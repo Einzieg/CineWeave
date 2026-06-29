@@ -167,6 +167,7 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 	t.Helper()
 	var mu sync.Mutex
 	pollCountByTask := map[string]int{}
+	promptTraceByTask := map[string]map[string]string{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer workflow-service-token" {
 			t.Fatalf("Authorization header = %q", r.Header.Get("Authorization"))
@@ -177,6 +178,9 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 			var req provider.GatewayTextRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode text request: %v", err)
+			}
+			if req.PromptTemplateKey != promptKeyStoryboardPlanner || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
+				t.Fatalf("text prompt trace = %+v", req)
 			}
 			writeWorkflowGatewayEnvelope(t, w, provider.GatewayTextResponse{
 				ProviderCallID: uuid.NewString(),
@@ -204,7 +208,10 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode image request: %v", err)
 			}
-			artifactID, mediaFileID, storageKey := insertMockGatewayMediaArtifact(t, r.Context(), pool, req.OrganizationID, req.ProjectID, req.WorkflowRunID, req.NodeRunID, imageModelID, "generated_image", "image/png")
+			if req.PromptTemplateKey != promptKeyStoryboardImage || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
+				t.Fatalf("image prompt trace = %+v", req)
+			}
+			artifactID, mediaFileID, storageKey := insertMockGatewayMediaArtifact(t, r.Context(), pool, req.OrganizationID, req.ProjectID, req.WorkflowRunID, req.NodeRunID, imageModelID, "generated_image", "image/png", req.PromptTemplateKey, req.PromptVersionID, req.PromptHash, req.PromptSource)
 			writeWorkflowGatewayEnvelope(t, w, provider.GatewayImageResponse{
 				ProviderCallID: uuid.NewString(),
 				ModelID:        imageModelID,
@@ -226,9 +233,21 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 			if req.ModelProfileKey != videoGenerationModelProfileKey || req.NodeRunID == "" || len(req.References) != 1 {
 				t.Fatalf("video create request = %+v", req)
 			}
+			if req.PromptTemplateKey != promptKeyStoryboardVideo || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
+				t.Fatalf("video prompt trace = %+v", req)
+			}
+			taskID := uuid.NewString()
+			mu.Lock()
+			promptTraceByTask[taskID] = map[string]string{
+				"promptTemplateKey": req.PromptTemplateKey,
+				"promptVersionId":   req.PromptVersionID,
+				"promptHash":        req.PromptHash,
+				"promptSource":      req.PromptSource,
+			}
+			mu.Unlock()
 			writeWorkflowGatewayEnvelope(t, w, provider.GatewayVideoCreateTaskResponse{
 				ProviderCallID:      uuid.NewString(),
-				ProviderAsyncTaskID: uuid.NewString(),
+				ProviderAsyncTaskID: taskID,
 				ExternalTaskID:      "external-video-task",
 				ModelID:             videoModelID,
 				Status:              "running",
@@ -242,6 +261,7 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 			mu.Lock()
 			pollCountByTask[req.ProviderAsyncTaskID]++
 			pollCount := pollCountByTask[req.ProviderAsyncTaskID]
+			trace := promptTraceByTask[req.ProviderAsyncTaskID]
 			mu.Unlock()
 			response := provider.GatewayVideoPollTaskResponse{
 				ProviderCallID:      uuid.NewString(),
@@ -253,7 +273,7 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 				LatencyMS:           18,
 			}
 			if pollCount >= 2 {
-				artifactID, mediaFileID, storageKey := insertMockGatewayMediaArtifact(t, r.Context(), pool, req.OrganizationID, req.ProjectID, req.WorkflowRunID, req.NodeRunID, videoModelID, "generated_video", "video/mp4")
+				artifactID, mediaFileID, storageKey := insertMockGatewayMediaArtifact(t, r.Context(), pool, req.OrganizationID, req.ProjectID, req.WorkflowRunID, req.NodeRunID, videoModelID, "generated_video", "video/mp4", trace["promptTemplateKey"], trace["promptVersionId"], trace["promptHash"], trace["promptSource"])
 				duration := 5.0
 				response.Status = "succeeded"
 				response.Output = provider.GatewayVideoOutput{
@@ -271,15 +291,21 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 	})
 }
 
-func insertMockGatewayMediaArtifact(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, projectID, workflowRunID, nodeRunID, modelID, artifactType, mimeType string) (string, string, string) {
+func insertMockGatewayMediaArtifact(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, projectID, workflowRunID, nodeRunID, modelID, artifactType, mimeType, promptTemplateKey, promptVersionID, promptHash, promptSource string) (string, string, string) {
 	t.Helper()
 	storageKey := fmt.Sprintf("org/%s/project/%s/workflow/%s/mock/%s-%d", organizationID, projectID, workflowRunID, artifactType, time.Now().UnixNano())
 	var artifactID string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, model_id, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'sha256:mock', $8, $9)
+		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, model_id, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'sha256:mock', $8, $9, $10)
 		RETURNING id
-	`, organizationID, projectID, workflowRunID, nodeRunID, artifactType, storageKey, mimeType, modelID, mustJSON(map[string]any{"source": "mock_provider_gateway"})).Scan(&artifactID); err != nil {
+	`, organizationID, projectID, workflowRunID, nodeRunID, artifactType, storageKey, mimeType, promptHash, modelID, mustJSON(map[string]any{
+		"source":            "mock_provider_gateway",
+		"promptTemplateKey": promptTemplateKey,
+		"promptVersionId":   promptVersionID,
+		"promptHash":        promptHash,
+		"promptSource":      promptSource,
+	})).Scan(&artifactID); err != nil {
 		t.Fatalf("insert mock artifact: %v", err)
 	}
 	var mediaFileID string
@@ -333,7 +359,7 @@ func assertVideoWorkflowNodeRuns(t *testing.T, ctx context.Context, pool *pgxpoo
 
 func assertVideoWorkflowArtifacts(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workflowRunID string) {
 	t.Helper()
-	rows, err := pool.Query(ctx, `SELECT type FROM artifacts WHERE workflow_run_id = $1`, workflowRunID)
+	rows, err := pool.Query(ctx, `SELECT type, metadata FROM artifacts WHERE workflow_run_id = $1`, workflowRunID)
 	if err != nil {
 		t.Fatalf("select artifacts: %v", err)
 	}
@@ -341,10 +367,19 @@ func assertVideoWorkflowArtifacts(t *testing.T, ctx context.Context, pool *pgxpo
 	seen := map[string]bool{}
 	for rows.Next() {
 		var artifactType string
-		if err := rows.Scan(&artifactType); err != nil {
+		var metadata json.RawMessage
+		if err := rows.Scan(&artifactType, &metadata); err != nil {
 			t.Fatalf("scan artifact: %v", err)
 		}
 		seen[artifactType] = true
+		switch artifactType {
+		case "storyboard_json":
+			assertPromptTraceMetadata(t, metadata, promptKeyStoryboardPlanner)
+		case "generated_image":
+			assertPromptTraceMetadata(t, metadata, promptKeyStoryboardImage)
+		case "generated_video":
+			assertPromptTraceMetadata(t, metadata, promptKeyStoryboardVideo)
+		}
 	}
 	for _, artifactType := range []string{"storyboard_json", "generated_image", "generated_video"} {
 		if !seen[artifactType] {

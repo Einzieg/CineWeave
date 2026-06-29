@@ -1462,6 +1462,227 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderCircuitStateEnvelope"
+  /api/prompt-templates:
+    get:
+      operationId: listPromptTemplates
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Prompt templates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptTemplateListEnvelope"
+    post:
+      operationId: createPromptTemplate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePromptTemplateRequest"
+      responses:
+        "201":
+          description: Created prompt template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptTemplateEnvelope"
+  /api/prompt-templates/{templateId}:
+    get:
+      operationId: getPromptTemplate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: templateId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Prompt template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptTemplateEnvelope"
+    patch:
+      operationId: updatePromptTemplate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: templateId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePromptTemplateRequest"
+      responses:
+        "200":
+          description: Updated prompt template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptTemplateEnvelope"
+  /api/prompt-templates/{templateId}/versions:
+    get:
+      operationId: listPromptVersions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: templateId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Prompt versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptVersionListEnvelope"
+    post:
+      operationId: createPromptVersion
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: templateId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePromptVersionRequest"
+      responses:
+        "201":
+          description: Created prompt version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptVersionEnvelope"
+  /api/prompt-versions/{versionId}/activate:
+    post:
+      operationId: activatePromptVersion
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Activated prompt version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptVersionEnvelope"
+  /api/prompt-bindings:
+    get:
+      operationId: listPromptBindings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: filter[projectId]
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Prompt bindings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptBindingListEnvelope"
+    post:
+      operationId: createPromptBinding
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePromptBindingRequest"
+      responses:
+        "201":
+          description: Created prompt binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptBindingEnvelope"
+  /api/prompt-bindings/{bindingId}:
+    delete:
+      operationId: deletePromptBinding
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: bindingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deleted prompt binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/prompts/render-test:
+    post:
+      operationId: renderPromptTest
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderPromptRequest"
+      responses:
+        "200":
+          description: Rendered prompt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderedPromptEnvelope"
   /internal/provider/models/discover:
     post:
       operationId: internalProviderDiscoverModels
@@ -2942,6 +3163,310 @@ components:
         unsupported:
           type: array
           items: {}
+    PromptVersionSummary:
+      type: object
+      required: [id, version, status, contentHash]
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+        status:
+          type: string
+          enum: [draft, active, archived]
+        title:
+          type: string
+        contentHash:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        activatedAt:
+          type: string
+          format: date-time
+    PromptTemplate:
+      type: object
+      required: [id, templateKey, name, purpose, modality, taskType, scope, status, isSystem, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        templateKey:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        purpose:
+          type: string
+        modality:
+          type: string
+          enum: [text, image, video, audio, multimodal]
+        taskType:
+          type: string
+        scope:
+          type: string
+          enum: [system, organization]
+        status:
+          type: string
+          enum: [active, archived]
+        isSystem:
+          type: boolean
+        activeVersion:
+          $ref: "#/components/schemas/PromptVersionSummary"
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    PromptVersion:
+      type: object
+      required: [id, templateId, version, status, content, contentFormat, variablesSchema, metadata, contentHash, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        templateId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+        status:
+          type: string
+          enum: [draft, active, archived]
+        title:
+          type: string
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [text, markdown]
+        variablesSchema:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        contentHash:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        activatedAt:
+          type: string
+          format: date-time
+    PromptBinding:
+      type: object
+      required: [id, organizationId, templateKey, promptVersionId, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        templateKey:
+          type: string
+        promptVersionId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [active, disabled]
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreatePromptTemplateRequest:
+      type: object
+      required: [templateKey, name, purpose, modality, taskType]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        templateKey:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        purpose:
+          type: string
+        modality:
+          type: string
+        taskType:
+          type: string
+    UpdatePromptTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        purpose:
+          type: string
+        modality:
+          type: string
+        taskType:
+          type: string
+        status:
+          type: string
+          enum: [active, archived]
+    CreatePromptVersionRequest:
+      type: object
+      required: [content]
+      properties:
+        title:
+          type: string
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [text, markdown]
+        variablesSchema:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        activate:
+          type: boolean
+    CreatePromptBindingRequest:
+      type: object
+      required: [promptVersionId]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        templateKey:
+          type: string
+        promptVersionId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [active, disabled]
+    RenderPromptRequest:
+      type: object
+      required: [templateKey, variables]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        templateKey:
+          type: string
+        variables:
+          type: object
+          additionalProperties: true
+    RenderedPrompt:
+      type: object
+      required: [templateKey, promptVersionId, renderedHash, text]
+      properties:
+        templateKey:
+          type: string
+        promptVersionId:
+          type: string
+          format: uuid
+        renderedHash:
+          type: string
+        contentHash:
+          type: string
+        promptSource:
+          type: string
+        text:
+          type: string
+    PromptTemplateEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/PromptTemplate"
+    PromptTemplateListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PromptTemplate"
+    PromptVersionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/PromptVersion"
+    PromptVersionListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PromptVersion"
+    PromptBindingEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/PromptBinding"
+    PromptBindingListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PromptBinding"
+    RenderedPromptEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/RenderedPrompt"
     ProviderStandardError:
       type: object
       required: [code, message, retryable]
@@ -2999,10 +3524,14 @@ components:
         providerModelId:
           type: string
           format: uuid
+        promptTemplateKey:
+          type: string
         promptVersionId:
           type: string
           format: uuid
         promptHash:
+          type: string
+        promptSource:
           type: string
         idempotencyKey:
           type: string
@@ -3139,10 +3668,14 @@ components:
         providerModelId:
           type: string
           format: uuid
+        promptTemplateKey:
+          type: string
         promptVersionId:
           type: string
           format: uuid
         promptHash:
+          type: string
+        promptSource:
           type: string
         idempotencyKey:
           type: string
@@ -3282,10 +3815,14 @@ components:
         providerModelId:
           type: string
           format: uuid
+        promptTemplateKey:
+          type: string
         promptVersionId:
           type: string
           format: uuid
         promptHash:
+          type: string
+        promptSource:
           type: string
         idempotencyKey:
           type: string

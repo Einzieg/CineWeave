@@ -37,6 +37,23 @@ const defaultImageTestSize = "1024x1024";
 const defaultVideoTestDuration = "5";
 const defaultVideoTestAspectRatio = "16:9";
 const defaultVideoTestResolution = "720p";
+const defaultPromptVariables = JSON.stringify(
+  {
+    input: { prompt: defaultPrompt },
+    project: { aspectRatio: "16:9" },
+    shot: {
+      visual: "Wide sunrise platform",
+      camera: "slow push-in",
+      motion: "mist drifting",
+      mood: "hopeful",
+      imagePrompt: "Cinematic sunrise train station, high detail",
+      videoPrompt: "A quiet train platform at sunrise with mist and soft light",
+    },
+    video: { duration: 5, aspectRatio: "16:9", resolution: "720p" },
+  },
+  null,
+  2,
+);
 const defaultCapabilityText = JSON.stringify(
   {
     taskTypes: ["text.generate", "text.stream"],
@@ -81,6 +98,7 @@ const navItems = [
   { label: "Project Studio", shortLabel: "Project", href: "#project-studio", icon: Clapperboard },
   { label: "Workflow Board", shortLabel: "Flow", href: "#workflow-board", icon: Workflow },
   { label: "Provider Center", shortLabel: "Gateway", href: "#provider-center", icon: KeyRound },
+  { label: "Prompt Center", shortLabel: "Prompt", href: "#prompt-center", icon: FileCode2 },
   { label: "Vault", shortLabel: "Vault", href: "#vault", icon: Library },
 ];
 
@@ -321,6 +339,44 @@ type ProviderCircuitState = {
   nextAttemptAt?: string;
 };
 
+type PromptTemplate = {
+  id: string;
+  organizationId?: string;
+  templateKey: string;
+  name: string;
+  purpose: string;
+  modality: string;
+  taskType: string;
+  scope: string;
+  status: string;
+  isSystem: boolean;
+  activeVersion?: {
+    id: string;
+    version: number;
+    status: string;
+    contentHash: string;
+  };
+};
+
+type PromptVersion = {
+  id: string;
+  templateId: string;
+  version: number;
+  status: string;
+  title?: string;
+  content: string;
+  contentHash: string;
+  activatedAt?: string;
+};
+
+type RenderedPrompt = {
+  templateKey: string;
+  promptVersionId: string;
+  renderedHash: string;
+  promptSource: string;
+  text: string;
+};
+
 type ManifestValidationResult = {
   valid: boolean;
   errors?: Array<{ path: string; message: string }> | null;
@@ -342,6 +398,7 @@ type RealtimeEvent = {
 };
 
 type BusyState = "bootstrap" | "workflow" | "cancel" | null;
+type PromptBusyState = "refresh" | "render" | "version" | "activate" | null;
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting";
 type ProviderTestType = "text_generation_test" | "streaming_test" | "image_generation_test" | "video_generation_test";
 type WorkflowType = "text_to_storyboard" | "video_production" | "script_to_storyboard";
@@ -391,6 +448,15 @@ export function CineWeaveConsole() {
   const [providerUsage, setProviderUsage] = useState<ProviderUsageSummary | null>(null);
   const [providerLimitPolicies, setProviderLimitPolicies] = useState<ProviderLimitPolicy[]>([]);
   const [providerCircuitStates, setProviderCircuitStates] = useState<ProviderCircuitState[]>([]);
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([]);
+  const [promptVersions, setPromptVersions] = useState<PromptVersion[]>([]);
+  const [selectedPromptTemplateId, setSelectedPromptTemplateId] = useState("");
+  const [promptVariablesText, setPromptVariablesText] = useState(defaultPromptVariables);
+  const [promptNewVersionText, setPromptNewVersionText] = useState("");
+  const [promptRenderResult, setPromptRenderResult] = useState<RenderedPrompt | null>(null);
+  const [promptError, setPromptError] = useState<string | null>(null);
+  const [promptNotice, setPromptNotice] = useState<string | null>(null);
+  const [promptBusy, setPromptBusy] = useState<PromptBusyState>(null);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedModelId, setSelectedModelId] = useState("");
   const [providerBaseUrl, setProviderBaseUrl] = useState(defaultProviderBaseUrl);
@@ -582,6 +648,39 @@ export function CineWeaveConsole() {
     }
   }, []);
 
+  const loadPromptVersions = useCallback(async (activeSession: SessionState, templateId: string) => {
+    const versionData = await apiRequest<{ items: PromptVersion[] }>(`/api/prompt-templates/${templateId}/versions`, {
+      token: activeSession.accessToken,
+      organizationId: activeSession.organizationId,
+    });
+    setPromptVersions(versionData.items);
+    setPromptNewVersionText((current) => current || versionData.items.find((item) => item.status === "active")?.content || "");
+    return versionData.items;
+  }, []);
+
+  const refreshPromptCenter = useCallback(
+    async (activeSession: SessionState) => {
+      setPromptError(null);
+      const templateData = await apiRequest<{ items: PromptTemplate[] }>("/api/prompt-templates", {
+        token: activeSession.accessToken,
+        organizationId: activeSession.organizationId,
+      });
+      setPromptTemplates(templateData.items);
+      const selected =
+        templateData.items.find((item) => item.id === selectedPromptTemplateId) ??
+        templateData.items.find((item) => item.templateKey === "storyboard_planner") ??
+        templateData.items[0];
+      if (!selected) {
+        setSelectedPromptTemplateId("");
+        setPromptVersions([]);
+        return;
+      }
+      setSelectedPromptTemplateId(selected.id);
+      await loadPromptVersions(activeSession, selected.id);
+    },
+    [loadPromptVersions, selectedPromptTemplateId],
+  );
+
   const pollWorkflowRun = useCallback(
     async (activeSession: SessionState, workflowRunId: string) => {
       for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -615,12 +714,135 @@ export function CineWeaveConsole() {
       await loadArtifacts(nextSession);
       await refreshProviderCenter(nextSession);
       await refreshAccess(nextSession);
+      await refreshPromptCenter(nextSession);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
       setBusy(null);
     }
-  }, [createDemoSession, loadArtifacts, refreshAccess, refreshProviderCenter]);
+  }, [createDemoSession, loadArtifacts, refreshAccess, refreshPromptCenter, refreshProviderCenter]);
+
+  const refreshPrompts = useCallback(async () => {
+    setPromptBusy("refresh");
+    setPromptNotice(null);
+    try {
+      const activeSession = session ?? (await createDemoSession());
+      await refreshPromptCenter(activeSession);
+      setPromptNotice("Prompt Center refreshed.");
+    } catch (cause) {
+      setPromptError(errorMessage(cause));
+    } finally {
+      setPromptBusy(null);
+    }
+  }, [createDemoSession, refreshPromptCenter, session]);
+
+  const changePromptTemplate = useCallback(
+    async (templateId: string) => {
+      setSelectedPromptTemplateId(templateId);
+      setPromptRenderResult(null);
+      setPromptNotice(null);
+      if (!session || !templateId) {
+        setPromptVersions([]);
+        return;
+      }
+      setPromptBusy("refresh");
+      setPromptError(null);
+      try {
+        const versions = await loadPromptVersions(session, templateId);
+        setPromptNewVersionText(versions.find((item) => item.status === "active")?.content ?? "");
+      } catch (cause) {
+        setPromptError(errorMessage(cause));
+      } finally {
+        setPromptBusy(null);
+      }
+    },
+    [loadPromptVersions, session],
+  );
+
+  const renderPrompt = useCallback(async () => {
+    setPromptBusy("render");
+    setPromptError(null);
+    setPromptNotice(null);
+    try {
+      const activeSession = session ?? (await createDemoSession());
+      const template = promptTemplates.find((item) => item.id === selectedPromptTemplateId) ?? promptTemplates[0];
+      if (!template) {
+        throw new Error("No prompt template selected.");
+      }
+      const variables = JSON.parse(promptVariablesText) as Record<string, unknown>;
+      const rendered = await apiRequest<RenderedPrompt>("/api/prompts/render-test", {
+        method: "POST",
+        token: activeSession.accessToken,
+        organizationId: activeSession.organizationId,
+        body: {
+          organizationId: activeSession.organizationId,
+          projectId: activeSession.projectId,
+          templateKey: template.templateKey,
+          variables,
+        },
+      });
+      setPromptRenderResult(rendered);
+    } catch (cause) {
+      setPromptError(errorMessage(cause));
+    } finally {
+      setPromptBusy(null);
+    }
+  }, [createDemoSession, promptTemplates, promptVariablesText, selectedPromptTemplateId, session]);
+
+  const createPromptVersion = useCallback(async () => {
+    if (!selectedPromptTemplateId) {
+      setPromptError("Select a prompt template before creating a version.");
+      return;
+    }
+    setPromptBusy("version");
+    setPromptError(null);
+    setPromptNotice(null);
+    try {
+      const activeSession = session ?? (await createDemoSession());
+      await apiRequest<PromptVersion>(`/api/prompt-templates/${selectedPromptTemplateId}/versions`, {
+        method: "POST",
+        token: activeSession.accessToken,
+        organizationId: activeSession.organizationId,
+        body: {
+          title: `Console ${new Date().toISOString()}`,
+          content: promptNewVersionText,
+        },
+      });
+      await loadPromptVersions(activeSession, selectedPromptTemplateId);
+      setPromptNotice("Prompt version created.");
+    } catch (cause) {
+      setPromptError(errorMessage(cause));
+    } finally {
+      setPromptBusy(null);
+    }
+  }, [createDemoSession, loadPromptVersions, promptNewVersionText, selectedPromptTemplateId, session]);
+
+  const activatePromptVersion = useCallback(
+    async (versionId: string) => {
+      if (!session || !selectedPromptTemplateId) {
+        setPromptError("Initialize a demo session before activating a version.");
+        return;
+      }
+      setPromptBusy("activate");
+      setPromptError(null);
+      setPromptNotice(null);
+      try {
+        await apiRequest<PromptVersion>(`/api/prompt-versions/${versionId}/activate`, {
+          method: "POST",
+          token: session.accessToken,
+          organizationId: session.organizationId,
+        });
+        await loadPromptVersions(session, selectedPromptTemplateId);
+        await refreshPromptCenter(session);
+        setPromptNotice("Prompt version activated.");
+      } catch (cause) {
+        setPromptError(errorMessage(cause));
+      } finally {
+        setPromptBusy(null);
+      }
+    },
+    [loadPromptVersions, refreshPromptCenter, selectedPromptTemplateId, session],
+  );
 
   const createAccessTeam = useCallback(async () => {
     setProviderBusy("profile");
@@ -1084,6 +1306,8 @@ export function CineWeaveConsole() {
   const selectedAccount = providerAccounts.find((account) => account.id === selectedAccountId);
   const selectedModel = providerModels.find((model) => model.id === selectedModelId);
   const scriptProfile = modelProfiles.find((profile) => profile.profileKey === "script_agent_default" || profile.purpose === "script");
+  const selectedPromptTemplate = promptTemplates.find((item) => item.id === selectedPromptTemplateId);
+  const activePromptVersion = promptVersions.find((item) => item.status === "active");
 
   return (
     <main className="min-h-screen">
@@ -1131,7 +1355,7 @@ export function CineWeaveConsole() {
               {apiBase}
             </div>
           </div>
-          <nav className="mt-4 grid grid-cols-5 gap-1 lg:hidden" aria-label="Primary">
+          <nav className="mt-4 grid grid-cols-6 gap-1 lg:hidden" aria-label="Primary">
             {navItems.map((item) => (
               <a
                 key={item.label}
@@ -1849,6 +2073,174 @@ export function CineWeaveConsole() {
                     )}
                   </div>
                 )}
+              </div>
+            </div>
+          </section>
+
+          <section id="prompt-center" className="mt-5 rounded border border-[var(--line)] bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
+              <div className="flex items-center gap-3">
+                <FileCode2 size={18} aria-hidden="true" />
+                <h2 className="text-sm font-semibold">Prompt Center</h2>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusPill status={`${promptTemplates.length} templates`} />
+                <button
+                  type="button"
+                  onClick={refreshPrompts}
+                  disabled={promptBusy !== null}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded border border-[var(--line)] bg-white px-3 text-sm font-medium disabled:opacity-60"
+                >
+                  {promptBusy === "refresh" ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div className="grid gap-5 p-4 xl:grid-cols-[0.85fr_1.15fr]">
+              {(promptError || promptNotice) && (
+                <div
+                  className={`xl:col-span-2 rounded border px-3 py-2 text-sm ${
+                    promptError ? "border-[var(--rose)] text-[var(--rose)]" : "border-[var(--teal)] text-[var(--teal)]"
+                  }`}
+                >
+                  {promptError ?? promptNotice}
+                </div>
+              )}
+
+              <div className="grid gap-4">
+                <div className="rounded border border-[var(--line)] p-4">
+                  <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                    <select
+                      value={selectedPromptTemplateId}
+                      onChange={(event) => {
+                        void changePromptTemplate(event.target.value);
+                      }}
+                      className="h-10 rounded border border-[var(--line)] bg-white px-3 text-sm text-[var(--foreground)] outline-none focus:border-[var(--foreground)]"
+                    >
+                      <option value="">No prompt</option>
+                      {promptTemplates.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.templateKey}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={renderPrompt}
+                      disabled={promptBusy !== null || !selectedPromptTemplate}
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded bg-[var(--foreground)] px-3 text-sm font-medium text-white disabled:opacity-60"
+                    >
+                      {promptBusy === "render" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+                      Render
+                    </button>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    <InfoRow label="Purpose" value={selectedPromptTemplate?.purpose ?? "None"} />
+                    <InfoRow label="Task" value={selectedPromptTemplate?.taskType ?? "None"} />
+                    <InfoRow label="Scope" value={selectedPromptTemplate?.scope ?? "None"} />
+                    <InfoRow label="Active Version" value={activePromptVersion ? `v${activePromptVersion.version}` : "None"} />
+                  </div>
+                </div>
+
+                <div className="rounded border border-[var(--line)] p-4">
+                  <div className="flex items-center gap-2">
+                    <ListChecks size={17} />
+                    <h3 className="text-sm font-semibold">Versions</h3>
+                  </div>
+                  <div className="mt-3 divide-y divide-[var(--line)] rounded border border-[var(--line)]">
+                    {promptVersions.length > 0 ? (
+                      promptVersions.map((version) => (
+                        <div key={version.id} className="grid gap-2 px-3 py-2 md:grid-cols-[auto_1fr_auto] md:items-center">
+                          <p className="text-sm font-medium">v{version.version}</p>
+                          <p className="truncate text-xs text-[var(--muted)]">{version.contentHash}</p>
+                          <div className="flex items-center gap-2">
+                            <StatusPill status={version.status} />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void activatePromptVersion(version.id);
+                              }}
+                              disabled={promptBusy !== null || version.status === "active"}
+                              className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[var(--line)] bg-white px-2 text-xs font-medium disabled:opacity-60"
+                            >
+                              <CheckCircle2 size={13} />
+                              Activate
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="px-3 py-5 text-sm text-[var(--muted)]">No prompt versions.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-4">
+                <div className="rounded border border-[var(--line)] p-4">
+                  <div className="flex items-center gap-2">
+                    <FileCode2 size={17} />
+                    <h3 className="text-sm font-semibold">Active Content</h3>
+                  </div>
+                  <pre className="mt-3 max-h-72 overflow-auto rounded border border-[var(--line)] bg-[var(--soft)] p-3 font-mono text-xs whitespace-pre-wrap">
+                    {activePromptVersion?.content ?? "No active content."}
+                  </pre>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded border border-[var(--line)] p-4">
+                    <div className="flex items-center gap-2">
+                      <Database size={17} />
+                      <h3 className="text-sm font-semibold">Render Variables</h3>
+                    </div>
+                    <textarea
+                      value={promptVariablesText}
+                      onChange={(event) => setPromptVariablesText(event.target.value)}
+                      spellCheck={false}
+                      className="mt-3 min-h-64 w-full resize-y rounded border border-[var(--line)] bg-white px-3 py-2 font-mono text-xs outline-none focus:border-[var(--foreground)]"
+                    />
+                  </div>
+
+                  <div className="rounded border border-[var(--line)] p-4">
+                    <div className="flex items-center gap-2">
+                      <Send size={17} />
+                      <h3 className="text-sm font-semibold">Render Result</h3>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      <InfoRow label="Version" value={promptRenderResult?.promptVersionId ?? "No render"} />
+                      <InfoRow label="Hash" value={promptRenderResult?.renderedHash ?? "No render"} />
+                      <InfoRow label="Source" value={promptRenderResult?.promptSource ?? "No render"} />
+                    </div>
+                    <pre className="mt-3 max-h-48 overflow-auto rounded border border-[var(--line)] bg-[var(--soft)] p-3 font-mono text-xs whitespace-pre-wrap">
+                      {promptRenderResult?.text ?? "No render result."}
+                    </pre>
+                  </div>
+                </div>
+
+                <div className="rounded border border-[var(--line)] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <FileCode2 size={17} />
+                      <h3 className="text-sm font-semibold">New Version</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={createPromptVersion}
+                      disabled={promptBusy !== null || !selectedPromptTemplate || promptNewVersionText.trim() === ""}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded border border-[var(--line)] bg-white px-3 text-sm font-medium disabled:opacity-60"
+                    >
+                      {promptBusy === "version" ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                      Create Version
+                    </button>
+                  </div>
+                  <textarea
+                    value={promptNewVersionText}
+                    onChange={(event) => setPromptNewVersionText(event.target.value)}
+                    spellCheck={false}
+                    className="mt-3 min-h-48 w-full resize-y rounded border border-[var(--line)] bg-white px-3 py-2 font-mono text-xs outline-none focus:border-[var(--foreground)]"
+                  />
+                </div>
               </div>
             </div>
           </section>

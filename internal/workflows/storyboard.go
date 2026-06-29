@@ -2,15 +2,15 @@ package workflows
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
+	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/storage"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -29,6 +29,9 @@ const (
 	nodeGenerateStoryboardTextKey   = "generate_storyboard_text"
 	nodeGenerateStoryboardImageKey  = "generate_storyboard_image"
 	nodeGenerateStoryboardVideoKey  = "generate_storyboard_video"
+	promptKeyStoryboardPlanner      = "storyboard_planner"
+	promptKeyStoryboardImage        = "storyboard_image_prompt"
+	promptKeyStoryboardVideo        = "storyboard_video_prompt"
 )
 
 type TextToStoryboardInput struct {
@@ -151,13 +154,39 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 	if err := validateStoryboardInput(baseInput); err != nil {
 		return GenerateStoryboardTextOutput{}, err
 	}
+	aspectRatio, err := a.projectAspectRatio(ctx, input.ProjectID)
+	if err != nil {
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardPlanner, map[string]any{
+		"input": map[string]any{
+			"prompt": input.Prompt,
+		},
+		"project": map[string]any{
+			"id":          input.ProjectID,
+			"aspectRatio": aspectRatio,
+		},
+		"workflow": map[string]any{
+			"id": input.WorkflowRunID,
+		},
+	})
+	if err != nil {
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, "", err)
+	}
 	nodeRunID, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
 		ProjectID:      input.ProjectID,
 		WorkflowRunID:  input.WorkflowRunID,
 		NodeKey:        nodeGenerateStoryboardTextKey,
 		NodeType:       "provider_text",
-		Input:          mustJSON(map[string]any{"prompt": input.Prompt, "modelProfileKey": scriptModelProfileKey}),
+		Input: mustJSON(map[string]any{
+			"prompt":            input.Prompt,
+			"modelProfileKey":   scriptModelProfileKey,
+			"promptTemplateKey": rendered.TemplateKey,
+			"promptVersionId":   rendered.PromptVersionID,
+			"promptHash":        rendered.RenderedHash,
+			"promptSource":      rendered.Source,
+		}),
 	})
 	if err != nil {
 		return GenerateStoryboardTextOutput{}, err
@@ -170,13 +199,17 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 	}
 
 	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
-		OrganizationID:  input.OrganizationID,
-		ProjectID:       input.ProjectID,
-		WorkflowRunID:   input.WorkflowRunID,
-		NodeRunID:       nodeRunID,
-		ModelProfileKey: scriptModelProfileKey,
+		OrganizationID:    input.OrganizationID,
+		ProjectID:         input.ProjectID,
+		WorkflowRunID:     input.WorkflowRunID,
+		NodeRunID:         nodeRunID,
+		ModelProfileKey:   scriptModelProfileKey,
+		PromptTemplateKey: rendered.TemplateKey,
+		PromptVersionID:   rendered.PromptVersionID,
+		PromptHash:        rendered.RenderedHash,
+		PromptSource:      rendered.Source,
 		Input: mustJSON(map[string]any{
-			"prompt":         storyboardPlannerPrompt(input.Prompt),
+			"prompt":         rendered.RenderedText,
 			"responseFormat": "json",
 		}),
 	})
@@ -196,7 +229,7 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 	if err != nil {
 		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	artifactID, err := a.insertStoryboardArtifact(ctx, input, nodeRunID, put, gatewayResp, parseError)
+	artifactID, err := a.insertStoryboardArtifact(ctx, input, nodeRunID, put, gatewayResp, rendered, parseError)
 	if err != nil {
 		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -228,6 +261,35 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 		return GenerateStoryboardImageOutput{}, err
 	}
 	imagePrompt := selectImagePrompt(input.Storyboard, input.Prompt)
+	shot := firstStoryboardShot(input.Storyboard)
+	if strings.TrimSpace(shot.ImagePrompt) == "" {
+		shot.ImagePrompt = imagePrompt
+	}
+	if strings.TrimSpace(shot.Visual) == "" {
+		shot.Visual = imagePrompt
+	}
+	aspectRatio, err := a.projectAspectRatio(ctx, input.ProjectID)
+	if err != nil {
+		return GenerateStoryboardImageOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardImage, map[string]any{
+		"input": map[string]any{
+			"prompt": input.Prompt,
+		},
+		"project": map[string]any{
+			"id":          input.ProjectID,
+			"aspectRatio": aspectRatio,
+		},
+		"shot": map[string]any{
+			"visual":      shot.Visual,
+			"camera":      shot.Camera,
+			"mood":        shot.Mood,
+			"imagePrompt": shot.ImagePrompt,
+		},
+	})
+	if err != nil {
+		return GenerateStoryboardImageOutput{}, a.failActivity(ctx, baseInput, "", err)
+	}
 	nodeRunID, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
 		ProjectID:      input.ProjectID,
@@ -238,6 +300,10 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 			"storyboardArtifactId": input.StoryboardArtifactID,
 			"imagePrompt":          imagePrompt,
 			"modelProfileKey":      imageGenerationModelProfileKey,
+			"promptTemplateKey":    rendered.TemplateKey,
+			"promptVersionId":      rendered.PromptVersionID,
+			"promptHash":           rendered.RenderedHash,
+			"promptSource":         rendered.Source,
 		}),
 	})
 	if err != nil {
@@ -251,14 +317,17 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 	}
 
 	gatewayResp, err := a.gateway.GenerateImage(ctx, provider.GatewayImageRequest{
-		OrganizationID:  input.OrganizationID,
-		ProjectID:       input.ProjectID,
-		WorkflowRunID:   input.WorkflowRunID,
-		NodeRunID:       nodeRunID,
-		ModelProfileKey: imageGenerationModelProfileKey,
-		PromptHash:      hashString(imagePrompt),
+		OrganizationID:    input.OrganizationID,
+		ProjectID:         input.ProjectID,
+		WorkflowRunID:     input.WorkflowRunID,
+		NodeRunID:         nodeRunID,
+		ModelProfileKey:   imageGenerationModelProfileKey,
+		PromptTemplateKey: rendered.TemplateKey,
+		PromptVersionID:   rendered.PromptVersionID,
+		PromptHash:        rendered.RenderedHash,
+		PromptSource:      rendered.Source,
 		Input: mustJSON(map[string]any{
-			"prompt":  imagePrompt,
+			"prompt":  rendered.RenderedText,
 			"size":    "1024x1024",
 			"n":       1,
 			"quality": "standard",
@@ -273,7 +342,7 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 		ImageStorageKey:  gatewayResp.Output.StorageKey,
 		ProviderCallID:   gatewayResp.ProviderCallID,
 		ModelID:          gatewayResp.ModelID,
-		ImagePrompt:      imagePrompt,
+		ImagePrompt:      rendered.RenderedText,
 	}
 	if err := CompleteNodeRun(ctx, a.db, nodeRunID, mustJSON(output)); err != nil {
 		return GenerateStoryboardImageOutput{}, err
@@ -314,20 +383,24 @@ func BuildTextToStoryboardOutput(storyboard GenerateStoryboardTextOutput, image 
 	}
 }
 
-func (a Activities) insertStoryboardArtifact(ctx context.Context, input GenerateStoryboardTextInput, nodeRunID string, put storage.PutResult, gatewayResp provider.GatewayTextResponse, parseError string) (string, error) {
+func (a Activities) insertStoryboardArtifact(ctx context.Context, input GenerateStoryboardTextInput, nodeRunID string, put storage.PutResult, gatewayResp provider.GatewayTextResponse, rendered promptsvc.RenderedPrompt, parseError string) (string, error) {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback(ctx)
 	metadata := map[string]any{
-		"source":         "workflow",
-		"nodeKey":        nodeGenerateStoryboardTextKey,
-		"providerCallId": gatewayResp.ProviderCallID,
-		"modelId":        gatewayResp.ModelID,
-		"nodeRunId":      nodeRunID,
-		"prompt":         input.Prompt,
-		"byteSize":       put.ByteSize,
+		"source":            "workflow",
+		"nodeKey":           nodeGenerateStoryboardTextKey,
+		"providerCallId":    gatewayResp.ProviderCallID,
+		"modelId":           gatewayResp.ModelID,
+		"nodeRunId":         nodeRunID,
+		"prompt":            input.Prompt,
+		"promptTemplateKey": rendered.TemplateKey,
+		"promptVersionId":   rendered.PromptVersionID,
+		"promptHash":        rendered.RenderedHash,
+		"promptSource":      rendered.Source,
+		"byteSize":          put.ByteSize,
 	}
 	if parseError == "" {
 		metadata["parseError"] = nil
@@ -336,10 +409,10 @@ func (a Activities) insertStoryboardArtifact(ctx context.Context, input Generate
 	}
 	var artifactID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, metadata, created_by)
-		VALUES ($1, $2, $3, $4, 'storyboard_json', $5, 'application/json', $6, $7, $8)
+		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, metadata, created_by)
+		VALUES ($1, $2, $3, $4, 'storyboard_json', $5, 'application/json', $6, $7, $8, $9)
 		RETURNING id
-	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, nodeRunID, put.StorageKey, put.ContentHash, mustJSON(metadata), input.CreatedBy).Scan(&artifactID); err != nil {
+	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, nodeRunID, put.StorageKey, put.ContentHash, rendered.RenderedHash, mustJSON(metadata), input.CreatedBy).Scan(&artifactID); err != nil {
 		return "", err
 	}
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "artifact.created", "artifact", artifactID, mustJSON(map[string]any{
@@ -355,6 +428,45 @@ func (a Activities) insertStoryboardArtifact(ctx context.Context, input Generate
 		return "", err
 	}
 	return artifactID, nil
+}
+
+func (a Activities) renderWorkflowPrompt(ctx context.Context, organizationID, projectID, templateKey string, variables map[string]any) (promptsvc.RenderedPrompt, error) {
+	resolved, err := promptsvc.NewService(a.db).Resolve(ctx, promptsvc.ResolveRequest{
+		OrganizationID: organizationID,
+		ProjectID:      projectID,
+		TemplateKey:    templateKey,
+	})
+	if err != nil {
+		return promptsvc.RenderedPrompt{}, workflowErrorFromPrompt(err)
+	}
+	rendered, err := promptsvc.Render(resolved, variables)
+	if err != nil {
+		return promptsvc.RenderedPrompt{}, workflowErrorFromPrompt(err)
+	}
+	return rendered, nil
+}
+
+func workflowErrorFromPrompt(err error) error {
+	var promptErr promptsvc.Error
+	if errors.As(err, &promptErr) {
+		return workflowError{Code: promptErr.Code, Message: promptErr.Message}
+	}
+	return workflowError{Code: codeActivityFailed, Message: err.Error()}
+}
+
+func (a Activities) projectAspectRatio(ctx context.Context, projectID string) (string, error) {
+	var aspectRatio sqlNullString
+	err := a.db.QueryRow(ctx, `SELECT aspect_ratio FROM projects WHERE id = $1`, projectID).Scan(&aspectRatio)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "16:9", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(aspectRatio.String) == "" {
+		return "16:9", nil
+	}
+	return strings.TrimSpace(aspectRatio.String), nil
 }
 
 func (a Activities) ensureModelProfileConfigured(ctx context.Context, organizationID, profileKey string, modalities []string) error {
@@ -526,15 +638,33 @@ func (e workflowError) Error() string {
 	return e.Message
 }
 
-func hashString(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
 func mustJSON(value any) json.RawMessage {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return json.RawMessage(`{}`)
 	}
 	return raw
+}
+
+type sqlNullString struct {
+	String string
+	Valid  bool
+}
+
+func (s *sqlNullString) Scan(value any) error {
+	if value == nil {
+		s.String = ""
+		s.Valid = false
+		return nil
+	}
+	s.Valid = true
+	switch typed := value.(type) {
+	case string:
+		s.String = typed
+	case []byte:
+		s.String = string(typed)
+	default:
+		s.String = fmt.Sprint(typed)
+	}
+	return nil
 }

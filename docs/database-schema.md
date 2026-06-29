@@ -28,3 +28,4 @@ Migration notes:
 - `000008_provider_limits` adds `provider_limit_policies` and `provider_circuit_states`, extends `provider_leases` with `lease_token`, and allows `provider_call_logs.status=blocked` for Gateway guard rejections.
 - Provider budget enforcement reads `cost_records`; blocked provider calls are logged but intentionally do not write cost rows.
 - `000009_model_profile_routing` expands `model_profiles.routing_strategy` to `priority`, `priority_with_fallback`, `weighted`, `cost_optimized`, and `latency_optimized`, and changes the default to `priority_with_fallback`.
+- `000010_prompt_registry` upgrades the early prompt table shape into Prompt Registry: `prompt_templates` gains purpose/modality/task/scope/status fields, `prompt_versions` gains active/draft versioning fields, `prompt_bindings` adds project/organization overrides, default storyboard prompts are seeded, and `prompt.read` / `prompt.manage` permissions are granted.

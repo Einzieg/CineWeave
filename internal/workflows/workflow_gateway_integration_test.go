@@ -103,6 +103,9 @@ func mockWorkflowProviderGateway(t *testing.T, textModelID, imageModelID string)
 			if req.ModelProfileKey != scriptModelProfileKey || req.NodeRunID == "" {
 				t.Fatalf("text gateway request = %+v", req)
 			}
+			if req.PromptTemplateKey != promptKeyStoryboardPlanner || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
+				t.Fatalf("text prompt trace = %+v", req)
+			}
 			writeWorkflowGatewayEnvelope(t, w, provider.GatewayTextResponse{
 				ProviderCallID: uuid.NewString(),
 				ModelID:        textModelID,
@@ -130,6 +133,9 @@ func mockWorkflowProviderGateway(t *testing.T, textModelID, imageModelID string)
 			}
 			if req.ModelProfileKey != imageGenerationModelProfileKey || req.NodeRunID == "" {
 				t.Fatalf("image gateway request = %+v", req)
+			}
+			if req.PromptTemplateKey != promptKeyStoryboardImage || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
+				t.Fatalf("image prompt trace = %+v", req)
 			}
 			writeWorkflowGatewayEnvelope(t, w, provider.GatewayImageResponse{
 				ProviderCallID: uuid.NewString(),
@@ -270,16 +276,41 @@ func assertWorkflowGatewayNodeRuns(t *testing.T, ctx context.Context, pool *pgxp
 
 func assertWorkflowGatewayStoryboardArtifact(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workflowRunID, artifactID string) {
 	t.Helper()
-	var artifactType, storageKey string
+	var artifactType, storageKey, promptHash string
+	var metadata json.RawMessage
 	if err := pool.QueryRow(ctx, `
-		SELECT type, storage_key
+		SELECT type, storage_key, prompt_hash, metadata
 		FROM artifacts
 		WHERE id = $1 AND workflow_run_id = $2
-	`, artifactID, workflowRunID).Scan(&artifactType, &storageKey); err != nil {
+	`, artifactID, workflowRunID).Scan(&artifactType, &storageKey, &promptHash, &metadata); err != nil {
 		t.Fatalf("select storyboard artifact: %v", err)
 	}
 	if artifactType != "storyboard_json" || storageKey == "" {
 		t.Fatalf("artifact type/storageKey = %q/%q", artifactType, storageKey)
+	}
+	assertPromptTraceMetadata(t, metadata, promptKeyStoryboardPlanner)
+	if !strings.HasPrefix(promptHash, "sha256:") {
+		t.Fatalf("storyboard prompt hash = %q", promptHash)
+	}
+}
+
+func assertPromptTraceMetadata(t *testing.T, metadata json.RawMessage, templateKey string) {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal(metadata, &decoded); err != nil {
+		t.Fatalf("decode artifact metadata: %v", err)
+	}
+	if decoded["promptTemplateKey"] != templateKey {
+		t.Fatalf("promptTemplateKey = %v, want %s metadata=%s", decoded["promptTemplateKey"], templateKey, string(metadata))
+	}
+	if value, _ := decoded["promptVersionId"].(string); value == "" {
+		t.Fatalf("promptVersionId missing metadata=%s", string(metadata))
+	}
+	if value, _ := decoded["promptHash"].(string); !strings.HasPrefix(value, "sha256:") {
+		t.Fatalf("promptHash = %q metadata=%s", value, string(metadata))
+	}
+	if value, _ := decoded["promptSource"].(string); value == "" {
+		t.Fatalf("promptSource missing metadata=%s", string(metadata))
 	}
 }
 

@@ -53,6 +53,13 @@ Provider test APIs:
 
 - Provider model tests and declarative manifest test-runs persist the idempotency key to `provider_call_logs.idempotency_key` when supplied.
 
+Prompt APIs:
+
+- `GET /api/prompt-templates` lists system and organization prompt templates with their active version summary.
+- `POST /api/prompt-templates/{templateId}/versions` creates a new immutable prompt version; `POST /api/prompt-versions/{versionId}/activate` makes it the active version.
+- `GET /api/prompt-bindings` and `POST /api/prompt-bindings` manage organization/project prompt overrides.
+- `POST /api/prompts/render-test` resolves project > organization > system prompt priority and renders safe dot-path variables without executing code.
+
 Provider webhook API:
 
 - `POST /api/provider-webhooks/{providerAccountId}/{webhookSecret}` receives async provider callbacks.

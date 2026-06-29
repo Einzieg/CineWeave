@@ -3391,6 +3391,19 @@ Task 022: Add event_outbox publisher to NATS JetStream.
 Task 023: Add provider webhook ingress and Temporal Signal handling.
 Task 024: Add novels, scripts, storyboard_shots, assets, media_files schema.
 Task 025: Add prompt_templates and prompt_versions schema.
+
+## Implementation Note: Prompt Registry / Prompt Versioning
+
+- Prompt Registry is now implemented through `prompt_templates`, `prompt_versions`, and `prompt_bindings`.
+- Migration `000010_prompt_registry` keeps the original prompt table compatibility columns and adds the v4 fields required for template purpose, modality, task type, scope, status, active versioning, metadata, and bindings.
+- System prompts are seeded idempotently for `storyboard_planner`, `storyboard_image_prompt`, and `storyboard_video_prompt`.
+- Prompt resolution order is project binding, organization binding, organization active version, then system active version.
+- Rendering is declaration-only dot-path replacement such as `{{ input.prompt }}`, `{{ shot.visual }}`, and `{{ video.duration }}`. Missing variables render as empty strings. Functions, loops, conditionals, JS, and Go template execution are not supported.
+- Prompt APIs are exposed at `/api/prompt-templates`, `/api/prompt-templates/{templateId}/versions`, `/api/prompt-versions/{versionId}/activate`, `/api/prompt-bindings`, and `/api/prompts/render-test`.
+- RBAC permissions `prompt.read` and `prompt.manage` gate Prompt Center access. `org_owner` continues through `admin.manage`; `org_admin` gets read/manage, `project_owner` gets read/manage, and project editor/viewer roles get read access.
+- `text_to_storyboard` and `video_production` now resolve and render prompt versions before Provider Gateway calls. Gateway text/image/video-create requests carry `promptTemplateKey`, `promptVersionId`, `promptHash`, and `promptSource`.
+- New workflow paths populate `provider_call_logs.prompt_version_id`, `provider_call_logs.prompt_hash`, `artifacts.prompt_hash`, and Artifact metadata fields `promptTemplateKey`, `promptVersionId`, `promptHash`, and `promptSource`.
+- Demo Console includes a minimal Prompt Center for listing seeded prompts, viewing active content, render-test, creating versions, and activating versions.
 Task 026: Add idempotency_keys support for write APIs and Provider calls.
 ```
 

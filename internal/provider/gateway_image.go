@@ -434,12 +434,16 @@ func (s *Service) recordGatewayImageCall(ctx context.Context, selection gatewayM
 
 func insertGatewayImageArtifact(ctx context.Context, tx pgx.Tx, selection gatewayModelSelection, req GatewayImageRequest, callID string, stored *gatewayStoredImage, input gatewayImageInput) error {
 	metadata := mustJSON(map[string]any{
-		"providerCallId":  callID,
-		"providerModelId": selection.Model.ID,
-		"mediaFileId":     stored.MediaFileID,
-		"prompt":          input.Prompt,
-		"size":            input.Size,
-		"quality":         input.Quality,
+		"providerCallId":    callID,
+		"providerModelId":   selection.Model.ID,
+		"mediaFileId":       stored.MediaFileID,
+		"prompt":            input.Prompt,
+		"promptVersionId":   req.PromptVersionID,
+		"promptHash":        req.PromptHash,
+		"promptTemplateKey": req.PromptTemplateKey,
+		"promptSource":      req.PromptSource,
+		"size":              input.Size,
+		"quality":           input.Quality,
 	})
 	_, err := tx.Exec(ctx, `
 		INSERT INTO artifacts(

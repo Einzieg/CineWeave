@@ -58,6 +58,10 @@ type gatewayVideoTask struct {
 	ModelProfileID        string
 	ModelProfileBindingID string
 	ModelProfileKey       string
+	PromptTemplateKey     string
+	PromptVersionID       string
+	PromptHash            string
+	PromptSource          string
 	ExternalTaskID        string
 	Status                string
 	Input                 json.RawMessage
@@ -680,6 +684,24 @@ func parseGatewayVideoInput(input json.RawMessage) (gatewayVideoInput, error) {
 	}, nil
 }
 
+func videoTaskInputWithPromptTrace(input json.RawMessage, promptTemplateKey, promptSource string) json.RawMessage {
+	var decoded map[string]any
+	if err := json.Unmarshal(input, &decoded); err != nil || decoded == nil {
+		return input
+	}
+	if strings.TrimSpace(promptTemplateKey) != "" {
+		decoded["promptTemplateKey"] = strings.TrimSpace(promptTemplateKey)
+	}
+	if strings.TrimSpace(promptSource) != "" {
+		decoded["promptSource"] = strings.TrimSpace(promptSource)
+	}
+	raw, err := json.Marshal(decoded)
+	if err != nil {
+		return input
+	}
+	return raw
+}
+
 func (s *Service) manifestForAccount(ctx context.Context, account Account) (ProviderManifest, error) {
 	var raw []byte
 	err := s.db.QueryRow(ctx, `
@@ -825,7 +847,7 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 	defer tx.Rollback(ctx)
 	taskID := uuid.NewString()
 	if stored != nil {
-		if err := insertGatewayVideoArtifact(ctx, tx, selection, req.OrganizationID, req.ProjectID, req.WorkflowRunID, req.NodeRunID, callID, taskID, externalTaskID, stored, input); err != nil {
+		if err := insertGatewayVideoArtifact(ctx, tx, selection, req.OrganizationID, req.ProjectID, req.WorkflowRunID, req.NodeRunID, req.PromptTemplateKey, req.PromptVersionID, req.PromptHash, req.PromptSource, callID, taskID, externalTaskID, stored, input); err != nil {
 			return CallLog{}, "", err
 		}
 		if err := insertGatewayVideoMediaFile(ctx, tx, req.OrganizationID, req.ProjectID, callID, taskID, externalTaskID, selection.Model.ID, stored); err != nil {
@@ -876,6 +898,7 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 		}
 		return call, "", nil
 	}
+	taskInput := videoTaskInputWithPromptTrace(req.Input, req.PromptTemplateKey, req.PromptSource)
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO provider_async_tasks(
 			id,
@@ -895,7 +918,7 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 			$16
 		)
 		RETURNING id
-	`, taskID, call.ID, req.OrganizationID, nullString(req.ProjectID), nullString(req.WorkflowRunID), nullString(req.NodeRunID), selection.Account.ID, selection.Model.ID, selection.CredentialID, nullString(selection.ModelProfileID), nullString(selection.ModelProfileBindingID), nullString(selection.ModelProfileKey), nullString(externalTaskID), status, req.Input, nullIfJSONNull(normalizedOutput), nullIfJSONNull(responseSnapshot), nullString(errorCode), nullString(errorMessage)).Scan(&taskID); err != nil {
+	`, taskID, call.ID, req.OrganizationID, nullString(req.ProjectID), nullString(req.WorkflowRunID), nullString(req.NodeRunID), selection.Account.ID, selection.Model.ID, selection.CredentialID, nullString(selection.ModelProfileID), nullString(selection.ModelProfileBindingID), nullString(selection.ModelProfileKey), nullString(externalTaskID), status, taskInput, nullIfJSONNull(normalizedOutput), nullIfJSONNull(responseSnapshot), nullString(errorCode), nullString(errorMessage)).Scan(&taskID); err != nil {
 		return CallLog{}, "", err
 	}
 	if stored != nil {
@@ -919,7 +942,7 @@ func (s *Service) recordVideoPollTask(ctx context.Context, selection gatewayMode
 	workflowRunID := firstNonEmpty(req.WorkflowRunID, task.WorkflowRunID)
 	nodeRunID := firstNonEmpty(req.NodeRunID, task.NodeRunID)
 	if stored != nil {
-		if err := insertGatewayVideoArtifact(ctx, tx, selection, task.OrganizationID, projectID, workflowRunID, nodeRunID, callID, task.ID, task.ExternalTaskID, stored, input); err != nil {
+		if err := insertGatewayVideoArtifact(ctx, tx, selection, task.OrganizationID, projectID, workflowRunID, nodeRunID, task.PromptTemplateKey, task.PromptVersionID, task.PromptHash, task.PromptSource, callID, task.ID, task.ExternalTaskID, stored, input); err != nil {
 			return CallLog{}, err
 		}
 		if err := insertGatewayVideoMediaFile(ctx, tx, task.OrganizationID, projectID, callID, task.ID, task.ExternalTaskID, selection.Model.ID, stored); err != nil {
@@ -938,6 +961,8 @@ func (s *Service) recordVideoPollTask(ctx context.Context, selection gatewayMode
 		ModelProfileID:        selection.ModelProfileID,
 		ModelProfileBindingID: selection.ModelProfileBindingID,
 		ModelProfileKey:       selection.ModelProfileKey,
+		PromptVersionID:       task.PromptVersionID,
+		PromptHash:            task.PromptHash,
 		LeaseID:               leaseID,
 		TaskType:              TaskTypeVideoPollTask,
 		ExecutionMode:         "async_poll",
@@ -1077,7 +1102,7 @@ func insertProviderVideoCancelEvent(ctx context.Context, tx pgx.Tx, task gateway
 	return err
 }
 
-func insertGatewayVideoArtifact(ctx context.Context, tx pgx.Tx, selection gatewayModelSelection, organizationID, projectID, workflowRunID, nodeRunID, callID, providerAsyncTaskID, externalTaskID string, stored *gatewayStoredVideo, input gatewayVideoInput) error {
+func insertGatewayVideoArtifact(ctx context.Context, tx pgx.Tx, selection gatewayModelSelection, organizationID, projectID, workflowRunID, nodeRunID, promptTemplateKey, promptVersionID, promptHash, promptSource, callID, providerAsyncTaskID, externalTaskID string, stored *gatewayStoredVideo, input gatewayVideoInput) error {
 	metadata := mustJSON(map[string]any{
 		"source":              "provider_gateway",
 		"providerCallId":      callID,
@@ -1086,6 +1111,10 @@ func insertGatewayVideoArtifact(ctx context.Context, tx pgx.Tx, selection gatewa
 		"providerModelId":     selection.Model.ID,
 		"mediaFileId":         stored.MediaFileID,
 		"prompt":              input.Prompt,
+		"promptTemplateKey":   promptTemplateKey,
+		"promptVersionId":     promptVersionID,
+		"promptHash":          promptHash,
+		"promptSource":        promptSource,
 		"duration":            input.DurationSeconds,
 		"aspectRatio":         input.AspectRatio,
 		"resolution":          input.Resolution,
@@ -1095,8 +1124,8 @@ func insertGatewayVideoArtifact(ctx context.Context, tx pgx.Tx, selection gatewa
 			id, organization_id, project_id, workflow_run_id, node_run_id, type,
 			storage_key, mime_type, content_hash, prompt_hash, model_id, metadata, created_by
 		)
-		VALUES ($1, $2, $3, $4, $5, 'generated_video', $6, $7, $8, NULL, $9, $10, NULL)
-	`, stored.ArtifactID, organizationID, nullString(projectID), nullString(workflowRunID), nullString(nodeRunID), stored.Output.StorageKey, stored.Output.MimeType, stored.Media.ContentHash, selection.Model.ID, metadata)
+		VALUES ($1, $2, $3, $4, $5, 'generated_video', $6, $7, $8, $9, $10, $11, NULL)
+	`, stored.ArtifactID, organizationID, nullString(projectID), nullString(workflowRunID), nullString(nodeRunID), stored.Output.StorageKey, stored.Output.MimeType, stored.Media.ContentHash, nullString(promptHash), selection.Model.ID, metadata)
 	return err
 }
 
@@ -1144,12 +1173,13 @@ func insertVideoCostRecord(ctx context.Context, tx pgx.Tx, providerCallID string
 
 func (s *Service) getGatewayVideoTask(ctx context.Context, req GatewayVideoPollTaskRequest) (gatewayVideoTask, error) {
 	var task gatewayVideoTask
-	var projectID, workflowRunID, nodeRunID, providerModelID, credentialID, modelProfileID, modelProfileBindingID, modelProfileKey, externalTaskID sql.NullString
+	var projectID, workflowRunID, nodeRunID, providerModelID, credentialID, modelProfileID, modelProfileBindingID, modelProfileKey, promptVersionID, promptHash, externalTaskID sql.NullString
 	var normalizedOutput []byte
 	if strings.TrimSpace(req.ProviderAsyncTaskID) != "" {
-		err := s.db.QueryRow(ctx, gatewayVideoTaskSelect(`WHERE id = $1 AND organization_id = $2`), req.ProviderAsyncTaskID, req.OrganizationID).Scan(
+		err := s.db.QueryRow(ctx, gatewayVideoTaskSelect(`WHERE t.id = $1 AND t.organization_id = $2`), req.ProviderAsyncTaskID, req.OrganizationID).Scan(
 			&task.ID, &task.ProviderCallID, &task.OrganizationID, &projectID, &workflowRunID, &nodeRunID,
 			&task.ProviderAccountID, &providerModelID, &credentialID, &modelProfileID, &modelProfileBindingID, &modelProfileKey,
+			&promptVersionID, &promptHash,
 			&externalTaskID, &task.Status, &task.Input, &normalizedOutput, &task.PollCount,
 		)
 		if err != nil {
@@ -1159,9 +1189,10 @@ func (s *Service) getGatewayVideoTask(ctx context.Context, req GatewayVideoPollT
 		if strings.TrimSpace(req.ProviderAccountID) == "" || strings.TrimSpace(req.ExternalTaskID) == "" {
 			return gatewayVideoTask{}, fmt.Errorf("%w: providerAsyncTaskId or providerAccountId/externalTaskId is required", ErrValidation)
 		}
-		err := s.db.QueryRow(ctx, gatewayVideoTaskSelect(`WHERE organization_id = $1 AND provider_account_id = $2 AND external_task_id = $3`), req.OrganizationID, req.ProviderAccountID, req.ExternalTaskID).Scan(
+		err := s.db.QueryRow(ctx, gatewayVideoTaskSelect(`WHERE t.organization_id = $1 AND t.provider_account_id = $2 AND t.external_task_id = $3`), req.OrganizationID, req.ProviderAccountID, req.ExternalTaskID).Scan(
 			&task.ID, &task.ProviderCallID, &task.OrganizationID, &projectID, &workflowRunID, &nodeRunID,
 			&task.ProviderAccountID, &providerModelID, &credentialID, &modelProfileID, &modelProfileBindingID, &modelProfileKey,
+			&promptVersionID, &promptHash,
 			&externalTaskID, &task.Status, &task.Input, &normalizedOutput, &task.PollCount,
 		)
 		if err != nil {
@@ -1176,8 +1207,12 @@ func (s *Service) getGatewayVideoTask(ctx context.Context, req GatewayVideoPollT
 	task.ModelProfileID = nullStringText(modelProfileID)
 	task.ModelProfileBindingID = nullStringText(modelProfileBindingID)
 	task.ModelProfileKey = nullStringText(modelProfileKey)
+	task.PromptVersionID = nullStringText(promptVersionID)
+	task.PromptHash = nullStringText(promptHash)
 	task.ExternalTaskID = nullStringText(externalTaskID)
 	task.NormalizedOutput = rawOrDefault(normalizedOutput, "{}")
+	task.PromptTemplateKey = videoStringField(task.Input, "promptTemplateKey")
+	task.PromptSource = videoStringField(task.Input, "promptSource")
 	if task.ProviderModelID == "" {
 		return gatewayVideoTask{}, fmt.Errorf("%w: provider async task has no provider model", ErrValidation)
 	}
@@ -1186,10 +1221,12 @@ func (s *Service) getGatewayVideoTask(ctx context.Context, req GatewayVideoPollT
 
 func gatewayVideoTaskSelect(where string) string {
 	return `
-		SELECT id, provider_call_id, organization_id, project_id, workflow_run_id, node_run_id,
-		       provider_account_id, provider_model_id, credential_id, model_profile_id, model_profile_binding_id, model_profile_key,
-		       external_task_id, status, input, normalized_output, poll_count
-		FROM provider_async_tasks
+		SELECT t.id, t.provider_call_id, t.organization_id, t.project_id, t.workflow_run_id, t.node_run_id,
+		       t.provider_account_id, t.provider_model_id, t.credential_id, t.model_profile_id, t.model_profile_binding_id, t.model_profile_key,
+		       l.prompt_version_id::text, l.prompt_hash,
+		       t.external_task_id, t.status, t.input, t.normalized_output, t.poll_count
+		FROM provider_async_tasks t
+		JOIN provider_call_logs l ON l.id = t.provider_call_id
 	` + where
 }
 

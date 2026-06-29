@@ -113,6 +113,33 @@ func (a Activities) CreateStoryboardVideoTask(ctx context.Context, input CreateS
 	if videoPrompt == "" {
 		videoPrompt = selectVideoPrompt(input.Storyboard, input.Prompt, duration)
 	}
+	shot := firstStoryboardShot(input.Storyboard)
+	if strings.TrimSpace(shot.VideoPrompt) == "" {
+		shot.VideoPrompt = videoPrompt
+	}
+	if strings.TrimSpace(shot.Visual) == "" {
+		shot.Visual = videoPrompt
+	}
+	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardVideo, map[string]any{
+		"input": map[string]any{
+			"prompt": input.Prompt,
+		},
+		"shot": map[string]any{
+			"visual":      shot.Visual,
+			"camera":      shot.Camera,
+			"motion":      shot.Motion,
+			"mood":        shot.Mood,
+			"videoPrompt": shot.VideoPrompt,
+		},
+		"video": map[string]any{
+			"duration":    duration,
+			"aspectRatio": aspectRatio,
+			"resolution":  resolution,
+		},
+	})
+	if err != nil {
+		return CreateStoryboardVideoTaskOutput{}, a.failActivity(ctx, baseInput, "", err)
+	}
 
 	nodeRunID, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
@@ -130,6 +157,10 @@ func (a Activities) CreateStoryboardVideoTask(ctx context.Context, input CreateS
 			"aspectRatio":          aspectRatio,
 			"resolution":           resolution,
 			"modelProfileKey":      videoGenerationModelProfileKey,
+			"promptTemplateKey":    rendered.TemplateKey,
+			"promptVersionId":      rendered.PromptVersionID,
+			"promptHash":           rendered.RenderedHash,
+			"promptSource":         rendered.Source,
 		}),
 	})
 	if err != nil {
@@ -143,15 +174,18 @@ func (a Activities) CreateStoryboardVideoTask(ctx context.Context, input CreateS
 	}
 
 	gatewayResp, err := a.gateway.CreateVideoTask(ctx, provider.GatewayVideoCreateTaskRequest{
-		OrganizationID:  input.OrganizationID,
-		ProjectID:       input.ProjectID,
-		WorkflowRunID:   input.WorkflowRunID,
-		NodeRunID:       nodeRunID,
-		ModelProfileKey: videoGenerationModelProfileKey,
-		PromptHash:      hashString(videoPrompt),
-		IdempotencyKey:  videoTaskIdempotencyKey(input.WorkflowRunID),
+		OrganizationID:    input.OrganizationID,
+		ProjectID:         input.ProjectID,
+		WorkflowRunID:     input.WorkflowRunID,
+		NodeRunID:         nodeRunID,
+		ModelProfileKey:   videoGenerationModelProfileKey,
+		PromptTemplateKey: rendered.TemplateKey,
+		PromptVersionID:   rendered.PromptVersionID,
+		PromptHash:        rendered.RenderedHash,
+		PromptSource:      rendered.Source,
+		IdempotencyKey:    videoTaskIdempotencyKey(input.WorkflowRunID),
 		Input: mustJSON(map[string]any{
-			"prompt":      videoPrompt,
+			"prompt":      rendered.RenderedText,
 			"duration":    duration,
 			"aspectRatio": aspectRatio,
 			"resolution":  resolution,

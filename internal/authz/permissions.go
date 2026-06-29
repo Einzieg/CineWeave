@@ -15,6 +15,8 @@ const (
 	PermissionMediaRead          = "media.read"
 	PermissionProviderRead       = "provider.read"
 	PermissionProviderManage     = "provider.manage"
+	PermissionPromptRead         = "prompt.read"
+	PermissionPromptManage       = "prompt.manage"
 	PermissionWorkflowRead       = "workflow.read"
 	PermissionWorkflowRun        = "workflow.run"
 	PermissionWorkflowCancel     = "workflow.cancel"

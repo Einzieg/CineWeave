@@ -179,31 +179,36 @@ CREATE INDEX IF NOT EXISTS role_bindings_subject_user_id_idx ON role_bindings(su
 CREATE INDEX IF NOT EXISTS role_bindings_subject_team_id_idx ON role_bindings(subject_team_id);
 CREATE INDEX IF NOT EXISTS role_bindings_resource_project_id_idx ON role_bindings(resource_project_id);
 
-INSERT INTO permissions(permission_key, description) VALUES
-  ('organization.read', 'Read organization'),
-  ('organization.update', 'Update organization'),
-  ('organization.members.manage', 'Manage organization members'),
-  ('workspace.read', 'Read workspace'),
-  ('workspace.create', 'Create workspace'),
-  ('project.read', 'Read project'),
-  ('project.create', 'Create project'),
-  ('project.update', 'Update project'),
-  ('project.delete', 'Delete project'),
-  ('project.members.manage', 'Manage project members'),
-  ('provider.read', 'Read providers'),
-  ('provider.create', 'Create providers'),
-  ('provider.update', 'Update providers'),
-  ('provider.delete', 'Delete providers'),
-  ('provider.test', 'Test providers'),
-  ('provider.credentials.rotate', 'Rotate provider credentials'),
-  ('provider.models.manage', 'Manage provider models'),
-  ('model_profiles.manage', 'Manage model profiles'),
-  ('workflow.run', 'Run workflows'),
-  ('workflow.cancel', 'Cancel workflows'),
-  ('workflow.retry', 'Retry workflows'),
-  ('workflow.read', 'Read workflows'),
-  ('workflow.audit', 'Audit workflows')
-ON CONFLICT (permission_key) DO UPDATE SET description = EXCLUDED.description;
+ALTER TABLE permissions
+  ADD COLUMN IF NOT EXISTS name TEXT;
+
+INSERT INTO permissions(permission_key, name, description) VALUES
+  ('organization.read', 'Organization Read', 'Read organization'),
+  ('organization.update', 'Organization Update', 'Update organization'),
+  ('organization.members.manage', 'Organization Members Manage', 'Manage organization members'),
+  ('workspace.read', 'Workspace Read', 'Read workspace'),
+  ('workspace.create', 'Workspace Create', 'Create workspace'),
+  ('project.read', 'Project Read', 'Read project'),
+  ('project.create', 'Project Create', 'Create project'),
+  ('project.update', 'Project Update', 'Update project'),
+  ('project.delete', 'Project Delete', 'Delete project'),
+  ('project.members.manage', 'Project Members Manage', 'Manage project members'),
+  ('provider.read', 'Provider Read', 'Read providers'),
+  ('provider.create', 'Provider Create', 'Create providers'),
+  ('provider.update', 'Provider Update', 'Update providers'),
+  ('provider.delete', 'Provider Delete', 'Delete providers'),
+  ('provider.test', 'Provider Test', 'Test providers'),
+  ('provider.credentials.rotate', 'Provider Credentials Rotate', 'Rotate provider credentials'),
+  ('provider.models.manage', 'Provider Models Manage', 'Manage provider models'),
+  ('model_profiles.manage', 'Model Profiles Manage', 'Manage model profiles'),
+  ('workflow.run', 'Workflow Run', 'Run workflows'),
+  ('workflow.cancel', 'Workflow Cancel', 'Cancel workflows'),
+  ('workflow.retry', 'Workflow Retry', 'Retry workflows'),
+  ('workflow.read', 'Workflow Read', 'Read workflows'),
+  ('workflow.audit', 'Workflow Audit', 'Audit workflows')
+ON CONFLICT (permission_key) DO UPDATE SET
+  name = EXCLUDED.name,
+  description = EXCLUDED.description;
 
 INSERT INTO roles(role_key, name, scope, is_system) VALUES
   ('organization_owner', 'Organization Owner', 'organization', true),
@@ -322,4 +327,3 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO schema_migrations(version) VALUES ('000001_auth_tenants_projects_rbac')
 ON CONFLICT (version) DO NOTHING;
-

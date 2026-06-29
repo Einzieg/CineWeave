@@ -397,18 +397,20 @@ type GatewayTextOptions struct {
 }
 
 type GatewayTextRequest struct {
-	OrganizationID  string             `json:"organizationId"`
-	WorkspaceID     string             `json:"workspaceId,omitempty"`
-	ProjectID       string             `json:"projectId,omitempty"`
-	WorkflowRunID   string             `json:"workflowRunId,omitempty"`
-	NodeRunID       string             `json:"nodeRunId,omitempty"`
-	ModelProfileKey string             `json:"modelProfileKey,omitempty"`
-	ProviderModelID string             `json:"providerModelId,omitempty"`
-	PromptVersionID string             `json:"promptVersionId,omitempty"`
-	PromptHash      string             `json:"promptHash,omitempty"`
-	IdempotencyKey  string             `json:"idempotencyKey,omitempty"`
-	Input           json.RawMessage    `json:"input"`
-	Options         GatewayTextOptions `json:"options"`
+	OrganizationID    string             `json:"organizationId"`
+	WorkspaceID       string             `json:"workspaceId,omitempty"`
+	ProjectID         string             `json:"projectId,omitempty"`
+	WorkflowRunID     string             `json:"workflowRunId,omitempty"`
+	NodeRunID         string             `json:"nodeRunId,omitempty"`
+	ModelProfileKey   string             `json:"modelProfileKey,omitempty"`
+	ProviderModelID   string             `json:"providerModelId,omitempty"`
+	PromptTemplateKey string             `json:"promptTemplateKey,omitempty"`
+	PromptVersionID   string             `json:"promptVersionId,omitempty"`
+	PromptHash        string             `json:"promptHash,omitempty"`
+	PromptSource      string             `json:"promptSource,omitempty"`
+	IdempotencyKey    string             `json:"idempotencyKey,omitempty"`
+	Input             json.RawMessage    `json:"input"`
+	Options           GatewayTextOptions `json:"options"`
 }
 
 type GatewayTextOutput struct {
@@ -462,19 +464,21 @@ type GatewayImageReference struct {
 }
 
 type GatewayImageRequest struct {
-	OrganizationID  string                  `json:"organizationId"`
-	WorkspaceID     string                  `json:"workspaceId,omitempty"`
-	ProjectID       string                  `json:"projectId,omitempty"`
-	WorkflowRunID   string                  `json:"workflowRunId,omitempty"`
-	NodeRunID       string                  `json:"nodeRunId,omitempty"`
-	ModelProfileKey string                  `json:"modelProfileKey,omitempty"`
-	ProviderModelID string                  `json:"providerModelId,omitempty"`
-	PromptVersionID string                  `json:"promptVersionId,omitempty"`
-	PromptHash      string                  `json:"promptHash,omitempty"`
-	IdempotencyKey  string                  `json:"idempotencyKey,omitempty"`
-	Input           json.RawMessage         `json:"input"`
-	References      []GatewayImageReference `json:"references,omitempty"`
-	Options         GatewayImageOptions     `json:"options"`
+	OrganizationID    string                  `json:"organizationId"`
+	WorkspaceID       string                  `json:"workspaceId,omitempty"`
+	ProjectID         string                  `json:"projectId,omitempty"`
+	WorkflowRunID     string                  `json:"workflowRunId,omitempty"`
+	NodeRunID         string                  `json:"nodeRunId,omitempty"`
+	ModelProfileKey   string                  `json:"modelProfileKey,omitempty"`
+	ProviderModelID   string                  `json:"providerModelId,omitempty"`
+	PromptTemplateKey string                  `json:"promptTemplateKey,omitempty"`
+	PromptVersionID   string                  `json:"promptVersionId,omitempty"`
+	PromptHash        string                  `json:"promptHash,omitempty"`
+	PromptSource      string                  `json:"promptSource,omitempty"`
+	IdempotencyKey    string                  `json:"idempotencyKey,omitempty"`
+	Input             json.RawMessage         `json:"input"`
+	References        []GatewayImageReference `json:"references,omitempty"`
+	Options           GatewayImageOptions     `json:"options"`
 }
 
 type GatewayImageOutput struct {
@@ -517,19 +521,21 @@ type GatewayVideoReference struct {
 }
 
 type GatewayVideoCreateTaskRequest struct {
-	OrganizationID  string                  `json:"organizationId"`
-	WorkspaceID     string                  `json:"workspaceId,omitempty"`
-	ProjectID       string                  `json:"projectId,omitempty"`
-	WorkflowRunID   string                  `json:"workflowRunId,omitempty"`
-	NodeRunID       string                  `json:"nodeRunId,omitempty"`
-	ModelProfileKey string                  `json:"modelProfileKey,omitempty"`
-	ProviderModelID string                  `json:"providerModelId,omitempty"`
-	PromptVersionID string                  `json:"promptVersionId,omitempty"`
-	PromptHash      string                  `json:"promptHash,omitempty"`
-	IdempotencyKey  string                  `json:"idempotencyKey,omitempty"`
-	Input           json.RawMessage         `json:"input"`
-	References      []GatewayVideoReference `json:"references,omitempty"`
-	Options         GatewayVideoOptions     `json:"options"`
+	OrganizationID    string                  `json:"organizationId"`
+	WorkspaceID       string                  `json:"workspaceId,omitempty"`
+	ProjectID         string                  `json:"projectId,omitempty"`
+	WorkflowRunID     string                  `json:"workflowRunId,omitempty"`
+	NodeRunID         string                  `json:"nodeRunId,omitempty"`
+	ModelProfileKey   string                  `json:"modelProfileKey,omitempty"`
+	ProviderModelID   string                  `json:"providerModelId,omitempty"`
+	PromptTemplateKey string                  `json:"promptTemplateKey,omitempty"`
+	PromptVersionID   string                  `json:"promptVersionId,omitempty"`
+	PromptHash        string                  `json:"promptHash,omitempty"`
+	PromptSource      string                  `json:"promptSource,omitempty"`
+	IdempotencyKey    string                  `json:"idempotencyKey,omitempty"`
+	Input             json.RawMessage         `json:"input"`
+	References        []GatewayVideoReference `json:"references,omitempty"`
+	Options           GatewayVideoOptions     `json:"options"`
 }
 
 type GatewayVideoCreateTaskResponse struct {
