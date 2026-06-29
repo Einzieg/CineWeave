@@ -8,24 +8,26 @@ import (
 )
 
 var (
-	ErrValidation = errors.New("provider validation failed")
-	ErrConflict   = errors.New("provider conflict")
+	ErrValidation              = errors.New("provider validation failed")
+	ErrConflict                = errors.New("provider conflict")
+	ErrProviderGatewayRequired = errors.New("provider gateway required")
 )
 
 const (
-	CodeAuthFailed            = "AUTH_FAILED"
-	CodeQuotaExceeded         = "QUOTA_EXCEEDED"
-	CodeRateLimited           = "RATE_LIMITED"
-	CodeModelNotFound         = "MODEL_NOT_FOUND"
-	CodeInvalidRequest        = "INVALID_REQUEST"
-	CodeUnsupportedCapability = "UNSUPPORTED_CAPABILITY"
-	CodeUpstreamTimeout       = "UPSTREAM_TIMEOUT"
-	CodeUpstreamInternalError = "UPSTREAM_INTERNAL_ERROR"
-	CodePollingTimeout        = "POLLING_TIMEOUT"
-	CodeResultExpired         = "RESULT_EXPIRED"
-	CodeMediaDownloadFailed   = "MEDIA_DOWNLOAD_FAILED"
-	CodeContentRejected       = "CONTENT_REJECTED"
-	CodeUnknownError          = "UNKNOWN_ERROR"
+	CodeAuthFailed              = "AUTH_FAILED"
+	CodeQuotaExceeded           = "QUOTA_EXCEEDED"
+	CodeRateLimited             = "RATE_LIMITED"
+	CodeModelNotFound           = "MODEL_NOT_FOUND"
+	CodeInvalidRequest          = "INVALID_REQUEST"
+	CodeUnsupportedCapability   = "UNSUPPORTED_CAPABILITY"
+	CodeUpstreamTimeout         = "UPSTREAM_TIMEOUT"
+	CodeUpstreamInternalError   = "UPSTREAM_INTERNAL_ERROR"
+	CodePollingTimeout          = "POLLING_TIMEOUT"
+	CodeResultExpired           = "RESULT_EXPIRED"
+	CodeMediaDownloadFailed     = "MEDIA_DOWNLOAD_FAILED"
+	CodeContentRejected         = "CONTENT_REJECTED"
+	CodeProviderGatewayRequired = "PROVIDER_GATEWAY_REQUIRED"
+	CodeUnknownError            = "UNKNOWN_ERROR"
 )
 
 type StandardError struct {

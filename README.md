@@ -21,6 +21,10 @@ pnpm --filter @cineweave/web lint
 docker compose config
 ```
 
+## Provider Gateway Boundary
+
+Provider Gateway is required by default for upstream model access. API and worker services should call `PROVIDER_GATEWAY_URL` with `CINEWEAVE_SERVICE_TOKEN`; production must not enable direct provider fallback. `CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK=true` is only for local development or test troubleshooting.
+
 ## Layout
 
 - `apps/api`: Go public API server.
@@ -33,4 +37,3 @@ docker compose config
 - `db`: migrations and seeds.
 - `deploy`: Docker Compose, Kubernetes, Helm, and ingress assets.
 - `docs`: implementation-facing architecture and execution notes.
-

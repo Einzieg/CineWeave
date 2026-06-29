@@ -654,6 +654,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "request is invalid", fmt.Sprintf("%v", err), false)
 	case errors.Is(err, provider.ErrConflict):
 		httpx.WriteError(w, r, http.StatusConflict, "CONFLICT", "resource conflict", fmt.Sprintf("%v", err), false)
+	case errors.Is(err, provider.ErrProviderGatewayRequired):
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, provider.CodeProviderGatewayRequired, "provider gateway is required", fmt.Sprintf("%v", err), false)
 	case errors.As(err, &upstreamErr):
 		standard := provider.NormalizeHTTPError(upstreamErr.Status, upstreamErr.Code)
 		httpx.WriteError(w, r, http.StatusBadGateway, standard.Code, standard.Message, standard, standard.Retryable)

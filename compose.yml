@@ -104,6 +104,7 @@ services:
       CINEWEAVE_CREDENTIAL_MASTER_KEY: ${CINEWEAVE_CREDENTIAL_MASTER_KEY:-}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
       PROVIDER_GATEWAY_URL: http://provider-gateway:8082
+      CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK: "false"
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
       S3_ENDPOINT: http://minio:9000
@@ -153,6 +154,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
       PROVIDER_GATEWAY_URL: http://provider-gateway:8082
+      CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK: "false"
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
       S3_BUCKET: cineweave

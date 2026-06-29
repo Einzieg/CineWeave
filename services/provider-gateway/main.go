@@ -32,6 +32,7 @@ func main() {
 		log.Fatal(err)
 	}
 	providerService := provider.NewService(pool, credentialVault)
+	providerService.EnableGatewayRuntime()
 	serviceToken := config.Get("CINEWEAVE_SERVICE_TOKEN", "dev-service-token")
 	handler := gatewayHandler{providers: providerService, serviceToken: serviceToken}
 

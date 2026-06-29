@@ -984,6 +984,8 @@ paths:
   /internal/provider/models/discover:
     post:
       operationId: internalProviderDiscoverModels
+      summary: Internal Provider Gateway model discovery
+      description: Internal API. Requires bearer service token and must not be exposed publicly.
       security:
         - serviceTokenAuth: []
       requestBody:
@@ -999,9 +1001,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GatewayDiscoverModelsEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
   /internal/provider/text/generate:
     post:
       operationId: internalProviderTextGenerate
+      summary: Internal Provider Gateway text generation
+      description: Internal API. Requires bearer service token and must not be exposed publicly.
       security:
         - serviceTokenAuth: []
       requestBody:
@@ -1017,9 +1027,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GatewayTextEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
   /internal/provider/text/stream:
     post:
       operationId: internalProviderTextStream
+      summary: Internal Provider Gateway text stream
+      description: Internal API. Requires bearer service token and streams provider.delta/provider.completed events.
       security:
         - serviceTokenAuth: []
       requestBody:
@@ -1035,9 +1053,15 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
   /internal/provider/manifests/test-run:
     post:
       operationId: internalProviderManifestTestRun
+      summary: Internal Provider Gateway manifest test run
+      description: Internal API. Requires bearer service token and keeps direct provider execution inside Provider Gateway.
       security:
         - serviceTokenAuth: []
       requestBody:
@@ -1053,6 +1077,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ManifestTestRunResultEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
 components:
   securitySchemes:
     bearerAuth:
@@ -1141,6 +1171,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
+    GatewayError:
+      description: Internal Provider Gateway error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GatewayErrorEnvelope"
   schemas:
     Envelope:
       type: object
@@ -2099,6 +2135,14 @@ components:
           type: integer
         upstreamCode:
           type: string
+    GatewayErrorEnvelope:
+      type: object
+      required: [requestId, error]
+      properties:
+        requestId:
+          type: string
+        error:
+          $ref: "#/components/schemas/ProviderStandardError"
     GatewayTextOptions:
       type: object
       properties:

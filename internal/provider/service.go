@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -20,11 +21,13 @@ import (
 )
 
 type Service struct {
-	db           *pgxpool.Pool
-	vault        *Vault
-	gatewayURL   string
-	gatewayToken string
-	httpClient   *http.Client
+	db                  *pgxpool.Pool
+	vault               *Vault
+	gatewayURL          string
+	gatewayToken        string
+	gatewayRuntime      bool
+	allowDirectFallback bool
+	httpClient          *http.Client
 }
 
 type rowScanner interface {
@@ -32,12 +35,22 @@ type rowScanner interface {
 }
 
 func NewService(db *pgxpool.Pool, vault *Vault) *Service {
-	return &Service{db: db, vault: vault, httpClient: &http.Client{Timeout: 2 * time.Minute}}
+	env := strings.TrimSpace(os.Getenv("CINEWEAVE_ENV"))
+	return &Service{
+		db:                  db,
+		vault:               vault,
+		allowDirectFallback: providerDirectFallbackAllowed(os.Getenv("CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK"), env),
+		httpClient:          &http.Client{Timeout: 2 * time.Minute},
+	}
 }
 
 func (s *Service) SetGateway(baseURL, token string) {
 	s.gatewayURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	s.gatewayToken = strings.TrimSpace(token)
+}
+
+func (s *Service) EnableGatewayRuntime() {
+	s.gatewayRuntime = true
 }
 
 func (s *Service) ListConnectors(ctx context.Context) ([]Connector, error) {
@@ -626,6 +639,9 @@ func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID 
 			Unsupported: response.Unsupported,
 		}, nil
 	}
+	if err := s.requireGatewayOrDirectFallback(); err != nil {
+		return ModelDiscoveryResult{}, err
+	}
 	account, err := s.GetAccount(ctx, organizationID, accountID)
 	if err != nil {
 		return ModelDiscoveryResult{}, err
@@ -655,6 +671,9 @@ func (s *Service) RecordProviderModelTest(ctx context.Context, organizationID, u
 
 	if s.gatewayConfigured() {
 		return s.recordProviderModelTestViaGateway(ctx, organizationID, userID, modelID, testType, input, req)
+	}
+	if err := s.requireGatewayOrDirectFallback(); err != nil {
+		return ProviderTestResult{}, err
 	}
 
 	model, err := s.GetModel(ctx, organizationID, modelID)
@@ -925,6 +944,9 @@ func (s *Service) RunManifestTest(ctx context.Context, organizationID, userID st
 		}
 		return response, nil
 	}
+	if err := s.requireGatewayOrDirectFallback(); err != nil {
+		return ManifestTestRunResult{}, err
+	}
 	if strings.TrimSpace(req.AccountID) == "" {
 		return ManifestTestRunResult{}, fmt.Errorf("%w: accountId is required", ErrValidation)
 	}
@@ -1110,6 +1132,25 @@ func (s *Service) UsageSummary(ctx context.Context, organizationID string) (Usag
 
 func (s *Service) gatewayConfigured() bool {
 	return strings.TrimSpace(s.gatewayURL) != ""
+}
+
+func (s *Service) requireGatewayOrDirectFallback() error {
+	if s.gatewayRuntime || s.gatewayConfigured() || s.allowDirectFallback {
+		return nil
+	}
+	return fmt.Errorf("%w: configure PROVIDER_GATEWAY_URL or explicitly set CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK=true for development/test", ErrProviderGatewayRequired)
+}
+
+func providerDirectFallbackAllowed(raw, env string) bool {
+	if !strings.EqualFold(strings.TrimSpace(raw), "true") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "development", "test":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) postGatewayJSON(ctx context.Context, path string, payload any, target any) error {
