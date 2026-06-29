@@ -192,6 +192,10 @@ type CallLog struct {
 	ExecutionMode         string          `json:"executionMode"`
 	Status                string          `json:"status"`
 	LatencyMS             *int            `json:"latencyMs,omitempty"`
+	InputTokens           *int            `json:"inputTokens,omitempty"`
+	OutputTokens          *int            `json:"outputTokens,omitempty"`
+	EstimatedCost         *string         `json:"estimatedCost,omitempty"`
+	Currency              *string         `json:"currency,omitempty"`
 	ErrorCode             *string         `json:"errorCode,omitempty"`
 	ErrorMessage          *string         `json:"errorMessage,omitempty"`
 	UpstreamStatus        *int            `json:"upstreamStatus,omitempty"`
@@ -224,6 +228,10 @@ type RecordCallRequest struct {
 	ExecutionMode         string          `json:"executionMode"`
 	Status                string          `json:"status"`
 	LatencyMS             *int            `json:"latencyMs"`
+	InputTokens           *int            `json:"inputTokens"`
+	OutputTokens          *int            `json:"outputTokens"`
+	EstimatedCost         string          `json:"estimatedCost"`
+	Currency              string          `json:"currency"`
 	ErrorCode             string          `json:"errorCode"`
 	ErrorMessage          string          `json:"errorMessage"`
 	UpstreamStatus        *int            `json:"upstreamStatus"`
@@ -258,4 +266,73 @@ type DiscoveredModel struct {
 type ModelDiscoveryResult struct {
 	Models      []DiscoveredModel `json:"models"`
 	Unsupported []any             `json:"unsupported"`
+}
+
+type GatewayTextOptions struct {
+	TimeoutMS      int    `json:"timeoutMs"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+}
+
+type GatewayTextRequest struct {
+	OrganizationID  string             `json:"organizationId"`
+	WorkspaceID     string             `json:"workspaceId,omitempty"`
+	ProjectID       string             `json:"projectId,omitempty"`
+	WorkflowRunID   string             `json:"workflowRunId,omitempty"`
+	NodeRunID       string             `json:"nodeRunId,omitempty"`
+	ModelProfileKey string             `json:"modelProfileKey,omitempty"`
+	ProviderModelID string             `json:"providerModelId,omitempty"`
+	PromptVersionID string             `json:"promptVersionId,omitempty"`
+	PromptHash      string             `json:"promptHash,omitempty"`
+	IdempotencyKey  string             `json:"idempotencyKey,omitempty"`
+	Input           json.RawMessage    `json:"input"`
+	Options         GatewayTextOptions `json:"options"`
+}
+
+type GatewayTextOutput struct {
+	Text string          `json:"text"`
+	Raw  json.RawMessage `json:"raw,omitempty"`
+}
+
+type GatewayUsage struct {
+	InputTokens   int    `json:"inputTokens,omitempty"`
+	OutputTokens  int    `json:"outputTokens,omitempty"`
+	TotalTokens   int    `json:"totalTokens,omitempty"`
+	EstimatedCost string `json:"estimatedCost"`
+	Currency      string `json:"currency,omitempty"`
+}
+
+type GatewayTextResponse struct {
+	ProviderCallID string            `json:"providerCallId"`
+	ModelID        string            `json:"modelId"`
+	Status         string            `json:"status"`
+	Output         GatewayTextOutput `json:"output"`
+	Usage          GatewayUsage      `json:"usage"`
+	Error          *StandardError    `json:"error,omitempty"`
+	LatencyMS      int               `json:"latencyMs,omitempty"`
+}
+
+type GatewayTextDelta struct {
+	Text string `json:"text"`
+}
+
+type GatewayDiscoverModelsRequest struct {
+	OrganizationID string `json:"organizationId"`
+	AccountID      string `json:"accountId"`
+	TestType       string `json:"testType,omitempty"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+}
+
+type GatewayDiscoverModelsResponse struct {
+	ProviderCallID string            `json:"providerCallId,omitempty"`
+	Status         string            `json:"status"`
+	Models         []DiscoveredModel `json:"models"`
+	Unsupported    []any             `json:"unsupported"`
+	Error          *StandardError    `json:"error,omitempty"`
+	LatencyMS      int               `json:"latencyMs,omitempty"`
+}
+
+type GatewayManifestTestRunRequest struct {
+	OrganizationID string                 `json:"organizationId"`
+	UserID         string                 `json:"userId"`
+	Request        ManifestTestRunRequest `json:"request"`
 }

@@ -38,6 +38,10 @@ func main() {
 		log.Fatal(err)
 	}
 	providerService := provider.NewService(pool, credentialVault)
+	providerService.SetGateway(
+		config.Get("PROVIDER_GATEWAY_URL", "http://localhost:8082"),
+		config.Get("CINEWEAVE_SERVICE_TOKEN", "dev-service-token"),
+	)
 	storageClient, err := storage.New(ctx, storage.ConfigFromEnv())
 	if err != nil {
 		log.Fatal(err)

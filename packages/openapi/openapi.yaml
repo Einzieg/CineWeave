@@ -981,12 +981,88 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderUsageSummaryEnvelope"
+  /internal/provider/models/discover:
+    post:
+      operationId: internalProviderDiscoverModels
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayDiscoverModelsRequest"
+      responses:
+        "200":
+          description: Provider model discovery result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayDiscoverModelsEnvelope"
+  /internal/provider/text/generate:
+    post:
+      operationId: internalProviderTextGenerate
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayTextRequest"
+      responses:
+        "200":
+          description: Provider text generation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayTextEnvelope"
+  /internal/provider/text/stream:
+    post:
+      operationId: internalProviderTextStream
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayTextRequest"
+      responses:
+        "200":
+          description: Server-sent text stream with provider.delta and provider.completed events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /internal/provider/manifests/test-run:
+    post:
+      operationId: internalProviderManifestTestRun
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayManifestTestRunRequest"
+      responses:
+        "200":
+          description: Declarative provider test result executed by Provider Gateway
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestTestRunResultEnvelope"
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    serviceTokenAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: service-token
   parameters:
     OrganizationId:
       name: organizationId
@@ -2007,6 +2083,154 @@ components:
         unsupported:
           type: array
           items: {}
+    ProviderStandardError:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+        retryAfterMs:
+          type: integer
+        upstreamStatus:
+          type: integer
+        upstreamCode:
+          type: string
+    GatewayTextOptions:
+      type: object
+      properties:
+        timeoutMs:
+          type: integer
+        idempotencyKey:
+          type: string
+    GatewayTextRequest:
+      type: object
+      required: [organizationId, input]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        modelProfileKey:
+          type: string
+        providerModelId:
+          type: string
+          format: uuid
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        idempotencyKey:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        options:
+          $ref: "#/components/schemas/GatewayTextOptions"
+    GatewayTextOutput:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+        raw:
+          type: object
+          additionalProperties: true
+    GatewayUsage:
+      type: object
+      required: [estimatedCost]
+      properties:
+        inputTokens:
+          type: integer
+        outputTokens:
+          type: integer
+        totalTokens:
+          type: integer
+        estimatedCost:
+          type: string
+        currency:
+          type: string
+    GatewayTextResponse:
+      type: object
+      required: [providerCallId, modelId, status, output, usage]
+      properties:
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        output:
+          $ref: "#/components/schemas/GatewayTextOutput"
+        usage:
+          $ref: "#/components/schemas/GatewayUsage"
+        error:
+          $ref: "#/components/schemas/ProviderStandardError"
+        latencyMs:
+          type: integer
+    GatewayDiscoverModelsRequest:
+      type: object
+      required: [organizationId, accountId]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        testType:
+          type: string
+        idempotencyKey:
+          type: string
+    GatewayDiscoverModelsResponse:
+      type: object
+      required: [status, models, unsupported]
+      properties:
+        providerCallId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiscoveredModel"
+        unsupported:
+          type: array
+          items: {}
+        error:
+          $ref: "#/components/schemas/ProviderStandardError"
+        latencyMs:
+          type: integer
+    GatewayManifestTestRunRequest:
+      type: object
+      required: [organizationId, userId, request]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        request:
+          $ref: "#/components/schemas/ManifestTestRunRequest"
     ModelProfileBinding:
       type: object
       required: [id, modelProfileId, providerModelId, priority, weight, enabled, createdAt]
@@ -2126,6 +2350,16 @@ components:
         executionMode:
           type: string
         status:
+          type: string
+        latencyMs:
+          type: integer
+        inputTokens:
+          type: integer
+        outputTokens:
+          type: integer
+        estimatedCost:
+          type: string
+        currency:
           type: string
         errorCode:
           type: string
@@ -2262,6 +2496,20 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ModelDiscoveryResult"
+    GatewayTextEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayTextResponse"
+    GatewayDiscoverModelsEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayDiscoverModelsResponse"
     ModelProfileEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

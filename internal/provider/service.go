@@ -1,11 +1,15 @@
 package provider
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -16,8 +20,11 @@ import (
 )
 
 type Service struct {
-	db    *pgxpool.Pool
-	vault *Vault
+	db           *pgxpool.Pool
+	vault        *Vault
+	gatewayURL   string
+	gatewayToken string
+	httpClient   *http.Client
 }
 
 type rowScanner interface {
@@ -25,7 +32,12 @@ type rowScanner interface {
 }
 
 func NewService(db *pgxpool.Pool, vault *Vault) *Service {
-	return &Service{db: db, vault: vault}
+	return &Service{db: db, vault: vault, httpClient: &http.Client{Timeout: 2 * time.Minute}}
+}
+
+func (s *Service) SetGateway(baseURL, token string) {
+	s.gatewayURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	s.gatewayToken = strings.TrimSpace(token)
 }
 
 func (s *Service) ListConnectors(ctx context.Context) ([]Connector, error) {
@@ -598,6 +610,22 @@ func (s *Service) DeleteModelProfileBinding(ctx context.Context, organizationID,
 }
 
 func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID string) (ModelDiscoveryResult, error) {
+	if s.gatewayConfigured() {
+		var response GatewayDiscoverModelsResponse
+		if err := s.postGatewayJSON(ctx, "/internal/provider/models/discover", GatewayDiscoverModelsRequest{
+			OrganizationID: organizationID,
+			AccountID:      accountID,
+		}, &response); err != nil {
+			return ModelDiscoveryResult{}, err
+		}
+		if response.Status == "failed" {
+			return ModelDiscoveryResult{}, errorFromGatewayStandard(response.Error)
+		}
+		return ModelDiscoveryResult{
+			Models:      response.Models,
+			Unsupported: response.Unsupported,
+		}, nil
+	}
 	account, err := s.GetAccount(ctx, organizationID, accountID)
 	if err != nil {
 		return ModelDiscoveryResult{}, err
@@ -623,6 +651,10 @@ func (s *Service) RecordProviderModelTest(ctx context.Context, organizationID, u
 	input, err := normalizeJSON(req.Input, "{}")
 	if err != nil {
 		return ProviderTestResult{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
+	}
+
+	if s.gatewayConfigured() {
+		return s.recordProviderModelTestViaGateway(ctx, organizationID, userID, modelID, testType, input, req)
 	}
 
 	model, err := s.GetModel(ctx, organizationID, modelID)
@@ -754,7 +786,145 @@ func (s *Service) RecordProviderModelTest(ctx context.Context, organizationID, u
 	}, nil
 }
 
+func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organizationID, userID, modelID, testType string, input json.RawMessage, req TestProviderModelRequest) (ProviderTestResult, error) {
+	model, err := s.GetModel(ctx, organizationID, modelID)
+	if err != nil {
+		return ProviderTestResult{}, err
+	}
+
+	status := "succeeded"
+	latencyMS := 0
+	var providerCallID string
+	var errorCode, errorMessage string
+	var normalizedOutput json.RawMessage
+	var requestSnapshot json.RawMessage
+	var responseSnapshot json.RawMessage
+
+	switch testType {
+	case "connection_test", "auth_test", "model_discovery_test":
+		gatewayReq := GatewayDiscoverModelsRequest{
+			OrganizationID: organizationID,
+			AccountID:      model.ProviderAccountID,
+			TestType:       testType,
+			IdempotencyKey: req.IdempotencyKey,
+		}
+		var gatewayResp GatewayDiscoverModelsResponse
+		if err := s.postGatewayJSON(ctx, "/internal/provider/models/discover", gatewayReq, &gatewayResp); err != nil {
+			return ProviderTestResult{}, err
+		}
+		providerCallID = gatewayResp.ProviderCallID
+		status = gatewayResp.Status
+		latencyMS = gatewayResp.LatencyMS
+		requestSnapshot = mustJSON(gatewayReq)
+		responseSnapshot = mustJSON(gatewayResp)
+		if status == "failed" {
+			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
+			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
+		} else {
+			normalizedOutput = mustJSON(map[string]any{"models": gatewayResp.Models, "unsupported": gatewayResp.Unsupported})
+		}
+	case "text_generation_test":
+		gatewayReq := GatewayTextRequest{
+			OrganizationID:  organizationID,
+			ProviderModelID: modelID,
+			IdempotencyKey:  req.IdempotencyKey,
+			Input:           input,
+		}
+		var gatewayResp GatewayTextResponse
+		if err := s.postGatewayJSON(ctx, "/internal/provider/text/generate", gatewayReq, &gatewayResp); err != nil {
+			return ProviderTestResult{}, err
+		}
+		providerCallID = gatewayResp.ProviderCallID
+		status = gatewayResp.Status
+		latencyMS = gatewayResp.LatencyMS
+		requestSnapshot = mustJSON(gatewayReq)
+		responseSnapshot = mustJSON(gatewayResp)
+		if status == "failed" {
+			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
+			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
+		} else {
+			normalizedOutput = mustJSON(gatewayResp.Output)
+		}
+	case "streaming_test":
+		gatewayReq := GatewayTextRequest{
+			OrganizationID:  organizationID,
+			ProviderModelID: modelID,
+			IdempotencyKey:  req.IdempotencyKey,
+			Input:           input,
+		}
+		gatewayResp, err := s.postGatewayStream(ctx, gatewayReq)
+		if err != nil {
+			return ProviderTestResult{}, err
+		}
+		providerCallID = gatewayResp.ProviderCallID
+		status = gatewayResp.Status
+		latencyMS = gatewayResp.LatencyMS
+		requestSnapshot = mustJSON(gatewayReq)
+		responseSnapshot = mustJSON(gatewayResp)
+		if status == "failed" {
+			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
+			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
+		} else {
+			normalizedOutput = mustJSON(gatewayResp.Output)
+		}
+	default:
+		return ProviderTestResult{}, fmt.Errorf("%w: unsupported testType", ErrValidation)
+	}
+	if normalizedOutput == nil {
+		normalizedOutput = json.RawMessage(`null`)
+	}
+	if responseSnapshot == nil {
+		responseSnapshot = json.RawMessage(`null`)
+	}
+
+	var testRunID string
+	if err := s.db.QueryRow(ctx, `
+		INSERT INTO provider_test_runs(
+			organization_id, provider_account_id, provider_model_id, test_type, status,
+			request_snapshot, response_snapshot, normalized_output, error_code, error_message, latency_ms, created_by
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING id
+	`,
+		organizationID,
+		model.ProviderAccountID,
+		model.ID,
+		testType,
+		status,
+		mustSanitize(requestSnapshot, "{}"),
+		nullIfJSONNull(mustSanitize(responseSnapshot, "null")),
+		nullIfJSONNull(normalizedOutput),
+		nullString(errorCode),
+		nullString(errorMessage),
+		latencyMS,
+		userID,
+	).Scan(&testRunID); err != nil {
+		return ProviderTestResult{}, err
+	}
+
+	return ProviderTestResult{
+		TestRunID:        testRunID,
+		ProviderCallID:   providerCallID,
+		Status:           status,
+		LatencyMS:        latencyMS,
+		ErrorCode:        stringPtr(sql.NullString{String: errorCode, Valid: errorCode != ""}),
+		ErrorMessage:     stringPtr(sql.NullString{String: errorMessage, Valid: errorMessage != ""}),
+		NormalizedOutput: normalizedOutput,
+	}, nil
+}
+
 func (s *Service) RunManifestTest(ctx context.Context, organizationID, userID string, req ManifestTestRunRequest) (ManifestTestRunResult, error) {
+	if s.gatewayConfigured() {
+		var response ManifestTestRunResult
+		if err := s.postGatewayJSON(ctx, "/internal/provider/manifests/test-run", GatewayManifestTestRunRequest{
+			OrganizationID: organizationID,
+			UserID:         userID,
+			Request:        req,
+		}, &response); err != nil {
+			return ManifestTestRunResult{}, err
+		}
+		return response, nil
+	}
 	if strings.TrimSpace(req.AccountID) == "" {
 		return ManifestTestRunResult{}, fmt.Errorf("%w: accountId is required", ErrValidation)
 	}
@@ -890,7 +1060,8 @@ func (s *Service) ListCallLogs(ctx context.Context, organizationID string, filte
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
 			task_type, execution_mode, status,
-			latency_ms, error_code, error_message, upstream_status, upstream_error_code,
+			latency_ms, input_tokens, output_tokens, estimated_cost::text, currency,
+			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
 			created_at, started_at, completed_at
 		FROM provider_call_logs
@@ -935,6 +1106,152 @@ func (s *Service) UsageSummary(ctx context.Context, organizationID string) (Usag
 	}
 	summary.Currency = "USD"
 	return summary, nil
+}
+
+func (s *Service) gatewayConfigured() bool {
+	return strings.TrimSpace(s.gatewayURL) != ""
+}
+
+func (s *Service) postGatewayJSON(ctx context.Context, path string, payload any, target any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.gatewayURL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if s.gatewayToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.gatewayToken)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return gatewayHTTPError(resp.StatusCode, responseBody)
+	}
+	var envelope struct {
+		Data  json.RawMessage `json:"data"`
+		Error *StandardError  `json:"error"`
+	}
+	if err := json.Unmarshal(responseBody, &envelope); err != nil {
+		return fmt.Errorf("%w: provider gateway response is invalid", ErrValidation)
+	}
+	if envelope.Error != nil {
+		return errorFromGatewayStandard(envelope.Error)
+	}
+	if len(envelope.Data) == 0 || target == nil {
+		return nil
+	}
+	if err := json.Unmarshal(envelope.Data, target); err != nil {
+		return fmt.Errorf("%w: provider gateway data is invalid", ErrValidation)
+	}
+	return nil
+}
+
+func (s *Service) postGatewayStream(ctx context.Context, payload GatewayTextRequest) (GatewayTextResponse, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return GatewayTextResponse{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.gatewayURL+"/internal/provider/text/stream", bytes.NewReader(body))
+	if err != nil {
+		return GatewayTextResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	if s.gatewayToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.gatewayToken)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return GatewayTextResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		if readErr != nil {
+			return GatewayTextResponse{}, readErr
+		}
+		return GatewayTextResponse{}, gatewayHTTPError(resp.StatusCode, responseBody)
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	event := ""
+	var completed GatewayTextResponse
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			event = ""
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		switch event {
+		case "provider.completed":
+			if err := json.Unmarshal([]byte(data), &completed); err != nil {
+				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream completion is invalid", ErrValidation)
+			}
+		case "provider.error":
+			var standard StandardError
+			if err := json.Unmarshal([]byte(data), &standard); err != nil {
+				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream error is invalid", ErrValidation)
+			}
+			return GatewayTextResponse{}, errorFromGatewayStandard(&standard)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return GatewayTextResponse{}, err
+	}
+	if completed.Status == "" {
+		return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream did not complete", ErrValidation)
+	}
+	return completed, nil
+}
+
+func gatewayHTTPError(status int, body []byte) error {
+	var envelope struct {
+		Error *StandardError `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error != nil {
+		return errorFromGatewayStandard(envelope.Error)
+	}
+	return &UpstreamError{Status: status, Body: string(body)}
+}
+
+func errorFromGatewayStandard(standard *StandardError) error {
+	if standard == nil {
+		return fmt.Errorf("%w: provider gateway request failed", ErrValidation)
+	}
+	if standard.UpstreamStatus > 0 {
+		return &UpstreamError{
+			Status: standard.UpstreamStatus,
+			Code:   standard.UpstreamCode,
+			Body:   string(mustJSON(standard)),
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrValidation, standard.Message)
+}
+
+func gatewayErrorFields(standard *StandardError) (string, string) {
+	if standard == nil {
+		return CodeUnknownError, "provider gateway request failed"
+	}
+	return standard.Code, standard.Message
 }
 
 func (s *Service) insertCredential(ctx context.Context, tx pgx.Tx, organizationID, accountID, userID, credentialKey, credentialType string, payload map[string]any) (string, error) {
@@ -1267,7 +1584,8 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			model_profile_id, model_profile_binding_id, model_profile_key,
 			prompt_version_id, prompt_hash,
 			idempotency_key, task_type, execution_mode, status,
-			latency_ms, error_code, error_message, upstream_status, upstream_error_code,
+			latency_ms, input_tokens, output_tokens, estimated_cost, currency,
+			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
 			started_at, completed_at
 		)
@@ -1278,7 +1596,8 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			$11, $12,
 			$13, $14, $15, $16,
 			$17, $18, $19, $20, $21,
-			$22, $23, $24, $25, $26,
+			$22, $23, $24, $25,
+			$26, $27, $28, $29, $30,
 			CASE WHEN $16 IN ('running', 'succeeded', 'failed', 'skipped') THEN now() ELSE NULL END,
 			CASE WHEN $16 IN ('succeeded', 'failed', 'cancelled', 'skipped') THEN now() ELSE NULL END
 		)
@@ -1287,7 +1606,8 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
 			task_type, execution_mode, status,
-			latency_ms, error_code, error_message, upstream_status, upstream_error_code,
+			latency_ms, input_tokens, output_tokens, estimated_cost::text, currency,
+			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
 			created_at, started_at, completed_at
 	`,
@@ -1308,6 +1628,10 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 		executionMode,
 		status,
 		req.LatencyMS,
+		nullInt(req.InputTokens),
+		nullInt(req.OutputTokens),
+		nullString(req.EstimatedCost),
+		currencyOrDefault(req.Currency),
 		nullString(req.ErrorCode),
 		nullString(req.ErrorMessage),
 		req.UpstreamStatus,
@@ -1326,7 +1650,8 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 	var projectID, workflowRunID, nodeRunID, providerModelID, credentialID sql.NullString
 	var modelProfileID, modelProfileBindingID, modelProfileKey sql.NullString
 	var errorCode, errorMessage, upstreamErrorCode sql.NullString
-	var latencyMS, upstreamStatus sql.NullInt64
+	var estimatedCost, currency sql.NullString
+	var latencyMS, inputTokens, outputTokens, upstreamStatus sql.NullInt64
 	var requestSnapshot, responseSnapshot, normalizedOutput, artifactIDs, mediaFileIDs []byte
 	var startedAt, completedAt sql.NullTime
 	err := row.Scan(
@@ -1345,6 +1670,10 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 		&item.ExecutionMode,
 		&item.Status,
 		&latencyMS,
+		&inputTokens,
+		&outputTokens,
+		&estimatedCost,
+		&currency,
 		&errorCode,
 		&errorMessage,
 		&upstreamStatus,
@@ -1373,6 +1702,16 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 		value := int(latencyMS.Int64)
 		item.LatencyMS = &value
 	}
+	if inputTokens.Valid {
+		value := int(inputTokens.Int64)
+		item.InputTokens = &value
+	}
+	if outputTokens.Valid {
+		value := int(outputTokens.Int64)
+		item.OutputTokens = &value
+	}
+	item.EstimatedCost = stringPtr(estimatedCost)
+	item.Currency = stringPtr(currency)
 	if upstreamStatus.Valid {
 		value := int(upstreamStatus.Int64)
 		item.UpstreamStatus = &value
@@ -1485,6 +1824,21 @@ func nullString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func nullInt(value *int) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func currencyOrDefault(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "USD"
+	}
+	return strings.ToUpper(value)
 }
 
 func nullStringValue(value sql.NullString) any {
