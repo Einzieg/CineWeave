@@ -174,6 +174,31 @@ type Artifact = {
   previewExpiresAt?: string;
 };
 
+type StoryboardShot = {
+  id: string;
+  workflowRunId: string;
+  shotIndex: number;
+  shotNo: number;
+  durationSeconds?: number;
+  visual?: string;
+  camera?: string;
+  motion?: string;
+  mood?: string;
+  imagePrompt?: string;
+  videoPrompt?: string;
+  imageArtifactId?: string;
+  imageMediaFileId?: string;
+  imageStorageKey?: string;
+  imagePreviewUrl?: string;
+  videoArtifactId?: string;
+  videoMediaFileId?: string;
+  videoStorageKey?: string;
+  videoPreviewUrl?: string;
+  providerAsyncTaskId?: string;
+  externalTaskId?: string;
+  status: string;
+};
+
 type ArtifactPreviewUrl = {
   artifactId: string;
   storageKey: string;
@@ -421,6 +446,7 @@ export function CineWeaveConsole() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [workflowNodes, setWorkflowNodes] = useState<WorkflowNodeRun[]>([]);
+  const [workflowShots, setWorkflowShots] = useState<StoryboardShot[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [events, setEvents] = useState<RealtimeEvent[]>([]);
   const [prompt, setPrompt] = useState(defaultPrompt);
@@ -430,6 +456,7 @@ export function CineWeaveConsole() {
   const [workflowVideoResolution, setWorkflowVideoResolution] = useState(defaultVideoTestResolution);
   const [workflowVideoPollInterval, setWorkflowVideoPollInterval] = useState("5");
   const [workflowVideoMaxPolls, setWorkflowVideoMaxPolls] = useState("120");
+  const [workflowVideoMaxShots, setWorkflowVideoMaxShots] = useState("3");
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("idle");
@@ -477,9 +504,13 @@ export function CineWeaveConsole() {
   const [manifestText, setManifestText] = useState(defaultManifestText);
   const [manifestValidation, setManifestValidation] = useState<ManifestValidationResult | null>(null);
   const videoProviderAsyncTaskId = useMemo(() => {
-    const videoNode = workflowNodes.find((node) => node.nodeKey === "generate_storyboard_video");
+    const runningShot = workflowShots.find((shot) => shot.providerAsyncTaskId && shot.status === "video_running");
+    if (runningShot?.providerAsyncTaskId) {
+      return runningShot.providerAsyncTaskId;
+    }
+    const videoNode = workflowNodes.find((node) => node.nodeKey === "generate_storyboard_video" || node.nodeKey.startsWith("create_shot_video_"));
     return videoNode ? normalizedOutputString(videoNode.output, "providerAsyncTaskId") : "-";
-  }, [workflowNodes]);
+  }, [workflowNodes, workflowShots]);
   const canCancelWorkflow = workflowRun ? isCancelableWorkflowStatus(workflowRun.status) : false;
 
   const metrics = useMemo(
@@ -559,6 +590,17 @@ export function CineWeaveConsole() {
       organizationId: activeSession.organizationId,
     });
     setWorkflowNodes(data.items);
+  }, []);
+
+  const loadWorkflowShots = useCallback(async (activeSession: SessionState, workflowRunId: string) => {
+    const data = await apiRequest<{ items: StoryboardShot[] }>(
+      `/api/workflow-runs/${workflowRunId}/shots?includePreviewUrl=true&previewExpiresSeconds=900`,
+      {
+        token: activeSession.accessToken,
+        organizationId: activeSession.organizationId,
+      },
+    );
+    setWorkflowShots(data.items);
   }, []);
 
   const refreshProviderCenter = useCallback(
@@ -690,15 +732,17 @@ export function CineWeaveConsole() {
         });
         setWorkflowRun(run);
         await loadWorkflowNodes(activeSession, workflowRunId);
+        await loadWorkflowShots(activeSession, workflowRunId);
         if (isTerminal(run.status)) {
           break;
         }
         await sleep(600);
       }
       await loadWorkflowNodes(activeSession, workflowRunId);
+      await loadWorkflowShots(activeSession, workflowRunId);
       await loadArtifacts(activeSession);
     },
-    [loadArtifacts, loadWorkflowNodes],
+    [loadArtifacts, loadWorkflowNodes, loadWorkflowShots],
   );
 
   const bootstrap = useCallback(async () => {
@@ -707,6 +751,7 @@ export function CineWeaveConsole() {
     setEvents([]);
     setWorkflowRun(null);
     setWorkflowNodes([]);
+    setWorkflowShots([]);
     setArtifacts([]);
     setConnection("idle");
     try {
@@ -870,6 +915,7 @@ export function CineWeaveConsole() {
     setError(null);
     setEvents([]);
     setWorkflowNodes([]);
+    setWorkflowShots([]);
     try {
       const activeSession = session ?? (await createDemoSession());
       const workflowInput =
@@ -880,6 +926,7 @@ export function CineWeaveConsole() {
               resolution: workflowVideoResolution || defaultVideoTestResolution,
               pollIntervalSeconds: Number(workflowVideoPollInterval) || 5,
               maxPolls: Number(workflowVideoMaxPolls) || 120,
+              maxShots: Math.min(Math.max(Number(workflowVideoMaxShots) || 3, 1), 3),
             }
           : undefined;
       const run = await apiRequest<WorkflowRun>("/api/workflow-runs", {
@@ -909,6 +956,7 @@ export function CineWeaveConsole() {
     workflowVideoAspectRatio,
     workflowVideoDuration,
     workflowVideoMaxPolls,
+    workflowVideoMaxShots,
     workflowVideoPollInterval,
     workflowVideoResolution,
   ]);
@@ -1425,7 +1473,7 @@ export function CineWeaveConsole() {
                       ))}
                     </select>
                   </label>
-                  <div className="grid gap-2 sm:grid-cols-5">
+                  <div className="grid gap-2 sm:grid-cols-6">
                     <input
                       value={workflowVideoDuration}
                       onChange={(event) => setWorkflowVideoDuration(event.target.value)}
@@ -1464,6 +1512,14 @@ export function CineWeaveConsole() {
                       disabled={workflowType !== "video_production"}
                       aria-label="Workflow Video Max Polls"
                       title="Workflow Video Max Polls"
+                      className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
+                    />
+                    <input
+                      value={workflowVideoMaxShots}
+                      onChange={(event) => setWorkflowVideoMaxShots(event.target.value)}
+                      disabled={workflowType !== "video_production"}
+                      aria-label="Workflow Video Max Shots"
+                      title="Workflow Video Max Shots"
                       className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
                     />
                   </div>
@@ -1553,6 +1609,38 @@ export function CineWeaveConsole() {
                         ))
                       ) : (
                         <p className="px-3 py-5 text-sm text-[var(--muted)]">No node runs yet.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-2">
+                  <div className="rounded border border-[var(--line)]">
+                    <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-3 py-2">
+                      <p className="text-xs font-medium text-[var(--muted)]">Storyboard Shots</p>
+                      <p className="text-xs text-[var(--muted)]">{workflowShots.length} shots</p>
+                    </div>
+                    <div className="grid gap-0 divide-y divide-[var(--line)]">
+                      {workflowShots.length > 0 ? (
+                        workflowShots.map((shot) => (
+                          <div key={shot.id} className="grid gap-3 px-3 py-3 lg:grid-cols-[1fr_180px_180px]">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-medium">Shot {shot.shotNo}</p>
+                                <StatusPill status={shot.status} />
+                                {shot.durationSeconds ? <p className="text-xs text-[var(--muted)]">{shot.durationSeconds}s</p> : null}
+                              </div>
+                              <p className="mt-2 line-clamp-3 text-sm text-[var(--foreground)]">{shot.visual || shot.imagePrompt || "No visual yet."}</p>
+                              <p className="mt-2 truncate text-xs text-[var(--muted)]">
+                                {shot.videoStorageKey || shot.imageStorageKey || shot.externalTaskId || shot.providerAsyncTaskId || "Waiting for media"}
+                              </p>
+                            </div>
+                            <ShotImagePreview shot={shot} />
+                            <ShotVideoPreview shot={shot} />
+                          </div>
+                        ))
+                      ) : (
+                        <p className="px-3 py-5 text-sm text-[var(--muted)]">No storyboard shots yet.</p>
                       )}
                     </div>
                   </div>
@@ -2348,6 +2436,32 @@ function AccessList({ title, items, empty }: { title: string; items: string[]; e
   );
 }
 
+function ShotImagePreview({ shot }: { shot: StoryboardShot }) {
+  if (shot.imagePreviewUrl) {
+    return (
+      <div className="relative aspect-video min-h-28 overflow-hidden rounded border border-[var(--line)] bg-[var(--soft)]">
+        <Image src={shot.imagePreviewUrl} alt={`Shot ${shot.shotNo} image`} fill sizes="180px" unoptimized className="object-cover" />
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-h-28 items-center rounded border border-[var(--line)] bg-[var(--soft)] px-3">
+      <p className="truncate text-xs text-[var(--muted)]">{shot.imageStorageKey || "No image"}</p>
+    </div>
+  );
+}
+
+function ShotVideoPreview({ shot }: { shot: StoryboardShot }) {
+  if (shot.videoPreviewUrl) {
+    return <video src={shot.videoPreviewUrl} controls className="aspect-video min-h-28 w-full rounded border border-[var(--line)] bg-black" />;
+  }
+  return (
+    <div className="flex min-h-28 items-center rounded border border-[var(--line)] bg-[var(--soft)] px-3">
+      <p className="truncate text-xs text-[var(--muted)]">{shot.videoStorageKey || "No video"}</p>
+    </div>
+  );
+}
+
 function StatusPill({ status }: { status: string }) {
   const isGood = status === "succeeded" || status === "live";
   const isBad = status === "failed" || status === "cancelled";
@@ -2580,6 +2694,12 @@ function attemptSummary(attempt: GatewayAttempt) {
 }
 
 function nodeLabel(nodeKey: string) {
+  if (nodeKey.startsWith("generate_shot_image_")) {
+    return `Generate Shot Image ${nodeKey.replace("generate_shot_image_", "")}`;
+  }
+  if (nodeKey.startsWith("create_shot_video_")) {
+    return `Create Shot Video ${nodeKey.replace("create_shot_video_", "")}`;
+  }
   const labels: Record<string, string> = {
     script_to_storyboard: "Script to Storyboard",
     storyboard_to_image: "Storyboard to Image",

@@ -61,75 +61,112 @@ func TestVideoProductionWorkflowGatewayIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateStoryboardText: %v", err)
 	}
-	imageOutput, err := activities.GenerateStoryboardImage(ctx, GenerateStoryboardImageInput{
-		OrganizationID:         input.OrganizationID,
-		ProjectID:              input.ProjectID,
-		WorkflowRunID:          input.WorkflowRunID,
-		Prompt:                 input.Prompt,
-		CreatedBy:              input.CreatedBy,
-		StoryboardArtifactID:   storyboard.StoryboardArtifactID,
-		Storyboard:             storyboard.Storyboard,
-		StoryboardProviderCall: storyboard.ProviderCallID,
+	shots, err := activities.ListStoryboardShots(ctx, ListStoryboardShotsInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
 	})
 	if err != nil {
-		t.Fatalf("GenerateStoryboardImage: %v", err)
+		t.Fatalf("ListStoryboardShots: %v", err)
 	}
-	createOutput, err := activities.CreateStoryboardVideoTask(ctx, CreateStoryboardVideoTaskInput{
-		OrganizationID:       input.OrganizationID,
-		ProjectID:            input.ProjectID,
-		WorkflowRunID:        input.WorkflowRunID,
-		CreatedBy:            input.CreatedBy,
-		StoryboardArtifactID: storyboard.StoryboardArtifactID,
-		ImageArtifactID:      imageOutput.ImageArtifactID,
-		ImageMediaFileID:     imageOutput.ImageMediaFileID,
-		ImageStorageKey:      imageOutput.ImageStorageKey,
-		Prompt:               input.Prompt,
-		VideoPrompt:          selectVideoPrompt(storyboard.Storyboard, input.Prompt, 5),
-		Duration:             5,
-		AspectRatio:          "16:9",
-		Resolution:           "720p",
-		Storyboard:           storyboard.Storyboard,
-	})
-	if err != nil {
-		t.Fatalf("CreateStoryboardVideoTask: %v", err)
+	if len(shots) != 2 {
+		t.Fatalf("shots len = %d, want 2: %+v", len(shots), shots)
 	}
-	firstPoll, err := activities.PollStoryboardVideoTask(ctx, PollStoryboardVideoTaskInput{
-		OrganizationID:      input.OrganizationID,
-		ProjectID:           input.ProjectID,
-		WorkflowRunID:       input.WorkflowRunID,
-		NodeRunID:           createOutput.NodeRunID,
-		ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
-		ExternalTaskID:      createOutput.ExternalTaskID,
-		PollCount:           1,
-	})
-	if err != nil {
-		t.Fatalf("PollStoryboardVideoTask first: %v", err)
+	providerCalls := VideoProductionProviderCalls{Storyboard: storyboard.ProviderCallID}
+	shotOutputs := make([]VideoProductionShotOutput, 0, len(shots))
+	for _, shot := range shots {
+		imageOutput, err := activities.GenerateShotImage(ctx, GenerateShotImageInput{
+			OrganizationID: input.OrganizationID,
+			ProjectID:      input.ProjectID,
+			WorkflowRunID:  input.WorkflowRunID,
+			CreatedBy:      input.CreatedBy,
+			ShotID:         shot.ID,
+			ShotIndex:      shot.ShotIndex,
+			ShotNo:         shot.ShotNo,
+			WorkflowPrompt: input.Prompt,
+			AspectRatio:    "16:9",
+		})
+		if err != nil {
+			t.Fatalf("GenerateShotImage shot %d: %v", shot.ShotIndex, err)
+		}
+		providerCalls.Images = append(providerCalls.Images, imageOutput.ProviderCallID)
+		createOutput, err := activities.CreateShotVideoTask(ctx, CreateShotVideoTaskInput{
+			OrganizationID: input.OrganizationID,
+			ProjectID:      input.ProjectID,
+			WorkflowRunID:  input.WorkflowRunID,
+			CreatedBy:      input.CreatedBy,
+			ShotID:         shot.ID,
+			ShotIndex:      shot.ShotIndex,
+			ShotNo:         shot.ShotNo,
+			WorkflowPrompt: input.Prompt,
+			Duration:       shot.Duration,
+			AspectRatio:    "16:9",
+			Resolution:     "720p",
+		})
+		if err != nil {
+			t.Fatalf("CreateShotVideoTask shot %d: %v", shot.ShotIndex, err)
+		}
+		providerCalls.VideoCreates = append(providerCalls.VideoCreates, createOutput.ProviderCallID)
+		firstPoll, err := activities.PollShotVideoTask(ctx, PollShotVideoTaskInput{
+			OrganizationID:      input.OrganizationID,
+			ProjectID:           input.ProjectID,
+			WorkflowRunID:       input.WorkflowRunID,
+			ShotID:              shot.ID,
+			ShotIndex:           shot.ShotIndex,
+			ShotNo:              shot.ShotNo,
+			NodeRunID:           createOutput.NodeRunID,
+			ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
+			ExternalTaskID:      createOutput.ExternalTaskID,
+			PollCount:           1,
+		})
+		if err != nil {
+			t.Fatalf("PollShotVideoTask first shot %d: %v", shot.ShotIndex, err)
+		}
+		providerCalls.VideoPolls = append(providerCalls.VideoPolls, firstPoll.ProviderCallID)
+		if firstPoll.Status != "running" {
+			t.Fatalf("first poll status = %q, want running", firstPoll.Status)
+		}
+		secondPoll, err := activities.PollShotVideoTask(ctx, PollShotVideoTaskInput{
+			OrganizationID:      input.OrganizationID,
+			ProjectID:           input.ProjectID,
+			WorkflowRunID:       input.WorkflowRunID,
+			ShotID:              shot.ID,
+			ShotIndex:           shot.ShotIndex,
+			ShotNo:              shot.ShotNo,
+			NodeRunID:           createOutput.NodeRunID,
+			ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
+			ExternalTaskID:      createOutput.ExternalTaskID,
+			PollCount:           2,
+		})
+		if err != nil {
+			t.Fatalf("PollShotVideoTask second shot %d: %v", shot.ShotIndex, err)
+		}
+		providerCalls.VideoPolls = append(providerCalls.VideoPolls, secondPoll.ProviderCallID)
+		shotOutputs = append(shotOutputs, VideoProductionShotOutput{
+			ShotID:              shot.ID,
+			ShotIndex:           shot.ShotIndex,
+			ShotNo:              shot.ShotNo,
+			Duration:            shot.Duration,
+			ImageArtifactID:     imageOutput.ImageArtifactID,
+			ImageMediaFileID:    imageOutput.ImageMediaFileID,
+			ImageStorageKey:     imageOutput.ImageStorageKey,
+			VideoArtifactID:     secondPoll.ArtifactID,
+			VideoMediaFileID:    secondPoll.MediaFileID,
+			VideoStorageKey:     secondPoll.StorageKey,
+			ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
+			ExternalTaskID:      secondPoll.ExternalTaskID,
+		})
 	}
-	if firstPoll.Status != "running" {
-		t.Fatalf("first poll status = %q, want running", firstPoll.Status)
-	}
-	secondPoll, err := activities.PollStoryboardVideoTask(ctx, PollStoryboardVideoTaskInput{
-		OrganizationID:      input.OrganizationID,
-		ProjectID:           input.ProjectID,
-		WorkflowRunID:       input.WorkflowRunID,
-		NodeRunID:           createOutput.NodeRunID,
-		ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
-		ExternalTaskID:      createOutput.ExternalTaskID,
-		PollCount:           2,
-	})
-	if err != nil {
-		t.Fatalf("PollStoryboardVideoTask second: %v", err)
-	}
-	output := BuildVideoProductionOutput(storyboard, imageOutput, createOutput, secondPoll)
+	output := BuildMultiShotVideoProductionOutput(storyboard, shotOutputs, providerCalls)
 	if err := activities.CompleteVideoProductionWorkflow(ctx, input, output); err != nil {
 		t.Fatalf("CompleteVideoProductionWorkflow: %v", err)
 	}
 
 	assertVideoWorkflowRunSucceeded(t, ctx, pool, workflowRunID)
 	assertVideoWorkflowNodeRuns(t, ctx, pool, workflowRunID)
+	assertVideoWorkflowStoryboardShots(t, ctx, pool, workflowRunID, 2)
 	assertVideoWorkflowArtifacts(t, ctx, pool, workflowRunID)
 	assertVideoWorkflowEvents(t, ctx, pool, orgID, workflowRunID)
-	assertWorkflowDidNotWriteProviderAccounting(t, ctx, pool, orgID)
 }
 
 func seedWorkflowVideoProfile(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, userID, textModelID string) string {
@@ -189,16 +226,28 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 				Output: provider.GatewayTextOutput{Text: `{
 					"title": "Sunrise Station",
 					"summary": "A quiet cinematic opening.",
-					"shots": [{
-						"shotNo": 1,
-						"duration": 5,
-						"visual": "Wide sunrise platform",
-						"camera": "slow push-in",
-						"motion": "mist drifting",
-						"mood": "hopeful",
-						"imagePrompt": "Cinematic sunrise train station, high detail",
-						"videoPrompt": "A quiet train platform at sunrise with mist and soft light"
-					}]
+					"shots": [
+						{
+							"shotNo": 1,
+							"duration": 5,
+							"visual": "Wide sunrise platform",
+							"camera": "slow push-in",
+							"motion": "mist drifting",
+							"mood": "hopeful",
+							"imagePrompt": "Cinematic sunrise train station, high detail",
+							"videoPrompt": "A quiet train platform at sunrise with mist and soft light"
+						},
+						{
+							"shotNo": 2,
+							"duration": 4,
+							"visual": "Close view of a train door opening",
+							"camera": "gentle handheld",
+							"motion": "warm light moving across the platform",
+							"mood": "anticipatory",
+							"imagePrompt": "Close cinematic train doorway, warm sunrise detail",
+							"videoPrompt": "The train door opens as sunrise light rolls over the platform"
+						}
+					]
 				}`},
 				Usage:     provider.GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
 				LatencyMS: 12,
@@ -236,7 +285,8 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 			if req.PromptTemplateKey != promptKeyStoryboardVideo || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
 				t.Fatalf("video prompt trace = %+v", req)
 			}
-			taskID := uuid.NewString()
+			externalTaskID := "external-video-task-" + uuid.NewString()
+			providerCallID, taskID := insertMockProviderAsyncTask(t, r.Context(), pool, req.OrganizationID, req.ProjectID, req.WorkflowRunID, req.NodeRunID, videoModelID, externalTaskID)
 			mu.Lock()
 			promptTraceByTask[taskID] = map[string]string{
 				"promptTemplateKey": req.PromptTemplateKey,
@@ -246,9 +296,9 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 			}
 			mu.Unlock()
 			writeWorkflowGatewayEnvelope(t, w, provider.GatewayVideoCreateTaskResponse{
-				ProviderCallID:      uuid.NewString(),
+				ProviderCallID:      providerCallID,
 				ProviderAsyncTaskID: taskID,
-				ExternalTaskID:      "external-video-task",
+				ExternalTaskID:      externalTaskID,
 				ModelID:             videoModelID,
 				Status:              "running",
 				LatencyMS:           25,
@@ -319,6 +369,39 @@ func insertMockGatewayMediaArtifact(t *testing.T, ctx context.Context, pool *pgx
 	return artifactID, mediaFileID, storageKey
 }
 
+func insertMockProviderAsyncTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, projectID, workflowRunID, nodeRunID, modelID, externalTaskID string) (string, string) {
+	t.Helper()
+	var accountID string
+	if err := pool.QueryRow(ctx, `SELECT provider_account_id FROM provider_models WHERE id = $1`, modelID).Scan(&accountID); err != nil {
+		t.Fatalf("select provider account for async task: %v", err)
+	}
+	var callID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO provider_call_logs(
+			organization_id, project_id, workflow_run_id, node_run_id,
+			provider_account_id, provider_model_id, task_type, execution_mode,
+			status, external_task_id, request_hash, request_snapshot, started_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, 'video.create_task', 'async_create', 'running', $7, 'sha256:mock', '{}', now())
+		RETURNING id
+	`, organizationID, projectID, workflowRunID, nodeRunID, accountID, modelID, externalTaskID).Scan(&callID); err != nil {
+		t.Fatalf("insert mock provider call: %v", err)
+	}
+	var taskID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO provider_async_tasks(
+			provider_call_id, organization_id, project_id, workflow_run_id, node_run_id,
+			provider_account_id, provider_model_id, external_task_id, status,
+			task_type, execution_mode, input, raw_status, started_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'running', 'video.generate', 'async_polling', '{}', '{}', now())
+		RETURNING id
+	`, callID, organizationID, projectID, workflowRunID, nodeRunID, accountID, modelID, externalTaskID).Scan(&taskID); err != nil {
+		t.Fatalf("insert mock provider async task: %v", err)
+	}
+	return callID, taskID
+}
+
 func assertVideoWorkflowRunSucceeded(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workflowRunID string) {
 	t.Helper()
 	var status string
@@ -330,7 +413,7 @@ func assertVideoWorkflowRunSucceeded(t *testing.T, ctx context.Context, pool *pg
 	if err := json.Unmarshal(rawOutput, &output); err != nil {
 		t.Fatalf("decode workflow output: %v", err)
 	}
-	if status != "succeeded" || output.VideoArtifactID == "" || output.VideoMediaFileID == "" || output.VideoStorageKey == "" || output.ProviderCalls["videoCreate"] == "" || output.ProviderCalls["videoPoll"] == "" {
+	if status != "succeeded" || len(output.Shots) != 2 || output.VideoArtifactID == "" || output.VideoMediaFileID == "" || output.VideoStorageKey == "" || len(output.ProviderCalls.VideoCreates) != 2 || len(output.ProviderCalls.VideoPolls) != 4 {
 		t.Fatalf("workflow status/output = %s/%+v", status, output)
 	}
 }
@@ -350,10 +433,39 @@ func assertVideoWorkflowNodeRuns(t *testing.T, ctx context.Context, pool *pgxpoo
 		}
 		statuses[nodeKey] = status
 	}
-	for _, nodeKey := range []string{nodeGenerateStoryboardTextKey, nodeGenerateStoryboardImageKey, nodeGenerateStoryboardVideoKey} {
+	for _, nodeKey := range []string{nodeGenerateStoryboardTextKey, "generate_shot_image_0", "create_shot_video_0", "generate_shot_image_1", "create_shot_video_1"} {
 		if statuses[nodeKey] != "succeeded" {
 			t.Fatalf("node statuses = %#v", statuses)
 		}
+	}
+}
+
+func assertVideoWorkflowStoryboardShots(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workflowRunID string, want int) {
+	t.Helper()
+	rows, err := pool.Query(ctx, `
+		SELECT status, image_artifact_id IS NOT NULL, video_artifact_id IS NOT NULL
+		FROM storyboard_shots
+		WHERE workflow_run_id = $1
+		ORDER BY shot_index
+	`, workflowRunID)
+	if err != nil {
+		t.Fatalf("select storyboard shots: %v", err)
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		count++
+		var status string
+		var hasImage, hasVideo bool
+		if err := rows.Scan(&status, &hasImage, &hasVideo); err != nil {
+			t.Fatalf("scan storyboard shot: %v", err)
+		}
+		if status != "video_succeeded" || !hasImage || !hasVideo {
+			t.Fatalf("shot status/image/video = %s/%v/%v", status, hasImage, hasVideo)
+		}
+	}
+	if count != want {
+		t.Fatalf("storyboard shot count = %d, want %d", count, want)
 	}
 }
 
@@ -408,7 +520,7 @@ func assertVideoWorkflowEvents(t *testing.T, ctx context.Context, pool *pgxpool.
 		}
 		seen[eventType] = true
 	}
-	for _, eventType := range []string{"workflow.node.started", "workflow.node.progress", "workflow.node.completed", "artifact.created", "workflow.run.completed"} {
+	for _, eventType := range []string{"workflow.node.started", "workflow.node.progress", "workflow.node.completed", "artifact.created", "storyboard.shot.video.completed", "workflow.run.completed"} {
 		if !seen[eventType] {
 			t.Fatalf("missing event %s in %#v", eventType, seen)
 		}

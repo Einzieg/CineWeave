@@ -15,55 +15,66 @@ func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
 	env := suite.NewTestWorkflowEnvironment()
 	var cancelCalled bool
 	var workflowCancelled bool
-	var cancelOutput CancelStoryboardVideoTaskOutput
+	var cancelOutput CancelShotVideoTaskOutput
+	shots := []StoryboardShotRecord{{ID: "shot-1", WorkflowRunID: "workflow", ShotIndex: 0, ShotNo: 1, Duration: 5, ImagePrompt: "station", VideoPrompt: "station video", Status: "storyboard_ready"}}
 
 	env.RegisterActivityWithOptions(func(ctx context.Context, input GenerateStoryboardTextInput) (GenerateStoryboardTextOutput, error) {
 		return GenerateStoryboardTextOutput{
 			StoryboardArtifactID: "storyboard-artifact",
 			ProviderCallID:       "text-call",
 			Storyboard:           json.RawMessage(`{"shots":[{"imagePrompt":"station","videoPrompt":"station video"}]}`),
+			Shots:                shots,
 		}, nil
 	}, activity.RegisterOptions{Name: "GenerateStoryboardText"})
-	env.RegisterActivityWithOptions(func(ctx context.Context, input GenerateStoryboardImageInput) (GenerateStoryboardImageOutput, error) {
-		return GenerateStoryboardImageOutput{
+	env.RegisterActivityWithOptions(func(ctx context.Context, input ListStoryboardShotsInput) ([]StoryboardShotRecord, error) {
+		return shots, nil
+	}, activity.RegisterOptions{Name: "ListStoryboardShots"})
+	env.RegisterActivityWithOptions(func(ctx context.Context, input GenerateShotImageInput) (GenerateShotImageOutput, error) {
+		return GenerateShotImageOutput{
+			NodeRunID:        "image-node",
+			ShotID:           input.ShotID,
 			ImageArtifactID:  "image-artifact",
 			ImageMediaFileID: "image-media",
 			ImageStorageKey:  "image-key",
 			ProviderCallID:   "image-call",
 		}, nil
-	}, activity.RegisterOptions{Name: "GenerateStoryboardImage"})
-	env.RegisterActivityWithOptions(func(ctx context.Context, input CreateStoryboardVideoTaskInput) (CreateStoryboardVideoTaskOutput, error) {
-		return CreateStoryboardVideoTaskOutput{
+	}, activity.RegisterOptions{Name: "GenerateShotImage"})
+	env.RegisterActivityWithOptions(func(ctx context.Context, input CreateShotVideoTaskInput) (CreateShotVideoTaskOutput, error) {
+		return CreateShotVideoTaskOutput{
 			NodeRunID:           "video-node",
+			ShotID:              input.ShotID,
 			ProviderCallID:      "create-call",
 			ProviderAsyncTaskID: "provider-task",
 			ExternalTaskID:      "external-task",
 			Status:              "running",
 			ModelID:             "video-model",
 		}, nil
-	}, activity.RegisterOptions{Name: "CreateStoryboardVideoTask"})
-	env.RegisterActivityWithOptions(func(ctx context.Context, input PollStoryboardVideoTaskInput) (PollStoryboardVideoTaskOutput, error) {
-		return PollStoryboardVideoTaskOutput{
+	}, activity.RegisterOptions{Name: "CreateShotVideoTask"})
+	env.RegisterActivityWithOptions(func(ctx context.Context, input PollShotVideoTaskInput) (PollShotVideoTaskOutput, error) {
+		return PollShotVideoTaskOutput{
 			ProviderCallID:      "poll-call",
 			ProviderAsyncTaskID: input.ProviderAsyncTaskID,
 			ExternalTaskID:      input.ExternalTaskID,
 			Status:              "running",
 		}, nil
-	}, activity.RegisterOptions{Name: "PollStoryboardVideoTask"})
-	env.RegisterActivityWithOptions(func(ctx context.Context, input CancelStoryboardVideoTaskInput) (CancelStoryboardVideoTaskOutput, error) {
+	}, activity.RegisterOptions{Name: "PollShotVideoTask"})
+	env.RegisterActivityWithOptions(func(ctx context.Context, input CancelShotVideoTaskInput) (CancelShotVideoTaskOutput, error) {
 		cancelCalled = true
-		if input.ProviderAsyncTaskID != "provider-task" || input.NodeRunID != "video-node" {
+		if input.ProviderAsyncTaskID != "provider-task" || input.NodeRunID != "video-node" || input.ShotID != "shot-1" {
 			t.Fatalf("cancel input = %+v", input)
 		}
-		cancelOutput = CancelStoryboardVideoTaskOutput{
+		cancelOutput = CancelShotVideoTaskOutput{
 			ProviderCallID:      "cancel-call",
 			ProviderAsyncTaskID: input.ProviderAsyncTaskID,
 			ExternalTaskID:      input.ExternalTaskID,
+			ShotID:              input.ShotID,
+			ShotIndex:           input.ShotIndex,
+			ShotNo:              input.ShotNo,
 			Status:              "cancelled",
 		}
 		return cancelOutput, nil
-	}, activity.RegisterOptions{Name: "CancelStoryboardVideoTask"})
-	env.RegisterActivityWithOptions(func(ctx context.Context, input TextToStoryboardInput, output CancelStoryboardVideoTaskOutput, reason string) error {
+	}, activity.RegisterOptions{Name: "CancelShotVideoTask"})
+	env.RegisterActivityWithOptions(func(ctx context.Context, input TextToStoryboardInput, output CancelShotVideoTaskOutput, reason string) error {
 		workflowCancelled = true
 		if output.ProviderAsyncTaskID != "provider-task" || output.Status != "cancelled" {
 			t.Fatalf("cancel workflow output = %+v", output)

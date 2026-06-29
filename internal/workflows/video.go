@@ -23,16 +23,42 @@ type WorkflowArtifact struct {
 }
 
 type VideoProductionOutput struct {
-	StoryboardArtifactID string            `json:"storyboardArtifactId"`
-	ImageArtifactID      string            `json:"imageArtifactId"`
-	ImageMediaFileID     string            `json:"imageMediaFileId"`
-	ImageStorageKey      string            `json:"imageStorageKey"`
-	VideoArtifactID      string            `json:"videoArtifactId"`
-	VideoMediaFileID     string            `json:"videoMediaFileId"`
-	VideoStorageKey      string            `json:"videoStorageKey"`
-	ProviderAsyncTaskID  string            `json:"providerAsyncTaskId"`
-	ExternalTaskID       string            `json:"externalTaskId,omitempty"`
-	ProviderCalls        map[string]string `json:"providerCalls"`
+	StoryboardArtifactID string                       `json:"storyboardArtifactId"`
+	Shots                []VideoProductionShotOutput  `json:"shots"`
+	ImageArtifactID      string                       `json:"imageArtifactId,omitempty"`
+	ImageMediaFileID     string                       `json:"imageMediaFileId,omitempty"`
+	ImageStorageKey      string                       `json:"imageStorageKey,omitempty"`
+	VideoArtifactID      string                       `json:"videoArtifactId,omitempty"`
+	VideoMediaFileID     string                       `json:"videoMediaFileId,omitempty"`
+	VideoStorageKey      string                       `json:"videoStorageKey,omitempty"`
+	ProviderAsyncTaskID  string                       `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID       string                       `json:"externalTaskId,omitempty"`
+	ProviderCalls        VideoProductionProviderCalls `json:"providerCalls"`
+}
+
+type VideoProductionShotOutput struct {
+	ShotID              string  `json:"shotId"`
+	ShotIndex           int     `json:"shotIndex"`
+	ShotNo              int     `json:"shotNo"`
+	Duration            float64 `json:"duration"`
+	ImageArtifactID     string  `json:"imageArtifactId"`
+	ImageMediaFileID    string  `json:"imageMediaFileId"`
+	ImageStorageKey     string  `json:"imageStorageKey"`
+	VideoArtifactID     string  `json:"videoArtifactId"`
+	VideoMediaFileID    string  `json:"videoMediaFileId"`
+	VideoStorageKey     string  `json:"videoStorageKey"`
+	ProviderAsyncTaskID string  `json:"providerAsyncTaskId"`
+	ExternalTaskID      string  `json:"externalTaskId,omitempty"`
+}
+
+type VideoProductionProviderCalls struct {
+	Storyboard   string   `json:"storyboard,omitempty"`
+	Images       []string `json:"images,omitempty"`
+	VideoCreates []string `json:"videoCreates,omitempty"`
+	VideoPolls   []string `json:"videoPolls,omitempty"`
+	Image        string   `json:"image,omitempty"`
+	VideoCreate  string   `json:"videoCreate,omitempty"`
+	VideoPoll    string   `json:"videoPoll,omitempty"`
 }
 
 type ProviderWebhookSignal struct {
@@ -82,23 +108,27 @@ func VideoComposeWorkflow(ctx workflow.Context, input TextToStoryboardInput, cli
 func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) (result VideoProductionOutput, err error) {
 	options := resolveVideoProductionOptions(input.Input)
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
-	var createOutput CreateStoryboardVideoTaskOutput
-	videoTerminal := false
+	var currentCreate CreateShotVideoTaskOutput
+	var currentShot StoryboardShotRecord
+	workflowTerminal := false
 	defer func() {
-		if ctx.Err() == nil || videoTerminal {
+		if ctx.Err() == nil || workflowTerminal {
 			return
 		}
 		cleanupCtx, _ := workflow.NewDisconnectedContext(ctx)
 		reason := "Workflow cancellation requested"
-		var cancelOutput CancelStoryboardVideoTaskOutput
-		if createOutput.ProviderAsyncTaskID != "" && createOutput.NodeRunID != "" {
-			_ = workflow.ExecuteActivity(cleanupCtx, "CancelStoryboardVideoTask", CancelStoryboardVideoTaskInput{
+		var cancelOutput CancelShotVideoTaskOutput
+		if currentCreate.ProviderAsyncTaskID != "" && currentCreate.NodeRunID != "" {
+			_ = workflow.ExecuteActivity(cleanupCtx, "CancelShotVideoTask", CancelShotVideoTaskInput{
 				OrganizationID:      input.OrganizationID,
 				ProjectID:           input.ProjectID,
 				WorkflowRunID:       input.WorkflowRunID,
-				NodeRunID:           createOutput.NodeRunID,
-				ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
-				ExternalTaskID:      createOutput.ExternalTaskID,
+				ShotID:              currentShot.ID,
+				ShotIndex:           currentShot.ShotIndex,
+				ShotNo:              currentShot.ShotNo,
+				NodeRunID:           currentCreate.NodeRunID,
+				ProviderAsyncTaskID: currentCreate.ProviderAsyncTaskID,
+				ExternalTaskID:      currentCreate.ExternalTaskID,
 				Reason:              reason,
 			}).Get(cleanupCtx, &cancelOutput)
 		}
@@ -110,79 +140,139 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 		return VideoProductionOutput{}, err
 	}
 
-	var image GenerateStoryboardImageOutput
-	imageInput := GenerateStoryboardImageInput{
-		OrganizationID:         input.OrganizationID,
-		ProjectID:              input.ProjectID,
-		WorkflowRunID:          input.WorkflowRunID,
-		Prompt:                 input.Prompt,
-		CreatedBy:              input.CreatedBy,
-		StoryboardArtifactID:   storyboard.StoryboardArtifactID,
-		Storyboard:             storyboard.Storyboard,
-		StoryboardProviderCall: storyboard.ProviderCallID,
-	}
-	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardImage", imageInput).Get(ctx, &image); err != nil {
+	var shots []StoryboardShotRecord
+	if err := workflow.ExecuteActivity(ctx, "ListStoryboardShots", ListStoryboardShotsInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
+	}).Get(ctx, &shots); err != nil {
 		return VideoProductionOutput{}, err
 	}
-
-	videoPrompt := selectVideoPrompt(storyboard.Storyboard, input.Prompt, options.Duration)
-	createInput := CreateStoryboardVideoTaskInput{
-		OrganizationID:       input.OrganizationID,
-		ProjectID:            input.ProjectID,
-		WorkflowRunID:        input.WorkflowRunID,
-		CreatedBy:            input.CreatedBy,
-		StoryboardArtifactID: storyboard.StoryboardArtifactID,
-		ImageArtifactID:      image.ImageArtifactID,
-		ImageMediaFileID:     image.ImageMediaFileID,
-		ImageStorageKey:      image.ImageStorageKey,
-		Prompt:               input.Prompt,
-		VideoPrompt:          videoPrompt,
-		Duration:             options.Duration,
-		AspectRatio:          options.AspectRatio,
-		Resolution:           options.Resolution,
-		Storyboard:           storyboard.Storyboard,
+	if len(shots) == 0 {
+		shots = storyboard.Shots
 	}
+	if len(shots) > options.MaxShots {
+		shots = shots[:options.MaxShots]
+	}
+
 	createActivityOptions := defaultActivityOptions()
 	createActivityOptions.RetryPolicy.MaximumAttempts = 1
 	createCtx := workflow.WithActivityOptions(ctx, createActivityOptions)
-	if err := workflow.ExecuteActivity(createCtx, "CreateStoryboardVideoTask", createInput).Get(createCtx, &createOutput); err != nil {
-		return VideoProductionOutput{}, err
-	}
-
-	var pollOutput PollStoryboardVideoTaskOutput
-	for pollCount := 1; pollCount <= options.MaxPolls; pollCount++ {
-		pollInput := PollStoryboardVideoTaskInput{
-			OrganizationID:      input.OrganizationID,
-			ProjectID:           input.ProjectID,
-			WorkflowRunID:       input.WorkflowRunID,
-			NodeRunID:           createOutput.NodeRunID,
-			ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
-			ExternalTaskID:      createOutput.ExternalTaskID,
-			PollCount:           pollCount,
-		}
-		if err := workflow.ExecuteActivity(ctx, "PollStoryboardVideoTask", pollInput).Get(ctx, &pollOutput); err != nil {
+	providerCalls := VideoProductionProviderCalls{Storyboard: storyboard.ProviderCallID}
+	shotOutputs := make([]VideoProductionShotOutput, 0, len(shots))
+	for _, shot := range shots {
+		currentShot = shot
+		currentCreate = CreateShotVideoTaskOutput{}
+		var image GenerateShotImageOutput
+		if err := workflow.ExecuteActivity(ctx, "GenerateShotImage", GenerateShotImageInput{
+			OrganizationID: input.OrganizationID,
+			ProjectID:      input.ProjectID,
+			WorkflowRunID:  input.WorkflowRunID,
+			CreatedBy:      input.CreatedBy,
+			ShotID:         shot.ID,
+			ShotIndex:      shot.ShotIndex,
+			ShotNo:         shot.ShotNo,
+			WorkflowPrompt: input.Prompt,
+			AspectRatio:    options.AspectRatio,
+		}).Get(ctx, &image); err != nil {
 			return VideoProductionOutput{}, err
 		}
-		if pollOutput.Status == "succeeded" {
-			result = BuildVideoProductionOutput(storyboard, image, createOutput, pollOutput)
-			videoTerminal = true
-			if err := workflow.ExecuteActivity(ctx, "CompleteVideoProductionWorkflow", input, result).Get(ctx, nil); err != nil {
+		if image.ProviderCallID != "" {
+			providerCalls.Images = append(providerCalls.Images, image.ProviderCallID)
+		}
+
+		duration := shot.Duration
+		if duration <= 0 {
+			duration = options.Duration
+		}
+		if duration > maxShotDuration {
+			duration = maxShotDuration
+		}
+		var createOutput CreateShotVideoTaskOutput
+		if err := workflow.ExecuteActivity(createCtx, "CreateShotVideoTask", CreateShotVideoTaskInput{
+			OrganizationID: input.OrganizationID,
+			ProjectID:      input.ProjectID,
+			WorkflowRunID:  input.WorkflowRunID,
+			CreatedBy:      input.CreatedBy,
+			ShotID:         shot.ID,
+			ShotIndex:      shot.ShotIndex,
+			ShotNo:         shot.ShotNo,
+			WorkflowPrompt: input.Prompt,
+			Duration:       duration,
+			AspectRatio:    options.AspectRatio,
+			Resolution:     options.Resolution,
+		}).Get(createCtx, &createOutput); err != nil {
+			return VideoProductionOutput{}, err
+		}
+		currentCreate = createOutput
+		if createOutput.ProviderCallID != "" {
+			providerCalls.VideoCreates = append(providerCalls.VideoCreates, createOutput.ProviderCallID)
+		}
+
+		var terminalPoll PollShotVideoTaskOutput
+		shotTerminal := false
+		for pollCount := 1; pollCount <= options.MaxPolls; pollCount++ {
+			var pollOutput PollShotVideoTaskOutput
+			pollInput := PollShotVideoTaskInput{
+				OrganizationID:      input.OrganizationID,
+				ProjectID:           input.ProjectID,
+				WorkflowRunID:       input.WorkflowRunID,
+				ShotID:              shot.ID,
+				ShotIndex:           shot.ShotIndex,
+				ShotNo:              shot.ShotNo,
+				NodeRunID:           createOutput.NodeRunID,
+				ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
+				ExternalTaskID:      createOutput.ExternalTaskID,
+				PollCount:           pollCount,
+			}
+			if err := workflow.ExecuteActivity(ctx, "PollShotVideoTask", pollInput).Get(ctx, &pollOutput); err != nil {
 				return VideoProductionOutput{}, err
 			}
-			return result, nil
+			if pollOutput.ProviderCallID != "" {
+				providerCalls.VideoPolls = append(providerCalls.VideoPolls, pollOutput.ProviderCallID)
+			}
+			if pollOutput.Status == "succeeded" {
+				terminalPoll = pollOutput
+				shotTerminal = true
+				break
+			}
+			if pollOutput.Status == "failed" || pollOutput.Status == "cancelled" {
+				return VideoProductionOutput{}, temporal.NewApplicationError("provider video task "+pollOutput.Status, codeActivityFailed)
+			}
+			if err := workflow.Sleep(ctx, options.PollInterval); err != nil {
+				return VideoProductionOutput{}, err
+			}
 		}
-		if pollOutput.Status == "failed" || pollOutput.Status == "cancelled" {
-			return VideoProductionOutput{}, temporal.NewApplicationError("provider video task "+pollOutput.Status, codeActivityFailed)
+		if !shotTerminal {
+			timeoutMessage := "provider video task polling timed out"
+			if err := workflow.ExecuteActivity(ctx, "FailVideoProductionWorkflow", input, createOutput.NodeRunID, codeProviderVideoPollingTimeout, timeoutMessage).Get(ctx, nil); err != nil {
+				return VideoProductionOutput{}, err
+			}
+			return VideoProductionOutput{}, temporal.NewApplicationError(timeoutMessage, codeProviderVideoPollingTimeout)
 		}
-		if err := workflow.Sleep(ctx, options.PollInterval); err != nil {
-			return VideoProductionOutput{}, err
-		}
+		shotOutputs = append(shotOutputs, VideoProductionShotOutput{
+			ShotID:              shot.ID,
+			ShotIndex:           shot.ShotIndex,
+			ShotNo:              shot.ShotNo,
+			Duration:            duration,
+			ImageArtifactID:     image.ImageArtifactID,
+			ImageMediaFileID:    image.ImageMediaFileID,
+			ImageStorageKey:     image.ImageStorageKey,
+			VideoArtifactID:     terminalPoll.ArtifactID,
+			VideoMediaFileID:    terminalPoll.MediaFileID,
+			VideoStorageKey:     terminalPoll.StorageKey,
+			ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
+			ExternalTaskID:      firstNonEmptyString(terminalPoll.ExternalTaskID, createOutput.ExternalTaskID),
+		})
+		currentCreate = CreateShotVideoTaskOutput{}
+		currentShot = StoryboardShotRecord{}
 	}
-	timeoutMessage := "provider video task polling timed out"
-	if err := workflow.ExecuteActivity(ctx, "FailVideoProductionWorkflow", input, createOutput.NodeRunID, codeProviderVideoPollingTimeout, timeoutMessage).Get(ctx, nil); err != nil {
+	result = BuildMultiShotVideoProductionOutput(storyboard, shotOutputs, providerCalls)
+	workflowTerminal = true
+	if err := workflow.ExecuteActivity(ctx, "CompleteVideoProductionWorkflow", input, result).Get(ctx, nil); err != nil {
 		return VideoProductionOutput{}, err
 	}
-	return VideoProductionOutput{}, temporal.NewApplicationError(timeoutMessage, codeProviderVideoPollingTimeout)
+	return result, nil
 }
 
 type videoProductionOptions struct {
@@ -191,6 +281,7 @@ type videoProductionOptions struct {
 	Resolution   string
 	PollInterval time.Duration
 	MaxPolls     int
+	MaxShots     int
 }
 
 func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
@@ -200,6 +291,7 @@ func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
 		Resolution:   "720p",
 		PollInterval: 5 * time.Second,
 		MaxPolls:     120,
+		MaxShots:     defaultMaxStoryboardShots,
 	}
 	if len(raw) == 0 {
 		return options
@@ -210,6 +302,7 @@ func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
 		Resolution          string  `json:"resolution"`
 		PollIntervalSeconds int     `json:"pollIntervalSeconds"`
 		MaxPolls            int     `json:"maxPolls"`
+		MaxShots            int     `json:"maxShots"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return options
@@ -228,6 +321,9 @@ func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
 	}
 	if decoded.MaxPolls > 0 {
 		options.MaxPolls = decoded.MaxPolls
+	}
+	if decoded.MaxShots > 0 && decoded.MaxShots <= defaultMaxStoryboardShots {
+		options.MaxShots = decoded.MaxShots
 	}
 	return options
 }

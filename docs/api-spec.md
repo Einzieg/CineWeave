@@ -40,7 +40,9 @@ Workflow APIs:
 - `GET /api/workflow-runs` lists runs by organization and optional project filter.
 - `GET /api/workflow-runs/{workflowRunId}` returns run status and output.
 - `GET /api/workflow-runs/{workflowRunId}/nodes` returns node status, retry count, input, and output for the Workflow Board.
+- `GET /api/workflow-runs/{workflowRunId}/shots?includePreviewUrl=true` returns normalized storyboard shots, per-shot image/video artifact links, and optional signed preview URLs.
 - `GET /api/artifacts` lists generated artifacts by organization and optional project filter.
+- `video_production` input supports `duration`, `aspectRatio`, `resolution`, `pollIntervalSeconds`, `maxPolls`, and `maxShots`; `maxShots` is capped at 3 for sequential v1.
 
 Asset APIs:
 

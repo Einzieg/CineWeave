@@ -62,26 +62,14 @@ func TestWorkflowGatewayIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateStoryboardText: %v", err)
 	}
-	imageOutput, err := activities.GenerateStoryboardImage(ctx, GenerateStoryboardImageInput{
-		OrganizationID:         input.OrganizationID,
-		ProjectID:              input.ProjectID,
-		WorkflowRunID:          input.WorkflowRunID,
-		Prompt:                 input.Prompt,
-		CreatedBy:              input.CreatedBy,
-		StoryboardArtifactID:   storyboard.StoryboardArtifactID,
-		Storyboard:             storyboard.Storyboard,
-		StoryboardProviderCall: storyboard.ProviderCallID,
-	})
-	if err != nil {
-		t.Fatalf("GenerateStoryboardImage: %v", err)
-	}
-	finalOutput := BuildTextToStoryboardOutput(storyboard, imageOutput)
+	finalOutput := BuildTextToStoryboardOutput(storyboard)
 	if err := activities.CompleteTextToStoryboardWorkflow(ctx, input, finalOutput); err != nil {
 		t.Fatalf("CompleteTextToStoryboardWorkflow: %v", err)
 	}
 
 	assertWorkflowGatewayNodeRuns(t, ctx, pool, workflowRunID)
 	assertWorkflowGatewayStoryboardArtifact(t, ctx, pool, workflowRunID, storyboard.StoryboardArtifactID)
+	assertWorkflowGatewayStoryboardShots(t, ctx, pool, workflowRunID, 1)
 	assertWorkflowGatewayRunOutput(t, ctx, pool, workflowRunID)
 	assertWorkflowGatewayEvents(t, ctx, pool, orgID, workflowRunID)
 	assertWorkflowDidNotWriteProviderAccounting(t, ctx, pool, orgID)
@@ -89,6 +77,7 @@ func TestWorkflowGatewayIntegration(t *testing.T) {
 
 func mockWorkflowProviderGateway(t *testing.T, textModelID, imageModelID string) http.Handler {
 	t.Helper()
+	_ = imageModelID
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer workflow-service-token" {
 			t.Fatalf("Authorization header = %q", r.Header.Get("Authorization"))
@@ -127,29 +116,7 @@ func mockWorkflowProviderGateway(t *testing.T, textModelID, imageModelID string)
 				LatencyMS: 12,
 			})
 		case "/internal/provider/image/generate":
-			var req provider.GatewayImageRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Fatalf("decode image request: %v", err)
-			}
-			if req.ModelProfileKey != imageGenerationModelProfileKey || req.NodeRunID == "" {
-				t.Fatalf("image gateway request = %+v", req)
-			}
-			if req.PromptTemplateKey != promptKeyStoryboardImage || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
-				t.Fatalf("image prompt trace = %+v", req)
-			}
-			writeWorkflowGatewayEnvelope(t, w, provider.GatewayImageResponse{
-				ProviderCallID: uuid.NewString(),
-				ModelID:        imageModelID,
-				Status:         "succeeded",
-				Output: provider.GatewayImageOutput{
-					ArtifactID:  uuid.NewString(),
-					MediaFileID: uuid.NewString(),
-					StorageKey:  "org/test/project/test/provider-images/2026/06/image.png",
-					MimeType:    "image/png",
-				},
-				Usage:     provider.GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
-				LatencyMS: 20,
-			})
+			t.Fatal("text_to_storyboard should not call image gateway")
 		default:
 			http.NotFound(w, r)
 		}
@@ -269,7 +236,10 @@ func assertWorkflowGatewayNodeRuns(t *testing.T, ctx context.Context, pool *pgxp
 		}
 		statuses[nodeKey] = status
 	}
-	if statuses[nodeGenerateStoryboardTextKey] != "succeeded" || statuses[nodeGenerateStoryboardImageKey] != "succeeded" {
+	if statuses[nodeGenerateStoryboardTextKey] != "succeeded" {
+		t.Fatalf("node statuses = %#v", statuses)
+	}
+	if _, ok := statuses[nodeGenerateStoryboardImageKey]; ok {
 		t.Fatalf("node statuses = %#v", statuses)
 	}
 }
@@ -319,10 +289,9 @@ func assertWorkflowGatewayRunOutput(t *testing.T, ctx context.Context, pool *pgx
 	var status string
 	var rawOutput json.RawMessage
 	var output struct {
-		ImageArtifactID string `json:"imageArtifactId"`
-		ProviderCalls   struct {
+		Shots         []StoryboardShotRecord `json:"shots"`
+		ProviderCalls struct {
 			Storyboard string `json:"storyboard"`
-			Image      string `json:"image"`
 		} `json:"providerCalls"`
 	}
 	if err := pool.QueryRow(ctx, `
@@ -335,8 +304,19 @@ func assertWorkflowGatewayRunOutput(t *testing.T, ctx context.Context, pool *pgx
 	if err := json.Unmarshal(rawOutput, &output); err != nil {
 		t.Fatalf("decode workflow output: %v", err)
 	}
-	if status != "succeeded" || output.ImageArtifactID == "" || output.ProviderCalls.Storyboard == "" || output.ProviderCalls.Image == "" {
+	if status != "succeeded" || len(output.Shots) != 1 || output.ProviderCalls.Storyboard == "" {
 		t.Fatalf("workflow status/output = %s/%+v", status, output)
+	}
+}
+
+func assertWorkflowGatewayStoryboardShots(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workflowRunID string, want int) {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM storyboard_shots WHERE workflow_run_id = $1`, workflowRunID).Scan(&count); err != nil {
+		t.Fatalf("select storyboard_shots: %v", err)
+	}
+	if count != want {
+		t.Fatalf("storyboard_shots count = %d, want %d", count, want)
 	}
 }
 
@@ -360,7 +340,7 @@ func assertWorkflowGatewayEvents(t *testing.T, ctx context.Context, pool *pgxpoo
 		}
 		seen[eventType] = true
 	}
-	for _, eventType := range []string{"workflow.node.completed", "artifact.created", "workflow.run.completed"} {
+	for _, eventType := range []string{"workflow.node.completed", "artifact.created", "storyboard.shots.created", "workflow.run.completed"} {
 		if !seen[eventType] {
 			t.Fatalf("missing event %s in %#v", eventType, seen)
 		}

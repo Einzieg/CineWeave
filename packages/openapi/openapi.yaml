@@ -826,6 +826,34 @@ paths:
                 $ref: "#/components/schemas/WorkflowNodeRunListEnvelope"
         "404":
           $ref: "#/components/responses/Error"
+  /api/workflow-runs/{workflowRunId}/shots:
+    get:
+      operationId: listWorkflowRunShots
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowRunId"
+        - name: includePreviewUrl
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: previewExpiresSeconds
+          in: query
+          schema:
+            type: integer
+            default: 900
+      responses:
+        "200":
+          description: Storyboard shots for a workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardShotListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /api/artifacts:
     get:
       operationId: listArtifacts
@@ -2432,11 +2460,15 @@ components:
           format: date-time
     TextToStoryboardOutput:
       type: object
-      required: [storyboardArtifactId, imageArtifactId, imageMediaFileId, imageStorageKey, providerCalls]
+      required: [storyboardArtifactId, providerCalls]
       properties:
         storyboardArtifactId:
           type: string
           format: uuid
+        shots:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardShot"
         imageArtifactId:
           type: string
           format: uuid
@@ -2447,7 +2479,7 @@ components:
           type: string
         providerCalls:
           type: object
-          required: [storyboard, image]
+          required: [storyboard]
           properties:
             storyboard:
               type: string
@@ -2459,18 +2491,16 @@ components:
       type: object
       required:
         - storyboardArtifactId
-        - imageArtifactId
-        - imageMediaFileId
-        - imageStorageKey
-        - videoArtifactId
-        - videoMediaFileId
-        - videoStorageKey
-        - providerAsyncTaskId
+        - shots
         - providerCalls
       properties:
         storyboardArtifactId:
           type: string
           format: uuid
+        shots:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoProductionShotOutput"
         imageArtifactId:
           type: string
           format: uuid
@@ -2494,11 +2524,26 @@ components:
           type: string
         providerCalls:
           type: object
-          required: [storyboard, image, videoCreate, videoPoll]
+          required: [storyboard]
           properties:
             storyboard:
               type: string
               format: uuid
+            images:
+              type: array
+              items:
+                type: string
+                format: uuid
+            videoCreates:
+              type: array
+              items:
+                type: string
+                format: uuid
+            videoPolls:
+              type: array
+              items:
+                type: string
+                format: uuid
             image:
               type: string
               format: uuid
@@ -2508,6 +2553,110 @@ components:
             videoPoll:
               type: string
               format: uuid
+    VideoProductionShotOutput:
+      type: object
+      required:
+        - shotId
+        - shotIndex
+        - shotNo
+        - duration
+        - imageArtifactId
+        - imageMediaFileId
+        - imageStorageKey
+        - videoArtifactId
+        - videoMediaFileId
+        - videoStorageKey
+        - providerAsyncTaskId
+      properties:
+        shotId:
+          type: string
+          format: uuid
+        shotIndex:
+          type: integer
+        shotNo:
+          type: integer
+        duration:
+          type: number
+          format: double
+        imageArtifactId:
+          type: string
+          format: uuid
+        imageMediaFileId:
+          type: string
+          format: uuid
+        imageStorageKey:
+          type: string
+        videoArtifactId:
+          type: string
+          format: uuid
+        videoMediaFileId:
+          type: string
+          format: uuid
+        videoStorageKey:
+          type: string
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+    StoryboardShot:
+      type: object
+      required: [id, workflowRunId, shotIndex, shotNo, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        shotIndex:
+          type: integer
+        shotNo:
+          type: integer
+        durationSeconds:
+          type: number
+          format: double
+        visual:
+          type: string
+        camera:
+          type: string
+        motion:
+          type: string
+        mood:
+          type: string
+        imagePrompt:
+          type: string
+        videoPrompt:
+          type: string
+        imageArtifactId:
+          type: string
+          format: uuid
+        imageMediaFileId:
+          type: string
+          format: uuid
+        imageStorageKey:
+          type: string
+        imagePreviewUrl:
+          type: string
+          format: uri
+        videoArtifactId:
+          type: string
+          format: uuid
+        videoMediaFileId:
+          type: string
+          format: uuid
+        videoStorageKey:
+          type: string
+        videoPreviewUrl:
+          type: string
+          format: uri
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        status:
+          type: string
     Artifact:
       type: object
       required: [id, organizationId, type, metadata, createdAt]
@@ -2760,6 +2909,18 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/WorkflowNodeRun"
+    StoryboardShotListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/StoryboardShot"
     ArtifactListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -4932,7 +5093,7 @@ components:
         input:
           type: object
           additionalProperties: true
-          description: Optional workflow-specific input. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, and maxPolls.
+          description: Optional workflow-specific input. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, maxPolls, and maxShots.
           properties:
             duration:
               type: number
@@ -4949,6 +5110,11 @@ components:
             maxPolls:
               type: integer
               default: 120
+            maxShots:
+              type: integer
+              minimum: 1
+              maximum: 3
+              default: 3
         idempotencyKey:
           type: string
           maxLength: 200
