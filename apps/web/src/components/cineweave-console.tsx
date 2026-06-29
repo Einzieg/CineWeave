@@ -266,6 +266,13 @@ type RealtimeEvent = {
 type BusyState = "bootstrap" | "workflow" | null;
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting";
 type ProviderTestType = "text_generation_test" | "streaming_test" | "image_generation_test";
+type WorkflowType = "text_to_storyboard" | "video_production" | "script_to_storyboard";
+
+const workflowTypes: Array<{ value: WorkflowType; label: string }> = [
+  { value: "text_to_storyboard", label: "Text to Storyboard" },
+  { value: "video_production", label: "Video Production" },
+  { value: "script_to_storyboard", label: "Script to Storyboard" },
+];
 
 export function CineWeaveConsole() {
   const [session, setSession] = useState<SessionState | null>(null);
@@ -274,6 +281,7 @@ export function CineWeaveConsole() {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [events, setEvents] = useState<RealtimeEvent[]>([]);
   const [prompt, setPrompt] = useState(defaultPrompt);
+  const [workflowType, setWorkflowType] = useState<WorkflowType>("text_to_storyboard");
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("idle");
@@ -481,7 +489,7 @@ export function CineWeaveConsole() {
         organizationId: activeSession.organizationId,
         body: {
           projectId: activeSession.projectId,
-          workflowType: "video_production",
+          workflowType,
           prompt,
         },
       });
@@ -492,7 +500,7 @@ export function CineWeaveConsole() {
     } finally {
       setBusy(null);
     }
-  }, [createDemoSession, pollWorkflowRun, prompt, session]);
+  }, [createDemoSession, pollWorkflowRun, prompt, session, workflowType]);
 
   const refreshProviders = useCallback(async () => {
     setProviderBusy("provider");
@@ -849,6 +857,21 @@ export function CineWeaveConsole() {
                     onChange={(event) => setPrompt(event.target.value)}
                     className="min-h-32 w-full resize-y rounded border border-[var(--line)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--foreground)]"
                   />
+                  <label className="grid gap-1 text-xs font-medium text-[var(--muted)]" htmlFor="workflow-type">
+                    Workflow Type
+                    <select
+                      id="workflow-type"
+                      value={workflowType}
+                      onChange={(event) => setWorkflowType(event.target.value as WorkflowType)}
+                      className="h-10 rounded border border-[var(--line)] bg-white px-3 text-sm text-[var(--foreground)] outline-none focus:border-[var(--foreground)]"
+                    >
+                      {workflowTypes.map((item) => (
+                        <option key={item.value} value={item.value}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <button
                       type="button"
@@ -882,6 +905,7 @@ export function CineWeaveConsole() {
                 <div className="grid gap-3">
                   <InfoRow label="User" value={session?.email ?? "Not initialized"} />
                   <InfoRow label="Project" value={session?.projectId ?? "Pending"} />
+                  <InfoRow label="Type" value={workflowType} />
                   <InfoRow label="Workflow" value={workflowRun?.id ?? "No run"} />
                   <InfoRow label="Temporal" value={workflowRun?.temporalWorkflowId ?? "No workflow"} />
                   <InfoRow label="Output" value={artifactSummary(artifacts)} />
@@ -1440,6 +1464,8 @@ function nodeLabel(nodeKey: string) {
     video_compose: "Video Compose",
     quality_check: "Quality Check",
     text_to_storyboard: "Text to Storyboard",
+    generate_storyboard_text: "Generate Storyboard Text",
+    generate_storyboard_image: "Generate Storyboard Image",
   };
   return labels[nodeKey] ?? nodeKey;
 }

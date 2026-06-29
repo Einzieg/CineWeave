@@ -3283,6 +3283,22 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - The Gateway writes generated image objects to S3 / MinIO and records `media_files`, `artifacts`, `provider_call_logs`, and `cost_records`.
 - API Server / Worker code must call Provider Gateway and must not call image providers, download upstream media, write provider call logs, or write cost records directly.
 - `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=false` is the default; set it to `true` only for local mock provider media URLs.
+
+## Implementation Note: Temporal Workflow to Provider Gateway Runtime
+
+- `POST /api/workflow-runs` with `workflowType=text_to_storyboard` starts the real Temporal `TextToStoryboardWorkflow` on the script task queue.
+- The script worker constructs `GatewayClient` from `PROVIDER_GATEWAY_URL` and `CINEWEAVE_SERVICE_TOKEN`; Worker and API code must not call upstream model providers directly.
+- `GenerateStoryboardText` creates a `generate_storyboard_text` node run, verifies an active `script_agent_default` binding, calls `/internal/provider/text/generate`, stores a `storyboard_json` artifact, and emits `workflow.node.started`, `artifact.created`, and `workflow.node.completed`.
+- `GenerateStoryboardImage` creates a `generate_storyboard_image` node run, verifies an active `image_generation_default` binding, calls `/internal/provider/image/generate`, and uses the Gateway-returned `artifactId`, `mediaFileId`, `storageKey`, and `providerCallId`. The worker does not download media and does not write `provider_call_logs` or `cost_records`.
+- On success, `workflow_runs.output` contains `storyboardArtifactId`, `imageArtifactId`, `imageMediaFileId`, `imageStorageKey`, and `providerCalls.storyboard/image`; the run emits `workflow.run.completed`.
+- If either profile has no active binding, the activity fails with `MODEL_PROFILE_NOT_CONFIGURED` so operators know to bind `script_agent_default` or `image_generation_default`.
+- Local verification commands:
+  - `go test ./...`
+  - `CINEWEAVE_INTEGRATION_TEST=1 go test ./internal/workflows -run TestWorkflowGatewayIntegration -count=1`
+  - `pnpm --filter @cineweave/web typecheck`
+  - `pnpm --filter @cineweave/web lint`
+  - `docker compose -f compose.yml config --quiet`
+  - `docker compose -f compose.yml build api provider-gateway script-worker`
 Task 012: Implement provider call logging.
 Task 013: Implement model profile and binding.
 Task 014: Implement Manifest JSON Schema.

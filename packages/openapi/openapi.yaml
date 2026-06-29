@@ -1551,8 +1551,11 @@ components:
           type: object
           additionalProperties: true
         output:
-          type: object
-          additionalProperties: true
+          description: Workflow output. text_to_storyboard returns TextToStoryboardOutput.
+          oneOf:
+            - $ref: "#/components/schemas/TextToStoryboardOutput"
+            - type: object
+              additionalProperties: true
         errorCode:
           type: string
         errorMessage:
@@ -1616,6 +1619,31 @@ components:
         createdAt:
           type: string
           format: date-time
+    TextToStoryboardOutput:
+      type: object
+      required: [storyboardArtifactId, imageArtifactId, imageMediaFileId, imageStorageKey, providerCalls]
+      properties:
+        storyboardArtifactId:
+          type: string
+          format: uuid
+        imageArtifactId:
+          type: string
+          format: uuid
+        imageMediaFileId:
+          type: string
+          format: uuid
+        imageStorageKey:
+          type: string
+        providerCalls:
+          type: object
+          required: [storyboard, image]
+          properties:
+            storyboard:
+              type: string
+              format: uuid
+            image:
+              type: string
+              format: uuid
     Artifact:
       type: object
       required: [id, organizationId, type, metadata, createdAt]
@@ -2198,6 +2226,8 @@ components:
           format: uuid
         modelProfileKey:
           type: string
+          description: Stable model profile key resolved by Provider Gateway, for example script_agent_default.
+          example: script_agent_default
         providerModelId:
           type: string
           format: uuid
@@ -2305,6 +2335,8 @@ components:
           format: uuid
         modelProfileKey:
           type: string
+          description: Stable model profile key resolved by Provider Gateway, for example image_generation_default.
+          example: image_generation_default
         providerModelId:
           type: string
           format: uuid
@@ -2802,6 +2834,7 @@ components:
           type: string
           enum: [video_production, text_to_storyboard, script_to_storyboard]
           default: video_production
+          description: Use text_to_storyboard for the real Temporal to Provider Gateway text/image production path.
         prompt:
           type: string
         idempotencyKey:

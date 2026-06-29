@@ -27,6 +27,10 @@ Provider Gateway is required by default for upstream model access. API and worke
 
 Provider Gateway now owns `text.generate`, `text.stream`, and `image.generate` runtime calls. The image runtime targets OpenAI-compatible `/v1/images/generations`, accepts URL or `b64_json` upstream responses, downloads or decodes the media inside the Gateway, stores it in S3 / MinIO, and writes `media_files`, `artifacts`, `provider_call_logs`, and `cost_records`. Private or localhost upstream media URLs are blocked unless `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=true` is explicitly set for development.
 
+`text_to_storyboard` is the first real production workflow path. `POST /api/workflow-runs` with `workflowType=text_to_storyboard` starts Temporal, the script worker calls Provider Gateway for `text.generate` using `script_agent_default`, then calls Provider Gateway for `image.generate` using `image_generation_default`. The worker records workflow node state and the storyboard JSON artifact only; Provider Gateway owns upstream credentials, image media storage, provider call logs, and cost records.
+
+For Docker Compose deployments, configure provider accounts and bind active models to both profile keys before running this workflow. Missing bindings fail the workflow with `MODEL_PROFILE_NOT_CONFIGURED`.
+
 ## Layout
 
 - `apps/api`: Go public API server.

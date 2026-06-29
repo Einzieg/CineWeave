@@ -6,6 +6,7 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/config"
 	"github.com/Einzieg/cineweave/internal/db"
+	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/storage"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"go.temporal.io/sdk/activity"
@@ -35,14 +36,17 @@ func main() {
 	defer temporalClient.Close()
 
 	temporalWorker := worker.New(temporalClient, workflows.ScriptTaskQueue, worker.Options{})
-	activities := workflows.NewActivities(pool, storageClient)
+	gatewayClient := provider.NewGatewayClientFromEnv()
+	activities := workflows.NewActivities(pool, storageClient, gatewayClient)
 	temporalWorker.RegisterWorkflow(workflows.TextToStoryboardWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.ScriptToStoryboardWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.StoryboardToImageWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.StoryboardToVideoWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.VideoComposeWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.VideoProductionWorkflow)
-	temporalWorker.RegisterActivityWithOptions(activities.GenerateStoryboard, workflowActivityOptions("GenerateStoryboard"))
+	temporalWorker.RegisterActivityWithOptions(activities.GenerateStoryboardText, workflowActivityOptions("GenerateStoryboardText"))
+	temporalWorker.RegisterActivityWithOptions(activities.GenerateStoryboardImage, workflowActivityOptions("GenerateStoryboardImage"))
+	temporalWorker.RegisterActivityWithOptions(activities.CompleteTextToStoryboardWorkflow, workflowActivityOptions("CompleteTextToStoryboardWorkflow"))
 	temporalWorker.RegisterActivityWithOptions(activities.GenerateScriptStoryboard, workflowActivityOptions("GenerateScriptStoryboard"))
 	temporalWorker.RegisterActivityWithOptions(activities.GenerateStoryboardImages, workflowActivityOptions("GenerateStoryboardImages"))
 	temporalWorker.RegisterActivityWithOptions(activities.GenerateStoryboardVideos, workflowActivityOptions("GenerateStoryboardVideos"))
