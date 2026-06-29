@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/jackc/pgx/v5"
 )
@@ -117,7 +118,7 @@ func (s *Server) requireArtifactAccess(w http.ResponseWriter, r *http.Request, p
 		s.writeError(w, r, err)
 		return Artifact{}, false
 	}
-	if !s.authorizeObjectAccess(w, r, principal, artifact.OrganizationID, artifact.ProjectID) {
+	if !s.authorizeObjectAccess(w, r, principal, authz.PermissionArtifactRead, artifact.OrganizationID, artifact.ProjectID) {
 		return Artifact{}, false
 	}
 	return artifact, true
@@ -129,28 +130,21 @@ func (s *Server) requireMediaFileAccess(w http.ResponseWriter, r *http.Request, 
 		s.writeError(w, r, err)
 		return MediaFile{}, false
 	}
-	if !s.authorizeObjectAccess(w, r, principal, mediaFile.OrganizationID, mediaFile.ProjectID) {
+	if !s.authorizeObjectAccess(w, r, principal, authz.PermissionMediaRead, mediaFile.OrganizationID, mediaFile.ProjectID) {
 		return MediaFile{}, false
 	}
 	return mediaFile, true
 }
 
-func (s *Server) authorizeObjectAccess(w http.ResponseWriter, r *http.Request, principal auth.Principal, objectOrganizationID string, projectID *string) bool {
+func (s *Server) authorizeObjectAccess(w http.ResponseWriter, r *http.Request, principal auth.Principal, permission, objectOrganizationID string, projectID *string) bool {
 	if organizationID(r, principal) != objectOrganizationID {
 		s.writeError(w, r, auth.ErrForbidden)
 		return false
 	}
-	var err error
 	if projectID != nil && strings.TrimSpace(*projectID) != "" {
-		err = s.ensureProjectMember(r, principal.UserID, *projectID)
-	} else {
-		err = s.ensureOrganizationMember(r, principal.UserID, objectOrganizationID)
+		return s.authorize(w, r, principal, permission, authz.Resource{ProjectID: *projectID})
 	}
-	if err != nil {
-		s.writeError(w, r, err)
-		return false
-	}
-	return true
+	return s.authorize(w, r, principal, permission, authz.Resource{OrganizationID: objectOrganizationID})
 }
 
 func (s *Server) artifact(r *http.Request, artifactID string) (Artifact, error) {

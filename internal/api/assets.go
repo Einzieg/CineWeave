@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 )
 
@@ -40,7 +41,7 @@ type AssetVariant struct {
 }
 
 func (s *Server) listAssets(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"))
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetRead)
 	if !ok {
 		return
 	}
@@ -76,7 +77,7 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request, principal au
 }
 
 func (s *Server) createAsset(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"))
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
@@ -139,7 +140,7 @@ func (s *Server) createAsset(w http.ResponseWriter, r *http.Request, principal a
 }
 
 func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"))
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetRead)
 	if !ok {
 		return
 	}
@@ -152,7 +153,7 @@ func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, principal auth
 }
 
 func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"))
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
@@ -218,7 +219,7 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request, principal a
 }
 
 func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"))
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetDelete)
 	if !ok {
 		return
 	}
@@ -234,7 +235,7 @@ func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request, principal a
 }
 
 func (s *Server) createAssetUploadURL(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"))
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
@@ -280,7 +281,7 @@ func (s *Server) createAssetUploadURL(w http.ResponseWriter, r *http.Request, pr
 }
 
 func (s *Server) createAssetVariant(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"))
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
@@ -404,14 +405,13 @@ func (s *Server) createAssetVariant(w http.ResponseWriter, r *http.Request, prin
 	httpx.WriteJSON(w, r, http.StatusCreated, response, nil)
 }
 
-func (s *Server) requireProjectAccess(w http.ResponseWriter, r *http.Request, principal auth.Principal, projectID string) (Project, bool) {
+func (s *Server) requireProjectAccess(w http.ResponseWriter, r *http.Request, principal auth.Principal, projectID, permission string) (Project, bool) {
 	project, err := s.project(r, projectID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return Project{}, false
 	}
-	if err := s.ensureProjectMember(r, principal.UserID, project.ID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, permission, authz.Resource{ProjectID: project.ID}) {
 		return Project{}, false
 	}
 	return project, true

@@ -3343,6 +3343,17 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - `CancelVideoProductionWorkflow` marks the workflow `cancelled`, writes cancellation output including provider async task IDs, and emits `workflow.run.cancelled`.
 - Provider Gateway video cancel is idempotent: already cancelled tasks return `cancelled`, completed tasks return `succeeded`, missing manifest cancel endpoints mark the local async task cancelled, and upstream cancel failures return `PROVIDER_CANCEL_FAILED` while preserving the async task state.
 - Demo Console shows `queued` / `running` / `cancelling` workflow runs as cancellable and calls `POST /api/workflow-runs/{id}/cancel`.
+
+## Implementation Note: Fine-Grained RBAC Authorizer
+
+- API authorization is now centralized in `internal/authz.Authorizer` and computes access from `role_bindings` plus `role_permissions`.
+- `organization_members` and `project_members` remain relationship tables only; key business APIs check permissions such as `provider.read`, `provider.manage`, `workflow.run`, `workflow.cancel`, `asset.write`, `artifact.read`, `media.read`, `team.manage`, and `role.manage`.
+- Default deny is enforced with `ACCESS_DENIED` instead of internal errors.
+- Organization bindings inherit across the organization, including workspaces and projects. Workspace bindings inherit to projects in that workspace. Project bindings apply only to that project.
+- Team role bindings apply only when both the team and `team_members` row are active.
+- Register grants the creator `org_owner`; project creation grants the creator `project_owner`.
+- New management endpoints expose `/api/teams`, `/api/roles`, `/api/permissions`, and `/api/role-bindings`.
+- Demo Console includes an Admin Access block that lists visible roles, teams, and role bindings and can create a team for smoke testing.
 Task 012: Implement provider call logging.
 Task 013: Implement model profile and binding.
 Task 014: Implement Manifest JSON Schema.

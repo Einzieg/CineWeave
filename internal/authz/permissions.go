@@ -1,0 +1,27 @@
+package authz
+
+const (
+	PermissionOrganizationRead   = "organization.read"
+	PermissionOrganizationManage = "organization.manage"
+	PermissionWorkspaceRead      = "workspace.read"
+	PermissionWorkspaceManage    = "workspace.manage"
+	PermissionProjectRead        = "project.read"
+	PermissionProjectWrite       = "project.write"
+	PermissionProjectDelete      = "project.delete"
+	PermissionAssetRead          = "asset.read"
+	PermissionAssetWrite         = "asset.write"
+	PermissionAssetDelete        = "asset.delete"
+	PermissionArtifactRead       = "artifact.read"
+	PermissionMediaRead          = "media.read"
+	PermissionProviderRead       = "provider.read"
+	PermissionProviderManage     = "provider.manage"
+	PermissionWorkflowRead       = "workflow.read"
+	PermissionWorkflowRun        = "workflow.run"
+	PermissionWorkflowCancel     = "workflow.cancel"
+	PermissionTeamRead           = "team.read"
+	PermissionTeamManage         = "team.manage"
+	PermissionRoleRead           = "role.read"
+	PermissionRoleManage         = "role.manage"
+	PermissionAuditRead          = "audit.read"
+	PermissionAdminManage        = "admin.manage"
+)

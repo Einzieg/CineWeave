@@ -228,6 +228,31 @@ type ModelProfile = {
   }>;
 };
 
+type AccessRole = {
+  id: string;
+  roleKey: string;
+  name: string;
+  scope: string;
+};
+
+type AccessTeam = {
+  id: string;
+  name: string;
+  status: string;
+};
+
+type AccessRoleBinding = {
+  id: string;
+  roleKey?: string;
+  subjectType: string;
+  subjectUserId?: string;
+  subjectTeamId?: string;
+  resourceType: string;
+  resourceOrganizationId?: string;
+  resourceWorkspaceId?: string;
+  resourceProjectId?: string;
+};
+
 type ProviderTestResult = {
   testRunId: string;
   providerCallId: string;
@@ -311,6 +336,10 @@ export function CineWeaveConsole() {
   const [providerAccounts, setProviderAccounts] = useState<ProviderAccount[]>([]);
   const [providerModels, setProviderModels] = useState<ProviderModel[]>([]);
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const [accessRoles, setAccessRoles] = useState<AccessRole[]>([]);
+  const [accessTeams, setAccessTeams] = useState<AccessTeam[]>([]);
+  const [accessRoleBindings, setAccessRoleBindings] = useState<AccessRoleBinding[]>([]);
+  const [accessError, setAccessError] = useState<string | null>(null);
   const [providerLogs, setProviderLogs] = useState<ProviderCallLog[]>([]);
   const [providerUsage, setProviderUsage] = useState<ProviderUsageSummary | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState("");
@@ -464,6 +493,31 @@ export function CineWeaveConsole() {
     [selectedAccountId],
   );
 
+  const refreshAccess = useCallback(async (activeSession: SessionState) => {
+    setAccessError(null);
+    try {
+      const [rolesData, bindingsData, teamsData] = await Promise.all([
+        apiRequest<{ items: AccessRole[] }>("/api/roles", {
+          token: activeSession.accessToken,
+          organizationId: activeSession.organizationId,
+        }),
+        apiRequest<{ items: AccessRoleBinding[] }>("/api/role-bindings", {
+          token: activeSession.accessToken,
+          organizationId: activeSession.organizationId,
+        }),
+        apiRequest<{ items: AccessTeam[] }>("/api/teams", {
+          token: activeSession.accessToken,
+          organizationId: activeSession.organizationId,
+        }),
+      ]);
+      setAccessRoles(rolesData.items);
+      setAccessRoleBindings(bindingsData.items);
+      setAccessTeams(teamsData.items);
+    } catch (cause) {
+      setAccessError(errorMessage(cause));
+    }
+  }, []);
+
   const pollWorkflowRun = useCallback(
     async (activeSession: SessionState, workflowRunId: string) => {
       for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -496,12 +550,34 @@ export function CineWeaveConsole() {
       const nextSession = await createDemoSession();
       await loadArtifacts(nextSession);
       await refreshProviderCenter(nextSession);
+      await refreshAccess(nextSession);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
       setBusy(null);
     }
-  }, [createDemoSession, loadArtifacts, refreshProviderCenter]);
+  }, [createDemoSession, loadArtifacts, refreshAccess, refreshProviderCenter]);
+
+  const createAccessTeam = useCallback(async () => {
+    setProviderBusy("profile");
+    setAccessError(null);
+    try {
+      const activeSession = session ?? (await createDemoSession());
+      await apiRequest<AccessTeam>("/api/teams", {
+        method: "POST",
+        token: activeSession.accessToken,
+        organizationId: activeSession.organizationId,
+        body: {
+          name: `Access Team ${Date.now().toString(36)}`,
+        },
+      });
+      await refreshAccess(activeSession);
+    } catch (cause) {
+      setAccessError(errorMessage(cause));
+    } finally {
+      setProviderBusy(null);
+    }
+  }, [createDemoSession, refreshAccess, session]);
 
   const runWorkflow = useCallback(async () => {
     setBusy("workflow");
@@ -1110,6 +1186,60 @@ export function CineWeaveConsole() {
                 <Plane label="Data" value="PostgreSQL / Redis / S3 / NATS" />
                 <Plane label="Cost" value="Provider call logs" icon={<CircleDollarSign size={16} />} />
               </div>
+              <div className="border-t border-[var(--line)] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <KeyRound size={17} />
+                    <h3 className="text-sm font-semibold">Admin Access</h3>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => session && refreshAccess(session)}
+                      disabled={!session || providerBusy !== null}
+                      aria-label="Refresh Access"
+                      title="Refresh Access"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded border border-[var(--line)] bg-white disabled:opacity-60"
+                    >
+                      <RefreshCw size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={createAccessTeam}
+                      disabled={providerBusy !== null}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded border border-[var(--line)] bg-white px-3 text-sm font-medium disabled:opacity-60"
+                    >
+                      {providerBusy === "profile" ? <Loader2 size={15} className="animate-spin" /> : <ListChecks size={15} />}
+                      Team
+                    </button>
+                  </div>
+                </div>
+                {accessError ? <p className="mt-3 text-xs text-[var(--rose)]">{accessError}</p> : null}
+                <div className="mt-3 grid gap-2">
+                  <InfoRow label="Roles" value={`${accessRoles.length} roles`} />
+                  <InfoRow label="Teams" value={`${accessTeams.length} teams`} />
+                  <InfoRow label="Bindings" value={`${accessRoleBindings.length} bindings`} />
+                </div>
+                <div className="mt-3 grid gap-3">
+                  <AccessList
+                    title="Roles"
+                    items={accessRoles.slice(0, 4).map((role) => `${role.roleKey} / ${role.scope}`)}
+                    empty="No roles visible."
+                  />
+                  <AccessList
+                    title="Teams"
+                    items={accessTeams.slice(0, 4).map((team) => `${team.name} / ${team.status}`)}
+                    empty="No teams yet."
+                  />
+                  <AccessList
+                    title="Role Bindings"
+                    items={accessRoleBindings
+                      .slice(0, 4)
+                      .map((binding) => `${binding.roleKey ?? binding.id} / ${binding.subjectType} / ${binding.resourceType}`)}
+                    empty="No bindings visible."
+                  />
+                </div>
+              </div>
             </div>
           </section>
 
@@ -1493,6 +1623,25 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="rounded border border-[var(--line)] px-3 py-2">
       <p className="text-xs text-[var(--muted)]">{label}</p>
       <p className="mt-1 truncate text-sm font-medium">{value}</p>
+    </div>
+  );
+}
+
+function AccessList({ title, items, empty }: { title: string; items: string[]; empty: string }) {
+  return (
+    <div className="rounded border border-[var(--line)] px-3 py-2">
+      <p className="text-xs font-medium text-[var(--muted)]">{title}</p>
+      <div className="mt-2 grid gap-1">
+        {items.length > 0 ? (
+          items.map((item) => (
+            <p key={item} className="truncate text-xs text-[var(--foreground)]">
+              {item}
+            </p>
+          ))
+        ) : (
+          <p className="text-xs text-[var(--muted)]">{empty}</p>
+        )}
+      </div>
     </div>
   );
 }

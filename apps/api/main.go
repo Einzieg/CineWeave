@@ -7,6 +7,7 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/api"
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/config"
 	"github.com/Einzieg/cineweave/internal/db"
 	"github.com/Einzieg/cineweave/internal/observability"
@@ -53,7 +54,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer temporalClient.Close()
-	server := api.New(pool, authService, providerService, storageClient, temporalClient)
+	server := api.New(pool, authService, providerService, storageClient, temporalClient, authz.New(pool))
 
 	if err := service.Serve(ctx, cfg, server.Handler(), logger); err != nil {
 		log.Fatal(err)

@@ -412,7 +412,9 @@ func createOrganizationForUser(ctx context.Context, tx pgx.Tx, userID, name stri
 	if err := tx.QueryRow(ctx, `
 		SELECT id
 		FROM roles
-		WHERE organization_id IS NULL AND role_key = 'organization_owner' AND scope = 'organization'
+		WHERE organization_id IS NULL AND role_key IN ('org_owner', 'organization_owner') AND scope = 'organization'
+		ORDER BY CASE WHEN role_key = 'org_owner' THEN 0 ELSE 1 END
+		LIMIT 1
 	`).Scan(&ownerRoleID); err != nil {
 		return "", err
 	}

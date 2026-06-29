@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/storage"
@@ -18,11 +19,12 @@ import (
 )
 
 type Server struct {
-	db        *pgxpool.Pool
-	auth      *auth.Service
-	providers *provider.Service
-	storage   *storage.Client
-	temporal  client.Client
+	db         *pgxpool.Pool
+	auth       *auth.Service
+	authorizer *authz.Authorizer
+	providers  *provider.Service
+	storage    *storage.Client
+	temporal   client.Client
 }
 
 type Organization struct {
@@ -52,8 +54,12 @@ type Project struct {
 	UpdatedAt      time.Time       `json:"updatedAt"`
 }
 
-func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provider.Service, storageClient *storage.Client, temporalClient client.Client) *Server {
-	return &Server{db: pool, auth: authService, providers: providerService, storage: storageClient, temporal: temporalClient}
+func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provider.Service, storageClient *storage.Client, temporalClient client.Client, authorizers ...*authz.Authorizer) *Server {
+	authorizer := authz.New(pool)
+	if len(authorizers) > 0 && authorizers[0] != nil {
+		authorizer = authorizers[0]
+	}
+	return &Server{db: pool, auth: authService, authorizer: authorizer, providers: providerService, storage: storageClient, temporal: temporalClient}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -75,6 +81,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/workspaces", s.withAuth(s.listWorkspaces))
 	mux.HandleFunc("POST /api/workspaces", s.withAuth(s.createWorkspace))
 	mux.HandleFunc("GET /api/workspaces/{workspaceId}", s.withAuth(s.getWorkspace))
+	mux.HandleFunc("GET /api/teams", s.withAuth(s.listTeams))
+	mux.HandleFunc("POST /api/teams", s.withAuth(s.createTeam))
+	mux.HandleFunc("GET /api/teams/{teamId}", s.withAuth(s.getTeam))
+	mux.HandleFunc("PATCH /api/teams/{teamId}", s.withAuth(s.updateTeam))
+	mux.HandleFunc("DELETE /api/teams/{teamId}", s.withAuth(s.deleteTeam))
+	mux.HandleFunc("GET /api/teams/{teamId}/members", s.withAuth(s.listTeamMembers))
+	mux.HandleFunc("POST /api/teams/{teamId}/members", s.withAuth(s.addTeamMember))
+	mux.HandleFunc("DELETE /api/teams/{teamId}/members/{userId}", s.withAuth(s.removeTeamMember))
+	mux.HandleFunc("GET /api/roles", s.withAuth(s.listRoles))
+	mux.HandleFunc("GET /api/permissions", s.withAuth(s.listPermissions))
+	mux.HandleFunc("GET /api/role-bindings", s.withAuth(s.listRoleBindings))
+	mux.HandleFunc("POST /api/role-bindings", s.withAuth(s.createRoleBinding))
+	mux.HandleFunc("DELETE /api/role-bindings/{roleBindingId}", s.withAuth(s.deleteRoleBinding))
 
 	mux.HandleFunc("GET /api/projects", s.withAuth(s.listProjects))
 	mux.HandleFunc("POST /api/projects", s.withAuth(s.createProject))
@@ -194,6 +213,17 @@ func (s *Server) listOrganizations(w http.ResponseWriter, r *http.Request, princ
 		FROM organizations o
 		JOIN organization_members om ON om.organization_id = o.id
 		WHERE om.user_id = $1 AND om.status = 'active'
+		  AND EXISTS (
+			SELECT 1
+			FROM role_bindings rb
+			JOIN role_permissions rp ON rp.role_id = rb.role_id
+			WHERE rb.organization_id = o.id
+			  AND rb.subject_type = 'user'
+			  AND rb.subject_user_id = $1
+			  AND rb.resource_type = 'organization'
+			  AND rb.resource_organization_id = o.id
+			  AND (rp.permission_key = 'organization.read' OR rp.permission_key = 'admin.manage')
+		  )
 		ORDER BY o.created_at
 	`, principal.UserID)
 	if err != nil {
@@ -236,8 +266,7 @@ func (s *Server) createOrganization(w http.ResponseWriter, r *http.Request, prin
 
 func (s *Server) getOrganization(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := r.PathValue("organizationId")
-	if err := s.ensureOrganizationMember(r, principal.UserID, orgID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionOrganizationRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	org, err := s.organization(r, orgID)
@@ -254,8 +283,7 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request, principa
 		httpx.WriteError(w, r, http.StatusBadRequest, "ORGANIZATION_REQUIRED", "organization context is required", nil, false)
 		return
 	}
-	if err := s.ensureOrganizationMember(r, principal.UserID, orgID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionWorkspaceRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 
@@ -299,8 +327,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request, princip
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "name is required", nil, false)
 		return
 	}
-	if err := s.ensureOrganizationMember(r, principal.UserID, orgID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionWorkspaceManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 
@@ -328,8 +355,7 @@ func (s *Server) getWorkspace(w http.ResponseWriter, r *http.Request, principal 
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.ensureOrganizationMember(r, principal.UserID, item.OrganizationID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionWorkspaceRead, authz.Resource{WorkspaceID: item.ID}) {
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
@@ -341,11 +367,14 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 		httpx.WriteError(w, r, http.StatusBadRequest, "ORGANIZATION_REQUIRED", "organization context is required", nil, false)
 		return
 	}
-	if err := s.ensureOrganizationMember(r, principal.UserID, orgID); err != nil {
-		s.writeError(w, r, err)
+	workspaceID := r.URL.Query().Get("filter[workspaceId]")
+	if workspaceID != "" {
+		if !s.authorize(w, r, principal, authz.PermissionProjectRead, authz.Resource{WorkspaceID: workspaceID}) {
+			return
+		}
+	} else if !s.authorize(w, r, principal, authz.PermissionProjectRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
-	workspaceID := r.URL.Query().Get("filter[workspaceId]")
 
 	query := `
 		SELECT id, organization_id, workspace_id, name, description, project_type, aspect_ratio, settings, created_at, updated_at
@@ -405,8 +434,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.ensureOrganizationMember(r, principal.UserID, orgID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionProjectWrite, authz.Resource{WorkspaceID: req.WorkspaceID}) {
 		return
 	}
 
@@ -470,8 +498,7 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, principal au
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.ensureProjectMember(r, principal.UserID, item.ID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionProjectRead, authz.Resource{ProjectID: item.ID}) {
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
@@ -484,8 +511,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.ensureProjectMember(r, principal.UserID, item.ID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionProjectWrite, authz.Resource{ProjectID: item.ID}) {
 		return
 	}
 
@@ -530,8 +556,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request, principal
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.ensureProjectMember(r, principal.UserID, item.ID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionProjectDelete, authz.Resource{ProjectID: item.ID}) {
 		return
 	}
 	if _, err := s.db.Exec(r.Context(), `DELETE FROM projects WHERE id = $1`, projectID); err != nil {
@@ -646,7 +671,12 @@ func organizationID(r *http.Request, principal auth.Principal) string {
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var upstreamErr *provider.UpstreamError
+	var accessErr authz.AccessError
 	switch {
+	case errors.As(err, &accessErr):
+		httpx.WriteError(w, r, http.StatusForbidden, "ACCESS_DENIED", "missing permission "+accessErr.Permission, accessDeniedDetails(accessErr), false)
+	case errors.Is(err, authz.ErrAccessDenied):
+		httpx.WriteError(w, r, http.StatusForbidden, "ACCESS_DENIED", "access denied", nil, false)
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		httpx.WriteError(w, r, http.StatusUnauthorized, "INVALID_CREDENTIALS", "email or password is invalid", nil, false)
 	case errors.Is(err, auth.ErrEmailExists):
@@ -668,5 +698,19 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, http.StatusNotFound, "NOT_FOUND", "resource was not found", nil, false)
 	default:
 		httpx.WriteError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error", fmt.Sprintf("%v", err), false)
+	}
+}
+
+func accessDeniedDetails(err authz.AccessError) map[string]any {
+	resourceID := err.Resource.OrganizationID
+	if err.Resource.ProjectID != "" {
+		resourceID = err.Resource.ProjectID
+	} else if err.Resource.WorkspaceID != "" {
+		resourceID = err.Resource.WorkspaceID
+	}
+	return map[string]any{
+		"permission":   err.Permission,
+		"resourceType": string(err.Resource.Type),
+		"resourceId":   resourceID,
 	}
 }

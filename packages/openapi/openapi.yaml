@@ -238,6 +238,263 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkspaceEnvelope"
+  /api/teams:
+    get:
+      operationId: listTeams
+      description: Requires team.read on the organization.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Teams in organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createTeam
+      description: Requires team.manage on the organization.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTeamRequest"
+      responses:
+        "201":
+          description: Created team
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/teams/{teamId}:
+    get:
+      operationId: getTeam
+      description: Requires team.read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Team detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamEnvelope"
+    patch:
+      operationId: updateTeam
+      description: Requires team.manage.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTeamRequest"
+      responses:
+        "200":
+          description: Updated team
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamEnvelope"
+    delete:
+      operationId: deleteTeam
+      description: Requires team.manage.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Disabled team
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/teams/{teamId}/members:
+    get:
+      operationId: listTeamMembers
+      description: Requires team.read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Team members
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamMemberListEnvelope"
+    post:
+      operationId: addTeamMember
+      description: Requires team.manage.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddTeamMemberRequest"
+      responses:
+        "201":
+          description: Added team member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamMemberEnvelope"
+  /api/teams/{teamId}/members/{userId}:
+    delete:
+      operationId: removeTeamMember
+      description: Requires team.manage.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Disabled team member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/roles:
+    get:
+      operationId: listRoles
+      description: Requires role.read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleListEnvelope"
+  /api/permissions:
+    get:
+      operationId: listPermissions
+      description: Requires role.read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PermissionListEnvelope"
+  /api/role-bindings:
+    get:
+      operationId: listRoleBindings
+      description: Requires role.read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Role bindings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleBindingListEnvelope"
+    post:
+      operationId: createRoleBinding
+      description: Requires role.manage.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoleBindingRequest"
+      responses:
+        "201":
+          description: Created role binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleBindingEnvelope"
+  /api/role-bindings/{roleBindingId}:
+    delete:
+      operationId: deleteRoleBinding
+      description: Requires role.manage and cannot delete the caller's last org_owner binding.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: roleBindingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deleted role binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
   /api/projects:
     get:
       operationId: listProjects
@@ -3426,6 +3683,273 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ProviderWebhookResult"
+    Team:
+      type: object
+      required: [id, organizationId, name, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [active, disabled]
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TeamMember:
+      type: object
+      required: [teamId, userId, status, createdAt]
+      properties:
+        teamId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [active, disabled]
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    Role:
+      type: object
+      required: [id, roleKey, name, scope, isSystem, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        roleKey:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        scope:
+          type: string
+          enum: [organization, workspace, project]
+        isSystem:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Permission:
+      type: object
+      required: [permissionKey, name, description, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        permissionKey:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    RoleBinding:
+      type: object
+      required: [id, organizationId, roleId, subjectType, resourceType, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        roleId:
+          type: string
+          format: uuid
+        roleKey:
+          type: string
+        subjectType:
+          type: string
+          enum: [user, team]
+        subjectUserId:
+          type: string
+          format: uuid
+        subjectTeamId:
+          type: string
+          format: uuid
+        resourceType:
+          type: string
+          enum: [organization, workspace, project]
+        resourceOrganizationId:
+          type: string
+          format: uuid
+        resourceWorkspaceId:
+          type: string
+          format: uuid
+        resourceProjectId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    TeamEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Team"
+    TeamListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Team"
+    TeamMemberEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/TeamMember"
+    TeamMemberListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/TeamMember"
+    RoleListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Role"
+    PermissionListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Permission"
+    RoleBindingEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/RoleBinding"
+    RoleBindingListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/RoleBinding"
+    CreateTeamRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    UpdateTeamRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [active, disabled]
+    AddTeamMemberRequest:
+      type: object
+      required: [userId]
+      properties:
+        userId:
+          type: string
+          format: uuid
+    CreateRoleBindingRequest:
+      type: object
+      required: [organizationId, roleId, subjectType, resourceType]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        roleId:
+          type: string
+          format: uuid
+        subjectType:
+          type: string
+          enum: [user, team]
+        subjectUserId:
+          type: string
+          format: uuid
+        subjectTeamId:
+          type: string
+          format: uuid
+        resourceType:
+          type: string
+          enum: [organization, workspace, project]
+        resourceOrganizationId:
+          type: string
+          format: uuid
+        resourceWorkspaceId:
+          type: string
+          format: uuid
+        resourceProjectId:
+          type: string
+          format: uuid
     CreateWorkspaceRequest:
       type: object
       required: [name]

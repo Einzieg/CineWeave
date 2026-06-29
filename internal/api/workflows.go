@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
@@ -88,8 +89,7 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.ensureProjectMember(r, principal.UserID, project.ID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionWorkflowRun, authz.Resource{ProjectID: project.ID}) {
 		return
 	}
 
@@ -188,10 +188,14 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 
 func (s *Server) listWorkflowRuns(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	projectID := r.URL.Query().Get("filter[projectId]")
+	if projectID != "" {
+		if !s.authorize(w, r, principal, authz.PermissionWorkflowRead, authz.Resource{ProjectID: projectID}) {
+			return
+		}
+	} else if !s.authorize(w, r, principal, authz.PermissionWorkflowRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
-	projectID := r.URL.Query().Get("filter[projectId]")
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
 		FROM workflow_runs
@@ -227,8 +231,7 @@ func (s *Server) getWorkflowRun(w http.ResponseWriter, r *http.Request, principa
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.ensureProjectMember(r, principal.UserID, item.ProjectID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionWorkflowRead, authz.Resource{ProjectID: item.ProjectID}) {
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
@@ -250,8 +253,7 @@ func (s *Server) cancelWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.ensureProjectMember(r, principal.UserID, item.ProjectID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionWorkflowCancel, authz.Resource{ProjectID: item.ProjectID}) {
 		return
 	}
 	if isTerminalWorkflowStatus(item.Status) {
@@ -293,8 +295,7 @@ func (s *Server) listWorkflowNodeRuns(w http.ResponseWriter, r *http.Request, pr
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.ensureProjectMember(r, principal.UserID, run.ProjectID); err != nil {
-		s.writeError(w, r, err)
+	if !s.authorize(w, r, principal, authz.PermissionWorkflowRead, authz.Resource{ProjectID: run.ProjectID}) {
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
@@ -338,10 +339,14 @@ func (s *Server) insertWorkflowCancelWarning(ctx context.Context, run WorkflowRu
 
 func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	projectID := r.URL.Query().Get("filter[projectId]")
+	if projectID != "" {
+		if !s.authorize(w, r, principal, authz.PermissionArtifactRead, authz.Resource{ProjectID: projectID}) {
+			return
+		}
+	} else if !s.authorize(w, r, principal, authz.PermissionArtifactRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
-	projectID := r.URL.Query().Get("filter[projectId]")
 	includePreviewURL := strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true")
 	previewExpires := previewURLExpiryFromRequest(r)
 	if includePreviewURL && s.storage == nil {

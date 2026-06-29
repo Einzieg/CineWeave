@@ -5,11 +5,16 @@ import (
 	"strconv"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/provider"
 )
 
 func (s *Server) listProviderConnectors(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
 	items, err := s.providers.ListConnectors(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
@@ -23,6 +28,10 @@ func (s *Server) importProviderConnector(w http.ResponseWriter, r *http.Request,
 	if !decode(w, r, &req) {
 		return
 	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
 	item, err := s.providers.ImportConnector(r.Context(), req)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -33,7 +42,7 @@ func (s *Server) importProviderConnector(w http.ResponseWriter, r *http.Request,
 
 func (s *Server) listProviderAccounts(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	items, err := s.providers.ListAccounts(r.Context(), orgID, r.URL.Query().Get("filter[status]"), queryInt(r, "limit", 20))
@@ -53,7 +62,7 @@ func (s *Server) createProviderAccount(w http.ResponseWriter, r *http.Request, p
 	if orgID == "" {
 		orgID = organizationID(r, principal)
 	}
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.CreateAccount(r.Context(), orgID, principal.UserID, req)
@@ -66,7 +75,7 @@ func (s *Server) createProviderAccount(w http.ResponseWriter, r *http.Request, p
 
 func (s *Server) getProviderAccount(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.GetAccount(r.Context(), orgID, r.PathValue("accountId"))
@@ -83,7 +92,7 @@ func (s *Server) updateProviderAccount(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.UpdateAccount(r.Context(), orgID, r.PathValue("accountId"), req)
@@ -96,7 +105,7 @@ func (s *Server) updateProviderAccount(w http.ResponseWriter, r *http.Request, p
 
 func (s *Server) deleteProviderAccount(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	if err := s.providers.DeleteAccount(r.Context(), orgID, r.PathValue("accountId")); err != nil {
@@ -112,7 +121,7 @@ func (s *Server) rotateProviderCredential(w http.ResponseWriter, r *http.Request
 		return
 	}
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.RotateCredential(r.Context(), orgID, r.PathValue("accountId"), principal.UserID, req)
@@ -125,7 +134,7 @@ func (s *Server) rotateProviderCredential(w http.ResponseWriter, r *http.Request
 
 func (s *Server) discoverProviderModels(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.DiscoverModels(r.Context(), orgID, r.PathValue("accountId"))
@@ -138,7 +147,7 @@ func (s *Server) discoverProviderModels(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) listProviderModels(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	items, err := s.providers.ListModels(r.Context(), orgID, r.PathValue("accountId"))
@@ -155,7 +164,7 @@ func (s *Server) createProviderModel(w http.ResponseWriter, r *http.Request, pri
 		return
 	}
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.CreateModel(r.Context(), orgID, r.PathValue("accountId"), req)
@@ -172,7 +181,7 @@ func (s *Server) updateProviderModel(w http.ResponseWriter, r *http.Request, pri
 		return
 	}
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.UpdateModel(r.Context(), orgID, r.PathValue("modelId"), req)
@@ -189,7 +198,7 @@ func (s *Server) testProviderModel(w http.ResponseWriter, r *http.Request, princ
 		return
 	}
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	req.IdempotencyKey = idempotencyKey(r, req.IdempotencyKey)
@@ -220,6 +229,10 @@ func (s *Server) validateProviderManifest(w http.ResponseWriter, r *http.Request
 	if !decode(w, r, &req) {
 		return
 	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
 	item, err := s.providers.ValidateManifest(req)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -234,7 +247,7 @@ func (s *Server) runProviderManifestTest(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	req.IdempotencyKey = idempotencyKey(r, req.IdempotencyKey)
@@ -266,7 +279,7 @@ func (s *Server) runProviderManifestTest(w http.ResponseWriter, r *http.Request,
 
 func (s *Server) listModelProfiles(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	items, err := s.providers.ListModelProfiles(r.Context(), orgID)
@@ -283,7 +296,7 @@ func (s *Server) createModelProfile(w http.ResponseWriter, r *http.Request, prin
 		return
 	}
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.CreateModelProfile(r.Context(), orgID, req)
@@ -300,7 +313,7 @@ func (s *Server) updateModelProfile(w http.ResponseWriter, r *http.Request, prin
 		return
 	}
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.UpdateModelProfile(r.Context(), orgID, r.PathValue("profileId"), req)
@@ -317,7 +330,7 @@ func (s *Server) createModelProfileBinding(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.CreateModelProfileBinding(r.Context(), orgID, r.PathValue("profileId"), req)
@@ -330,7 +343,7 @@ func (s *Server) createModelProfileBinding(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) deleteModelProfileBinding(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	if err := s.providers.DeleteModelProfileBinding(r.Context(), orgID, r.PathValue("profileId"), r.PathValue("bindingId")); err != nil {
@@ -342,7 +355,7 @@ func (s *Server) deleteModelProfileBinding(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) listProviderCallLogs(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	items, err := s.providers.ListCallLogs(r.Context(), orgID, provider.CallLogFilters{
@@ -359,7 +372,7 @@ func (s *Server) listProviderCallLogs(w http.ResponseWriter, r *http.Request, pr
 
 func (s *Server) getProviderUsageSummary(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	if !s.requireOrganization(w, r, principal, orgID) {
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
 	item, err := s.providers.UsageSummary(r.Context(), orgID)

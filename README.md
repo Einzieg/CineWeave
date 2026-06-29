@@ -39,6 +39,10 @@ The Vault preview path uses authenticated API endpoints to create short-lived si
 
 For Docker Compose deployments, configure provider accounts and bind active models to `script_agent_default`, `image_generation_default`, and `video_generation_default` before running `video_production`. Missing bindings fail the workflow with `MODEL_PROFILE_NOT_CONFIGURED`.
 
+## RBAC Authorization
+
+API access is permission based through `role_bindings` and `role_permissions`, not raw membership checks. Register creates an organization, active membership, and an `org_owner` binding for the creator. Project creation grants the creator `project_owner`. Provider, workflow, asset, artifact, media, team, and role-binding operations are checked with fine-grained permissions such as `provider.manage`, `workflow.run`, `workflow.cancel`, `asset.write`, `artifact.read`, and `role.manage`. Organization bindings inherit to workspaces and projects; workspace bindings inherit to projects in that workspace; project bindings apply only to that project. Team role bindings apply only to active team members.
+
 ## Layout
 
 - `apps/api`: Go public API server.
