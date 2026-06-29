@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cineweave.local/schemas/provider-manifest.schema.json",
+  "title": "CineWeave Provider Manifest",
+  "type": "object",
+  "required": ["kind", "version", "id", "name", "transport", "baseUrl", "auth", "models", "endpoints"],
+  "properties": {
+    "kind": {
+      "const": "ProviderConnector"
+    },
+    "version": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-_.]*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "transport": {
+      "const": "http"
+    },
+    "baseUrl": {
+      "type": "string",
+      "format": "uri"
+    },
+    "auth": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["none", "bearer", "api_key", "basic"]
+        },
+        "header": {
+          "type": "string"
+        },
+        "valueTemplate": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "displayName", "modality", "capabilities"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "modality": {
+            "enum": ["text", "image", "video", "audio", "embedding"]
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "taskTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "endpoints": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["endpointType", "method", "pathTemplate", "responseMapping"],
+        "properties": {
+          "endpointType": {
+            "enum": ["sync", "async_create", "async_poll"]
+          },
+          "method": {
+            "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+          },
+          "pathTemplate": {
+            "type": "string",
+            "minLength": 1
+          },
+          "headersTemplate": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "requestTemplate": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "responseMapping": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "pollEndpointKey": {
+            "type": "string"
+          },
+          "pollIntervalMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPolls": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

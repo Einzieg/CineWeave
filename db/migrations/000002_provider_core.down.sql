@@ -1,0 +1,26 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS review_tasks;
+DROP TABLE IF EXISTS idempotency_keys;
+DROP TABLE IF EXISTS event_outbox;
+DROP TABLE IF EXISTS provider_leases;
+DROP TABLE IF EXISTS cost_records;
+DROP TABLE IF EXISTS provider_async_tasks;
+DROP TABLE IF EXISTS provider_call_logs;
+DROP TABLE IF EXISTS prompt_versions;
+DROP TABLE IF EXISTS prompt_templates;
+DROP TABLE IF EXISTS artifacts;
+DROP TABLE IF EXISTS workflow_node_runs;
+DROP TABLE IF EXISTS workflow_runs;
+DROP TABLE IF EXISTS workflow_template_nodes;
+DROP TABLE IF EXISTS workflow_templates;
+DROP TABLE IF EXISTS model_profile_bindings;
+DROP TABLE IF EXISTS model_profiles;
+DROP TABLE IF EXISTS provider_test_runs;
+DROP TABLE IF EXISTS provider_endpoints;
+DROP TABLE IF EXISTS provider_model_capabilities;
+DROP TABLE IF EXISTS provider_models;
+DROP TABLE IF EXISTS provider_credentials;
+DROP TABLE IF EXISTS provider_accounts;
+DROP TABLE IF EXISTS provider_connectors;
+
+DELETE FROM schema_migrations WHERE version = '000002_provider_core';

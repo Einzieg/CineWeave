@@ -1,0 +1,2364 @@
+openapi: 3.1.0
+info:
+  title: CineWeave API
+  version: 0.1.0
+  description: API contract seed for the Phase 1 CineWeave control plane.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/auth/register:
+    post:
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Registered user with initial organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/auth/login:
+    post:
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+  /api/auth/refresh:
+    post:
+      operationId: refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Rotated refresh token and access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+  /api/auth/logout:
+    post:
+      operationId: logout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Session revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/auth/me:
+    get:
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+  /api/provider-webhooks/{providerAccountId}/{webhookSecret}:
+    post:
+      operationId: receiveProviderWebhook
+      parameters:
+        - name: providerAccountId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: webhookSecret
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "202":
+          description: Webhook accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderWebhookResultEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/organizations:
+    get:
+      operationId: listOrganizations
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Organizations for current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationListEnvelope"
+    post:
+      operationId: createOrganization
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Created organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationEnvelope"
+  /api/organizations/{organizationId}:
+    get:
+      operationId: getOrganization
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: Organization detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/workspaces:
+    get:
+      operationId: listWorkspaces
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Workspaces in organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceListEnvelope"
+    post:
+      operationId: createWorkspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkspaceRequest"
+      responses:
+        "201":
+          description: Created workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceEnvelope"
+  /api/workspaces/{workspaceId}:
+    get:
+      operationId: getWorkspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Workspace detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceEnvelope"
+  /api/projects:
+    get:
+      operationId: listProjects
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: filter[workspaceId]
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Projects in organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectListEnvelope"
+    post:
+      operationId: createProject
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "201":
+          description: Created project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectEnvelope"
+  /api/projects/{projectId}:
+    get:
+      operationId: getProject
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectEnvelope"
+    patch:
+      operationId: updateProject
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectRequest"
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectEnvelope"
+    delete:
+      operationId: deleteProject
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Deleted project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/assets:
+    get:
+      operationId: listAssets
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: filter[type]
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Project assets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetListEnvelope"
+    post:
+      operationId: createAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetRequest"
+      responses:
+        "201":
+          description: Created asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetEnvelope"
+        "200":
+          description: Idempotent replay of a previous asset create
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetEnvelope"
+  /api/projects/{projectId}/assets/upload-url:
+    post:
+      operationId: createAssetUploadUrl
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetUploadUrlRequest"
+      responses:
+        "201":
+          description: Presigned upload URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetUploadUrlEnvelope"
+  /api/projects/{projectId}/assets/{assetId}:
+    get:
+      operationId: getAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: Asset detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetEnvelope"
+    patch:
+      operationId: updateAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAssetRequest"
+      responses:
+        "200":
+          description: Updated asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetEnvelope"
+    delete:
+      operationId: deleteAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: Deleted asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/assets/{assetId}/variants:
+    post:
+      operationId: createAssetVariant
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetVariantRequest"
+      responses:
+        "201":
+          description: Created asset media variant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetVariantCreateEnvelope"
+        "200":
+          description: Idempotent replay of a previous asset variant create
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetVariantCreateEnvelope"
+  /api/workflow-runs:
+    get:
+      operationId: listWorkflowRuns
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: filter[projectId]
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Workflow runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunListEnvelope"
+    post:
+      operationId: createWorkflowRun
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkflowRunRequest"
+      responses:
+        "201":
+          description: Created workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "200":
+          description: Idempotent replay of a previously created workflow run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/workflow-runs/{workflowRunId}:
+    get:
+      operationId: getWorkflowRun
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowRunId"
+      responses:
+        "200":
+          description: Workflow run detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/workflow-runs/{workflowRunId}/nodes:
+    get:
+      operationId: listWorkflowNodeRuns
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowRunId"
+      responses:
+        "200":
+          description: Workflow node runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowNodeRunListEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/artifacts:
+    get:
+      operationId: listArtifacts
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: filter[projectId]
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Project artifacts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactListEnvelope"
+  /api/providers/connectors:
+    get:
+      operationId: listProviderConnectors
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Provider connectors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectorListEnvelope"
+  /api/providers/connectors/import:
+    post:
+      operationId: importProviderConnector
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportProviderConnectorRequest"
+      responses:
+        "201":
+          description: Imported connector
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectorEnvelope"
+  /api/providers/accounts:
+    get:
+      operationId: listProviderAccounts
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Provider accounts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderAccountListEnvelope"
+    post:
+      operationId: createProviderAccount
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProviderAccountRequest"
+      responses:
+        "201":
+          description: Created provider account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderAccountEnvelope"
+  /api/providers/accounts/{accountId}:
+    get:
+      operationId: getProviderAccount
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+      responses:
+        "200":
+          description: Provider account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderAccountEnvelope"
+    patch:
+      operationId: updateProviderAccount
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProviderAccountRequest"
+      responses:
+        "200":
+          description: Updated provider account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderAccountEnvelope"
+    delete:
+      operationId: deleteProviderAccount
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+      responses:
+        "200":
+          description: Disabled provider account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/providers/accounts/{accountId}/credentials/rotate:
+    post:
+      operationId: rotateProviderCredential
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotateCredentialRequest"
+      responses:
+        "200":
+          description: Rotated credential
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderAccountEnvelope"
+  /api/providers/accounts/{accountId}/discover-models:
+    post:
+      operationId: discoverProviderModels
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+      responses:
+        "200":
+          description: Discovered OpenAI-compatible models
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelDiscoveryResultEnvelope"
+        "502":
+          $ref: "#/components/responses/Error"
+  /api/providers/accounts/{accountId}/models:
+    get:
+      operationId: listProviderModels
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+      responses:
+        "200":
+          description: Provider models
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderModelListEnvelope"
+    post:
+      operationId: createProviderModel
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProviderModelRequest"
+      responses:
+        "201":
+          description: Created provider model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderModelEnvelope"
+  /api/providers/models/{modelId}:
+    patch:
+      operationId: updateProviderModel
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ModelId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProviderModelRequest"
+      responses:
+        "200":
+          description: Updated provider model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderModelEnvelope"
+  /api/providers/models/{modelId}/test:
+    post:
+      operationId: testProviderModel
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ModelId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestProviderModelRequest"
+      responses:
+        "201":
+          description: Provider model test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderTestResultEnvelope"
+        "200":
+          description: Idempotent replay of a previous provider model test
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderTestResultEnvelope"
+  /api/providers/manifests/validate:
+    post:
+      operationId: validateProviderManifest
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateManifestRequest"
+      responses:
+        "200":
+          description: Manifest validation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestValidationEnvelope"
+  /api/providers/manifests/test-run:
+    post:
+      operationId: runProviderManifestTest
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManifestTestRunRequest"
+      responses:
+        "201":
+          description: Declarative provider test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestTestRunResultEnvelope"
+        "200":
+          description: Idempotent replay of a previous declarative provider test
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestTestRunResultEnvelope"
+  /api/model-profiles:
+    get:
+      operationId: listModelProfiles
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Model profiles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelProfileListEnvelope"
+    post:
+      operationId: createModelProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateModelProfileRequest"
+      responses:
+        "201":
+          description: Created model profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelProfileEnvelope"
+  /api/model-profiles/{profileId}:
+    patch:
+      operationId: updateModelProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ProfileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateModelProfileRequest"
+      responses:
+        "200":
+          description: Updated model profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelProfileEnvelope"
+  /api/model-profiles/{profileId}/bindings:
+    post:
+      operationId: createModelProfileBinding
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ProfileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateModelProfileBindingRequest"
+      responses:
+        "201":
+          description: Created model profile binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelProfileEnvelope"
+  /api/model-profiles/{profileId}/bindings/{bindingId}:
+    delete:
+      operationId: deleteModelProfileBinding
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ProfileId"
+        - $ref: "#/components/parameters/BindingId"
+      responses:
+        "200":
+          description: Deleted binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/provider-call-logs:
+    get:
+      operationId: listProviderCallLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: filter[projectId]
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Provider call logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCallLogListEnvelope"
+  /api/provider-usage/summary:
+    get:
+      operationId: getProviderUsageSummary
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Provider usage summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderUsageSummaryEnvelope"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    OrganizationId:
+      name: organizationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AssetId:
+      name: assetId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    WorkflowRunId:
+      name: workflowRunId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ModelId:
+      name: modelId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ProfileId:
+      name: profileId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BindingId:
+      name: bindingId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrganizationHeader:
+      name: X-Organization-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 200
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Envelope:
+      type: object
+      required: [requestId]
+      properties:
+        requestId:
+          type: string
+        data: {}
+        meta: {}
+    ErrorEnvelope:
+      type: object
+      required: [requestId, error]
+      properties:
+        requestId:
+          type: string
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+    ErrorBody:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details: {}
+        retryable:
+          type: boolean
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        displayName:
+          type: string
+        organizationName:
+          type: string
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+    AuthEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AuthToken"
+    MeEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                user:
+                  $ref: "#/components/schemas/User"
+                organizationId:
+                  type: string
+                  format: uuid
+    AuthToken:
+      type: object
+      required: [accessToken, expiresIn, refreshToken, user]
+      properties:
+        accessToken:
+          type: string
+        expiresIn:
+          type: integer
+        refreshToken:
+          type: string
+        organizationId:
+          type: string
+          format: uuid
+        user:
+          $ref: "#/components/schemas/User"
+    User:
+      type: object
+      required: [id, email]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+    Organization:
+      type: object
+      required: [id, name, slug, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    Workspace:
+      type: object
+      required: [id, organizationId, name, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    Project:
+      type: object
+      required: [id, organizationId, workspaceId, name, settings, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        projectType:
+          type: string
+        aspectRatio:
+          type: string
+        settings:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Asset:
+      type: object
+      required: [id, organizationId, projectId, assetType, name, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        assetType:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        currentArtifactId:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateAssetRequest:
+      type: object
+      required: [assetType, name]
+      properties:
+        assetType:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        currentArtifactId:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+          maxLength: 200
+    UpdateAssetRequest:
+      type: object
+      properties:
+        assetType:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        currentArtifactId:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+    CreateAssetUploadUrlRequest:
+      type: object
+      required: [fileName, mimeType]
+      properties:
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        assetType:
+          type: string
+        expiresSeconds:
+          type: integer
+    AssetUploadUrl:
+      type: object
+      required: [storageKey, uploadUrl, method, headers, expiresAt]
+      properties:
+        storageKey:
+          type: string
+        uploadUrl:
+          type: string
+          format: uri
+        method:
+          type: string
+        headers:
+          type: object
+          additionalProperties: true
+        expiresAt:
+          type: string
+          format: date-time
+    AssetVariant:
+      type: object
+      required: [id, mediaFileId, variantType, storageKey, mimeType, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        variantType:
+          type: string
+        storageKey:
+          type: string
+        mimeType:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    CreateAssetVariantRequest:
+      type: object
+      required: [storageKey, mimeType]
+      properties:
+        variantType:
+          type: string
+          default: original
+        storageKey:
+          type: string
+        mimeType:
+          type: string
+        byteSize:
+          type: integer
+          format: int64
+        width:
+          type: integer
+        height:
+          type: integer
+        durationSeconds:
+          type: number
+        checksum:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+          maxLength: 200
+    AssetVariantCreateResult:
+      type: object
+      required: [asset, artifactId, mediaFileId, variant]
+      properties:
+        asset:
+          $ref: "#/components/schemas/Asset"
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        variant:
+          $ref: "#/components/schemas/AssetVariant"
+    WorkflowRun:
+      type: object
+      required: [id, organizationId, projectId, temporalWorkflowId, status, input, output, createdBy, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        templateId:
+          type: string
+          format: uuid
+        temporalWorkflowId:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        cancelledAt:
+          type: string
+          format: date-time
+    WorkflowNodeRun:
+      type: object
+      required: [id, organizationId, projectId, workflowRunId, nodeKey, nodeType, status, input, output, retryCount, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeKey:
+          type: string
+        nodeType:
+          type: string
+        status:
+          type: string
+          enum: [pending, queued, running, succeeded, failed, cancelled, skipped, waiting_review]
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        retryCount:
+          type: integer
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    Artifact:
+      type: object
+      required: [id, organizationId, projectId, type, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        type:
+          type: string
+        storageKey:
+          type: string
+        mimeType:
+          type: string
+        contentHash:
+          type: string
+        promptHash:
+          type: string
+        modelId:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    OrganizationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Organization"
+    OrganizationListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Organization"
+    WorkspaceEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Workspace"
+    WorkspaceListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Workspace"
+    ProjectEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Project"
+    ProjectListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Project"
+    AssetEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Asset"
+    AssetListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Asset"
+    AssetUploadUrlEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AssetUploadUrl"
+    AssetVariantCreateEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AssetVariantCreateResult"
+    WorkflowRunEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/WorkflowRun"
+    WorkflowRunListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/WorkflowRun"
+    WorkflowNodeRunListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/WorkflowNodeRun"
+    ArtifactListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Artifact"
+    ProviderConnector:
+      type: object
+      required: [id, connectorKey, name, type, isOfficial, manifest, version, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        connectorKey:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        isOfficial:
+          type: boolean
+        manifest:
+          type: object
+        version:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    ImportProviderConnectorRequest:
+      type: object
+      required: [connectorKey, name, type]
+      properties:
+        connectorKey:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        isOfficial:
+          type: boolean
+        manifest:
+          type: object
+        version:
+          type: string
+    ProviderAccount:
+      type: object
+      required: [id, organizationId, connectorId, connectorKey, name, authType, status, config, createdBy, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        connectorId:
+          type: string
+          format: uuid
+        connectorKey:
+          type: string
+        name:
+          type: string
+        baseUrl:
+          type: string
+        authType:
+          type: string
+        status:
+          type: string
+        config:
+          type: object
+        credentialPreview:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateProviderAccountRequest:
+      type: object
+      required: [connectorKey, name]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        connectorKey:
+          type: string
+        name:
+          type: string
+        baseUrl:
+          type: string
+          format: uri
+        authType:
+          type: string
+        credential:
+          type: object
+          additionalProperties: true
+        config:
+          type: object
+          additionalProperties: true
+    UpdateProviderAccountRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        baseUrl:
+          type: string
+          format: uri
+        authType:
+          type: string
+        status:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+    RotateCredentialRequest:
+      type: object
+      required: [credential]
+      properties:
+        credentialKey:
+          type: string
+        credential:
+          type: object
+          additionalProperties: true
+    ProviderCapability:
+      type: object
+      required: [id, providerModelId, taskTypes, inputLimits, outputLimits, qualityTiers, providerOptionsSchema, pricingPolicy, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        taskTypes:
+          type: array
+          items:
+            type: string
+        inputLimits:
+          type: object
+          additionalProperties: true
+        outputLimits:
+          type: object
+          additionalProperties: true
+        qualityTiers:
+          type: array
+          items: {}
+        providerOptionsSchema:
+          type: object
+          additionalProperties: true
+        pricingPolicy:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    ProviderModel:
+      type: object
+      required: [id, providerAccountId, modelKey, displayName, modality, status, capabilities, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        modelKey:
+          type: string
+        displayName:
+          type: string
+        modality:
+          type: string
+        status:
+          type: string
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapability"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CapabilityInput:
+      type: object
+      properties:
+        taskTypes:
+          type: array
+          items:
+            type: string
+        inputLimits:
+          type: object
+          additionalProperties: true
+        outputLimits:
+          type: object
+          additionalProperties: true
+        qualityTiers:
+          type: array
+          items: {}
+        providerOptionsSchema:
+          type: object
+          additionalProperties: true
+        pricingPolicy:
+          type: object
+          additionalProperties: true
+    CreateProviderModelRequest:
+      type: object
+      required: [modelKey, displayName, modality]
+      properties:
+        modelKey:
+          type: string
+        displayName:
+          type: string
+        modality:
+          type: string
+        status:
+          type: string
+        capabilities:
+          $ref: "#/components/schemas/CapabilityInput"
+    UpdateProviderModelRequest:
+      type: object
+      properties:
+        modelKey:
+          type: string
+        displayName:
+          type: string
+        modality:
+          type: string
+        status:
+          type: string
+        capabilities:
+          $ref: "#/components/schemas/CapabilityInput"
+    TestProviderModelRequest:
+      type: object
+      required: [testType]
+      properties:
+        testType:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+          maxLength: 200
+    ProviderTestResult:
+      type: object
+      required: [testRunId, providerCallId, status, latencyMs, normalizedOutput]
+      properties:
+        testRunId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        latencyMs:
+          type: integer
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        normalizedOutput:
+          type: object
+          additionalProperties: true
+    ManifestValidationIssue:
+      type: object
+      required: [path, message]
+      properties:
+        path:
+          type: string
+        message:
+          type: string
+    ManifestValidationResult:
+      type: object
+      required: [valid, errors]
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ManifestValidationIssue"
+    ValidateManifestRequest:
+      type: object
+      properties:
+        manifest:
+          type: object
+          additionalProperties: true
+        manifestText:
+          type: string
+    ManifestTestRunRequest:
+      type: object
+      required: [accountId, endpointKey]
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        endpointKey:
+          type: string
+        pollEndpointKey:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        manifest:
+          type: object
+          additionalProperties: true
+        manifestText:
+          type: string
+        maxPolls:
+          type: integer
+        idempotencyKey:
+          type: string
+          maxLength: 200
+    ManifestTestRunResult:
+      type: object
+      required: [testRunId, providerCallId, endpointKey, status, latencyMs, normalizedOutput]
+      properties:
+        testRunId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        endpointKey:
+          type: string
+        status:
+          type: string
+        latencyMs:
+          type: integer
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        normalizedOutput:
+          type: object
+          additionalProperties: true
+    DiscoveredModel:
+      type: object
+      required: [modelKey, displayName, modality, status]
+      properties:
+        modelKey:
+          type: string
+        displayName:
+          type: string
+        modality:
+          type: string
+        status:
+          type: string
+    ModelDiscoveryResult:
+      type: object
+      required: [models, unsupported]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiscoveredModel"
+        unsupported:
+          type: array
+          items: {}
+    ModelProfileBinding:
+      type: object
+      required: [id, modelProfileId, providerModelId, priority, weight, enabled, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        modelProfileId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        priority:
+          type: integer
+        weight:
+          type: integer
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    ModelProfile:
+      type: object
+      required: [id, organizationId, profileKey, name, purpose, routingStrategy, fallbackStrategy, bindings, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        profileKey:
+          type: string
+        name:
+          type: string
+        purpose:
+          type: string
+        routingStrategy:
+          type: string
+        fallbackStrategy:
+          type: object
+          additionalProperties: true
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelProfileBinding"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateModelProfileRequest:
+      type: object
+      required: [profileKey, name, purpose]
+      properties:
+        profileKey:
+          type: string
+        name:
+          type: string
+        purpose:
+          type: string
+        routingStrategy:
+          type: string
+        fallbackStrategy:
+          type: object
+          additionalProperties: true
+    UpdateModelProfileRequest:
+      type: object
+      properties:
+        profileKey:
+          type: string
+        name:
+          type: string
+        purpose:
+          type: string
+        routingStrategy:
+          type: string
+        fallbackStrategy:
+          type: object
+          additionalProperties: true
+    CreateModelProfileBindingRequest:
+      type: object
+      required: [providerModelId]
+      properties:
+        providerModelId:
+          type: string
+          format: uuid
+        priority:
+          type: integer
+        weight:
+          type: integer
+        enabled:
+          type: boolean
+    ProviderCallLog:
+      type: object
+      required: [id, organizationId, providerAccountId, taskType, executionMode, status, requestSnapshot, artifactIds, mediaFileIds, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        credentialId:
+          type: string
+          format: uuid
+        taskType:
+          type: string
+        executionMode:
+          type: string
+        status:
+          type: string
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        requestSnapshot:
+          type: object
+          additionalProperties: true
+        responseSnapshot:
+          type: object
+          additionalProperties: true
+        normalizedOutput:
+          type: object
+          additionalProperties: true
+        artifactIds:
+          type: array
+          items:
+            type: string
+        mediaFileIds:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+    ProviderUsageSummary:
+      type: object
+      required: [totalCalls, failedCalls, totalCost, currency]
+      properties:
+        totalCalls:
+          type: integer
+        failedCalls:
+          type: integer
+        totalCost:
+          type: string
+        currency:
+          type: string
+    ProviderWebhookResult:
+      type: object
+      required: [providerAsyncTaskId, providerCallId, status, signalStatus]
+      properties:
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        signalStatus:
+          type: string
+    ProviderConnectorEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderConnector"
+    ProviderConnectorListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProviderConnector"
+    ProviderAccountEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderAccount"
+    ProviderAccountListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProviderAccount"
+    ProviderModelEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderModel"
+    ProviderModelListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProviderModel"
+    ProviderTestResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderTestResult"
+    ManifestValidationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ManifestValidationResult"
+    ManifestTestRunResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ManifestTestRunResult"
+    ModelDiscoveryResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ModelDiscoveryResult"
+    ModelProfileEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ModelProfile"
+    ModelProfileListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ModelProfile"
+    ProviderCallLogListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProviderCallLog"
+    ProviderUsageSummaryEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderUsageSummary"
+    ProviderWebhookResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderWebhookResult"
+    CreateWorkspaceRequest:
+      type: object
+      required: [name]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        name:
+          type: string
+    CreateProjectRequest:
+      type: object
+      required: [workspaceId, name]
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        projectType:
+          type: string
+        aspectRatio:
+          type: string
+        settings:
+          type: object
+    CreateWorkflowRunRequest:
+      type: object
+      required: [projectId]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        workflowType:
+          type: string
+          enum: [video_production, text_to_storyboard, script_to_storyboard]
+          default: video_production
+        prompt:
+          type: string
+        idempotencyKey:
+          type: string
+          maxLength: 200
+    UpdateProjectRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        projectType:
+          type: string
+        aspectRatio:
+          type: string
+        settings:
+          type: object

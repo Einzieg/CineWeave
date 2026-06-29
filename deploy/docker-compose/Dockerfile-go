@@ -1,0 +1,17 @@
+FROM golang:1.26-alpine AS build
+
+ARG SERVICE_PATH
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN go build -o /out/service ./${SERVICE_PATH}
+
+FROM alpine:3.21
+RUN adduser -D -H cineweave
+USER cineweave
+COPY --from=build /out/service /service
+EXPOSE 8080 8081 8082
+ENTRYPOINT ["/service"]
