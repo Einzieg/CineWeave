@@ -314,6 +314,20 @@ func (s *Service) CancelVideoTask(ctx context.Context, req GatewayVideoCancelTas
 	if err != nil {
 		return GatewayVideoCancelTaskResponse{}, err
 	}
+	if task.Status == "cancelled" {
+		return GatewayVideoCancelTaskResponse{
+			ProviderAsyncTaskID: task.ID,
+			ExternalTaskID:      task.ExternalTaskID,
+			Status:              "cancelled",
+		}, nil
+	}
+	if task.Status == "succeeded" {
+		return GatewayVideoCancelTaskResponse{
+			ProviderAsyncTaskID: task.ID,
+			ExternalTaskID:      task.ExternalTaskID,
+			Status:              "succeeded",
+		}, nil
+	}
 	account, err := s.GetAccount(ctx, req.OrganizationID, task.ProviderAccountID)
 	if err != nil {
 		return GatewayVideoCancelTaskResponse{}, err
@@ -358,8 +372,12 @@ func (s *Service) CancelVideoTask(ctx context.Context, req GatewayVideoCancelTas
 			normalizedOutput = result.NormalizedOutput
 		}
 		if runErr != nil {
-			status, errorCode, errorMessage, upstreamStatus, upstreamErrorCode = normalizedProviderFailure(runErr)
-			standardError = standardErrorFromRunError(runErr, errorCode, errorMessage)
+			status = "failed"
+			_, errorCode, errorMessage, upstreamStatus, upstreamErrorCode = normalizedProviderFailure(runErr)
+			if errorCode == "" {
+				errorCode = CodeProviderCancelFailed
+			}
+			standardError = &StandardError{Code: errorCode, Message: "provider video task cancel failed", Retryable: true}
 			if len(responseSnapshot) == 0 {
 				responseSnapshot = upstreamBody(runErr)
 			}
@@ -791,23 +809,58 @@ func (s *Service) recordVideoCancelTask(ctx context.Context, selection gatewayMo
 	if err != nil {
 		return CallLog{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE provider_async_tasks
-		SET status = 'cancelled',
-		    cancelled_at = COALESCE(cancelled_at, now()),
-		    finalized_at = COALESCE(finalized_at, now()),
-		    error_code = $2,
-		    error_message = $3,
-		    normalized_output = $4,
-		    last_response_snapshot = $5
-		WHERE id = $1
-	`, task.ID, nullString(errorCode), nullString(errorMessage), nullIfJSONNull(normalizedOutput), nullIfJSONNull(responseSnapshot)); err != nil {
-		return CallLog{}, err
+	if status == "cancelled" {
+		if _, err := tx.Exec(ctx, `
+			UPDATE provider_async_tasks
+			SET status = 'cancelled',
+			    cancelled_at = COALESCE(cancelled_at, now()),
+			    finalized_at = COALESCE(finalized_at, now()),
+			    error_code = $2,
+			    error_message = $3,
+			    normalized_output = $4,
+			    last_response_snapshot = $5
+			WHERE id = $1
+		`, task.ID, nullString(errorCode), nullString(errorMessage), nullIfJSONNull(normalizedOutput), nullIfJSONNull(responseSnapshot)); err != nil {
+			return CallLog{}, err
+		}
+		if err := insertProviderVideoCancelEvent(ctx, tx, task, call.ID, "provider.video.task.cancelled", "cancelled", ""); err != nil {
+			return CallLog{}, err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `
+			UPDATE provider_async_tasks
+			SET error_code = $2,
+			    error_message = $3,
+			    normalized_output = $4,
+			    last_response_snapshot = $5
+			WHERE id = $1
+		`, task.ID, nullString(errorCode), nullString(errorMessage), nullIfJSONNull(normalizedOutput), nullIfJSONNull(responseSnapshot)); err != nil {
+			return CallLog{}, err
+		}
+		if err := insertProviderVideoCancelEvent(ctx, tx, task, call.ID, "provider.video.task.cancel_failed", status, errorMessage); err != nil {
+			return CallLog{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CallLog{}, err
 	}
 	return call, nil
+}
+
+func insertProviderVideoCancelEvent(ctx context.Context, tx pgx.Tx, task gatewayVideoTask, providerCallID, eventType, status, errorMessage string) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
+		VALUES ($1, $2, $3, 'provider_async_task', $4, $5)
+	`, task.OrganizationID, nullString(task.ProjectID), eventType, task.ID, mustJSON(map[string]any{
+		"workflowRunId":       task.WorkflowRunID,
+		"nodeRunId":           task.NodeRunID,
+		"providerAsyncTaskId": task.ID,
+		"externalTaskId":      task.ExternalTaskID,
+		"providerCallId":      providerCallID,
+		"status":              status,
+		"errorMessage":        errorMessage,
+	}))
+	return err
 }
 
 func insertGatewayVideoArtifact(ctx context.Context, tx pgx.Tx, selection gatewayModelSelection, organizationID, projectID, workflowRunID, nodeRunID, callID, providerAsyncTaskID, externalTaskID string, stored *gatewayStoredVideo, input gatewayVideoInput) error {

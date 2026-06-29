@@ -3332,6 +3332,17 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - `GET /api/artifacts?includePreviewUrl=true&previewExpiresSeconds=900` signs previewable artifacts only; the default list path does not batch sign URLs.
 - Preview URLs default to 15 minutes and clamp to 1 hour. `preview-url` accepts `image/*`, `video/*`, `audio/*`, `text/*`, and `application/json`; unsupported artifact MIME types return `UNSUPPORTED_PREVIEW_TYPE`.
 - Local Docker Compose uses `S3_ENDPOINT=http://minio:9000` for server-to-MinIO access and `S3_PUBLIC_ENDPOINT=http://localhost:9000` for browser-accessible signed URLs.
+
+## Implementation Note: Workflow Cancel and Provider Async Task Cancel
+
+- `workflow_runs.status` now supports `cancelling` for user-requested cancellation before the workflow reaches `cancelled`.
+- `POST /api/workflow-runs/{workflowRunId}/cancel` requires authentication and project membership, marks queued/running/cancelling runs as `cancelling`, emits `workflow.run.cancelling`, and requests Temporal `CancelWorkflow`.
+- Repeated cancel on terminal `succeeded`, `failed`, or `cancelled` runs returns the current workflow run without restarting Temporal cancellation.
+- `VideoProductionWorkflow` performs cancellation cleanup from a Temporal disconnected context after the video provider task has been created and before video completion.
+- `CancelStoryboardVideoTask` calls Provider Gateway `/internal/provider/video/cancel-task`, then marks the `generate_storyboard_video` node `cancelled` and emits `workflow.node.cancelled`.
+- `CancelVideoProductionWorkflow` marks the workflow `cancelled`, writes cancellation output including provider async task IDs, and emits `workflow.run.cancelled`.
+- Provider Gateway video cancel is idempotent: already cancelled tasks return `cancelled`, completed tasks return `succeeded`, missing manifest cancel endpoints mark the local async task cancelled, and upstream cancel failures return `PROVIDER_CANCEL_FAILED` while preserving the async task state.
+- Demo Console shows `queued` / `running` / `cancelling` workflow runs as cancellable and calls `POST /api/workflow-runs/{id}/cancel`.
 Task 012: Implement provider call logging.
 Task 013: Implement model profile and binding.
 Task 014: Implement Manifest JSON Schema.

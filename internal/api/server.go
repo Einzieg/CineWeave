@@ -114,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs", s.withAuth(s.createWorkflowRun))
 	mux.HandleFunc("GET /api/workflow-runs", s.withAuth(s.listWorkflowRuns))
 	mux.HandleFunc("GET /api/workflow-runs/{workflowRunId}", s.withAuth(s.getWorkflowRun))
+	mux.HandleFunc("POST /api/workflow-runs/{workflowRunId}/cancel", s.withAuth(s.cancelWorkflowRun))
 	mux.HandleFunc("GET /api/workflow-runs/{workflowRunId}/nodes", s.withAuth(s.listWorkflowNodeRuns))
 	mux.HandleFunc("GET /api/artifacts", s.withAuth(s.listArtifacts))
 	mux.HandleFunc("GET /api/artifacts/{artifactId}", s.withAuth(s.getArtifact))

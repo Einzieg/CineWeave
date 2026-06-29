@@ -79,10 +79,31 @@ func VideoComposeWorkflow(ctx workflow.Context, input TextToStoryboardInput, cli
 	return output, nil
 }
 
-func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) (VideoProductionOutput, error) {
+func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) (result VideoProductionOutput, err error) {
 	options := resolveVideoProductionOptions(input.Input)
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
-	var result VideoProductionOutput
+	var createOutput CreateStoryboardVideoTaskOutput
+	videoTerminal := false
+	defer func() {
+		if ctx.Err() == nil || videoTerminal {
+			return
+		}
+		cleanupCtx, _ := workflow.NewDisconnectedContext(ctx)
+		reason := "Workflow cancellation requested"
+		var cancelOutput CancelStoryboardVideoTaskOutput
+		if createOutput.ProviderAsyncTaskID != "" && createOutput.NodeRunID != "" {
+			_ = workflow.ExecuteActivity(cleanupCtx, "CancelStoryboardVideoTask", CancelStoryboardVideoTaskInput{
+				OrganizationID:      input.OrganizationID,
+				ProjectID:           input.ProjectID,
+				WorkflowRunID:       input.WorkflowRunID,
+				NodeRunID:           createOutput.NodeRunID,
+				ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
+				ExternalTaskID:      createOutput.ExternalTaskID,
+				Reason:              reason,
+			}).Get(cleanupCtx, &cancelOutput)
+		}
+		_ = workflow.ExecuteActivity(cleanupCtx, "CancelVideoProductionWorkflow", input, cancelOutput, reason).Get(cleanupCtx, nil)
+	}()
 
 	var storyboard GenerateStoryboardTextOutput
 	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardText", generateStoryboardTextInput(input)).Get(ctx, &storyboard); err != nil {
@@ -124,7 +145,6 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 	createActivityOptions := defaultActivityOptions()
 	createActivityOptions.RetryPolicy.MaximumAttempts = 1
 	createCtx := workflow.WithActivityOptions(ctx, createActivityOptions)
-	var createOutput CreateStoryboardVideoTaskOutput
 	if err := workflow.ExecuteActivity(createCtx, "CreateStoryboardVideoTask", createInput).Get(createCtx, &createOutput); err != nil {
 		return VideoProductionOutput{}, err
 	}
@@ -145,6 +165,7 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 		}
 		if pollOutput.Status == "succeeded" {
 			result = BuildVideoProductionOutput(storyboard, image, createOutput, pollOutput)
+			videoTerminal = true
 			if err := workflow.ExecuteActivity(ctx, "CompleteVideoProductionWorkflow", input, result).Get(ctx, nil); err != nil {
 				return VideoProductionOutput{}, err
 			}

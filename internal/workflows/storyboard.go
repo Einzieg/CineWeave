@@ -24,6 +24,8 @@ const (
 	codeActivityFailed              = "ACTIVITY_FAILED"
 	codeModelProfileNotConfigured   = "MODEL_PROFILE_NOT_CONFIGURED"
 	codeProviderVideoPollingTimeout = "PROVIDER_VIDEO_POLLING_TIMEOUT"
+	codeUserCancelRequested         = "USER_CANCEL_REQUESTED"
+	codeUserCancelled               = "USER_CANCELLED"
 	nodeGenerateStoryboardTextKey   = "generate_storyboard_text"
 	nodeGenerateStoryboardImageKey  = "generate_storyboard_image"
 	nodeGenerateStoryboardVideoKey  = "generate_storyboard_video"

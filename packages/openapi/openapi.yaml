@@ -527,6 +527,32 @@ paths:
                 $ref: "#/components/schemas/WorkflowRunEnvelope"
         "404":
           $ref: "#/components/responses/Error"
+  /api/workflow-runs/{workflowRunId}/cancel:
+    post:
+      operationId: cancelWorkflowRun
+      summary: Cancel a workflow run
+      description: Sets a queued or running workflow to cancelling and requests Temporal cancellation. Terminal workflows return their current state.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowRunId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelWorkflowRunRequest"
+      responses:
+        "200":
+          description: Workflow run after cancellation request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /api/workflow-runs/{workflowRunId}/nodes:
     get:
       operationId: listWorkflowNodeRuns
@@ -1725,7 +1751,7 @@ components:
           type: string
         status:
           type: string
-          enum: [queued, running, succeeded, failed, cancelled]
+          enum: [queued, running, cancelling, succeeded, failed, cancelled]
         input:
           type: object
           additionalProperties: true
@@ -2999,7 +3025,7 @@ components:
           type: string
         status:
           type: string
-          enum: [cancelled, failed]
+          enum: [cancelled, succeeded, failed]
         error:
           $ref: "#/components/schemas/ProviderStandardError"
     GatewayDiscoverModelsRequest:
@@ -3463,6 +3489,12 @@ components:
         idempotencyKey:
           type: string
           maxLength: 200
+    CancelWorkflowRunRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: Optional human-readable cancellation reason.
     UpdateProjectRequest:
       type: object
       properties:

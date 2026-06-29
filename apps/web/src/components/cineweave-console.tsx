@@ -120,7 +120,7 @@ type WorkflowRun = {
   organizationId: string;
   projectId: string;
   temporalWorkflowId: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  status: "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
   input: Record<string, unknown>;
   output: Record<string, unknown>;
   errorCode?: string;
@@ -277,7 +277,7 @@ type RealtimeEvent = {
   createdAt: string;
 };
 
-type BusyState = "bootstrap" | "workflow" | null;
+type BusyState = "bootstrap" | "workflow" | "cancel" | null;
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting";
 type ProviderTestType = "text_generation_test" | "streaming_test" | "image_generation_test" | "video_generation_test";
 type WorkflowType = "text_to_storyboard" | "video_production" | "script_to_storyboard";
@@ -327,6 +327,11 @@ export function CineWeaveConsole() {
   const [providerTestResult, setProviderTestResult] = useState<ProviderTestResult | null>(null);
   const [manifestText, setManifestText] = useState(defaultManifestText);
   const [manifestValidation, setManifestValidation] = useState<ManifestValidationResult | null>(null);
+  const videoProviderAsyncTaskId = useMemo(() => {
+    const videoNode = workflowNodes.find((node) => node.nodeKey === "generate_storyboard_video");
+    return videoNode ? normalizedOutputString(videoNode.output, "providerAsyncTaskId") : "-";
+  }, [workflowNodes]);
+  const canCancelWorkflow = workflowRun ? isCancelableWorkflowStatus(workflowRun.status) : false;
 
   const metrics = useMemo(
     () => [
@@ -545,6 +550,29 @@ export function CineWeaveConsole() {
     workflowVideoPollInterval,
     workflowVideoResolution,
   ]);
+
+  const cancelWorkflow = useCallback(async () => {
+    if (!workflowRun || !session) {
+      setError("Initialize a demo session before cancelling a workflow.");
+      return;
+    }
+    setBusy("cancel");
+    setError(null);
+    try {
+      const run = await apiRequest<WorkflowRun>(`/api/workflow-runs/${workflowRun.id}/cancel`, {
+        method: "POST",
+        token: session.accessToken,
+        organizationId: session.organizationId,
+        body: { reason: "User requested cancellation from Demo Console" },
+      });
+      setWorkflowRun(run);
+      await pollWorkflowRun(session, run.id);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(null);
+    }
+  }, [pollWorkflowRun, session, workflowRun]);
 
   const refreshProviders = useCallback(async () => {
     setProviderBusy("provider");
@@ -977,7 +1005,7 @@ export function CineWeaveConsole() {
                       className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
                     />
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="grid gap-2 sm:grid-cols-3">
                     <button
                       type="button"
                       onClick={bootstrap}
@@ -998,7 +1026,23 @@ export function CineWeaveConsole() {
                       {busy === "workflow" ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
                       Run
                     </button>
+                    {canCancelWorkflow ? (
+                      <button
+                        type="button"
+                        onClick={cancelWorkflow}
+                        disabled={busy !== null}
+                        aria-label="Cancel Workflow"
+                        title="Cancel Workflow"
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded border border-[var(--rose)] bg-white px-3 text-sm font-medium text-[var(--rose)] disabled:opacity-60"
+                      >
+                        {busy === "cancel" ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />}
+                        Cancel
+                      </button>
+                    ) : null}
                   </div>
+                  {workflowRun?.status === "cancelling" && videoProviderAsyncTaskId !== "-" ? (
+                    <p className="text-xs text-[var(--muted)]">Cancelling provider task {videoProviderAsyncTaskId}...</p>
+                  ) : null}
                   {error ? (
                     <div className="flex gap-2 rounded border border-[var(--rose)] bg-white px-3 py-2 text-sm text-[var(--rose)]">
                       <XCircle size={16} className="mt-0.5 shrink-0" />
@@ -1570,6 +1614,10 @@ function trimTrailingSlash(value: string) {
 
 function isTerminal(status: WorkflowRun["status"]) {
   return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+function isCancelableWorkflowStatus(status: WorkflowRun["status"]) {
+  return status === "queued" || status === "running" || status === "cancelling";
 }
 
 function sleep(ms: number) {

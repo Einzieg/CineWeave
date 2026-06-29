@@ -33,6 +33,8 @@ Provider Gateway Video Runtime v1 adds declarative HTTP video providers through 
 
 `video_production` v1 now runs the minimum real production chain: text to `storyboard_json`, image to `generated_image`, and async image-to-video to `generated_video`. `POST /api/workflow-runs` accepts optional `input.duration`, `input.aspectRatio`, `input.resolution`, `input.pollIntervalSeconds`, and `input.maxPolls`; Temporal creates the video task once through Provider Gateway and uses a durable workflow-level poll loop until the Gateway returns a terminal video result.
 
+Video workflow cancellation is exposed through `POST /api/workflow-runs/{id}/cancel`. Running, queued, or already-cancelling runs are marked `cancelling` and API requests Temporal cancellation; terminal runs return their current state for repeated cancel calls. If a Provider Gateway video async task exists, workflow cleanup calls `/internal/provider/video/cancel-task`, marks the video node and workflow cancelled, and emits cancellation events.
+
 The Vault preview path uses authenticated API endpoints to create short-lived signed GET URLs for `artifacts` and `media_files`; S3 / MinIO buckets do not need public read access. In local Docker Compose, server components use `S3_ENDPOINT=http://minio:9000`, while browser preview URLs are signed with `S3_PUBLIC_ENDPOINT=http://localhost:9000`.
 
 For Docker Compose deployments, configure provider accounts and bind active models to `script_agent_default`, `image_generation_default`, and `video_generation_default` before running `video_production`. Missing bindings fail the workflow with `MODEL_PROFILE_NOT_CONFIGURED`.

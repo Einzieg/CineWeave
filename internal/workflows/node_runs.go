@@ -168,6 +168,112 @@ func FailNodeRun(ctx context.Context, db txBeginner, nodeRunID, code, message st
 	return tx.Commit(ctx)
 }
 
+func CancelNodeRun(ctx context.Context, db txBeginner, nodeRunID string, output json.RawMessage, reason string) error {
+	if len(output) == 0 {
+		output = json.RawMessage(`{}`)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	runCtx, err := lockNodeRunContext(ctx, tx, nodeRunID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflow_node_runs
+		SET status = 'cancelled',
+		    output = $2,
+		    error_code = 'USER_CANCELLED',
+		    error_message = $3,
+		    completed_at = now()
+		WHERE id = $1
+		  AND status NOT IN ('succeeded', 'failed', 'cancelled')
+	`, nodeRunID, output, nullableCancelReason(reason)); err != nil {
+		return err
+	}
+	if err := insertEvent(ctx, tx, runCtx.OrganizationID, runCtx.ProjectID, "workflow.node.cancelled", "workflow_node_run", nodeRunID, mustJSON(map[string]any{
+		"workflowRunId": runCtx.WorkflowRunID,
+		"nodeRunId":     nodeRunID,
+		"nodeKey":       runCtx.NodeKey,
+		"reason":        reason,
+		"status":        "cancelled",
+		"output":        json.RawMessage(output),
+	})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func MarkWorkflowCancelling(ctx context.Context, db txBeginner, workflowRunID, reason string) error {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	runCtx, err := lockWorkflowRunContext(ctx, tx, workflowRunID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflow_runs
+		SET status = 'cancelling',
+		    error_code = 'USER_CANCEL_REQUESTED',
+		    error_message = $2
+		WHERE id = $1
+		  AND status IN ('pending', 'queued', 'running', 'cancelling')
+	`, workflowRunID, nullableCancelReason(reason)); err != nil {
+		return err
+	}
+	if err := insertEvent(ctx, tx, runCtx.OrganizationID, runCtx.ProjectID, "workflow.run.cancelling", "workflow_run", workflowRunID, mustJSON(map[string]any{
+		"workflowRunId": workflowRunID,
+		"reason":        reason,
+		"status":        "cancelling",
+	})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func CancelWorkflowRun(ctx context.Context, db txBeginner, workflowRunID string, output json.RawMessage, reason string) error {
+	if len(output) == 0 {
+		output = json.RawMessage(`{}`)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	runCtx, err := lockWorkflowRunContext(ctx, tx, workflowRunID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflow_runs
+		SET status = 'cancelled',
+		    output = $2,
+		    error_code = 'USER_CANCELLED',
+		    error_message = $3,
+		    completed_at = now(),
+		    cancelled_at = COALESCE(cancelled_at, now())
+		WHERE id = $1
+		  AND status NOT IN ('succeeded', 'failed', 'cancelled')
+	`, workflowRunID, output, nullableCancelReason(reason)); err != nil {
+		return err
+	}
+	if err := insertEvent(ctx, tx, runCtx.OrganizationID, runCtx.ProjectID, "workflow.run.cancelled", "workflow_run", workflowRunID, mustJSON(map[string]any{
+		"workflowRunId": workflowRunID,
+		"reason":        reason,
+		"status":        "cancelled",
+		"output":        json.RawMessage(output),
+	})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func insertEvent(ctx context.Context, tx pgx.Tx, organizationID, projectID, eventType, aggregateType, aggregateID string, payload json.RawMessage) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
@@ -185,6 +291,25 @@ func lockNodeRunContext(ctx context.Context, tx pgx.Tx, nodeRunID string) (nodeR
 		FOR UPDATE
 	`, nodeRunID).Scan(&runCtx.OrganizationID, &runCtx.ProjectID, &runCtx.WorkflowRunID, &runCtx.NodeKey)
 	return runCtx, err
+}
+
+func lockWorkflowRunContext(ctx context.Context, tx pgx.Tx, workflowRunID string) (nodeRunContext, error) {
+	var runCtx nodeRunContext
+	err := tx.QueryRow(ctx, `
+		SELECT organization_id, project_id, id::text, ''
+		FROM workflow_runs
+		WHERE id = $1
+		FOR UPDATE
+	`, workflowRunID).Scan(&runCtx.OrganizationID, &runCtx.ProjectID, &runCtx.WorkflowRunID, &runCtx.NodeKey)
+	return runCtx, err
+}
+
+func nullableCancelReason(reason string) any {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return nil
+	}
+	return reason
 }
 
 type txBeginner interface {

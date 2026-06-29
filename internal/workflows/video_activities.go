@@ -62,6 +62,24 @@ type PollStoryboardVideoTaskOutput struct {
 	PollCount           int      `json:"pollCount,omitempty"`
 }
 
+type CancelStoryboardVideoTaskInput struct {
+	OrganizationID      string `json:"organizationId"`
+	ProjectID           string `json:"projectId"`
+	WorkflowRunID       string `json:"workflowRunId"`
+	NodeRunID           string `json:"nodeRunId"`
+	ProviderAsyncTaskID string `json:"providerAsyncTaskId"`
+	ExternalTaskID      string `json:"externalTaskId,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+}
+
+type CancelStoryboardVideoTaskOutput struct {
+	ProviderCallID      string `json:"providerCallId,omitempty"`
+	ProviderAsyncTaskID string `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID      string `json:"externalTaskId,omitempty"`
+	Status              string `json:"status"`
+	ErrorMessage        string `json:"errorMessage,omitempty"`
+}
+
 func (a Activities) CreateStoryboardVideoTask(ctx context.Context, input CreateStoryboardVideoTaskInput) (CreateStoryboardVideoTaskOutput, error) {
 	baseInput := TextToStoryboardInput{
 		OrganizationID: input.OrganizationID,
@@ -169,6 +187,52 @@ func (a Activities) CreateStoryboardVideoTask(ctx context.Context, input CreateS
 	return output, nil
 }
 
+func (a Activities) CancelStoryboardVideoTask(ctx context.Context, input CancelStoryboardVideoTaskInput) (CancelStoryboardVideoTaskOutput, error) {
+	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.NodeRunID) == "" {
+		return CancelStoryboardVideoTaskOutput{}, fmt.Errorf("organizationId, projectId, workflowRunId, and nodeRunId are required")
+	}
+	if strings.TrimSpace(input.ProviderAsyncTaskID) == "" {
+		return CancelStoryboardVideoTaskOutput{}, fmt.Errorf("providerAsyncTaskId is required")
+	}
+	reason := strings.TrimSpace(input.Reason)
+	if reason == "" {
+		reason = "Workflow cancellation requested"
+	}
+	output := CancelStoryboardVideoTaskOutput{
+		ProviderAsyncTaskID: input.ProviderAsyncTaskID,
+		ExternalTaskID:      input.ExternalTaskID,
+		Status:              "cancelled",
+	}
+	if a.gateway == nil {
+		output.Status = "cancel_failed"
+		output.ErrorMessage = "provider gateway client is not configured"
+		_ = CancelNodeRun(ctx, a.db, input.NodeRunID, mustJSON(output), reason)
+		_ = a.recordProviderVideoCancelEvent(ctx, input, output)
+		return output, nil
+	}
+	gatewayResp, err := a.gateway.CancelVideoTask(ctx, provider.GatewayVideoCancelTaskRequest{
+		OrganizationID:      input.OrganizationID,
+		ProviderAsyncTaskID: input.ProviderAsyncTaskID,
+		ExternalTaskID:      input.ExternalTaskID,
+	})
+	if err != nil {
+		output.Status = "cancel_failed"
+		output.ErrorMessage = err.Error()
+	} else {
+		output.ProviderCallID = gatewayResp.ProviderCallID
+		output.ProviderAsyncTaskID = firstNonEmptyString(gatewayResp.ProviderAsyncTaskID, input.ProviderAsyncTaskID)
+		output.ExternalTaskID = firstNonEmptyString(gatewayResp.ExternalTaskID, input.ExternalTaskID)
+		output.Status = firstNonEmptyString(gatewayResp.Status, "cancelled")
+	}
+	if err := CancelNodeRun(ctx, a.db, input.NodeRunID, mustJSON(output), reason); err != nil {
+		return CancelStoryboardVideoTaskOutput{}, err
+	}
+	if err := a.recordProviderVideoCancelEvent(ctx, input, output); err != nil {
+		return CancelStoryboardVideoTaskOutput{}, err
+	}
+	return output, nil
+}
+
 func (a Activities) PollStoryboardVideoTask(ctx context.Context, input PollStoryboardVideoTaskInput) (PollStoryboardVideoTaskOutput, error) {
 	baseInput := TextToStoryboardInput{
 		OrganizationID: input.OrganizationID,
@@ -267,6 +331,17 @@ func (a Activities) FailVideoProductionWorkflow(ctx context.Context, input TextT
 	return a.markWorkflowFailed(ctx, input, code, message)
 }
 
+func (a Activities) CancelVideoProductionWorkflow(ctx context.Context, input TextToStoryboardInput, output CancelStoryboardVideoTaskOutput, reason string) error {
+	return CancelWorkflowRun(ctx, a.db, input.WorkflowRunID, mustJSON(map[string]any{
+		"providerAsyncTaskId": output.ProviderAsyncTaskID,
+		"externalTaskId":      output.ExternalTaskID,
+		"providerCallId":      output.ProviderCallID,
+		"status":              "cancelled",
+		"videoCancelStatus":   output.Status,
+		"errorMessage":        output.ErrorMessage,
+	}), reason)
+}
+
 func BuildVideoProductionOutput(storyboard GenerateStoryboardTextOutput, image GenerateStoryboardImageOutput, create CreateStoryboardVideoTaskOutput, poll PollStoryboardVideoTaskOutput) VideoProductionOutput {
 	return VideoProductionOutput{
 		StoryboardArtifactID: storyboard.StoryboardArtifactID,
@@ -285,6 +360,31 @@ func BuildVideoProductionOutput(storyboard GenerateStoryboardTextOutput, image G
 			"videoPoll":   poll.ProviderCallID,
 		},
 	}
+}
+
+func (a Activities) recordProviderVideoCancelEvent(ctx context.Context, input CancelStoryboardVideoTaskInput, output CancelStoryboardVideoTaskOutput) error {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	eventType := "provider.video.task.cancelled"
+	if output.Status == "cancel_failed" {
+		eventType = "provider.video.task.cancel_failed"
+	}
+	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, eventType, "provider_async_task", input.ProviderAsyncTaskID, mustJSON(map[string]any{
+		"workflowRunId":       input.WorkflowRunID,
+		"nodeRunId":           input.NodeRunID,
+		"providerAsyncTaskId": output.ProviderAsyncTaskID,
+		"externalTaskId":      output.ExternalTaskID,
+		"providerCallId":      output.ProviderCallID,
+		"reason":              input.Reason,
+		"status":              output.Status,
+		"errorMessage":        output.ErrorMessage,
+	})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (a Activities) existingStoryboardVideoTask(ctx context.Context, workflowRunID string) (CreateStoryboardVideoTaskOutput, bool, error) {
