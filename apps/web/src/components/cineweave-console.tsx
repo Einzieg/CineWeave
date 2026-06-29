@@ -282,6 +282,31 @@ type ProviderUsageSummary = {
   currency: string;
 };
 
+type ProviderLimitPolicy = {
+  id: string;
+  providerAccountId?: string;
+  providerModelId?: string;
+  taskType: string;
+  maxConcurrency?: number;
+  requestsPerMinute?: number;
+  requestsPerDay?: number;
+  dailyBudget?: string;
+  monthlyBudget?: string;
+  currency: string;
+  failureThreshold?: number;
+  enabled: boolean;
+};
+
+type ProviderCircuitState = {
+  id: string;
+  providerAccountId: string;
+  providerModelId?: string;
+  taskType: string;
+  state: string;
+  failureCount: number;
+  nextAttemptAt?: string;
+};
+
 type ManifestValidationResult = {
   valid: boolean;
   errors?: Array<{ path: string; message: string }> | null;
@@ -342,10 +367,16 @@ export function CineWeaveConsole() {
   const [accessError, setAccessError] = useState<string | null>(null);
   const [providerLogs, setProviderLogs] = useState<ProviderCallLog[]>([]);
   const [providerUsage, setProviderUsage] = useState<ProviderUsageSummary | null>(null);
+  const [providerLimitPolicies, setProviderLimitPolicies] = useState<ProviderLimitPolicy[]>([]);
+  const [providerCircuitStates, setProviderCircuitStates] = useState<ProviderCircuitState[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedModelId, setSelectedModelId] = useState("");
   const [providerBaseUrl, setProviderBaseUrl] = useState(defaultProviderBaseUrl);
   const [providerApiKey, setProviderApiKey] = useState(defaultProviderApiKey);
+  const [limitTaskType, setLimitTaskType] = useState("video.create_task");
+  const [limitMaxConcurrency, setLimitMaxConcurrency] = useState("2");
+  const [limitRequestsPerMinute, setLimitRequestsPerMinute] = useState("10");
+  const [limitDailyBudget, setLimitDailyBudget] = useState("20.00000000");
   const [capabilityText, setCapabilityText] = useState(defaultCapabilityText);
   const [providerTestType, setProviderTestType] = useState<ProviderTestType>("text_generation_test");
   const [testPrompt, setTestPrompt] = useState(defaultTestPrompt);
@@ -443,7 +474,7 @@ export function CineWeaveConsole() {
 
   const refreshProviderCenter = useCallback(
     async (activeSession: SessionState) => {
-      const [connectorData, accountData, profileData, logData, usageData] = await Promise.all([
+      const [connectorData, accountData, profileData, logData, usageData, policyData, circuitData] = await Promise.all([
         apiRequest<{ items: ProviderConnector[] }>("/api/providers/connectors", {
           token: activeSession.accessToken,
           organizationId: activeSession.organizationId,
@@ -464,12 +495,22 @@ export function CineWeaveConsole() {
           token: activeSession.accessToken,
           organizationId: activeSession.organizationId,
         }),
+        apiRequest<{ items: ProviderLimitPolicy[] }>("/api/provider-limit-policies", {
+          token: activeSession.accessToken,
+          organizationId: activeSession.organizationId,
+        }),
+        apiRequest<{ items: ProviderCircuitState[] }>("/api/provider-circuit-states", {
+          token: activeSession.accessToken,
+          organizationId: activeSession.organizationId,
+        }),
       ]);
       setConnectors(connectorData.items);
       setProviderAccounts(accountData.items);
       setModelProfiles(profileData.items);
       setProviderLogs(logData.items);
       setProviderUsage(usageData);
+      setProviderLimitPolicies(policyData.items);
+      setProviderCircuitStates(circuitData.items);
 
       const accountID =
         selectedAccountId && accountData.items.some((account) => account.id === selectedAccountId)
@@ -861,6 +902,74 @@ export function CineWeaveConsole() {
       setProviderBusy(null);
     }
   }, [refreshProviderCenter, selectedModelId, session]);
+
+  const createLimitPolicy = useCallback(async () => {
+    if (!session || !selectedAccountId) {
+      setProviderError("Select an account before creating a limit policy.");
+      return;
+    }
+    setProviderBusy("provider");
+    setProviderError(null);
+    setProviderNotice(null);
+    try {
+      await apiRequest<ProviderLimitPolicy>("/api/provider-limit-policies", {
+        method: "POST",
+        token: session.accessToken,
+        organizationId: session.organizationId,
+        body: {
+          organizationId: session.organizationId,
+          providerAccountId: selectedAccountId,
+          providerModelId: selectedModelId || null,
+          taskType: limitTaskType,
+          maxConcurrency: numberOrUndefined(limitMaxConcurrency),
+          requestsPerMinute: numberOrUndefined(limitRequestsPerMinute),
+          dailyBudget: limitDailyBudget.trim() || undefined,
+          currency: "USD",
+          enabled: true,
+        },
+      });
+      await refreshProviderCenter(session);
+      setProviderNotice("Provider limit policy created.");
+    } catch (cause) {
+      setProviderError(errorMessage(cause));
+    } finally {
+      setProviderBusy(null);
+    }
+  }, [
+    limitDailyBudget,
+    limitMaxConcurrency,
+    limitRequestsPerMinute,
+    limitTaskType,
+    refreshProviderCenter,
+    selectedAccountId,
+    selectedModelId,
+    session,
+  ]);
+
+  const resetCircuitState = useCallback(
+    async (stateId: string) => {
+      if (!session) {
+        setProviderError("Initialize a demo session before resetting a circuit.");
+        return;
+      }
+      setProviderBusy("provider");
+      setProviderError(null);
+      try {
+        await apiRequest<ProviderCircuitState>(`/api/provider-circuit-states/${stateId}/reset`, {
+          method: "POST",
+          token: session.accessToken,
+          organizationId: session.organizationId,
+        });
+        await refreshProviderCenter(session);
+        setProviderNotice("Provider circuit reset.");
+      } catch (cause) {
+        setProviderError(errorMessage(cause));
+      } finally {
+        setProviderBusy(null);
+      }
+    },
+    [refreshProviderCenter, session],
+  );
 
   const changeProviderAccount = useCallback(
     async (accountID: string) => {
@@ -1498,6 +1607,105 @@ export function CineWeaveConsole() {
                       )}
                     </div>
                   </div>
+
+                  <div className="rounded border border-[var(--line)] p-4">
+                    <div className="flex items-center gap-2">
+                      <Activity size={17} />
+                      <h3 className="text-sm font-semibold">Limits and Circuit</h3>
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-[0.8fr_0.55fr_0.55fr_0.7fr_auto]">
+                      <select
+                        value={limitTaskType}
+                        onChange={(event) => setLimitTaskType(event.target.value)}
+                        className="h-10 rounded border border-[var(--line)] bg-white px-3 text-sm text-[var(--foreground)] outline-none focus:border-[var(--foreground)]"
+                      >
+                        <option value="text.generate">Text</option>
+                        <option value="text.stream">Stream</option>
+                        <option value="image.generate">Image</option>
+                        <option value="video.create_task">Video Create</option>
+                        <option value="video.poll_task">Video Poll</option>
+                        <option value="video.cancel_task">Video Cancel</option>
+                        <option value="any">Any</option>
+                      </select>
+                      <input
+                        value={limitMaxConcurrency}
+                        onChange={(event) => setLimitMaxConcurrency(event.target.value)}
+                        aria-label="Max Concurrency"
+                        title="Max Concurrency"
+                        className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)]"
+                      />
+                      <input
+                        value={limitRequestsPerMinute}
+                        onChange={(event) => setLimitRequestsPerMinute(event.target.value)}
+                        aria-label="Requests Per Minute"
+                        title="Requests Per Minute"
+                        className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)]"
+                      />
+                      <input
+                        value={limitDailyBudget}
+                        onChange={(event) => setLimitDailyBudget(event.target.value)}
+                        aria-label="Daily Budget"
+                        title="Daily Budget"
+                        className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={createLimitPolicy}
+                        disabled={providerBusy !== null || !selectedAccountId}
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded bg-[var(--foreground)] px-3 text-sm font-medium text-white disabled:opacity-60"
+                      >
+                        <CheckCircle2 size={16} />
+                        Create
+                      </button>
+                    </div>
+                    <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                      <div className="divide-y divide-[var(--line)] rounded border border-[var(--line)]">
+                        {providerLimitPolicies.length > 0 ? (
+                          providerLimitPolicies.slice(0, 5).map((policy) => (
+                            <div key={policy.id} className="grid gap-1 px-3 py-2">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="truncate text-sm font-medium">{policy.taskType}</p>
+                                <StatusPill status={policy.enabled ? "active" : "disabled"} />
+                              </div>
+                              <p className="truncate text-xs text-[var(--muted)]">
+                                c={policy.maxConcurrency ?? "-"} rpm={policy.requestsPerMinute ?? "-"} budget={policy.dailyBudget ?? "-"}
+                              </p>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="px-3 py-5 text-sm text-[var(--muted)]">No limit policies.</p>
+                        )}
+                      </div>
+                      <div className="divide-y divide-[var(--line)] rounded border border-[var(--line)]">
+                        {providerCircuitStates.length > 0 ? (
+                          providerCircuitStates.slice(0, 5).map((state) => (
+                            <div key={state.id} className="grid gap-2 px-3 py-2">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="truncate text-sm font-medium">{state.taskType}</p>
+                                <StatusPill status={state.state} />
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="truncate text-xs text-[var(--muted)]">failures={state.failureCount}</p>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void resetCircuitState(state.id);
+                                  }}
+                                  disabled={providerBusy !== null}
+                                  className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[var(--line)] bg-white px-2 text-xs font-medium disabled:opacity-60"
+                                >
+                                  <RefreshCw size={13} />
+                                  Reset
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="px-3 py-5 text-sm text-[var(--muted)]">No circuit states.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1755,6 +1963,11 @@ function parseCapabilityInput(value: string) {
     providerOptionsSchema: decoded.providerOptionsSchema ?? {},
     pricingPolicy: decoded.pricingPolicy ?? {},
   };
+}
+
+function numberOrUndefined(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function trimTrailingSlash(value: string) {

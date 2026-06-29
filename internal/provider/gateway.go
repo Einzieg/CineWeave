@@ -129,6 +129,66 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	taskType := TaskTypeTextGenerate
+	executionMode := "sync"
+	if stream {
+		taskType = TaskTypeTextStream
+		executionMode = "stream"
+	}
+	guardReq := s.gatewayGuardRequest(gatewayGuardRequestInput{
+		OrganizationID: req.OrganizationID,
+		Selection:      selection,
+		TaskType:       taskType,
+		EstimatedCost:  "0.00000000",
+		Currency:       "USD",
+		LeaseTTL:       timeout + 30*time.Second,
+	})
+	lease, guardErr := s.guard.Acquire(ctx, guardReq)
+	if guardErr != nil {
+		standard, ok := blockedGatewayStandard(guardErr)
+		if !ok {
+			return GatewayTextResponse{}, guardErr
+		}
+		call, err := s.recordGatewayTextCall(ctx, selection, req, RecordCallRequest{
+			OrganizationID:        req.OrganizationID,
+			ProjectID:             req.ProjectID,
+			WorkflowRunID:         req.WorkflowRunID,
+			NodeRunID:             req.NodeRunID,
+			ProviderAccountID:     selection.Account.ID,
+			ProviderModelID:       selection.Model.ID,
+			CredentialID:          selection.CredentialID,
+			ModelProfileID:        selection.ModelProfileID,
+			ModelProfileBindingID: selection.ModelProfileBindingID,
+			ModelProfileKey:       selection.ModelProfileKey,
+			PromptVersionID:       req.PromptVersionID,
+			PromptHash:            req.PromptHash,
+			IdempotencyKey:        gatewayIdempotencyKey(req),
+			TaskType:              taskType,
+			ExecutionMode:         executionMode,
+			Status:                "blocked",
+			ErrorCode:             standard.Code,
+			ErrorMessage:          standard.Message,
+			RequestSnapshot:       req.Input,
+			ResponseSnapshot:      blockedResponseSnapshot(standard),
+			NormalizedOutput:      blockedNormalizedOutput(standard),
+		}, GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"})
+		if err != nil {
+			return GatewayTextResponse{}, err
+		}
+		return GatewayTextResponse{
+			ProviderCallID: call.ID,
+			ModelID:        selection.Model.ID,
+			Status:         "blocked",
+			Output:         GatewayTextOutput{Raw: blockedResponseSnapshot(standard)},
+			Usage:          GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
+			Error:          standard,
+		}, nil
+	}
+	providerCallID := ""
+	defer func() {
+		s.releaseGatewayLease(lease, providerCallID)
+	}()
+
 	client := newOpenAICompatibleClient(timeout)
 	var result chatCompletionResult
 	if stream {
@@ -166,13 +226,8 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		normalizedOutput = mustJSON(map[string]any{"text": result.Text})
 	}
 
+	runErr := err
 	usage := estimateTextCost(result.Usage, selection.Model.Capabilities)
-	taskType := "text.generate"
-	executionMode := "sync"
-	if stream {
-		taskType = "text.stream"
-		executionMode = "stream"
-	}
 	call, err := s.recordGatewayTextCall(ctx, selection, req, RecordCallRequest{
 		OrganizationID:        req.OrganizationID,
 		ProjectID:             req.ProjectID,
@@ -186,6 +241,7 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		ModelProfileKey:       selection.ModelProfileKey,
 		PromptVersionID:       req.PromptVersionID,
 		PromptHash:            req.PromptHash,
+		LeaseID:               lease.LeaseID,
 		IdempotencyKey:        gatewayIdempotencyKey(req),
 		TaskType:              taskType,
 		ExecutionMode:         executionMode,
@@ -205,6 +261,12 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	}, usage)
 	if err != nil {
 		return GatewayTextResponse{}, err
+	}
+	providerCallID = call.ID
+	if runErr != nil {
+		s.recordGatewayGuardFailure(ctx, guardReq, errorCode, errorMessage)
+	} else {
+		s.recordGatewayGuardSuccess(ctx, guardReq)
 	}
 
 	return GatewayTextResponse{
@@ -309,8 +371,10 @@ func (s *Service) recordGatewayTextCall(ctx context.Context, selection gatewayMo
 	if err != nil {
 		return CallLog{}, err
 	}
-	if err := insertTextCostRecord(ctx, tx, call.ID, selection, req, callReq.TaskType, usage); err != nil {
-		return CallLog{}, err
+	if callReq.Status != "blocked" {
+		if err := insertTextCostRecord(ctx, tx, call.ID, selection, req, callReq.TaskType, usage); err != nil {
+			return CallLog{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CallLog{}, err

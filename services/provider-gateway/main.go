@@ -258,6 +258,12 @@ func writeSSE(w http.ResponseWriter, event string, data any) error {
 func writeGatewayError(w http.ResponseWriter, r *http.Request, err error) {
 	standard := standardGatewayError(err)
 	status := http.StatusInternalServerError
+	if _, ok := provider.StandardErrorFromGuard(err); ok {
+		status = http.StatusTooManyRequests
+		if standard.Code == provider.CodeProviderDailyQuotaExceeded || standard.Code == provider.CodeProviderMonthlyBudgetExceeded {
+			status = http.StatusPaymentRequired
+		}
+	}
 	if errors.Is(err, provider.ErrValidation) {
 		status = http.StatusUnprocessableEntity
 	}
@@ -274,6 +280,9 @@ func writeGatewayError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func standardGatewayError(err error) provider.StandardError {
+	if standard, ok := provider.StandardErrorFromGuard(err); ok {
+		return *standard
+	}
 	var upstreamErr *provider.UpstreamError
 	if errors.As(err, &upstreamErr) {
 		return provider.NormalizeHTTPError(upstreamErr.Status, upstreamErr.Code)

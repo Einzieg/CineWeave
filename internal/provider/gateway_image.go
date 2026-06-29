@@ -92,8 +92,63 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	client := newOpenAICompatibleClient(timeout)
 	callID := uuid.NewString()
+	usage := estimateImageCost(imageInput, selection.Model.Capabilities)
+	guardReq := s.gatewayGuardRequest(gatewayGuardRequestInput{
+		OrganizationID: req.OrganizationID,
+		Selection:      selection,
+		TaskType:       TaskTypeImageGenerate,
+		EstimatedCost:  usage.EstimatedCost,
+		Currency:       usage.Currency,
+		LeaseTTL:       timeout + 30*time.Second,
+	})
+	lease, guardErr := s.guard.Acquire(ctx, guardReq)
+	if guardErr != nil {
+		standard, ok := blockedGatewayStandard(guardErr)
+		if !ok {
+			return GatewayImageResponse{}, guardErr
+		}
+		call, err := s.recordGatewayImageCall(ctx, selection, req, callID, RecordCallRequest{
+			ID:                    callID,
+			OrganizationID:        req.OrganizationID,
+			ProjectID:             req.ProjectID,
+			WorkflowRunID:         req.WorkflowRunID,
+			NodeRunID:             req.NodeRunID,
+			ProviderAccountID:     selection.Account.ID,
+			ProviderModelID:       selection.Model.ID,
+			CredentialID:          selection.CredentialID,
+			ModelProfileID:        selection.ModelProfileID,
+			ModelProfileBindingID: selection.ModelProfileBindingID,
+			ModelProfileKey:       selection.ModelProfileKey,
+			PromptVersionID:       req.PromptVersionID,
+			PromptHash:            req.PromptHash,
+			IdempotencyKey:        gatewayImageIdempotencyKey(req),
+			TaskType:              TaskTypeImageGenerate,
+			ExecutionMode:         "sync",
+			Status:                "blocked",
+			ErrorCode:             standard.Code,
+			ErrorMessage:          standard.Message,
+			RequestSnapshot:       req.Input,
+			ResponseSnapshot:      blockedResponseSnapshot(standard),
+			NormalizedOutput:      blockedNormalizedOutput(standard),
+		}, usage, nil, imageInput, imageGenerationResult{})
+		if err != nil {
+			return GatewayImageResponse{}, err
+		}
+		return GatewayImageResponse{
+			ProviderCallID: call.ID,
+			ModelID:        selection.Model.ID,
+			Status:         "blocked",
+			Usage:          GatewayUsage{EstimatedCost: "0.00000000", Currency: usage.Currency},
+			Error:          standard,
+		}, nil
+	}
+	providerCallID := ""
+	defer func() {
+		s.releaseGatewayLease(lease, providerCallID)
+	}()
+
+	client := newOpenAICompatibleClient(timeout)
 	started := time.Now()
 	result, runErr := client.imageGeneration(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, input)
 	latencyMS := int(time.Since(started).Milliseconds())
@@ -109,7 +164,6 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	responseSnapshot := result.ResponseSnapshot
 	normalizedOutput := result.NormalizedOutput
 	output := GatewayImageOutput{}
-	usage := estimateImageCost(imageInput, selection.Model.Capabilities)
 
 	var stored *gatewayStoredImage
 	if runErr != nil {
@@ -158,8 +212,9 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 		ModelProfileKey:       selection.ModelProfileKey,
 		PromptVersionID:       req.PromptVersionID,
 		PromptHash:            req.PromptHash,
+		LeaseID:               lease.LeaseID,
 		IdempotencyKey:        gatewayImageIdempotencyKey(req),
-		TaskType:              "image.generate",
+		TaskType:              TaskTypeImageGenerate,
 		ExecutionMode:         "sync",
 		Status:                status,
 		LatencyMS:             &latencyMS,
@@ -175,6 +230,12 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	}, usage, stored, imageInput, result)
 	if err != nil {
 		return GatewayImageResponse{}, err
+	}
+	providerCallID = call.ID
+	if runErr != nil {
+		s.recordGatewayGuardFailure(ctx, guardReq, errorCode, errorMessage)
+	} else {
+		s.recordGatewayGuardSuccess(ctx, guardReq)
 	}
 
 	return GatewayImageResponse{
@@ -332,8 +393,10 @@ func (s *Service) recordGatewayImageCall(ctx context.Context, selection gatewayM
 	if err != nil {
 		return CallLog{}, err
 	}
-	if err := insertImageCostRecord(ctx, tx, call.ID, selection, req, usage, imageInput); err != nil {
-		return CallLog{}, err
+	if callReq.Status != "blocked" {
+		if err := insertImageCostRecord(ctx, tx, call.ID, selection, req, usage, imageInput); err != nil {
+			return CallLog{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CallLog{}, err

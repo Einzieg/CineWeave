@@ -1351,6 +1351,117 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderUsageSummaryEnvelope"
+  /api/provider-limit-policies:
+    get:
+      operationId: listProviderLimitPolicies
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Provider limit policies
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderLimitPolicyListEnvelope"
+    post:
+      operationId: createProviderLimitPolicy
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProviderLimitPolicyRequest"
+      responses:
+        "201":
+          description: Created provider limit policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderLimitPolicyEnvelope"
+  /api/provider-limit-policies/{policyId}:
+    get:
+      operationId: getProviderLimitPolicy
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/PolicyId"
+      responses:
+        "200":
+          description: Provider limit policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderLimitPolicyEnvelope"
+    patch:
+      operationId: updateProviderLimitPolicy
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/PolicyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProviderLimitPolicyRequest"
+      responses:
+        "200":
+          description: Updated provider limit policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderLimitPolicyEnvelope"
+    delete:
+      operationId: deleteProviderLimitPolicy
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/PolicyId"
+      responses:
+        "200":
+          description: Deleted provider limit policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/provider-circuit-states:
+    get:
+      operationId: listProviderCircuitStates
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Provider circuit states
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCircuitStateListEnvelope"
+  /api/provider-circuit-states/{stateId}/reset:
+    post:
+      operationId: resetProviderCircuitState
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/CircuitStateId"
+      responses:
+        "200":
+          description: Reset provider circuit state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCircuitStateEnvelope"
   /internal/provider/models/discover:
     post:
       operationId: internalProviderDiscoverModels
@@ -1638,6 +1749,20 @@ components:
       schema:
         type: string
         format: uuid
+    PolicyId:
+      name: policyId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CircuitStateId:
+      name: stateId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     OrganizationHeader:
       name: X-Organization-Id
       in: header
@@ -1688,6 +1813,7 @@ components:
       properties:
         code:
           type: string
+          description: Includes PROVIDER_RATE_LIMITED, PROVIDER_CONCURRENCY_LIMITED, PROVIDER_DAILY_QUOTA_EXCEEDED, PROVIDER_MONTHLY_BUDGET_EXCEEDED, and PROVIDER_CIRCUIT_OPEN for Provider Gateway guard blocks.
         message:
           type: string
         details: {}
@@ -3162,7 +3288,7 @@ components:
           format: uuid
         status:
           type: string
-          enum: [queued, running, succeeded, failed, cancelled]
+          enum: [queued, running, succeeded, failed, cancelled, blocked]
         error:
           $ref: "#/components/schemas/ProviderStandardError"
         latencyMs:
@@ -3241,7 +3367,7 @@ components:
           format: uuid
         status:
           type: string
-          enum: [queued, running, succeeded, failed, cancelled]
+          enum: [queued, running, succeeded, failed, cancelled, blocked]
         output:
           $ref: "#/components/schemas/GatewayVideoOutput"
         usage:
@@ -3282,7 +3408,7 @@ components:
           type: string
         status:
           type: string
-          enum: [cancelled, succeeded, failed]
+          enum: [cancelled, succeeded, failed, blocked]
         error:
           $ref: "#/components/schemas/ProviderStandardError"
     GatewayDiscoverModelsRequest:
@@ -3497,6 +3623,177 @@ components:
           type: string
         currency:
           type: string
+    ProviderLimitPolicy:
+      type: object
+      required: [id, organizationId, taskType, currency, enabled, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        taskType:
+          type: string
+          enum: [any, text.generate, text.stream, image.generate, video.create_task, video.poll_task, video.cancel_task]
+        maxConcurrency:
+          type: integer
+        requestsPerMinute:
+          type: integer
+        requestsPerDay:
+          type: integer
+        dailyBudget:
+          type: string
+        monthlyBudget:
+          type: string
+        currency:
+          type: string
+          default: USD
+        failureThreshold:
+          type: integer
+        failureWindowSeconds:
+          type: integer
+        circuitCooldownSeconds:
+          type: integer
+        enabled:
+          type: boolean
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateProviderLimitPolicyRequest:
+      type: object
+      required: [organizationId, taskType]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        taskType:
+          type: string
+          enum: [any, text.generate, text.stream, image.generate, video.create_task, video.poll_task, video.cancel_task]
+        maxConcurrency:
+          type: integer
+          minimum: 0
+        requestsPerMinute:
+          type: integer
+          minimum: 0
+        requestsPerDay:
+          type: integer
+          minimum: 0
+        dailyBudget:
+          type: string
+        monthlyBudget:
+          type: string
+        currency:
+          type: string
+          default: USD
+        failureThreshold:
+          type: integer
+          minimum: 0
+        failureWindowSeconds:
+          type: integer
+          minimum: 0
+        circuitCooldownSeconds:
+          type: integer
+          minimum: 0
+        enabled:
+          type: boolean
+    UpdateProviderLimitPolicyRequest:
+      type: object
+      properties:
+        providerAccountId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        taskType:
+          type: string
+          enum: [any, text.generate, text.stream, image.generate, video.create_task, video.poll_task, video.cancel_task]
+        maxConcurrency:
+          type: integer
+          minimum: 0
+        requestsPerMinute:
+          type: integer
+          minimum: 0
+        requestsPerDay:
+          type: integer
+          minimum: 0
+        dailyBudget:
+          type: string
+        monthlyBudget:
+          type: string
+        currency:
+          type: string
+        failureThreshold:
+          type: integer
+          minimum: 0
+        failureWindowSeconds:
+          type: integer
+          minimum: 0
+        circuitCooldownSeconds:
+          type: integer
+          minimum: 0
+        enabled:
+          type: boolean
+    ProviderCircuitState:
+      type: object
+      required: [id, organizationId, providerAccountId, taskType, state, failureCount, successCount, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        taskType:
+          type: string
+        state:
+          type: string
+          enum: [closed, open, half_open]
+        failureCount:
+          type: integer
+        successCount:
+          type: integer
+        openedAt:
+          type: string
+          format: date-time
+        halfOpenAt:
+          type: string
+          format: date-time
+        nextAttemptAt:
+          type: string
+          format: date-time
+        lastErrorCode:
+          type: string
+        lastErrorMessage:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
     ProviderWebhookResult:
       type: object
       required: [providerAsyncTaskId, providerCallId, status, signalStatus]
@@ -3676,6 +3973,44 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ProviderUsageSummary"
+    ProviderLimitPolicyEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderLimitPolicy"
+    ProviderLimitPolicyListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProviderLimitPolicy"
+    ProviderCircuitStateEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderCircuitState"
+    ProviderCircuitStateListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProviderCircuitState"
     ProviderWebhookResultEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

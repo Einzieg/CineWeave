@@ -30,6 +30,7 @@ type Service struct {
 	allowDirectFallback bool
 	httpClient          *http.Client
 	objectStorage       ObjectStorage
+	guard               *ProviderGuard
 }
 
 type rowScanner interface {
@@ -43,6 +44,7 @@ func NewService(db *pgxpool.Pool, vault *Vault) *Service {
 		vault:               vault,
 		allowDirectFallback: providerDirectFallbackAllowed(os.Getenv("CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK"), env),
 		httpClient:          &http.Client{Timeout: 2 * time.Minute},
+		guard:               NewProviderGuard(db),
 	}
 }
 
@@ -633,7 +635,7 @@ func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID 
 		}, &response); err != nil {
 			return ModelDiscoveryResult{}, err
 		}
-		if response.Status == "failed" {
+		if isProviderFailureStatus(response.Status) {
 			return ModelDiscoveryResult{}, errorFromGatewayStandard(response.Error)
 		}
 		return ModelDiscoveryResult{
@@ -842,7 +844,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		latencyMS = gatewayResp.LatencyMS
 		requestSnapshot = mustJSON(gatewayReq)
 		responseSnapshot = mustJSON(gatewayResp)
-		if status == "failed" {
+		if isProviderFailureStatus(status) {
 			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
 			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
 		} else {
@@ -864,7 +866,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		latencyMS = gatewayResp.LatencyMS
 		requestSnapshot = mustJSON(gatewayReq)
 		responseSnapshot = mustJSON(gatewayResp)
-		if status == "failed" {
+		if isProviderFailureStatus(status) {
 			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
 			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
 		} else {
@@ -886,7 +888,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		latencyMS = gatewayResp.LatencyMS
 		requestSnapshot = mustJSON(gatewayReq)
 		responseSnapshot = mustJSON(gatewayResp)
-		if status == "failed" {
+		if isProviderFailureStatus(status) {
 			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
 			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
 		} else {
@@ -911,7 +913,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		latencyMS = gatewayResp.LatencyMS
 		requestSnapshot = mustJSON(gatewayReq)
 		responseSnapshot = mustJSON(gatewayResp)
-		if status == "failed" {
+		if isProviderFailureStatus(status) {
 			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
 			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
 		} else {
@@ -941,7 +943,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 			"externalTaskId":      createResp.ExternalTaskID,
 			"status":              createResp.Status,
 		})
-		if status == "failed" {
+		if isProviderFailureStatus(status) {
 			errorCode, errorMessage = gatewayErrorFields(createResp.Error)
 			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode, "providerAsyncTaskId": createResp.ProviderAsyncTaskID})
 			break
@@ -969,7 +971,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 			status = pollResp.Status
 			latencyMS += pollResp.LatencyMS
 			responseSnapshot = mustJSON(pollResp)
-			if status == "failed" {
+			if isProviderFailureStatus(status) {
 				errorCode, errorMessage = gatewayErrorFields(pollResp.Error)
 				normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode, "providerAsyncTaskId": pollResp.ProviderAsyncTaskID})
 				break
@@ -996,6 +998,10 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 	if responseSnapshot == nil {
 		responseSnapshot = json.RawMessage(`null`)
 	}
+	testRunStatus := status
+	if testRunStatus == "blocked" {
+		testRunStatus = "failed"
+	}
 
 	var testRunID string
 	if err := s.db.QueryRow(ctx, `
@@ -1010,7 +1016,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		model.ProviderAccountID,
 		model.ID,
 		testType,
-		status,
+		testRunStatus,
 		mustSanitize(requestSnapshot, "{}"),
 		nullIfJSONNull(mustSanitize(responseSnapshot, "null")),
 		nullIfJSONNull(normalizedOutput),
@@ -1216,7 +1222,7 @@ func (s *Service) UsageSummary(ctx context.Context, organizationID string) (Usag
 	if err := s.db.QueryRow(ctx, `
 		SELECT
 			count(*),
-			count(*) FILTER (WHERE status = 'failed'),
+			count(*) FILTER (WHERE status IN ('failed', 'blocked')),
 			COALESCE(sum(estimated_cost), 0)::text
 		FROM provider_call_logs
 		WHERE organization_id = $1
@@ -1726,24 +1732,24 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
 			prompt_version_id, prompt_hash,
-			idempotency_key, task_type, execution_mode, status,
+			lease_id, idempotency_key, task_type, execution_mode, status,
 			latency_ms, input_tokens, output_tokens, estimated_cost, currency,
 			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
 			started_at, completed_at
 		)
 		VALUES (
-			COALESCE(NULLIF($31, '')::uuid, gen_random_uuid()),
+			COALESCE(NULLIF($32, '')::uuid, gen_random_uuid()),
 			$1, $2, $3, $4,
 			$5, $6, $7,
 			$8, $9, $10,
 			$11, $12,
-			$13, $14, $15, $16,
-			$17, $18, $19, $20, $21,
-			$22, $23, $24, $25,
-			$26, $27, $28, $29, $30,
-			CASE WHEN $16 IN ('running', 'succeeded', 'failed', 'skipped') THEN now() ELSE NULL END,
-			CASE WHEN $16 IN ('succeeded', 'failed', 'cancelled', 'skipped') THEN now() ELSE NULL END
+			$13, $14, $15, $16, $17,
+			$18, $19, $20, $21, $22,
+			$23, $24, $25, $26,
+			$27, $28, $29, $30, $31,
+			CASE WHEN $17 IN ('running', 'succeeded', 'failed', 'skipped', 'blocked') THEN now() ELSE NULL END,
+			CASE WHEN $17 IN ('succeeded', 'failed', 'cancelled', 'skipped', 'blocked') THEN now() ELSE NULL END
 		)
 		RETURNING
 			id, organization_id, project_id, workflow_run_id, node_run_id,
@@ -1767,6 +1773,7 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 		nullString(req.ModelProfileKey),
 		nullString(req.PromptVersionID),
 		nullString(req.PromptHash),
+		nullString(req.LeaseID),
 		nullString(strings.TrimSpace(req.IdempotencyKey)),
 		taskType,
 		executionMode,

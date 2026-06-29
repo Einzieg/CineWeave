@@ -224,6 +224,7 @@ type RecordCallRequest struct {
 	ModelProfileKey       string          `json:"modelProfileKey"`
 	PromptVersionID       string          `json:"promptVersionId"`
 	PromptHash            string          `json:"promptHash"`
+	LeaseID               string          `json:"leaseId"`
 	IdempotencyKey        string          `json:"idempotencyKey"`
 	TaskType              string          `json:"taskType"`
 	ExecutionMode         string          `json:"executionMode"`
@@ -255,6 +256,77 @@ type UsageSummary struct {
 	FailedCalls int64  `json:"failedCalls"`
 	TotalCost   string `json:"totalCost"`
 	Currency    string `json:"currency"`
+}
+
+type ProviderLimitPolicy struct {
+	ID                     string    `json:"id"`
+	OrganizationID         string    `json:"organizationId"`
+	ProviderAccountID      *string   `json:"providerAccountId,omitempty"`
+	ProviderModelID        *string   `json:"providerModelId,omitempty"`
+	TaskType               string    `json:"taskType"`
+	MaxConcurrency         *int      `json:"maxConcurrency,omitempty"`
+	RequestsPerMinute      *int      `json:"requestsPerMinute,omitempty"`
+	RequestsPerDay         *int      `json:"requestsPerDay,omitempty"`
+	DailyBudget            *string   `json:"dailyBudget,omitempty"`
+	MonthlyBudget          *string   `json:"monthlyBudget,omitempty"`
+	Currency               string    `json:"currency"`
+	FailureThreshold       *int      `json:"failureThreshold,omitempty"`
+	FailureWindowSeconds   *int      `json:"failureWindowSeconds,omitempty"`
+	CircuitCooldownSeconds *int      `json:"circuitCooldownSeconds,omitempty"`
+	Enabled                bool      `json:"enabled"`
+	CreatedBy              *string   `json:"createdBy,omitempty"`
+	CreatedAt              time.Time `json:"createdAt"`
+	UpdatedAt              time.Time `json:"updatedAt"`
+}
+
+type CreateProviderLimitPolicyRequest struct {
+	OrganizationID         string  `json:"organizationId"`
+	ProviderAccountID      *string `json:"providerAccountId"`
+	ProviderModelID        *string `json:"providerModelId"`
+	TaskType               string  `json:"taskType"`
+	MaxConcurrency         *int    `json:"maxConcurrency"`
+	RequestsPerMinute      *int    `json:"requestsPerMinute"`
+	RequestsPerDay         *int    `json:"requestsPerDay"`
+	DailyBudget            *string `json:"dailyBudget"`
+	MonthlyBudget          *string `json:"monthlyBudget"`
+	Currency               string  `json:"currency"`
+	FailureThreshold       *int    `json:"failureThreshold"`
+	FailureWindowSeconds   *int    `json:"failureWindowSeconds"`
+	CircuitCooldownSeconds *int    `json:"circuitCooldownSeconds"`
+	Enabled                *bool   `json:"enabled"`
+}
+
+type UpdateProviderLimitPolicyRequest struct {
+	ProviderAccountID      *string `json:"providerAccountId"`
+	ProviderModelID        *string `json:"providerModelId"`
+	TaskType               *string `json:"taskType"`
+	MaxConcurrency         *int    `json:"maxConcurrency"`
+	RequestsPerMinute      *int    `json:"requestsPerMinute"`
+	RequestsPerDay         *int    `json:"requestsPerDay"`
+	DailyBudget            *string `json:"dailyBudget"`
+	MonthlyBudget          *string `json:"monthlyBudget"`
+	Currency               *string `json:"currency"`
+	FailureThreshold       *int    `json:"failureThreshold"`
+	FailureWindowSeconds   *int    `json:"failureWindowSeconds"`
+	CircuitCooldownSeconds *int    `json:"circuitCooldownSeconds"`
+	Enabled                *bool   `json:"enabled"`
+}
+
+type ProviderCircuitState struct {
+	ID                string     `json:"id"`
+	OrganizationID    string     `json:"organizationId"`
+	ProviderAccountID string     `json:"providerAccountId"`
+	ProviderModelID   *string    `json:"providerModelId,omitempty"`
+	TaskType          string     `json:"taskType"`
+	State             string     `json:"state"`
+	FailureCount      int        `json:"failureCount"`
+	SuccessCount      int        `json:"successCount"`
+	OpenedAt          *time.Time `json:"openedAt,omitempty"`
+	HalfOpenAt        *time.Time `json:"halfOpenAt,omitempty"`
+	NextAttemptAt     *time.Time `json:"nextAttemptAt,omitempty"`
+	LastErrorCode     *string    `json:"lastErrorCode,omitempty"`
+	LastErrorMessage  *string    `json:"lastErrorMessage,omitempty"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
 }
 
 type DiscoveredModel struct {

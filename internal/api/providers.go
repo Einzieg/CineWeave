@@ -383,6 +383,111 @@ func (s *Server) getProviderUsageSummary(w http.ResponseWriter, r *http.Request,
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
+func (s *Server) listProviderLimitPolicies(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	items, err := s.providers.ListProviderLimitPolicies(r.Context(), orgID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) createProviderLimitPolicy(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req provider.CreateProviderLimitPolicyRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := organizationID(r, principal)
+	if req.OrganizationID == "" {
+		req.OrganizationID = orgID
+	}
+	if req.OrganizationID != orgID {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "organizationId must match request context", nil, false)
+		return
+	}
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.CreateProviderLimitPolicy(r.Context(), orgID, principal.UserID, req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+}
+
+func (s *Server) getProviderLimitPolicy(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.GetProviderLimitPolicy(r.Context(), orgID, r.PathValue("policyId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) updateProviderLimitPolicy(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req provider.UpdateProviderLimitPolicyRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.UpdateProviderLimitPolicy(r.Context(), orgID, r.PathValue("policyId"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) deleteProviderLimitPolicy(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	if err := s.providers.DeleteProviderLimitPolicy(r.Context(), orgID, r.PathValue("policyId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]bool{"deleted": true}, nil)
+}
+
+func (s *Server) listProviderCircuitStates(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	items, err := s.providers.ListProviderCircuitStates(r.Context(), orgID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) resetProviderCircuitState(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.ResetProviderCircuitState(r.Context(), orgID, r.PathValue("stateId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
 func (s *Server) requireOrganization(w http.ResponseWriter, r *http.Request, principal auth.Principal, orgID string) bool {
 	if orgID == "" {
 		httpx.WriteError(w, r, http.StatusBadRequest, "ORGANIZATION_REQUIRED", "organization context is required", nil, false)

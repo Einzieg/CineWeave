@@ -3354,6 +3354,18 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - Register grants the creator `org_owner`; project creation grants the creator `project_owner`.
 - New management endpoints expose `/api/teams`, `/api/roles`, `/api/permissions`, and `/api/role-bindings`.
 - Demo Console includes an Admin Access block that lists visible roles, teams, and role bindings and can create a team for smoke testing.
+
+## Implementation Note: Provider Gateway Rate Limit / Lease / Quota
+
+- Provider Gateway owns provider guard enforcement for `text.generate`, `text.stream`, `image.generate`, `video.create_task`, `video.poll_task`, and `video.cancel_task`.
+- API Server and Workers do not enforce supplier limits and do not call upstream providers directly.
+- `provider_limit_policies` configures max concurrency, requests per minute/day, daily/monthly budget, and circuit breaker behavior by organization, provider account, provider model, and task type.
+- `provider_leases` stores active leases with `lease_token`; leases are acquired in a transaction, expired leases are cleaned before checks, and release is best-effort with the final `provider_call_id`.
+- Request quotas are counted from `provider_call_logs`; budget quotas are counted from `cost_records`.
+- `provider_circuit_states` stores closed/open/half_open state and is updated by Provider Gateway after upstream success or failure.
+- Guard denials are normalized as `PROVIDER_RATE_LIMITED`, `PROVIDER_CONCURRENCY_LIMITED`, `PROVIDER_DAILY_QUOTA_EXCEEDED`, `PROVIDER_MONTHLY_BUDGET_EXCEEDED`, or `PROVIDER_CIRCUIT_OPEN`.
+- Blocked calls are persisted to `provider_call_logs` with `status=blocked`; they do not create `cost_records`.
+- Provider Center exposes a minimal policy list/create form and circuit state list/reset action guarded by `provider.read` and `provider.manage`.
 Task 012: Implement provider call logging.
 Task 013: Implement model profile and binding.
 Task 014: Implement Manifest JSON Schema.

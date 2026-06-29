@@ -31,7 +31,7 @@ func (c *GatewayClient) GenerateText(ctx context.Context, req GatewayTextRequest
 	if err := c.postJSON(ctx, "/internal/provider/text/generate", req, &response); err != nil {
 		return GatewayTextResponse{}, err
 	}
-	if response.Status == "failed" {
+	if isProviderFailureStatus(response.Status) {
 		return GatewayTextResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
@@ -42,7 +42,7 @@ func (c *GatewayClient) GenerateImage(ctx context.Context, req GatewayImageReque
 	if err := c.postJSON(ctx, "/internal/provider/image/generate", req, &response); err != nil {
 		return GatewayImageResponse{}, err
 	}
-	if response.Status == "failed" {
+	if isProviderFailureStatus(response.Status) {
 		return GatewayImageResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
@@ -53,7 +53,7 @@ func (c *GatewayClient) CreateVideoTask(ctx context.Context, req GatewayVideoCre
 	if err := c.postJSON(ctx, "/internal/provider/video/create-task", req, &response); err != nil {
 		return GatewayVideoCreateTaskResponse{}, err
 	}
-	if response.Status == "failed" {
+	if isProviderFailureStatus(response.Status) {
 		return GatewayVideoCreateTaskResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
@@ -64,7 +64,7 @@ func (c *GatewayClient) PollVideoTask(ctx context.Context, req GatewayVideoPollT
 	if err := c.postJSON(ctx, "/internal/provider/video/poll-task", req, &response); err != nil {
 		return GatewayVideoPollTaskResponse{}, err
 	}
-	if response.Status == "failed" {
+	if isProviderFailureStatus(response.Status) {
 		return GatewayVideoPollTaskResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
@@ -75,7 +75,7 @@ func (c *GatewayClient) CancelVideoTask(ctx context.Context, req GatewayVideoCan
 	if err := c.postJSON(ctx, "/internal/provider/video/cancel-task", req, &response); err != nil {
 		return GatewayVideoCancelTaskResponse{}, err
 	}
-	if response.Status == "failed" {
+	if isProviderFailureStatus(response.Status) {
 		return GatewayVideoCancelTaskResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
