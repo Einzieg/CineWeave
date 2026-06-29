@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -52,7 +53,7 @@ type WorkflowNodeRun struct {
 type Artifact struct {
 	ID             string          `json:"id"`
 	OrganizationID string          `json:"organizationId"`
-	ProjectID      string          `json:"projectId"`
+	ProjectID      *string         `json:"projectId,omitempty"`
 	WorkflowRunID  *string         `json:"workflowRunId,omitempty"`
 	NodeRunID      *string         `json:"nodeRunId,omitempty"`
 	Type           string          `json:"type"`
@@ -282,10 +283,12 @@ func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request, principal
 	items := make([]Artifact, 0)
 	for rows.Next() {
 		var item Artifact
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.ProjectID, &item.WorkflowRunID, &item.NodeRunID, &item.Type, &item.StorageKey, &item.MimeType, &item.ContentHash, &item.PromptHash, &item.ModelID, &item.Metadata, &item.CreatedAt); err != nil {
+		var projectID sql.NullString
+		if err := rows.Scan(&item.ID, &item.OrganizationID, &projectID, &item.WorkflowRunID, &item.NodeRunID, &item.Type, &item.StorageKey, &item.MimeType, &item.ContentHash, &item.PromptHash, &item.ModelID, &item.Metadata, &item.CreatedAt); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
+		item.ProjectID = stringPtrFromValue(projectID.String)
 		items = append(items, item)
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)

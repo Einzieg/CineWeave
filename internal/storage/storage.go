@@ -83,12 +83,19 @@ func (c *Client) PutJSON(ctx context.Context, key string, value any) (PutResult,
 	if err != nil {
 		return PutResult{}, err
 	}
+	return c.PutBytes(ctx, key, body, "application/json")
+}
+
+func (c *Client) PutBytes(ctx context.Context, key string, body []byte, contentType string) (PutResult, error) {
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
 	sum := sha256.Sum256(body)
 	if _, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(body),
-		ContentType: aws.String("application/json"),
+		ContentType: aws.String(contentType),
 	}); err != nil {
 		return PutResult{}, err
 	}

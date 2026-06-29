@@ -1033,6 +1033,32 @@ paths:
           $ref: "#/components/responses/GatewayError"
         "502":
           $ref: "#/components/responses/GatewayError"
+  /internal/provider/image/generate:
+    post:
+      operationId: internalProviderImageGenerate
+      summary: Internal Provider Gateway image generation
+      description: Internal API. Requires bearer service token, calls OpenAI-compatible Images API, and stores media in S3 / MinIO before returning artifact and media file ids.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayImageRequest"
+      responses:
+        "200":
+          description: Provider image generation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayImageEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
   /internal/provider/text/stream:
     post:
       operationId: internalProviderTextStream
@@ -1592,7 +1618,7 @@ components:
           format: date-time
     Artifact:
       type: object
-      required: [id, organizationId, projectId, type, metadata, createdAt]
+      required: [id, organizationId, type, metadata, createdAt]
       properties:
         id:
           type: string
@@ -1996,6 +2022,7 @@ components:
       properties:
         testType:
           type: string
+          enum: [connection_test, auth_test, model_discovery_test, text_generation_test, streaming_test, image_generation_test]
         input:
           type: object
           additionalProperties: true
@@ -2223,6 +2250,138 @@ components:
           type: string
         output:
           $ref: "#/components/schemas/GatewayTextOutput"
+        usage:
+          $ref: "#/components/schemas/GatewayUsage"
+        error:
+          $ref: "#/components/schemas/ProviderStandardError"
+        latencyMs:
+          type: integer
+    GatewayImageOptions:
+      type: object
+      properties:
+        timeoutMs:
+          type: integer
+        idempotencyKey:
+          type: string
+    GatewayImageReference:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          description: Reference kind such as image, mask, or style.
+        assetId:
+          type: string
+          format: uuid
+        artifactId:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        storageKey:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    GatewayImageRequest:
+      type: object
+      required: [organizationId, input]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        modelProfileKey:
+          type: string
+        providerModelId:
+          type: string
+          format: uuid
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        idempotencyKey:
+          type: string
+        input:
+          type: object
+          required: [prompt]
+          properties:
+            prompt:
+              type: string
+            size:
+              type: string
+              example: 1024x1024
+            aspectRatio:
+              type: string
+            quality:
+              type: string
+            n:
+              type: integer
+              maximum: 1
+            response_format:
+              type: string
+            responseFormat:
+              type: string
+            providerOptions:
+              type: object
+              additionalProperties: true
+          additionalProperties: true
+        references:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayImageReference"
+        options:
+          $ref: "#/components/schemas/GatewayImageOptions"
+    GatewayImageOutput:
+      type: object
+      properties:
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        url:
+          type: string
+          format: uri
+        mimeType:
+          type: string
+        width:
+          type: integer
+        height:
+          type: integer
+        raw:
+          type: object
+          additionalProperties: true
+    GatewayImageResponse:
+      type: object
+      required: [providerCallId, modelId, status, output, usage]
+      properties:
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        output:
+          $ref: "#/components/schemas/GatewayImageOutput"
         usage:
           $ref: "#/components/schemas/GatewayUsage"
         error:
@@ -2547,6 +2706,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/GatewayTextResponse"
+    GatewayImageEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayImageResponse"
     GatewayDiscoverModelsEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

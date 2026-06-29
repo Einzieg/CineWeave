@@ -3274,6 +3274,15 @@ Task 008: Implement Credential Vault encryption.
 Task 009: Implement Provider Account CRUD.
 Task 010: Implement Provider Model and Capability CRUD.
 Task 011: Implement New API-first OpenAI-compatible text provider.
+
+## Implementation Note: Provider Gateway Image Runtime v1
+
+- `POST /internal/provider/image/generate` is implemented as an internal service-token API.
+- The first adapter target is OpenAI-compatible `/v1/images/generations`, including New API / One API / LiteLLM / OpenAI official style responses.
+- The Gateway accepts upstream `url` and `b64_json` image results, then downloads or decodes media inside Provider Gateway.
+- The Gateway writes generated image objects to S3 / MinIO and records `media_files`, `artifacts`, `provider_call_logs`, and `cost_records`.
+- API Server / Worker code must call Provider Gateway and must not call image providers, download upstream media, write provider call logs, or write cost records directly.
+- `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=false` is the default; set it to `true` only for local mock provider media URLs.
 Task 012: Implement provider call logging.
 Task 013: Implement model profile and binding.
 Task 014: Implement Manifest JSON Schema.

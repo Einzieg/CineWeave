@@ -146,6 +146,14 @@ func testProviderGatewayHTTP(t *testing.T, service *Service, token string) http.
 				return
 			}
 			_ = writeGatewayIntegrationSSE(w, "provider.completed", resp)
+		case "/internal/provider/image/generate":
+			var req GatewayImageRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
+			resp, err := service.GenerateImage(r.Context(), req)
+			writeGatewayIntegrationEnvelope(t, w, resp, err)
 		default:
 			http.NotFound(w, r)
 		}

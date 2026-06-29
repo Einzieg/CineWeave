@@ -461,7 +461,7 @@ VALUES
     'OpenAI Compatible',
     'http',
     true,
-    '{"kind":"ProviderConnector","version":"v1","id":"openai_compatible","name":"OpenAI Compatible","transport":"http","auth":{"type":"bearer"},"models":[],"endpoints":{"models":{"method":"GET","path":"/models"},"chatCompletions":{"method":"POST","path":"/chat/completions"}}}',
+    '{"kind":"ProviderConnector","version":"v1","id":"openai_compatible","name":"OpenAI Compatible","transport":"http","auth":{"type":"bearer"},"models":[],"endpoints":{"models":{"method":"GET","path":"/models"},"chatCompletions":{"method":"POST","path":"/chat/completions"},"imagesGenerations":{"method":"POST","path":"/images/generations"}}}',
     'v1'
   ),
   (

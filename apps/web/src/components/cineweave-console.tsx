@@ -31,6 +31,8 @@ const defaultPrompt = "A quiet train station at sunrise with cinematic lighting.
 const defaultProviderBaseUrl = "http://127.0.0.1:19180/v1";
 const defaultProviderApiKey = "sk-mock-phase3";
 const defaultTestPrompt = "Write one cinematic sentence for a sunrise train station.";
+const defaultImageTestPrompt = "A cinematic sunrise train station, high detail";
+const defaultImageTestSize = "1024x1024";
 const defaultCapabilityText = JSON.stringify(
   {
     taskTypes: ["text.generate", "text.stream"],
@@ -263,6 +265,7 @@ type RealtimeEvent = {
 
 type BusyState = "bootstrap" | "workflow" | null;
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting";
+type ProviderTestType = "text_generation_test" | "streaming_test" | "image_generation_test";
 
 export function CineWeaveConsole() {
   const [session, setSession] = useState<SessionState | null>(null);
@@ -288,7 +291,9 @@ export function CineWeaveConsole() {
   const [providerBaseUrl, setProviderBaseUrl] = useState(defaultProviderBaseUrl);
   const [providerApiKey, setProviderApiKey] = useState(defaultProviderApiKey);
   const [capabilityText, setCapabilityText] = useState(defaultCapabilityText);
+  const [providerTestType, setProviderTestType] = useState<ProviderTestType>("text_generation_test");
   const [testPrompt, setTestPrompt] = useState(defaultTestPrompt);
+  const [imageTestSize, setImageTestSize] = useState(defaultImageTestSize);
   const [providerTestResult, setProviderTestResult] = useState<ProviderTestResult | null>(null);
   const [manifestText, setManifestText] = useState(defaultManifestText);
   const [manifestValidation, setManifestValidation] = useState<ManifestValidationResult | null>(null);
@@ -558,6 +563,7 @@ export function CineWeaveConsole() {
           config: {
             modelsEndpoint: "/models",
             chatCompletionsEndpoint: "/chat/completions",
+            imagesGenerationsEndpoint: "/images/generations",
             timeoutMs: 3000,
           },
         },
@@ -639,24 +645,29 @@ export function CineWeaveConsole() {
     setProviderError(null);
     setProviderTestResult(null);
     try {
+      const input =
+        providerTestType === "image_generation_test"
+          ? { prompt: testPrompt || defaultImageTestPrompt, size: imageTestSize, quality: "standard", projectId: session.projectId }
+          : { prompt: testPrompt };
       const result = await apiRequest<ProviderTestResult>(`/api/providers/models/${selectedModelId}/test`, {
         method: "POST",
         token: session.accessToken,
         organizationId: session.organizationId,
         body: {
-          testType: "text_generation_test",
-          input: { prompt: testPrompt },
+          testType: providerTestType,
+          input,
         },
       });
       setProviderTestResult(result);
       await refreshProviderCenter(session);
+      await loadArtifacts(session);
       setProviderNotice("Provider test completed.");
     } catch (cause) {
       setProviderError(errorMessage(cause));
     } finally {
       setProviderBusy(null);
     }
-  }, [refreshProviderCenter, selectedModelId, session, testPrompt]);
+  }, [imageTestSize, loadArtifacts, providerTestType, refreshProviderCenter, selectedModelId, session, testPrompt]);
 
   const bindScriptProfile = useCallback(async () => {
     if (!session || !selectedModelId) {
@@ -1079,11 +1090,26 @@ export function CineWeaveConsole() {
                       <Send size={17} />
                       <h3 className="text-sm font-semibold">Test Center</h3>
                     </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
+                    <div className="mt-3 grid gap-3 md:grid-cols-[0.75fr_1fr_0.55fr_auto]">
+                      <select
+                        value={providerTestType}
+                        onChange={(event) => setProviderTestType(event.target.value as ProviderTestType)}
+                        className="h-10 rounded border border-[var(--line)] bg-white px-3 text-sm text-[var(--foreground)] outline-none focus:border-[var(--foreground)]"
+                      >
+                        <option value="text_generation_test">Text</option>
+                        <option value="streaming_test">Stream</option>
+                        <option value="image_generation_test">Image</option>
+                      </select>
                       <input
                         value={testPrompt}
                         onChange={(event) => setTestPrompt(event.target.value)}
                         className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)]"
+                      />
+                      <input
+                        value={imageTestSize}
+                        onChange={(event) => setImageTestSize(event.target.value)}
+                        disabled={providerTestType !== "image_generation_test"}
+                        className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
                       />
                       <button
                         type="button"
@@ -1100,6 +1126,9 @@ export function CineWeaveConsole() {
                         <InfoRow label="Status" value={providerTestResult.status} />
                         <InfoRow label="Latency" value={`${providerTestResult.latencyMs} ms`} />
                         <InfoRow label="Call Log" value={providerTestResult.providerCallId} />
+                        <InfoRow label="Artifact" value={normalizedOutputString(providerTestResult.normalizedOutput, "artifactId")} />
+                        <InfoRow label="Media" value={normalizedOutputString(providerTestResult.normalizedOutput, "mediaFileId")} />
+                        <InfoRow label="Storage" value={normalizedOutputString(providerTestResult.normalizedOutput, "storageKey")} />
                       </div>
                     )}
                   </div>
@@ -1393,6 +1422,14 @@ function artifactSummary(items: Artifact[]) {
     return "No artifacts";
   }
   return `${items.length} artifact${items.length === 1 ? "" : "s"}`;
+}
+
+function normalizedOutputString(output: unknown, key: string) {
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
+    return "-";
+  }
+  const value = (output as Record<string, unknown>)[key];
+  return typeof value === "string" && value ? value : "-";
 }
 
 function nodeLabel(nodeKey: string) {

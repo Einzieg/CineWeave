@@ -17,9 +17,10 @@ type openAICompatibleClient struct {
 }
 
 type openAICompatibleConfig struct {
-	ModelsEndpoint          string `json:"modelsEndpoint"`
-	ChatCompletionsEndpoint string `json:"chatCompletionsEndpoint"`
-	TimeoutMS               int    `json:"timeoutMs"`
+	ModelsEndpoint            string `json:"modelsEndpoint"`
+	ChatCompletionsEndpoint   string `json:"chatCompletionsEndpoint"`
+	ImagesGenerationsEndpoint string `json:"imagesGenerationsEndpoint"`
+	TimeoutMS                 int    `json:"timeoutMs"`
 }
 
 type chatCompletionResult struct {
@@ -28,6 +29,18 @@ type chatCompletionResult struct {
 	NormalizedOutput json.RawMessage
 	Text             string
 	Usage            GatewayUsage
+	LatencyMS        int
+}
+
+type imageGenerationResult struct {
+	RequestSnapshot  json.RawMessage
+	ResponseSnapshot json.RawMessage
+	NormalizedOutput json.RawMessage
+	ImageURL         string
+	B64JSON          string
+	RevisedPrompt    string
+	MimeType         string
+	ResponseType     string
 	LatencyMS        int
 }
 
@@ -45,6 +58,9 @@ func parseOpenAICompatibleConfig(raw json.RawMessage) openAICompatibleConfig {
 	}
 	if strings.TrimSpace(cfg.ChatCompletionsEndpoint) == "" {
 		cfg.ChatCompletionsEndpoint = "/chat/completions"
+	}
+	if strings.TrimSpace(cfg.ImagesGenerationsEndpoint) == "" {
+		cfg.ImagesGenerationsEndpoint = "/images/generations"
 	}
 	if cfg.TimeoutMS <= 0 {
 		cfg.TimeoutMS = 30000
@@ -234,6 +250,47 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 	}, nil
 }
 
+func (c openAICompatibleClient) imageGeneration(ctx context.Context, account Account, model Model, apiKey string, cfg openAICompatibleConfig, input json.RawMessage) (imageGenerationResult, error) {
+	endpoint, err := buildProviderURL(account.BaseURL, cfg.ImagesGenerationsEndpoint)
+	if err != nil {
+		return imageGenerationResult{}, err
+	}
+	requestBody, err := buildImageGenerationRequest(model.ModelKey, input)
+	if err != nil {
+		return imageGenerationResult{}, err
+	}
+	requestBytes, err := json.Marshal(requestBody)
+	if err != nil {
+		return imageGenerationResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(requestBytes))
+	if err != nil {
+		return imageGenerationResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	applyAuth(req, account.AuthType, apiKey)
+
+	started := time.Now()
+	resp, err := c.httpClient.Do(req)
+	latencyMS := int(time.Since(started).Milliseconds())
+	if err != nil {
+		return imageGenerationResult{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGatewayImageBytes*2))
+	if err != nil {
+		return imageGenerationResult{}, err
+	}
+	if resp.StatusCode >= 400 {
+		return imageGenerationResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: body}, upstreamError(resp.StatusCode, body)
+	}
+	result, err := parseImageGenerationResponse(body)
+	result.LatencyMS = latencyMS
+	result.RequestSnapshot = requestBytes
+	result.ResponseSnapshot = body
+	return result, err
+}
+
 func buildProviderURL(baseURL *string, endpoint string) (string, error) {
 	if baseURL == nil || strings.TrimSpace(*baseURL) == "" {
 		return "", fmt.Errorf("%w: provider account baseUrl is required", ErrValidation)
@@ -267,7 +324,7 @@ func applyAuth(req *http.Request, authType, apiKey string) {
 
 func openAICompatiblePathNeedsV1(path string) bool {
 	switch strings.TrimLeft(path, "/") {
-	case "models", "chat/completions":
+	case "models", "chat/completions", "images/generations":
 		return true
 	default:
 		return false
@@ -325,6 +382,66 @@ func buildChatCompletionRequest(modelKey string, input json.RawMessage, stream b
 	return requestBody, nil
 }
 
+func buildImageGenerationRequest(modelKey string, input json.RawMessage) (map[string]any, error) {
+	var decoded map[string]any
+	if len(input) > 0 {
+		if err := json.Unmarshal(input, &decoded); err != nil {
+			return nil, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
+		}
+	}
+	if decoded == nil {
+		decoded = map[string]any{}
+	}
+	prompt, _ := decoded["prompt"].(string)
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil, fmt.Errorf("%w: input.prompt is required", ErrValidation)
+	}
+	n := imageRequestCount(decoded["n"])
+	if n <= 0 {
+		n = 1
+	}
+	if n > 1 {
+		return nil, fmt.Errorf("%w: image.generate only supports n=1 in this version", ErrValidation)
+	}
+	requestBody := map[string]any{
+		"model":           modelKey,
+		"prompt":          prompt,
+		"size":            imageStringOption(decoded, "size", "1024x1024"),
+		"n":               n,
+		"response_format": "url",
+	}
+	for _, key := range []string{"quality", "style", "background", "moderation"} {
+		if value, ok := decoded[key]; ok {
+			requestBody[key] = value
+		}
+	}
+	for _, pair := range []struct {
+		inputKey string
+		outKey   string
+	}{
+		{"response_format", "response_format"},
+		{"responseFormat", "response_format"},
+		{"output_format", "output_format"},
+		{"outputFormat", "output_format"},
+		{"aspect_ratio", "aspect_ratio"},
+		{"aspectRatio", "aspect_ratio"},
+	} {
+		if value, ok := decoded[pair.inputKey]; ok {
+			requestBody[pair.outKey] = value
+		}
+	}
+	if providerOptions, ok := decoded["providerOptions"].(map[string]any); ok {
+		for key, value := range providerOptions {
+			if key == "model" || key == "prompt" {
+				continue
+			}
+			requestBody[key] = value
+		}
+	}
+	return requestBody, nil
+}
+
 func parseOpenAIModels(body []byte) ([]DiscoveredModel, error) {
 	var envelope struct {
 		Data []struct {
@@ -366,6 +483,48 @@ func parseOpenAIModels(body []byte) ([]DiscoveredModel, error) {
 		})
 	}
 	return items, nil
+}
+
+func parseImageGenerationResponse(body []byte) (imageGenerationResult, error) {
+	var response struct {
+		Data []struct {
+			URL           string `json:"url"`
+			B64JSON       string `json:"b64_json"`
+			RevisedPrompt string `json:"revised_prompt"`
+			MimeType      string `json:"mime_type"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return imageGenerationResult{}, fmt.Errorf("%w: provider image response is invalid", ErrValidation)
+	}
+	if len(response.Data) == 0 {
+		return imageGenerationResult{}, fmt.Errorf("%w: provider image response has no data", ErrValidation)
+	}
+	item := response.Data[0]
+	result := imageGenerationResult{
+		ImageURL:      strings.TrimSpace(item.URL),
+		B64JSON:       strings.TrimSpace(item.B64JSON),
+		RevisedPrompt: item.RevisedPrompt,
+		MimeType:      strings.TrimSpace(item.MimeType),
+	}
+	switch {
+	case result.ImageURL != "":
+		result.ResponseType = "url"
+	case result.B64JSON != "":
+		result.ResponseType = "b64_json"
+		if result.MimeType == "" {
+			result.MimeType = "image/png"
+		}
+	default:
+		return imageGenerationResult{}, fmt.Errorf("%w: provider image response did not include url or b64_json", ErrValidation)
+	}
+	result.NormalizedOutput = mustJSON(map[string]any{
+		"imageUrl":      result.ImageURL,
+		"b64Json":       result.B64JSON,
+		"revisedPrompt": result.RevisedPrompt,
+		"mimeType":      result.MimeType,
+	})
+	return result, nil
 }
 
 func parseChatCompletionText(body []byte) (string, error) {
@@ -490,6 +649,40 @@ func firstPositiveInt(values ...int) int {
 	for _, value := range values {
 		if value > 0 {
 			return value
+		}
+	}
+	return 0
+}
+
+func imageStringOption(decoded map[string]any, key, fallback string) string {
+	value, _ := decoded[key].(string)
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func imageRequestCount(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil {
+			return int(parsed)
+		}
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return 0
+		}
+		var parsed int
+		if _, err := fmt.Sscanf(strings.TrimSpace(typed), "%d", &parsed); err == nil {
+			return parsed
 		}
 	}
 	return 0

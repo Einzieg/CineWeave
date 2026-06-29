@@ -28,6 +28,7 @@ type Service struct {
 	gatewayRuntime      bool
 	allowDirectFallback bool
 	httpClient          *http.Client
+	objectStorage       ObjectStorage
 }
 
 type rowScanner interface {
@@ -735,6 +736,8 @@ func (s *Service) RecordProviderModelTest(ctx context.Context, organizationID, u
 		errorCode = CodeUnsupportedCapability
 		errorMessage = "streaming test is not implemented in this phase"
 		normalizedOutput = mustJSON(map[string]any{"status": "failed", "code": errorCode})
+	case "image_generation_test":
+		return ProviderTestResult{}, fmt.Errorf("%w: configure PROVIDER_GATEWAY_URL for image_generation_test", ErrProviderGatewayRequired)
 	default:
 		return ProviderTestResult{}, fmt.Errorf("%w: unsupported testType", ErrValidation)
 	}
@@ -873,6 +876,31 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		}
 		gatewayResp, err := s.postGatewayStream(ctx, gatewayReq)
 		if err != nil {
+			return ProviderTestResult{}, err
+		}
+		providerCallID = gatewayResp.ProviderCallID
+		status = gatewayResp.Status
+		latencyMS = gatewayResp.LatencyMS
+		requestSnapshot = mustJSON(gatewayReq)
+		responseSnapshot = mustJSON(gatewayResp)
+		if status == "failed" {
+			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
+			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
+		} else {
+			normalizedOutput = mustJSON(gatewayResp.Output)
+		}
+	case "image_generation_test":
+		gatewayReq := GatewayImageRequest{
+			OrganizationID:  organizationID,
+			ProjectID:       stringFieldFromJSON(input, "projectId"),
+			WorkflowRunID:   stringFieldFromJSON(input, "workflowRunId"),
+			NodeRunID:       stringFieldFromJSON(input, "nodeRunId"),
+			ProviderModelID: modelID,
+			IdempotencyKey:  req.IdempotencyKey,
+			Input:           input,
+		}
+		var gatewayResp GatewayImageResponse
+		if err := s.postGatewayJSON(ctx, "/internal/provider/image/generate", gatewayReq, &gatewayResp); err != nil {
 			return ProviderTestResult{}, err
 		}
 		providerCallID = gatewayResp.ProviderCallID
@@ -1620,6 +1648,7 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 
 	row := db.QueryRow(ctx, `
 		INSERT INTO provider_call_logs(
+			id,
 			organization_id, project_id, workflow_run_id, node_run_id,
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
@@ -1631,6 +1660,7 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			started_at, completed_at
 		)
 		VALUES (
+			COALESCE(NULLIF($31, '')::uuid, gen_random_uuid()),
 			$1, $2, $3, $4,
 			$5, $6, $7,
 			$8, $9, $10,
@@ -1682,6 +1712,7 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 		nullIfJSONNull(normalizedOutput),
 		artifactIDs,
 		mediaFileIDs,
+		strings.TrimSpace(req.ID),
 	)
 	return scanCallLog(row)
 }
@@ -1843,6 +1874,15 @@ func rawOrNil(raw []byte) json.RawMessage {
 		return nil
 	}
 	return json.RawMessage(raw)
+}
+
+func stringFieldFromJSON(raw json.RawMessage, key string) string {
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return ""
+	}
+	value, _ := decoded[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func nullIfJSONNull(raw json.RawMessage) any {

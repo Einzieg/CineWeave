@@ -14,6 +14,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/observability"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/service"
+	"github.com/Einzieg/cineweave/internal/storage"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -33,6 +34,11 @@ func main() {
 	}
 	providerService := provider.NewService(pool, credentialVault)
 	providerService.EnableGatewayRuntime()
+	storageClient, err := storage.New(ctx, storage.ConfigFromEnv())
+	if err != nil {
+		log.Fatal(err)
+	}
+	providerService.SetStorage(storageClient)
 	serviceToken := config.Get("CINEWEAVE_SERVICE_TOKEN", "dev-service-token")
 	handler := gatewayHandler{providers: providerService, serviceToken: serviceToken}
 
@@ -43,7 +49,7 @@ func main() {
 	mux.HandleFunc("/internal/provider/text/generate", handler.withServiceAuth(handler.generateText))
 	mux.HandleFunc("/internal/provider/text/stream", handler.withServiceAuth(handler.streamText))
 	mux.HandleFunc("/internal/provider/manifests/test-run", handler.withServiceAuth(handler.runManifestTest))
-	mux.HandleFunc("/internal/provider/image/generate", httpx.NotImplemented("provider image generation"))
+	mux.HandleFunc("/internal/provider/image/generate", handler.withServiceAuth(handler.generateImage))
 	mux.HandleFunc("/internal/provider/video/create-task", httpx.NotImplemented("provider video task creation"))
 	mux.HandleFunc("/internal/provider/audio/tts", httpx.NotImplemented("provider audio tts"))
 
@@ -94,6 +100,23 @@ func (h gatewayHandler) generateText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := h.providers.GenerateText(r.Context(), req)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (h gatewayHandler) generateImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+		return
+	}
+	var req provider.GatewayImageRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.GenerateImage(r.Context(), req)
 	if err != nil {
 		writeGatewayError(w, r, err)
 		return

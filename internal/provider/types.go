@@ -211,6 +211,7 @@ type CallLog struct {
 }
 
 type RecordCallRequest struct {
+	ID                    string          `json:"id,omitempty"`
 	OrganizationID        string          `json:"organizationId"`
 	ProjectID             string          `json:"projectId"`
 	WorkflowRunID         string          `json:"workflowRunId"`
@@ -309,6 +310,57 @@ type GatewayTextResponse struct {
 	Usage          GatewayUsage      `json:"usage"`
 	Error          *StandardError    `json:"error,omitempty"`
 	LatencyMS      int               `json:"latencyMs,omitempty"`
+}
+
+type GatewayImageOptions struct {
+	TimeoutMS      int    `json:"timeoutMs"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+}
+
+type GatewayImageReference struct {
+	Type       string          `json:"type"`
+	AssetID    string          `json:"assetId,omitempty"`
+	ArtifactID string          `json:"artifactId,omitempty"`
+	URL        string          `json:"url,omitempty"`
+	StorageKey string          `json:"storageKey,omitempty"`
+	Metadata   json.RawMessage `json:"metadata,omitempty"`
+}
+
+type GatewayImageRequest struct {
+	OrganizationID  string                  `json:"organizationId"`
+	WorkspaceID     string                  `json:"workspaceId,omitempty"`
+	ProjectID       string                  `json:"projectId,omitempty"`
+	WorkflowRunID   string                  `json:"workflowRunId,omitempty"`
+	NodeRunID       string                  `json:"nodeRunId,omitempty"`
+	ModelProfileKey string                  `json:"modelProfileKey,omitempty"`
+	ProviderModelID string                  `json:"providerModelId,omitempty"`
+	PromptVersionID string                  `json:"promptVersionId,omitempty"`
+	PromptHash      string                  `json:"promptHash,omitempty"`
+	IdempotencyKey  string                  `json:"idempotencyKey,omitempty"`
+	Input           json.RawMessage         `json:"input"`
+	References      []GatewayImageReference `json:"references,omitempty"`
+	Options         GatewayImageOptions     `json:"options"`
+}
+
+type GatewayImageOutput struct {
+	ArtifactID  string          `json:"artifactId,omitempty"`
+	MediaFileID string          `json:"mediaFileId,omitempty"`
+	StorageKey  string          `json:"storageKey,omitempty"`
+	URL         string          `json:"url,omitempty"`
+	MimeType    string          `json:"mimeType,omitempty"`
+	Width       *int            `json:"width,omitempty"`
+	Height      *int            `json:"height,omitempty"`
+	Raw         json.RawMessage `json:"raw,omitempty"`
+}
+
+type GatewayImageResponse struct {
+	ProviderCallID string             `json:"providerCallId"`
+	ModelID        string             `json:"modelId"`
+	Status         string             `json:"status"`
+	Output         GatewayImageOutput `json:"output"`
+	Usage          GatewayUsage       `json:"usage"`
+	Error          *StandardError     `json:"error,omitempty"`
+	LatencyMS      int                `json:"latencyMs,omitempty"`
 }
 
 type GatewayTextDelta struct {
