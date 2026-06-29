@@ -17,21 +17,25 @@ import (
 )
 
 const (
-	ScriptTaskQueue                = "cineweave-script"
-	scriptModelProfileKey          = "script_agent_default"
-	imageGenerationModelProfileKey = "image_generation_default"
-	codeActivityFailed             = "ACTIVITY_FAILED"
-	codeModelProfileNotConfigured  = "MODEL_PROFILE_NOT_CONFIGURED"
-	nodeGenerateStoryboardTextKey  = "generate_storyboard_text"
-	nodeGenerateStoryboardImageKey = "generate_storyboard_image"
+	ScriptTaskQueue                 = "cineweave-script"
+	scriptModelProfileKey           = "script_agent_default"
+	imageGenerationModelProfileKey  = "image_generation_default"
+	videoGenerationModelProfileKey  = "video_generation_default"
+	codeActivityFailed              = "ACTIVITY_FAILED"
+	codeModelProfileNotConfigured   = "MODEL_PROFILE_NOT_CONFIGURED"
+	codeProviderVideoPollingTimeout = "PROVIDER_VIDEO_POLLING_TIMEOUT"
+	nodeGenerateStoryboardTextKey   = "generate_storyboard_text"
+	nodeGenerateStoryboardImageKey  = "generate_storyboard_image"
+	nodeGenerateStoryboardVideoKey  = "generate_storyboard_video"
 )
 
 type TextToStoryboardInput struct {
-	OrganizationID string `json:"organizationId"`
-	ProjectID      string `json:"projectId"`
-	WorkflowRunID  string `json:"workflowRunId"`
-	Prompt         string `json:"prompt"`
-	CreatedBy      string `json:"createdBy"`
+	OrganizationID string          `json:"organizationId"`
+	ProjectID      string          `json:"projectId"`
+	WorkflowRunID  string          `json:"workflowRunId"`
+	Prompt         string          `json:"prompt"`
+	CreatedBy      string          `json:"createdBy"`
+	Input          json.RawMessage `json:"input,omitempty"`
 }
 
 type TextToStoryboardOutput struct {
@@ -98,7 +102,7 @@ func TextToStoryboardWorkflow(ctx workflow.Context, input TextToStoryboardInput)
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
 
 	var storyboard GenerateStoryboardTextOutput
-	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardText", GenerateStoryboardTextInput(input)).Get(ctx, &storyboard); err != nil {
+	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardText", generateStoryboardTextInput(input)).Get(ctx, &storyboard); err != nil {
 		return TextToStoryboardOutput{}, err
 	}
 
@@ -124,8 +128,25 @@ func TextToStoryboardWorkflow(ctx workflow.Context, input TextToStoryboardInput)
 	return output, nil
 }
 
+func generateStoryboardTextInput(input TextToStoryboardInput) GenerateStoryboardTextInput {
+	return GenerateStoryboardTextInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
+		Prompt:         input.Prompt,
+		CreatedBy:      input.CreatedBy,
+	}
+}
+
 func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateStoryboardTextInput) (GenerateStoryboardTextOutput, error) {
-	if err := validateStoryboardInput(TextToStoryboardInput(input)); err != nil {
+	baseInput := TextToStoryboardInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
+		Prompt:         input.Prompt,
+		CreatedBy:      input.CreatedBy,
+	}
+	if err := validateStoryboardInput(baseInput); err != nil {
 		return GenerateStoryboardTextOutput{}, err
 	}
 	nodeRunID, err := StartNodeRun(ctx, a.db, NodeRunInput{
@@ -140,10 +161,10 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 		return GenerateStoryboardTextOutput{}, err
 	}
 	if err := a.ensureModelProfileConfigured(ctx, input.OrganizationID, scriptModelProfileKey, []string{"text", "multimodal"}); err != nil {
-		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, TextToStoryboardInput(input), nodeRunID, err)
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, err)
 	}
 	if a.gateway == nil {
-		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, TextToStoryboardInput(input), nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
 
 	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
@@ -158,7 +179,7 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 		}),
 	})
 	if err != nil {
-		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, TextToStoryboardInput(input), nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))
 	}
 	storyboard, parseError := parseStoryboardText(gatewayResp.Output.Text)
 	storyboardValue := map[string]any{
@@ -171,11 +192,11 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 	storageKey := fmt.Sprintf("org/%s/project/%s/workflow/%s/storyboard/storyboard.json", input.OrganizationID, input.ProjectID, input.WorkflowRunID)
 	put, err := a.storage.PutJSON(ctx, storageKey, storyboardValue)
 	if err != nil {
-		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, TextToStoryboardInput(input), nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	artifactID, err := a.insertStoryboardArtifact(ctx, input, nodeRunID, put, gatewayResp, parseError)
 	if err != nil {
-		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, TextToStoryboardInput(input), nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 
 	output := GenerateStoryboardTextOutput{

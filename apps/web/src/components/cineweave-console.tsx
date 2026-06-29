@@ -285,6 +285,11 @@ export function CineWeaveConsole() {
   const [events, setEvents] = useState<RealtimeEvent[]>([]);
   const [prompt, setPrompt] = useState(defaultPrompt);
   const [workflowType, setWorkflowType] = useState<WorkflowType>("text_to_storyboard");
+  const [workflowVideoDuration, setWorkflowVideoDuration] = useState(defaultVideoTestDuration);
+  const [workflowVideoAspectRatio, setWorkflowVideoAspectRatio] = useState(defaultVideoTestAspectRatio);
+  const [workflowVideoResolution, setWorkflowVideoResolution] = useState(defaultVideoTestResolution);
+  const [workflowVideoPollInterval, setWorkflowVideoPollInterval] = useState("5");
+  const [workflowVideoMaxPolls, setWorkflowVideoMaxPolls] = useState("120");
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("idle");
@@ -489,6 +494,16 @@ export function CineWeaveConsole() {
     setWorkflowNodes([]);
     try {
       const activeSession = session ?? (await createDemoSession());
+      const workflowInput =
+        workflowType === "video_production"
+          ? {
+              duration: Number(workflowVideoDuration) || Number(defaultVideoTestDuration),
+              aspectRatio: workflowVideoAspectRatio || defaultVideoTestAspectRatio,
+              resolution: workflowVideoResolution || defaultVideoTestResolution,
+              pollIntervalSeconds: Number(workflowVideoPollInterval) || 5,
+              maxPolls: Number(workflowVideoMaxPolls) || 120,
+            }
+          : undefined;
       const run = await apiRequest<WorkflowRun>("/api/workflow-runs", {
         method: "POST",
         token: activeSession.accessToken,
@@ -497,6 +512,7 @@ export function CineWeaveConsole() {
           projectId: activeSession.projectId,
           workflowType,
           prompt,
+          ...(workflowInput ? { input: workflowInput } : {}),
         },
       });
       setWorkflowRun(run);
@@ -506,7 +522,18 @@ export function CineWeaveConsole() {
     } finally {
       setBusy(null);
     }
-  }, [createDemoSession, pollWorkflowRun, prompt, session, workflowType]);
+  }, [
+    createDemoSession,
+    pollWorkflowRun,
+    prompt,
+    session,
+    workflowType,
+    workflowVideoAspectRatio,
+    workflowVideoDuration,
+    workflowVideoMaxPolls,
+    workflowVideoPollInterval,
+    workflowVideoResolution,
+  ]);
 
   const refreshProviders = useCallback(async () => {
     setProviderBusy("provider");
@@ -897,6 +924,48 @@ export function CineWeaveConsole() {
                       ))}
                     </select>
                   </label>
+                  <div className="grid gap-2 sm:grid-cols-5">
+                    <input
+                      value={workflowVideoDuration}
+                      onChange={(event) => setWorkflowVideoDuration(event.target.value)}
+                      disabled={workflowType !== "video_production"}
+                      aria-label="Workflow Video Duration"
+                      title="Workflow Video Duration"
+                      className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
+                    />
+                    <input
+                      value={workflowVideoAspectRatio}
+                      onChange={(event) => setWorkflowVideoAspectRatio(event.target.value)}
+                      disabled={workflowType !== "video_production"}
+                      aria-label="Workflow Video Aspect Ratio"
+                      title="Workflow Video Aspect Ratio"
+                      className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
+                    />
+                    <input
+                      value={workflowVideoResolution}
+                      onChange={(event) => setWorkflowVideoResolution(event.target.value)}
+                      disabled={workflowType !== "video_production"}
+                      aria-label="Workflow Video Resolution"
+                      title="Workflow Video Resolution"
+                      className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
+                    />
+                    <input
+                      value={workflowVideoPollInterval}
+                      onChange={(event) => setWorkflowVideoPollInterval(event.target.value)}
+                      disabled={workflowType !== "video_production"}
+                      aria-label="Workflow Video Poll Interval"
+                      title="Workflow Video Poll Interval"
+                      className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
+                    />
+                    <input
+                      value={workflowVideoMaxPolls}
+                      onChange={(event) => setWorkflowVideoMaxPolls(event.target.value)}
+                      disabled={workflowType !== "video_production"}
+                      aria-label="Workflow Video Max Polls"
+                      title="Workflow Video Max Polls"
+                      className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
+                    />
+                  </div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <button
                       type="button"
@@ -949,6 +1018,17 @@ export function CineWeaveConsole() {
                             <div>
                               <p className="text-sm font-medium">{nodeLabel(node.nodeKey)}</p>
                               <p className="text-xs text-[var(--muted)]">{node.nodeType}</p>
+                              {node.nodeKey === "generate_storyboard_video" ? (
+                                <p className="truncate text-xs text-[var(--muted)]">
+                                  {[
+                                    normalizedOutputString(node.output, "providerAsyncTaskId"),
+                                    normalizedOutputString(node.output, "externalTaskId"),
+                                    normalizedOutputString(node.output, "storageKey"),
+                                  ]
+                                    .filter((value) => value !== "-")
+                                    .join(" / ") || "Waiting for video task"}
+                                </p>
+                              ) : null}
                             </div>
                             <StatusPill status={node.status} />
                             <p className="text-xs text-[var(--muted)]">retry {node.retryCount}</p>
@@ -1517,6 +1597,7 @@ function nodeLabel(nodeKey: string) {
     text_to_storyboard: "Text to Storyboard",
     generate_storyboard_text: "Generate Storyboard Text",
     generate_storyboard_image: "Generate Storyboard Image",
+    generate_storyboard_video: "Generate Storyboard Video",
   };
   return labels[nodeKey] ?? nodeKey;
 }

@@ -58,7 +58,7 @@ func TestWorkflowGatewayIntegration(t *testing.T) {
 		Prompt:         "A quiet train station at sunrise with cinematic lighting.",
 		CreatedBy:      userID,
 	}
-	storyboard, err := activities.GenerateStoryboardText(ctx, GenerateStoryboardTextInput(input))
+	storyboard, err := activities.GenerateStoryboardText(ctx, generateStoryboardTextInput(input))
 	if err != nil {
 		t.Fatalf("GenerateStoryboardText: %v", err)
 	}

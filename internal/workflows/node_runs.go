@@ -108,6 +108,37 @@ func CompleteNodeRun(ctx context.Context, db txBeginner, nodeRunID string, outpu
 	return tx.Commit(ctx)
 }
 
+func ProgressNodeRun(ctx context.Context, db txBeginner, nodeRunID string, output json.RawMessage) error {
+	if len(output) == 0 {
+		output = json.RawMessage(`{}`)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	runCtx, err := lockNodeRunContext(ctx, tx, nodeRunID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflow_node_runs
+		SET status = 'running', output = $2
+		WHERE id = $1
+	`, nodeRunID, output); err != nil {
+		return err
+	}
+	if err := insertEvent(ctx, tx, runCtx.OrganizationID, runCtx.ProjectID, "workflow.node.progress", "workflow_node_run", nodeRunID, mustJSON(map[string]any{
+		"workflowRunId": runCtx.WorkflowRunID,
+		"nodeKey":       runCtx.NodeKey,
+		"output":        json.RawMessage(output),
+	})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func FailNodeRun(ctx context.Context, db txBeginner, nodeRunID, code, message string) error {
 	tx, err := db.Begin(ctx)
 	if err != nil {

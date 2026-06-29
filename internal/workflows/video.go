@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/storage"
@@ -22,12 +23,16 @@ type WorkflowArtifact struct {
 }
 
 type VideoProductionOutput struct {
-	StoryboardArtifact WorkflowArtifact        `json:"storyboardArtifact"`
-	ImageArtifact      WorkflowArtifact        `json:"imageArtifact"`
-	VideoClipsArtifact WorkflowArtifact        `json:"videoClipsArtifact"`
-	FinalVideoArtifact WorkflowArtifact        `json:"finalVideoArtifact"`
-	QualityArtifact    WorkflowArtifact        `json:"qualityArtifact"`
-	WebhookSignals     []ProviderWebhookSignal `json:"webhookSignals,omitempty"`
+	StoryboardArtifactID string            `json:"storyboardArtifactId"`
+	ImageArtifactID      string            `json:"imageArtifactId"`
+	ImageMediaFileID     string            `json:"imageMediaFileId"`
+	ImageStorageKey      string            `json:"imageStorageKey"`
+	VideoArtifactID      string            `json:"videoArtifactId"`
+	VideoMediaFileID     string            `json:"videoMediaFileId"`
+	VideoStorageKey      string            `json:"videoStorageKey"`
+	ProviderAsyncTaskID  string            `json:"providerAsyncTaskId"`
+	ExternalTaskID       string            `json:"externalTaskId,omitempty"`
+	ProviderCalls        map[string]string `json:"providerCalls"`
 }
 
 type ProviderWebhookSignal struct {
@@ -75,29 +80,135 @@ func VideoComposeWorkflow(ctx workflow.Context, input TextToStoryboardInput, cli
 }
 
 func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) (VideoProductionOutput, error) {
+	options := resolveVideoProductionOptions(input.Input)
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
 	var result VideoProductionOutput
-	if err := workflow.ExecuteActivity(ctx, "GenerateScriptStoryboard", input).Get(ctx, &result.StoryboardArtifact); err != nil {
+
+	var storyboard GenerateStoryboardTextOutput
+	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardText", generateStoryboardTextInput(input)).Get(ctx, &storyboard); err != nil {
 		return VideoProductionOutput{}, err
 	}
-	result.WebhookSignals = append(result.WebhookSignals, drainProviderWebhookSignals(ctx)...)
-	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardImages", input, result.StoryboardArtifact).Get(ctx, &result.ImageArtifact); err != nil {
+
+	var image GenerateStoryboardImageOutput
+	imageInput := GenerateStoryboardImageInput{
+		OrganizationID:         input.OrganizationID,
+		ProjectID:              input.ProjectID,
+		WorkflowRunID:          input.WorkflowRunID,
+		Prompt:                 input.Prompt,
+		CreatedBy:              input.CreatedBy,
+		StoryboardArtifactID:   storyboard.StoryboardArtifactID,
+		Storyboard:             storyboard.Storyboard,
+		StoryboardProviderCall: storyboard.ProviderCallID,
+	}
+	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardImage", imageInput).Get(ctx, &image); err != nil {
 		return VideoProductionOutput{}, err
 	}
-	result.WebhookSignals = append(result.WebhookSignals, drainProviderWebhookSignals(ctx)...)
-	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardVideos", input, result.ImageArtifact).Get(ctx, &result.VideoClipsArtifact); err != nil {
+
+	videoPrompt := selectVideoPrompt(storyboard.Storyboard, input.Prompt, options.Duration)
+	createInput := CreateStoryboardVideoTaskInput{
+		OrganizationID:       input.OrganizationID,
+		ProjectID:            input.ProjectID,
+		WorkflowRunID:        input.WorkflowRunID,
+		CreatedBy:            input.CreatedBy,
+		StoryboardArtifactID: storyboard.StoryboardArtifactID,
+		ImageArtifactID:      image.ImageArtifactID,
+		ImageMediaFileID:     image.ImageMediaFileID,
+		ImageStorageKey:      image.ImageStorageKey,
+		Prompt:               input.Prompt,
+		VideoPrompt:          videoPrompt,
+		Duration:             options.Duration,
+		AspectRatio:          options.AspectRatio,
+		Resolution:           options.Resolution,
+		Storyboard:           storyboard.Storyboard,
+	}
+	createActivityOptions := defaultActivityOptions()
+	createActivityOptions.RetryPolicy.MaximumAttempts = 1
+	createCtx := workflow.WithActivityOptions(ctx, createActivityOptions)
+	var createOutput CreateStoryboardVideoTaskOutput
+	if err := workflow.ExecuteActivity(createCtx, "CreateStoryboardVideoTask", createInput).Get(createCtx, &createOutput); err != nil {
 		return VideoProductionOutput{}, err
 	}
-	result.WebhookSignals = append(result.WebhookSignals, drainProviderWebhookSignals(ctx)...)
-	if err := workflow.ExecuteActivity(ctx, "ComposeTimeline", input, result.VideoClipsArtifact).Get(ctx, &result.FinalVideoArtifact); err != nil {
+
+	var pollOutput PollStoryboardVideoTaskOutput
+	for pollCount := 1; pollCount <= options.MaxPolls; pollCount++ {
+		pollInput := PollStoryboardVideoTaskInput{
+			OrganizationID:      input.OrganizationID,
+			ProjectID:           input.ProjectID,
+			WorkflowRunID:       input.WorkflowRunID,
+			NodeRunID:           createOutput.NodeRunID,
+			ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
+			ExternalTaskID:      createOutput.ExternalTaskID,
+			PollCount:           pollCount,
+		}
+		if err := workflow.ExecuteActivity(ctx, "PollStoryboardVideoTask", pollInput).Get(ctx, &pollOutput); err != nil {
+			return VideoProductionOutput{}, err
+		}
+		if pollOutput.Status == "succeeded" {
+			result = BuildVideoProductionOutput(storyboard, image, createOutput, pollOutput)
+			if err := workflow.ExecuteActivity(ctx, "CompleteVideoProductionWorkflow", input, result).Get(ctx, nil); err != nil {
+				return VideoProductionOutput{}, err
+			}
+			return result, nil
+		}
+		if pollOutput.Status == "failed" || pollOutput.Status == "cancelled" {
+			return VideoProductionOutput{}, temporal.NewApplicationError("provider video task "+pollOutput.Status, codeActivityFailed)
+		}
+		if err := workflow.Sleep(ctx, options.PollInterval); err != nil {
+			return VideoProductionOutput{}, err
+		}
+	}
+	timeoutMessage := "provider video task polling timed out"
+	if err := workflow.ExecuteActivity(ctx, "FailVideoProductionWorkflow", input, createOutput.NodeRunID, codeProviderVideoPollingTimeout, timeoutMessage).Get(ctx, nil); err != nil {
 		return VideoProductionOutput{}, err
 	}
-	result.WebhookSignals = append(result.WebhookSignals, drainProviderWebhookSignals(ctx)...)
-	if err := workflow.ExecuteActivity(ctx, "QualityCheck", input, result.FinalVideoArtifact).Get(ctx, &result.QualityArtifact); err != nil {
-		return VideoProductionOutput{}, err
+	return VideoProductionOutput{}, temporal.NewApplicationError(timeoutMessage, codeProviderVideoPollingTimeout)
+}
+
+type videoProductionOptions struct {
+	Duration     float64
+	AspectRatio  string
+	Resolution   string
+	PollInterval time.Duration
+	MaxPolls     int
+}
+
+func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
+	options := videoProductionOptions{
+		Duration:     5,
+		AspectRatio:  "16:9",
+		Resolution:   "720p",
+		PollInterval: 5 * time.Second,
+		MaxPolls:     120,
 	}
-	result.WebhookSignals = append(result.WebhookSignals, drainProviderWebhookSignals(ctx)...)
-	return result, nil
+	if len(raw) == 0 {
+		return options
+	}
+	var decoded struct {
+		Duration            float64 `json:"duration"`
+		AspectRatio         string  `json:"aspectRatio"`
+		Resolution          string  `json:"resolution"`
+		PollIntervalSeconds int     `json:"pollIntervalSeconds"`
+		MaxPolls            int     `json:"maxPolls"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return options
+	}
+	if decoded.Duration > 0 {
+		options.Duration = decoded.Duration
+	}
+	if strings.TrimSpace(decoded.AspectRatio) != "" {
+		options.AspectRatio = strings.TrimSpace(decoded.AspectRatio)
+	}
+	if strings.TrimSpace(decoded.Resolution) != "" {
+		options.Resolution = strings.TrimSpace(decoded.Resolution)
+	}
+	if decoded.PollIntervalSeconds > 0 {
+		options.PollInterval = time.Duration(decoded.PollIntervalSeconds) * time.Second
+	}
+	if decoded.MaxPolls > 0 {
+		options.MaxPolls = decoded.MaxPolls
+	}
+	return options
 }
 
 func drainProviderWebhookSignals(ctx workflow.Context) []ProviderWebhookSignal {

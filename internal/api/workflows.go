@@ -68,10 +68,11 @@ type Artifact struct {
 
 func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	var req struct {
-		ProjectID      string `json:"projectId"`
-		WorkflowType   string `json:"workflowType"`
-		Prompt         string `json:"prompt"`
-		IdempotencyKey string `json:"idempotencyKey,omitempty"`
+		ProjectID      string          `json:"projectId"`
+		WorkflowType   string          `json:"workflowType"`
+		Prompt         string          `json:"prompt"`
+		Input          json.RawMessage `json:"input,omitempty"`
+		IdempotencyKey string          `json:"idempotencyKey,omitempty"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -98,18 +99,24 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowType is not supported", nil, false)
 		return
 	}
+	workflowRequestInput, err := normalizeWorkflowRequestInput(workflowType, req.Input, project.AspectRatio)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error(), nil, false)
+		return
+	}
 	idempotency := idempotencyKey(r, req.IdempotencyKey)
 	requestHash := idempotencyRequestHash(map[string]any{
 		"projectId":    project.ID,
 		"workflowType": workflowType,
 		"prompt":       strings.TrimSpace(req.Prompt),
+		"input":        string(workflowRequestInput),
 	})
 	idempotencyState, ok := s.prepareIdempotency(w, r, project.OrganizationID, "workflow-runs:create", idempotency, requestHash)
 	if !ok {
 		return
 	}
 
-	input := json.RawMessage(mustMarshal(map[string]any{"prompt": strings.TrimSpace(req.Prompt), "workflowType": workflowType}))
+	input := json.RawMessage(mustMarshal(map[string]any{"prompt": strings.TrimSpace(req.Prompt), "workflowType": workflowType, "input": workflowRequestInput}))
 	var run WorkflowRun
 	err = s.db.QueryRow(r.Context(), `
 		WITH new_run AS (SELECT gen_random_uuid() AS id)
@@ -145,6 +152,7 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		WorkflowRunID:  run.ID,
 		Prompt:         strings.TrimSpace(req.Prompt),
 		CreatedBy:      principal.UserID,
+		Input:          workflowRequestInput,
 	}
 	var workflowFunc any
 	switch workflowType {
@@ -314,6 +322,37 @@ func scanWorkflowRun(row pgx.Row) (WorkflowRun, error) {
 		&item.CancelledAt,
 	)
 	return item, err
+}
+
+func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, projectAspectRatio *string) (json.RawMessage, error) {
+	values := map[string]any{}
+	if len(raw) > 0 && strings.TrimSpace(string(raw)) != "null" {
+		if err := json.Unmarshal(raw, &values); err != nil {
+			return nil, err
+		}
+	}
+	if workflowType == "video_production" {
+		if _, ok := values["duration"]; !ok {
+			values["duration"] = 5
+		}
+		if value, ok := values["aspectRatio"].(string); !ok || strings.TrimSpace(value) == "" {
+			aspectRatio := "16:9"
+			if projectAspectRatio != nil && strings.TrimSpace(*projectAspectRatio) != "" {
+				aspectRatio = strings.TrimSpace(*projectAspectRatio)
+			}
+			values["aspectRatio"] = aspectRatio
+		}
+		if value, ok := values["resolution"].(string); !ok || strings.TrimSpace(value) == "" {
+			values["resolution"] = "720p"
+		}
+		if _, ok := values["pollIntervalSeconds"]; !ok {
+			values["pollIntervalSeconds"] = 5
+		}
+		if _, ok := values["maxPolls"]; !ok {
+			values["maxPolls"] = 120
+		}
+	}
+	return json.RawMessage(mustMarshal(values)), nil
 }
 
 func mustMarshal(value any) []byte {

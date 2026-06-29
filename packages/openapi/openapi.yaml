@@ -1629,9 +1629,10 @@ components:
           type: object
           additionalProperties: true
         output:
-          description: Workflow output. text_to_storyboard returns TextToStoryboardOutput.
+          description: Workflow output. text_to_storyboard returns TextToStoryboardOutput; video_production returns VideoProductionOutput.
           oneOf:
             - $ref: "#/components/schemas/TextToStoryboardOutput"
+            - $ref: "#/components/schemas/VideoProductionOutput"
             - type: object
               additionalProperties: true
         errorCode:
@@ -1680,6 +1681,7 @@ components:
           type: object
           additionalProperties: true
         output:
+          description: Node progress or terminal output. Provider video nodes include providerAsyncTaskId, externalTaskId, and generated video artifact/media/storage fields after success.
           type: object
           additionalProperties: true
         retryCount:
@@ -1720,6 +1722,59 @@ components:
               type: string
               format: uuid
             image:
+              type: string
+              format: uuid
+    VideoProductionOutput:
+      type: object
+      required:
+        - storyboardArtifactId
+        - imageArtifactId
+        - imageMediaFileId
+        - imageStorageKey
+        - videoArtifactId
+        - videoMediaFileId
+        - videoStorageKey
+        - providerAsyncTaskId
+        - providerCalls
+      properties:
+        storyboardArtifactId:
+          type: string
+          format: uuid
+        imageArtifactId:
+          type: string
+          format: uuid
+        imageMediaFileId:
+          type: string
+          format: uuid
+        imageStorageKey:
+          type: string
+        videoArtifactId:
+          type: string
+          format: uuid
+        videoMediaFileId:
+          type: string
+          format: uuid
+        videoStorageKey:
+          type: string
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        providerCalls:
+          type: object
+          required: [storyboard, image, videoCreate, videoPoll]
+          properties:
+            storyboard:
+              type: string
+              format: uuid
+            image:
+              type: string
+              format: uuid
+            videoCreate:
+              type: string
+              format: uuid
+            videoPoll:
               type: string
               format: uuid
     Artifact:
@@ -3160,9 +3215,29 @@ components:
           type: string
           enum: [video_production, text_to_storyboard, script_to_storyboard]
           default: video_production
-          description: Use text_to_storyboard for the real Temporal to Provider Gateway text/image production path.
+          description: Use video_production for the real Temporal to Provider Gateway text/image/video path.
         prompt:
           type: string
+        input:
+          type: object
+          additionalProperties: true
+          description: Optional workflow-specific input. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, and maxPolls.
+          properties:
+            duration:
+              type: number
+              default: 5
+            aspectRatio:
+              type: string
+              default: "16:9"
+            resolution:
+              type: string
+              default: "720p"
+            pollIntervalSeconds:
+              type: integer
+              default: 5
+            maxPolls:
+              type: integer
+              default: 120
         idempotencyKey:
           type: string
           maxLength: 200

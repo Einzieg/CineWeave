@@ -48,6 +48,39 @@ func (c *GatewayClient) GenerateImage(ctx context.Context, req GatewayImageReque
 	return response, nil
 }
 
+func (c *GatewayClient) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTaskRequest) (GatewayVideoCreateTaskResponse, error) {
+	var response GatewayVideoCreateTaskResponse
+	if err := c.postJSON(ctx, "/internal/provider/video/create-task", req, &response); err != nil {
+		return GatewayVideoCreateTaskResponse{}, err
+	}
+	if response.Status == "failed" {
+		return GatewayVideoCreateTaskResponse{}, errorFromGatewayStandard(response.Error)
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) PollVideoTask(ctx context.Context, req GatewayVideoPollTaskRequest) (GatewayVideoPollTaskResponse, error) {
+	var response GatewayVideoPollTaskResponse
+	if err := c.postJSON(ctx, "/internal/provider/video/poll-task", req, &response); err != nil {
+		return GatewayVideoPollTaskResponse{}, err
+	}
+	if response.Status == "failed" {
+		return GatewayVideoPollTaskResponse{}, errorFromGatewayStandard(response.Error)
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) CancelVideoTask(ctx context.Context, req GatewayVideoCancelTaskRequest) (GatewayVideoCancelTaskResponse, error) {
+	var response GatewayVideoCancelTaskResponse
+	if err := c.postJSON(ctx, "/internal/provider/video/cancel-task", req, &response); err != nil {
+		return GatewayVideoCancelTaskResponse{}, err
+	}
+	if response.Status == "failed" {
+		return GatewayVideoCancelTaskResponse{}, errorFromGatewayStandard(response.Error)
+	}
+	return response, nil
+}
+
 func (c *GatewayClient) postJSON(ctx context.Context, path string, payload any, target any) error {
 	if strings.TrimSpace(c.BaseURL) == "" {
 		return fmt.Errorf("%w: PROVIDER_GATEWAY_URL is required", ErrProviderGatewayRequired)

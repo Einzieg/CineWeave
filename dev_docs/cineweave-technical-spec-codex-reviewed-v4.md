@@ -3312,6 +3312,17 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
   - `pnpm --filter @cineweave/web lint`
   - `docker compose -f compose.yml config --quiet`
   - `docker compose -f compose.yml build api provider-gateway script-worker`
+
+## Implementation Note: Temporal to Provider Gateway Video Production v1
+
+- `POST /api/workflow-runs` with `workflowType=video_production` now runs the minimum real chain: Provider Gateway `text.generate` creates `storyboard_json`, Provider Gateway `image.generate` creates `generated_image`, and Provider Gateway `video.create-task` / `video.poll-task` creates `generated_video`.
+- The script worker only calls `provider.GatewayClient`; it does not decrypt provider credentials, call upstream providers directly, download upstream video media, or write `provider_call_logs` / `cost_records`.
+- `CreateStoryboardVideoTask` writes the `generate_storyboard_video` node and calls `/internal/provider/video/create-task` with `modelProfileKey=video_generation_default`, `mode=image_to_video`, a stable idempotency key, and the generated image reference.
+- `PollStoryboardVideoTask` performs one Gateway poll per activity execution. The durable loop lives in `VideoProductionWorkflow` and uses `workflow.Sleep`, default `pollIntervalSeconds=5`, and default `maxPolls=120`.
+- On success, `workflow_runs.output` contains `storyboardArtifactId`, `imageArtifactId`, `imageMediaFileId`, `imageStorageKey`, `videoArtifactId`, `videoMediaFileId`, `videoStorageKey`, `providerAsyncTaskId`, `externalTaskId`, and `providerCalls.storyboard/image/videoCreate/videoPoll`.
+- Configure active model profile bindings for `script_agent_default`, `image_generation_default`, and `video_generation_default` before running `video_production`.
+- Local verification command:
+  - `CINEWEAVE_INTEGRATION_TEST=1 go test ./internal/workflows -run TestVideoProductionWorkflowGatewayIntegration -count=1`
 Task 012: Implement provider call logging.
 Task 013: Implement model profile and binding.
 Task 014: Implement Manifest JSON Schema.
