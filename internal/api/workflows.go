@@ -1,7 +1,6 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -51,19 +50,21 @@ type WorkflowNodeRun struct {
 }
 
 type Artifact struct {
-	ID             string          `json:"id"`
-	OrganizationID string          `json:"organizationId"`
-	ProjectID      *string         `json:"projectId,omitempty"`
-	WorkflowRunID  *string         `json:"workflowRunId,omitempty"`
-	NodeRunID      *string         `json:"nodeRunId,omitempty"`
-	Type           string          `json:"type"`
-	StorageKey     *string         `json:"storageKey,omitempty"`
-	MimeType       *string         `json:"mimeType,omitempty"`
-	ContentHash    *string         `json:"contentHash,omitempty"`
-	PromptHash     *string         `json:"promptHash,omitempty"`
-	ModelID        *string         `json:"modelId,omitempty"`
-	Metadata       json.RawMessage `json:"metadata"`
-	CreatedAt      time.Time       `json:"createdAt"`
+	ID               string          `json:"id"`
+	OrganizationID   string          `json:"organizationId"`
+	ProjectID        *string         `json:"projectId,omitempty"`
+	WorkflowRunID    *string         `json:"workflowRunId,omitempty"`
+	NodeRunID        *string         `json:"nodeRunId,omitempty"`
+	Type             string          `json:"type"`
+	StorageKey       *string         `json:"storageKey,omitempty"`
+	MimeType         *string         `json:"mimeType,omitempty"`
+	ContentHash      *string         `json:"contentHash,omitempty"`
+	PromptHash       *string         `json:"promptHash,omitempty"`
+	ModelID          *string         `json:"modelId,omitempty"`
+	Metadata         json.RawMessage `json:"metadata"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	PreviewURL       *string         `json:"previewUrl,omitempty"`
+	PreviewExpiresAt *time.Time      `json:"previewExpiresAt,omitempty"`
 }
 
 func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -275,6 +276,12 @@ func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request, principal
 		return
 	}
 	projectID := r.URL.Query().Get("filter[projectId]")
+	includePreviewURL := strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true")
+	previewExpires := previewURLExpiryFromRequest(r)
+	if includePreviewURL && s.storage == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
+		return
+	}
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, model_id, metadata, created_at
 		FROM artifacts
@@ -290,13 +297,20 @@ func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request, principal
 	defer rows.Close()
 	items := make([]Artifact, 0)
 	for rows.Next() {
-		var item Artifact
-		var projectID sql.NullString
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &projectID, &item.WorkflowRunID, &item.NodeRunID, &item.Type, &item.StorageKey, &item.MimeType, &item.ContentHash, &item.PromptHash, &item.ModelID, &item.Metadata, &item.CreatedAt); err != nil {
+		item, err := scanArtifact(rows)
+		if err != nil {
 			s.writeError(w, r, err)
 			return
 		}
-		item.ProjectID = stringPtrFromValue(projectID.String)
+		if includePreviewURL && artifactCanPreview(item) && item.StorageKey != nil && strings.TrimSpace(*item.StorageKey) != "" {
+			presigned, err := s.storage.PresignGetObject(r.Context(), *item.StorageKey, previewExpires)
+			if err != nil {
+				s.writeError(w, r, err)
+				return
+			}
+			item.PreviewURL = &presigned.URL
+			item.PreviewExpiresAt = &presigned.ExpiresAt
+		}
 		items = append(items, item)
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)

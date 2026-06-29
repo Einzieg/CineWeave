@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -20,6 +22,7 @@ import (
 
 type Config struct {
 	Endpoint        string
+	PublicEndpoint  string
 	Region          string
 	Bucket          string
 	AccessKeyID     string
@@ -28,8 +31,9 @@ type Config struct {
 }
 
 type Client struct {
-	s3     *s3.Client
-	bucket string
+	s3        *s3.Client
+	presignS3 *s3.Client
+	bucket    string
 }
 
 type PutResult struct {
@@ -46,9 +50,17 @@ type PresignedPutResult struct {
 	ExpiresAt  time.Time
 }
 
+type PresignedGetResult struct {
+	StorageKey string    `json:"storageKey"`
+	URL        string    `json:"url"`
+	Method     string    `json:"method"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+}
+
 func ConfigFromEnv() Config {
 	return Config{
 		Endpoint:        env("S3_ENDPOINT", "http://localhost:9000"),
+		PublicEndpoint:  env("S3_PUBLIC_ENDPOINT", ""),
 		Region:          env("S3_REGION", "us-east-1"),
 		Bucket:          env("S3_BUCKET", "cineweave"),
 		AccessKeyID:     env("S3_ACCESS_KEY_ID", "minio"),
@@ -69,13 +81,13 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := s3.NewFromConfig(awsCfg, func(options *s3.Options) {
-		if cfg.Endpoint != "" {
-			options.BaseEndpoint = aws.String(cfg.Endpoint)
-		}
-		options.UsePathStyle = cfg.UsePathStyle
-	})
-	return &Client{s3: client, bucket: cfg.Bucket}, nil
+	client := newS3Client(awsCfg, cfg.Endpoint, cfg.UsePathStyle)
+	presignEndpoint := cfg.Endpoint
+	if strings.TrimSpace(cfg.PublicEndpoint) != "" {
+		presignEndpoint = cfg.PublicEndpoint
+	}
+	presignClient := newS3Client(awsCfg, presignEndpoint, cfg.UsePathStyle)
+	return &Client{s3: client, presignS3: presignClient, bucket: cfg.Bucket}, nil
 }
 
 func (c *Client) PutJSON(ctx context.Context, key string, value any) (PutResult, error) {
@@ -107,13 +119,15 @@ func (c *Client) PutBytes(ctx context.Context, key string, body []byte, contentT
 }
 
 func (c *Client) PresignPutObject(ctx context.Context, key, contentType string, expires time.Duration) (PresignedPutResult, error) {
-	if expires <= 0 {
-		expires = 15 * time.Minute
+	normalizedKey, err := validateObjectKey(key)
+	if err != nil {
+		return PresignedPutResult{}, err
 	}
-	presignClient := s3.NewPresignClient(c.s3)
+	expires = normalizePresignExpiry(expires)
+	presignClient := s3.NewPresignClient(c.presignS3)
 	result, err := presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
-		Key:         aws.String(key),
+		Key:         aws.String(normalizedKey),
 		ContentType: aws.String(contentType),
 	}, func(options *s3.PresignOptions) {
 		options.Expires = expires
@@ -122,12 +136,70 @@ func (c *Client) PresignPutObject(ctx context.Context, key, contentType string, 
 		return PresignedPutResult{}, err
 	}
 	return PresignedPutResult{
-		StorageKey: key,
+		StorageKey: normalizedKey,
 		URL:        result.URL,
 		Method:     result.Method,
 		Headers:    result.SignedHeader,
 		ExpiresAt:  time.Now().Add(expires).UTC(),
 	}, nil
+}
+
+func (c *Client) PresignGetObject(ctx context.Context, key string, expires time.Duration) (PresignedGetResult, error) {
+	normalizedKey, err := validateObjectKey(key)
+	if err != nil {
+		return PresignedGetResult{}, err
+	}
+	expires = normalizePresignExpiry(expires)
+	presignClient := s3.NewPresignClient(c.presignS3)
+	result, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(normalizedKey),
+	}, func(options *s3.PresignOptions) {
+		options.Expires = expires
+	})
+	if err != nil {
+		return PresignedGetResult{}, err
+	}
+	return PresignedGetResult{
+		StorageKey: normalizedKey,
+		URL:        result.URL,
+		Method:     result.Method,
+		ExpiresAt:  time.Now().Add(expires).UTC(),
+	}, nil
+}
+
+func newS3Client(cfg aws.Config, endpoint string, usePathStyle bool) *s3.Client {
+	return s3.NewFromConfig(cfg, func(options *s3.Options) {
+		if strings.TrimSpace(endpoint) != "" {
+			options.BaseEndpoint = aws.String(strings.TrimSpace(endpoint))
+		}
+		options.UsePathStyle = usePathStyle
+	})
+}
+
+func normalizePresignExpiry(expires time.Duration) time.Duration {
+	if expires <= 0 {
+		return 15 * time.Minute
+	}
+	if expires > time.Hour {
+		return time.Hour
+	}
+	return expires
+}
+
+func validateObjectKey(key string) (string, error) {
+	normalized := strings.TrimSpace(key)
+	if normalized == "" {
+		return "", fmt.Errorf("storage key is required")
+	}
+	if strings.HasPrefix(normalized, "/") || path.IsAbs(normalized) || strings.Contains(normalized, "\\") {
+		return "", fmt.Errorf("storage key must be a relative object key")
+	}
+	cleaned := path.Clean(normalized)
+	if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." || strings.Contains(normalized, "../") || strings.Contains(normalized, "/..") {
+		return "", fmt.Errorf("storage key must not contain path traversal")
+	}
+	return normalized, nil
 }
 
 func env(key, fallback string) string {

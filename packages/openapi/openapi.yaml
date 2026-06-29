@@ -555,6 +555,17 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: includePreviewUrl
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: previewExpiresSeconds
+          in: query
+          schema:
+            type: integer
+            default: 900
+            maximum: 3600
       responses:
         "200":
           description: Project artifacts
@@ -562,6 +573,82 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ArtifactListEnvelope"
+  /api/artifacts/{artifactId}:
+    get:
+      operationId: getArtifact
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ArtifactId"
+      responses:
+        "200":
+          description: Artifact detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/artifacts/{artifactId}/preview-url:
+    post:
+      operationId: createArtifactPreviewUrl
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ArtifactId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactPreviewUrlRequest"
+      responses:
+        "200":
+          description: Presigned artifact preview URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactPreviewUrlEnvelope"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/media-files/{mediaFileId}:
+    get:
+      operationId: getMediaFile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MediaFileId"
+      responses:
+        "200":
+          description: Media file detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaFileEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/media-files/{mediaFileId}/download-url:
+    post:
+      operationId: createMediaFileDownloadUrl
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MediaFileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaFileDownloadUrlRequest"
+      responses:
+        "200":
+          description: Presigned media file download URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaFileDownloadUrlEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
   /api/providers/connectors:
     get:
       operationId: listProviderConnectors
@@ -1226,6 +1313,20 @@ components:
       schema:
         type: string
         format: uuid
+    ArtifactId:
+      name: artifactId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    MediaFileId:
+      name: mediaFileId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     AccountId:
       name: accountId
       in: path
@@ -1815,6 +1916,99 @@ components:
         createdAt:
           type: string
           format: date-time
+        previewUrl:
+          type: string
+          format: uri
+        previewExpiresAt:
+          type: string
+          format: date-time
+    ArtifactPreviewUrlRequest:
+      type: object
+      properties:
+        expiresSeconds:
+          type: integer
+          default: 900
+          maximum: 3600
+    ArtifactPreviewUrlResponse:
+      type: object
+      required: [artifactId, storageKey, url, method, expiresAt]
+      properties:
+        artifactId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        url:
+          type: string
+          format: uri
+        method:
+          type: string
+          enum: [GET]
+        expiresAt:
+          type: string
+          format: date-time
+    MediaFile:
+      type: object
+      required: [id, organizationId, storageKey, mimeType, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        artifactId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        mimeType:
+          type: string
+        byteSize:
+          type: integer
+          format: int64
+        width:
+          type: integer
+        height:
+          type: integer
+        durationSeconds:
+          type: number
+        checksum:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    MediaFileDownloadUrlRequest:
+      type: object
+      properties:
+        expiresSeconds:
+          type: integer
+          default: 900
+          maximum: 3600
+    MediaFileDownloadUrlResponse:
+      type: object
+      required: [mediaFileId, storageKey, url, method, expiresAt]
+      properties:
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        url:
+          type: string
+          format: uri
+        method:
+          type: string
+          enum: [GET]
+        expiresAt:
+          type: string
+          format: date-time
     OrganizationEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -1948,6 +2142,34 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Artifact"
+    ArtifactEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Artifact"
+    ArtifactPreviewUrlEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ArtifactPreviewUrlResponse"
+    MediaFileEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/MediaFile"
+    MediaFileDownloadUrlEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/MediaFileDownloadUrlResponse"
     ProviderConnector:
       type: object
       required: [id, connectorKey, name, type, isOfficial, manifest, version, createdAt]

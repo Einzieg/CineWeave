@@ -22,6 +22,7 @@ import {
   Workflow,
   XCircle,
 } from "lucide-react";
+import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -151,6 +152,16 @@ type Artifact = {
   mimeType?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
+  previewUrl?: string;
+  previewExpiresAt?: string;
+};
+
+type ArtifactPreviewUrl = {
+  artifactId: string;
+  storageKey: string;
+  url: string;
+  method: "GET";
+  expiresAt: string;
 };
 
 type ProviderConnector = {
@@ -385,7 +396,7 @@ export function CineWeaveConsole() {
         organizationId: activeSession.organizationId,
       },
     );
-    setArtifacts(data.items);
+    setArtifacts(await withArtifactPreviewUrls(activeSession, data.items));
   }, []);
 
   const loadWorkflowNodes = useCallback(async (activeSession: SessionState, workflowRunId: string) => {
@@ -1394,6 +1405,18 @@ export function CineWeaveConsole() {
                         <p className="text-sm font-medium">{artifact.type}</p>
                         <p className="text-xs text-[var(--muted)]">{artifact.mimeType ?? "application/json"}</p>
                       </div>
+                      {artifact.previewUrl && isImageArtifact(artifact) ? (
+                        <div className="relative mt-2 aspect-video w-full overflow-hidden rounded border border-[var(--line)]">
+                          <Image src={artifact.previewUrl} alt={artifact.type} fill sizes="360px" unoptimized className="object-cover" />
+                        </div>
+                      ) : null}
+                      {artifact.previewUrl && isVideoArtifact(artifact) ? (
+                        <video
+                          src={artifact.previewUrl}
+                          controls
+                          className="mt-2 aspect-video w-full rounded border border-[var(--line)] bg-black"
+                        />
+                      ) : null}
                       <p className="truncate text-xs text-[var(--muted)]">{artifact.storageKey}</p>
                     </div>
                   ))
@@ -1577,6 +1600,62 @@ function artifactSummary(items: Artifact[]) {
     return "No artifacts";
   }
   return `${items.length} artifact${items.length === 1 ? "" : "s"}`;
+}
+
+async function withArtifactPreviewUrls(activeSession: SessionState, items: Artifact[]) {
+  const previewCandidates = [...items]
+    .filter((artifact) => isPreviewableMediaArtifact(artifact))
+    .sort((left, right) => previewPriority(right) - previewPriority(left))
+    .slice(0, 10);
+  const previewById = new Map<string, ArtifactPreviewUrl>();
+  for (let index = 0; index < previewCandidates.length; index += 4) {
+    const chunk = previewCandidates.slice(index, index + 4);
+    const previews = await Promise.all(chunk.map((artifact) => loadArtifactPreviewUrl(activeSession, artifact.id)));
+    previews.forEach((preview) => {
+      if (preview) {
+        previewById.set(preview.artifactId, preview);
+      }
+    });
+  }
+  return items.map((artifact) => {
+    const preview = previewById.get(artifact.id);
+    if (!preview) {
+      return artifact;
+    }
+    return { ...artifact, previewUrl: preview.url, previewExpiresAt: preview.expiresAt };
+  });
+}
+
+async function loadArtifactPreviewUrl(activeSession: SessionState, artifactId: string) {
+  try {
+    return await apiRequest<ArtifactPreviewUrl>(`/api/artifacts/${artifactId}/preview-url`, {
+      method: "POST",
+      token: activeSession.accessToken,
+      organizationId: activeSession.organizationId,
+      body: { expiresSeconds: 900 },
+    });
+  } catch {
+    return null;
+  }
+}
+
+function previewPriority(artifact: Artifact) {
+  if (artifact.type === "generated_image" || artifact.type === "generated_video") {
+    return 2;
+  }
+  return 1;
+}
+
+function isPreviewableMediaArtifact(artifact: Artifact) {
+  return isImageArtifact(artifact) || isVideoArtifact(artifact);
+}
+
+function isImageArtifact(artifact: Artifact) {
+  return artifact.mimeType?.toLowerCase().startsWith("image/") ?? false;
+}
+
+function isVideoArtifact(artifact: Artifact) {
+  return artifact.mimeType?.toLowerCase().startsWith("video/") ?? false;
 }
 
 function normalizedOutputString(output: unknown, key: string) {

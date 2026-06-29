@@ -116,6 +116,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/workflow-runs/{workflowRunId}", s.withAuth(s.getWorkflowRun))
 	mux.HandleFunc("GET /api/workflow-runs/{workflowRunId}/nodes", s.withAuth(s.listWorkflowNodeRuns))
 	mux.HandleFunc("GET /api/artifacts", s.withAuth(s.listArtifacts))
+	mux.HandleFunc("GET /api/artifacts/{artifactId}", s.withAuth(s.getArtifact))
+	mux.HandleFunc("POST /api/artifacts/{artifactId}/preview-url", s.withAuth(s.createArtifactPreviewURL))
+	mux.HandleFunc("GET /api/media-files/{mediaFileId}", s.withAuth(s.getMediaFile))
+	mux.HandleFunc("POST /api/media-files/{mediaFileId}/download-url", s.withAuth(s.createMediaFileDownloadURL))
 
 	return httpx.WithCORS(httpx.WithRequestID(mux))
 }

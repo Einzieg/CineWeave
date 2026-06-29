@@ -3323,6 +3323,15 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - Configure active model profile bindings for `script_agent_default`, `image_generation_default`, and `video_generation_default` before running `video_production`.
 - Local verification command:
   - `CINEWEAVE_INTEGRATION_TEST=1 go test ./internal/workflows -run TestVideoProductionWorkflowGatewayIntegration -count=1`
+
+## Implementation Note: CineWeave Vault Preview URLs
+
+- Artifact and media previews are generated through authenticated API endpoints, not public S3 / MinIO bucket permissions.
+- `GET /api/artifacts/{artifactId}` and `POST /api/artifacts/{artifactId}/preview-url` enforce organization and project membership before returning object metadata or a signed GET URL.
+- `GET /api/media-files/{mediaFileId}` and `POST /api/media-files/{mediaFileId}/download-url` use the same authorization rules.
+- `GET /api/artifacts?includePreviewUrl=true&previewExpiresSeconds=900` signs previewable artifacts only; the default list path does not batch sign URLs.
+- Preview URLs default to 15 minutes and clamp to 1 hour. `preview-url` accepts `image/*`, `video/*`, `audio/*`, `text/*`, and `application/json`; unsupported artifact MIME types return `UNSUPPORTED_PREVIEW_TYPE`.
+- Local Docker Compose uses `S3_ENDPOINT=http://minio:9000` for server-to-MinIO access and `S3_PUBLIC_ENDPOINT=http://localhost:9000` for browser-accessible signed URLs.
 Task 012: Implement provider call logging.
 Task 013: Implement model profile and binding.
 Task 014: Implement Manifest JSON Schema.
