@@ -79,17 +79,61 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 	}
 	req.Input = input
 
-	selection, err := s.selectGatewayVideoModel(ctx, req.OrganizationID, req.ProviderModelID, req.ModelProfileKey)
+	if strings.TrimSpace(req.ProviderModelID) != "" {
+		selection, err := s.selectGatewayVideoModel(ctx, req.OrganizationID, req.ProviderModelID, req.ModelProfileKey)
+		if err != nil {
+			return GatewayVideoCreateTaskResponse{}, err
+		}
+		response, _, err := s.executeGatewayVideoCreateAttempt(ctx, req, videoInput, selection, 1, 1, string(RoutingPriority))
+		return response, err
+	}
+
+	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
+		OrganizationID:       req.OrganizationID,
+		ModelProfileKey:      req.ModelProfileKey,
+		TaskType:             TaskTypeVideoCreateTask,
+		Modality:             "video",
+		VideoDurationSeconds: videoInput.DurationSeconds,
+		VideoResolution:      videoInput.Resolution,
+	})
 	if err != nil {
 		return GatewayVideoCreateTaskResponse{}, err
 	}
+	strategy := candidates[0].FallbackStrategy
+	maxAttempts := fallbackMaxAttempts(strategy, len(candidates))
+	attempts := make([]GatewayAttempt, 0, maxAttempts)
+	var final GatewayVideoCreateTaskResponse
+	for i := 0; i < maxAttempts; i++ {
+		candidate := candidates[i]
+		selection, err := s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidate)
+		if err != nil {
+			return GatewayVideoCreateTaskResponse{}, err
+		}
+		response, attempt, err := s.executeGatewayVideoCreateAttempt(ctx, req, videoInput, selection, i+1, maxAttempts, candidate.RoutingStrategy)
+		if err != nil {
+			return GatewayVideoCreateTaskResponse{}, err
+		}
+		attempts = append(attempts, attempt)
+		response.Attempts = append([]GatewayAttempt(nil), attempts...)
+		final = response
+		if !isProviderFailureStatus(response.Status) {
+			return response, nil
+		}
+		if i+1 >= maxAttempts || !shouldFallback(gatewayErrorCode(response.Error), strategy) {
+			return response, nil
+		}
+	}
+	return final, nil
+}
+
+func (s *Service) executeGatewayVideoCreateAttempt(ctx context.Context, req GatewayVideoCreateTaskRequest, videoInput gatewayVideoInput, selection gatewayModelSelection, attemptIndex, maxAttempts int, selectedBy string) (GatewayVideoCreateTaskResponse, GatewayAttempt, error) {
 	manifest, err := s.manifestForAccount(ctx, selection.Account)
 	if err != nil {
-		return GatewayVideoCreateTaskResponse{}, err
+		return GatewayVideoCreateTaskResponse{}, GatewayAttempt{}, err
 	}
 	endpointKey, endpoint, err := selectVideoCreateEndpoint(selection, manifest)
 	if err != nil {
-		return GatewayVideoCreateTaskResponse{}, err
+		return GatewayVideoCreateTaskResponse{}, GatewayAttempt{}, err
 	}
 	timeout := gatewayVideoTimeout(req.Options.TimeoutMS, endpoint.TimeoutMS)
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -108,7 +152,7 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 	if guardErr != nil {
 		standard, ok := blockedGatewayStandard(guardErr)
 		if !ok {
-			return GatewayVideoCreateTaskResponse{}, guardErr
+			return GatewayVideoCreateTaskResponse{}, GatewayAttempt{}, guardErr
 		}
 		call, err := recordCall(ctx, s.db, RecordCallRequest{
 			ID:                    callID,
@@ -132,17 +176,19 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 			ErrorMessage:          standard.Message,
 			RequestSnapshot:       req.Input,
 			ResponseSnapshot:      blockedResponseSnapshot(standard),
-			NormalizedOutput:      blockedNormalizedOutput(standard),
+			NormalizedOutput:      withRoutingNormalizedOutput(blockedNormalizedOutput(standard), selection, attemptIndex, maxAttempts, selectedBy),
 		})
 		if err != nil {
-			return GatewayVideoCreateTaskResponse{}, err
+			return GatewayVideoCreateTaskResponse{}, GatewayAttempt{}, err
 		}
+		attempt := gatewayAttemptFromCall(call, selection, standard, 0)
 		return GatewayVideoCreateTaskResponse{
 			ProviderCallID: call.ID,
 			ModelID:        selection.Model.ID,
 			Status:         "blocked",
 			Error:          standard,
-		}, nil
+			Attempts:       []GatewayAttempt{attempt},
+		}, attempt, nil
 	}
 	providerCallID := ""
 	defer func() {
@@ -150,7 +196,7 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 	}()
 
 	started := time.Now()
-	result, runErr := callManifestEndpointWithContext(callCtx, manifest, selection.Account, selection.Credential, endpointKey, endpoint, input, videoManifestContext(selection, req.References, nil))
+	result, runErr := callManifestEndpointWithContext(callCtx, manifest, selection.Account, selection.Credential, endpointKey, endpoint, req.Input, videoManifestContext(selection, req.References, nil))
 	latencyMS := int(time.Since(started).Milliseconds())
 	if result.LatencyMS > latencyMS {
 		latencyMS = result.LatencyMS
@@ -165,7 +211,7 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 	}
 	externalTaskID := videoStringField(result.NormalizedOutput, "externalTaskId", "taskId", "id")
 	if externalTaskID == "" {
-		externalTaskID = videoStringField(input, "externalTaskId", "taskId")
+		externalTaskID = videoStringField(req.Input, "externalTaskId", "taskId")
 	}
 	normalizedOutput := result.NormalizedOutput
 	responseSnapshot := result.ResponseSnapshot
@@ -187,7 +233,7 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 		}
 	} else if videoURL := videoStringField(normalizedOutput, "videoUrl", "url", "outputUrl"); status == "succeeded" && strings.TrimSpace(videoURL) != "" {
 		if s.objectStorage == nil {
-			return GatewayVideoCreateTaskResponse{}, fmt.Errorf("%w: object storage is not configured", ErrValidation)
+			return GatewayVideoCreateTaskResponse{}, GatewayAttempt{}, fmt.Errorf("%w: object storage is not configured", ErrValidation)
 		}
 		media, mediaErr := downloadGatewayVideoURL(callCtx, videoURL, videoStringField(normalizedOutput, "mimeType"), timeout)
 		if mediaErr == nil {
@@ -210,10 +256,11 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 	if len(normalizedOutput) == 0 {
 		normalizedOutput = json.RawMessage(`{}`)
 	}
+	normalizedOutput = withRoutingNormalizedOutput(normalizedOutput, selection, attemptIndex, maxAttempts, selectedBy)
 
 	call, taskID, err := s.recordVideoCreateTask(ctx, selection, req, callID, lease.LeaseID, externalTaskID, status, latencyMS, errorCode, errorMessage, upstreamStatus, upstreamErrorCode, result.RequestSnapshot, responseSnapshot, normalizedOutput, usage, stored, videoInput)
 	if err != nil {
-		return GatewayVideoCreateTaskResponse{}, err
+		return GatewayVideoCreateTaskResponse{}, GatewayAttempt{}, err
 	}
 	providerCallID = call.ID
 	if runErr != nil {
@@ -221,6 +268,7 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 	} else {
 		s.recordGatewayGuardSuccess(ctx, guardReq)
 	}
+	attempt := gatewayAttemptFromCall(call, selection, standardError, latencyMS)
 	return GatewayVideoCreateTaskResponse{
 		ProviderCallID:      call.ID,
 		ProviderAsyncTaskID: taskID,
@@ -229,7 +277,8 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 		Status:              status,
 		Error:               standardError,
 		LatencyMS:           latencyMS,
-	}, nil
+		Attempts:            []GatewayAttempt{attempt},
+	}, attempt, nil
 }
 
 func (s *Service) PollVideoTask(ctx context.Context, req GatewayVideoPollTaskRequest) (GatewayVideoPollTaskResponse, error) {
@@ -600,37 +649,16 @@ func (s *Service) selectGatewayVideoModel(ctx context.Context, organizationID, p
 	if profileKey == "" {
 		return gatewayModelSelection{}, fmt.Errorf("%w: modelProfileKey or providerModelId is required", ErrValidation)
 	}
-	var profileID, bindingID, modelID string
-	err := s.db.QueryRow(ctx, `
-		SELECT p.id, b.id, m.id
-		FROM model_profiles p
-		JOIN model_profile_bindings b ON b.model_profile_id = p.id
-		JOIN provider_models m ON m.id = b.provider_model_id
-		JOIN provider_accounts a ON a.id = m.provider_account_id
-		WHERE p.organization_id = $1
-		  AND p.profile_key = $2
-		  AND b.enabled = true
-		  AND m.status = 'active'
-		  AND a.status = 'active'
-		  AND m.modality IN ('video', 'multimodal')
-		ORDER BY b.priority ASC, b.weight DESC, b.created_at ASC
-		LIMIT 1
-	`, organizationID, profileKey).Scan(&profileID, &bindingID, &modelID)
-	if err != nil {
-		if errorsIsNoRows(err) {
-			return gatewayModelSelection{}, fmt.Errorf("%w: no active video provider model is bound to modelProfileKey", ErrValidation)
-		}
-		return gatewayModelSelection{}, err
-	}
-	model, err := s.GetModel(ctx, organizationID, modelID)
+	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
+		OrganizationID:  organizationID,
+		ModelProfileKey: profileKey,
+		TaskType:        TaskTypeVideoCreateTask,
+		Modality:        "video",
+	})
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	account, err := s.GetAccount(ctx, organizationID, model.ProviderAccountID)
-	if err != nil {
-		return gatewayModelSelection{}, err
-	}
-	return s.completeGatewaySelection(ctx, organizationID, account, model, profileID, bindingID, profileKey)
+	return s.completeGatewaySelectionFromCandidate(ctx, organizationID, candidates[0])
 }
 
 func parseGatewayVideoInput(input json.RawMessage) (gatewayVideoInput, error) {
@@ -841,6 +869,12 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 	call, err := recordCall(ctx, tx, callReq)
 	if err != nil {
 		return CallLog{}, "", err
+	}
+	if isProviderFailureStatus(status) {
+		if err := tx.Commit(ctx); err != nil {
+			return CallLog{}, "", err
+		}
+		return call, "", nil
 	}
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO provider_async_tasks(

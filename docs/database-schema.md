@@ -27,3 +27,4 @@ Migration notes:
 - Asset API writes user-managed project assets to `assets`. Uploaded/derived media is represented through an `artifacts` row, a `media_files` row, and a `media_variants` row; `assets.current_artifact_id` points at the latest artifact.
 - `000008_provider_limits` adds `provider_limit_policies` and `provider_circuit_states`, extends `provider_leases` with `lease_token`, and allows `provider_call_logs.status=blocked` for Gateway guard rejections.
 - Provider budget enforcement reads `cost_records`; blocked provider calls are logged but intentionally do not write cost rows.
+- `000009_model_profile_routing` expands `model_profiles.routing_strategy` to `priority`, `priority_with_fallback`, `weighted`, `cost_optimized`, and `latency_optimized`, and changes the default to `priority_with_fallback`.

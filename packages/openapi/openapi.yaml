@@ -2842,6 +2842,10 @@ components:
         normalizedOutput:
           type: object
           additionalProperties: true
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayAttempt"
     ManifestValidationIssue:
       type: object
       required: [path, message]
@@ -3030,6 +3034,33 @@ components:
           type: string
         currency:
           type: string
+    GatewayAttempt:
+      type: object
+      required: [status, retryable]
+      properties:
+        providerCallId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        modelProfileBindingId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [succeeded, failed, blocked, queued, running, cancelled, skipped]
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        retryable:
+          type: boolean
+        latencyMs:
+          type: integer
     GatewayTextResponse:
       type: object
       required: [providerCallId, modelId, status, output, usage]
@@ -3050,6 +3081,10 @@ components:
           $ref: "#/components/schemas/ProviderStandardError"
         latencyMs:
           type: integer
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayAttempt"
     GatewayImageOptions:
       type: object
       properties:
@@ -3184,6 +3219,10 @@ components:
           $ref: "#/components/schemas/ProviderStandardError"
         latencyMs:
           type: integer
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayAttempt"
     GatewayVideoOptions:
       type: object
       properties:
@@ -3293,6 +3332,10 @@ components:
           $ref: "#/components/schemas/ProviderStandardError"
         latencyMs:
           type: integer
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayAttempt"
     GatewayVideoPollTaskRequest:
       type: object
       required: [organizationId]
@@ -3497,9 +3540,9 @@ components:
           type: string
         routingStrategy:
           type: string
+          enum: [priority, priority_with_fallback, weighted, cost_optimized, latency_optimized]
         fallbackStrategy:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/FallbackStrategy"
         bindings:
           type: array
           items:
@@ -3522,9 +3565,9 @@ components:
           type: string
         routingStrategy:
           type: string
+          enum: [priority, priority_with_fallback, weighted, cost_optimized, latency_optimized]
         fallbackStrategy:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/FallbackStrategy"
     UpdateModelProfileRequest:
       type: object
       properties:
@@ -3536,9 +3579,31 @@ components:
           type: string
         routingStrategy:
           type: string
+          enum: [priority, priority_with_fallback, weighted, cost_optimized, latency_optimized]
         fallbackStrategy:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/FallbackStrategy"
+    FallbackStrategy:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          default: true
+        maxAttempts:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 3
+        fallbackOn:
+          type: array
+          items:
+            type: string
+          example: [PROVIDER_RATE_LIMITED, PROVIDER_CONCURRENCY_LIMITED, PROVIDER_CIRCUIT_OPEN, UPSTREAM_TIMEOUT, UPSTREAM_INTERNAL_ERROR, RATE_LIMITED]
+        stopOn:
+          type: array
+          items:
+            type: string
+          example: [AUTH_FAILED, MODEL_NOT_FOUND, INVALID_REQUEST, UNSUPPORTED_CAPABILITY, CONTENT_REJECTED]
+      additionalProperties: false
     CreateModelProfileBindingRequest:
       type: object
       required: [providerModelId]
@@ -3548,8 +3613,10 @@ components:
           format: uuid
         priority:
           type: integer
+          minimum: 0
         weight:
           type: integer
+          minimum: 0
         enabled:
           type: boolean
     ProviderCallLog:

@@ -36,6 +36,7 @@ const (
 	CodeProviderMonthlyBudgetExceeded = "PROVIDER_MONTHLY_BUDGET_EXCEEDED"
 	CodeProviderCircuitOpen           = "PROVIDER_CIRCUIT_OPEN"
 	CodeProviderLeaseExpired          = "PROVIDER_LEASE_EXPIRED"
+	CodeModelProfileNotConfigured     = "MODEL_PROFILE_NOT_CONFIGURED"
 	CodeUnknownError                  = "UNKNOWN_ERROR"
 )
 

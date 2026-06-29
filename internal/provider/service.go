@@ -496,12 +496,13 @@ func (s *Service) CreateModelProfile(ctx context.Context, organizationID string,
 		return ModelProfile{}, fmt.Errorf("%w: profileKey, name, and purpose are required", ErrValidation)
 	}
 	routingStrategy := strings.TrimSpace(req.RoutingStrategy)
-	if routingStrategy == "" {
-		routingStrategy = "priority"
-	}
-	fallbackStrategy, err := normalizeJSON(req.FallbackStrategy, "{}")
+	routingStrategy, err := validateRoutingStrategy(routingStrategy)
 	if err != nil {
-		return ModelProfile{}, fmt.Errorf("%w: fallbackStrategy must be valid JSON", ErrValidation)
+		return ModelProfile{}, err
+	}
+	fallbackStrategy, err := validateFallbackStrategy(req.FallbackStrategy)
+	if err != nil {
+		return ModelProfile{}, err
 	}
 
 	var profileID string
@@ -554,10 +555,14 @@ func (s *Service) UpdateModelProfile(ctx context.Context, organizationID, profil
 	if req.RoutingStrategy != nil {
 		routingStrategy = strings.TrimSpace(*req.RoutingStrategy)
 	}
+	routingStrategy, err = validateRoutingStrategy(routingStrategy)
+	if err != nil {
+		return ModelProfile{}, err
+	}
 	if len(req.FallbackStrategy) > 0 {
-		fallbackStrategy, err = normalizeJSON(req.FallbackStrategy, "{}")
+		fallbackStrategy, err = validateFallbackStrategy(req.FallbackStrategy)
 		if err != nil {
-			return ModelProfile{}, fmt.Errorf("%w: fallbackStrategy must be valid JSON", ErrValidation)
+			return ModelProfile{}, err
 		}
 	}
 	if profileKey == "" || name == "" || purpose == "" {
@@ -583,13 +588,19 @@ func (s *Service) CreateModelProfileBinding(ctx context.Context, organizationID,
 	if _, err := s.GetModel(ctx, organizationID, req.ProviderModelID); err != nil {
 		return ModelProfile{}, err
 	}
-	priority := req.Priority
-	if priority == 0 {
-		priority = 100
+	priority := 100
+	if req.Priority != nil {
+		if *req.Priority < 0 {
+			return ModelProfile{}, fmt.Errorf("%w: priority must be non-negative", ErrValidation)
+		}
+		priority = *req.Priority
 	}
-	weight := req.Weight
-	if weight == 0 {
-		weight = 100
+	weight := 100
+	if req.Weight != nil {
+		if *req.Weight < 0 {
+			return ModelProfile{}, fmt.Errorf("%w: weight must be non-negative", ErrValidation)
+		}
+		weight = *req.Weight
 	}
 	enabled := true
 	if req.Enabled != nil {
@@ -826,6 +837,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 	var normalizedOutput json.RawMessage
 	var requestSnapshot json.RawMessage
 	var responseSnapshot json.RawMessage
+	var attempts []GatewayAttempt
 
 	switch testType {
 	case "connection_test", "auth_test", "model_discovery_test":
@@ -864,6 +876,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		providerCallID = gatewayResp.ProviderCallID
 		status = gatewayResp.Status
 		latencyMS = gatewayResp.LatencyMS
+		attempts = gatewayResp.Attempts
 		requestSnapshot = mustJSON(gatewayReq)
 		responseSnapshot = mustJSON(gatewayResp)
 		if isProviderFailureStatus(status) {
@@ -886,6 +899,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		providerCallID = gatewayResp.ProviderCallID
 		status = gatewayResp.Status
 		latencyMS = gatewayResp.LatencyMS
+		attempts = gatewayResp.Attempts
 		requestSnapshot = mustJSON(gatewayReq)
 		responseSnapshot = mustJSON(gatewayResp)
 		if isProviderFailureStatus(status) {
@@ -936,6 +950,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		providerCallID = createResp.ProviderCallID
 		status = createResp.Status
 		latencyMS = createResp.LatencyMS
+		attempts = createResp.Attempts
 		requestSnapshot = mustJSON(createReq)
 		responseSnapshot = mustJSON(createResp)
 		normalizedOutput = mustJSON(map[string]any{
@@ -1036,6 +1051,7 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		ErrorCode:        stringPtr(sql.NullString{String: errorCode, Valid: errorCode != ""}),
 		ErrorMessage:     stringPtr(sql.NullString{String: errorMessage, Valid: errorMessage != ""}),
 		NormalizedOutput: normalizedOutput,
+		Attempts:         attempts,
 	}, nil
 }
 

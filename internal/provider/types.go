@@ -127,6 +127,55 @@ type ModelProfile struct {
 	UpdatedAt        time.Time             `json:"updatedAt"`
 }
 
+type RoutingStrategy string
+
+const (
+	RoutingPriority             RoutingStrategy = "priority"
+	RoutingPriorityWithFallback RoutingStrategy = "priority_with_fallback"
+	RoutingWeighted             RoutingStrategy = "weighted"
+	RoutingCostOptimized        RoutingStrategy = "cost_optimized"
+	RoutingLatencyOptimized     RoutingStrategy = "latency_optimized"
+)
+
+type FallbackStrategy struct {
+	Enabled     bool     `json:"enabled"`
+	MaxAttempts int      `json:"maxAttempts"`
+	FallbackOn  []string `json:"fallbackOn"`
+	StopOn      []string `json:"stopOn"`
+}
+
+type RoutingRequest struct {
+	OrganizationID       string
+	ModelProfileKey      string
+	TaskType             string
+	Modality             string
+	EstimatedInputTokens int
+	MaxOutputTokens      int
+	ImageSize            string
+	ImageQuality         string
+	VideoDurationSeconds float64
+	VideoResolution      string
+}
+
+type RoutingCandidate struct {
+	ModelProfileID        string
+	ModelProfileKey       string
+	ModelProfileBindingID string
+	ProviderModelID       string
+	ProviderAccountID     string
+	Priority              int
+	Weight                int
+	ModelKey              string
+	Modality              string
+	Capabilities          []Capability
+	RoutingStrategy       string
+	FallbackStrategy      FallbackStrategy
+	createdAt             time.Time
+	averageLatencyMS      float64
+	hasLatency            bool
+	estimatedCost         float64
+}
+
 type ModelProfileBinding struct {
 	ID              string    `json:"id"`
 	ModelProfileID  string    `json:"modelProfileId"`
@@ -155,19 +204,20 @@ type UpdateModelProfileRequest struct {
 
 type CreateModelProfileBindingRequest struct {
 	ProviderModelID string `json:"providerModelId"`
-	Priority        int    `json:"priority"`
-	Weight          int    `json:"weight"`
+	Priority        *int   `json:"priority"`
+	Weight          *int   `json:"weight"`
 	Enabled         *bool  `json:"enabled"`
 }
 
 type ProviderTestResult struct {
-	TestRunID        string          `json:"testRunId"`
-	ProviderCallID   string          `json:"providerCallId"`
-	Status           string          `json:"status"`
-	LatencyMS        int             `json:"latencyMs"`
-	ErrorCode        *string         `json:"errorCode,omitempty"`
-	ErrorMessage     *string         `json:"errorMessage,omitempty"`
-	NormalizedOutput json.RawMessage `json:"normalizedOutput"`
+	TestRunID        string           `json:"testRunId"`
+	ProviderCallID   string           `json:"providerCallId"`
+	Status           string           `json:"status"`
+	LatencyMS        int              `json:"latencyMs"`
+	ErrorCode        *string          `json:"errorCode,omitempty"`
+	ErrorMessage     *string          `json:"errorMessage,omitempty"`
+	NormalizedOutput json.RawMessage  `json:"normalizedOutput"`
+	Attempts         []GatewayAttempt `json:"attempts,omitempty"`
 }
 
 type TestProviderModelRequest struct {
@@ -374,6 +424,18 @@ type GatewayUsage struct {
 	Currency      string `json:"currency,omitempty"`
 }
 
+type GatewayAttempt struct {
+	ProviderCallID        string `json:"providerCallId,omitempty"`
+	ProviderModelID       string `json:"providerModelId,omitempty"`
+	ProviderAccountID     string `json:"providerAccountId,omitempty"`
+	ModelProfileBindingID string `json:"modelProfileBindingId,omitempty"`
+	Status                string `json:"status"`
+	ErrorCode             string `json:"errorCode,omitempty"`
+	ErrorMessage          string `json:"errorMessage,omitempty"`
+	Retryable             bool   `json:"retryable"`
+	LatencyMS             int    `json:"latencyMs,omitempty"`
+}
+
 type GatewayTextResponse struct {
 	ProviderCallID string            `json:"providerCallId"`
 	ModelID        string            `json:"modelId"`
@@ -382,6 +444,7 @@ type GatewayTextResponse struct {
 	Usage          GatewayUsage      `json:"usage"`
 	Error          *StandardError    `json:"error,omitempty"`
 	LatencyMS      int               `json:"latencyMs,omitempty"`
+	Attempts       []GatewayAttempt  `json:"attempts,omitempty"`
 }
 
 type GatewayImageOptions struct {
@@ -433,6 +496,7 @@ type GatewayImageResponse struct {
 	Usage          GatewayUsage       `json:"usage"`
 	Error          *StandardError     `json:"error,omitempty"`
 	LatencyMS      int                `json:"latencyMs,omitempty"`
+	Attempts       []GatewayAttempt   `json:"attempts,omitempty"`
 }
 
 type GatewayVideoOptions struct {
@@ -469,13 +533,14 @@ type GatewayVideoCreateTaskRequest struct {
 }
 
 type GatewayVideoCreateTaskResponse struct {
-	ProviderCallID      string         `json:"providerCallId"`
-	ProviderAsyncTaskID string         `json:"providerAsyncTaskId"`
-	ExternalTaskID      string         `json:"externalTaskId,omitempty"`
-	ModelID             string         `json:"modelId"`
-	Status              string         `json:"status"`
-	Error               *StandardError `json:"error,omitempty"`
-	LatencyMS           int            `json:"latencyMs,omitempty"`
+	ProviderCallID      string           `json:"providerCallId"`
+	ProviderAsyncTaskID string           `json:"providerAsyncTaskId"`
+	ExternalTaskID      string           `json:"externalTaskId,omitempty"`
+	ModelID             string           `json:"modelId"`
+	Status              string           `json:"status"`
+	Error               *StandardError   `json:"error,omitempty"`
+	LatencyMS           int              `json:"latencyMs,omitempty"`
+	Attempts            []GatewayAttempt `json:"attempts,omitempty"`
 }
 
 type GatewayVideoPollTaskRequest struct {

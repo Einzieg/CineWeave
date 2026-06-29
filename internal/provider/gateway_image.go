@@ -80,10 +80,54 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	}
 	req.Input = input
 
-	selection, err := s.selectGatewayImageModel(ctx, req)
+	if strings.TrimSpace(req.ProviderModelID) != "" {
+		selection, err := s.selectGatewayImageModel(ctx, req)
+		if err != nil {
+			return GatewayImageResponse{}, err
+		}
+		response, _, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, 1, 1, string(RoutingPriority))
+		return response, err
+	}
+
+	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
+		OrganizationID:  req.OrganizationID,
+		ModelProfileKey: req.ModelProfileKey,
+		TaskType:        TaskTypeImageGenerate,
+		Modality:        "image",
+		ImageSize:       imageInput.Size,
+		ImageQuality:    imageInput.Quality,
+	})
 	if err != nil {
 		return GatewayImageResponse{}, err
 	}
+	strategy := candidates[0].FallbackStrategy
+	maxAttempts := fallbackMaxAttempts(strategy, len(candidates))
+	attempts := make([]GatewayAttempt, 0, maxAttempts)
+	var final GatewayImageResponse
+	for i := 0; i < maxAttempts; i++ {
+		candidate := candidates[i]
+		selection, err := s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidate)
+		if err != nil {
+			return GatewayImageResponse{}, err
+		}
+		response, attempt, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, i+1, maxAttempts, candidate.RoutingStrategy)
+		if err != nil {
+			return GatewayImageResponse{}, err
+		}
+		attempts = append(attempts, attempt)
+		response.Attempts = append([]GatewayAttempt(nil), attempts...)
+		final = response
+		if response.Status == "succeeded" {
+			return response, nil
+		}
+		if i+1 >= maxAttempts || !shouldFallback(gatewayErrorCode(response.Error), strategy) {
+			return response, nil
+		}
+	}
+	return final, nil
+}
+
+func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayImageRequest, imageInput gatewayImageInput, selection gatewayModelSelection, attemptIndex, maxAttempts int, selectedBy string) (GatewayImageResponse, GatewayAttempt, error) {
 	cfg := parseOpenAICompatibleConfig(selection.Account.Config)
 	if req.Options.TimeoutMS > 0 {
 		cfg.TimeoutMS = req.Options.TimeoutMS
@@ -106,7 +150,7 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	if guardErr != nil {
 		standard, ok := blockedGatewayStandard(guardErr)
 		if !ok {
-			return GatewayImageResponse{}, guardErr
+			return GatewayImageResponse{}, GatewayAttempt{}, guardErr
 		}
 		call, err := s.recordGatewayImageCall(ctx, selection, req, callID, RecordCallRequest{
 			ID:                    callID,
@@ -130,18 +174,20 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 			ErrorMessage:          standard.Message,
 			RequestSnapshot:       req.Input,
 			ResponseSnapshot:      blockedResponseSnapshot(standard),
-			NormalizedOutput:      blockedNormalizedOutput(standard),
+			NormalizedOutput:      withRoutingNormalizedOutput(blockedNormalizedOutput(standard), selection, attemptIndex, maxAttempts, selectedBy),
 		}, usage, nil, imageInput, imageGenerationResult{})
 		if err != nil {
-			return GatewayImageResponse{}, err
+			return GatewayImageResponse{}, GatewayAttempt{}, err
 		}
+		attempt := gatewayAttemptFromCall(call, selection, standard, 0)
 		return GatewayImageResponse{
 			ProviderCallID: call.ID,
 			ModelID:        selection.Model.ID,
 			Status:         "blocked",
 			Usage:          GatewayUsage{EstimatedCost: "0.00000000", Currency: usage.Currency},
 			Error:          standard,
-		}, nil
+			Attempts:       []GatewayAttempt{attempt},
+		}, attempt, nil
 	}
 	providerCallID := ""
 	defer func() {
@@ -150,7 +196,7 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 
 	client := newOpenAICompatibleClient(timeout)
 	started := time.Now()
-	result, runErr := client.imageGeneration(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, input)
+	result, runErr := client.imageGeneration(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input)
 	latencyMS := int(time.Since(started).Milliseconds())
 	if result.LatencyMS > latencyMS {
 		latencyMS = result.LatencyMS
@@ -197,6 +243,7 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	if len(normalizedOutput) == 0 {
 		normalizedOutput = json.RawMessage(`null`)
 	}
+	normalizedOutput = withRoutingNormalizedOutput(normalizedOutput, selection, attemptIndex, maxAttempts, selectedBy)
 
 	call, err := s.recordGatewayImageCall(ctx, selection, req, callID, RecordCallRequest{
 		ID:                    callID,
@@ -229,7 +276,7 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 		NormalizedOutput:      normalizedOutput,
 	}, usage, stored, imageInput, result)
 	if err != nil {
-		return GatewayImageResponse{}, err
+		return GatewayImageResponse{}, GatewayAttempt{}, err
 	}
 	providerCallID = call.ID
 	if runErr != nil {
@@ -238,6 +285,7 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 		s.recordGatewayGuardSuccess(ctx, guardReq)
 	}
 
+	attempt := gatewayAttemptFromCall(call, selection, standardError, latencyMS)
 	return GatewayImageResponse{
 		ProviderCallID: call.ID,
 		ModelID:        selection.Model.ID,
@@ -246,7 +294,8 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 		Usage:          usage,
 		Error:          standardError,
 		LatencyMS:      latencyMS,
-	}, nil
+		Attempts:       []GatewayAttempt{attempt},
+	}, attempt, nil
 }
 
 func (s *Service) selectGatewayImageModel(ctx context.Context, req GatewayImageRequest) (gatewayModelSelection, error) {
@@ -272,37 +321,16 @@ func (s *Service) selectGatewayImageModel(ctx context.Context, req GatewayImageR
 	if profileKey == "" {
 		return gatewayModelSelection{}, fmt.Errorf("%w: modelProfileKey or providerModelId is required", ErrValidation)
 	}
-	var profileID, bindingID, modelID string
-	err := s.db.QueryRow(ctx, `
-		SELECT p.id, b.id, m.id
-		FROM model_profiles p
-		JOIN model_profile_bindings b ON b.model_profile_id = p.id
-		JOIN provider_models m ON m.id = b.provider_model_id
-		JOIN provider_accounts a ON a.id = m.provider_account_id
-		WHERE p.organization_id = $1
-		  AND p.profile_key = $2
-		  AND b.enabled = true
-		  AND m.status = 'active'
-		  AND a.status = 'active'
-		  AND m.modality IN ('image', 'multimodal')
-		ORDER BY b.priority ASC, b.weight DESC, b.created_at ASC
-		LIMIT 1
-	`, req.OrganizationID, profileKey).Scan(&profileID, &bindingID, &modelID)
-	if err != nil {
-		if errorsIsNoRows(err) {
-			return gatewayModelSelection{}, fmt.Errorf("%w: no active image provider model is bound to modelProfileKey", ErrValidation)
-		}
-		return gatewayModelSelection{}, err
-	}
-	model, err := s.GetModel(ctx, req.OrganizationID, modelID)
+	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
+		OrganizationID:  req.OrganizationID,
+		ModelProfileKey: profileKey,
+		TaskType:        TaskTypeImageGenerate,
+		Modality:        "image",
+	})
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	account, err := s.GetAccount(ctx, req.OrganizationID, model.ProviderAccountID)
-	if err != nil {
-		return gatewayModelSelection{}, err
-	}
-	return s.completeGatewaySelection(ctx, req.OrganizationID, account, model, profileID, bindingID, profileKey)
+	return s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidates[0])
 }
 
 func parseGatewayImageInput(input json.RawMessage) (gatewayImageInput, error) {
@@ -393,7 +421,7 @@ func (s *Service) recordGatewayImageCall(ctx context.Context, selection gatewayM
 	if err != nil {
 		return CallLog{}, err
 	}
-	if callReq.Status != "blocked" {
+	if callReq.Status != "blocked" && stored != nil {
 		if err := insertImageCostRecord(ctx, tx, call.ID, selection, req, usage, imageInput); err != nil {
 			return CallLog{}, err
 		}

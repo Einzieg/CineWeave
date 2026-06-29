@@ -29,3 +29,14 @@ Provider Guard runs inside Provider Gateway before text, image, video create-tas
 - Daily and monthly budgets are counted from `cost_records`.
 - `provider_circuit_states` opens after configured failures, transitions to `half_open` after cooldown, and closes on a successful half-open call.
 - Guard-blocked calls are persisted to `provider_call_logs` with `status=blocked` and a normalized error such as `PROVIDER_CONCURRENCY_LIMITED`, `PROVIDER_RATE_LIMITED`, `PROVIDER_DAILY_QUOTA_EXCEEDED`, `PROVIDER_MONTHLY_BUDGET_EXCEEDED`, or `PROVIDER_CIRCUIT_OPEN`. Blocked calls never write `cost_records`.
+
+## Model Profile Routing
+
+Routing and fallback are owned by Provider Gateway. API Server, Workers, and Activities pass either `providerModelId` for an explicit one-model call or `modelProfileKey` for profile routing.
+
+- Supported profile strategies are `priority`, `priority_with_fallback`, `weighted`, `cost_optimized`, and `latency_optimized`.
+- `fallback_strategy` controls `enabled`, `maxAttempts`, `fallbackOn`, and `stopOn`. Empty strategy defaults to three attempts and fallback for guard/rate/timeout/internal failures.
+- `text.generate`, `text.stream`, `image.generate`, and `video.create_task` can route across profile candidates. `video.poll_task` and `video.cancel_task` are pinned to the `provider_async_tasks` model/account.
+- Every attempt writes `provider_call_logs`. Failed image/video-create candidates write logs only; artifacts, media files, async tasks, and cost records are created by the successful candidate.
+- Stream fallback is allowed only before the first delta is sent. Once content has been emitted, later stream errors are returned directly.
+- Gateway responses include `attempts` with provider call, model, account, binding, status, error, retryable flag, and latency.

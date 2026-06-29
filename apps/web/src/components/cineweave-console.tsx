@@ -219,6 +219,7 @@ type ModelProfile = {
   name: string;
   purpose: string;
   routingStrategy: string;
+  fallbackStrategy?: unknown;
   bindings: Array<{
     id: string;
     providerModelId: string;
@@ -226,6 +227,18 @@ type ModelProfile = {
     weight: number;
     enabled: boolean;
   }>;
+};
+
+type GatewayAttempt = {
+  providerCallId?: string;
+  providerModelId?: string;
+  providerAccountId?: string;
+  modelProfileBindingId?: string;
+  status: string;
+  errorCode?: string;
+  errorMessage?: string;
+  retryable: boolean;
+  latencyMs?: number;
 };
 
 type AccessRole = {
@@ -261,6 +274,7 @@ type ProviderTestResult = {
   errorCode?: string;
   errorMessage?: string;
   normalizedOutput: unknown;
+  attempts?: GatewayAttempt[];
 };
 
 type ProviderCallLog = {
@@ -338,6 +352,14 @@ const workflowTypes: Array<{ value: WorkflowType; label: string }> = [
   { value: "script_to_storyboard", label: "Script to Storyboard" },
 ];
 
+const routingStrategyOptions = [
+  { value: "priority", label: "Priority" },
+  { value: "priority_with_fallback", label: "Priority Fallback" },
+  { value: "weighted", label: "Weighted" },
+  { value: "cost_optimized", label: "Cost Optimized" },
+  { value: "latency_optimized", label: "Latency Optimized" },
+];
+
 export function CineWeaveConsole() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
@@ -385,6 +407,7 @@ export function CineWeaveConsole() {
   const [videoTestAspectRatio, setVideoTestAspectRatio] = useState(defaultVideoTestAspectRatio);
   const [videoTestResolution, setVideoTestResolution] = useState(defaultVideoTestResolution);
   const [providerTestResult, setProviderTestResult] = useState<ProviderTestResult | null>(null);
+  const [profileRoutingStrategy, setProfileRoutingStrategy] = useState("priority_with_fallback");
   const [manifestText, setManifestText] = useState(defaultManifestText);
   const [manifestValidation, setManifestValidation] = useState<ManifestValidationResult | null>(null);
   const videoProviderAsyncTaskId = useMemo(() => {
@@ -902,6 +925,36 @@ export function CineWeaveConsole() {
       setProviderBusy(null);
     }
   }, [refreshProviderCenter, selectedModelId, session]);
+
+  const updateScriptProfileRouting = useCallback(async () => {
+    if (!session) {
+      setProviderError("Initialize a demo session before updating routing.");
+      return;
+    }
+    const profile = modelProfiles.find((item) => item.profileKey === "script_agent_default" || item.purpose === "script");
+    if (!profile) {
+      setProviderError("Bind a script profile before updating routing.");
+      return;
+    }
+    setProviderBusy("profile");
+    setProviderError(null);
+    try {
+      await apiRequest<ModelProfile>(`/api/model-profiles/${profile.id}`, {
+        method: "PATCH",
+        token: session.accessToken,
+        organizationId: session.organizationId,
+        body: {
+          routingStrategy: profileRoutingStrategy,
+        },
+      });
+      await refreshProviderCenter(session);
+      setProviderNotice("Model profile routing updated.");
+    } catch (cause) {
+      setProviderError(errorMessage(cause));
+    } finally {
+      setProviderBusy(null);
+    }
+  }, [modelProfiles, profileRoutingStrategy, refreshProviderCenter, session]);
 
   const createLimitPolicy = useCallback(async () => {
     if (!session || !selectedAccountId) {
@@ -1490,6 +1543,42 @@ export function CineWeaveConsole() {
                       Bind Profile
                     </button>
                   </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
+                    <select
+                      value={profileRoutingStrategy}
+                      onChange={(event) => setProfileRoutingStrategy(event.target.value)}
+                      className="h-10 rounded border border-[var(--line)] bg-white px-3 text-sm text-[var(--foreground)] outline-none focus:border-[var(--foreground)]"
+                    >
+                      {routingStrategyOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={updateScriptProfileRouting}
+                      disabled={providerBusy !== null || !scriptProfile}
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded border border-[var(--line)] bg-white px-3 text-sm font-medium disabled:opacity-60"
+                    >
+                      <RefreshCw size={15} />
+                      Update Routing
+                    </button>
+                  </div>
+                  <div className="mt-3 divide-y divide-[var(--line)] rounded border border-[var(--line)]">
+                    {modelProfiles.length > 0 ? (
+                      modelProfiles.slice(0, 5).map((profile) => (
+                        <div key={profile.id} className="grid gap-1 px-3 py-2 md:grid-cols-[1fr_auto]">
+                          <p className="truncate text-sm font-medium">{profile.profileKey}</p>
+                          <p className="text-xs text-[var(--muted)]">{profile.routingStrategy}</p>
+                          <p className="truncate text-xs text-[var(--muted)]">{profile.purpose}</p>
+                          <p className="text-xs text-[var(--muted)]">{profile.bindings.length} bindings</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="px-3 py-5 text-sm text-[var(--muted)]">No model profiles.</p>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1570,14 +1659,27 @@ export function CineWeaveConsole() {
                       </button>
                     </div>
                     {providerTestResult && (
-                      <div className="mt-3 grid gap-2 md:grid-cols-3">
-                        <InfoRow label="Status" value={providerTestResult.status} />
-                        <InfoRow label="Latency" value={`${providerTestResult.latencyMs} ms`} />
-                        <InfoRow label="Call Log" value={providerTestResult.providerCallId} />
-                        <InfoRow label="Async Task" value={normalizedOutputString(providerTestResult.normalizedOutput, "providerAsyncTaskId")} />
-                        <InfoRow label="Artifact" value={normalizedOutputString(providerTestResult.normalizedOutput, "artifactId")} />
-                        <InfoRow label="Media" value={normalizedOutputString(providerTestResult.normalizedOutput, "mediaFileId")} />
-                        <InfoRow label="Storage" value={normalizedOutputString(providerTestResult.normalizedOutput, "storageKey")} />
+                      <div className="mt-3 grid gap-3">
+                        <div className="grid gap-2 md:grid-cols-3">
+                          <InfoRow label="Status" value={providerTestResult.status} />
+                          <InfoRow label="Latency" value={`${providerTestResult.latencyMs} ms`} />
+                          <InfoRow label="Call Log" value={providerTestResult.providerCallId} />
+                          <InfoRow label="Async Task" value={normalizedOutputString(providerTestResult.normalizedOutput, "providerAsyncTaskId")} />
+                          <InfoRow label="Artifact" value={normalizedOutputString(providerTestResult.normalizedOutput, "artifactId")} />
+                          <InfoRow label="Media" value={normalizedOutputString(providerTestResult.normalizedOutput, "mediaFileId")} />
+                          <InfoRow label="Storage" value={normalizedOutputString(providerTestResult.normalizedOutput, "storageKey")} />
+                        </div>
+                        {(providerTestResult.attempts?.length ?? 0) > 0 && (
+                          <div className="divide-y divide-[var(--line)] rounded border border-[var(--line)]">
+                            {providerTestResult.attempts?.map((attempt, index) => (
+                              <div key={`${attempt.providerCallId ?? index}`} className="grid gap-1 px-3 py-2 md:grid-cols-[auto_1fr_auto]">
+                                <p className="text-xs font-medium">Attempt {index + 1}</p>
+                                <p className="truncate text-xs text-[var(--muted)]">{attemptSummary(attempt)}</p>
+                                <StatusPill status={attempt.status} />
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1922,8 +2024,8 @@ async function ensureScriptProfileBinding(activeSession: SessionState, providerM
           profileKey: "script_agent_default",
           name: "Script Agent Default",
           purpose: "script",
-          routingStrategy: "priority",
-          fallbackStrategy: {},
+          routingStrategy: "priority_with_fallback",
+          fallbackStrategy: { enabled: true, maxAttempts: 3 },
         },
       });
     } catch {
@@ -2074,6 +2176,15 @@ function normalizedOutputString(output: unknown, key: string) {
   }
   const value = (output as Record<string, unknown>)[key];
   return typeof value === "string" && value ? value : "-";
+}
+
+function attemptSummary(attempt: GatewayAttempt) {
+  const model = attempt.providerModelId ? `model ${attempt.providerModelId}` : "model -";
+  if (attempt.status === "succeeded") {
+    return `succeeded on ${model}`;
+  }
+  const code = attempt.errorCode ? `: ${attempt.errorCode}` : "";
+  return `${attempt.status}${code} on ${model}`;
 }
 
 function nodeLabel(nodeKey: string) {

@@ -117,10 +117,76 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	}
 	req.Input = input
 
-	selection, err := s.selectGatewayTextModel(ctx, req)
+	taskType := TaskTypeTextGenerate
+	executionMode := "sync"
+	if stream {
+		taskType = TaskTypeTextStream
+		executionMode = "stream"
+	}
+
+	if strings.TrimSpace(req.ProviderModelID) != "" {
+		selection, err := s.selectGatewayTextModel(ctx, req)
+		if err != nil {
+			return GatewayTextResponse{}, err
+		}
+		response, _, err := s.executeGatewayTextAttempt(ctx, req, selection, stream, onDelta, taskType, executionMode, 1, 1, string(RoutingPriority))
+		return response, err
+	}
+
+	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
+		OrganizationID:  req.OrganizationID,
+		ModelProfileKey: req.ModelProfileKey,
+		TaskType:        taskType,
+		Modality:        "text",
+		MaxOutputTokens: firstPositive(intFieldFromJSON(req.Input, "maxOutputTokens"), intFieldFromJSON(req.Input, "max_tokens")),
+	})
 	if err != nil {
 		return GatewayTextResponse{}, err
 	}
+	strategy := candidates[0].FallbackStrategy
+	maxAttempts := fallbackMaxAttempts(strategy, len(candidates))
+	attempts := make([]GatewayAttempt, 0, maxAttempts)
+	var final GatewayTextResponse
+	for i := 0; i < maxAttempts; i++ {
+		candidate := candidates[i]
+		selection, err := s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidate)
+		if err != nil {
+			return GatewayTextResponse{}, err
+		}
+		sentDelta := false
+		attemptDelta := onDelta
+		if stream {
+			attemptDelta = func(delta GatewayTextDelta) error {
+				if strings.TrimSpace(delta.Text) != "" {
+					sentDelta = true
+				}
+				if onDelta == nil {
+					return nil
+				}
+				return onDelta(delta)
+			}
+		}
+		response, attempt, err := s.executeGatewayTextAttempt(ctx, req, selection, stream, attemptDelta, taskType, executionMode, i+1, maxAttempts, candidate.RoutingStrategy)
+		if err != nil {
+			return GatewayTextResponse{}, err
+		}
+		attempts = append(attempts, attempt)
+		response.Attempts = append([]GatewayAttempt(nil), attempts...)
+		final = response
+		if response.Status == "succeeded" {
+			return response, nil
+		}
+		if stream && sentDelta {
+			return response, nil
+		}
+		if i+1 >= maxAttempts || !shouldFallback(gatewayErrorCode(response.Error), strategy) {
+			return response, nil
+		}
+	}
+	return final, nil
+}
+
+func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayTextRequest, selection gatewayModelSelection, stream bool, onDelta func(GatewayTextDelta) error, taskType, executionMode string, attemptIndex, maxAttempts int, selectedBy string) (GatewayTextResponse, GatewayAttempt, error) {
 	cfg := parseOpenAICompatibleConfig(selection.Account.Config)
 	if req.Options.TimeoutMS > 0 {
 		cfg.TimeoutMS = req.Options.TimeoutMS
@@ -129,12 +195,6 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	taskType := TaskTypeTextGenerate
-	executionMode := "sync"
-	if stream {
-		taskType = TaskTypeTextStream
-		executionMode = "stream"
-	}
 	guardReq := s.gatewayGuardRequest(gatewayGuardRequestInput{
 		OrganizationID: req.OrganizationID,
 		Selection:      selection,
@@ -147,7 +207,7 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	if guardErr != nil {
 		standard, ok := blockedGatewayStandard(guardErr)
 		if !ok {
-			return GatewayTextResponse{}, guardErr
+			return GatewayTextResponse{}, GatewayAttempt{}, guardErr
 		}
 		call, err := s.recordGatewayTextCall(ctx, selection, req, RecordCallRequest{
 			OrganizationID:        req.OrganizationID,
@@ -170,11 +230,12 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 			ErrorMessage:          standard.Message,
 			RequestSnapshot:       req.Input,
 			ResponseSnapshot:      blockedResponseSnapshot(standard),
-			NormalizedOutput:      blockedNormalizedOutput(standard),
+			NormalizedOutput:      withRoutingNormalizedOutput(blockedNormalizedOutput(standard), selection, attemptIndex, maxAttempts, selectedBy),
 		}, GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"})
 		if err != nil {
-			return GatewayTextResponse{}, err
+			return GatewayTextResponse{}, GatewayAttempt{}, err
 		}
+		attempt := gatewayAttemptFromCall(call, selection, standard, 0)
 		return GatewayTextResponse{
 			ProviderCallID: call.ID,
 			ModelID:        selection.Model.ID,
@@ -182,7 +243,8 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 			Output:         GatewayTextOutput{Raw: blockedResponseSnapshot(standard)},
 			Usage:          GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
 			Error:          standard,
-		}, nil
+			Attempts:       []GatewayAttempt{attempt},
+		}, attempt, nil
 	}
 	providerCallID := ""
 	defer func() {
@@ -191,15 +253,16 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 
 	client := newOpenAICompatibleClient(timeout)
 	var result chatCompletionResult
+	var err error
 	if stream {
-		result, err = client.streamChatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, input, func(text string) error {
+		result, err = client.streamChatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input, func(text string) error {
 			if onDelta == nil {
 				return nil
 			}
 			return onDelta(GatewayTextDelta{Text: text})
 		})
 	} else {
-		result, err = client.chatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, input)
+		result, err = client.chatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input)
 	}
 
 	status := "succeeded"
@@ -225,6 +288,7 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	if len(normalizedOutput) == 0 {
 		normalizedOutput = mustJSON(map[string]any{"text": result.Text})
 	}
+	normalizedOutput = withRoutingNormalizedOutput(normalizedOutput, selection, attemptIndex, maxAttempts, selectedBy)
 
 	runErr := err
 	usage := estimateTextCost(result.Usage, selection.Model.Capabilities)
@@ -260,7 +324,7 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		NormalizedOutput:      normalizedOutput,
 	}, usage)
 	if err != nil {
-		return GatewayTextResponse{}, err
+		return GatewayTextResponse{}, GatewayAttempt{}, err
 	}
 	providerCallID = call.ID
 	if runErr != nil {
@@ -269,6 +333,7 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		s.recordGatewayGuardSuccess(ctx, guardReq)
 	}
 
+	attempt := gatewayAttemptFromCall(call, selection, standardError, result.LatencyMS)
 	return GatewayTextResponse{
 		ProviderCallID: call.ID,
 		ModelID:        selection.Model.ID,
@@ -280,7 +345,8 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		Usage:     usage,
 		Error:     standardError,
 		LatencyMS: result.LatencyMS,
-	}, nil
+		Attempts:  []GatewayAttempt{attempt},
+	}, attempt, nil
 }
 
 func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextRequest) (gatewayModelSelection, error) {
@@ -303,37 +369,28 @@ func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextReq
 	if profileKey == "" {
 		return gatewayModelSelection{}, fmt.Errorf("%w: modelProfileKey or providerModelId is required", ErrValidation)
 	}
-	var profileID, bindingID, modelID string
-	err := s.db.QueryRow(ctx, `
-		SELECT p.id, b.id, m.id
-		FROM model_profiles p
-		JOIN model_profile_bindings b ON b.model_profile_id = p.id
-		JOIN provider_models m ON m.id = b.provider_model_id
-		JOIN provider_accounts a ON a.id = m.provider_account_id
-		WHERE p.organization_id = $1
-		  AND p.profile_key = $2
-		  AND b.enabled = true
-		  AND m.status = 'active'
-		  AND a.status = 'active'
-		  AND m.modality IN ('text', 'multimodal')
-		ORDER BY b.priority ASC, b.weight DESC, b.created_at ASC
-		LIMIT 1
-	`, req.OrganizationID, profileKey).Scan(&profileID, &bindingID, &modelID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return gatewayModelSelection{}, fmt.Errorf("%w: no active provider model is bound to modelProfileKey", ErrValidation)
-		}
-		return gatewayModelSelection{}, err
-	}
-	model, err := s.GetModel(ctx, req.OrganizationID, modelID)
+	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
+		OrganizationID:  req.OrganizationID,
+		ModelProfileKey: profileKey,
+		TaskType:        TaskTypeTextGenerate,
+		Modality:        "text",
+	})
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	account, err := s.GetAccount(ctx, req.OrganizationID, model.ProviderAccountID)
+	return s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidates[0])
+}
+
+func (s *Service) completeGatewaySelectionFromCandidate(ctx context.Context, organizationID string, candidate RoutingCandidate) (gatewayModelSelection, error) {
+	model, err := s.GetModel(ctx, organizationID, candidate.ProviderModelID)
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	return s.completeGatewaySelection(ctx, req.OrganizationID, account, model, profileID, bindingID, profileKey)
+	account, err := s.GetAccount(ctx, organizationID, model.ProviderAccountID)
+	if err != nil {
+		return gatewayModelSelection{}, err
+	}
+	return s.completeGatewaySelection(ctx, organizationID, account, model, candidate.ModelProfileID, candidate.ModelProfileBindingID, candidate.ModelProfileKey)
 }
 
 func (s *Service) completeGatewaySelection(ctx context.Context, organizationID string, account Account, model Model, profileID, bindingID, profileKey string) (gatewayModelSelection, error) {

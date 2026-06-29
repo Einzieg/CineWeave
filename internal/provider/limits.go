@@ -231,10 +231,10 @@ func (g *ProviderGuard) checkCircuitTx(ctx context.Context, tx pgx.Tx, req Guard
 }
 
 func (g *ProviderGuard) checkConcurrencyTx(ctx context.Context, tx pgx.Tx, req GuardRequest, policy effectiveLimitPolicy) error {
-	limit := intValue(policy.MaxConcurrency)
-	if limit <= 0 {
+	if policy.MaxConcurrency == nil {
 		return nil
 	}
+	limit := intValue(policy.MaxConcurrency)
 	var count int
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*)

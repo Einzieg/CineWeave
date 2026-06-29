@@ -1638,7 +1638,7 @@ CREATE TABLE model_profiles (
   profile_key TEXT NOT NULL,
   name TEXT NOT NULL,
   purpose TEXT NOT NULL,
-  routing_strategy TEXT NOT NULL DEFAULT 'priority',
+  routing_strategy TEXT NOT NULL DEFAULT 'priority_with_fallback',
   fallback_strategy JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -3366,6 +3366,17 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - Guard denials are normalized as `PROVIDER_RATE_LIMITED`, `PROVIDER_CONCURRENCY_LIMITED`, `PROVIDER_DAILY_QUOTA_EXCEEDED`, `PROVIDER_MONTHLY_BUDGET_EXCEEDED`, or `PROVIDER_CIRCUIT_OPEN`.
 - Blocked calls are persisted to `provider_call_logs` with `status=blocked`; they do not create `cost_records`.
 - Provider Center exposes a minimal policy list/create form and circuit state list/reset action guarded by `provider.read` and `provider.manage`.
+
+## Implementation Note: Model Profile Routing and Fallback
+
+- Provider Gateway now owns model profile routing for `text.generate`, `text.stream`, `image.generate`, and `video.create_task`.
+- Supported `model_profiles.routing_strategy` values are `priority`, `priority_with_fallback`, `weighted`, `cost_optimized`, and `latency_optimized`; the schema default is `priority_with_fallback`.
+- `fallback_strategy` supports `enabled`, `maxAttempts`, `fallbackOn`, and `stopOn`. Empty strategy defaults to three attempts with fallback for guard/rate/timeout/internal failures and stop for auth, model-not-found, invalid request, unsupported capability, and content rejection.
+- A request with `providerModelId` bypasses profile routing and executes one model. A request with `modelProfileKey` resolves ordered candidates and tries the next candidate when the current attempt is guard-blocked or fails with a fallback-enabled upstream error.
+- Every attempt writes `provider_call_logs` and Gateway responses include `attempts`. Failed image/video-create attempts do not create artifacts, media files, async tasks, or cost records.
+- Stream fallback only occurs before the first delta is sent. After any delta is emitted, subsequent stream errors are returned directly to avoid mixed-model output.
+- `video.poll_task` and `video.cancel_task` remain pinned to the `provider_async_tasks` provider account/model created by `video.create_task`.
+- Provider Center displays routing strategy, lets operators update the script profile routing strategy, and shows provider test attempts.
 Task 012: Implement provider call logging.
 Task 013: Implement model profile and binding.
 Task 014: Implement Manifest JSON Schema.
