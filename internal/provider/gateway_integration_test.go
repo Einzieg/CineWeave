@@ -154,6 +154,30 @@ func testProviderGatewayHTTP(t *testing.T, service *Service, token string) http.
 			}
 			resp, err := service.GenerateImage(r.Context(), req)
 			writeGatewayIntegrationEnvelope(t, w, resp, err)
+		case "/internal/provider/video/create-task":
+			var req GatewayVideoCreateTaskRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
+			resp, err := service.CreateVideoTask(r.Context(), req)
+			writeGatewayIntegrationEnvelope(t, w, resp, err)
+		case "/internal/provider/video/poll-task":
+			var req GatewayVideoPollTaskRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
+			resp, err := service.PollVideoTask(r.Context(), req)
+			writeGatewayIntegrationEnvelope(t, w, resp, err)
+		case "/internal/provider/video/cancel-task":
+			var req GatewayVideoCancelTaskRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
+			resp, err := service.CancelVideoTask(r.Context(), req)
+			writeGatewayIntegrationEnvelope(t, w, resp, err)
 		default:
 			http.NotFound(w, r)
 		}

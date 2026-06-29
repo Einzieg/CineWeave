@@ -50,7 +50,9 @@ func main() {
 	mux.HandleFunc("/internal/provider/text/stream", handler.withServiceAuth(handler.streamText))
 	mux.HandleFunc("/internal/provider/manifests/test-run", handler.withServiceAuth(handler.runManifestTest))
 	mux.HandleFunc("/internal/provider/image/generate", handler.withServiceAuth(handler.generateImage))
-	mux.HandleFunc("/internal/provider/video/create-task", httpx.NotImplemented("provider video task creation"))
+	mux.HandleFunc("/internal/provider/video/create-task", handler.withServiceAuth(handler.createVideoTask))
+	mux.HandleFunc("/internal/provider/video/poll-task", handler.withServiceAuth(handler.pollVideoTask))
+	mux.HandleFunc("/internal/provider/video/cancel-task", handler.withServiceAuth(handler.cancelVideoTask))
 	mux.HandleFunc("/internal/provider/audio/tts", httpx.NotImplemented("provider audio tts"))
 
 	if err := service.Serve(ctx, cfg, httpx.WithRequestID(mux), logger); err != nil {
@@ -117,6 +119,57 @@ func (h gatewayHandler) generateImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := h.providers.GenerateImage(r.Context(), req)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (h gatewayHandler) createVideoTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+		return
+	}
+	var req provider.GatewayVideoCreateTaskRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.CreateVideoTask(r.Context(), req)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (h gatewayHandler) pollVideoTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+		return
+	}
+	var req provider.GatewayVideoPollTaskRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.PollVideoTask(r.Context(), req)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (h gatewayHandler) cancelVideoTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+		return
+	}
+	var req provider.GatewayVideoCancelTaskRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.CancelVideoTask(r.Context(), req)
 	if err != nil {
 		writeGatewayError(w, r, err)
 		return

@@ -100,7 +100,14 @@ type manifestRunResult struct {
 }
 
 var manifestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-_.]*$`)
-var templatePattern = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}`)
+var templatePattern = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.\-\[\]'"]+)\s*\}\}`)
+
+type manifestCallContext struct {
+	References []map[string]any
+	Model      map[string]any
+	Account    map[string]any
+	Task       map[string]any
+}
 
 func ParseManifest(raw json.RawMessage, text string) (ProviderManifest, json.RawMessage, error) {
 	var jsonBytes []byte
@@ -287,6 +294,10 @@ func runAsyncManifestEndpoint(ctx context.Context, manifest ProviderManifest, ac
 }
 
 func callManifestEndpoint(ctx context.Context, manifest ProviderManifest, account Account, credential map[string]any, endpointKey string, endpoint ManifestEndpoint, input json.RawMessage) (manifestRunResult, error) {
+	return callManifestEndpointWithContext(ctx, manifest, account, credential, endpointKey, endpoint, input, manifestCallContext{})
+}
+
+func callManifestEndpointWithContext(ctx context.Context, manifest ProviderManifest, account Account, credential map[string]any, endpointKey string, endpoint ManifestEndpoint, input json.RawMessage, extra manifestCallContext) (manifestRunResult, error) {
 	baseURL := strings.TrimRight(manifest.BaseURL, "/")
 	if account.BaseURL != nil && strings.TrimSpace(*account.BaseURL) != "" {
 		baseURL = strings.TrimRight(*account.BaseURL, "/")
@@ -297,8 +308,12 @@ func callManifestEndpoint(ctx context.Context, manifest ProviderManifest, accoun
 	}
 	contextValue := map[string]any{
 		"input":      inputValue,
+		"references": extra.References,
 		"credential": credential,
 		"endpoint":   map[string]any{"key": endpointKey},
+		"model":      extra.Model,
+		"account":    extra.Account,
+		"task":       extra.Task,
 	}
 	path, err := renderTemplateString(endpoint.PathTemplate, contextValue)
 	if err != nil {
@@ -505,7 +520,10 @@ func renderTemplateString(value string, contextValue map[string]any) (string, er
 }
 
 func lookupTemplatePath(contextValue map[string]any, path string) (any, error) {
-	parts := strings.Split(path, ".")
+	parts, err := parseTemplatePath(path)
+	if err != nil {
+		return nil, err
+	}
 	var current any = contextValue
 	for _, part := range parts {
 		if part == "" {
@@ -518,11 +536,59 @@ func lookupTemplatePath(contextValue map[string]any, path string) (any, error) {
 				return nil, fmt.Errorf("%w: template path %s was not found", ErrValidation, path)
 			}
 			current = value
+		case []map[string]any:
+			index, err := strconv.Atoi(part)
+			if err != nil || index < 0 || index >= len(typed) {
+				return nil, fmt.Errorf("%w: template path %s index is invalid", ErrValidation, path)
+			}
+			current = typed[index]
+		case []any:
+			index, err := strconv.Atoi(part)
+			if err != nil || index < 0 || index >= len(typed) {
+				return nil, fmt.Errorf("%w: template path %s index is invalid", ErrValidation, path)
+			}
+			current = typed[index]
 		default:
 			return nil, fmt.Errorf("%w: template path %s is invalid", ErrValidation, path)
 		}
 	}
 	return current, nil
+}
+
+func parseTemplatePath(path string) ([]string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, fmt.Errorf("%w: template path is empty", ErrValidation)
+	}
+	tokens := make([]string, 0, 4)
+	for i := 0; i < len(path); {
+		switch path[i] {
+		case '.':
+			i++
+		case '[':
+			end := strings.IndexByte(path[i:], ']')
+			if end < 0 {
+				return nil, fmt.Errorf("%w: template path %s bracket is not closed", ErrValidation, path)
+			}
+			token := strings.Trim(path[i+1:i+end], ` "'`)
+			if token == "" {
+				return nil, fmt.Errorf("%w: template path %s bracket is empty", ErrValidation, path)
+			}
+			tokens = append(tokens, token)
+			i += end + 1
+		default:
+			start := i
+			for i < len(path) && path[i] != '.' && path[i] != '[' {
+				i++
+			}
+			token := strings.TrimSpace(path[start:i])
+			if token == "" {
+				return nil, fmt.Errorf("%w: template path %s segment is empty", ErrValidation, path)
+			}
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens, nil
 }
 
 func mapResponse(body []byte, mappingRaw json.RawMessage) (json.RawMessage, error) {
@@ -541,6 +607,10 @@ func mapResponse(body []byte, mappingRaw json.RawMessage) (json.RawMessage, erro
 	for key, path := range mapping {
 		value, err := evalJSONPath(responseValue, path)
 		if err != nil {
+			if strings.Contains(err.Error(), "was not found") {
+				out[key] = nil
+				continue
+			}
 			return nil, err
 		}
 		out[key] = value

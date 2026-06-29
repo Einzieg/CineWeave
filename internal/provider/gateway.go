@@ -17,6 +17,7 @@ type gatewayModelSelection struct {
 	Account               Account
 	Model                 Model
 	CredentialID          string
+	Credential            map[string]any
 	APIKey                string
 	ModelProfileID        string
 	ModelProfileBindingID string
@@ -289,6 +290,7 @@ func (s *Service) completeGatewaySelection(ctx context.Context, organizationID s
 		Account:               account,
 		Model:                 model,
 		CredentialID:          credentialID,
+		Credential:            credential,
 		APIKey:                apiKey,
 		ModelProfileID:        profileID,
 		ModelProfileBindingID: bindingID,

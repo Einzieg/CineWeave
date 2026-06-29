@@ -20,6 +20,9 @@ func TestProviderGatewayRequiredByDefault(t *testing.T) {
 	if _, err := service.RecordProviderModelTest(context.Background(), "org", "user", "model", TestProviderModelRequest{TestType: "image_generation_test"}); !errors.Is(err, ErrProviderGatewayRequired) {
 		t.Fatalf("RecordProviderModelTest image error = %v, want ErrProviderGatewayRequired", err)
 	}
+	if _, err := service.RecordProviderModelTest(context.Background(), "org", "user", "model", TestProviderModelRequest{TestType: "video_generation_test"}); !errors.Is(err, ErrProviderGatewayRequired) {
+		t.Fatalf("RecordProviderModelTest video error = %v, want ErrProviderGatewayRequired", err)
+	}
 	if _, err := service.RunManifestTest(context.Background(), "org", "user", ManifestTestRunRequest{}); !errors.Is(err, ErrProviderGatewayRequired) {
 		t.Fatalf("RunManifestTest error = %v, want ErrProviderGatewayRequired", err)
 	}

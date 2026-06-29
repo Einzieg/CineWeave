@@ -363,6 +363,102 @@ type GatewayImageResponse struct {
 	LatencyMS      int                `json:"latencyMs,omitempty"`
 }
 
+type GatewayVideoOptions struct {
+	TimeoutMS      int    `json:"timeoutMs"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	MaxPolls       int    `json:"maxPolls,omitempty"`
+}
+
+type GatewayVideoReference struct {
+	Type        string          `json:"type"`
+	AssetID     string          `json:"assetId,omitempty"`
+	ArtifactID  string          `json:"artifactId,omitempty"`
+	MediaFileID string          `json:"mediaFileId,omitempty"`
+	URL         string          `json:"url,omitempty"`
+	StorageKey  string          `json:"storageKey,omitempty"`
+	MimeType    string          `json:"mimeType,omitempty"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
+}
+
+type GatewayVideoCreateTaskRequest struct {
+	OrganizationID  string                  `json:"organizationId"`
+	WorkspaceID     string                  `json:"workspaceId,omitempty"`
+	ProjectID       string                  `json:"projectId,omitempty"`
+	WorkflowRunID   string                  `json:"workflowRunId,omitempty"`
+	NodeRunID       string                  `json:"nodeRunId,omitempty"`
+	ModelProfileKey string                  `json:"modelProfileKey,omitempty"`
+	ProviderModelID string                  `json:"providerModelId,omitempty"`
+	PromptVersionID string                  `json:"promptVersionId,omitempty"`
+	PromptHash      string                  `json:"promptHash,omitempty"`
+	IdempotencyKey  string                  `json:"idempotencyKey,omitempty"`
+	Input           json.RawMessage         `json:"input"`
+	References      []GatewayVideoReference `json:"references,omitempty"`
+	Options         GatewayVideoOptions     `json:"options"`
+}
+
+type GatewayVideoCreateTaskResponse struct {
+	ProviderCallID      string         `json:"providerCallId"`
+	ProviderAsyncTaskID string         `json:"providerAsyncTaskId"`
+	ExternalTaskID      string         `json:"externalTaskId,omitempty"`
+	ModelID             string         `json:"modelId"`
+	Status              string         `json:"status"`
+	Error               *StandardError `json:"error,omitempty"`
+	LatencyMS           int            `json:"latencyMs,omitempty"`
+}
+
+type GatewayVideoPollTaskRequest struct {
+	OrganizationID      string              `json:"organizationId"`
+	ProviderAsyncTaskID string              `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID      string              `json:"externalTaskId,omitempty"`
+	ProviderModelID     string              `json:"providerModelId,omitempty"`
+	ProviderAccountID   string              `json:"providerAccountId,omitempty"`
+	ProjectID           string              `json:"projectId,omitempty"`
+	WorkflowRunID       string              `json:"workflowRunId,omitempty"`
+	NodeRunID           string              `json:"nodeRunId,omitempty"`
+	Options             GatewayVideoOptions `json:"options"`
+}
+
+type GatewayVideoOutput struct {
+	ArtifactID      string          `json:"artifactId,omitempty"`
+	MediaFileID     string          `json:"mediaFileId,omitempty"`
+	StorageKey      string          `json:"storageKey,omitempty"`
+	URL             string          `json:"url,omitempty"`
+	MimeType        string          `json:"mimeType,omitempty"`
+	ByteSize        *int64          `json:"byteSize,omitempty"`
+	DurationSeconds *float64        `json:"durationSeconds,omitempty"`
+	Width           *int            `json:"width,omitempty"`
+	Height          *int            `json:"height,omitempty"`
+	Raw             json.RawMessage `json:"raw,omitempty"`
+}
+
+type GatewayVideoPollTaskResponse struct {
+	ProviderCallID      string             `json:"providerCallId"`
+	ProviderAsyncTaskID string             `json:"providerAsyncTaskId"`
+	ExternalTaskID      string             `json:"externalTaskId,omitempty"`
+	ModelID             string             `json:"modelId,omitempty"`
+	Status              string             `json:"status"`
+	Output              GatewayVideoOutput `json:"output"`
+	Usage               GatewayUsage       `json:"usage"`
+	Error               *StandardError     `json:"error,omitempty"`
+	LatencyMS           int                `json:"latencyMs,omitempty"`
+}
+
+type GatewayVideoCancelTaskRequest struct {
+	OrganizationID      string `json:"organizationId"`
+	ProviderAsyncTaskID string `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID      string `json:"externalTaskId,omitempty"`
+	ProviderModelID     string `json:"providerModelId,omitempty"`
+	ProviderAccountID   string `json:"providerAccountId,omitempty"`
+}
+
+type GatewayVideoCancelTaskResponse struct {
+	ProviderCallID      string         `json:"providerCallId,omitempty"`
+	ProviderAsyncTaskID string         `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID      string         `json:"externalTaskId,omitempty"`
+	Status              string         `json:"status"`
+	Error               *StandardError `json:"error,omitempty"`
+}
+
 type GatewayTextDelta struct {
 	Text string `json:"text"`
 }

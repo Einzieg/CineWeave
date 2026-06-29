@@ -33,6 +33,9 @@ const defaultProviderApiKey = "sk-mock-phase3";
 const defaultTestPrompt = "Write one cinematic sentence for a sunrise train station.";
 const defaultImageTestPrompt = "A cinematic sunrise train station, high detail";
 const defaultImageTestSize = "1024x1024";
+const defaultVideoTestDuration = "5";
+const defaultVideoTestAspectRatio = "16:9";
+const defaultVideoTestResolution = "720p";
 const defaultCapabilityText = JSON.stringify(
   {
     taskTypes: ["text.generate", "text.stream"],
@@ -265,7 +268,7 @@ type RealtimeEvent = {
 
 type BusyState = "bootstrap" | "workflow" | null;
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting";
-type ProviderTestType = "text_generation_test" | "streaming_test" | "image_generation_test";
+type ProviderTestType = "text_generation_test" | "streaming_test" | "image_generation_test" | "video_generation_test";
 type WorkflowType = "text_to_storyboard" | "video_production" | "script_to_storyboard";
 
 const workflowTypes: Array<{ value: WorkflowType; label: string }> = [
@@ -302,6 +305,9 @@ export function CineWeaveConsole() {
   const [providerTestType, setProviderTestType] = useState<ProviderTestType>("text_generation_test");
   const [testPrompt, setTestPrompt] = useState(defaultTestPrompt);
   const [imageTestSize, setImageTestSize] = useState(defaultImageTestSize);
+  const [videoTestDuration, setVideoTestDuration] = useState(defaultVideoTestDuration);
+  const [videoTestAspectRatio, setVideoTestAspectRatio] = useState(defaultVideoTestAspectRatio);
+  const [videoTestResolution, setVideoTestResolution] = useState(defaultVideoTestResolution);
   const [providerTestResult, setProviderTestResult] = useState<ProviderTestResult | null>(null);
   const [manifestText, setManifestText] = useState(defaultManifestText);
   const [manifestValidation, setManifestValidation] = useState<ManifestValidationResult | null>(null);
@@ -656,7 +662,15 @@ export function CineWeaveConsole() {
       const input =
         providerTestType === "image_generation_test"
           ? { prompt: testPrompt || defaultImageTestPrompt, size: imageTestSize, quality: "standard", projectId: session.projectId }
-          : { prompt: testPrompt };
+          : providerTestType === "video_generation_test"
+            ? {
+                prompt: testPrompt || defaultImageTestPrompt,
+                duration: Number(videoTestDuration) || Number(defaultVideoTestDuration),
+                aspectRatio: videoTestAspectRatio || defaultVideoTestAspectRatio,
+                resolution: videoTestResolution || defaultVideoTestResolution,
+                projectId: session.projectId,
+              }
+            : { prompt: testPrompt };
       const result = await apiRequest<ProviderTestResult>(`/api/providers/models/${selectedModelId}/test`, {
         method: "POST",
         token: session.accessToken,
@@ -675,7 +689,18 @@ export function CineWeaveConsole() {
     } finally {
       setProviderBusy(null);
     }
-  }, [imageTestSize, loadArtifacts, providerTestType, refreshProviderCenter, selectedModelId, session, testPrompt]);
+  }, [
+    imageTestSize,
+    loadArtifacts,
+    providerTestType,
+    refreshProviderCenter,
+    selectedModelId,
+    session,
+    testPrompt,
+    videoTestAspectRatio,
+    videoTestDuration,
+    videoTestResolution,
+  ]);
 
   const bindScriptProfile = useCallback(async () => {
     if (!session || !selectedModelId) {
@@ -1114,7 +1139,7 @@ export function CineWeaveConsole() {
                       <Send size={17} />
                       <h3 className="text-sm font-semibold">Test Center</h3>
                     </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-[0.75fr_1fr_0.55fr_auto]">
+                    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-[0.75fr_1fr_0.55fr_0.45fr_0.55fr_0.55fr_auto]">
                       <select
                         value={providerTestType}
                         onChange={(event) => setProviderTestType(event.target.value as ProviderTestType)}
@@ -1123,6 +1148,7 @@ export function CineWeaveConsole() {
                         <option value="text_generation_test">Text</option>
                         <option value="streaming_test">Stream</option>
                         <option value="image_generation_test">Image</option>
+                        <option value="video_generation_test">Video</option>
                       </select>
                       <input
                         value={testPrompt}
@@ -1133,6 +1159,30 @@ export function CineWeaveConsole() {
                         value={imageTestSize}
                         onChange={(event) => setImageTestSize(event.target.value)}
                         disabled={providerTestType !== "image_generation_test"}
+                        className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
+                      />
+                      <input
+                        value={videoTestDuration}
+                        onChange={(event) => setVideoTestDuration(event.target.value)}
+                        disabled={providerTestType !== "video_generation_test"}
+                        aria-label="Video Duration"
+                        title="Video Duration"
+                        className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
+                      />
+                      <input
+                        value={videoTestAspectRatio}
+                        onChange={(event) => setVideoTestAspectRatio(event.target.value)}
+                        disabled={providerTestType !== "video_generation_test"}
+                        aria-label="Video Aspect Ratio"
+                        title="Video Aspect Ratio"
+                        className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
+                      />
+                      <input
+                        value={videoTestResolution}
+                        onChange={(event) => setVideoTestResolution(event.target.value)}
+                        disabled={providerTestType !== "video_generation_test"}
+                        aria-label="Video Resolution"
+                        title="Video Resolution"
                         className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
                       />
                       <button
@@ -1150,6 +1200,7 @@ export function CineWeaveConsole() {
                         <InfoRow label="Status" value={providerTestResult.status} />
                         <InfoRow label="Latency" value={`${providerTestResult.latencyMs} ms`} />
                         <InfoRow label="Call Log" value={providerTestResult.providerCallId} />
+                        <InfoRow label="Async Task" value={normalizedOutputString(providerTestResult.normalizedOutput, "providerAsyncTaskId")} />
                         <InfoRow label="Artifact" value={normalizedOutputString(providerTestResult.normalizedOutput, "artifactId")} />
                         <InfoRow label="Media" value={normalizedOutputString(providerTestResult.normalizedOutput, "mediaFileId")} />
                         <InfoRow label="Storage" value={normalizedOutputString(providerTestResult.normalizedOutput, "storageKey")} />

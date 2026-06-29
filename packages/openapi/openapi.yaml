@@ -1059,6 +1059,84 @@ paths:
           $ref: "#/components/responses/GatewayError"
         "502":
           $ref: "#/components/responses/GatewayError"
+  /internal/provider/video/create-task:
+    post:
+      operationId: internalProviderVideoCreateTask
+      summary: Internal Provider Gateway video task creation
+      description: Internal API. Requires bearer service token and creates an asynchronous declarative HTTP video provider task.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayVideoCreateTaskRequest"
+      responses:
+        "200":
+          description: Provider video task creation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayVideoCreateTaskEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/video/poll-task:
+    post:
+      operationId: internalProviderVideoPollTask
+      summary: Internal Provider Gateway video task polling
+      description: Internal API. Requires bearer service token, polls upstream status, and stores completed video media in S3 / MinIO.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayVideoPollTaskRequest"
+      responses:
+        "200":
+          description: Provider video polling result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayVideoPollTaskEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/video/cancel-task:
+    post:
+      operationId: internalProviderVideoCancelTask
+      summary: Internal Provider Gateway video task cancellation
+      description: Internal API. Requires bearer service token and cancels an upstream task when the manifest exposes a cancel endpoint.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayVideoCancelTaskRequest"
+      responses:
+        "200":
+          description: Provider video cancellation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayVideoCancelTaskEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
   /internal/provider/text/stream:
     post:
       operationId: internalProviderTextStream
@@ -2050,7 +2128,7 @@ components:
       properties:
         testType:
           type: string
-          enum: [connection_test, auth_test, model_discovery_test, text_generation_test, streaming_test, image_generation_test]
+          enum: [connection_test, auth_test, model_discovery_test, text_generation_test, streaming_test, image_generation_test, video_generation_test]
         input:
           type: object
           additionalProperties: true
@@ -2420,6 +2498,233 @@ components:
           $ref: "#/components/schemas/ProviderStandardError"
         latencyMs:
           type: integer
+    GatewayVideoOptions:
+      type: object
+      properties:
+        timeoutMs:
+          type: integer
+        idempotencyKey:
+          type: string
+        maxPolls:
+          type: integer
+    GatewayVideoReference:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [image, video, audio]
+        assetId:
+          type: string
+          format: uuid
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        storageKey:
+          type: string
+        mimeType:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    GatewayVideoCreateTaskRequest:
+      type: object
+      required: [organizationId, input]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        modelProfileKey:
+          type: string
+        providerModelId:
+          type: string
+          format: uuid
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        idempotencyKey:
+          type: string
+        input:
+          type: object
+          required: [prompt]
+          properties:
+            prompt:
+              type: string
+            duration:
+              type: number
+            aspectRatio:
+              type: string
+            resolution:
+              type: string
+            mode:
+              type: string
+          additionalProperties: true
+        references:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayVideoReference"
+        options:
+          $ref: "#/components/schemas/GatewayVideoOptions"
+    GatewayVideoCreateTaskResponse:
+      type: object
+      required: [providerCallId, providerAsyncTaskId, modelId, status]
+      properties:
+        providerCallId:
+          type: string
+          format: uuid
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        modelId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        error:
+          $ref: "#/components/schemas/ProviderStandardError"
+        latencyMs:
+          type: integer
+    GatewayVideoPollTaskRequest:
+      type: object
+      required: [organizationId]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        providerModelId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        options:
+          $ref: "#/components/schemas/GatewayVideoOptions"
+    GatewayVideoOutput:
+      type: object
+      properties:
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        url:
+          type: string
+          format: uri
+        mimeType:
+          type: string
+        byteSize:
+          type: integer
+          format: int64
+        durationSeconds:
+          type: number
+        width:
+          type: integer
+        height:
+          type: integer
+        raw:
+          type: object
+          additionalProperties: true
+    GatewayVideoPollTaskResponse:
+      type: object
+      required: [providerCallId, providerAsyncTaskId, status, output, usage]
+      properties:
+        providerCallId:
+          type: string
+          format: uuid
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        modelId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        output:
+          $ref: "#/components/schemas/GatewayVideoOutput"
+        usage:
+          $ref: "#/components/schemas/GatewayUsage"
+        error:
+          $ref: "#/components/schemas/ProviderStandardError"
+        latencyMs:
+          type: integer
+    GatewayVideoCancelTaskRequest:
+      type: object
+      required: [organizationId]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        providerModelId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+    GatewayVideoCancelTaskResponse:
+      type: object
+      required: [status]
+      properties:
+        providerCallId:
+          type: string
+          format: uuid
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        status:
+          type: string
+          enum: [cancelled, failed]
+        error:
+          $ref: "#/components/schemas/ProviderStandardError"
     GatewayDiscoverModelsRequest:
       type: object
       required: [organizationId, accountId]
@@ -2745,6 +3050,27 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/GatewayImageResponse"
+    GatewayVideoCreateTaskEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayVideoCreateTaskResponse"
+    GatewayVideoPollTaskEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayVideoPollTaskResponse"
+    GatewayVideoCancelTaskEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayVideoCancelTaskResponse"
     GatewayDiscoverModelsEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

@@ -3284,6 +3284,19 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - API Server / Worker code must call Provider Gateway and must not call image providers, download upstream media, write provider call logs, or write cost records directly.
 - `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=false` is the default; set it to `true` only for local mock provider media URLs.
 
+## Implementation Note: Provider Gateway Video Runtime v1
+
+- Provider Gateway now owns asynchronous video task runtime through `/internal/provider/video/create-task`, `/internal/provider/video/poll-task`, and `/internal/provider/video/cancel-task`.
+- Video providers are integrated first through declarative HTTP Provider Manifests, not hardcoded vendor adapters.
+- Manifest video templates can use `input`, `references`, `credential`, `endpoint`, `model`, `account`, and `task`; for example `{{ references[0].url }}` and `{{ task.externalTaskId }}`.
+- `provider_async_tasks` is the durable async task state source. Provider Gateway does not keep long-running video task state in memory.
+- `create-task` writes `provider_call_logs` with `task_type=video.create_task` and `execution_mode=async_create`, then writes `provider_async_tasks`.
+- `poll-task` writes `provider_call_logs` with `task_type=video.poll_task` and `execution_mode=async_poll`. Running polls update `provider_async_tasks` only; succeeded polls download video media, store it in S3 / MinIO, write `media_files`, `generated_video` artifacts, and final `cost_records`.
+- `cancel-task` calls a manifest cancel endpoint when configured; otherwise it marks the local async task cancelled.
+- Private video media URLs are blocked by default. Development can set `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=true`.
+- Video download size defaults to `CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES=536870912`.
+- `video_generation_test` executes via Provider Gateway create/poll and returns `providerAsyncTaskId`; completed tests also return `artifactId`, `mediaFileId`, and `storageKey`.
+
 ## Implementation Note: Temporal Workflow to Provider Gateway Runtime
 
 - `POST /api/workflow-runs` with `workflowType=text_to_storyboard` starts the real Temporal `TextToStoryboardWorkflow` on the script task queue.

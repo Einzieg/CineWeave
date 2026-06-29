@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -738,6 +739,8 @@ func (s *Service) RecordProviderModelTest(ctx context.Context, organizationID, u
 		normalizedOutput = mustJSON(map[string]any{"status": "failed", "code": errorCode})
 	case "image_generation_test":
 		return ProviderTestResult{}, fmt.Errorf("%w: configure PROVIDER_GATEWAY_URL for image_generation_test", ErrProviderGatewayRequired)
+	case "video_generation_test":
+		return ProviderTestResult{}, fmt.Errorf("%w: configure PROVIDER_GATEWAY_URL for video_generation_test", ErrProviderGatewayRequired)
 	default:
 		return ProviderTestResult{}, fmt.Errorf("%w: unsupported testType", ErrValidation)
 	}
@@ -913,6 +916,76 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
 		} else {
 			normalizedOutput = mustJSON(gatewayResp.Output)
+		}
+	case "video_generation_test":
+		createReq := GatewayVideoCreateTaskRequest{
+			OrganizationID:  organizationID,
+			ProjectID:       stringFieldFromJSON(input, "projectId"),
+			WorkflowRunID:   stringFieldFromJSON(input, "workflowRunId"),
+			NodeRunID:       stringFieldFromJSON(input, "nodeRunId"),
+			ProviderModelID: modelID,
+			IdempotencyKey:  req.IdempotencyKey,
+			Input:           input,
+		}
+		var createResp GatewayVideoCreateTaskResponse
+		if err := s.postGatewayJSON(ctx, "/internal/provider/video/create-task", createReq, &createResp); err != nil {
+			return ProviderTestResult{}, err
+		}
+		providerCallID = createResp.ProviderCallID
+		status = createResp.Status
+		latencyMS = createResp.LatencyMS
+		requestSnapshot = mustJSON(createReq)
+		responseSnapshot = mustJSON(createResp)
+		normalizedOutput = mustJSON(map[string]any{
+			"providerAsyncTaskId": createResp.ProviderAsyncTaskID,
+			"externalTaskId":      createResp.ExternalTaskID,
+			"status":              createResp.Status,
+		})
+		if status == "failed" {
+			errorCode, errorMessage = gatewayErrorFields(createResp.Error)
+			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode, "providerAsyncTaskId": createResp.ProviderAsyncTaskID})
+			break
+		}
+		maxPolls := intFieldFromJSON(input, "maxPolls")
+		if maxPolls <= 0 {
+			maxPolls = createReq.Options.MaxPolls
+		}
+		if maxPolls <= 0 {
+			maxPolls = 5
+		}
+		for attempt := 0; attempt < maxPolls; attempt++ {
+			pollReq := GatewayVideoPollTaskRequest{
+				OrganizationID:      organizationID,
+				ProviderAsyncTaskID: createResp.ProviderAsyncTaskID,
+				ProjectID:           createReq.ProjectID,
+				WorkflowRunID:       createReq.WorkflowRunID,
+				NodeRunID:           createReq.NodeRunID,
+			}
+			var pollResp GatewayVideoPollTaskResponse
+			if err := s.postGatewayJSON(ctx, "/internal/provider/video/poll-task", pollReq, &pollResp); err != nil {
+				return ProviderTestResult{}, err
+			}
+			providerCallID = pollResp.ProviderCallID
+			status = pollResp.Status
+			latencyMS += pollResp.LatencyMS
+			responseSnapshot = mustJSON(pollResp)
+			if status == "failed" {
+				errorCode, errorMessage = gatewayErrorFields(pollResp.Error)
+				normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode, "providerAsyncTaskId": pollResp.ProviderAsyncTaskID})
+				break
+			}
+			normalizedOutput = mustJSON(map[string]any{
+				"providerAsyncTaskId": pollResp.ProviderAsyncTaskID,
+				"externalTaskId":      pollResp.ExternalTaskID,
+				"status":              pollResp.Status,
+				"artifactId":          pollResp.Output.ArtifactID,
+				"mediaFileId":         pollResp.Output.MediaFileID,
+				"storageKey":          pollResp.Output.StorageKey,
+				"mimeType":            pollResp.Output.MimeType,
+			})
+			if status == "succeeded" || status == "cancelled" {
+				break
+			}
 		}
 	default:
 		return ProviderTestResult{}, fmt.Errorf("%w: unsupported testType", ErrValidation)
@@ -1883,6 +1956,22 @@ func stringFieldFromJSON(raw json.RawMessage, key string) string {
 	}
 	value, _ := decoded[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func intFieldFromJSON(raw json.RawMessage, key string) int {
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return 0
+	}
+	switch typed := decoded[key].(type) {
+	case float64:
+		return int(typed)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(typed))
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func nullIfJSONNull(raw json.RawMessage) any {
