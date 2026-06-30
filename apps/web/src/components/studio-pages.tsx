@@ -1363,11 +1363,11 @@ function ProvidersContent() {
     <SessionGate>
       <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
         <Surface>
-          <SectionTitle title="创建供应商" description="先接入 OpenAI-compatible 账号，再创建模型配置。" />
+          <SectionTitle title="创建供应商" description="先接入兼容 OpenAI 的账号，再创建模型配置。" />
           <div className="grid gap-3 p-4">
             <TextInput label="账号名称" value={accountName} onChange={setAccountName} />
-            <TextInput label="Base URL" value={accountBaseUrl} onChange={setAccountBaseUrl} />
-            <TextInput label="API Key" value={accountApiKey} onChange={setAccountApiKey} />
+            <TextInput label="接口地址" value={accountBaseUrl} onChange={setAccountBaseUrl} />
+            <TextInput label="访问密钥" value={accountApiKey} onChange={setAccountApiKey} />
             <button
               className="studio-button studio-button-primary"
               disabled={busy !== "" || !accountName.trim() || !accountBaseUrl.trim()}
@@ -1394,7 +1394,7 @@ function ProvidersContent() {
               创建账号
             </button>
             <div className="h-px bg-white/10" />
-            <TextInput label="模型配置 Key" value={profileKey} onChange={setProfileKey} />
+            <TextInput label="模型配置键" value={profileKey} onChange={setProfileKey} />
             <TextInput label="模型配置名称" value={profileName} onChange={setProfileName} />
             <TextInput label="用途" value={profilePurpose} onChange={setProfilePurpose} />
             <button
@@ -1423,8 +1423,8 @@ function ProvidersContent() {
           </div>
         </Surface>
         <Surface>
-          <SectionTitle title="供应商账号" description="用于 Provider Gateway 的上游账号。" />
-          <ListBlock items={accounts.data} empty="还没有供应商账号" render={(item) => <SimpleRow title={item.displayName || item.name || item.id} detail={item.providerType || "OpenAI-compatible"} status={item.status} />} />
+          <SectionTitle title="供应商账号" description="用于供应商网关的上游账号。" />
+          <ListBlock items={accounts.data} empty="还没有供应商账号" render={(item) => <SimpleRow title={item.displayName || item.name || item.id} detail={item.providerType || "兼容 OpenAI"} status={item.status} />} />
         </Surface>
         <Surface className="xl:col-start-2">
           <SectionTitle title="模型配置" description="脚本、图片和视频生产通过模型配置路由。" />
@@ -1478,9 +1478,9 @@ function PromptsContent() {
     <SessionGate>
       <div className="grid gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
         <Surface>
-          <SectionTitle title="创建提示词" description="为脚本、资产、分镜或镜头生产维护组织级 Prompt。" />
+          <SectionTitle title="创建提示词" description="为脚本、资产、分镜或镜头生产维护组织级提示词。" />
           <div className="grid gap-3 p-4">
-            <TextInput label="模板 Key" value={templateKey} onChange={setTemplateKey} />
+            <TextInput label="模板键" value={templateKey} onChange={setTemplateKey} />
             <TextInput label="名称" value={templateName} onChange={setTemplateName} />
             <TextInput label="用途" value={purpose} onChange={setPurpose} />
             <TextInput label="模态" value={modality} onChange={setModality} />
@@ -1531,7 +1531,7 @@ function PromptsContent() {
           </div>
         </Surface>
         <Surface>
-          <SectionTitle title="提示词模板" description="生产链路中的 Prompt Registry 版本入口。" />
+          <SectionTitle title="提示词模板" description="生产链路中的提示词注册表版本入口。" />
           <ListBlock
             items={templates.data}
             empty="还没有提示词模板"
@@ -1642,7 +1642,7 @@ export function GlobalSettingsPage() {
         <Surface>
           <SectionTitle title="本机会话" description="顶部的访问令牌、组织 ID 和工作区 ID 会保存在本机浏览器。" />
           <div className="grid gap-3 p-4 text-sm text-zinc-400">
-            <p>正式登录页尚未纳入本次范围；当前阶段使用访问令牌直接调用 API。</p>
+            <p>正式登录页尚未纳入本次范围；当前阶段使用访问令牌直接调用接口。</p>
             <Link className="studio-button w-fit" href={"/demo" as Route}>
               打开旧版演示控制台
             </Link>

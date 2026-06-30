@@ -30,7 +30,7 @@ export function TopBar({
       </div>
       <div className="mt-2 flex items-center gap-2 text-[12px] text-zinc-500">
         <Save size={13} />
-        会话信息保存在本机浏览器，用于调用 CineWeave API。{session.currentProjectId ? `当前项目：${session.currentProjectId}` : ""}
+        会话信息保存在本机浏览器，用于调用 CineWeave 接口。{session.currentProjectId ? `当前项目：${session.currentProjectId}` : ""}
       </div>
     </header>
   );
