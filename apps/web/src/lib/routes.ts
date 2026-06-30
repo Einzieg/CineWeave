@@ -5,6 +5,7 @@ import {
   Gauge,
   KeyRound,
   Library,
+  ListChecks,
   Settings2,
   ShieldCheck,
   Workflow,
@@ -23,6 +24,7 @@ export const globalNavItems = [
 
 export const projectNavItems = [
   { label: "项目概览", segment: "", icon: FolderKanban },
+  { label: "生产看板", segment: "production", icon: ListChecks },
   { label: "原文与剧本", segment: "sources", icon: FileText },
   { label: "资产", segment: "assets", icon: Boxes },
   { label: "分镜镜头", segment: "storyboard", icon: Clapperboard },

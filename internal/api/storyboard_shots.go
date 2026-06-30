@@ -35,6 +35,7 @@ type StoryboardShot struct {
 	VideoProviderAsyncTaskID *string  `json:"providerAsyncTaskId,omitempty"`
 	VideoExternalTaskID      *string  `json:"externalTaskId,omitempty"`
 	Status                   string   `json:"status"`
+	ReviewStatus             string   `json:"reviewStatus"`
 
 	imageArtifactStorageKey *string
 	imageArtifactMimeType   *string
@@ -86,7 +87,8 @@ func (s *Server) listWorkflowRunShots(w http.ResponseWriter, r *http.Request, pr
 			va.mime_type,
 			s.video_provider_async_task_id,
 			s.video_external_task_id,
-			COALESCE(s.status, 'pending')
+			COALESCE(s.status, 'pending'),
+			COALESCE(s.review_status, 'pending')
 		FROM storyboard_shots s
 		LEFT JOIN artifacts ia ON ia.id = s.image_artifact_id
 		LEFT JOIN artifacts va ON va.id = s.video_artifact_id
@@ -147,6 +149,7 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 		&providerAsyncTaskID,
 		&externalTaskID,
 		&item.Status,
+		&item.ReviewStatus,
 	)
 	if duration.Valid {
 		item.DurationSeconds = &duration.Float64

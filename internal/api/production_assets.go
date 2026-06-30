@@ -30,6 +30,7 @@ type CanonicalAsset struct {
 	ReferenceMediaFileID *string         `json:"referenceMediaFileId,omitempty"`
 	ReferenceStorageKey  *string         `json:"referenceStorageKey,omitempty"`
 	Status               string          `json:"status"`
+	ReviewStatus         string          `json:"reviewStatus"`
 	SourceScriptIDs      json.RawMessage `json:"sourceScriptIds"`
 	Metadata             json.RawMessage `json:"metadata"`
 	CreatedBy            *string         `json:"createdBy,omitempty"`
@@ -58,6 +59,7 @@ type ShotAssetRequirement struct {
 	DerivedMediaFileID *string         `json:"derivedMediaFileId,omitempty"`
 	DerivedStorageKey  *string         `json:"derivedStorageKey,omitempty"`
 	Status             string          `json:"status"`
+	ReviewStatus       string          `json:"reviewStatus"`
 	Metadata           json.RawMessage `json:"metadata"`
 	CreatedAt          time.Time       `json:"createdAt"`
 	UpdatedAt          time.Time       `json:"updatedAt"`
@@ -72,7 +74,7 @@ func (s *Server) listCanonicalAssets(w http.ResponseWriter, r *http.Request, pri
 	assetType := strings.TrimSpace(r.URL.Query().Get("filter[type]"))
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
-		       reference_artifact_id, reference_media_file_id, reference_storage_key, status,
+		       reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
 		       source_script_ids, metadata, created_by, created_at, updated_at
 		FROM canonical_assets
 		WHERE project_id = $1
@@ -178,7 +180,7 @@ func (s *Server) updateCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 		    status = $9
 		WHERE id = $1 AND project_id = $2
 		RETURNING id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
-		          reference_artifact_id, reference_media_file_id, reference_storage_key, status,
+		          reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
 		          source_script_ids, metadata, created_by, created_at, updated_at
 	`, current.ID, project.ID, assetType, name, description, req.BasePrompt, visualTraits, metadata, status))
 	if err != nil {
@@ -335,7 +337,7 @@ func (s *Server) generateCanonicalAssetImage(w http.ResponseWriter, r *http.Requ
 		    status = 'image_succeeded'
 		WHERE id = $1 AND project_id = $2
 		RETURNING id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
-		          reference_artifact_id, reference_media_file_id, reference_storage_key, status,
+		          reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
 		          source_script_ids, metadata, created_by, created_at, updated_at
 	`, asset.ID, project.ID, gatewayResp.Output.ArtifactID, gatewayResp.Output.MediaFileID, gatewayResp.Output.StorageKey))
 	if err != nil {
@@ -515,7 +517,7 @@ func (s *Server) renderAPIProjectPrompt(r *http.Request, project Project, templa
 func (s *Server) canonicalAsset(r *http.Request, projectID, assetID string) (CanonicalAsset, error) {
 	return scanCanonicalAsset(s.db.QueryRow(r.Context(), `
 		SELECT id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
-		       reference_artifact_id, reference_media_file_id, reference_storage_key, status,
+		       reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
 		       source_script_ids, metadata, created_by, created_at, updated_at
 		FROM canonical_assets
 		WHERE project_id = $1 AND id = $2
@@ -554,7 +556,8 @@ func (s *Server) storyboardShotByID(r *http.Request, projectID, shotID string) (
 			va.mime_type,
 			s.video_provider_async_task_id,
 			s.video_external_task_id,
-			COALESCE(s.status, 'pending')
+			COALESCE(s.status, 'pending'),
+			COALESCE(s.review_status, 'pending')
 		FROM storyboard_shots s
 		LEFT JOIN artifacts ia ON ia.id = s.image_artifact_id
 		LEFT JOIN artifacts va ON va.id = s.video_artifact_id
@@ -579,6 +582,7 @@ func scanCanonicalAsset(row rowScan) (CanonicalAsset, error) {
 		&referenceMediaFileID,
 		&referenceStorageKey,
 		&item.Status,
+		&item.ReviewStatus,
 		&sourceScriptIDs,
 		&metadata,
 		&createdBy,
@@ -603,7 +607,7 @@ func shotAssetRequirementSelectSQL(where string) string {
 			r.asset_id, r.requirement_type, r.role_in_shot, r.costume, r.pose,
 			r.expression, r.action, r.camera_relation, r.scene_state, r.prop_state,
 			r.prompt, r.derived_artifact_id, r.derived_media_file_id, r.derived_storage_key,
-			r.status, r.metadata, r.created_at, r.updated_at
+			r.status, r.review_status, r.metadata, r.created_at, r.updated_at
 		FROM shot_asset_requirements r
 	` + where
 }
@@ -634,6 +638,7 @@ func scanShotAssetRequirement(row rowScan) (ShotAssetRequirement, error) {
 		&derivedMediaFileID,
 		&derivedStorageKey,
 		&item.Status,
+		&item.ReviewStatus,
 		&metadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,

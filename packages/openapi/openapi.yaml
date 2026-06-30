@@ -587,6 +587,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/production/status:
+    get:
+      operationId: getProductionStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project production board status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductionStatusEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/production/actions:
+    post:
+      operationId: runProductionAction
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductionActionRequest"
+      responses:
+        "202":
+          description: Production stage action queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductionActionResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/sources:
     get:
       operationId: listProjectSources
@@ -1015,6 +1057,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CanonicalAssetImageResultEnvelope"
+  /api/projects/{projectId}/assets/{assetId}/review:
+    post:
+      operationId: reviewCanonicalAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+      responses:
+        "200":
+          description: Updated canonical asset review status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/shot-asset-requirements:
     get:
       operationId: listShotAssetRequirements
@@ -1044,6 +1111,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DerivedAssetImageResultEnvelope"
+  /api/projects/{projectId}/shot-asset-requirements/{requirementId}/review:
+    post:
+      operationId: reviewShotAssetRequirement
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequirementId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+      responses:
+        "200":
+          description: Updated shot asset requirement review status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/review:
+    post:
+      operationId: reviewStoryboardShot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+      responses:
+        "200":
+          description: Updated storyboard shot review status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/assets:
     get:
       operationId: listAssets
@@ -2444,6 +2561,13 @@ components:
       schema:
         type: string
         format: uuid
+    ShotId:
+      name: shotId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     WorkflowRunId:
       name: workflowRunId
       in: path
@@ -2964,7 +3088,7 @@ components:
           format: date-time
     CanonicalAsset:
       type: object
-      required: [id, organizationId, projectId, assetType, name, description, visualTraits, status, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, assetType, name, description, visualTraits, status, reviewStatus, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -2997,6 +3121,8 @@ components:
           type: string
         status:
           type: string
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
         sourceScriptIds:
           type: array
           items:
@@ -3016,7 +3142,7 @@ components:
           format: date-time
     ShotAssetRequirement:
       type: object
-      required: [id, organizationId, projectId, storyboardShotId, assetId, requirementType, status, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, storyboardShotId, assetId, requirementType, status, reviewStatus, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -3066,6 +3192,8 @@ components:
           type: string
         status:
           type: string
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
         metadata:
           type: object
           additionalProperties: true
@@ -3486,7 +3614,7 @@ components:
           type: string
     StoryboardShot:
       type: object
-      required: [id, workflowRunId, shotIndex, shotNo, status]
+      required: [id, workflowRunId, shotIndex, shotNo, status, reviewStatus]
       properties:
         id:
           type: string
@@ -3542,6 +3670,239 @@ components:
           type: string
         status:
           type: string
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+    ReviewStatus:
+      type: string
+      enum: [pending, approved, rejected, needs_edit]
+    ProductionStageStatus:
+      type: string
+      enum: [pending, not_started, imported, ready, needs_review, running, partial, failed, completed]
+    ProductionStatus:
+      type: object
+      required: [projectId, project, overall, stages]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        project:
+          type: object
+          required: [name, projectType, contentType, videoRatio, artStyle]
+          properties:
+            name:
+              type: string
+            projectType:
+              type: string
+            contentType:
+              type: string
+            videoRatio:
+              type: string
+            artStyle:
+              type: string
+        overall:
+          type: object
+          required: [stage, progress, status]
+          properties:
+            stage:
+              type: string
+              enum: [source, assets, storyboard, shot_assets, shot_images, shot_videos, final_video]
+            progress:
+              type: integer
+              minimum: 0
+              maximum: 100
+            status:
+              $ref: "#/components/schemas/ProductionStageStatus"
+        stages:
+          type: object
+          required: [source, assets, storyboard, shotAssets, shotImages, shotVideos, finalVideo]
+          properties:
+            source:
+              $ref: "#/components/schemas/ProductionSourceStage"
+            assets:
+              $ref: "#/components/schemas/ProductionAssetsStage"
+            storyboard:
+              $ref: "#/components/schemas/ProductionStoryboardStage"
+            shotAssets:
+              $ref: "#/components/schemas/ProductionShotAssetsStage"
+            shotImages:
+              $ref: "#/components/schemas/ProductionShotMediaStage"
+            shotVideos:
+              $ref: "#/components/schemas/ProductionShotMediaStage"
+            finalVideo:
+              $ref: "#/components/schemas/ProductionFinalVideoStage"
+    ProductionSourceStage:
+      type: object
+      required: [status, novelSourceCount, scriptSourceCount, summary]
+      properties:
+        status:
+          $ref: "#/components/schemas/ProductionStageStatus"
+        novelSourceCount:
+          type: integer
+        scriptSourceCount:
+          type: integer
+        activeScriptId:
+          type: string
+          format: uuid
+        activeScriptTitle:
+          type: string
+        summary:
+          type: array
+          items:
+            type: string
+    ProductionAssetsStage:
+      type: object
+      required: [status, characterCount, sceneCount, propCount, referenceImageCount, missingReferenceImageCount, approvedCount, pendingReviewCount, summary]
+      properties:
+        status:
+          $ref: "#/components/schemas/ProductionStageStatus"
+        characterCount:
+          type: integer
+        sceneCount:
+          type: integer
+        propCount:
+          type: integer
+        referenceImageCount:
+          type: integer
+        missingReferenceImageCount:
+          type: integer
+        approvedCount:
+          type: integer
+        pendingReviewCount:
+          type: integer
+        summary:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    ProductionStoryboardStage:
+      type: object
+      required: [status, shotCount, confirmedShotCount, pendingReviewCount, summary]
+      properties:
+        status:
+          $ref: "#/components/schemas/ProductionStageStatus"
+        shotCount:
+          type: integer
+        confirmedShotCount:
+          type: integer
+        pendingReviewCount:
+          type: integer
+        summary:
+          type: array
+          items:
+            type: string
+    ProductionShotAssetsStage:
+      type: object
+      required: [status, requirementCount, characterRequirementCount, sceneRequirementCount, propRequirementCount, derivedImageCount, missingDerivedImageCount, approvedCount, pendingReviewCount, summary]
+      properties:
+        status:
+          $ref: "#/components/schemas/ProductionStageStatus"
+        requirementCount:
+          type: integer
+        characterRequirementCount:
+          type: integer
+        sceneRequirementCount:
+          type: integer
+        propRequirementCount:
+          type: integer
+        derivedImageCount:
+          type: integer
+        missingDerivedImageCount:
+          type: integer
+        approvedCount:
+          type: integer
+        pendingReviewCount:
+          type: integer
+        summary:
+          type: array
+          items:
+            type: string
+    ProductionShotMediaStage:
+      type: object
+      required: [status, total, succeeded, failed, running, pending]
+      properties:
+        status:
+          $ref: "#/components/schemas/ProductionStageStatus"
+        total:
+          type: integer
+        succeeded:
+          type: integer
+        failed:
+          type: integer
+        running:
+          type: integer
+        pending:
+          type: integer
+    ProductionFinalVideoStage:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/ProductionStageStatus"
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        previewUrl:
+          type: string
+          format: uri
+        storageKey:
+          type: string
+    ProductionActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [generate_script, analyze_assets, generate_asset_images, generate_storyboard, analyze_shot_assets, generate_derived_asset_images, generate_shot_images, generate_shot_videos, compose_final_video, run_full_production]
+        sourceId:
+          type: string
+          format: uuid
+        scriptId:
+          type: string
+          format: uuid
+        options:
+          type: object
+          additionalProperties: true
+    ProductionActionResponse:
+      type: object
+      required: [action, workflowRunId, status, workflowType]
+      properties:
+        action:
+          type: string
+        workflowRunId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        workflowType:
+          type: string
+        note:
+          type: string
+    ReviewRequest:
+      type: object
+      required: [reviewStatus]
+      properties:
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        note:
+          type: string
+    ReviewResponse:
+      type: object
+      required: [id, reviewStatus, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        note:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
     Artifact:
       type: object
       required: [id, organizationId, type, metadata, createdAt]
@@ -3731,6 +4092,27 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Project"
+    ProductionStatusEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProductionStatus"
+    ProductionActionResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProductionActionResponse"
+    ReviewResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ReviewResponse"
     ProjectSourceEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

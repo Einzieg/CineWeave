@@ -120,6 +120,7 @@ export type CanonicalAsset = {
   referenceMediaFileId?: string;
   referenceStorageKey?: string;
   status: string;
+  reviewStatus?: string;
   sourceScriptIds?: string[];
   createdAt?: string;
   updatedAt?: string;
@@ -145,6 +146,7 @@ export type ShotAssetRequirement = {
   derivedMediaFileId?: string;
   derivedStorageKey?: string;
   status: string;
+  reviewStatus?: string;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -204,6 +206,96 @@ export type StoryboardShot = {
   providerAsyncTaskId?: string;
   externalTaskId?: string;
   status: string;
+  reviewStatus?: string;
+};
+
+export type ProductionStatus = {
+  projectId: string;
+  project: {
+    name: string;
+    projectType: string;
+    contentType: string;
+    videoRatio: string;
+    artStyle: string;
+  };
+  overall: {
+    stage: string;
+    progress: number;
+    status: string;
+  };
+  stages: {
+    source: {
+      status: string;
+      novelSourceCount: number;
+      scriptSourceCount: number;
+      activeScriptId?: string | null;
+      activeScriptTitle?: string | null;
+      summary: string[];
+    };
+    assets: {
+      status: string;
+      characterCount: number;
+      sceneCount: number;
+      propCount: number;
+      referenceImageCount: number;
+      missingReferenceImageCount: number;
+      approvedCount: number;
+      pendingReviewCount: number;
+      summary: Record<string, string[]>;
+    };
+    storyboard: {
+      status: string;
+      shotCount: number;
+      confirmedShotCount: number;
+      pendingReviewCount: number;
+      summary: string[];
+    };
+    shotAssets: {
+      status: string;
+      requirementCount: number;
+      characterRequirementCount: number;
+      sceneRequirementCount: number;
+      propRequirementCount: number;
+      derivedImageCount: number;
+      missingDerivedImageCount: number;
+      approvedCount: number;
+      pendingReviewCount: number;
+      summary: string[];
+    };
+    shotImages: ProductionShotMediaStage;
+    shotVideos: ProductionShotMediaStage;
+    finalVideo: {
+      status: string;
+      artifactId?: string | null;
+      mediaFileId?: string | null;
+      previewUrl?: string | null;
+      storageKey?: string | null;
+    };
+  };
+};
+
+export type ProductionShotMediaStage = {
+  status: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  running: number;
+  pending: number;
+};
+
+export type ProductionActionResponse = {
+  action: string;
+  workflowRunId: string;
+  status: string;
+  workflowType: string;
+  note?: string;
+};
+
+export type ReviewResponse = {
+  id: string;
+  reviewStatus: string;
+  note?: string;
+  updatedAt: string;
 };
 
 export type Artifact = {

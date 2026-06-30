@@ -11,8 +11,11 @@ import type {
   Permission,
   Project,
   ProjectSource,
+  ProductionActionResponse,
+  ProductionStatus,
   PromptTemplate,
   ProviderAccount,
+  ReviewResponse,
   Role,
   Script,
   ScriptVersion,
@@ -97,6 +100,10 @@ export const studioApi = {
   createProject: (session: StudioSession, body: JsonRecord) => apiRequest<Project>("/api/projects", { method: "POST", session, body }),
   updateProject: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<Project>(`/api/projects/${projectId}`, { method: "PATCH", session, body }),
+  getProductionStatus: (session: StudioSession, projectId: string) =>
+    apiRequest<ProductionStatus>(`/api/projects/${projectId}/production/status`, { session }),
+  runProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<ProductionActionResponse>(`/api/projects/${projectId}/production/actions`, { method: "POST", session, body }),
 
   listSources: (session: StudioSession, projectId: string) => apiRequest<ListEnvelope<ProjectSource>>(`/api/projects/${projectId}/sources`, { session }),
   createSource: (session: StudioSession, projectId: string, body: JsonRecord) =>
@@ -148,10 +155,14 @@ export const studioApi = {
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/scripts/${scriptId}/analyze-assets`, { method: "POST", session, body }),
   generateAssetImage: (session: StudioSession, projectId: string, assetId: string) =>
     apiRequest<{ asset: CanonicalAsset; providerCallId: string }>(`/api/projects/${projectId}/assets/${assetId}/generate-image`, { method: "POST", session, body: {} }),
+  reviewAsset: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
+    apiRequest<ReviewResponse>(`/api/projects/${projectId}/assets/${assetId}/review`, { method: "POST", session, body }),
   listShotAssetRequirements: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<ShotAssetRequirement>>(`/api/projects/${projectId}/shot-asset-requirements`, { session }),
   generateDerivedAssetImage: (session: StudioSession, projectId: string, requirementId: string) =>
     apiRequest<{ requirement: ShotAssetRequirement; providerCallId: string }>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}/generate-image`, { method: "POST", session, body: {} }),
+  reviewShotAssetRequirement: (session: StudioSession, projectId: string, requirementId: string, body: JsonRecord) =>
+    apiRequest<ReviewResponse>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}/review`, { method: "POST", session, body }),
 
   generateStoryboard: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/scripts/${scriptId}/generate-storyboard`, { method: "POST", session, body }),
@@ -167,6 +178,8 @@ export const studioApi = {
       session,
       query: { includePreviewUrl: true, previewExpiresSeconds: 900 },
     }),
+  reviewStoryboardShot: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord) =>
+    apiRequest<ReviewResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/review`, { method: "POST", session, body }),
 
   listArtifacts: (session: StudioSession, projectId?: string) =>
     apiRequest<ListEnvelope<Artifact>>("/api/artifacts", {

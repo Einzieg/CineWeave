@@ -21,6 +21,7 @@ import type {
   Permission,
   Project,
   ProjectSource,
+  ProductionStatus,
   PromptTemplate,
   ProviderAccount,
   Role,
@@ -382,41 +383,14 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
 }
 
 function ProjectOverviewContent({ projectId }: { projectId: string }) {
-  const { session } = useStudioSession();
   const project = useStudioQuery<Project | null>(null, `project:${projectId}`, async (activeSession) => studioApi.getProject(activeSession, projectId));
+  const production = useStudioQuery<ProductionStatus | null>(null, `project:${projectId}:production`, async (activeSession) => studioApi.getProductionStatus(activeSession, projectId));
   const scripts = useStudioQuery<Script[]>([], `project:${projectId}:scripts`, async (activeSession) => (await studioApi.listScripts(activeSession, projectId)).items);
   const assets = useStudioQuery<CanonicalAsset[]>([], `project:${projectId}:assets`, async (activeSession) => (await studioApi.listCanonicalAssets(activeSession, projectId)).items);
   const workflows = useStudioQuery<WorkflowRun[]>([], `project:${projectId}:runs`, async (activeSession) => (await studioApi.listWorkflowRuns(activeSession, projectId)).items);
   const artifacts = useStudioQuery<Artifact[]>([], `project:${projectId}:artifacts`, async (activeSession) => (await studioApi.listArtifacts(activeSession, projectId)).items);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
-  const activeScript = scripts.data.find((item) => item.status === "active") ?? scripts.data[0];
   const latestRun = workflows.data[0];
   const finalVideo = artifacts.data.find((item) => item.type === "final_video");
-
-  async function startVideo() {
-    if (!activeScript) {
-      setError("还没有可用剧本，请先在原文与剧本页面生成或保存剧本。");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      await studioApi.createWorkflowRun(session, compactRecord({
-        projectId,
-        workflowType: "full_production",
-        prompt: project.data?.name ?? "",
-        input: { scriptId: activeScript.id, generateImages: true, generateDerivedAssets: true, skipCompose: false },
-      }));
-      workflows.reload();
-      setNotice("完整生产工作流已启动。");
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <SessionGate>
@@ -438,13 +412,25 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
                     <Pill>{project.data.artStyle || "未设置画风"}</Pill>
                   </div>
                 </div>
-                <button className="studio-button studio-button-primary" disabled={busy} onClick={startVideo} type="button">
-                  {busy ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
-                  运行视频生产
-                </button>
+                <Link className="studio-button studio-button-primary" href={projectHref(projectId, "production") as Route}>
+                  <Play size={16} />
+                  继续生产
+                </Link>
               </div>
-              <ErrorPanel message={error} />
-              {notice ? <p className="mt-3 text-sm text-cyan-100">{notice}</p> : null}
+              {production.data ? (
+                <div className="mt-5 grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+                  <div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-400">当前阶段：{productionStageLabel(production.data.overall.stage)}</span>
+                      <span className="font-medium text-zinc-100">{production.data.overall.progress}%</span>
+                    </div>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-full rounded-full bg-cyan-300" style={{ width: `${Math.max(0, Math.min(100, production.data.overall.progress))}%` }} />
+                    </div>
+                  </div>
+                  <StatusBadge status={production.data.overall.status} />
+                </div>
+              ) : null}
             </Surface>
           ) : null}
         </QueryBody>
@@ -493,6 +479,292 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
         </div>
       </div>
     </SessionGate>
+  );
+}
+
+export function ProjectProductionPage({ projectId }: { projectId: string }) {
+  return (
+    <AppShell active="projects" title="生产看板" description="按阶段推进项目生产，检查、确认、重跑每一步，而不是一次性黑盒生成。" projectId={projectId} projectSection="production">
+      <ProjectProductionContent projectId={projectId} />
+    </AppShell>
+  );
+}
+
+function ProjectProductionContent({ projectId }: { projectId: string }) {
+  const { session } = useStudioSession();
+  const status = useStudioQuery<ProductionStatus | null>(null, `production:${projectId}`, async (activeSession) => studioApi.getProductionStatus(activeSession, projectId));
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [lastWorkflowRunId, setLastWorkflowRunId] = useState("");
+
+  async function runAction(action: string) {
+    setBusy(action);
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.runProductionAction(session, projectId, compactRecord({ action, options: { maxShots: 3 } }));
+      setLastWorkflowRunId(response.workflowRunId);
+      setNotice(response.note || `${productionActionLabel(action)}已启动`);
+      status.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const nextAction = status.data ? nextProductionAction(status.data) : "";
+
+  return (
+    <SessionGate>
+      <QueryBody state={status}>
+        {status.data ? (
+          <div className="grid gap-5">
+            <Surface className="p-5">
+              <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-3xl font-semibold text-zinc-50">{status.data.project.name}</h2>
+                    <StatusBadge status={status.data.overall.status} />
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Pill>{status.data.project.projectType || "未设置项目类型"}</Pill>
+                    <Pill>{status.data.project.contentType || "未设置内容类型"}</Pill>
+                    <Pill>{status.data.project.videoRatio || "16:9"}</Pill>
+                    <Pill>{status.data.project.artStyle || "未设置画风"}</Pill>
+                  </div>
+                  <div className="mt-5">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-400">当前阶段：{productionStageLabel(status.data.overall.stage)}</span>
+                      <span className="font-medium text-zinc-100">{status.data.overall.progress}%</span>
+                    </div>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-full rounded-full bg-cyan-300" style={{ width: `${Math.max(0, Math.min(100, status.data.overall.progress))}%` }} />
+                    </div>
+                  </div>
+                </div>
+                <div className="grid content-start gap-3">
+                  {nextAction ? (
+                    <button className="studio-button studio-button-primary justify-center" disabled={busy !== ""} onClick={() => runAction(nextAction)} type="button">
+                      {busy ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
+                      继续下一步
+                    </button>
+                  ) : null}
+                  {status.data.stages.finalVideo.previewUrl ? (
+                    <a className="studio-button justify-center" href={status.data.stages.finalVideo.previewUrl} rel="noreferrer" target="_blank">
+                      <Video size={16} />
+                      查看最终成片
+                    </a>
+                  ) : null}
+                  {lastWorkflowRunId ? <p className="rounded-md border border-white/10 bg-white/[0.03] p-3 text-xs text-zinc-400">运行中 workflowRunId：{lastWorkflowRunId}</p> : null}
+                  <ErrorPanel message={error} />
+                  {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+                </div>
+              </div>
+            </Surface>
+
+            {status.data.stages.finalVideo.previewUrl ? (
+              <Surface className="overflow-hidden">
+                <SectionTitle title="最终成片预览" description="final_video 生成后会优先显示在生产看板顶部。" />
+                <div className="p-4">
+                  <video className="aspect-video w-full rounded-md bg-black" controls src={status.data.stages.finalVideo.previewUrl} />
+                </div>
+              </Surface>
+            ) : null}
+
+            <div className="grid gap-4">
+              <ProductionStageCard
+                title="内容源"
+                status={status.data.stages.source.status}
+                description={productionStageDescription("source", status.data.stages.source.status)}
+                metrics={[
+                  metricText("小说原文", status.data.stages.source.novelSourceCount),
+                  metricText("剧本原文", status.data.stages.source.scriptSourceCount),
+                  status.data.stages.source.activeScriptTitle ? `当前剧本：${status.data.stages.source.activeScriptTitle}` : "当前剧本：暂无",
+                ]}
+                summary={status.data.stages.source.summary}
+                primary={{ label: "让 Agent 生成剧本", action: "generate_script", disabled: status.data.stages.source.novelSourceCount + status.data.stages.source.scriptSourceCount === 0 }}
+                secondary={{ label: "进入原文与剧本", href: projectHref(projectId, "sources") }}
+                busy={busy}
+                onRun={runAction}
+              />
+              <ProductionStageCard
+                title="基础资产"
+                status={status.data.stages.assets.status}
+                description={productionStageDescription("assets", status.data.stages.assets.status)}
+                metrics={[
+                  metricText("角色", status.data.stages.assets.characterCount),
+                  metricText("场景", status.data.stages.assets.sceneCount),
+                  metricText("道具", status.data.stages.assets.propCount),
+                  metricText("参考图", status.data.stages.assets.referenceImageCount),
+                  metricText("待确认", status.data.stages.assets.pendingReviewCount),
+                ]}
+                summary={[...(status.data.stages.assets.summary.character ?? []), ...(status.data.stages.assets.summary.scene ?? []), ...(status.data.stages.assets.summary.prop ?? [])]}
+                primary={{ label: "分析剧本资产", action: "analyze_assets", disabled: !status.data.stages.source.activeScriptId }}
+                secondary={{ label: "生成缺失参考图", action: "generate_asset_images", disabled: !status.data.stages.source.activeScriptId }}
+                link={{ label: "进入资产", href: projectHref(projectId, "assets") }}
+                busy={busy}
+                onRun={runAction}
+              />
+              <ProductionStageCard
+                title="分镜"
+                status={status.data.stages.storyboard.status}
+                description={productionStageDescription("storyboard", status.data.stages.storyboard.status)}
+                metrics={[
+                  metricText("镜头", status.data.stages.storyboard.shotCount),
+                  metricText("已确认镜头", status.data.stages.storyboard.confirmedShotCount),
+                  metricText("待确认", status.data.stages.storyboard.pendingReviewCount),
+                ]}
+                summary={status.data.stages.storyboard.summary}
+                primary={{ label: "生成分镜", action: "generate_storyboard", disabled: !status.data.stages.source.activeScriptId }}
+                secondary={{ label: "进入分镜镜头", href: projectHref(projectId, "storyboard") }}
+                busy={busy}
+                onRun={runAction}
+              />
+              <ProductionStageCard
+                title="派生资产"
+                status={status.data.stages.shotAssets.status}
+                description={productionStageDescription("shot_assets", status.data.stages.shotAssets.status)}
+                metrics={[
+                  metricText("需求", status.data.stages.shotAssets.requirementCount),
+                  metricText("角色派生", status.data.stages.shotAssets.characterRequirementCount),
+                  metricText("场景派生", status.data.stages.shotAssets.sceneRequirementCount),
+                  metricText("道具派生", status.data.stages.shotAssets.propRequirementCount),
+                  metricText("派生参考图", status.data.stages.shotAssets.derivedImageCount),
+                  metricText("待确认", status.data.stages.shotAssets.pendingReviewCount),
+                ]}
+                summary={status.data.stages.shotAssets.summary}
+                primary={{ label: "分析镜头派生资产", action: "analyze_shot_assets", disabled: !status.data.stages.source.activeScriptId }}
+                secondary={{ label: "生成派生参考图", action: "generate_derived_asset_images", disabled: !status.data.stages.source.activeScriptId }}
+                link={{ label: "进入分镜镜头", href: projectHref(projectId, "storyboard") }}
+                busy={busy}
+                onRun={runAction}
+              />
+              <ProductionStageCard
+                title="镜头图片"
+                status={status.data.stages.shotImages.status}
+                description={productionStageDescription("shot_images", status.data.stages.shotImages.status)}
+                metrics={shotMediaMetrics(status.data.stages.shotImages)}
+                primary={{ label: "生成镜头图片", action: "generate_shot_images", disabled: !status.data.stages.source.activeScriptId }}
+                secondary={{ label: "重新生成失败图片", action: "generate_shot_images", disabled: !status.data.stages.source.activeScriptId || status.data.stages.shotImages.failed === 0 }}
+                link={{ label: "进入分镜镜头", href: projectHref(projectId, "storyboard") }}
+                busy={busy}
+                onRun={runAction}
+              />
+              <ProductionStageCard
+                title="镜头视频"
+                status={status.data.stages.shotVideos.status}
+                description={productionStageDescription("shot_videos", status.data.stages.shotVideos.status)}
+                metrics={shotMediaMetrics(status.data.stages.shotVideos)}
+                primary={{ label: "生成镜头视频", action: "generate_shot_videos", disabled: !status.data.stages.source.activeScriptId }}
+                secondary={{ label: "查看/取消运行任务", href: projectHref(projectId, "workflows") }}
+                link={{ label: "进入分镜镜头", href: projectHref(projectId, "storyboard") }}
+                busy={busy}
+                onRun={runAction}
+              />
+              <ProductionStageCard
+                title="最终成片"
+                status={status.data.stages.finalVideo.status}
+                description={productionStageDescription("final_video", status.data.stages.finalVideo.status)}
+                metrics={[
+                  status.data.stages.finalVideo.artifactId ? "最终成片：已生成" : "最终成片：未生成",
+                  status.data.stages.finalVideo.storageKey ? `对象：${status.data.stages.finalVideo.storageKey}` : "时间线文件：等待合成",
+                ]}
+                primary={{ label: "合成最终成片", action: "compose_final_video", disabled: !status.data.stages.source.activeScriptId }}
+                secondary={status.data.stages.finalVideo.previewUrl ? { label: "预览最终成片", href: status.data.stages.finalVideo.previewUrl } : { label: "进入媒体资产", href: projectHref(projectId, "vault") }}
+                busy={busy}
+                onRun={runAction}
+              />
+            </div>
+          </div>
+        ) : null}
+      </QueryBody>
+    </SessionGate>
+  );
+}
+
+function ProductionStageCard({
+  title,
+  status,
+  description,
+  metrics,
+  summary = [],
+  primary,
+  secondary,
+  link,
+  busy,
+  onRun,
+}: {
+  title: string;
+  status: string;
+  description: string;
+  metrics: string[];
+  summary?: string[];
+  primary: { label: string; action: string; disabled?: boolean };
+  secondary?: { label: string; action?: string; href?: string; disabled?: boolean };
+  link?: { label: string; href: string };
+  busy: string;
+  onRun: (action: string) => void;
+}) {
+  const busyThis = busy === primary.action || (secondary?.action ? busy === secondary.action : false);
+  return (
+    <Surface className="p-4">
+      <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-lg font-semibold text-zinc-100">{title}</h3>
+            <StatusBadge status={status} />
+          </div>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">{description}</p>
+          <div className="mt-4 grid gap-2 md:grid-cols-3">
+            {metrics.map((item) => (
+              <div className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-300" key={item}>
+                {item}
+              </div>
+            ))}
+          </div>
+          {summary.length ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {summary.slice(0, 8).map((item) => (
+                <Pill key={item}>{item}</Pill>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <div className="grid content-start gap-2">
+          <button className="studio-button studio-button-primary justify-center" disabled={busy !== "" || primary.disabled} onClick={() => onRun(primary.action)} type="button">
+            {busy === primary.action ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
+            {primary.label}
+          </button>
+          {secondary?.action ? (
+            <button className="studio-button justify-center" disabled={busy !== "" || secondary.disabled} onClick={() => secondary.action && onRun(secondary.action)} type="button">
+              {busyThis ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+              {secondary.label}
+            </button>
+          ) : null}
+          {secondary?.href ? (
+            secondary.href.startsWith("http") ? (
+              <a className="studio-button justify-center" href={secondary.href} rel="noreferrer" target="_blank">
+                <ArrowRight size={16} />
+                {secondary.label}
+              </a>
+            ) : (
+              <Link className="studio-button justify-center" href={secondary.href as Route}>
+                <ArrowRight size={16} />
+                {secondary.label}
+              </Link>
+            )
+          ) : null}
+          {link ? (
+            <Link className="studio-button justify-center" href={link.href as Route}>
+              <ArrowRight size={16} />
+              {link.label}
+            </Link>
+          ) : null}
+        </div>
+      </div>
+    </Surface>
   );
 }
 
@@ -861,14 +1133,28 @@ function AssetsContent({ projectId }: { projectId: string }) {
                     <p className="font-medium text-zinc-100">{asset.name}</p>
                     <p className="mt-1 text-xs text-zinc-500">{assetTypeLabel(asset.assetType)}</p>
                   </div>
-                  <StatusBadge status={asset.status} />
+                  <div className="grid justify-items-end gap-1">
+                    <StatusBadge status={asset.status} />
+                    <StatusBadge status={asset.reviewStatus ?? "pending"} />
+                  </div>
                 </div>
                 <p className="line-clamp-3 text-sm leading-6 text-zinc-400">{asset.description}</p>
+                <p className="text-xs text-zinc-500">参考图：{asset.referenceArtifactId || asset.referenceStorageKey ? "已生成" : "未生成"}</p>
                 <p className="text-xs text-zinc-500">关联派生需求：{requirements.data.filter((item) => item.assetId === asset.id).length}</p>
-                <button className="studio-button" disabled={busy !== ""} onClick={() => perform("生成参考图", async () => void (await studioApi.generateAssetImage(session, projectId, asset.id)))} type="button">
-                  <ImageIcon size={16} />
-                  生成参考图
-                </button>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <button className="studio-button" disabled={busy !== ""} onClick={() => perform("确认资产", async () => void (await studioApi.reviewAsset(session, projectId, asset.id, { reviewStatus: "approved" })))} type="button">
+                    <Check size={16} />
+                    确认资产
+                  </button>
+                  <button className="studio-button" disabled={busy !== ""} onClick={() => perform("标记需修改", async () => void (await studioApi.reviewAsset(session, projectId, asset.id, { reviewStatus: "needs_edit" })))} type="button">
+                    <X size={16} />
+                    需修改
+                  </button>
+                  <button className="studio-button" disabled={busy !== ""} onClick={() => perform("生成参考图", async () => void (await studioApi.generateAssetImage(session, projectId, asset.id)))} type="button">
+                    <ImageIcon size={16} />
+                    参考图
+                  </button>
+                </div>
               </div>
             </Surface>
           ))}
@@ -990,6 +1276,7 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                   <div className="flex items-center gap-2">
                     <h3 className="font-semibold text-zinc-100">镜头 {shot.shotNo}</h3>
                     <StatusBadge status={shot.status} />
+                    <StatusBadge status={shot.reviewStatus ?? "pending"} />
                   </div>
                   <p className="mt-3 text-sm leading-6 text-zinc-300">{shot.visual || "暂无视觉描述"}</p>
                   <dl className="mt-4 grid gap-2 text-sm text-zinc-400 md:grid-cols-2">
@@ -998,22 +1285,43 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                     <Meta label="情绪" value={shot.mood} />
                     <Meta label="时长" value={shot.durationSeconds ? `${shot.durationSeconds}s` : "未设置"} />
                   </dl>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("确认镜头", async () => void (await studioApi.reviewStoryboardShot(session, projectId, shot.id, { reviewStatus: "approved" })))} type="button">
+                      <Check size={16} />
+                      确认镜头
+                    </button>
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("标记镜头需修改", async () => void (await studioApi.reviewStoryboardShot(session, projectId, shot.id, { reviewStatus: "needs_edit" })))} type="button">
+                      <X size={16} />
+                      需修改
+                    </button>
+                  </div>
                 </div>
                 <div className="grid content-start gap-2">
                   <p className="text-sm font-medium text-zinc-100">派生资产需求</p>
                   {shotRequirements.map((req) => (
                     <div className="rounded-md border border-white/10 bg-white/[0.03] p-3 text-xs leading-5 text-zinc-400" key={req.id}>
-                      <p className="font-medium text-zinc-200">
-                        {assetTypeLabel(req.assetType)}：{req.assetName || req.assetId}
-                      </p>
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-medium text-zinc-200">
+                          {assetTypeLabel(req.assetType)}：{req.assetName || req.assetId}
+                        </p>
+                        <StatusBadge status={req.reviewStatus ?? "pending"} />
+                      </div>
                       <p>服装：{req.costume || "未指定"}</p>
                       <p>姿态：{req.pose || "未指定"}</p>
                       <p>表情：{req.expression || "未指定"}</p>
                       <p>动作：{req.action || "未指定"}</p>
                       <p>状态：{req.sceneState || req.propState || "未指定"}</p>
-                      <button className="mt-2 text-cyan-100" onClick={() => perform("生成派生资产图", async () => void (await studioApi.generateDerivedAssetImage(session, projectId, req.id)))} type="button">
-                        生成派生资产图
-                      </button>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button className="text-cyan-100" onClick={() => perform("确认派生资产需求", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, req.id, { reviewStatus: "approved" })))} type="button">
+                          确认需求
+                        </button>
+                        <button className="text-amber-100" onClick={() => perform("标记派生资产需修改", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, req.id, { reviewStatus: "needs_edit" })))} type="button">
+                          需修改
+                        </button>
+                        <button className="text-cyan-100" onClick={() => perform("生成派生资产图", async () => void (await studioApi.generateDerivedAssetImage(session, projectId, req.id)))} type="button">
+                          生成派生资产图
+                        </button>
+                      </div>
                     </div>
                   ))}
                   {!shotRequirements.length ? <p className="text-sm text-zinc-500">暂无派生资产需求。</p> : null}
@@ -1920,6 +2228,119 @@ function Meta({ label, value }: { label: string; value?: string }) {
 
 function Pill({ children }: { children: React.ReactNode }) {
   return <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[12px] text-zinc-400">{children}</span>;
+}
+
+function productionActionLabel(action: string) {
+  switch (action) {
+    case "generate_script":
+      return "生成剧本";
+    case "analyze_assets":
+      return "分析剧本资产";
+    case "generate_asset_images":
+      return "生成基础资产参考图";
+    case "generate_storyboard":
+      return "生成分镜";
+    case "analyze_shot_assets":
+      return "分析派生资产";
+    case "generate_derived_asset_images":
+      return "生成派生参考图";
+    case "generate_shot_images":
+      return "生成镜头图片";
+    case "generate_shot_videos":
+      return "生成镜头视频";
+    case "compose_final_video":
+      return "合成最终成片";
+    case "run_full_production":
+      return "完整生产";
+    default:
+      return "生产动作";
+  }
+}
+
+function productionStageLabel(stage: string) {
+  switch (stage) {
+    case "source":
+      return "内容源";
+    case "assets":
+      return "基础资产";
+    case "storyboard":
+      return "分镜";
+    case "shot_assets":
+      return "派生资产";
+    case "shot_images":
+      return "镜头图片";
+    case "shot_videos":
+      return "镜头视频";
+    case "final_video":
+      return "最终成片";
+    default:
+      return stage || "未开始";
+  }
+}
+
+function productionStageDescription(stage: string, status: string) {
+  if (status === "needs_review") {
+    return "仍有未确认内容。可以继续运行后续阶段，但建议先检查并确认输出。";
+  }
+  if (status === "failed") {
+    return "本阶段存在失败项，可以修正输入后重新运行该阶段。";
+  }
+  if (status === "running") {
+    return "本阶段正在运行，完成后看板会显示新的数量和状态。";
+  }
+  switch (stage) {
+    case "source":
+      return "导入小说原文或剧本原文，也可以让 Agent 从原文生成可生产剧本。";
+    case "assets":
+      return "从剧本中沉淀角色、场景和道具，并为缺失项目生成基础参考图。";
+    case "storyboard":
+      return "根据当前剧本生成镜头列表，确认镜头后进入派生资产和镜头生产。";
+    case "shot_assets":
+      return "分析每个镜头需要的角色服装、姿态、场景状态和道具变化。";
+    case "shot_images":
+      return "为每个镜头生成静态图，作为后续视频生成的视觉依据。";
+    case "shot_videos":
+      return "基于镜头图片生成短视频片段，失败项可在本阶段重跑。";
+    case "final_video":
+      return "将已完成的镜头视频合成为最终成片，并在 Vault 中保存。";
+    default:
+      return "按阶段推进生产流程。";
+  }
+}
+
+function nextProductionAction(status: ProductionStatus) {
+  switch (status.overall.stage) {
+    case "source":
+      return status.stages.source.novelSourceCount + status.stages.source.scriptSourceCount > 0 ? "generate_script" : "";
+    case "assets":
+      return status.stages.assets.missingReferenceImageCount > 0 && status.stages.assets.pendingReviewCount === 0 ? "generate_asset_images" : "analyze_assets";
+    case "storyboard":
+      return "generate_storyboard";
+    case "shot_assets":
+      return status.stages.shotAssets.missingDerivedImageCount > 0 && status.stages.shotAssets.pendingReviewCount === 0 ? "generate_derived_asset_images" : "analyze_shot_assets";
+    case "shot_images":
+      return "generate_shot_images";
+    case "shot_videos":
+      return "generate_shot_videos";
+    case "final_video":
+      return status.stages.finalVideo.status === "ready" ? "" : "compose_final_video";
+    default:
+      return "";
+  }
+}
+
+function metricText(label: string, value: number) {
+  return `${label}：${value}`;
+}
+
+function shotMediaMetrics(stage: ProductionStatus["stages"]["shotImages"]) {
+  return [
+    metricText("总数", stage.total),
+    metricText("已完成", stage.succeeded),
+    metricText("运行中", stage.running),
+    metricText("失败", stage.failed),
+    metricText("待生成", stage.pending),
+  ];
 }
 
 function compactRecord(record: Record<string, unknown>): JsonRecord {
