@@ -121,6 +121,10 @@ export type CanonicalAsset = {
   referenceStorageKey?: string;
   status: string;
   reviewStatus?: string;
+  manualOverride?: boolean;
+  staleState?: string;
+  editedBy?: string;
+  editedAt?: string;
   sourceScriptIds?: string[];
   createdAt?: string;
   updatedAt?: string;
@@ -147,6 +151,10 @@ export type ShotAssetRequirement = {
   derivedStorageKey?: string;
   status: string;
   reviewStatus?: string;
+  manualOverride?: boolean;
+  staleState?: string;
+  editedBy?: string;
+  editedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -207,6 +215,10 @@ export type StoryboardShot = {
   externalTaskId?: string;
   status: string;
   reviewStatus?: string;
+  manualOverride?: boolean;
+  staleState?: string;
+  editedBy?: string;
+  editedAt?: string;
 };
 
 export type ProductionStatus = {
@@ -241,6 +253,9 @@ export type ProductionStatus = {
       missingReferenceImageCount: number;
       approvedCount: number;
       pendingReviewCount: number;
+      manualOverrideCount: number;
+      staleCount: number;
+      downstreamStaleCount: number;
       summary: Record<string, string[]>;
     };
     storyboard: {
@@ -248,6 +263,8 @@ export type ProductionStatus = {
       shotCount: number;
       confirmedShotCount: number;
       pendingReviewCount: number;
+      manualOverrideCount: number;
+      staleShotCount: number;
       summary: string[];
     };
     shotAssets: {
@@ -260,6 +277,8 @@ export type ProductionStatus = {
       missingDerivedImageCount: number;
       approvedCount: number;
       pendingReviewCount: number;
+      manualOverrideCount: number;
+      staleRequirementCount: number;
       summary: string[];
     };
     shotImages: ProductionShotMediaStage;
@@ -270,6 +289,9 @@ export type ProductionStatus = {
       mediaFileId?: string | null;
       previewUrl?: string | null;
       storageKey?: string | null;
+      workflowRunId?: string | null;
+      sourceWorkflowRunId?: string | null;
+      stale?: boolean;
     };
   };
 };
@@ -281,6 +303,7 @@ export type ProductionShotMediaStage = {
   failed: number;
   running: number;
   pending: number;
+  stale: number;
 };
 
 export type ProductionActionResponse = {
@@ -296,6 +319,14 @@ export type ReviewResponse = {
   reviewStatus: string;
   note?: string;
   updatedAt: string;
+};
+
+export type RegenerateResponse = {
+  targetType: string;
+  targetId: string;
+  workflowRunId: string;
+  status: string;
+  workflowType: string;
 };
 
 export type Artifact = {

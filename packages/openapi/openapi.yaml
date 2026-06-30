@@ -629,6 +629,32 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/regenerate:
+    post:
+      operationId: regenerateCreativeObject
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegenerateRequest"
+      responses:
+        "202":
+          description: Partial regeneration workflow queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegenerateResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/sources:
     get:
       operationId: listProjectSources
@@ -1096,6 +1122,33 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ShotAssetRequirementListEnvelope"
+  /api/projects/{projectId}/shot-asset-requirements/{requirementId}:
+    patch:
+      operationId: updateShotAssetRequirement
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequirementId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateShotAssetRequirementRequest"
+      responses:
+        "200":
+          description: Updated shot asset requirement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotAssetRequirementEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/shot-asset-requirements/{requirementId}/generate-image:
     post:
       operationId: generateDerivedAssetImage
@@ -1133,6 +1186,33 @@ paths:
               schema:
                 $ref: "#/components/schemas/ReviewResponseEnvelope"
         "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}:
+    patch:
+      operationId: updateStoryboardShot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateStoryboardShotRequest"
+      responses:
+        "200":
+          description: Updated storyboard shot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardShotEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
@@ -3088,7 +3168,7 @@ components:
           format: date-time
     CanonicalAsset:
       type: object
-      required: [id, organizationId, projectId, assetType, name, description, visualTraits, status, reviewStatus, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, assetType, name, description, visualTraits, status, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -3123,6 +3203,16 @@ components:
           type: string
         reviewStatus:
           $ref: "#/components/schemas/ReviewStatus"
+        manualOverride:
+          type: boolean
+        staleState:
+          $ref: "#/components/schemas/StaleState"
+        editedBy:
+          type: string
+          format: uuid
+        editedAt:
+          type: string
+          format: date-time
         sourceScriptIds:
           type: array
           items:
@@ -3142,7 +3232,7 @@ components:
           format: date-time
     ShotAssetRequirement:
       type: object
-      required: [id, organizationId, projectId, storyboardShotId, assetId, requirementType, status, reviewStatus, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, storyboardShotId, assetId, requirementType, status, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -3194,6 +3284,16 @@ components:
           type: string
         reviewStatus:
           $ref: "#/components/schemas/ReviewStatus"
+        manualOverride:
+          type: boolean
+        staleState:
+          $ref: "#/components/schemas/StaleState"
+        editedBy:
+          type: string
+          format: uuid
+        editedAt:
+          type: string
+          format: date-time
         metadata:
           type: object
           additionalProperties: true
@@ -3614,7 +3714,7 @@ components:
           type: string
     StoryboardShot:
       type: object
-      required: [id, workflowRunId, shotIndex, shotNo, status, reviewStatus]
+      required: [id, workflowRunId, shotIndex, shotNo, status, reviewStatus, manualOverride, staleState]
       properties:
         id:
           type: string
@@ -3672,12 +3772,25 @@ components:
           type: string
         reviewStatus:
           $ref: "#/components/schemas/ReviewStatus"
+        manualOverride:
+          type: boolean
+        staleState:
+          $ref: "#/components/schemas/StaleState"
+        editedBy:
+          type: string
+          format: uuid
+        editedAt:
+          type: string
+          format: date-time
     ReviewStatus:
       type: string
       enum: [pending, approved, rejected, needs_edit]
+    StaleState:
+      type: string
+      enum: [fresh, upstream_changed, needs_regeneration]
     ProductionStageStatus:
       type: string
-      enum: [pending, not_started, imported, ready, needs_review, running, partial, failed, completed]
+      enum: [pending, not_started, imported, ready, needs_review, needs_regeneration, running, partial, failed, completed]
     ProductionStatus:
       type: object
       required: [projectId, project, overall, stages]
@@ -3751,7 +3864,7 @@ components:
             type: string
     ProductionAssetsStage:
       type: object
-      required: [status, characterCount, sceneCount, propCount, referenceImageCount, missingReferenceImageCount, approvedCount, pendingReviewCount, summary]
+      required: [status, characterCount, sceneCount, propCount, referenceImageCount, missingReferenceImageCount, approvedCount, pendingReviewCount, manualOverrideCount, staleCount, downstreamStaleCount, summary]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
@@ -3769,6 +3882,12 @@ components:
           type: integer
         pendingReviewCount:
           type: integer
+        manualOverrideCount:
+          type: integer
+        staleCount:
+          type: integer
+        downstreamStaleCount:
+          type: integer
         summary:
           type: object
           additionalProperties:
@@ -3777,7 +3896,7 @@ components:
               type: string
     ProductionStoryboardStage:
       type: object
-      required: [status, shotCount, confirmedShotCount, pendingReviewCount, summary]
+      required: [status, shotCount, confirmedShotCount, pendingReviewCount, manualOverrideCount, staleShotCount, summary]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
@@ -3787,13 +3906,17 @@ components:
           type: integer
         pendingReviewCount:
           type: integer
+        manualOverrideCount:
+          type: integer
+        staleShotCount:
+          type: integer
         summary:
           type: array
           items:
             type: string
     ProductionShotAssetsStage:
       type: object
-      required: [status, requirementCount, characterRequirementCount, sceneRequirementCount, propRequirementCount, derivedImageCount, missingDerivedImageCount, approvedCount, pendingReviewCount, summary]
+      required: [status, requirementCount, characterRequirementCount, sceneRequirementCount, propRequirementCount, derivedImageCount, missingDerivedImageCount, approvedCount, pendingReviewCount, manualOverrideCount, staleRequirementCount, summary]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
@@ -3813,13 +3936,17 @@ components:
           type: integer
         pendingReviewCount:
           type: integer
+        manualOverrideCount:
+          type: integer
+        staleRequirementCount:
+          type: integer
         summary:
           type: array
           items:
             type: string
     ProductionShotMediaStage:
       type: object
-      required: [status, total, succeeded, failed, running, pending]
+      required: [status, total, succeeded, failed, running, pending, stale]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
@@ -3833,9 +3960,11 @@ components:
           type: integer
         pending:
           type: integer
+        stale:
+          type: integer
     ProductionFinalVideoStage:
       type: object
-      required: [status]
+      required: [status, stale]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
@@ -3850,6 +3979,14 @@ components:
           format: uri
         storageKey:
           type: string
+        workflowRunId:
+          type: string
+          format: uuid
+        sourceWorkflowRunId:
+          type: string
+          format: uuid
+        stale:
+          type: boolean
     ProductionActionRequest:
       type: object
       required: [action]
@@ -3880,6 +4017,36 @@ components:
         workflowType:
           type: string
         note:
+          type: string
+    RegenerateRequest:
+      type: object
+      required: [targetType]
+      properties:
+        targetType:
+          type: string
+          enum: [canonical_asset_image, derived_asset_image, shot_image, shot_video, final_video]
+        targetId:
+          type: string
+          format: uuid
+          description: Required for all targets except final_video. For final_video it optionally selects the source workflow run.
+        options:
+          type: object
+          additionalProperties: true
+    RegenerateResponse:
+      type: object
+      required: [targetType, targetId, workflowRunId, status, workflowType]
+      properties:
+        targetType:
+          type: string
+        targetId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        workflowType:
           type: string
     ReviewRequest:
       type: object
@@ -4106,6 +4273,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ProductionActionResponse"
+    RegenerateResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/RegenerateResponse"
     ReviewResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -4227,6 +4401,13 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/CanonicalAsset"
+    ShotAssetRequirementEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ShotAssetRequirement"
     ShotAssetRequirementListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -4348,6 +4529,13 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/WorkflowNodeRun"
+    StoryboardShotEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/StoryboardShot"
     StoryboardShotListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -6743,6 +6931,44 @@ components:
           additionalProperties: true
         status:
           type: string
+    UpdateShotAssetRequirementRequest:
+      type: object
+      properties:
+        costume:
+          type: string
+        pose:
+          type: string
+        expression:
+          type: string
+        action:
+          type: string
+        cameraRelation:
+          type: string
+        sceneState:
+          type: string
+        propState:
+          type: string
+        prompt:
+          type: string
+    UpdateStoryboardShotRequest:
+      type: object
+      properties:
+        visual:
+          type: string
+        camera:
+          type: string
+        motion:
+          type: string
+        mood:
+          type: string
+        durationSeconds:
+          type: number
+          format: double
+          minimum: 0
+        imagePrompt:
+          type: string
+        videoPrompt:
+          type: string
     CreateWorkflowRunRequest:
       type: object
       required: [projectId]
@@ -6752,7 +6978,7 @@ components:
           format: uuid
         workflowType:
           type: string
-          enum: [video_production, text_to_storyboard, source_to_script, script_to_assets, script_to_storyboard, script_to_video, full_production]
+          enum: [video_production, text_to_storyboard, source_to_script, script_to_assets, script_to_storyboard, script_to_video, full_production, regenerate_canonical_asset_image, regenerate_derived_asset_image, regenerate_shot_image, regenerate_shot_video, regenerate_final_video]
           default: video_production
           description: video_production keeps the prompt-only path unless input.scriptId is provided.
         prompt:

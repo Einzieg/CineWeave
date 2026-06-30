@@ -113,6 +113,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/projects/{projectId}", s.withAuth(s.deleteProject))
 	mux.HandleFunc("GET /api/projects/{projectId}/production/status", s.withAuth(s.getProductionStatus))
 	mux.HandleFunc("POST /api/projects/{projectId}/production/actions", s.withAuth(s.runProductionAction))
+	mux.HandleFunc("POST /api/projects/{projectId}/regenerate", s.withAuth(s.regenerateCreativeObject))
 	mux.HandleFunc("GET /api/projects/{projectId}/sources", s.withAuth(s.listProjectSources))
 	mux.HandleFunc("POST /api/projects/{projectId}/sources", s.withAuth(s.createProjectSource))
 	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.getProjectSource))
@@ -137,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{projectId}/canonical-assets/{assetId}", s.withAuth(s.getCanonicalAsset))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/canonical-assets/{assetId}", s.withAuth(s.updateCanonicalAsset))
 	mux.HandleFunc("GET /api/projects/{projectId}/shot-asset-requirements", s.withAuth(s.listShotAssetRequirements))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/shot-asset-requirements/{requirementId}", s.withAuth(s.updateShotAssetRequirement))
 	mux.HandleFunc("POST /api/projects/{projectId}/shot-asset-requirements/{requirementId}/generate-image", s.withAuth(s.generateDerivedAssetImage))
 	mux.HandleFunc("POST /api/projects/{projectId}/shot-asset-requirements/{requirementId}/review", s.withAuth(s.reviewShotAssetRequirement))
 	mux.HandleFunc("GET /api/projects/{projectId}/assets", s.withAuth(s.listAssets))
@@ -148,6 +150,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/projects/{projectId}/assets/{assetId}", s.withAuth(s.updateAsset))
 	mux.HandleFunc("DELETE /api/projects/{projectId}/assets/{assetId}", s.withAuth(s.deleteAsset))
 	mux.HandleFunc("POST /api/projects/{projectId}/assets/{assetId}/variants", s.withAuth(s.createAssetVariant))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/storyboard-shots/{shotId}", s.withAuth(s.updateStoryboardShot))
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/review", s.withAuth(s.reviewStoryboardShot))
 
 	mux.HandleFunc("GET /api/providers/connectors", s.withAuth(s.listProviderConnectors))

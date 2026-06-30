@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"testing"
+
+	"github.com/Einzieg/cineweave/internal/authz"
 )
 
 func TestProductionStatusHelpers(t *testing.T) {
@@ -23,6 +25,26 @@ func TestProductionStatusHelpers(t *testing.T) {
 	}
 	if permission, ok := productionActionPermission("generate_asset_images"); !ok || permission != "asset.generate" {
 		t.Fatalf("production action permission = %s ok=%v", permission, ok)
+	}
+	regenerationCases := []struct {
+		targetType   string
+		workflowType string
+		permission   string
+	}{
+		{"canonical_asset_image", "regenerate_canonical_asset_image", authz.PermissionAssetGenerate},
+		{"derived_asset_image", "regenerate_derived_asset_image", authz.PermissionAssetGenerate},
+		{"shot_image", "regenerate_shot_image", authz.PermissionStoryboardGenerate},
+		{"shot_video", "regenerate_shot_video", authz.PermissionWorkflowRun},
+		{"final_video", "regenerate_final_video", authz.PermissionWorkflowRun},
+	}
+	for _, tc := range regenerationCases {
+		workflowType, workflowFunc, permissions, ok := regenerationWorkflow(tc.targetType)
+		if !ok || workflowType != tc.workflowType || workflowFunc == nil || len(permissions) == 0 || permissions[0] != tc.permission {
+			t.Fatalf("regeneration workflow %s = workflowType=%s permissions=%v ok=%v", tc.targetType, workflowType, permissions, ok)
+		}
+	}
+	if _, _, _, ok := regenerationWorkflow("unknown"); ok {
+		t.Fatalf("unknown regeneration target should be rejected")
 	}
 }
 
@@ -127,6 +149,80 @@ func TestProductionReviewAPI(t *testing.T) {
 	assertAPIErrorCode(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/assets/"+assetID+"/review", seed.ownerToken, seed.organizationID, map[string]any{
 		"reviewStatus": "done",
 	}, http.StatusUnprocessableEntity, "VALIDATION_FAILED")
+}
+
+func TestCreativeObjectEditAPIMarksManualOverrideAndStale(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	assetID := seed.insertCanonicalAsset(t, "character", "Lin Chu", "approved", "")
+	workflowRunID := seed.insertWorkflowRun(t, "succeeded")
+	shotID := seed.insertProductionShot(t, workflowRunID, "", "", "approved", "video_succeeded")
+	requirementID := seed.insertShotAssetRequirement(t, workflowRunID, shotID, assetID, "approved", "")
+
+	var asset CanonicalAsset
+	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID, seed.ownerToken, seed.organizationID, map[string]any{
+		"name":         "Lin Chu Revised",
+		"description":  "manual description",
+		"visualTraits": map[string]any{"hair": "black"},
+	}, &asset)
+	if !asset.ManualOverride || asset.StaleState != "fresh" || asset.ReviewStatus != "pending" || asset.Name != "Lin Chu Revised" {
+		t.Fatalf("updated asset = %+v", asset)
+	}
+	assertStaleState(t, seed, "shot_asset_requirements", requirementID, "upstream_changed")
+	assertStaleState(t, seed, "storyboard_shots", shotID, "needs_regeneration")
+
+	var shot StoryboardShot
+	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/storyboard-shots/"+shotID, seed.ownerToken, seed.organizationID, map[string]any{
+		"visual":          "Manual shot visual",
+		"durationSeconds": 6,
+		"imagePrompt":     "manual image prompt",
+	}, &shot)
+	if !shot.ManualOverride || shot.StaleState != "needs_regeneration" || shot.ReviewStatus != "pending" || shot.Visual != "Manual shot visual" {
+		t.Fatalf("updated shot = %+v", shot)
+	}
+
+	var requirement ShotAssetRequirement
+	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/shot-asset-requirements/"+requirementID, seed.ownerToken, seed.organizationID, map[string]any{
+		"pose":   "standing",
+		"prompt": "manual derived prompt",
+	}, &requirement)
+	if !requirement.ManualOverride || requirement.StaleState != "needs_regeneration" || requirement.ReviewStatus != "pending" || requirement.Pose == nil || *requirement.Pose != "standing" {
+		t.Fatalf("updated requirement = %+v", requirement)
+	}
+	assertStaleState(t, seed, "storyboard_shots", shotID, "needs_regeneration")
+
+	var eventCount int
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT count(*)
+		FROM event_outbox
+		WHERE project_id = $1
+		  AND event_type IN ('asset.updated', 'storyboard.shot.updated', 'shot_asset_requirement.updated')
+	`, seed.projectID).Scan(&eventCount); err != nil {
+		t.Fatalf("count edit events: %v", err)
+	}
+	if eventCount != 3 {
+		t.Fatalf("edit event count = %d, want 3", eventCount)
+	}
+}
+
+func assertStaleState(t *testing.T, seed *artifactPreviewSeed, table, id, want string) {
+	t.Helper()
+	queryByTable := map[string]string{
+		"storyboard_shots":        `SELECT stale_state FROM storyboard_shots WHERE id = $1 AND project_id = $2`,
+		"shot_asset_requirements": `SELECT stale_state FROM shot_asset_requirements WHERE id = $1 AND project_id = $2`,
+	}
+	query, ok := queryByTable[table]
+	if !ok {
+		t.Fatalf("unsupported stale state table %s", table)
+	}
+	var got string
+	if err := seed.pool.QueryRow(seed.ctx, query, id, seed.projectID).Scan(&got); err != nil {
+		t.Fatalf("read stale state %s %s: %v", table, id, err)
+	}
+	if got != want {
+		t.Fatalf("%s %s stale_state = %s, want %s", table, id, got, want)
+	}
 }
 
 func (s *artifactPreviewSeed) insertProjectSource(t *testing.T, sourceType, title string) string {

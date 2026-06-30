@@ -43,8 +43,10 @@ import {
   ImageIcon,
   Loader2,
   MessageSquareText,
+  Pencil,
   Play,
   Plus,
+  RefreshCw,
   Save,
   Search,
   Send,
@@ -599,6 +601,8 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("道具", status.data.stages.assets.propCount),
                   metricText("参考图", status.data.stages.assets.referenceImageCount),
                   metricText("待确认", status.data.stages.assets.pendingReviewCount),
+                  metricText("人工修改", status.data.stages.assets.manualOverrideCount),
+                  metricText("下游过期", status.data.stages.assets.downstreamStaleCount),
                 ]}
                 summary={[...(status.data.stages.assets.summary.character ?? []), ...(status.data.stages.assets.summary.scene ?? []), ...(status.data.stages.assets.summary.prop ?? [])]}
                 primary={{ label: "分析剧本资产", action: "analyze_assets", disabled: !status.data.stages.source.activeScriptId }}
@@ -615,6 +619,8 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("镜头", status.data.stages.storyboard.shotCount),
                   metricText("已确认镜头", status.data.stages.storyboard.confirmedShotCount),
                   metricText("待确认", status.data.stages.storyboard.pendingReviewCount),
+                  metricText("人工修改", status.data.stages.storyboard.manualOverrideCount),
+                  metricText("需重生成", status.data.stages.storyboard.staleShotCount),
                 ]}
                 summary={status.data.stages.storyboard.summary}
                 primary={{ label: "生成分镜", action: "generate_storyboard", disabled: !status.data.stages.source.activeScriptId }}
@@ -633,6 +639,8 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("道具派生", status.data.stages.shotAssets.propRequirementCount),
                   metricText("派生参考图", status.data.stages.shotAssets.derivedImageCount),
                   metricText("待确认", status.data.stages.shotAssets.pendingReviewCount),
+                  metricText("人工修改", status.data.stages.shotAssets.manualOverrideCount),
+                  metricText("派生图过期", status.data.stages.shotAssets.staleRequirementCount),
                 ]}
                 summary={status.data.stages.shotAssets.summary}
                 primary={{ label: "分析镜头派生资产", action: "analyze_shot_assets", disabled: !status.data.stages.source.activeScriptId }}
@@ -670,6 +678,7 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 metrics={[
                   status.data.stages.finalVideo.artifactId ? "最终成片：已生成" : "最终成片：未生成",
                   status.data.stages.finalVideo.storageKey ? `对象：${status.data.stages.finalVideo.storageKey}` : "时间线文件：等待合成",
+                  status.data.stages.finalVideo.stale ? "最终成片可能不是最新" : "最终成片状态：最新",
                 ]}
                 primary={{ label: "合成最终成片", action: "compose_final_video", disabled: !status.data.stages.source.activeScriptId }}
                 secondary={status.data.stages.finalVideo.previewUrl ? { label: "预览最终成片", href: status.data.stages.finalVideo.previewUrl } : { label: "进入媒体资产", href: projectHref(projectId, "vault") }}
@@ -1062,6 +1071,7 @@ function AssetsContent({ projectId }: { projectId: string }) {
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [editingAsset, setEditingAsset] = useState<CanonicalAsset | null>(null);
   const effectiveScriptId = validSelection(scriptId, scripts.data);
   const filtered = assets.data.filter((asset) => filter === "all" || asset.assetType === filter);
 
@@ -1104,13 +1114,7 @@ function AssetsContent({ projectId }: { projectId: string }) {
           <button
             className="studio-button"
             disabled={busy !== ""}
-            onClick={() =>
-              perform("生成缺失参考图", async () => {
-                for (const asset of assets.data.filter((item) => !item.referenceArtifactId)) {
-                  await studioApi.generateAssetImage(session, projectId, asset.id);
-                }
-              })
-            }
+            onClick={() => perform("生成缺失参考图", async () => void (await studioApi.runProductionAction(session, projectId, { action: "generate_asset_images", options: {} })))}
             type="button"
           >
             <ImageIcon size={16} />
@@ -1122,46 +1126,71 @@ function AssetsContent({ projectId }: { projectId: string }) {
 
       {filtered.length ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((asset) => (
-            <Surface className="overflow-hidden" key={asset.id}>
-              <div className="grid aspect-video place-items-center bg-black/30 text-zinc-600">
-                <ImageIcon size={28} />
-              </div>
-              <div className="grid gap-3 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-zinc-100">{asset.name}</p>
-                    <p className="mt-1 text-xs text-zinc-500">{assetTypeLabel(asset.assetType)}</p>
+          {filtered.map((asset) => {
+            const linkedRequirements = requirements.data.filter((item) => item.assetId === asset.id);
+            const staleRequirementCount = linkedRequirements.filter((item) => item.staleState && item.staleState !== "fresh").length;
+            return (
+              <Surface className="overflow-hidden" key={asset.id}>
+                <div className="grid aspect-video place-items-center bg-black/30 text-zinc-600">
+                  <ImageIcon size={28} />
+                </div>
+                <div className="grid gap-3 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-zinc-100">{asset.name}</p>
+                      <p className="mt-1 text-xs text-zinc-500">{assetTypeLabel(asset.assetType)}</p>
+                    </div>
+                    <div className="grid justify-items-end gap-1">
+                      <StatusBadge status={asset.status} />
+                      <StatusBadge status={asset.reviewStatus ?? "pending"} />
+                      {asset.manualOverride ? <Pill>人工修改</Pill> : null}
+                      {asset.staleState && asset.staleState !== "fresh" ? <StatusBadge status={asset.staleState} /> : null}
+                    </div>
                   </div>
-                  <div className="grid justify-items-end gap-1">
-                    <StatusBadge status={asset.status} />
-                    <StatusBadge status={asset.reviewStatus ?? "pending"} />
+                  <p className="line-clamp-3 text-sm leading-6 text-zinc-400">{asset.description}</p>
+                  <p className="text-xs text-zinc-500">参考图：{asset.referenceArtifactId || asset.referenceStorageKey ? "已生成" : "未生成"}</p>
+                  <p className="text-xs text-zinc-500">关联派生需求：{linkedRequirements.length}</p>
+                  {staleRequirementCount ? <p className="text-xs text-amber-100">下游派生资产需重生成：{staleRequirementCount}</p> : null}
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("确认资产", async () => void (await studioApi.reviewAsset(session, projectId, asset.id, { reviewStatus: "approved" })))} type="button">
+                      <Check size={16} />
+                      确认资产
+                    </button>
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("标记需修改", async () => void (await studioApi.reviewAsset(session, projectId, asset.id, { reviewStatus: "needs_edit" })))} type="button">
+                      <X size={16} />
+                      需修改
+                    </button>
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => setEditingAsset(asset)} type="button">
+                      <Pencil size={16} />
+                      编辑资产
+                    </button>
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("重新生成参考图", async () => void (await studioApi.regenerate(session, projectId, { targetType: "canonical_asset_image", targetId: asset.id, options: { force: true } })))} type="button">
+                      <RefreshCw size={16} />
+                      参考图
+                    </button>
                   </div>
                 </div>
-                <p className="line-clamp-3 text-sm leading-6 text-zinc-400">{asset.description}</p>
-                <p className="text-xs text-zinc-500">参考图：{asset.referenceArtifactId || asset.referenceStorageKey ? "已生成" : "未生成"}</p>
-                <p className="text-xs text-zinc-500">关联派生需求：{requirements.data.filter((item) => item.assetId === asset.id).length}</p>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <button className="studio-button" disabled={busy !== ""} onClick={() => perform("确认资产", async () => void (await studioApi.reviewAsset(session, projectId, asset.id, { reviewStatus: "approved" })))} type="button">
-                    <Check size={16} />
-                    确认资产
-                  </button>
-                  <button className="studio-button" disabled={busy !== ""} onClick={() => perform("标记需修改", async () => void (await studioApi.reviewAsset(session, projectId, asset.id, { reviewStatus: "needs_edit" })))} type="button">
-                    <X size={16} />
-                    需修改
-                  </button>
-                  <button className="studio-button" disabled={busy !== ""} onClick={() => perform("生成参考图", async () => void (await studioApi.generateAssetImage(session, projectId, asset.id)))} type="button">
-                    <ImageIcon size={16} />
-                    参考图
-                  </button>
-                </div>
-              </div>
-            </Surface>
-          ))}
+              </Surface>
+            );
+          })}
         </div>
       ) : (
         <EmptyState title="还没有资产" description="选择剧本后点击“分析剧本资产”，提取角色、场景和道具。" />
       )}
+      <AssetEditDialog
+        asset={editingAsset}
+        busy={busy !== ""}
+        onClose={() => setEditingAsset(null)}
+        onSave={(body) =>
+          perform("保存资产修订", async () => {
+            if (!editingAsset) {
+              return;
+            }
+            await studioApi.updateCanonicalAsset(session, projectId, editingAsset.id, body);
+            setEditingAsset(null);
+          })
+        }
+      />
     </SessionGate>
   );
 }
@@ -1184,6 +1213,8 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const [maxShots, setMaxShots] = useState("3");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [editingShot, setEditingShot] = useState<StoryboardShot | null>(null);
+  const [editingRequirement, setEditingRequirement] = useState<ShotAssetRequirement | null>(null);
   const storyboardRuns = workflows.data.filter((run) => ["script_to_storyboard", "script_to_video", "full_production"].includes(stringFrom(run.input.workflowType)));
   const effectiveScriptId = validSelection(scriptId, scripts.data);
   const effectiveWorkflowRunId = validSelection(workflowRunId, storyboardRuns);
@@ -1277,6 +1308,8 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                     <h3 className="font-semibold text-zinc-100">镜头 {shot.shotNo}</h3>
                     <StatusBadge status={shot.status} />
                     <StatusBadge status={shot.reviewStatus ?? "pending"} />
+                    {shot.manualOverride ? <Pill>人工修改</Pill> : null}
+                    {shot.staleState && shot.staleState !== "fresh" ? <StatusBadge status={shot.staleState} /> : null}
                   </div>
                   <p className="mt-3 text-sm leading-6 text-zinc-300">{shot.visual || "暂无视觉描述"}</p>
                   <dl className="mt-4 grid gap-2 text-sm text-zinc-400 md:grid-cols-2">
@@ -1294,6 +1327,18 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                       <X size={16} />
                       需修改
                     </button>
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => setEditingShot(shot)} type="button">
+                      <Pencil size={16} />
+                      编辑镜头
+                    </button>
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("重新生成镜头图片", async () => void (await studioApi.regenerate(session, projectId, { targetType: "shot_image", targetId: shot.id, options: { force: true } })))} type="button">
+                      <RefreshCw size={16} />
+                      镜头图
+                    </button>
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("重新生成镜头视频", async () => void (await studioApi.regenerate(session, projectId, { targetType: "shot_video", targetId: shot.id, options: { force: true } })))} type="button">
+                      <Video size={16} />
+                      镜头视频
+                    </button>
                   </div>
                 </div>
                 <div className="grid content-start gap-2">
@@ -1304,7 +1349,11 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                         <p className="font-medium text-zinc-200">
                           {assetTypeLabel(req.assetType)}：{req.assetName || req.assetId}
                         </p>
-                        <StatusBadge status={req.reviewStatus ?? "pending"} />
+                        <div className="grid justify-items-end gap-1">
+                          <StatusBadge status={req.reviewStatus ?? "pending"} />
+                          {req.manualOverride ? <Pill>人工修改</Pill> : null}
+                          {req.staleState && req.staleState !== "fresh" ? <StatusBadge status={req.staleState} /> : null}
+                        </div>
                       </div>
                       <p>服装：{req.costume || "未指定"}</p>
                       <p>姿态：{req.pose || "未指定"}</p>
@@ -1318,8 +1367,11 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                         <button className="text-amber-100" onClick={() => perform("标记派生资产需修改", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, req.id, { reviewStatus: "needs_edit" })))} type="button">
                           需修改
                         </button>
-                        <button className="text-cyan-100" onClick={() => perform("生成派生资产图", async () => void (await studioApi.generateDerivedAssetImage(session, projectId, req.id)))} type="button">
-                          生成派生资产图
+                        <button className="text-cyan-100" onClick={() => setEditingRequirement(req)} type="button">
+                          编辑需求
+                        </button>
+                        <button className="text-cyan-100" onClick={() => perform("重新生成派生资产图", async () => void (await studioApi.regenerate(session, projectId, { targetType: "derived_asset_image", targetId: req.id, options: { force: true } })))} type="button">
+                          重生成派生图
                         </button>
                       </div>
                     </div>
@@ -1333,7 +1385,278 @@ function StoryboardContent({ projectId }: { projectId: string }) {
       ) : (
         <EmptyState title="还没有分镜" description="选择剧本后生成分镜，系统会展示镜头、参与资产和派生资产需求。" />
       )}
+      <ShotEditDialog
+        busy={busy !== ""}
+        shot={editingShot}
+        onClose={() => setEditingShot(null)}
+        onSave={(body) =>
+          perform("保存镜头修订", async () => {
+            if (!editingShot) {
+              return;
+            }
+            await studioApi.updateStoryboardShot(session, projectId, editingShot.id, body);
+            setEditingShot(null);
+          })
+        }
+      />
+      <RequirementEditDialog
+        busy={busy !== ""}
+        requirement={editingRequirement}
+        onClose={() => setEditingRequirement(null)}
+        onSave={(body) =>
+          perform("保存派生资产需求修订", async () => {
+            if (!editingRequirement) {
+              return;
+            }
+            await studioApi.updateShotAssetRequirement(session, projectId, editingRequirement.id, body);
+            setEditingRequirement(null);
+          })
+        }
+      />
     </SessionGate>
+  );
+}
+
+function AssetEditDialog({
+  asset,
+  busy,
+  onClose,
+  onSave,
+}: {
+  asset: CanonicalAsset | null;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (body: JsonRecord) => Promise<void>;
+}) {
+  if (!asset) {
+    return null;
+  }
+  return <AssetEditDialogForm key={asset.id} asset={asset} busy={busy} onClose={onClose} onSave={onSave} />;
+}
+
+function AssetEditDialogForm({
+  asset,
+  busy,
+  onClose,
+  onSave,
+}: {
+  asset: CanonicalAsset;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (body: JsonRecord) => Promise<void>;
+}) {
+  const [form, setForm] = useState(assetEditForm(asset));
+  const [localError, setLocalError] = useState("");
+
+  async function submit() {
+    setLocalError("");
+    const parsedTraits = parseJsonRecordInput(form.visualTraits);
+    if (parsedTraits.error) {
+      setLocalError(parsedTraits.error);
+      return;
+    }
+    if (!form.name.trim() || !form.description.trim()) {
+      setLocalError("名称和描述不能为空");
+      return;
+    }
+    await onSave(
+      compactRecord({
+        assetType: form.assetType,
+        name: form.name,
+        description: form.description,
+        basePrompt: form.basePrompt,
+        visualTraits: parsedTraits.value,
+      }),
+    );
+  }
+
+  return (
+    <EditDialogShell title="编辑基础资产" error={localError} onClose={onClose}>
+      <div className="grid gap-3">
+        <SelectInput label="类型" value={form.assetType} values={["character", "scene", "prop"]} labels={{ character: "角色", scene: "场景", prop: "道具" }} onChange={(assetType) => setForm({ ...form, assetType })} />
+        <TextInput label="名称" value={form.name} onChange={(name) => setForm({ ...form, name })} />
+        <TextAreaInput label="描述" rows={4} value={form.description} onChange={(description) => setForm({ ...form, description })} />
+        <TextAreaInput label="基础提示词" rows={4} value={form.basePrompt} onChange={(basePrompt) => setForm({ ...form, basePrompt })} />
+        <TextAreaInput label="视觉 traits JSON" rows={7} value={form.visualTraits} onChange={(visualTraits) => setForm({ ...form, visualTraits })} />
+        <div className="flex justify-end gap-2">
+          <button className="studio-button" disabled={busy} onClick={onClose} type="button">
+            取消
+          </button>
+          <button className="studio-button studio-button-primary" disabled={busy} onClick={submit} type="button">
+            {busy ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+            保存修订
+          </button>
+        </div>
+      </div>
+    </EditDialogShell>
+  );
+}
+
+function ShotEditDialog({
+  shot,
+  busy,
+  onClose,
+  onSave,
+}: {
+  shot: StoryboardShot | null;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (body: JsonRecord) => Promise<void>;
+}) {
+  if (!shot) {
+    return null;
+  }
+  return <ShotEditDialogForm key={shot.id} shot={shot} busy={busy} onClose={onClose} onSave={onSave} />;
+}
+
+function ShotEditDialogForm({
+  shot,
+  busy,
+  onClose,
+  onSave,
+}: {
+  shot: StoryboardShot;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (body: JsonRecord) => Promise<void>;
+}) {
+  const [form, setForm] = useState(shotEditForm(shot));
+  const [localError, setLocalError] = useState("");
+
+  async function submit() {
+    setLocalError("");
+    const durationSeconds = form.durationSeconds.trim() ? Number(form.durationSeconds) : undefined;
+    if (durationSeconds !== undefined && (!Number.isFinite(durationSeconds) || durationSeconds <= 0)) {
+      setLocalError("时长必须大于 0");
+      return;
+    }
+    await onSave(
+      compactRecord({
+        visual: form.visual,
+        camera: form.camera,
+        motion: form.motion,
+        mood: form.mood,
+        durationSeconds,
+        imagePrompt: form.imagePrompt,
+        videoPrompt: form.videoPrompt,
+      }),
+    );
+  }
+
+  return (
+    <EditDialogShell title={`编辑镜头 ${shot.shotNo}`} error={localError} onClose={onClose}>
+      <div className="grid gap-3">
+        <TextAreaInput label="画面描述" rows={4} value={form.visual} onChange={(visual) => setForm({ ...form, visual })} />
+        <div className="grid gap-3 md:grid-cols-3">
+          <TextInput label="运镜" value={form.camera} onChange={(camera) => setForm({ ...form, camera })} />
+          <TextInput label="动作" value={form.motion} onChange={(motion) => setForm({ ...form, motion })} />
+          <TextInput label="情绪" value={form.mood} onChange={(mood) => setForm({ ...form, mood })} />
+        </div>
+        <TextInput label="时长秒" value={form.durationSeconds} onChange={(durationSeconds) => setForm({ ...form, durationSeconds })} />
+        <TextAreaInput label="图片提示词" rows={4} value={form.imagePrompt} onChange={(imagePrompt) => setForm({ ...form, imagePrompt })} />
+        <TextAreaInput label="视频提示词" rows={4} value={form.videoPrompt} onChange={(videoPrompt) => setForm({ ...form, videoPrompt })} />
+        <div className="flex justify-end gap-2">
+          <button className="studio-button" disabled={busy} onClick={onClose} type="button">
+            取消
+          </button>
+          <button className="studio-button studio-button-primary" disabled={busy} onClick={submit} type="button">
+            {busy ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+            保存修订
+          </button>
+        </div>
+      </div>
+    </EditDialogShell>
+  );
+}
+
+function RequirementEditDialog({
+  requirement,
+  busy,
+  onClose,
+  onSave,
+}: {
+  requirement: ShotAssetRequirement | null;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (body: JsonRecord) => Promise<void>;
+}) {
+  if (!requirement) {
+    return null;
+  }
+  return <RequirementEditDialogForm key={requirement.id} requirement={requirement} busy={busy} onClose={onClose} onSave={onSave} />;
+}
+
+function RequirementEditDialogForm({
+  requirement,
+  busy,
+  onClose,
+  onSave,
+}: {
+  requirement: ShotAssetRequirement;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (body: JsonRecord) => Promise<void>;
+}) {
+  const [form, setForm] = useState(requirementEditForm(requirement));
+
+  async function submit() {
+    await onSave(
+      compactRecord({
+        costume: form.costume,
+        pose: form.pose,
+        expression: form.expression,
+        action: form.action,
+        cameraRelation: form.cameraRelation,
+        sceneState: form.sceneState,
+        propState: form.propState,
+        prompt: form.prompt,
+      }),
+    );
+  }
+
+  return (
+    <EditDialogShell title="编辑派生资产需求" onClose={onClose}>
+      <div className="grid gap-3">
+        <div className="grid gap-3 md:grid-cols-2">
+          <TextInput label="服装" value={form.costume} onChange={(costume) => setForm({ ...form, costume })} />
+          <TextInput label="姿态" value={form.pose} onChange={(pose) => setForm({ ...form, pose })} />
+          <TextInput label="表情" value={form.expression} onChange={(expression) => setForm({ ...form, expression })} />
+          <TextInput label="动作" value={form.action} onChange={(action) => setForm({ ...form, action })} />
+          <TextInput label="镜头关系" value={form.cameraRelation} onChange={(cameraRelation) => setForm({ ...form, cameraRelation })} />
+          <TextInput label="场景状态" value={form.sceneState} onChange={(sceneState) => setForm({ ...form, sceneState })} />
+          <TextInput label="道具状态" value={form.propState} onChange={(propState) => setForm({ ...form, propState })} />
+        </div>
+        <TextAreaInput label="派生图提示词" rows={5} value={form.prompt} onChange={(prompt) => setForm({ ...form, prompt })} />
+        <div className="flex justify-end gap-2">
+          <button className="studio-button" disabled={busy} onClick={onClose} type="button">
+            取消
+          </button>
+          <button className="studio-button studio-button-primary" disabled={busy} onClick={submit} type="button">
+            {busy ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+            保存修订
+          </button>
+        </div>
+      </div>
+    </EditDialogShell>
+  );
+}
+
+function EditDialogShell({ title, error = "", children, onClose }: { title: string; error?: string; children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/10 bg-zinc-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+          <h3 className="text-base font-semibold text-zinc-100">{title}</h3>
+          <button className="rounded-md p-1 text-zinc-400 hover:bg-white/10 hover:text-zinc-100" onClick={onClose} type="button">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="grid gap-3 p-4">
+          <ErrorPanel message={error} />
+          {children}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2340,7 +2663,63 @@ function shotMediaMetrics(stage: ProductionStatus["stages"]["shotImages"]) {
     metricText("运行中", stage.running),
     metricText("失败", stage.failed),
     metricText("待生成", stage.pending),
+    metricText("已过期", stage.stale),
   ];
+}
+
+function assetEditForm(asset: CanonicalAsset | null) {
+  return {
+    assetType: asset?.assetType ?? "character",
+    name: asset?.name ?? "",
+    description: asset?.description ?? "",
+    basePrompt: asset?.basePrompt ?? "",
+    visualTraits: jsonRecordInputText(asset?.visualTraits),
+  };
+}
+
+function shotEditForm(shot: StoryboardShot | null) {
+  return {
+    visual: shot?.visual ?? "",
+    camera: shot?.camera ?? "",
+    motion: shot?.motion ?? "",
+    mood: shot?.mood ?? "",
+    durationSeconds: shot?.durationSeconds ? String(shot.durationSeconds) : "",
+    imagePrompt: shot?.imagePrompt ?? "",
+    videoPrompt: shot?.videoPrompt ?? "",
+  };
+}
+
+function requirementEditForm(requirement: ShotAssetRequirement | null) {
+  return {
+    costume: requirement?.costume ?? "",
+    pose: requirement?.pose ?? "",
+    expression: requirement?.expression ?? "",
+    action: requirement?.action ?? "",
+    cameraRelation: requirement?.cameraRelation ?? "",
+    sceneState: requirement?.sceneState ?? "",
+    propState: requirement?.propState ?? "",
+    prompt: requirement?.prompt ?? "",
+  };
+}
+
+function jsonRecordInputText(value?: JsonRecord) {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
+function parseJsonRecordInput(raw: string): { value?: JsonRecord; error?: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { value: {} };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as JsonValue;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { error: "JSON 必须是对象" };
+    }
+    return { value: parsed as JsonRecord };
+  } catch (cause) {
+    return { error: cause instanceof Error ? cause.message : "JSON 解析失败" };
+  }
 }
 
 function compactRecord(record: Record<string, unknown>): JsonRecord {

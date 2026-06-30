@@ -77,6 +77,8 @@ type CanonicalAssetRecord struct {
 	ReferenceMediaFileID string          `json:"referenceMediaFileId,omitempty"`
 	ReferenceStorageKey  string          `json:"referenceStorageKey,omitempty"`
 	Status               string          `json:"status"`
+	ManualOverride       bool            `json:"manualOverride,omitempty"`
+	StaleState           string          `json:"staleState,omitempty"`
 }
 
 type AnalyzeScriptAssetsInput struct {
@@ -140,6 +142,8 @@ type ShotAssetRequirementRecord struct {
 	DerivedMediaFileID string `json:"derivedMediaFileId,omitempty"`
 	DerivedStorageKey  string `json:"derivedStorageKey,omitempty"`
 	Status             string `json:"status,omitempty"`
+	ManualOverride     bool   `json:"manualOverride,omitempty"`
+	StaleState         string `json:"staleState,omitempty"`
 }
 
 func ScriptToAssetsWorkflow(ctx workflow.Context, input TextToStoryboardInput) (ScriptAssetsOutput, error) {

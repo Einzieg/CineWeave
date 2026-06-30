@@ -46,6 +46,8 @@ type StoryboardShotRecord struct {
 	VideoProviderAsyncTaskID string  `json:"providerAsyncTaskId,omitempty"`
 	VideoExternalTaskID      string  `json:"externalTaskId,omitempty"`
 	Status                   string  `json:"status"`
+	ManualOverride           bool    `json:"manualOverride,omitempty"`
+	StaleState               string  `json:"staleState,omitempty"`
 }
 
 func ParseStoryboardShots(raw json.RawMessage) ([]StoryboardShot, error) {

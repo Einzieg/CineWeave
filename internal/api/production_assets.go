@@ -11,6 +11,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/production"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/workflows"
@@ -31,6 +32,10 @@ type CanonicalAsset struct {
 	ReferenceStorageKey  *string         `json:"referenceStorageKey,omitempty"`
 	Status               string          `json:"status"`
 	ReviewStatus         string          `json:"reviewStatus"`
+	ManualOverride       bool            `json:"manualOverride"`
+	StaleState           string          `json:"staleState"`
+	EditedBy             *string         `json:"editedBy,omitempty"`
+	EditedAt             *time.Time      `json:"editedAt,omitempty"`
 	SourceScriptIDs      json.RawMessage `json:"sourceScriptIds"`
 	Metadata             json.RawMessage `json:"metadata"`
 	CreatedBy            *string         `json:"createdBy,omitempty"`
@@ -60,6 +65,10 @@ type ShotAssetRequirement struct {
 	DerivedStorageKey  *string         `json:"derivedStorageKey,omitempty"`
 	Status             string          `json:"status"`
 	ReviewStatus       string          `json:"reviewStatus"`
+	ManualOverride     bool            `json:"manualOverride"`
+	StaleState         string          `json:"staleState"`
+	EditedBy           *string         `json:"editedBy,omitempty"`
+	EditedAt           *time.Time      `json:"editedAt,omitempty"`
 	Metadata           json.RawMessage `json:"metadata"`
 	CreatedAt          time.Time       `json:"createdAt"`
 	UpdatedAt          time.Time       `json:"updatedAt"`
@@ -75,7 +84,7 @@ func (s *Server) listCanonicalAssets(w http.ResponseWriter, r *http.Request, pri
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
 		       reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
-		       source_script_ids, metadata, created_by, created_at, updated_at
+		       manual_override, stale_state, edited_by, edited_at, source_script_ids, metadata, created_by, created_at, updated_at
 		FROM canonical_assets
 		WHERE project_id = $1
 		  AND ($2 = '' OR asset_type = $2)
@@ -169,21 +178,58 @@ func (s *Server) updateCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 			return
 		}
 	}
-	item, err := scanCanonicalAsset(s.db.QueryRow(r.Context(), `
+	basePromptSet := req.BasePrompt != nil
+	basePrompt := ""
+	if req.BasePrompt != nil {
+		basePrompt = strings.TrimSpace(*req.BasePrompt)
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	item, err := scanCanonicalAsset(tx.QueryRow(r.Context(), `
 		UPDATE canonical_assets
 		SET asset_type = $3,
 		    name = $4,
 		    description = $5,
-		    base_prompt = COALESCE($6, base_prompt),
-		    visual_traits = $7,
-		    metadata = $8,
-		    status = $9
+		    base_prompt = CASE WHEN $6 THEN NULLIF($7, '') ELSE base_prompt END,
+		    visual_traits = $8,
+		    metadata = $9,
+		    status = $10,
+		    review_status = 'pending',
+		    manual_override = true,
+		    stale_state = 'fresh',
+		    edited_by = $11,
+		    edited_at = now(),
+		    updated_at = now()
 		WHERE id = $1 AND project_id = $2
 		RETURNING id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
 		          reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
-		          source_script_ids, metadata, created_by, created_at, updated_at
-	`, current.ID, project.ID, assetType, name, description, req.BasePrompt, visualTraits, metadata, status))
+		          manual_override, stale_state, edited_by, edited_at, source_script_ids, metadata, created_by, created_at, updated_at
+	`, current.ID, project.ID, assetType, name, description, basePromptSet, basePrompt, visualTraits, metadata, status, principal.UserID))
 	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := production.MarkAssetDownstreamStale(r.Context(), tx, project.ID, current.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.updated", "canonical_asset", item.ID, mustRawJSON(map[string]any{
+		"assetId":        item.ID,
+		"manualOverride": item.ManualOverride,
+		"staleState":     item.StaleState,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -334,11 +380,12 @@ func (s *Server) generateCanonicalAssetImage(w http.ResponseWriter, r *http.Requ
 		SET reference_artifact_id = NULLIF($3, '')::uuid,
 		    reference_media_file_id = NULLIF($4, '')::uuid,
 		    reference_storage_key = NULLIF($5, ''),
-		    status = 'image_succeeded'
+		    status = 'image_succeeded',
+		    stale_state = 'fresh'
 		WHERE id = $1 AND project_id = $2
 		RETURNING id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
 		          reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
-		          source_script_ids, metadata, created_by, created_at, updated_at
+		          manual_override, stale_state, edited_by, edited_at, source_script_ids, metadata, created_by, created_at, updated_at
 	`, asset.ID, project.ID, gatewayResp.Output.ArtifactID, gatewayResp.Output.MediaFileID, gatewayResp.Output.StorageKey))
 	if err != nil {
 		s.writeError(w, r, err)
@@ -426,7 +473,8 @@ func (s *Server) generateDerivedAssetImage(w http.ResponseWriter, r *http.Reques
 		SET derived_artifact_id = NULLIF($2, '')::uuid,
 		    derived_media_file_id = NULLIF($3, '')::uuid,
 		    derived_storage_key = NULLIF($4, ''),
-		    status = 'image_succeeded'
+		    status = 'image_succeeded',
+		    stale_state = 'fresh'
 		WHERE id = $1
 	`, item.ID, gatewayResp.Output.ArtifactID, gatewayResp.Output.MediaFileID, gatewayResp.Output.StorageKey); err != nil {
 		s.writeError(w, r, err)
@@ -518,7 +566,7 @@ func (s *Server) canonicalAsset(r *http.Request, projectID, assetID string) (Can
 	return scanCanonicalAsset(s.db.QueryRow(r.Context(), `
 		SELECT id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
 		       reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
-		       source_script_ids, metadata, created_by, created_at, updated_at
+		       manual_override, stale_state, edited_by, edited_at, source_script_ids, metadata, created_by, created_at, updated_at
 		FROM canonical_assets
 		WHERE project_id = $1 AND id = $2
 	`, projectID, assetID))
@@ -557,7 +605,11 @@ func (s *Server) storyboardShotByID(r *http.Request, projectID, shotID string) (
 			s.video_provider_async_task_id,
 			s.video_external_task_id,
 			COALESCE(s.status, 'pending'),
-			COALESCE(s.review_status, 'pending')
+			COALESCE(s.review_status, 'pending'),
+			COALESCE(s.manual_override, false),
+			COALESCE(s.stale_state, 'fresh'),
+			s.edited_by,
+			s.edited_at
 		FROM storyboard_shots s
 		LEFT JOIN artifacts ia ON ia.id = s.image_artifact_id
 		LEFT JOIN artifacts va ON va.id = s.video_artifact_id
@@ -567,7 +619,8 @@ func (s *Server) storyboardShotByID(r *http.Request, projectID, shotID string) (
 
 func scanCanonicalAsset(row rowScan) (CanonicalAsset, error) {
 	var item CanonicalAsset
-	var basePrompt, referenceArtifactID, referenceMediaFileID, referenceStorageKey, createdBy sql.NullString
+	var basePrompt, referenceArtifactID, referenceMediaFileID, referenceStorageKey, editedBy, createdBy sql.NullString
+	var editedAt sql.NullTime
 	var visualTraits, sourceScriptIDs, metadata []byte
 	err := row.Scan(
 		&item.ID,
@@ -583,6 +636,10 @@ func scanCanonicalAsset(row rowScan) (CanonicalAsset, error) {
 		&referenceStorageKey,
 		&item.Status,
 		&item.ReviewStatus,
+		&item.ManualOverride,
+		&item.StaleState,
+		&editedBy,
+		&editedAt,
 		&sourceScriptIDs,
 		&metadata,
 		&createdBy,
@@ -594,6 +651,10 @@ func scanCanonicalAsset(row rowScan) (CanonicalAsset, error) {
 	item.ReferenceArtifactID = stringPtrFromNull(referenceArtifactID)
 	item.ReferenceMediaFileID = stringPtrFromNull(referenceMediaFileID)
 	item.ReferenceStorageKey = stringPtrFromNull(referenceStorageKey)
+	item.EditedBy = stringPtrFromNull(editedBy)
+	if editedAt.Valid {
+		item.EditedAt = &editedAt.Time
+	}
 	item.SourceScriptIDs = rawOrDefaultBytes(sourceScriptIDs, "[]")
 	item.Metadata = rawOrDefaultBytes(metadata, "{}")
 	item.CreatedBy = stringPtrFromNull(createdBy)
@@ -607,7 +668,8 @@ func shotAssetRequirementSelectSQL(where string) string {
 			r.asset_id, r.requirement_type, r.role_in_shot, r.costume, r.pose,
 			r.expression, r.action, r.camera_relation, r.scene_state, r.prop_state,
 			r.prompt, r.derived_artifact_id, r.derived_media_file_id, r.derived_storage_key,
-			r.status, r.review_status, r.metadata, r.created_at, r.updated_at
+			r.status, r.review_status, r.manual_override, r.stale_state, r.edited_by, r.edited_at,
+			r.metadata, r.created_at, r.updated_at
 		FROM shot_asset_requirements r
 	` + where
 }
@@ -615,7 +677,8 @@ func shotAssetRequirementSelectSQL(where string) string {
 func scanShotAssetRequirement(row rowScan) (ShotAssetRequirement, error) {
 	var item ShotAssetRequirement
 	var workflowRunID, roleInShot, costume, pose, expression, action, cameraRelation, sceneState, propState, prompt sql.NullString
-	var derivedArtifactID, derivedMediaFileID, derivedStorageKey sql.NullString
+	var derivedArtifactID, derivedMediaFileID, derivedStorageKey, editedBy sql.NullString
+	var editedAt sql.NullTime
 	var metadata []byte
 	err := row.Scan(
 		&item.ID,
@@ -639,6 +702,10 @@ func scanShotAssetRequirement(row rowScan) (ShotAssetRequirement, error) {
 		&derivedStorageKey,
 		&item.Status,
 		&item.ReviewStatus,
+		&item.ManualOverride,
+		&item.StaleState,
+		&editedBy,
+		&editedAt,
 		&metadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -656,6 +723,10 @@ func scanShotAssetRequirement(row rowScan) (ShotAssetRequirement, error) {
 	item.DerivedArtifactID = stringPtrFromNull(derivedArtifactID)
 	item.DerivedMediaFileID = stringPtrFromNull(derivedMediaFileID)
 	item.DerivedStorageKey = stringPtrFromNull(derivedStorageKey)
+	item.EditedBy = stringPtrFromNull(editedBy)
+	if editedAt.Valid {
+		item.EditedAt = &editedAt.Time
+	}
 	item.Metadata = rawOrDefaultBytes(metadata, "{}")
 	return item, err
 }

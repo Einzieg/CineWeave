@@ -19,8 +19,9 @@ type ComposeFinalVideoInput struct {
 	WorkflowRunID  string `json:"workflowRunId"`
 	CreatedBy      string `json:"createdBy"`
 
-	AspectRatio string `json:"aspectRatio"`
-	Resolution  string `json:"resolution"`
+	SourceWorkflowRunID string `json:"sourceWorkflowRunId,omitempty"`
+	AspectRatio         string `json:"aspectRatio"`
+	Resolution          string `json:"resolution"`
 }
 
 type ComposeFinalVideoOutput struct {
@@ -88,7 +89,8 @@ func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVid
 		return ComposeFinalVideoOutput{}, err
 	}
 
-	clips, err := a.composeVideoClips(ctx, input.WorkflowRunID)
+	sourceWorkflowRunID := firstNonEmptyString(input.SourceWorkflowRunID, input.WorkflowRunID)
+	clips, err := a.composeVideoClips(ctx, sourceWorkflowRunID)
 	if err != nil {
 		return ComposeFinalVideoOutput{}, a.failComposeFinalVideo(ctx, input, nodeRunID, codeActivityFailed, err.Error())
 	}
@@ -239,13 +241,15 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 	}
 
 	finalMetadata := map[string]any{
-		"source":          "media_worker",
-		"nodeKey":         nodeComposeFinalVideoKey,
-		"nodeRunId":       nodeRunID,
-		"workflowRunId":   input.WorkflowRunID,
-		"shotIds":         shotIDs,
-		"clipStorageKeys": clipStorageKeys,
-		"clipCount":       len(clips),
+		"source":              "media_worker",
+		"nodeKey":             nodeComposeFinalVideoKey,
+		"nodeRunId":           nodeRunID,
+		"workflowRunId":       input.WorkflowRunID,
+		"sourceWorkflowRunId": firstNonEmptyString(input.SourceWorkflowRunID, input.WorkflowRunID),
+		"staleState":          "fresh",
+		"shotIds":             shotIDs,
+		"clipStorageKeys":     clipStorageKeys,
+		"clipCount":           len(clips),
 		"composeSettings": map[string]any{
 			"aspectRatio": defaultString(input.AspectRatio, "16:9"),
 			"resolution":  defaultString(input.Resolution, "720p"),
@@ -267,10 +271,11 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id
 	`, input.OrganizationID, input.ProjectID, finalArtifactID, result.StorageKey, result.MimeType, nullInt64(result.ByteSize), nullInt(result.Width), nullInt(result.Height), nullFloat(result.DurationSeconds), nullIfEmpty(result.ContentHash), mustJSON(map[string]any{
-		"source":        "media_worker",
-		"workflowRunId": input.WorkflowRunID,
-		"shotIds":       shotIDs,
-		"clipCount":     len(clips),
+		"source":              "media_worker",
+		"workflowRunId":       input.WorkflowRunID,
+		"sourceWorkflowRunId": firstNonEmptyString(input.SourceWorkflowRunID, input.WorkflowRunID),
+		"shotIds":             shotIDs,
+		"clipCount":           len(clips),
 	}), nullIfEmpty(input.CreatedBy)).Scan(&mediaFileID); err != nil {
 		return ComposeFinalVideoOutput{}, err
 	}
@@ -380,9 +385,10 @@ func buildTimelineManifest(input ComposeFinalVideoInput, clips []composeClipReco
 		ProjectID:     input.ProjectID,
 		Clips:         make([]timelineManifestClip, 0, len(clips)),
 		Compose: map[string]string{
-			"aspectRatio": defaultString(input.AspectRatio, "16:9"),
-			"resolution":  defaultString(input.Resolution, "720p"),
-			"format":      "mp4",
+			"aspectRatio":         defaultString(input.AspectRatio, "16:9"),
+			"resolution":          defaultString(input.Resolution, "720p"),
+			"format":              "mp4",
+			"sourceWorkflowRunId": firstNonEmptyString(input.SourceWorkflowRunID, input.WorkflowRunID),
 		},
 	}
 	for _, clip := range clips {

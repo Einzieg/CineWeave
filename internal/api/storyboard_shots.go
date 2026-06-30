@@ -13,29 +13,33 @@ import (
 )
 
 type StoryboardShot struct {
-	ID                       string   `json:"id"`
-	WorkflowRunID            string   `json:"workflowRunId"`
-	ShotIndex                int      `json:"shotIndex"`
-	ShotNo                   int      `json:"shotNo"`
-	DurationSeconds          *float64 `json:"durationSeconds,omitempty"`
-	Visual                   string   `json:"visual,omitempty"`
-	Camera                   string   `json:"camera,omitempty"`
-	Motion                   string   `json:"motion,omitempty"`
-	Mood                     string   `json:"mood,omitempty"`
-	ImagePrompt              string   `json:"imagePrompt,omitempty"`
-	VideoPrompt              string   `json:"videoPrompt,omitempty"`
-	ImageArtifactID          *string  `json:"imageArtifactId,omitempty"`
-	ImageMediaFileID         *string  `json:"imageMediaFileId,omitempty"`
-	ImageStorageKey          *string  `json:"imageStorageKey,omitempty"`
-	ImagePreviewURL          *string  `json:"imagePreviewUrl,omitempty"`
-	VideoArtifactID          *string  `json:"videoArtifactId,omitempty"`
-	VideoMediaFileID         *string  `json:"videoMediaFileId,omitempty"`
-	VideoStorageKey          *string  `json:"videoStorageKey,omitempty"`
-	VideoPreviewURL          *string  `json:"videoPreviewUrl,omitempty"`
-	VideoProviderAsyncTaskID *string  `json:"providerAsyncTaskId,omitempty"`
-	VideoExternalTaskID      *string  `json:"externalTaskId,omitempty"`
-	Status                   string   `json:"status"`
-	ReviewStatus             string   `json:"reviewStatus"`
+	ID                       string     `json:"id"`
+	WorkflowRunID            string     `json:"workflowRunId"`
+	ShotIndex                int        `json:"shotIndex"`
+	ShotNo                   int        `json:"shotNo"`
+	DurationSeconds          *float64   `json:"durationSeconds,omitempty"`
+	Visual                   string     `json:"visual,omitempty"`
+	Camera                   string     `json:"camera,omitempty"`
+	Motion                   string     `json:"motion,omitempty"`
+	Mood                     string     `json:"mood,omitempty"`
+	ImagePrompt              string     `json:"imagePrompt,omitempty"`
+	VideoPrompt              string     `json:"videoPrompt,omitempty"`
+	ImageArtifactID          *string    `json:"imageArtifactId,omitempty"`
+	ImageMediaFileID         *string    `json:"imageMediaFileId,omitempty"`
+	ImageStorageKey          *string    `json:"imageStorageKey,omitempty"`
+	ImagePreviewURL          *string    `json:"imagePreviewUrl,omitempty"`
+	VideoArtifactID          *string    `json:"videoArtifactId,omitempty"`
+	VideoMediaFileID         *string    `json:"videoMediaFileId,omitempty"`
+	VideoStorageKey          *string    `json:"videoStorageKey,omitempty"`
+	VideoPreviewURL          *string    `json:"videoPreviewUrl,omitempty"`
+	VideoProviderAsyncTaskID *string    `json:"providerAsyncTaskId,omitempty"`
+	VideoExternalTaskID      *string    `json:"externalTaskId,omitempty"`
+	Status                   string     `json:"status"`
+	ReviewStatus             string     `json:"reviewStatus"`
+	ManualOverride           bool       `json:"manualOverride"`
+	StaleState               string     `json:"staleState"`
+	EditedBy                 *string    `json:"editedBy,omitempty"`
+	EditedAt                 *time.Time `json:"editedAt,omitempty"`
 
 	imageArtifactStorageKey *string
 	imageArtifactMimeType   *string
@@ -88,7 +92,11 @@ func (s *Server) listWorkflowRunShots(w http.ResponseWriter, r *http.Request, pr
 			s.video_provider_async_task_id,
 			s.video_external_task_id,
 			COALESCE(s.status, 'pending'),
-			COALESCE(s.review_status, 'pending')
+			COALESCE(s.review_status, 'pending'),
+			COALESCE(s.manual_override, false),
+			COALESCE(s.stale_state, 'fresh'),
+			s.edited_by,
+			s.edited_at
 		FROM storyboard_shots s
 		LEFT JOIN artifacts ia ON ia.id = s.image_artifact_id
 		LEFT JOIN artifacts va ON va.id = s.video_artifact_id
@@ -123,7 +131,8 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	var duration sql.NullFloat64
 	var imageArtifactID, imageMediaFileID, imageStorageKey, imageArtifactStorageKey, imageArtifactMimeType sql.NullString
 	var videoArtifactID, videoMediaFileID, videoStorageKey, videoArtifactStorageKey, videoArtifactMimeType sql.NullString
-	var providerAsyncTaskID, externalTaskID sql.NullString
+	var providerAsyncTaskID, externalTaskID, editedBy sql.NullString
+	var editedAt sql.NullTime
 	err := row.Scan(
 		&item.ID,
 		&item.WorkflowRunID,
@@ -150,6 +159,10 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 		&externalTaskID,
 		&item.Status,
 		&item.ReviewStatus,
+		&item.ManualOverride,
+		&item.StaleState,
+		&editedBy,
+		&editedAt,
 	)
 	if duration.Valid {
 		item.DurationSeconds = &duration.Float64
@@ -166,6 +179,10 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	item.videoArtifactMimeType = stringPtrFromNull(videoArtifactMimeType)
 	item.VideoProviderAsyncTaskID = stringPtrFromNull(providerAsyncTaskID)
 	item.VideoExternalTaskID = stringPtrFromNull(externalTaskID)
+	item.EditedBy = stringPtrFromNull(editedBy)
+	if editedAt.Valid {
+		item.EditedAt = &editedAt.Time
+	}
 	return item, err
 }
 

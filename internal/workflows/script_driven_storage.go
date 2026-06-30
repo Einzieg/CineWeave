@@ -80,7 +80,7 @@ func (a Activities) listCanonicalAssets(ctx context.Context, projectID string) (
 		SELECT id::text, asset_type, name, description, COALESCE(base_prompt, ''),
 		       visual_traits, COALESCE(reference_artifact_id::text, ''),
 		       COALESCE(reference_media_file_id::text, ''), COALESCE(reference_storage_key, ''),
-		       status
+		       status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
 		FROM canonical_assets
 		WHERE project_id = $1
 		ORDER BY asset_type, name
@@ -105,7 +105,7 @@ func (a Activities) canonicalAssetByID(ctx context.Context, projectID, assetID s
 		SELECT id::text, asset_type, name, description, COALESCE(base_prompt, ''),
 		       visual_traits, COALESCE(reference_artifact_id::text, ''),
 		       COALESCE(reference_media_file_id::text, ''), COALESCE(reference_storage_key, ''),
-		       status
+		       status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
 		FROM canonical_assets
 		WHERE project_id = $1 AND id = $2
 	`, projectID, assetID))
@@ -126,19 +126,24 @@ func (a Activities) upsertCanonicalAssets(ctx context.Context, input AnalyzeScri
 			)
 			VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, 'prompt_ready', $8, $9, $10)
 			ON CONFLICT (project_id, asset_type, name) DO UPDATE SET
-				description = EXCLUDED.description,
-				base_prompt = EXCLUDED.base_prompt,
-				visual_traits = EXCLUDED.visual_traits,
+				description = CASE WHEN canonical_assets.manual_override THEN canonical_assets.description ELSE EXCLUDED.description END,
+				base_prompt = CASE WHEN canonical_assets.manual_override THEN canonical_assets.base_prompt ELSE EXCLUDED.base_prompt END,
+				visual_traits = CASE WHEN canonical_assets.manual_override THEN canonical_assets.visual_traits ELSE EXCLUDED.visual_traits END,
 				status = CASE
 					WHEN canonical_assets.status IN ('image_running', 'image_succeeded') THEN canonical_assets.status
 					ELSE 'prompt_ready'
 				END,
-				metadata = COALESCE(canonical_assets.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+				stale_state = CASE WHEN canonical_assets.manual_override THEN canonical_assets.stale_state ELSE 'fresh' END,
+				metadata = COALESCE(canonical_assets.metadata, '{}'::jsonb) ||
+					CASE
+						WHEN canonical_assets.manual_override THEN jsonb_build_object('agentLastSuggestion', EXCLUDED.metadata)
+						ELSE EXCLUDED.metadata
+					END,
 				updated_at = now()
 			RETURNING id::text, asset_type, name, description, COALESCE(base_prompt, ''),
 			          visual_traits, COALESCE(reference_artifact_id::text, ''),
 			          COALESCE(reference_media_file_id::text, ''), COALESCE(reference_storage_key, ''),
-			          status
+			          status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
 		`, input.OrganizationID, input.ProjectID, candidate.AssetType, candidate.Name, candidate.Description, candidate.BasePrompt,
 			jsonOrDefault(candidate.VisualTraits, `{}`), mustJSON([]string{script.ID}), mustJSON(map[string]any{
 				"source":            "script_asset_extraction",
@@ -168,8 +173,8 @@ func (a Activities) upsertCanonicalAssets(ctx context.Context, input AnalyzeScri
 			       NULLIF($7, '')::uuid, NULLIF($8, ''), $9, $10
 			FROM asset_versions
 			WHERE asset_id = $3
-		`, input.OrganizationID, input.ProjectID, item.ID, candidate.Description, candidate.BasePrompt,
-			jsonOrDefault(candidate.VisualTraits, `{}`), rendered.PromptVersionID, rendered.RenderedHash,
+		`, input.OrganizationID, input.ProjectID, item.ID, item.Description, item.BasePrompt,
+			jsonOrDefault(item.VisualTraits, `{}`), rendered.PromptVersionID, rendered.RenderedHash,
 			mustJSON(map[string]any{"source": "script_asset_extraction", "scriptId": script.ID}), input.CreatedBy); err != nil {
 			return nil, err
 		}
@@ -223,17 +228,22 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 				script_id = EXCLUDED.script_id,
 				script_version_id = EXCLUDED.script_version_id,
 				storyboard_source = EXCLUDED.storyboard_source,
-				shot_no = EXCLUDED.shot_no,
-				title = EXCLUDED.title,
-				duration_seconds = EXCLUDED.duration_seconds,
-				visual = EXCLUDED.visual,
-				camera = EXCLUDED.camera,
-				motion = EXCLUDED.motion,
-				mood = EXCLUDED.mood,
-				image_prompt = EXCLUDED.image_prompt,
-				video_prompt = EXCLUDED.video_prompt,
+				shot_no = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.shot_no ELSE EXCLUDED.shot_no END,
+				title = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.title ELSE EXCLUDED.title END,
+				duration_seconds = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.duration_seconds ELSE EXCLUDED.duration_seconds END,
+				visual = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.visual ELSE EXCLUDED.visual END,
+				camera = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.camera ELSE EXCLUDED.camera END,
+				motion = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.motion ELSE EXCLUDED.motion END,
+				mood = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.mood ELSE EXCLUDED.mood END,
+				image_prompt = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.image_prompt ELSE EXCLUDED.image_prompt END,
+				video_prompt = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.video_prompt ELSE EXCLUDED.video_prompt END,
 				status = 'storyboard_ready',
-				metadata = COALESCE(storyboard_shots.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+				stale_state = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.stale_state ELSE 'fresh' END,
+				metadata = COALESCE(storyboard_shots.metadata, '{}'::jsonb) ||
+					CASE
+						WHEN storyboard_shots.manual_override THEN jsonb_build_object('agentLastSuggestion', EXCLUDED.metadata)
+						ELSE EXCLUDED.metadata
+					END,
 				updated_at = now()
 			RETURNING
 				id::text,
@@ -256,7 +266,9 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 				COALESCE(video_storage_key, ''),
 				COALESCE(video_provider_async_task_id::text, ''),
 				COALESCE(video_external_task_id, ''),
-				status
+				status,
+				COALESCE(manual_override, false),
+				COALESCE(stale_state, 'fresh')
 		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, artifactID, script.ID, script.VersionID,
 			shotIndex, shot.ShotNo, shot.Title, shot.Duration, shot.Visual, shot.Camera, shot.Motion, shot.Mood,
 			shot.ImagePrompt, shot.VideoPrompt, mustJSON(map[string]any{
@@ -284,6 +296,8 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 			&record.VideoProviderAsyncTaskID,
 			&record.VideoExternalTaskID,
 			&record.Status,
+			&record.ManualOverride,
+			&record.StaleState,
 		)
 		if err != nil {
 			return "", nil, nil, err
@@ -309,29 +323,10 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 		if !ok {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM shot_asset_requirements WHERE storyboard_shot_id = $1 AND asset_id = $2`, shot.ID, asset.ID); err != nil {
-			return "", nil, nil, err
-		}
-		err := tx.QueryRow(ctx, `
-			INSERT INTO shot_asset_requirements(
-				organization_id, project_id, workflow_run_id, storyboard_shot_id, asset_id,
-				requirement_type, role_in_shot, costume, pose, expression, action,
-				camera_relation, scene_state, prop_state, prompt, status, metadata
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''),
-			        NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
-			        NULLIF($15, ''), 'pending', $16)
-			RETURNING id::text
-		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, shot.ID, asset.ID,
-			req.RequirementType, req.RoleInShot, req.Costume, req.Pose, req.Expression, req.Action,
-			req.CameraRelation, req.SceneState, req.PropState, req.Prompt,
-			mustJSON(map[string]any{"source": "storyboard_from_script", "assetName": req.AssetName, "assetType": req.AssetType})).Scan(&req.ID)
+		req, err = upsertShotAssetRequirementRecord(ctx, tx, input, shot, asset, req)
 		if err != nil {
 			return "", nil, nil, err
 		}
-		req.StoryboardShotID = shot.ID
-		req.AssetID = asset.ID
-		req.Status = "pending"
 		requirementRecords = append(requirementRecords, req)
 	}
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "storyboard.shots.created", "workflow_run", input.WorkflowRunID, mustJSON(map[string]any{
@@ -349,6 +344,114 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 	return artifactID, shotRecords, requirementRecords, nil
 }
 
+func upsertShotAssetRequirementRecord(ctx context.Context, tx pgx.Tx, input GenerateStoryboardFromScriptInput, shot StoryboardShotRecord, asset CanonicalAssetRecord, req ShotAssetRequirementRecord) (ShotAssetRequirementRecord, error) {
+	metadata := mustJSON(map[string]any{"source": "storyboard_from_script", "assetName": req.AssetName, "assetType": req.AssetType})
+	args := []any{shot.ID, asset.ID, req.RequirementType}
+	var existingID string
+	var manualOverride bool
+	err := tx.QueryRow(ctx, `
+		SELECT id::text, COALESCE(manual_override, false)
+		FROM shot_asset_requirements
+		WHERE storyboard_shot_id = $1 AND asset_id = $2 AND requirement_type = $3
+		ORDER BY created_at ASC
+		LIMIT 1
+	`, args...).Scan(&existingID, &manualOverride)
+	if err != nil && err != pgx.ErrNoRows {
+		return ShotAssetRequirementRecord{}, err
+	}
+	if err == pgx.ErrNoRows {
+		record := req
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO shot_asset_requirements(
+				organization_id, project_id, workflow_run_id, storyboard_shot_id, asset_id,
+				requirement_type, role_in_shot, costume, pose, expression, action,
+				camera_relation, scene_state, prop_state, prompt, status, stale_state, metadata
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''),
+			        NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
+			        NULLIF($15, ''), 'pending', 'fresh', $16)
+			RETURNING id::text, status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
+		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, shot.ID, asset.ID,
+			req.RequirementType, req.RoleInShot, req.Costume, req.Pose, req.Expression, req.Action,
+			req.CameraRelation, req.SceneState, req.PropState, req.Prompt, metadata).Scan(&record.ID, &record.Status, &record.ManualOverride, &record.StaleState); err != nil {
+			return ShotAssetRequirementRecord{}, err
+		}
+		record.StoryboardShotID = shot.ID
+		record.AssetID = asset.ID
+		record.AssetType = asset.AssetType
+		record.AssetName = asset.Name
+		return record, nil
+	}
+	if manualOverride {
+		var record ShotAssetRequirementRecord
+		if err := tx.QueryRow(ctx, `
+			UPDATE shot_asset_requirements
+			SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('agentLastSuggestion', $2::jsonb),
+			    updated_at = now()
+			WHERE id = $1
+			RETURNING id::text, storyboard_shot_id::text, asset_id::text, requirement_type,
+			          COALESCE(role_in_shot, ''), COALESCE(costume, ''), COALESCE(pose, ''),
+			          COALESCE(expression, ''), COALESCE(action, ''), COALESCE(camera_relation, ''),
+			          COALESCE(scene_state, ''), COALESCE(prop_state, ''), COALESCE(prompt, ''),
+			          COALESCE(derived_artifact_id::text, ''), COALESCE(derived_media_file_id::text, ''),
+			          COALESCE(derived_storage_key, ''), status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
+		`, existingID, metadata).Scan(
+			&record.ID,
+			&record.StoryboardShotID,
+			&record.AssetID,
+			&record.RequirementType,
+			&record.RoleInShot,
+			&record.Costume,
+			&record.Pose,
+			&record.Expression,
+			&record.Action,
+			&record.CameraRelation,
+			&record.SceneState,
+			&record.PropState,
+			&record.Prompt,
+			&record.DerivedArtifactID,
+			&record.DerivedMediaFileID,
+			&record.DerivedStorageKey,
+			&record.Status,
+			&record.ManualOverride,
+			&record.StaleState,
+		); err != nil {
+			return ShotAssetRequirementRecord{}, err
+		}
+		record.AssetType = asset.AssetType
+		record.AssetName = asset.Name
+		return record, nil
+	}
+	record := req
+	if err := tx.QueryRow(ctx, `
+		UPDATE shot_asset_requirements
+		SET workflow_run_id = $2,
+		    role_in_shot = NULLIF($3, ''),
+		    costume = NULLIF($4, ''),
+		    pose = NULLIF($5, ''),
+		    expression = NULLIF($6, ''),
+		    action = NULLIF($7, ''),
+		    camera_relation = NULLIF($8, ''),
+		    scene_state = NULLIF($9, ''),
+		    prop_state = NULLIF($10, ''),
+		    prompt = NULLIF($11, ''),
+		    status = 'pending',
+		    stale_state = 'fresh',
+		    metadata = COALESCE(metadata, '{}'::jsonb) || $12::jsonb,
+		    updated_at = now()
+		WHERE id = $1
+		RETURNING id::text, status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
+	`, existingID, input.WorkflowRunID, req.RoleInShot, req.Costume, req.Pose, req.Expression, req.Action,
+		req.CameraRelation, req.SceneState, req.PropState, req.Prompt, metadata).Scan(&record.ID, &record.Status, &record.ManualOverride, &record.StaleState); err != nil {
+		return ShotAssetRequirementRecord{}, err
+	}
+	record.StoryboardShotID = shot.ID
+	record.AssetID = asset.ID
+	record.AssetType = asset.AssetType
+	record.AssetName = asset.Name
+	return record, nil
+}
+
 func (a Activities) shotAssetRequirementByID(ctx context.Context, projectID, requirementID string) (ShotAssetRequirementRecord, error) {
 	var item ShotAssetRequirementRecord
 	err := a.db.QueryRow(ctx, `
@@ -358,7 +461,8 @@ func (a Activities) shotAssetRequirementByID(ctx context.Context, projectID, req
 		       COALESCE(r.expression, ''), COALESCE(r.action, ''), COALESCE(r.camera_relation, ''),
 		       COALESCE(r.scene_state, ''), COALESCE(r.prop_state, ''), COALESCE(r.prompt, ''),
 		       COALESCE(r.derived_artifact_id::text, ''), COALESCE(r.derived_media_file_id::text, ''),
-		       COALESCE(r.derived_storage_key, ''), r.status
+		       COALESCE(r.derived_storage_key, ''), r.status,
+		       COALESCE(r.manual_override, false), COALESCE(r.stale_state, 'fresh')
 		FROM shot_asset_requirements r
 		JOIN canonical_assets a ON a.id = r.asset_id
 		WHERE r.project_id = $1 AND r.id = $2
@@ -382,6 +486,8 @@ func (a Activities) shotAssetRequirementByID(ctx context.Context, projectID, req
 		&item.DerivedMediaFileID,
 		&item.DerivedStorageKey,
 		&item.Status,
+		&item.ManualOverride,
+		&item.StaleState,
 	)
 	return item, err
 }
@@ -409,7 +515,9 @@ func (a Activities) storyboardShotByID(ctx context.Context, projectID, shotID st
 			COALESCE(video_storage_key, ''),
 			COALESCE(video_provider_async_task_id::text, ''),
 			COALESCE(video_external_task_id, ''),
-			COALESCE(status, 'pending')
+			COALESCE(status, 'pending'),
+			COALESCE(manual_override, false),
+			COALESCE(stale_state, 'fresh')
 		FROM storyboard_shots
 		WHERE project_id = $1 AND id = $2
 	`, projectID, shotID))
@@ -513,6 +621,7 @@ func (a Activities) completeCanonicalAssetImage(ctx context.Context, input Gener
 		    reference_media_file_id = NULLIF($3, '')::uuid,
 		    reference_storage_key = NULLIF($4, ''),
 		    status = 'image_succeeded',
+		    stale_state = 'fresh',
 		    updated_at = now()
 		WHERE id = $1
 	`, input.AssetID, output.ImageArtifactID, output.ImageMediaFileID, output.ImageStorageKey); err != nil {
@@ -544,6 +653,7 @@ func (a Activities) completeDerivedAssetImage(ctx context.Context, input Generat
 		    derived_media_file_id = NULLIF($3, '')::uuid,
 		    derived_storage_key = NULLIF($4, ''),
 		    status = 'image_succeeded',
+		    stale_state = 'fresh',
 		    updated_at = now()
 		WHERE id = $1
 	`, input.RequirementID, output.ImageArtifactID, output.ImageMediaFileID, output.ImageStorageKey)
@@ -564,6 +674,8 @@ func scanCanonicalAssetRecord(row pgx.Row) (CanonicalAssetRecord, error) {
 		&item.ReferenceMediaFileID,
 		&item.ReferenceStorageKey,
 		&item.Status,
+		&item.ManualOverride,
+		&item.StaleState,
 	)
 	item.VisualTraits = jsonOrDefault(visualTraits, `{}`)
 	return item, err

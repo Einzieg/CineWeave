@@ -7,12 +7,15 @@ const toneByStatus: Record<string, string> = {
   running: "border-amber-300/30 bg-amber-300/10 text-amber-100",
   needs_review: "border-amber-300/30 bg-amber-300/10 text-amber-100",
   needs_edit: "border-amber-300/30 bg-amber-300/10 text-amber-100",
+  needs_regeneration: "border-amber-300/30 bg-amber-300/10 text-amber-100",
+  upstream_changed: "border-amber-300/30 bg-amber-300/10 text-amber-100",
   partial: "border-amber-300/30 bg-amber-300/10 text-amber-100",
   queued: "border-zinc-400/30 bg-zinc-400/10 text-zinc-100",
   draft: "border-zinc-400/30 bg-zinc-400/10 text-zinc-100",
   pending: "border-zinc-400/30 bg-zinc-400/10 text-zinc-100",
   not_started: "border-zinc-400/30 bg-zinc-400/10 text-zinc-100",
   approved: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
+  fresh: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
   succeeded: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
   completed: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
   processed: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
@@ -52,8 +55,14 @@ export function statusLabel(status: string) {
       return "待确认";
     case "needs_edit":
       return "需修改";
+    case "needs_regeneration":
+      return "需重生成";
+    case "upstream_changed":
+      return "上游已变更";
     case "approved":
       return "已确认";
+    case "fresh":
+      return "最新";
     case "rejected":
       return "已拒绝";
     case "partial":

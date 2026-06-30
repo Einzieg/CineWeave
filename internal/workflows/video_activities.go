@@ -35,6 +35,7 @@ type GenerateShotImageInput struct {
 
 	WorkflowPrompt string `json:"workflowPrompt"`
 	AspectRatio    string `json:"aspectRatio"`
+	Force          bool   `json:"force,omitempty"`
 }
 
 type GenerateShotImageOutput struct {
@@ -60,6 +61,7 @@ type CreateShotVideoTaskInput struct {
 	Duration       float64 `json:"duration"`
 	AspectRatio    string  `json:"aspectRatio"`
 	Resolution     string  `json:"resolution"`
+	Force          bool    `json:"force,omitempty"`
 }
 
 type CreateShotVideoTaskOutput struct {
@@ -209,11 +211,11 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 	if err := validateStoryboardInput(baseInput); err != nil {
 		return GenerateShotImageOutput{}, err
 	}
-	shot, err := a.storyboardShot(ctx, input.WorkflowRunID, input.ShotID, input.ShotIndex)
+	shot, err := a.storyboardShot(ctx, input.ProjectID, input.WorkflowRunID, input.ShotID, input.ShotIndex)
 	if err != nil {
 		return GenerateShotImageOutput{}, err
 	}
-	if shot.ImageArtifactID != "" && shot.ImageMediaFileID != "" && shot.ImageStorageKey != "" {
+	if !input.Force && shot.ImageArtifactID != "" && shot.ImageMediaFileID != "" && shot.ImageStorageKey != "" {
 		return GenerateShotImageOutput{
 			ShotID:           shot.ID,
 			ImageArtifactID:  shot.ImageArtifactID,
@@ -348,14 +350,14 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 	if err := validateStoryboardInput(baseInput); err != nil {
 		return CreateShotVideoTaskOutput{}, err
 	}
-	shot, err := a.storyboardShot(ctx, input.WorkflowRunID, input.ShotID, input.ShotIndex)
+	shot, err := a.storyboardShot(ctx, input.ProjectID, input.WorkflowRunID, input.ShotID, input.ShotIndex)
 	if err != nil {
 		return CreateShotVideoTaskOutput{}, err
 	}
 	if shot.ImageArtifactID == "" || shot.ImageMediaFileID == "" || shot.ImageStorageKey == "" {
 		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, "", "video_failed", "storyboard.shot.video.failed", workflowError{Code: provider.CodeInvalidRequest, Message: "shot image artifact/media/storage is required before video generation"})
 	}
-	if shot.VideoProviderAsyncTaskID != "" {
+	if !input.Force && shot.VideoProviderAsyncTaskID != "" {
 		return CreateShotVideoTaskOutput{
 			ShotID:              shot.ID,
 			ProviderAsyncTaskID: shot.VideoProviderAsyncTaskID,
@@ -507,7 +509,7 @@ func (a Activities) PollShotVideoTask(ctx context.Context, input PollShotVideoTa
 	if strings.TrimSpace(input.ProviderAsyncTaskID) == "" {
 		return PollShotVideoTaskOutput{}, fmt.Errorf("providerAsyncTaskId is required")
 	}
-	shot, err := a.storyboardShot(ctx, input.WorkflowRunID, input.ShotID, input.ShotIndex)
+	shot, err := a.storyboardShot(ctx, input.ProjectID, input.WorkflowRunID, input.ShotID, input.ShotIndex)
 	if err != nil {
 		return PollShotVideoTaskOutput{}, err
 	}
@@ -572,7 +574,7 @@ func (a Activities) CancelShotVideoTask(ctx context.Context, input CancelShotVid
 	if strings.TrimSpace(input.ProviderAsyncTaskID) == "" {
 		return CancelShotVideoTaskOutput{}, fmt.Errorf("providerAsyncTaskId is required")
 	}
-	shot, err := a.storyboardShot(ctx, input.WorkflowRunID, input.ShotID, input.ShotIndex)
+	shot, err := a.storyboardShot(ctx, input.ProjectID, input.WorkflowRunID, input.ShotID, input.ShotIndex)
 	if err != nil {
 		return CancelShotVideoTaskOutput{}, err
 	}
@@ -1063,7 +1065,9 @@ func (a Activities) listStoryboardShots(ctx context.Context, workflowRunID strin
 			COALESCE(video_storage_key, ''),
 			COALESCE(video_provider_async_task_id::text, ''),
 			COALESCE(video_external_task_id, ''),
-			COALESCE(status, 'pending')
+			COALESCE(status, 'pending'),
+			COALESCE(manual_override, false),
+			COALESCE(stale_state, 'fresh')
 		FROM storyboard_shots
 		WHERE workflow_run_id = $1
 		ORDER BY shot_index ASC
@@ -1083,11 +1087,12 @@ func (a Activities) listStoryboardShots(ctx context.Context, workflowRunID strin
 	return shots, rows.Err()
 }
 
-func (a Activities) storyboardShot(ctx context.Context, workflowRunID, shotID string, shotIndex int) (StoryboardShotRecord, error) {
+func (a Activities) storyboardShot(ctx context.Context, projectID, workflowRunID, shotID string, shotIndex int) (StoryboardShotRecord, error) {
 	args := []any{workflowRunID}
 	where := `workflow_run_id = $1`
 	if strings.TrimSpace(shotID) != "" {
-		where += ` AND id = $2`
+		where = `project_id = $1 AND id = $2`
+		args[0] = projectID
 		args = append(args, shotID)
 	} else {
 		where += ` AND shot_index = $2`
@@ -1115,7 +1120,9 @@ func (a Activities) storyboardShot(ctx context.Context, workflowRunID, shotID st
 			COALESCE(video_storage_key, ''),
 			COALESCE(video_provider_async_task_id::text, ''),
 			COALESCE(video_external_task_id, ''),
-			COALESCE(status, 'pending')
+			COALESCE(status, 'pending'),
+			COALESCE(manual_override, false),
+			COALESCE(stale_state, 'fresh')
 		FROM storyboard_shots
 		WHERE `+where+`
 	`, args...))
@@ -1145,6 +1152,8 @@ func scanStoryboardShotRecord(row pgx.Row) (StoryboardShotRecord, error) {
 		&shot.VideoProviderAsyncTaskID,
 		&shot.VideoExternalTaskID,
 		&shot.Status,
+		&shot.ManualOverride,
+		&shot.StaleState,
 	)
 	return shot, err
 }
@@ -1192,6 +1201,7 @@ func (a Activities) completeShotImage(ctx context.Context, input GenerateShotIma
 		    image_media_file_id = $3,
 		    image_storage_key = NULLIF($4, ''),
 		    status = 'image_succeeded',
+		    stale_state = 'fresh',
 		    updated_at = now()
 		WHERE id = $1
 	`, shot.ID, nullIfEmpty(output.ImageArtifactID), nullIfEmpty(output.ImageMediaFileID), output.ImageStorageKey); err != nil {
@@ -1320,6 +1330,7 @@ func (a Activities) completeShotVideo(ctx context.Context, input PollShotVideoTa
 		    video_provider_async_task_id = $5,
 		    video_external_task_id = NULLIF($6, ''),
 		    status = 'video_succeeded',
+		    stale_state = 'fresh',
 		    updated_at = now()
 		WHERE id = $1
 	`, shot.ID, nullIfEmpty(output.ArtifactID), nullIfEmpty(output.MediaFileID), output.StorageKey, nullIfEmpty(output.ProviderAsyncTaskID), output.ExternalTaskID); err != nil {

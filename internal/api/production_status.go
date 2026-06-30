@@ -63,15 +63,20 @@ type ProductionAssetsStage struct {
 	MissingReferenceImageCount int                 `json:"missingReferenceImageCount"`
 	ApprovedCount              int                 `json:"approvedCount"`
 	PendingReviewCount         int                 `json:"pendingReviewCount"`
+	ManualOverrideCount        int                 `json:"manualOverrideCount"`
+	StaleCount                 int                 `json:"staleCount"`
+	DownstreamStaleCount       int                 `json:"downstreamStaleCount"`
 	Summary                    map[string][]string `json:"summary"`
 }
 
 type ProductionStoryboardStage struct {
-	Status             string   `json:"status"`
-	ShotCount          int      `json:"shotCount"`
-	ConfirmedShotCount int      `json:"confirmedShotCount"`
-	PendingReviewCount int      `json:"pendingReviewCount"`
-	Summary            []string `json:"summary"`
+	Status              string   `json:"status"`
+	ShotCount           int      `json:"shotCount"`
+	ConfirmedShotCount  int      `json:"confirmedShotCount"`
+	PendingReviewCount  int      `json:"pendingReviewCount"`
+	ManualOverrideCount int      `json:"manualOverrideCount"`
+	StaleShotCount      int      `json:"staleShotCount"`
+	Summary             []string `json:"summary"`
 }
 
 type ProductionShotAssetsStage struct {
@@ -84,6 +89,8 @@ type ProductionShotAssetsStage struct {
 	MissingDerivedImageCount  int      `json:"missingDerivedImageCount"`
 	ApprovedCount             int      `json:"approvedCount"`
 	PendingReviewCount        int      `json:"pendingReviewCount"`
+	ManualOverrideCount       int      `json:"manualOverrideCount"`
+	StaleRequirementCount     int      `json:"staleRequirementCount"`
 	Summary                   []string `json:"summary"`
 }
 
@@ -94,14 +101,18 @@ type ProductionShotMediaStage struct {
 	Failed    int    `json:"failed"`
 	Running   int    `json:"running"`
 	Pending   int    `json:"pending"`
+	Stale     int    `json:"stale"`
 }
 
 type ProductionFinalVideoStage struct {
-	Status      string  `json:"status"`
-	ArtifactID  *string `json:"artifactId"`
-	MediaFileID *string `json:"mediaFileId"`
-	PreviewURL  *string `json:"previewUrl"`
-	StorageKey  *string `json:"storageKey"`
+	Status              string  `json:"status"`
+	ArtifactID          *string `json:"artifactId"`
+	MediaFileID         *string `json:"mediaFileId"`
+	PreviewURL          *string `json:"previewUrl"`
+	StorageKey          *string `json:"storageKey"`
+	WorkflowRunID       *string `json:"workflowRunId,omitempty"`
+	SourceWorkflowRunID *string `json:"sourceWorkflowRunId,omitempty"`
+	Stale               bool    `json:"stale"`
 }
 
 type ProductionActionRequest struct {
@@ -320,7 +331,7 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 }
 
 func (s *Server) productionAssetsStage(r *http.Request, projectID string) (ProductionAssetsStage, error) {
-	var characterCount, sceneCount, propCount, referenceCount, runningCount, failedCount, approvedCount, pendingReviewCount int
+	var characterCount, sceneCount, propCount, referenceCount, runningCount, failedCount, approvedCount, pendingReviewCount, manualOverrideCount, staleCount, downstreamStaleCount int
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT
 			COUNT(*) FILTER (WHERE asset_type = 'character'),
@@ -330,10 +341,18 @@ func (s *Server) productionAssetsStage(r *http.Request, projectID string) (Produ
 			COUNT(*) FILTER (WHERE status = 'image_running'),
 			COUNT(*) FILTER (WHERE status = 'image_failed'),
 			COUNT(*) FILTER (WHERE review_status = 'approved'),
-			COUNT(*) FILTER (WHERE review_status <> 'approved')
+			COUNT(*) FILTER (WHERE review_status <> 'approved'),
+			COUNT(*) FILTER (WHERE manual_override),
+			COUNT(*) FILTER (WHERE stale_state <> 'fresh'),
+			(
+				SELECT COUNT(*)
+				FROM shot_asset_requirements r
+				WHERE r.project_id = $1
+				  AND r.stale_state <> 'fresh'
+			)
 		FROM canonical_assets
 		WHERE project_id = $1
-	`, projectID).Scan(&characterCount, &sceneCount, &propCount, &referenceCount, &runningCount, &failedCount, &approvedCount, &pendingReviewCount); err != nil {
+	`, projectID).Scan(&characterCount, &sceneCount, &propCount, &referenceCount, &runningCount, &failedCount, &approvedCount, &pendingReviewCount, &manualOverrideCount, &staleCount, &downstreamStaleCount); err != nil {
 		return ProductionAssetsStage{}, err
 	}
 	total := characterCount + sceneCount + propCount
@@ -348,6 +367,8 @@ func (s *Server) productionAssetsStage(r *http.Request, projectID string) (Produ
 		status = "failed"
 	case pendingReviewCount > 0:
 		status = "needs_review"
+	case staleCount+downstreamStaleCount > 0:
+		status = "needs_regeneration"
 	case missingReferenceCount > 0:
 		status = "ready"
 	default:
@@ -366,20 +387,25 @@ func (s *Server) productionAssetsStage(r *http.Request, projectID string) (Produ
 		MissingReferenceImageCount: missingReferenceCount,
 		ApprovedCount:              approvedCount,
 		PendingReviewCount:         pendingReviewCount,
+		ManualOverrideCount:        manualOverrideCount,
+		StaleCount:                 staleCount,
+		DownstreamStaleCount:       downstreamStaleCount,
 		Summary:                    summary,
 	}, nil
 }
 
 func (s *Server) productionStoryboardStage(r *http.Request, projectID string, workflowsByType map[string]productionWorkflowState) (ProductionStoryboardStage, error) {
-	var shotCount, confirmedCount, pendingReviewCount int
+	var shotCount, confirmedCount, pendingReviewCount, manualOverrideCount, staleShotCount int
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT
 			COUNT(*),
 			COUNT(*) FILTER (WHERE review_status = 'approved'),
-			COUNT(*) FILTER (WHERE review_status <> 'approved')
+			COUNT(*) FILTER (WHERE review_status <> 'approved'),
+			COUNT(*) FILTER (WHERE manual_override),
+			COUNT(*) FILTER (WHERE stale_state <> 'fresh')
 		FROM storyboard_shots
 		WHERE project_id = $1
-	`, projectID).Scan(&shotCount, &confirmedCount, &pendingReviewCount); err != nil {
+	`, projectID).Scan(&shotCount, &confirmedCount, &pendingReviewCount, &manualOverrideCount, &staleShotCount); err != nil {
 		return ProductionStoryboardStage{}, err
 	}
 	state := mergedWorkflowState(workflowsByType, "script_to_storyboard", "script_to_video", "full_production")
@@ -393,6 +419,8 @@ func (s *Server) productionStoryboardStage(r *http.Request, projectID string, wo
 		status = "not_started"
 	case pendingReviewCount > 0:
 		status = "needs_review"
+	case staleShotCount > 0:
+		status = "needs_regeneration"
 	default:
 		status = "ready"
 	}
@@ -401,16 +429,18 @@ func (s *Server) productionStoryboardStage(r *http.Request, projectID string, wo
 		return ProductionStoryboardStage{}, err
 	}
 	return ProductionStoryboardStage{
-		Status:             status,
-		ShotCount:          shotCount,
-		ConfirmedShotCount: confirmedCount,
-		PendingReviewCount: pendingReviewCount,
-		Summary:            summary,
+		Status:              status,
+		ShotCount:           shotCount,
+		ConfirmedShotCount:  confirmedCount,
+		PendingReviewCount:  pendingReviewCount,
+		ManualOverrideCount: manualOverrideCount,
+		StaleShotCount:      staleShotCount,
+		Summary:             summary,
 	}, nil
 }
 
 func (s *Server) productionShotAssetsStage(r *http.Request, projectID string) (ProductionShotAssetsStage, error) {
-	var total, characterCount, sceneCount, propCount, derivedCount, runningCount, failedCount, approvedCount, pendingReviewCount int
+	var total, characterCount, sceneCount, propCount, derivedCount, runningCount, failedCount, approvedCount, pendingReviewCount, manualOverrideCount, staleRequirementCount int
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT
 			COUNT(*),
@@ -421,11 +451,13 @@ func (s *Server) productionShotAssetsStage(r *http.Request, projectID string) (P
 			COUNT(*) FILTER (WHERE r.status = 'image_running'),
 			COUNT(*) FILTER (WHERE r.status = 'image_failed'),
 			COUNT(*) FILTER (WHERE r.review_status = 'approved'),
-			COUNT(*) FILTER (WHERE r.review_status <> 'approved')
+			COUNT(*) FILTER (WHERE r.review_status <> 'approved'),
+			COUNT(*) FILTER (WHERE r.manual_override),
+			COUNT(*) FILTER (WHERE r.stale_state <> 'fresh')
 		FROM shot_asset_requirements r
 		LEFT JOIN canonical_assets a ON a.id = r.asset_id
 		WHERE r.project_id = $1
-	`, projectID).Scan(&total, &characterCount, &sceneCount, &propCount, &derivedCount, &runningCount, &failedCount, &approvedCount, &pendingReviewCount); err != nil {
+	`, projectID).Scan(&total, &characterCount, &sceneCount, &propCount, &derivedCount, &runningCount, &failedCount, &approvedCount, &pendingReviewCount, &manualOverrideCount, &staleRequirementCount); err != nil {
 		return ProductionShotAssetsStage{}, err
 	}
 	missing := maxInt(total-derivedCount, 0)
@@ -439,6 +471,8 @@ func (s *Server) productionShotAssetsStage(r *http.Request, projectID string) (P
 		status = "failed"
 	case pendingReviewCount > 0:
 		status = "needs_review"
+	case staleRequirementCount > 0:
+		status = "needs_regeneration"
 	case missing > 0:
 		status = "ready"
 	default:
@@ -458,12 +492,14 @@ func (s *Server) productionShotAssetsStage(r *http.Request, projectID string) (P
 		MissingDerivedImageCount:  missing,
 		ApprovedCount:             approvedCount,
 		PendingReviewCount:        pendingReviewCount,
+		ManualOverrideCount:       manualOverrideCount,
+		StaleRequirementCount:     staleRequirementCount,
 		Summary:                   summary,
 	}, nil
 }
 
 func (s *Server) productionShotMediaStage(r *http.Request, projectID, mediaKind string) (ProductionShotMediaStage, error) {
-	var total, succeeded, failed, running int
+	var total, succeeded, failed, running, stale int
 	var err error
 	if mediaKind == "image" {
 		err = s.db.QueryRow(r.Context(), `
@@ -471,54 +507,79 @@ func (s *Server) productionShotMediaStage(r *http.Request, projectID, mediaKind 
 				COUNT(*),
 				COUNT(*) FILTER (WHERE image_artifact_id IS NOT NULL OR image_media_file_id IS NOT NULL OR COALESCE(image_storage_key, '') <> '' OR status IN ('image_succeeded', 'video_running', 'video_succeeded')),
 				COUNT(*) FILTER (WHERE status = 'image_failed'),
-				COUNT(*) FILTER (WHERE status = 'image_running')
+				COUNT(*) FILTER (WHERE status = 'image_running'),
+				COUNT(*) FILTER (WHERE stale_state = 'needs_regeneration')
 			FROM storyboard_shots
 			WHERE project_id = $1
-		`, projectID).Scan(&total, &succeeded, &failed, &running)
+		`, projectID).Scan(&total, &succeeded, &failed, &running, &stale)
 	} else {
 		err = s.db.QueryRow(r.Context(), `
 			SELECT
 				COUNT(*),
 				COUNT(*) FILTER (WHERE video_artifact_id IS NOT NULL OR video_media_file_id IS NOT NULL OR COALESCE(video_storage_key, '') <> '' OR status = 'video_succeeded'),
 				COUNT(*) FILTER (WHERE status = 'video_failed'),
-				COUNT(*) FILTER (WHERE status = 'video_running')
+				COUNT(*) FILTER (WHERE status = 'video_running'),
+				COUNT(*) FILTER (WHERE stale_state = 'needs_regeneration')
 			FROM storyboard_shots
 			WHERE project_id = $1
-		`, projectID).Scan(&total, &succeeded, &failed, &running)
+		`, projectID).Scan(&total, &succeeded, &failed, &running, &stale)
 	}
 	if err != nil {
 		return ProductionShotMediaStage{}, err
 	}
 	pending := maxInt(total-succeeded-failed-running, 0)
+	status := productionMediaStatus(total, succeeded, failed, running)
+	if stale > 0 && status != "running" && status != "failed" {
+		status = "needs_regeneration"
+	}
 	return ProductionShotMediaStage{
-		Status:    productionMediaStatus(total, succeeded, failed, running),
+		Status:    status,
 		Total:     total,
 		Succeeded: succeeded,
 		Failed:    failed,
 		Running:   running,
 		Pending:   pending,
+		Stale:     stale,
 	}, nil
 }
 
 func (s *Server) productionFinalVideoStage(r *http.Request, projectID string, workflowsByType map[string]productionWorkflowState) (ProductionFinalVideoStage, error) {
-	var artifactID, mediaFileID, storageKey, mimeType sql.NullString
+	var artifactID, mediaFileID, storageKey, mimeType, workflowRunID, sourceWorkflowRunID, staleState sql.NullString
 	err := s.db.QueryRow(r.Context(), `
-		SELECT a.id, mf.id, a.storage_key, a.mime_type
+		SELECT a.id, mf.id, a.storage_key, a.mime_type, a.workflow_run_id::text,
+		       a.metadata->>'sourceWorkflowRunId',
+		       COALESCE(a.metadata->>'staleState', 'fresh')
 		FROM artifacts a
 		LEFT JOIN media_files mf ON mf.artifact_id = a.id
 		WHERE a.project_id = $1 AND a.type = 'final_video'
 		ORDER BY a.created_at DESC
 		LIMIT 1
-	`, projectID).Scan(&artifactID, &mediaFileID, &storageKey, &mimeType)
+	`, projectID).Scan(&artifactID, &mediaFileID, &storageKey, &mimeType, &workflowRunID, &sourceWorkflowRunID, &staleState)
 	if err != nil && err != pgx.ErrNoRows {
 		return ProductionFinalVideoStage{}, err
 	}
+	var staleShotCount int
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT COUNT(*)
+		FROM storyboard_shots
+		WHERE project_id = $1 AND stale_state <> 'fresh'
+	`, projectID).Scan(&staleShotCount); err != nil {
+		return ProductionFinalVideoStage{}, err
+	}
 	if artifactID.Valid {
+		stale := staleShotCount > 0 || staleState.String == "needs_regeneration"
+		status := "ready"
+		if stale {
+			status = "needs_regeneration"
+		}
 		stage := ProductionFinalVideoStage{
-			Status:      "ready",
-			ArtifactID:  stringPtrFromNull(artifactID),
-			MediaFileID: stringPtrFromNull(mediaFileID),
-			StorageKey:  stringPtrFromNull(storageKey),
+			Status:              status,
+			ArtifactID:          stringPtrFromNull(artifactID),
+			MediaFileID:         stringPtrFromNull(mediaFileID),
+			StorageKey:          stringPtrFromNull(storageKey),
+			WorkflowRunID:       stringPtrFromNull(workflowRunID),
+			SourceWorkflowRunID: stringPtrFromNull(sourceWorkflowRunID),
+			Stale:               stale,
 		}
 		if s.storage != nil && storageKey.Valid && mimeType.Valid && canPreviewMimeType(mimeType.String) {
 			if presigned, err := s.storage.PresignGetObject(r.Context(), storageKey.String, 15*time.Minute); err == nil {
@@ -527,7 +588,7 @@ func (s *Server) productionFinalVideoStage(r *http.Request, projectID string, wo
 		}
 		return stage, nil
 	}
-	state := mergedWorkflowState(workflowsByType, "script_to_video", "full_production", "video_production")
+	state := mergedWorkflowState(workflowsByType, "script_to_video", "full_production", "video_production", "regenerate_final_video")
 	status := "not_started"
 	if state.Running {
 		status = "running"

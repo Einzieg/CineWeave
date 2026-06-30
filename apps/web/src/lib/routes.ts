@@ -56,6 +56,16 @@ export function workflowLabel(value: string) {
       return "兼容视频生产";
     case "text_to_storyboard":
       return "文本生成分镜";
+    case "regenerate_canonical_asset_image":
+      return "重新生成资产参考图";
+    case "regenerate_derived_asset_image":
+      return "重新生成派生资产图";
+    case "regenerate_shot_image":
+      return "重新生成镜头图片";
+    case "regenerate_shot_video":
+      return "重新生成镜头视频";
+    case "regenerate_final_video":
+      return "重新合成最终成片";
     default:
       return value;
   }

@@ -13,6 +13,7 @@ import type {
   ProjectSource,
   ProductionActionResponse,
   ProductionStatus,
+  RegenerateResponse,
   PromptTemplate,
   ProviderAccount,
   ReviewResponse,
@@ -104,6 +105,8 @@ export const studioApi = {
     apiRequest<ProductionStatus>(`/api/projects/${projectId}/production/status`, { session }),
   runProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<ProductionActionResponse>(`/api/projects/${projectId}/production/actions`, { method: "POST", session, body }),
+  regenerate: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<RegenerateResponse>(`/api/projects/${projectId}/regenerate`, { method: "POST", session, body }),
 
   listSources: (session: StudioSession, projectId: string) => apiRequest<ListEnvelope<ProjectSource>>(`/api/projects/${projectId}/sources`, { session }),
   createSource: (session: StudioSession, projectId: string, body: JsonRecord) =>
@@ -151,6 +154,8 @@ export const studioApi = {
 
   listCanonicalAssets: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<CanonicalAsset>>(`/api/projects/${projectId}/canonical-assets`, { session }),
+  updateCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
+    apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, { method: "PATCH", session, body }),
   analyzeScriptAssets: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/scripts/${scriptId}/analyze-assets`, { method: "POST", session, body }),
   generateAssetImage: (session: StudioSession, projectId: string, assetId: string) =>
@@ -163,6 +168,8 @@ export const studioApi = {
     apiRequest<{ requirement: ShotAssetRequirement; providerCallId: string }>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}/generate-image`, { method: "POST", session, body: {} }),
   reviewShotAssetRequirement: (session: StudioSession, projectId: string, requirementId: string, body: JsonRecord) =>
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}/review`, { method: "POST", session, body }),
+  updateShotAssetRequirement: (session: StudioSession, projectId: string, requirementId: string, body: JsonRecord) =>
+    apiRequest<ShotAssetRequirement>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}`, { method: "PATCH", session, body }),
 
   generateStoryboard: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/scripts/${scriptId}/generate-storyboard`, { method: "POST", session, body }),
@@ -180,6 +187,8 @@ export const studioApi = {
     }),
   reviewStoryboardShot: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord) =>
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/review`, { method: "POST", session, body }),
+  updateStoryboardShot: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord) =>
+    apiRequest<StoryboardShot>(`/api/projects/${projectId}/storyboard-shots/${shotId}`, { method: "PATCH", session, body }),
 
   listArtifacts: (session: StudioSession, projectId?: string) =>
     apiRequest<ListEnvelope<Artifact>>("/api/artifacts", {
