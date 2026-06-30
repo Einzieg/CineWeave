@@ -206,7 +206,7 @@ services:
       CINEWEAVE_PROVIDER_GATEWAY_ADDR: ":8082"
       CINEWEAVE_CREDENTIAL_MASTER_KEY: ${CINEWEAVE_CREDENTIAL_MASTER_KEY:-}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
-      CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS: ${CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS:-false}
+      CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS: ${CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS:-true}
       CINEWEAVE_PROVIDER_GUARD_SERVICE_NAME: ${CINEWEAVE_PROVIDER_GUARD_SERVICE_NAME:-provider-gateway}
       CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES: ${CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES:-536870912}
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
@@ -223,6 +223,19 @@ services:
         condition: service_completed_successfully
       minio-create-bucket:
         condition: service_completed_successfully
+
+  mock-provider:
+    profiles: ["demo", "full"]
+    build:
+      context: .
+      dockerfile: deploy/docker-compose/Dockerfile-go
+      args:
+        SERVICE_PATH: services/mock-provider
+    environment:
+      CINEWEAVE_MOCK_PROVIDER_ADDR: ":19180"
+      CINEWEAVE_MOCK_PROVIDER_PUBLIC_BASE_URL: http://mock-provider:19180
+    ports:
+      - "${CINEWEAVE_MOCK_PROVIDER_HOST_PORT:-19180}:19180"
 
   event-publisher:
     profiles: ["app", "full"]

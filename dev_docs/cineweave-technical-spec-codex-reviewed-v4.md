@@ -3431,7 +3431,23 @@ Task 025: Add prompt_templates and prompt_versions schema.
   - `pnpm --filter @cineweave/web typecheck`
   - `pnpm --filter @cineweave/web lint`
   - `docker compose -f compose.yml config --quiet`
-  - `docker compose -f compose.yml build api script-worker media-worker web`
+  - `docker compose -f compose.yml build api provider-gateway script-worker media-worker web mock-provider`
+
+## Implementation Note: Silent Video MVP Hardening
+
+- Silent Video MVP now has a repeatable Docker Compose demo loop: `docker compose -f compose.yml --profile app --profile demo up -d --build`, then `pnpm smoke:silent-video`.
+- `services/mock-provider` is a local-only mock provider. It exposes OpenAI-compatible text/image endpoints and declarative async video endpoints, including static FFmpeg-concat-able MP4 fixtures served from `/files/video-1.mp4` and `/files/video-2.mp4`.
+- `examples/providers/mock-video-provider.yaml` is the demo video manifest. Smoke imports it idempotently and binds `cw-mock-video` to `video_generation_default`.
+- The smoke script creates or reuses the demo user, workspace, project, provider accounts, models, and profile bindings for `script_agent_default`, `image_generation_default`, and `video_generation_default`. It runs `video_production` with `maxShots=2`, waits for `final_video`, fetches a signed preview URL, and prints a summary.
+- `GET /api/system/status` is non-auth and low sensitivity. It reports database plus configured Temporal, storage, and Provider Gateway readiness hints for demo preflight.
+- The Demo Console surfaces a Silent Video MVP checklist, missing profile hints, silent workflow copy, and a final_video-first preview area.
+- Current MVP scope remains silent video only. Deferred audio scope:
+  - Provider Gateway `audio.tts`
+  - TTS Provider
+  - `generated_audio` artifact
+  - audio mix
+  - subtitles
+  - BGM
 Task 026: Add idempotency_keys support for write APIs and Provider calls.
 ```
 

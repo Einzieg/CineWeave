@@ -16,6 +16,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/system/status:
+    get:
+      operationId: getSystemStatus
+      responses:
+        "200":
+          description: Non-sensitive demo readiness status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStatusEnvelope"
   /api/auth/register:
     post:
       operationId: register
@@ -2048,6 +2058,40 @@ components:
           type: string
         data: {}
         meta: {}
+    SystemStatusEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/SystemStatus"
+    SystemStatus:
+      type: object
+      required: [status, services, version]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        services:
+          $ref: "#/components/schemas/SystemServices"
+        version:
+          type: string
+    SystemServices:
+      type: object
+      required: [database, temporal, storage, providerGateway]
+      properties:
+        database:
+          type: string
+          enum: [ok, unknown]
+        temporal:
+          type: string
+          enum: [ok, unknown]
+        storage:
+          type: string
+          enum: [ok, unknown]
+        providerGateway:
+          type: string
+          enum: [ok, unknown]
     ErrorEnvelope:
       type: object
       required: [requestId, error]

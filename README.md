@@ -8,7 +8,8 @@ The repository root is this directory. Do not create a nested `cineweave/` folde
 
 ```powershell
 pnpm install
-docker compose up -d
+docker compose -f compose.yml --profile app --profile demo up -d --build
+pnpm smoke:silent-video
 pnpm --filter @cineweave/web dev
 ```
 
@@ -19,8 +20,23 @@ go test ./...
 pnpm --filter @cineweave/web typecheck
 pnpm --filter @cineweave/web lint
 docker compose config
-docker compose -f compose.yml build api script-worker media-worker web
+docker compose -f compose.yml build api provider-gateway script-worker media-worker web mock-provider
 ```
+
+## Silent Video MVP Demo
+
+The local demo profile starts a mock OpenAI-compatible text/image provider and a declarative mock video provider. It is for local development only; production deployments should configure real provider accounts and set private provider media URL policy explicitly.
+
+```powershell
+pnpm install
+docker compose -f compose.yml --profile app --profile demo up -d --build
+pnpm smoke:silent-video
+pnpm --filter @cineweave/web dev
+```
+
+`pnpm smoke:silent-video` creates or reuses the demo user, workspace, project, provider accounts, models, and the `script_agent_default`, `image_generation_default`, and `video_generation_default` profile bindings. It runs `video_production` with two silent shots, waits for the `final_video` artifact, and prints the final video preview URL. Open [http://localhost:3000](http://localhost:3000) to inspect the console after the web dev server starts.
+
+The current MVP is silent video. TTS, generated audio artifacts, audio mix, subtitles, and BGM are intentionally deferred.
 
 ## Provider Gateway Boundary
 
@@ -29,6 +45,8 @@ Provider Gateway is required by default for upstream model access. API and worke
 Provider Gateway now owns `text.generate`, `text.stream`, and `image.generate` runtime calls. The image runtime targets OpenAI-compatible `/v1/images/generations`, accepts URL or `b64_json` upstream responses, downloads or decodes the media inside the Gateway, stores it in S3 / MinIO, and writes `media_files`, `artifacts`, `provider_call_logs`, and `cost_records`. Private or localhost upstream media URLs are blocked unless `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=true` is explicitly set for development.
 
 Provider Gateway Video Runtime v1 adds declarative HTTP video providers through `/internal/provider/video/create-task`, `/internal/provider/video/poll-task`, and `/internal/provider/video/cancel-task`. Video providers should be onboarded with Provider Manifest endpoints first because upstream video APIs vary widely. `provider_async_tasks` is the durable async task state source; Temporal workers will own later durable polling loops, while the Gateway performs each create / poll / cancel call, downloads completed video media, writes S3 / MinIO objects, and records `media_files`, `artifacts`, `provider_call_logs`, and final `cost_records`. Video downloads default to `CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES=536870912`.
+
+The Compose demo enables `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=true` by default so Provider Gateway can fetch video files from the internal `mock-provider` service. Set `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=false` or a stricter deployment-specific value outside local demo environments.
 
 Provider limits are enforced only inside Provider Gateway. `provider_limit_policies` can cap max concurrency, requests per minute/day, daily/monthly budget, and failure circuit behavior by organization, account, model, and task type. `provider_leases` protects active upstream calls, budget checks read `cost_records`, and circuit state is stored in `provider_circuit_states`. Guard-blocked calls are written to `provider_call_logs` with `status=blocked` and do not create `cost_records`.
 

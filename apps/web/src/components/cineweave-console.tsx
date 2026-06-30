@@ -26,10 +26,10 @@ import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-const apiBase = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:19092");
+const apiBase = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080");
 const realtimeUrl = process.env.NEXT_PUBLIC_REALTIME_URL ?? "http://127.0.0.1:19093/api/realtime/events";
 const defaultPrompt = "A quiet train station at sunrise with cinematic lighting.";
-const defaultProviderBaseUrl = "http://127.0.0.1:19180/v1";
+const defaultProviderBaseUrl = "http://mock-provider:19180/v1";
 const defaultProviderApiKey = "sk-mock-phase3";
 const defaultTestPrompt = "Write one cinematic sentence for a sunrise train station.";
 const defaultImageTestPrompt = "A cinematic sunrise train station, high detail";
@@ -422,6 +422,12 @@ type RealtimeEvent = {
   createdAt: string;
 };
 
+type SystemStatus = {
+  status: string;
+  services: Record<string, string>;
+  version: string;
+};
+
 type BusyState = "bootstrap" | "workflow" | "cancel" | null;
 type PromptBusyState = "refresh" | "render" | "version" | "activate" | null;
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting";
@@ -433,6 +439,8 @@ const workflowTypes: Array<{ value: WorkflowType; label: string }> = [
   { value: "video_production", label: "Video Production" },
   { value: "script_to_storyboard", label: "Script to Storyboard" },
 ];
+
+const requiredMvpProfileKeys = ["script_agent_default", "image_generation_default", "video_generation_default"] as const;
 
 const routingStrategyOptions = [
   { value: "priority", label: "Priority" },
@@ -504,6 +512,7 @@ export function CineWeaveConsole() {
   const [profileRoutingStrategy, setProfileRoutingStrategy] = useState("priority_with_fallback");
   const [manifestText, setManifestText] = useState(defaultManifestText);
   const [manifestValidation, setManifestValidation] = useState<ManifestValidationResult | null>(null);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const videoProviderAsyncTaskId = useMemo(() => {
     const runningShot = workflowShots.find((shot) => shot.providerAsyncTaskId && shot.status === "video_running");
     if (runningShot?.providerAsyncTaskId) {
@@ -514,6 +523,35 @@ export function CineWeaveConsole() {
   }, [workflowNodes, workflowShots]);
   const finalVideoArtifact = useMemo(() => artifacts.find((artifact) => artifact.type === "final_video") ?? null, [artifacts]);
   const finalVideoStorageKey = outputString(workflowRun?.output, "finalVideoStorageKey");
+  const finalVideoPreviewUrl = finalVideoArtifact?.previewUrl ?? null;
+  const activeProfileKeys = useMemo(
+    () => new Set(modelProfiles.filter((profile) => profile.bindings.some((binding) => binding.enabled)).map((profile) => profile.profileKey)),
+    [modelProfiles],
+  );
+  const missingMvpProfileKeys = useMemo(
+    () => requiredMvpProfileKeys.filter((profileKey) => !activeProfileKeys.has(profileKey)),
+    [activeProfileKeys],
+  );
+  const mvpChecklist = useMemo(
+    () => [
+      {
+        label: "Provider profiles configured",
+        ready: missingMvpProfileKeys.length === 0,
+        detail: missingMvpProfileKeys.length === 0 ? "All required profiles are bound" : missingMvpProfileKeys.join(", "),
+      },
+      {
+        label: "Workflow can run",
+        ready: workflowRun ? workflowRun.status !== "failed" && workflowRun.status !== "cancelled" : missingMvpProfileKeys.length === 0,
+        detail: workflowRun?.status ?? "Ready after smoke setup",
+      },
+      {
+        label: "Final video preview available",
+        ready: Boolean(finalVideoPreviewUrl),
+        detail: finalVideoArtifact?.storageKey ?? finalVideoStorageKey ?? "Waiting for final_video",
+      },
+    ],
+    [finalVideoArtifact, finalVideoPreviewUrl, finalVideoStorageKey, missingMvpProfileKeys, workflowRun],
+  );
   const canCancelWorkflow = workflowRun ? isCancelableWorkflowStatus(workflowRun.status) : false;
 
   const metrics = useMemo(
@@ -536,6 +574,24 @@ export function CineWeaveConsole() {
     ],
     [artifacts.length, connection, error, finalVideoArtifact, finalVideoStorageKey, workflowRun],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    apiRequest<SystemStatus>("/api/system/status")
+      .then((status) => {
+        if (!cancelled) {
+          setSystemStatus(status);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSystemStatus(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const createDemoSession = useCallback(async () => {
     const suffix = Date.now().toString(36);
@@ -1448,6 +1504,32 @@ export function CineWeaveConsole() {
             ))}
           </section>
 
+          <section className="mt-5 rounded border border-[var(--line)] bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
+              <div className="flex items-center gap-2">
+                <ListChecks size={18} aria-hidden="true" />
+                <h2 className="text-sm font-semibold">Silent Video MVP</h2>
+              </div>
+              <StatusPill status={systemStatus?.status ?? "unknown"} />
+            </div>
+            <div className="grid gap-3 p-4 lg:grid-cols-3">
+              {mvpChecklist.map((item) => (
+                <div key={item.label} className="rounded border border-[var(--line)] px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium">{item.label}</p>
+                    <StatusPill status={item.ready ? "ready" : "missing"} />
+                  </div>
+                  <p className="mt-2 truncate text-xs text-[var(--muted)]">{item.detail}</p>
+                </div>
+              ))}
+            </div>
+            {missingMvpProfileKeys.length > 0 ? (
+              <p className="border-t border-[var(--line)] px-4 py-3 text-xs text-[var(--muted)]">
+                Missing profiles: {missingMvpProfileKeys.join(", ")}
+              </p>
+            ) : null}
+          </section>
+
           <section className="mt-6 grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
             <div id="workflow-board" className="rounded border border-[var(--line)] bg-white">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
@@ -1484,6 +1566,11 @@ export function CineWeaveConsole() {
                       ))}
                     </select>
                   </label>
+                  {workflowType === "video_production" ? (
+                    <p className="rounded border border-[var(--line)] bg-[var(--soft)] px-3 py-2 text-xs text-[var(--muted)]">
+                      Current workflow is silent video only: no TTS, audio mix, BGM, or subtitles are generated.
+                    </p>
+                  ) : null}
                   <div className="grid gap-2 sm:grid-cols-6">
                     <input
                       value={workflowVideoDuration}
@@ -1591,12 +1678,31 @@ export function CineWeaveConsole() {
                 </div>
 
                 <div className="grid gap-3">
+                  {finalVideoArtifact ? (
+                    <div className="rounded border border-[var(--line)] p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-medium text-[var(--muted)]">Final Video Preview</p>
+                        <StatusPill status={finalVideoPreviewUrl ? "ready" : "storage"} />
+                      </div>
+                      {finalVideoPreviewUrl && isVideoArtifact(finalVideoArtifact) ? (
+                        <video
+                          src={finalVideoPreviewUrl}
+                          controls
+                          className="mt-3 aspect-video w-full rounded border border-[var(--line)] bg-black"
+                        />
+                      ) : (
+                        <p className="mt-3 truncate text-xs text-[var(--muted)]">
+                          {finalVideoArtifact.storageKey ?? finalVideoStorageKey ?? "No final video storage key"}
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
                   <InfoRow label="User" value={session?.email ?? "Not initialized"} />
                   <InfoRow label="Project" value={session?.projectId ?? "Pending"} />
                   <InfoRow label="Type" value={workflowType} />
                   <InfoRow label="Workflow" value={workflowRun?.id ?? "No run"} />
                   <InfoRow label="Temporal" value={workflowRun?.temporalWorkflowId ?? "No workflow"} />
-                  <InfoRow label="Final Video" value={finalVideoStorageKey ?? finalVideoArtifact?.storageKey ?? "Pending"} />
+                  <InfoRow label="Final Video" value={finalVideoArtifact?.storageKey ?? finalVideoStorageKey ?? "Pending"} />
                   <InfoRow label="Output" value={artifactSummary(artifacts)} />
                 </div>
 
@@ -1680,6 +1786,7 @@ export function CineWeaveConsole() {
                 <Plane label="Control" value="Go API Server" />
                 <Plane label="Provider" value="CineWeave Gateway" />
                 <Plane label="Workflow" value="Temporal" />
+                <Plane label="Readiness" value={systemStatus ? `API ${systemStatus.version}` : "Unknown"} />
                 <Plane label="Data" value="PostgreSQL / Redis / S3 / NATS" />
                 <Plane label="Cost" value="Provider call logs" icon={<CircleDollarSign size={16} />} />
               </div>
@@ -2486,8 +2593,8 @@ function ShotVideoPreview({ shot }: { shot: StoryboardShot }) {
 }
 
 function StatusPill({ status }: { status: string }) {
-  const isGood = status === "succeeded" || status === "live";
-  const isBad = status === "failed" || status === "cancelled";
+  const isGood = status === "succeeded" || status === "live" || status === "ready" || status === "ok" || status === "active";
+  const isBad = status === "failed" || status === "cancelled" || status === "missing";
   const className = isGood
     ? "border-[var(--teal)] text-[var(--teal)]"
     : isBad
