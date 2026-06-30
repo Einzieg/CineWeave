@@ -8,8 +8,7 @@ The repository root is this directory. Do not create a nested `cineweave/` folde
 
 ```powershell
 pnpm install
-docker compose -f compose.yml --profile app --profile demo up -d --build
-pnpm smoke:silent-video
+docker compose -f compose.yml --profile app up -d --build
 pnpm --filter @cineweave/web dev
 ```
 
@@ -20,21 +19,8 @@ go test ./...
 pnpm --filter @cineweave/web typecheck
 pnpm --filter @cineweave/web lint
 docker compose config
-docker compose -f compose.yml build api provider-gateway script-worker media-worker web mock-provider
+docker compose -f compose.yml build api provider-gateway script-worker media-worker web
 ```
-
-## Silent Video MVP Demo
-
-The local demo profile starts a mock OpenAI-compatible text/image provider and a declarative mock video provider. It is for local development only; production deployments should configure real provider accounts and set private provider media URL policy explicitly.
-
-```powershell
-pnpm install
-docker compose -f compose.yml --profile app --profile demo up -d --build
-pnpm smoke:silent-video
-pnpm --filter @cineweave/web dev
-```
-
-`pnpm smoke:silent-video` creates or reuses the demo user, workspace, project, provider accounts, models, and the `script_agent_default`, `image_generation_default`, and `video_generation_default` profile bindings. It runs `video_production` with two silent shots, waits for the `final_video` artifact, and prints the final video preview URL. Open [http://localhost:3000](http://localhost:3000) to inspect the console after the web dev server starts.
 
 The current MVP is silent video. TTS, generated audio artifacts, audio mix, subtitles, and BGM are intentionally deferred.
 
@@ -44,9 +30,7 @@ Provider Gateway is required by default for upstream model access. API and worke
 
 Provider Gateway now owns `text.generate`, `text.stream`, and `image.generate` runtime calls. The image runtime targets OpenAI-compatible `/v1/images/generations`, accepts URL or `b64_json` upstream responses, downloads or decodes the media inside the Gateway, stores it in S3 / MinIO, and writes `media_files`, `artifacts`, `provider_call_logs`, and `cost_records`. Private or localhost upstream media URLs are blocked unless `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=true` is explicitly set for development.
 
-Provider Gateway Video Runtime v1 adds declarative HTTP video providers through `/internal/provider/video/create-task`, `/internal/provider/video/poll-task`, and `/internal/provider/video/cancel-task`. Video providers should be onboarded with Provider Manifest endpoints first because upstream video APIs vary widely. `provider_async_tasks` is the durable async task state source; Temporal workers will own later durable polling loops, while the Gateway performs each create / poll / cancel call, downloads completed video media, writes S3 / MinIO objects, and records `media_files`, `artifacts`, `provider_call_logs`, and final `cost_records`. Video downloads default to `CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES=536870912`.
-
-The Compose demo enables `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=true` by default so Provider Gateway can fetch video files from the internal `mock-provider` service. Set `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=false` or a stricter deployment-specific value outside local demo environments.
+Provider Gateway Video Runtime v1 adds declarative HTTP video providers through `/internal/provider/video/create-task`, `/internal/provider/video/poll-task`, and `/internal/provider/video/cancel-task`. Video providers should be onboarded with Provider Manifest endpoints first because upstream video APIs vary widely. `provider_async_tasks` is the durable async task state source; Temporal workers will own later durable polling loops, while the Gateway performs each create / poll / cancel call, downloads completed video media, writes S3 / MinIO objects, and records `media_files`, `artifacts`, `provider_call_logs`, and final `cost_records`. Video downloads default to `CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES=536870912`. Private or localhost upstream media URLs remain blocked by default; only set `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=true` for controlled development providers that require it.
 
 Provider limits are enforced only inside Provider Gateway. `provider_limit_policies` can cap max concurrency, requests per minute/day, daily/monthly budget, and failure circuit behavior by organization, account, model, and task type. `provider_leases` protects active upstream calls, budget checks read `cost_records`, and circuit state is stored in `provider_circuit_states`. Guard-blocked calls are written to `provider_call_logs` with `status=blocked` and do not create `cost_records`.
 
@@ -58,7 +42,7 @@ System prompts are seeded during migration for `storyboard_planner`, `storyboard
 
 Workflow prompt resolution follows project binding, organization binding, organization active version, then system active version. `text_to_storyboard` and `video_production` render prompt templates through the Prompt Registry before calling Provider Gateway. Each new workflow model call sends `promptVersionId`, `promptHash`, `promptTemplateKey`, and `promptSource`; Provider Gateway writes `provider_call_logs.prompt_version_id`, `provider_call_logs.prompt_hash`, and gateway-side Artifact metadata for image/video outputs. Storyboard JSON artifacts also store `artifacts.prompt_hash` plus `metadata.promptVersionId`, `metadata.promptTemplateKey`, and `metadata.promptSource`.
 
-Prompt management APIs are available at `/api/prompt-templates`, `/api/prompt-templates/{templateId}/versions`, `/api/prompt-versions/{versionId}/activate`, `/api/prompt-bindings`, and `/api/prompts/render-test`. `prompt.read` allows listing and render-test; `prompt.manage` allows creating templates, versions, bindings, and activating versions. The Demo Console includes a minimal Prompt Center for listing system prompts, rendering test variables, creating versions, and activating versions.
+Prompt management APIs are available at `/api/prompt-templates`, `/api/prompt-templates/{templateId}/versions`, `/api/prompt-versions/{versionId}/activate`, `/api/prompt-bindings`, and `/api/prompts/render-test`. `prompt.read` allows listing and render-test; `prompt.manage` allows creating templates, versions, bindings, and activating versions.
 
 `text_to_storyboard` is the first real storyboard workflow path. `POST /api/workflow-runs` with `workflowType=text_to_storyboard` starts Temporal, the script worker calls Provider Gateway for `text.generate` using `script_agent_default`, then records the storyboard JSON artifact and normalized `storyboard_shots`. It does not call image or video Gateway paths.
 
@@ -66,7 +50,7 @@ Prompt management APIs are available at `/api/prompt-templates`, `/api/prompt-te
 
 `media-worker` listens on Temporal task queue `cineweave-media`. It uses only `media_files`, `artifacts`, and S3 / MinIO object storage; it does not call Provider Gateway or access provider credentials. The Docker Compose media-worker image uses `deploy/docker-compose/Dockerfile-media-worker` and installs FFmpeg in that runtime image.
 
-Shot results are available through `GET /api/workflow-runs/{id}/shots?includePreviewUrl=true`, and the Demo Console shows storyboard shots with image/video previews while retaining the Vault artifact list.
+Shot results are available through `GET /api/workflow-runs/{id}/shots?includePreviewUrl=true`, and the Studio project workspace shows storyboard shots with image/video previews while retaining the Vault artifact list.
 
 Video workflow cancellation is exposed through `POST /api/workflow-runs/{id}/cancel`. Running, queued, or already-cancelling runs are marked `cancelling` and API requests Temporal cancellation; terminal runs return their current state for repeated cancel calls. If the current shot has a running Provider Gateway video async task, workflow cleanup calls `/internal/provider/video/cancel-task`; completed shots stay succeeded and not-yet-started shots are marked cancelled.
 

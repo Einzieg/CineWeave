@@ -21,7 +21,7 @@ paths:
       operationId: getSystemStatus
       responses:
         "200":
-          description: Non-sensitive demo readiness status
+          description: Non-sensitive system readiness status
           content:
             application/json:
               schema:

@@ -3342,7 +3342,7 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - `CancelStoryboardVideoTask` calls Provider Gateway `/internal/provider/video/cancel-task`, then marks the `generate_storyboard_video` node `cancelled` and emits `workflow.node.cancelled`.
 - `CancelVideoProductionWorkflow` marks the workflow `cancelled`, writes cancellation output including provider async task IDs, and emits `workflow.run.cancelled`.
 - Provider Gateway video cancel is idempotent: already cancelled tasks return `cancelled`, completed tasks return `succeeded`, missing manifest cancel endpoints mark the local async task cancelled, and upstream cancel failures return `PROVIDER_CANCEL_FAILED` while preserving the async task state.
-- Demo Console shows `queued` / `running` / `cancelling` workflow runs as cancellable and calls `POST /api/workflow-runs/{id}/cancel`.
+- Studio workflow pages show `queued` / `running` / `cancelling` workflow runs as cancellable and call `POST /api/workflow-runs/{id}/cancel`.
 
 ## Implementation Note: Fine-Grained RBAC Authorizer
 
@@ -3353,7 +3353,7 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - Team role bindings apply only when both the team and `team_members` row are active.
 - Register grants the creator `org_owner`; project creation grants the creator `project_owner`.
 - New management endpoints expose `/api/teams`, `/api/roles`, `/api/permissions`, and `/api/role-bindings`.
-- Demo Console includes an Admin Access block that lists visible roles, teams, and role bindings and can create a team for smoke testing.
+- Studio access management pages list visible roles, teams, and role bindings and can create teams for RBAC administration.
 
 ## Implementation Note: Provider Gateway Rate Limit / Lease / Quota
 
@@ -3403,7 +3403,7 @@ Task 025: Add prompt_templates and prompt_versions schema.
 - RBAC permissions `prompt.read` and `prompt.manage` gate Prompt Center access. `org_owner` continues through `admin.manage`; `org_admin` gets read/manage, `project_owner` gets read/manage, and project editor/viewer roles get read access.
 - `text_to_storyboard` and `video_production` now resolve and render prompt versions before Provider Gateway calls. Gateway text/image/video-create requests carry `promptTemplateKey`, `promptVersionId`, `promptHash`, and `promptSource`.
 - New workflow paths populate `provider_call_logs.prompt_version_id`, `provider_call_logs.prompt_hash`, `artifacts.prompt_hash`, and Artifact metadata fields `promptTemplateKey`, `promptVersionId`, `promptHash`, and `promptSource`.
-- Demo Console includes a minimal Prompt Center for listing seeded prompts, viewing active content, render-test, creating versions, and activating versions.
+- Studio Prompt Center lists seeded prompts, shows active content, supports render-test, creates versions, and activates versions.
 
 ## Implementation Note: Multi-Shot Video Production v1
 
@@ -3431,16 +3431,14 @@ Task 025: Add prompt_templates and prompt_versions schema.
   - `pnpm --filter @cineweave/web typecheck`
   - `pnpm --filter @cineweave/web lint`
   - `docker compose -f compose.yml config --quiet`
-  - `docker compose -f compose.yml build api provider-gateway script-worker media-worker web mock-provider`
+  - `docker compose -f compose.yml build api provider-gateway script-worker media-worker web`
 
 ## Implementation Note: Silent Video MVP Hardening
 
-- Silent Video MVP now has a repeatable Docker Compose demo loop: `docker compose -f compose.yml --profile app --profile demo up -d --build`, then `pnpm smoke:silent-video`.
-- `services/mock-provider` is a local-only mock provider. It exposes OpenAI-compatible text/image endpoints and declarative async video endpoints, including static FFmpeg-concat-able MP4 fixtures served from `/files/video-1.mp4` and `/files/video-2.mp4`.
-- `examples/providers/mock-video-provider.yaml` is the demo video manifest. Smoke imports it idempotently and binds `cw-mock-video` to `video_generation_default`.
-- The smoke script creates or reuses the demo user, workspace, project, provider accounts, models, and profile bindings for `script_agent_default`, `image_generation_default`, and `video_generation_default`. It runs `video_production` with `maxShots=2`, waits for `final_video`, fetches a signed preview URL, and prints a summary.
-- `GET /api/system/status` is non-auth and low sensitivity. It reports database plus configured Temporal, storage, and Provider Gateway readiness hints for demo preflight.
-- The Demo Console surfaces a Silent Video MVP checklist, missing profile hints, silent workflow copy, and a final_video-first preview area.
+- Docker Compose app profile starts the production-shaped local stack with application services only: `docker compose -f compose.yml --profile app up -d --build`.
+- Provider accounts, provider models, and model profile bindings must be configured explicitly in Studio or through API before running script, image, or video workflows.
+- `GET /api/system/status` is non-auth and low sensitivity. It reports database plus configured Temporal, storage, and Provider Gateway readiness hints for service health checks.
+- Studio project pages surface workflow status, model profile hints, storyboard and media previews, and a final_video-first Vault view.
 - Current MVP scope remains silent video only. Deferred audio scope:
   - Provider Gateway `audio.tts`
   - TTS Provider

@@ -9,7 +9,6 @@
     "lint": "pnpm --filter @cineweave/web lint",
     "typecheck": "pnpm --filter @cineweave/web typecheck",
     "test": "pnpm run typecheck && pnpm run lint",
-    "smoke:silent-video": "node scripts/smoke-silent-video.mjs",
     "compose:infra": "docker compose --profile infra up -d",
     "compose:full": "docker compose --profile full up -d",
     "compose:down": "docker compose down --remove-orphans"

@@ -1643,9 +1643,6 @@ export function GlobalSettingsPage() {
           <SectionTitle title="本机会话" description="顶部的访问令牌、组织 ID 和工作区 ID 会保存在本机浏览器。" />
           <div className="grid gap-3 p-4 text-sm text-zinc-400">
             <p>正式登录页尚未纳入本次范围；当前阶段使用访问令牌直接调用接口。</p>
-            <Link className="studio-button w-fit" href={"/demo" as Route}>
-              打开旧版演示控制台
-            </Link>
           </div>
         </Surface>
       </SessionGate>

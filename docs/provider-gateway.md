@@ -17,7 +17,7 @@ The first real adapter must support `/v1/models`, `/v1/chat/completions`, `/v1/i
 
 Image runtime v1 exposes `POST /internal/provider/image/generate` for internal service-token callers. API Server and Workers must not call image providers directly and must not download upstream media. The Gateway accepts OpenAI-compatible image responses containing either `url` or `b64_json`, then writes the generated object to S3 / MinIO before returning `artifactId`, `mediaFileId`, and `storageKey`.
 
-`CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=false` is the default. Set it to `true` only for local mock providers whose image URLs resolve to localhost or private networks.
+`CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=false` is the default. Set it to `true` only for controlled development providers whose media URLs resolve to localhost or private networks.
 
 ## Provider Guard
 
