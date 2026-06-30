@@ -13,6 +13,8 @@ docker compose -f compose.yml --profile app up -d --build
 
 The web container is exposed at `http://localhost:3000`. On a fresh database, open that URL and complete `/setup` to create the first administrator, organization, and workspace. Public registration is disabled by default with `CINEWEAVE_ALLOW_PUBLIC_REGISTRATION=false`; keep it disabled for server deployments unless you intentionally want open signup.
 
+After setup, use `/login` with the administrator account. The web app stores the login session locally and sends the access token plus organization context automatically; users do not manually enter tokens, organization IDs, or workspace IDs.
+
 Useful commands:
 
 ```powershell

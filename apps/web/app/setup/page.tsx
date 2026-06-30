@@ -93,18 +93,18 @@ export default function SetupPage() {
   }
 
   return (
-    <AuthPageShell title="初始化影织" description="创建第一个管理员、组织和默认工作区。完成后公共注册默认保持关闭。">
+    <AuthPageShell title="初始化影织" description="首次启动需要创建管理员账号，之后请使用该账号登录。">
       <AuthForm onSubmit={submit}>
         <AuthField autoComplete="email" label="管理员邮箱" onChange={(email) => setForm({ ...form, email })} type="email" value={form.email} />
-        <AuthField autoComplete="name" label="显示名称" onChange={(displayName) => setForm({ ...form, displayName })} value={form.displayName} />
+        <AuthField autoComplete="name" label="管理员姓名" onChange={(displayName) => setForm({ ...form, displayName })} value={form.displayName} />
         <AuthField label="组织名称" onChange={(organizationName) => setForm({ ...form, organizationName })} value={form.organizationName} />
-        <AuthField label="工作区名称" onChange={(workspaceName) => setForm({ ...form, workspaceName })} value={form.workspaceName} />
-        <AuthField autoComplete="new-password" label="密码" onChange={(password) => setForm({ ...form, password })} type="password" value={form.password} />
+        <AuthField label="默认工作区名称" onChange={(workspaceName) => setForm({ ...form, workspaceName })} value={form.workspaceName} />
+        <AuthField autoComplete="new-password" label="登录密码" onChange={(password) => setForm({ ...form, password })} type="password" value={form.password} />
         <AuthField autoComplete="new-password" label="确认密码" onChange={(confirmPassword) => setForm({ ...form, confirmPassword })} type="password" value={form.confirmPassword} />
         <AuthError message={error} />
         <button className="studio-button studio-button-primary w-full" disabled={busy} type="submit">
           {busy ? <Loader2 className="animate-spin" size={16} /> : <WandSparkles size={16} />}
-          完成初始化
+          创建管理员并进入
         </button>
       </AuthForm>
     </AuthPageShell>

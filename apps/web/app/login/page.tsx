@@ -2,6 +2,7 @@
 
 import { Loader2, LogIn } from "lucide-react";
 import type { Route } from "next";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
@@ -75,7 +76,7 @@ export default function LoginPage() {
   }
 
   return (
-    <AuthPageShell title="登录工作台" description="使用初始化管理员或已授权账号进入 AI 视频创作工作台。">
+    <AuthPageShell title="登录影织" description="进入你的 AI 视频创作工作台。">
       <AuthForm onSubmit={submit}>
         <AuthField autoComplete="email" label="邮箱" onChange={setEmail} type="email" value={email} />
         <AuthField autoComplete="current-password" label="密码" onChange={setPassword} type="password" value={password} />
@@ -84,6 +85,12 @@ export default function LoginPage() {
           {busy ? <Loader2 className="animate-spin" size={16} /> : <LogIn size={16} />}
           登录
         </button>
+        <p className="text-center text-sm text-slate-500">
+          首次启动？
+          <Link className="font-medium text-blue-700 hover:text-blue-800" href={"/setup" as Route}>
+            请先初始化管理员账号
+          </Link>
+        </p>
       </AuthForm>
     </AuthPageShell>
   );

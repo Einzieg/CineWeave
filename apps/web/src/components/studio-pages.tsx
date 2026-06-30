@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { studioApi } from "@/lib/api-client";
 import { cn } from "@/lib/cn";
 import { projectHref, workflowLabel } from "@/lib/routes";
+import { useSessionDetails } from "@/lib/session-details";
 import { useStudioSession } from "@/lib/session";
 import type {
   AgentMessage,
@@ -2278,6 +2279,7 @@ export function GlobalSettingsPage() {
 function SettingsContent() {
   const router = useRouter();
   const { session, clearSession } = useStudioSession();
+  const details = useSessionDetails();
 
   async function logout() {
     if (session.refreshToken.trim()) {
@@ -2294,8 +2296,8 @@ function SettingsContent() {
         <div className="grid gap-4 p-4 md:grid-cols-2">
           <InfoTile label="显示名称" value={session.user?.displayName || "未设置"} />
           <InfoTile label="邮箱" value={session.user?.email || "未设置"} />
-          <InfoTile label="组织" value={session.organizationId ? "已连接" : "未连接"} />
-          <InfoTile label="工作区" value={session.workspaceId ? "已连接" : "未连接"} />
+          <InfoTile label="当前组织" value={details.organizationName || (session.organizationId ? "已连接" : "未连接")} />
+          <InfoTile label="当前工作区" value={details.workspaceName || (session.workspaceId ? "已连接" : "未连接")} />
           <div className="md:col-span-2">
             <button className="studio-button" onClick={logout} type="button">
               <X size={16} />

@@ -1,6 +1,7 @@
 "use client";
 
-import { LogOut, UserCircle2 } from "lucide-react";
+import { Building2, LogOut, UserCircle2 } from "lucide-react";
+import { useSessionDetails } from "@/lib/session-details";
 import type { StudioSession } from "@/lib/types";
 
 export function TopBar({
@@ -15,6 +16,7 @@ export function TopBar({
   onLogout: () => void;
 }) {
   const displayName = session.user?.displayName?.trim() || session.user?.email || "已登录用户";
+  const details = useSessionDetails();
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur-xl">
@@ -24,6 +26,13 @@ export function TopBar({
           {description ? <p className="mt-1 text-sm text-slate-500">{description}</p> : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <Building2 className="shrink-0 text-slate-500" size={18} />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-slate-900">{details.organizationName || "当前组织"}</p>
+              <p className="truncate text-xs text-slate-500">{details.workspaceName || "默认工作区"}</p>
+            </div>
+          </div>
           <div className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
             <UserCircle2 className="shrink-0 text-slate-500" size={18} />
             <div className="min-w-0">

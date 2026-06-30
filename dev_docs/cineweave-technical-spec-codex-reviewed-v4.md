@@ -2481,19 +2481,19 @@ Dashboard
   - 成本
   - Provider 健康度
 
-Project Studio
+项目工作台
   - 项目设置
   - 风格设定
   - 角色设定
   - 世界观设定
 
-Novel / Script Studio
+原文 / 剧本工作台
   - 小说章节
   - 事件图谱
   - 剧本版本
   - AI 修改历史
 
-Storyboard Studio
+分镜工作台
   - 分镜表格
   - 镜头卡片
   - 角色/场景/道具绑定
@@ -3132,7 +3132,7 @@ Not required in first Provider: video generation
 3. 实现 StoryboardToVideoWorkflow。
 4. 实现 VideoComposeWorkflow。
 5. 实现基础 QualityCheckActivity。
-6. 实现 Project Studio / Workflow Board MVP。
+6. 实现 项目工作台 / 工作流看板 MVP。
 ```
 
 验收标准：
@@ -3342,7 +3342,7 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - `CancelStoryboardVideoTask` calls Provider Gateway `/internal/provider/video/cancel-task`, then marks the `generate_storyboard_video` node `cancelled` and emits `workflow.node.cancelled`.
 - `CancelVideoProductionWorkflow` marks the workflow `cancelled`, writes cancellation output including provider async task IDs, and emits `workflow.run.cancelled`.
 - Provider Gateway video cancel is idempotent: already cancelled tasks return `cancelled`, completed tasks return `succeeded`, missing manifest cancel endpoints mark the local async task cancelled, and upstream cancel failures return `PROVIDER_CANCEL_FAILED` while preserving the async task state.
-- Studio workflow pages show `queued` / `running` / `cancelling` workflow runs as cancellable and call `POST /api/workflow-runs/{id}/cancel`.
+- 工作台工作流页面 show `queued` / `running` / `cancelling` workflow runs as cancellable and call `POST /api/workflow-runs/{id}/cancel`.
 
 ## Implementation Note: Fine-Grained RBAC Authorizer
 
@@ -3353,7 +3353,7 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - Team role bindings apply only when both the team and `team_members` row are active.
 - Register grants the creator `org_owner`; project creation grants the creator `project_owner`.
 - New management endpoints expose `/api/teams`, `/api/roles`, `/api/permissions`, and `/api/role-bindings`.
-- Studio access management pages list visible roles, teams, and role bindings and can create teams for RBAC administration.
+- 权限管理页面 list visible roles, teams, and role bindings and can create teams for RBAC administration.
 
 ## Implementation Note: Provider Gateway Rate Limit / Lease / Quota
 
@@ -3403,7 +3403,7 @@ Task 025: Add prompt_templates and prompt_versions schema.
 - RBAC permissions `prompt.read` and `prompt.manage` gate Prompt Center access. `org_owner` continues through `admin.manage`; `org_admin` gets read/manage, `project_owner` gets read/manage, and project editor/viewer roles get read access.
 - `text_to_storyboard` and `video_production` now resolve and render prompt versions before Provider Gateway calls. Gateway text/image/video-create requests carry `promptTemplateKey`, `promptVersionId`, `promptHash`, and `promptSource`.
 - New workflow paths populate `provider_call_logs.prompt_version_id`, `provider_call_logs.prompt_hash`, `artifacts.prompt_hash`, and Artifact metadata fields `promptTemplateKey`, `promptVersionId`, `promptHash`, and `promptSource`.
-- Studio Prompt Center lists seeded prompts, shows active content, supports render-test, creates versions, and activates versions.
+- 提示词中心 lists seeded prompts, shows active content, supports render-test, creates versions, and activates versions.
 
 ## Implementation Note: Multi-Shot Video Production v1
 
@@ -3437,7 +3437,7 @@ Task 025: Add prompt_templates and prompt_versions schema.
 
 - Docker Compose app profile starts the production-shaped local stack with application services only: `docker compose -f compose.yml --profile app up -d --build`.
 - First-run deployments use `GET /api/system/setup-state` and `POST /api/system/setup` to create the initial administrator, organization, and workspace. Public `/api/auth/register` is disabled by default with `CINEWEAVE_ALLOW_PUBLIC_REGISTRATION=false`; the web app routes `/` to `/setup`, `/login`, or `/dashboard` based on setup and session state.
-- Provider accounts, provider models, and model profile bindings must be configured explicitly in Studio or through API before running script, image, or video workflows.
+- Provider accounts, provider models, and model profile bindings must be configured explicitly in the web workbench or through API before running script, image, or video workflows.
 - `GET /api/system/status` is non-auth and low sensitivity. It reports database plus configured Temporal, storage, and Provider Gateway readiness hints for service health checks.
 - Project pages surface workflow status, model profile hints, storyboard and media previews, and a final_video-first Vault view.
 - Current MVP scope remains silent video only. Deferred audio scope:

@@ -35,7 +35,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SystemSetupStateEnvelope"
+                $ref: "#/components/schemas/SetupStateResponseEnvelope"
   /api/system/setup:
     post:
       operationId: setupSystem
@@ -51,7 +51,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AuthEnvelope"
+                $ref: "#/components/schemas/SystemSetupResponseEnvelope"
         "409":
           $ref: "#/components/responses/Error"
         "422":
@@ -2852,14 +2852,14 @@ components:
     SystemSetupRequest:
       allOf:
         - $ref: "#/components/schemas/RegisterRequest"
-    SystemSetupStateEnvelope:
+    SetupStateResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
         - type: object
           properties:
             data:
-              $ref: "#/components/schemas/SystemSetupState"
-    SystemSetupState:
+              $ref: "#/components/schemas/SetupStateResponse"
+    SetupStateResponse:
       type: object
       required: [needsSetup, userCount, organizationCount]
       properties:
@@ -2871,6 +2871,16 @@ components:
         organizationCount:
           type: integer
           minimum: 0
+    SystemSetupResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/SystemSetupResponse"
+    SystemSetupResponse:
+      allOf:
+        - $ref: "#/components/schemas/AuthToken"
     LoginRequest:
       type: object
       required: [email, password]
