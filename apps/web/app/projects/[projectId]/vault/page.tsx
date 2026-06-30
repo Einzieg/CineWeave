@@ -1,6 +1,6 @@
-import { ProjectOverviewPage } from "@/components/studio-pages";
+import { VaultPage } from "@/components/studio-pages";
 
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  return <ProjectOverviewPage projectId={projectId} />;
+  return <VaultPage projectId={projectId} />;
 }

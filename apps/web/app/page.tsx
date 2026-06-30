@@ -1,5 +1,6 @@
-import { CineWeaveConsole } from "@/components/cineweave-console";
+import { redirect } from "next/navigation";
+import type { Route } from "next";
 
 export default function Home() {
-  return <CineWeaveConsole />;
+  redirect("/dashboard" as Route);
 }

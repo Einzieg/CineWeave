@@ -1,0 +1,60 @@
+import {
+  Boxes,
+  FileCode2,
+  FolderKanban,
+  Gauge,
+  KeyRound,
+  Library,
+  Settings2,
+  ShieldCheck,
+  Workflow,
+  Clapperboard,
+  FileText,
+} from "lucide-react";
+
+export const globalNavItems = [
+  { label: "总览", href: "/dashboard", icon: Gauge, section: "dashboard" },
+  { label: "项目", href: "/projects", icon: FolderKanban, section: "projects" },
+  { label: "供应商中心", href: "/providers", icon: KeyRound, section: "providers" },
+  { label: "提示词中心", href: "/prompts", icon: FileCode2, section: "prompts" },
+  { label: "权限管理", href: "/access", icon: ShieldCheck, section: "access" },
+  { label: "设置", href: "/settings", icon: Settings2, section: "settings" },
+] as const;
+
+export const projectNavItems = [
+  { label: "项目概览", segment: "", icon: FolderKanban },
+  { label: "原文与剧本", segment: "sources", icon: FileText },
+  { label: "资产", segment: "assets", icon: Boxes },
+  { label: "分镜镜头", segment: "storyboard", icon: Clapperboard },
+  { label: "工作流", segment: "workflows", icon: Workflow },
+  { label: "媒体资产", segment: "vault", icon: Library },
+  { label: "项目设置", segment: "settings", icon: Settings2 },
+] as const;
+
+export type GlobalSection = (typeof globalNavItems)[number]["section"];
+export type ProjectSection = (typeof projectNavItems)[number]["segment"];
+
+export function projectHref(projectId: string, segment = "") {
+  return segment ? `/projects/${projectId}/${segment}` : `/projects/${projectId}`;
+}
+
+export function workflowLabel(value: string) {
+  switch (value) {
+    case "source_to_script":
+      return "从原文生成剧本";
+    case "script_to_assets":
+      return "分析剧本资产";
+    case "script_to_storyboard":
+      return "生成分镜";
+    case "script_to_video":
+      return "剧本生成视频";
+    case "full_production":
+      return "完整生产";
+    case "video_production":
+      return "兼容视频生产";
+    case "text_to_storyboard":
+      return "文本生成分镜";
+    default:
+      return value;
+  }
+}
