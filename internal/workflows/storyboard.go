@@ -18,17 +18,20 @@ import (
 
 const (
 	ScriptTaskQueue                 = "cineweave-script"
+	MediaTaskQueue                  = "cineweave-media"
 	scriptModelProfileKey           = "script_agent_default"
 	imageGenerationModelProfileKey  = "image_generation_default"
 	videoGenerationModelProfileKey  = "video_generation_default"
 	codeActivityFailed              = "ACTIVITY_FAILED"
 	codeModelProfileNotConfigured   = "MODEL_PROFILE_NOT_CONFIGURED"
 	codeProviderVideoPollingTimeout = "PROVIDER_VIDEO_POLLING_TIMEOUT"
+	codeNoVideoClipsToCompose       = "NO_VIDEO_CLIPS_TO_COMPOSE"
 	codeUserCancelRequested         = "USER_CANCEL_REQUESTED"
 	codeUserCancelled               = "USER_CANCELLED"
 	nodeGenerateStoryboardTextKey   = "generate_storyboard_text"
 	nodeGenerateStoryboardImageKey  = "generate_storyboard_image"
 	nodeGenerateStoryboardVideoKey  = "generate_storyboard_video"
+	nodeComposeFinalVideoKey        = "compose_final_video"
 	promptKeyStoryboardPlanner      = "storyboard_planner"
 	promptKeyStoryboardImage        = "storyboard_image_prompt"
 	promptKeyStoryboardVideo        = "storyboard_video_prompt"
@@ -641,6 +644,7 @@ func (a Activities) markWorkflowFailed(ctx context.Context, input TextToStoryboa
 		UPDATE workflow_runs
 		SET status = 'failed', error_code = $2, error_message = $3, completed_at = now()
 		WHERE id = $1
+		  AND status NOT IN ('succeeded', 'cancelled')
 	`, input.WorkflowRunID, code, message); err != nil {
 		return err
 	}

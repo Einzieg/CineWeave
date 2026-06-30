@@ -840,12 +840,17 @@ func (a Activities) CompleteVideoProductionWorkflow(ctx context.Context, input T
 	}
 	defer tx.Rollback(ctx)
 	outputJSON := mustJSON(output)
-	if _, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE workflow_runs
 		SET status = 'succeeded', output = $2, completed_at = now()
 		WHERE id = $1
-	`, input.WorkflowRunID, outputJSON); err != nil {
+		  AND status NOT IN ('failed', 'cancelled')
+	`, input.WorkflowRunID, outputJSON)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil
 	}
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "workflow.run.completed", "workflow_run", input.WorkflowRunID, outputJSON); err != nil {
 		return err
@@ -910,6 +915,41 @@ func (a Activities) CancelVideoProductionWorkflow(ctx context.Context, input Tex
 		"status":        "cancelled",
 		"output":        json.RawMessage(runOutput),
 	})); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		UPDATE workflow_node_runs
+		SET status = 'cancelled',
+		    output = COALESCE(output, '{}'::jsonb) || $2::jsonb,
+		    error_code = 'USER_CANCELLED',
+		    error_message = $3,
+		    completed_at = now()
+		WHERE workflow_run_id = $1
+		  AND node_key = $4
+		  AND status NOT IN ('succeeded', 'failed', 'cancelled')
+		RETURNING id::text
+	`, input.WorkflowRunID, runOutput, nullableCancelReason(reason), nodeComposeFinalVideoKey)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var nodeRunID string
+		if err := rows.Scan(&nodeRunID); err != nil {
+			return err
+		}
+		if err := insertEvent(ctx, tx, runCtx.OrganizationID, runCtx.ProjectID, "workflow.node.cancelled", "workflow_node_run", nodeRunID, mustJSON(map[string]any{
+			"workflowRunId": input.WorkflowRunID,
+			"nodeRunId":     nodeRunID,
+			"nodeKey":       nodeComposeFinalVideoKey,
+			"reason":        reason,
+			"status":        "cancelled",
+			"output":        json.RawMessage(runOutput),
+		})); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

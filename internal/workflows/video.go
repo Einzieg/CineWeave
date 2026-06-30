@@ -23,17 +23,21 @@ type WorkflowArtifact struct {
 }
 
 type VideoProductionOutput struct {
-	StoryboardArtifactID string                       `json:"storyboardArtifactId"`
-	Shots                []VideoProductionShotOutput  `json:"shots"`
-	ImageArtifactID      string                       `json:"imageArtifactId,omitempty"`
-	ImageMediaFileID     string                       `json:"imageMediaFileId,omitempty"`
-	ImageStorageKey      string                       `json:"imageStorageKey,omitempty"`
-	VideoArtifactID      string                       `json:"videoArtifactId,omitempty"`
-	VideoMediaFileID     string                       `json:"videoMediaFileId,omitempty"`
-	VideoStorageKey      string                       `json:"videoStorageKey,omitempty"`
-	ProviderAsyncTaskID  string                       `json:"providerAsyncTaskId,omitempty"`
-	ExternalTaskID       string                       `json:"externalTaskId,omitempty"`
-	ProviderCalls        VideoProductionProviderCalls `json:"providerCalls"`
+	StoryboardArtifactID  string                       `json:"storyboardArtifactId"`
+	Shots                 []VideoProductionShotOutput  `json:"shots"`
+	FinalVideoArtifactID  string                       `json:"finalVideoArtifactId,omitempty"`
+	FinalVideoMediaFileID string                       `json:"finalVideoMediaFileId,omitempty"`
+	FinalVideoStorageKey  string                       `json:"finalVideoStorageKey,omitempty"`
+	TimelineArtifactID    string                       `json:"timelineArtifactId,omitempty"`
+	ImageArtifactID       string                       `json:"imageArtifactId,omitempty"`
+	ImageMediaFileID      string                       `json:"imageMediaFileId,omitempty"`
+	ImageStorageKey       string                       `json:"imageStorageKey,omitempty"`
+	VideoArtifactID       string                       `json:"videoArtifactId,omitempty"`
+	VideoMediaFileID      string                       `json:"videoMediaFileId,omitempty"`
+	VideoStorageKey       string                       `json:"videoStorageKey,omitempty"`
+	ProviderAsyncTaskID   string                       `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID        string                       `json:"externalTaskId,omitempty"`
+	ProviderCalls         VideoProductionProviderCalls `json:"providerCalls"`
 }
 
 type VideoProductionShotOutput struct {
@@ -268,6 +272,27 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 		currentShot = StoryboardShotRecord{}
 	}
 	result = BuildMultiShotVideoProductionOutput(storyboard, shotOutputs, providerCalls)
+	if !options.SkipCompose {
+		composeOptions := defaultActivityOptions()
+		composeOptions.TaskQueue = MediaTaskQueue
+		composeOptions.StartToCloseTimeout = 30 * time.Minute
+		composeCtx := workflow.WithActivityOptions(ctx, composeOptions)
+		var composeOutput ComposeFinalVideoOutput
+		if err := workflow.ExecuteActivity(composeCtx, "ComposeFinalVideo", ComposeFinalVideoInput{
+			OrganizationID: input.OrganizationID,
+			ProjectID:      input.ProjectID,
+			WorkflowRunID:  input.WorkflowRunID,
+			CreatedBy:      input.CreatedBy,
+			AspectRatio:    options.AspectRatio,
+			Resolution:     options.Resolution,
+		}).Get(composeCtx, &composeOutput); err != nil {
+			return VideoProductionOutput{}, err
+		}
+		result.FinalVideoArtifactID = composeOutput.ArtifactID
+		result.FinalVideoMediaFileID = composeOutput.MediaFileID
+		result.FinalVideoStorageKey = composeOutput.StorageKey
+		result.TimelineArtifactID = composeOutput.TimelineArtifactID
+	}
 	workflowTerminal = true
 	if err := workflow.ExecuteActivity(ctx, "CompleteVideoProductionWorkflow", input, result).Get(ctx, nil); err != nil {
 		return VideoProductionOutput{}, err
@@ -282,6 +307,7 @@ type videoProductionOptions struct {
 	PollInterval time.Duration
 	MaxPolls     int
 	MaxShots     int
+	SkipCompose  bool
 }
 
 func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
@@ -292,6 +318,7 @@ func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
 		PollInterval: 5 * time.Second,
 		MaxPolls:     120,
 		MaxShots:     defaultMaxStoryboardShots,
+		SkipCompose:  false,
 	}
 	if len(raw) == 0 {
 		return options
@@ -303,6 +330,7 @@ func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
 		PollIntervalSeconds int     `json:"pollIntervalSeconds"`
 		MaxPolls            int     `json:"maxPolls"`
 		MaxShots            int     `json:"maxShots"`
+		SkipCompose         bool    `json:"skipCompose"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return options
@@ -325,6 +353,7 @@ func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
 	if decoded.MaxShots > 0 && decoded.MaxShots <= defaultMaxStoryboardShots {
 		options.MaxShots = decoded.MaxShots
 	}
+	options.SkipCompose = decoded.SkipCompose
 	return options
 }
 

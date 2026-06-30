@@ -439,6 +439,9 @@ func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, pro
 		if value, ok := values["maxShots"].(float64); !ok || value <= 0 || value > 3 {
 			values["maxShots"] = 3
 		}
+		if _, ok := values["skipCompose"].(bool); !ok {
+			values["skipCompose"] = false
+		}
 	}
 	return json.RawMessage(mustMarshal(values)), nil
 }

@@ -42,7 +42,9 @@ Workflow APIs:
 - `GET /api/workflow-runs/{workflowRunId}/nodes` returns node status, retry count, input, and output for the Workflow Board.
 - `GET /api/workflow-runs/{workflowRunId}/shots?includePreviewUrl=true` returns normalized storyboard shots, per-shot image/video artifact links, and optional signed preview URLs.
 - `GET /api/artifacts` lists generated artifacts by organization and optional project filter.
-- `video_production` input supports `duration`, `aspectRatio`, `resolution`, `pollIntervalSeconds`, `maxPolls`, and `maxShots`; `maxShots` is capped at 3 for sequential v1.
+- `video_production` input supports `duration`, `aspectRatio`, `resolution`, `pollIntervalSeconds`, `maxPolls`, `maxShots`, and `skipCompose`; `maxShots` is capped at 3 for sequential v1, and `skipCompose=false` is the default.
+- `video_production` output includes per-shot generated video fields plus `finalVideoArtifactId`, `finalVideoMediaFileId`, `finalVideoStorageKey`, and `timelineArtifactId` after Media Worker composition succeeds.
+- Video production artifacts include `storyboard_json`, `generated_image`, `generated_video`, `timeline_json`, and `final_video`; preview URLs work for `final_video` through the existing artifact preview endpoint.
 
 Asset APIs:
 

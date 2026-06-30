@@ -3414,7 +3414,24 @@ Task 025: Add prompt_templates and prompt_versions schema.
 - Workflow output now includes `shots[]` plus grouped provider call IDs for `images`, `videoCreates`, and `videoPolls`. The first shot also fills the legacy single image/video fields for compatibility.
 - `GET /api/workflow-runs/{workflowRunId}/shots` returns shot status, artifact/media/storage links, and optional signed image/video preview URLs.
 - Cancellation now cancels only the current running shot provider async task, keeps completed video shots succeeded, and marks pending/running unfinished shots cancelled.
-- Final FFmpeg composition, TTS, and export remain out of scope for this v1.
+- Final FFmpeg composition is implemented by Media Compose v1. TTS, subtitles, BGM, transitions, watermarking, cover images, and multi-track timeline editing remain out of scope.
+
+## Implementation Note: Media Compose / Final Video Export v1
+
+- `workers/media-worker` is a Temporal activity worker on `cineweave-media`. It registers `ComposeFinalVideo` only, initializes DB and S3 / MinIO storage, and does not initialize Provider Gateway or provider credentials.
+- `VideoProductionWorkflow` now schedules `ComposeFinalVideo` after all shot videos succeed unless `input.skipCompose=true`.
+- `ComposeFinalVideo` reads `storyboard_shots` with `status=video_succeeded`, downloads the shot video objects, normalizes them with FFmpeg to MP4 / H.264 / yuv420p / fixed resolution / fixed fps, concatenates them in shot order, uploads the final MP4, and writes a linked `media_files` row.
+- The workflow writes a `timeline_json` artifact containing shot clip ordering and compose settings, then writes a `final_video` artifact for the composed MP4.
+- `workflow_runs.output` includes `finalVideoArtifactId`, `finalVideoMediaFileId`, `finalVideoStorageKey`, `timelineArtifactId`, and the existing `shots[]`.
+- `compose_final_video` uses node type `media.compose` and emits `workflow.node.completed`, `artifact.created`, and `media.compose.completed`; failures emit `media.compose.failed` and fail the workflow.
+- Docker Compose builds media-worker with `deploy/docker-compose/Dockerfile-media-worker`, which installs FFmpeg only for that runtime image.
+- Local verification commands:
+  - `go test ./...`
+  - `CINEWEAVE_INTEGRATION_TEST=1 go test ./internal/workflows -run TestVideoCompose -count=1`
+  - `pnpm --filter @cineweave/web typecheck`
+  - `pnpm --filter @cineweave/web lint`
+  - `docker compose -f compose.yml config --quiet`
+  - `docker compose -f compose.yml build api script-worker media-worker web`
 Task 026: Add idempotency_keys support for write APIs and Provider calls.
 ```
 

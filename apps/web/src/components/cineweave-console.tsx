@@ -457,6 +457,7 @@ export function CineWeaveConsole() {
   const [workflowVideoPollInterval, setWorkflowVideoPollInterval] = useState("5");
   const [workflowVideoMaxPolls, setWorkflowVideoMaxPolls] = useState("120");
   const [workflowVideoMaxShots, setWorkflowVideoMaxShots] = useState("3");
+  const [workflowVideoSkipCompose, setWorkflowVideoSkipCompose] = useState(false);
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("idle");
@@ -511,6 +512,8 @@ export function CineWeaveConsole() {
     const videoNode = workflowNodes.find((node) => node.nodeKey === "generate_storyboard_video" || node.nodeKey.startsWith("create_shot_video_"));
     return videoNode ? normalizedOutputString(videoNode.output, "providerAsyncTaskId") : "-";
   }, [workflowNodes, workflowShots]);
+  const finalVideoArtifact = useMemo(() => artifacts.find((artifact) => artifact.type === "final_video") ?? null, [artifacts]);
+  const finalVideoStorageKey = outputString(workflowRun?.output, "finalVideoStorageKey");
   const canCancelWorkflow = workflowRun ? isCancelableWorkflowStatus(workflowRun.status) : false;
 
   const metrics = useMemo(
@@ -522,10 +525,16 @@ export function CineWeaveConsole() {
         tone: workflowRun?.status === "failed" ? "rose" : "teal",
       },
       { label: "Artifacts", value: String(artifacts.length), detail: "Stored in MinIO", tone: "blue" },
+      {
+        label: "Final Video",
+        value: finalVideoArtifact ? "ready" : workflowRun?.status === "succeeded" ? "missing" : "pending",
+        detail: finalVideoArtifact?.storageKey ?? finalVideoStorageKey ?? "Compose output",
+        tone: finalVideoArtifact ? "teal" : "amber",
+      },
       { label: "Realtime", value: connection, detail: "SSE outbox stream", tone: "amber" },
       { label: "Errors", value: error ? "1" : "0", detail: error ?? "No visible failures", tone: "rose" },
     ],
-    [artifacts.length, connection, error, workflowRun],
+    [artifacts.length, connection, error, finalVideoArtifact, finalVideoStorageKey, workflowRun],
   );
 
   const createDemoSession = useCallback(async () => {
@@ -581,7 +590,7 @@ export function CineWeaveConsole() {
         organizationId: activeSession.organizationId,
       },
     );
-    setArtifacts(await withArtifactPreviewUrls(activeSession, data.items));
+    setArtifacts(sortArtifactsForVault(await withArtifactPreviewUrls(activeSession, data.items)));
   }, []);
 
   const loadWorkflowNodes = useCallback(async (activeSession: SessionState, workflowRunId: string) => {
@@ -927,6 +936,7 @@ export function CineWeaveConsole() {
               pollIntervalSeconds: Number(workflowVideoPollInterval) || 5,
               maxPolls: Number(workflowVideoMaxPolls) || 120,
               maxShots: Math.min(Math.max(Number(workflowVideoMaxShots) || 3, 1), 3),
+              skipCompose: workflowVideoSkipCompose,
             }
           : undefined;
       const run = await apiRequest<WorkflowRun>("/api/workflow-runs", {
@@ -959,6 +969,7 @@ export function CineWeaveConsole() {
     workflowVideoMaxShots,
     workflowVideoPollInterval,
     workflowVideoResolution,
+    workflowVideoSkipCompose,
   ]);
 
   const cancelWorkflow = useCallback(async () => {
@@ -1424,7 +1435,7 @@ export function CineWeaveConsole() {
         </header>
 
         <div id="dashboard" className="px-5 py-6 lg:px-8">
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" aria-label="Metrics">
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5" aria-label="Metrics">
             {metrics.map((metric) => (
               <div
                 key={metric.label}
@@ -1523,6 +1534,16 @@ export function CineWeaveConsole() {
                       className="h-10 rounded border border-[var(--line)] px-3 text-sm outline-none focus:border-[var(--foreground)] disabled:bg-[var(--soft)] disabled:text-[var(--muted)]"
                     />
                   </div>
+                  <label className="inline-flex w-fit items-center gap-2 text-xs font-medium text-[var(--muted)]">
+                    <input
+                      type="checkbox"
+                      checked={workflowVideoSkipCompose}
+                      onChange={(event) => setWorkflowVideoSkipCompose(event.target.checked)}
+                      disabled={workflowType !== "video_production"}
+                      className="h-4 w-4 rounded border border-[var(--line)]"
+                    />
+                    Skip Compose
+                  </label>
                   <div className="grid gap-2 sm:grid-cols-3">
                     <button
                       type="button"
@@ -1575,6 +1596,7 @@ export function CineWeaveConsole() {
                   <InfoRow label="Type" value={workflowType} />
                   <InfoRow label="Workflow" value={workflowRun?.id ?? "No run"} />
                   <InfoRow label="Temporal" value={workflowRun?.temporalWorkflowId ?? "No workflow"} />
+                  <InfoRow label="Final Video" value={finalVideoStorageKey ?? finalVideoArtifact?.storageKey ?? "Pending"} />
                   <InfoRow label="Output" value={artifactSummary(artifacts)} />
                 </div>
 
@@ -1591,15 +1613,16 @@ export function CineWeaveConsole() {
                             <div>
                               <p className="text-sm font-medium">{nodeLabel(node.nodeKey)}</p>
                               <p className="text-xs text-[var(--muted)]">{node.nodeType}</p>
-                              {node.nodeKey === "generate_storyboard_video" ? (
+                              {node.nodeKey === "generate_storyboard_video" || node.nodeKey === "compose_final_video" ? (
                                 <p className="truncate text-xs text-[var(--muted)]">
                                   {[
                                     normalizedOutputString(node.output, "providerAsyncTaskId"),
                                     normalizedOutputString(node.output, "externalTaskId"),
                                     normalizedOutputString(node.output, "storageKey"),
+                                    normalizedOutputString(node.output, "timelineArtifactId"),
                                   ]
                                     .filter((value) => value !== "-")
-                                    .join(" / ") || "Waiting for video task"}
+                                    .join(" / ") || (node.nodeKey === "compose_final_video" ? "Waiting for media compose" : "Waiting for video task")}
                                 </p>
                               ) : null}
                             </div>
@@ -2620,6 +2643,10 @@ function artifactSummary(items: Artifact[]) {
   return `${items.length} artifact${items.length === 1 ? "" : "s"}`;
 }
 
+function sortArtifactsForVault(items: Artifact[]) {
+  return [...items].sort((left, right) => previewPriority(right) - previewPriority(left));
+}
+
 async function withArtifactPreviewUrls(activeSession: SessionState, items: Artifact[]) {
   const previewCandidates = [...items]
     .filter((artifact) => isPreviewableMediaArtifact(artifact))
@@ -2658,6 +2685,9 @@ async function loadArtifactPreviewUrl(activeSession: SessionState, artifactId: s
 }
 
 function previewPriority(artifact: Artifact) {
+  if (artifact.type === "final_video") {
+    return 4;
+  }
   if (artifact.type === "generated_image" || artifact.type === "generated_video") {
     return 2;
   }
@@ -2684,6 +2714,11 @@ function normalizedOutputString(output: unknown, key: string) {
   return typeof value === "string" && value ? value : "-";
 }
 
+function outputString(output: unknown, key: string) {
+  const value = normalizedOutputString(output, key);
+  return value === "-" ? null : value;
+}
+
 function attemptSummary(attempt: GatewayAttempt) {
   const model = attempt.providerModelId ? `model ${attempt.providerModelId}` : "model -";
   if (attempt.status === "succeeded") {
@@ -2699,6 +2734,9 @@ function nodeLabel(nodeKey: string) {
   }
   if (nodeKey.startsWith("create_shot_video_")) {
     return `Create Shot Video ${nodeKey.replace("create_shot_video_", "")}`;
+  }
+  if (nodeKey === "compose_final_video") {
+    return "Compose Final Video";
   }
   const labels: Record<string, string> = {
     script_to_storyboard: "Script to Storyboard",

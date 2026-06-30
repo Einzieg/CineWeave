@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path"
@@ -99,23 +100,102 @@ func (c *Client) PutJSON(ctx context.Context, key string, value any) (PutResult,
 }
 
 func (c *Client) PutBytes(ctx context.Context, key string, body []byte, contentType string) (PutResult, error) {
+	return c.PutObject(ctx, key, body, contentType)
+}
+
+func (c *Client) PutObject(ctx context.Context, key string, body []byte, contentType string) (PutResult, error) {
+	normalizedKey, err := validateObjectKey(key)
+	if err != nil {
+		return PutResult{}, err
+	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 	sum := sha256.Sum256(body)
 	if _, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
-		Key:         aws.String(key),
+		Key:         aws.String(normalizedKey),
 		Body:        bytes.NewReader(body),
 		ContentType: aws.String(contentType),
 	}); err != nil {
 		return PutResult{}, err
 	}
 	return PutResult{
-		StorageKey:  key,
+		StorageKey:  normalizedKey,
 		ContentHash: "sha256:" + hex.EncodeToString(sum[:]),
 		ByteSize:    int64(len(body)),
 	}, nil
+}
+
+func (c *Client) PutFile(ctx context.Context, key, filePath, contentType string) (PutResult, error) {
+	normalizedKey, err := validateObjectKey(key)
+	if err != nil {
+		return PutResult{}, err
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return PutResult{}, err
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return PutResult{}, err
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return PutResult{}, err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return PutResult{}, err
+	}
+	if _, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(c.bucket),
+		Key:         aws.String(normalizedKey),
+		Body:        file,
+		ContentType: aws.String(contentType),
+	}); err != nil {
+		return PutResult{}, err
+	}
+	return PutResult{
+		StorageKey:  normalizedKey,
+		ContentHash: "sha256:" + hex.EncodeToString(hasher.Sum(nil)),
+		ByteSize:    stat.Size(),
+	}, nil
+}
+
+func (c *Client) GetObject(ctx context.Context, key string, maxBytes int64) ([]byte, string, error) {
+	normalizedKey, err := validateObjectKey(key)
+	if err != nil {
+		return nil, "", err
+	}
+	result, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(normalizedKey),
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	defer result.Body.Close()
+
+	reader := io.Reader(result.Body)
+	if maxBytes > 0 {
+		reader = io.LimitReader(result.Body, maxBytes+1)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, "", err
+	}
+	if maxBytes > 0 && int64(len(body)) > maxBytes {
+		return nil, "", fmt.Errorf("object %s exceeds maxBytes limit", normalizedKey)
+	}
+	contentType := ""
+	if result.ContentType != nil {
+		contentType = *result.ContentType
+	}
+	return body, contentType, nil
 }
 
 func (c *Client) PresignPutObject(ctx context.Context, key, contentType string, expires time.Duration) (PresignedPutResult, error) {
@@ -196,7 +276,7 @@ func validateObjectKey(key string) (string, error) {
 		return "", fmt.Errorf("storage key must be a relative object key")
 	}
 	cleaned := path.Clean(normalized)
-	if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." || strings.Contains(normalized, "../") || strings.Contains(normalized, "/..") {
+	if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." || strings.Contains(normalized, "../") || strings.Contains(normalized, "/..") || strings.HasPrefix(normalized, "./") || strings.Contains(normalized, "/./") {
 		return "", fmt.Errorf("storage key must not contain path traversal")
 	}
 	return normalized, nil

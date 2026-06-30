@@ -2433,6 +2433,7 @@ components:
           type: string
         nodeType:
           type: string
+          description: Workflow node type such as provider_text, image.generate, video.create_task, or media.compose.
         status:
           type: string
           enum: [pending, queued, running, succeeded, failed, cancelled, skipped, waiting_review]
@@ -2501,6 +2502,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/VideoProductionShotOutput"
+        finalVideoArtifactId:
+          type: string
+          format: uuid
+        finalVideoMediaFileId:
+          type: string
+          format: uuid
+        finalVideoStorageKey:
+          type: string
+        timelineArtifactId:
+          type: string
+          format: uuid
         imageArtifactId:
           type: string
           format: uuid
@@ -2678,6 +2690,7 @@ components:
           format: uuid
         type:
           type: string
+          description: Artifact type. Workflow video production can emit storyboard_json, generated_image, generated_video, timeline_json, and final_video.
         storageKey:
           type: string
         mimeType:
@@ -5093,7 +5106,7 @@ components:
         input:
           type: object
           additionalProperties: true
-          description: Optional workflow-specific input. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, maxPolls, and maxShots.
+          description: Optional workflow-specific input. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, maxPolls, maxShots, and skipCompose.
           properties:
             duration:
               type: number
@@ -5115,6 +5128,9 @@ components:
               minimum: 1
               maximum: 3
               default: 3
+            skipCompose:
+              type: boolean
+              default: false
         idempotencyKey:
           type: string
           maxLength: 200

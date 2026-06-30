@@ -33,12 +33,12 @@ func TestSelectVideoPromptPriority(t *testing.T) {
 
 func TestResolveVideoProductionOptionsDefaultsAndOverrides(t *testing.T) {
 	defaults := resolveVideoProductionOptions(nil)
-	if defaults.Duration != 5 || defaults.AspectRatio != "16:9" || defaults.Resolution != "720p" || defaults.MaxPolls != 120 || defaults.MaxShots != 3 || defaults.PollInterval.Seconds() != 5 {
+	if defaults.Duration != 5 || defaults.AspectRatio != "16:9" || defaults.Resolution != "720p" || defaults.MaxPolls != 120 || defaults.MaxShots != 3 || defaults.SkipCompose || defaults.PollInterval.Seconds() != 5 {
 		t.Fatalf("defaults = %+v", defaults)
 	}
 
-	overrides := resolveVideoProductionOptions(json.RawMessage(`{"duration":8,"aspectRatio":"9:16","resolution":"1080p","pollIntervalSeconds":2,"maxPolls":3,"maxShots":2}`))
-	if overrides.Duration != 8 || overrides.AspectRatio != "9:16" || overrides.Resolution != "1080p" || overrides.MaxPolls != 3 || overrides.MaxShots != 2 || overrides.PollInterval.Seconds() != 2 {
+	overrides := resolveVideoProductionOptions(json.RawMessage(`{"duration":8,"aspectRatio":"9:16","resolution":"1080p","pollIntervalSeconds":2,"maxPolls":3,"maxShots":2,"skipCompose":true}`))
+	if overrides.Duration != 8 || overrides.AspectRatio != "9:16" || overrides.Resolution != "1080p" || overrides.MaxPolls != 3 || overrides.MaxShots != 2 || !overrides.SkipCompose || overrides.PollInterval.Seconds() != 2 {
 		t.Fatalf("overrides = %+v", overrides)
 	}
 }
@@ -63,6 +63,7 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 	env := suite.NewTestWorkflowEnvironment()
 	var createCalls int
 	var pollCalls int
+	var composeCalls int
 	var completed VideoProductionOutput
 	shots := []StoryboardShotRecord{
 		{ID: "shot-1", WorkflowRunID: "workflow", ShotIndex: 0, ShotNo: 1, Duration: 5, Visual: "wide station", ImagePrompt: "station image 1", VideoPrompt: "station video 1", Status: "storyboard_ready"},
@@ -131,6 +132,20 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 			PollCount:           perTaskPoll,
 		}, nil
 	}, activity.RegisterOptions{Name: "PollShotVideoTask"})
+	env.RegisterActivityWithOptions(func(ctx context.Context, input ComposeFinalVideoInput) (ComposeFinalVideoOutput, error) {
+		composeCalls++
+		if input.WorkflowRunID != "workflow" || input.AspectRatio != "16:9" || input.Resolution != "720p" {
+			t.Fatalf("compose input = %+v", input)
+		}
+		return ComposeFinalVideoOutput{
+			NodeRunID:          "compose-node",
+			ArtifactID:         "final-video-artifact",
+			MediaFileID:        "final-video-media",
+			StorageKey:         "final-video-key.mp4",
+			MimeType:           "video/mp4",
+			TimelineArtifactID: "timeline-artifact",
+		}, nil
+	}, activity.RegisterOptions{Name: "ComposeFinalVideo"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input TextToStoryboardInput, output VideoProductionOutput) error {
 		completed = output
 		return nil
@@ -155,7 +170,10 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 	if createCalls != 2 || pollCalls != 4 {
 		t.Fatalf("createCalls=%d pollCalls=%d", createCalls, pollCalls)
 	}
-	if len(completed.Shots) != 2 || completed.Shots[1].VideoArtifactID != "video-artifact-shot-2" || len(completed.ProviderCalls.VideoPolls) != 4 {
+	if composeCalls != 1 {
+		t.Fatalf("composeCalls=%d, want 1", composeCalls)
+	}
+	if len(completed.Shots) != 2 || completed.Shots[1].VideoArtifactID != "video-artifact-shot-2" || len(completed.ProviderCalls.VideoPolls) != 4 || completed.FinalVideoArtifactID != "final-video-artifact" || completed.FinalVideoMediaFileID != "final-video-media" || completed.FinalVideoStorageKey != "final-video-key.mp4" || completed.TimelineArtifactID != "timeline-artifact" {
 		t.Fatalf("completed output = %+v", completed)
 	}
 }
