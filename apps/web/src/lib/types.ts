@@ -19,8 +19,10 @@ export type ApiEnvelope<TData> = {
 
 export type StudioSession = {
   accessToken: string;
+  currentUserId: string;
   organizationId: string;
   workspaceId: string;
+  currentProjectId: string;
 };
 
 export type Project = {

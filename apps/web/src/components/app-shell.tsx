@@ -3,7 +3,7 @@
 import { MainSidebar, MobileGlobalNav } from "@/components/main-sidebar";
 import { ProjectNav } from "@/components/project-nav";
 import { TopBar } from "@/components/top-bar";
-import { StudioSessionProvider, useStudioSession } from "@/lib/session";
+import { StudioSessionProvider, useBindCurrentProject, useStudioSession } from "@/lib/session";
 import type { GlobalSection, ProjectSection } from "@/lib/routes";
 import type { ReactNode } from "react";
 
@@ -47,6 +47,7 @@ function AppShellContent({
   children: ReactNode;
 }) {
   const { session, updateSession } = useStudioSession();
+  useBindCurrentProject(projectId);
   return (
     <div className="min-h-svh bg-zinc-950 text-zinc-100">
       <div className="flex min-h-svh">

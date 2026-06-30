@@ -88,6 +88,7 @@ export const studioApi = {
   listOrganizations: (session: StudioSession) => apiRequest<ListEnvelope<Organization>>("/api/organizations", { session }),
   listWorkspaces: (session: StudioSession) => apiRequest<ListEnvelope<Workspace>>("/api/workspaces", { session }),
   listTeams: (session: StudioSession) => apiRequest<ListEnvelope<Team>>("/api/teams", { session }),
+  createTeam: (session: StudioSession, body: JsonRecord) => apiRequest<Team>("/api/teams", { method: "POST", session, body }),
   listRoles: (session: StudioSession) => apiRequest<ListEnvelope<Role>>("/api/roles", { session }),
   listPermissions: (session: StudioSession) => apiRequest<ListEnvelope<Permission>>("/api/permissions", { session }),
 
@@ -174,8 +175,13 @@ export const studioApi = {
     }),
 
   listProviderAccounts: (session: StudioSession) => apiRequest<ListEnvelope<ProviderAccount>>("/api/providers/accounts", { session }),
+  createProviderAccount: (session: StudioSession, body: JsonRecord) => apiRequest<ProviderAccount>("/api/providers/accounts", { method: "POST", session, body }),
   listModelProfiles: (session: StudioSession) => apiRequest<ListEnvelope<ModelProfile>>("/api/model-profiles", { session }),
+  createModelProfile: (session: StudioSession, body: JsonRecord) => apiRequest<ModelProfile>("/api/model-profiles", { method: "POST", session, body }),
   listPromptTemplates: (session: StudioSession) => apiRequest<ListEnvelope<PromptTemplate>>("/api/prompt-templates", { session }),
+  createPromptTemplate: (session: StudioSession, body: JsonRecord) => apiRequest<PromptTemplate>("/api/prompt-templates", { method: "POST", session, body }),
+  createPromptVersion: (session: StudioSession, templateId: string, body: JsonRecord) =>
+    apiRequest<{ id: string }>(`/api/prompt-templates/${templateId}/versions`, { method: "POST", session, body }),
 };
 
 function trimTrailingSlash(value: string) {

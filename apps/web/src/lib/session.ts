@@ -8,8 +8,10 @@ const sessionKey = "cineweave.studio.session.v1";
 
 export const emptySession: StudioSession = {
   accessToken: "",
+  currentUserId: "",
   organizationId: "",
   workspaceId: "",
+  currentProjectId: "",
 };
 
 export function readStoredSession(): StudioSession {
@@ -24,8 +26,10 @@ export function readStoredSession(): StudioSession {
     const parsed = JSON.parse(raw) as Partial<StudioSession>;
     return {
       accessToken: String(parsed.accessToken ?? ""),
+      currentUserId: String(parsed.currentUserId ?? ""),
       organizationId: String(parsed.organizationId ?? ""),
       workspaceId: String(parsed.workspaceId ?? ""),
+      currentProjectId: String(parsed.currentProjectId ?? ""),
     };
   } catch {
     return emptySession;
@@ -88,4 +92,16 @@ export function useStudioSession() {
     throw new Error("useStudioSession must be used inside StudioSessionProvider");
   }
   return value;
+}
+
+export function useBindCurrentProject(projectId?: string) {
+  const { session, hydrated, updateSession } = useStudioSession();
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    if (projectId && session.currentProjectId !== projectId) {
+      updateSession({ currentProjectId: projectId });
+    }
+  }, [hydrated, projectId, session.currentProjectId, updateSession]);
 }

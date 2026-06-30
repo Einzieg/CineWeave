@@ -21,15 +21,16 @@ export function TopBar({
           <h1 className="text-xl font-semibold tracking-normal text-zinc-50">{title}</h1>
           {description ? <p className="mt-1 text-sm text-zinc-400">{description}</p> : null}
         </div>
-        <div className="grid gap-2 sm:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_minmax(180px,1fr)] xl:w-[760px]">
+        <div className="grid gap-2 sm:grid-cols-2 xl:w-[860px] xl:grid-cols-[minmax(180px,1fr)_minmax(150px,1fr)_minmax(150px,1fr)_minmax(150px,1fr)]">
           <SessionInput label="访问令牌" type="password" value={session.accessToken} onChange={(accessToken) => onSessionChange({ accessToken })} />
+          <SessionInput label="用户标识" value={session.currentUserId} onChange={(currentUserId) => onSessionChange({ currentUserId })} />
           <SessionInput label="组织 ID" value={session.organizationId} onChange={(organizationId) => onSessionChange({ organizationId })} />
           <SessionInput label="工作区 ID" value={session.workspaceId} onChange={(workspaceId) => onSessionChange({ workspaceId })} />
         </div>
       </div>
       <div className="mt-2 flex items-center gap-2 text-[12px] text-zinc-500">
         <Save size={13} />
-        会话信息保存在本机浏览器，用于调用 CineWeave API。
+        会话信息保存在本机浏览器，用于调用 CineWeave API。{session.currentProjectId ? `当前项目：${session.currentProjectId}` : ""}
       </div>
     </header>
   );

@@ -940,7 +940,7 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   return (
     <SessionGate>
       <Surface className="mb-5 p-4">
-        <div className="grid gap-3 xl:grid-cols-[1fr_120px_auto_auto_auto]">
+        <div className="grid gap-3 xl:grid-cols-[1fr_120px_auto_auto_auto_auto]">
           <select className="studio-input" value={effectiveScriptId} onChange={(event) => setScriptId(event.target.value)}>
             <option value="">选择剧本</option>
             {scripts.data.map((script) => (
@@ -953,6 +953,10 @@ function StoryboardContent({ projectId }: { projectId: string }) {
           <button className="studio-button studio-button-primary" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成分镜", async () => void (await studioApi.generateStoryboard(session, projectId, effectiveScriptId, { maxShots: Number(maxShots), generateDerivedAssets: false })))} type="button">
             <Clapperboard size={16} />
             生成分镜
+          </button>
+          <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("分析镜头派生资产", async () => void (await studioApi.generateStoryboard(session, projectId, effectiveScriptId, { maxShots: Number(maxShots), generateDerivedAssets: true })))} type="button">
+            <Sparkles size={16} />
+            分析派生资产
           </button>
           <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成镜头图片", async () => startScriptVideo(true))} type="button">
             <ImageIcon size={16} />
@@ -1326,16 +1330,103 @@ export function ProvidersPage() {
 }
 
 function ProvidersContent() {
+  const { session } = useStudioSession();
   const accounts = useStudioQuery<ProviderAccount[]>([], "providers:accounts", async (session) => (await studioApi.listProviderAccounts(session)).items);
   const profiles = useStudioQuery<ModelProfile[]>([], "providers:profiles", async (session) => (await studioApi.listModelProfiles(session)).items);
+  const [accountName, setAccountName] = useState("New API");
+  const [accountBaseUrl, setAccountBaseUrl] = useState("https://api.openai.com/v1");
+  const [accountApiKey, setAccountApiKey] = useState("");
+  const [profileKey, setProfileKey] = useState("script_agent_default");
+  const [profileName, setProfileName] = useState("脚本 Agent 默认配置");
+  const [profilePurpose, setProfilePurpose] = useState("script");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function perform(label: string, action: () => Promise<void>) {
+    setBusy(label);
+    setError("");
+    setNotice("");
+    try {
+      await action();
+      setNotice(`${label}已完成。`);
+      accounts.reload();
+      profiles.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
   return (
     <SessionGate>
-      <div className="grid gap-5 xl:grid-cols-2">
+      <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <Surface>
+          <SectionTitle title="创建供应商" description="先接入 OpenAI-compatible 账号，再创建模型配置。" />
+          <div className="grid gap-3 p-4">
+            <TextInput label="账号名称" value={accountName} onChange={setAccountName} />
+            <TextInput label="Base URL" value={accountBaseUrl} onChange={setAccountBaseUrl} />
+            <TextInput label="API Key" value={accountApiKey} onChange={setAccountApiKey} />
+            <button
+              className="studio-button studio-button-primary"
+              disabled={busy !== "" || !accountName.trim() || !accountBaseUrl.trim()}
+              onClick={() =>
+                perform("创建供应商账号", async () => {
+                  await studioApi.createProviderAccount(
+                    session,
+                    compactRecord({
+                      organizationId: session.organizationId,
+                      connectorKey: "openai_compatible",
+                      name: accountName,
+                      baseUrl: accountBaseUrl,
+                      authType: "bearer",
+                      credential: accountApiKey.trim() ? { apiKey: accountApiKey.trim() } : undefined,
+                      config: {},
+                    }),
+                  );
+                  setAccountApiKey("");
+                })
+              }
+              type="button"
+            >
+              {busy === "创建供应商账号" ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+              创建账号
+            </button>
+            <div className="h-px bg-white/10" />
+            <TextInput label="模型配置 Key" value={profileKey} onChange={setProfileKey} />
+            <TextInput label="模型配置名称" value={profileName} onChange={setProfileName} />
+            <TextInput label="用途" value={profilePurpose} onChange={setProfilePurpose} />
+            <button
+              className="studio-button"
+              disabled={busy !== "" || !profileKey.trim() || !profileName.trim() || !profilePurpose.trim()}
+              onClick={() =>
+                perform("创建模型配置", async () => {
+                  await studioApi.createModelProfile(
+                    session,
+                    compactRecord({
+                      profileKey,
+                      name: profileName,
+                      purpose: profilePurpose,
+                      routingStrategy: "priority_with_fallback",
+                      fallbackStrategy: {},
+                    }),
+                  );
+                })
+              }
+              type="button"
+            >
+              创建模型配置
+            </button>
+            <ErrorPanel message={error} />
+            {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+          </div>
+        </Surface>
         <Surface>
           <SectionTitle title="供应商账号" description="用于 Provider Gateway 的上游账号。" />
           <ListBlock items={accounts.data} empty="还没有供应商账号" render={(item) => <SimpleRow title={item.displayName || item.name || item.id} detail={item.providerType || "OpenAI-compatible"} status={item.status} />} />
         </Surface>
-        <Surface>
+        <Surface className="xl:col-start-2">
           <SectionTitle title="模型配置" description="脚本、图片和视频生产通过模型配置路由。" />
           <ListBlock items={profiles.data} empty="还没有模型配置" render={(item) => <SimpleRow title={item.profileKey} detail={item.purpose || "未设置用途"} status={item.status || "active"} />} />
         </Surface>
@@ -1353,17 +1444,101 @@ export function PromptsPage() {
 }
 
 function PromptsContent() {
+  const { session } = useStudioSession();
   const templates = useStudioQuery<PromptTemplate[]>([], "prompts:templates", async (session) => (await studioApi.listPromptTemplates(session)).items);
+  const [templateKey, setTemplateKey] = useState("storyboard_planner_custom");
+  const [templateName, setTemplateName] = useState("分镜规划自定义提示词");
+  const [purpose, setPurpose] = useState("storyboard");
+  const [modality, setModality] = useState("text");
+  const [taskType, setTaskType] = useState("storyboard_planning");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [versionTitle, setVersionTitle] = useState("初始版本");
+  const [versionContent, setVersionContent] = useState("");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const effectiveTemplateId = validSelection(selectedTemplateId, templates.data);
+
+  async function perform(label: string, action: () => Promise<void>) {
+    setBusy(label);
+    setError("");
+    setNotice("");
+    try {
+      await action();
+      setNotice(`${label}已完成。`);
+      templates.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
   return (
     <SessionGate>
-      <Surface>
-        <SectionTitle title="提示词模板" description="生产链路中的 Prompt Registry 版本入口。" />
-        <ListBlock
-          items={templates.data}
-          empty="还没有提示词模板"
-          render={(item) => <SimpleRow title={item.name || item.templateKey} detail={`${item.templateKey} · ${item.taskType || item.modality || "未设置任务"}`} status={item.status} />}
-        />
-      </Surface>
+      <div className="grid gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
+        <Surface>
+          <SectionTitle title="创建提示词" description="为脚本、资产、分镜或镜头生产维护组织级 Prompt。" />
+          <div className="grid gap-3 p-4">
+            <TextInput label="模板 Key" value={templateKey} onChange={setTemplateKey} />
+            <TextInput label="名称" value={templateName} onChange={setTemplateName} />
+            <TextInput label="用途" value={purpose} onChange={setPurpose} />
+            <TextInput label="模态" value={modality} onChange={setModality} />
+            <TextInput label="任务类型" value={taskType} onChange={setTaskType} />
+            <button
+              className="studio-button studio-button-primary"
+              disabled={busy !== "" || !templateKey.trim() || !templateName.trim() || !purpose.trim() || !modality.trim() || !taskType.trim()}
+              onClick={() =>
+                perform("创建提示词模板", async () => {
+                  const created = await studioApi.createPromptTemplate(session, compactRecord({ templateKey, name: templateName, purpose, modality, taskType }));
+                  setSelectedTemplateId(created.id);
+                })
+              }
+              type="button"
+            >
+              创建模板
+            </button>
+            <div className="h-px bg-white/10" />
+            <SelectFromList label="选择模板" value={effectiveTemplateId} items={templates.data} getLabel={(item) => item.name || item.templateKey} onChange={setSelectedTemplateId} />
+            <TextInput label="版本标题" value={versionTitle} onChange={setVersionTitle} />
+            <TextAreaInput rows={8} label="提示词内容" value={versionContent} onChange={setVersionContent} />
+            <button
+              className="studio-button"
+              disabled={!effectiveTemplateId || busy !== "" || !versionContent.trim()}
+              onClick={() =>
+                perform("创建并激活版本", async () => {
+                  await studioApi.createPromptVersion(
+                    session,
+                    effectiveTemplateId,
+                    compactRecord({
+                      title: versionTitle,
+                      content: versionContent,
+                      contentFormat: "text",
+                      variablesSchema: {},
+                      metadata: {},
+                      activate: true,
+                    }),
+                  );
+                  setVersionContent("");
+                })
+              }
+              type="button"
+            >
+              创建并激活版本
+            </button>
+            <ErrorPanel message={error} />
+            {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+          </div>
+        </Surface>
+        <Surface>
+          <SectionTitle title="提示词模板" description="生产链路中的 Prompt Registry 版本入口。" />
+          <ListBlock
+            items={templates.data}
+            empty="还没有提示词模板"
+            render={(item) => <SimpleRow title={item.name || item.templateKey} detail={`${item.templateKey} · ${item.taskType || item.modality || "未设置任务"}`} status={item.status} />}
+          />
+        </Surface>
+      </div>
     </SessionGate>
   );
 }
@@ -1377,14 +1552,51 @@ export function AccessPage() {
 }
 
 function AccessContent() {
+  const { session } = useStudioSession();
   const organizations = useStudioQuery<Organization[]>([], "access:orgs", async (session) => (await studioApi.listOrganizations(session)).items);
   const workspaces = useStudioQuery<Workspace[]>([], "access:workspaces", async (session) => (await studioApi.listWorkspaces(session)).items);
   const teams = useStudioQuery<Team[]>([], "access:teams", async (session) => (await studioApi.listTeams(session)).items);
   const roles = useStudioQuery<Role[]>([], "access:roles", async (session) => (await studioApi.listRoles(session)).items);
   const permissions = useStudioQuery<Permission[]>([], "access:permissions", async (session) => (await studioApi.listPermissions(session)).items);
+  const [teamName, setTeamName] = useState("");
+  const [teamDescription, setTeamDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function createTeam() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await studioApi.createTeam(session, compactRecord({ name: teamName, description: nullable(teamDescription) }));
+      setTeamName("");
+      setTeamDescription("");
+      setNotice("团队已创建。");
+      teams.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <SessionGate>
       <div className="grid gap-5 xl:grid-cols-2">
+        <Surface>
+          <SectionTitle title="创建团队" description="先创建团队，再在后续权限策略中绑定角色。" />
+          <div className="grid gap-3 p-4">
+            <TextInput label="团队名称" value={teamName} onChange={setTeamName} />
+            <TextAreaInput label="团队说明" value={teamDescription} onChange={setTeamDescription} />
+            <button className="studio-button studio-button-primary" disabled={busy || !teamName.trim()} onClick={createTeam} type="button">
+              {busy ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+              创建团队
+            </button>
+            <ErrorPanel message={error} />
+            {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+          </div>
+        </Surface>
         <Surface>
           <SectionTitle title="组织与工作区" />
           <div className="grid gap-3 p-4">
@@ -1637,7 +1849,7 @@ function ListBlock<TItem>({ items, empty, render }: { items: TItem[]; empty: str
       {items.map((item, index) => (
         <div key={index}>{render(item)}</div>
       ))}
-      {!items.length ? <EmptyState title={empty} description="请先在对应 API 中创建配置，或回到旧版演示控制台完成初始化。" /> : null}
+      {!items.length ? <EmptyState title={empty} description="请使用本页创建入口完成初始化，或先确认当前会话是否有管理权限。" /> : null}
     </div>
   );
 }
