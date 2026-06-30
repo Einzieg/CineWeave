@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -77,6 +78,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", httpx.HealthHandler("api"))
 	mux.HandleFunc("GET /readyz", httpx.HealthHandler("api"))
 	mux.HandleFunc("GET /api/system/status", s.systemStatus)
+	mux.HandleFunc("GET /api/system/setup-state", s.systemSetupState)
+	mux.HandleFunc("POST /api/system/setup", s.systemSetup)
 
 	mux.HandleFunc("POST /api/auth/register", s.register)
 	mux.HandleFunc("POST /api/auth/login", s.login)
@@ -209,6 +212,10 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+	if !publicRegistrationAllowed() {
+		s.writeError(w, r, auth.ErrPublicRegistrationDisabled)
+		return
+	}
 	var req auth.RegisterRequest
 	if !decode(w, r, &req) {
 		return
@@ -265,10 +272,34 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request, principal auth.Princ
 		s.writeError(w, r, err)
 		return
 	}
+	workspaceID, err := s.defaultWorkspaceID(r, principal.OrganizationID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
 		"user":           user,
 		"organizationId": principal.OrganizationID,
+		"workspaceId":    workspaceID,
 	}, nil)
+}
+
+func (s *Server) defaultWorkspaceID(r *http.Request, organizationID string) (string, error) {
+	if strings.TrimSpace(organizationID) == "" {
+		return "", nil
+	}
+	var workspaceID string
+	err := s.db.QueryRow(r.Context(), `
+		SELECT id
+		FROM workspaces
+		WHERE organization_id = $1
+		ORDER BY created_at
+		LIMIT 1
+	`, organizationID).Scan(&workspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return workspaceID, err
 }
 
 func (s *Server) listOrganizations(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -848,6 +879,10 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "authentication is required", nil, false)
 	case errors.Is(err, auth.ErrForbidden):
 		httpx.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "permission denied", nil, false)
+	case errors.Is(err, auth.ErrSetupComplete):
+		httpx.WriteError(w, r, http.StatusConflict, "SETUP_ALREADY_COMPLETED", "system setup has already been completed", nil, false)
+	case errors.Is(err, auth.ErrPublicRegistrationDisabled):
+		httpx.WriteError(w, r, http.StatusForbidden, "PUBLIC_REGISTRATION_DISABLED", "public registration is disabled", nil, false)
 	case errors.Is(err, provider.ErrValidation):
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "request is invalid", fmt.Sprintf("%v", err), false)
 	case errors.Is(err, provider.ErrConflict):
@@ -862,6 +897,10 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		httpx.WriteError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error", fmt.Sprintf("%v", err), false)
 	}
+}
+
+func publicRegistrationAllowed() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("CINEWEAVE_ALLOW_PUBLIC_REGISTRATION")), "true")
 }
 
 func accessDeniedDetails(err authz.AccessError) map[string]any {

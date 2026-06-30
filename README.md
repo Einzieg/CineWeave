@@ -9,8 +9,9 @@ The repository root is this directory. Do not create a nested `cineweave/` folde
 ```powershell
 pnpm install
 docker compose -f compose.yml --profile app up -d --build
-pnpm --filter @cineweave/web dev
 ```
+
+The web container is exposed at `http://localhost:3000`. On a fresh database, open that URL and complete `/setup` to create the first administrator, organization, and workspace. Public registration is disabled by default with `CINEWEAVE_ALLOW_PUBLIC_REGISTRATION=false`; keep it disabled for server deployments unless you intentionally want open signup.
 
 Useful commands:
 
@@ -50,7 +51,7 @@ Prompt management APIs are available at `/api/prompt-templates`, `/api/prompt-te
 
 `media-worker` listens on Temporal task queue `cineweave-media`. It uses only `media_files`, `artifacts`, and S3 / MinIO object storage; it does not call Provider Gateway or access provider credentials. The Docker Compose media-worker image uses `deploy/docker-compose/Dockerfile-media-worker` and installs FFmpeg in that runtime image.
 
-Shot results are available through `GET /api/workflow-runs/{id}/shots?includePreviewUrl=true`, and the Studio project workspace shows storyboard shots with image/video previews while retaining the Vault artifact list.
+Shot results are available through `GET /api/workflow-runs/{id}/shots?includePreviewUrl=true`, and the project workspace shows storyboard shots with image/video previews while retaining the Vault artifact list.
 
 Video workflow cancellation is exposed through `POST /api/workflow-runs/{id}/cancel`. Running, queued, or already-cancelling runs are marked `cancelling` and API requests Temporal cancellation; terminal runs return their current state for repeated cancel calls. If the current shot has a running Provider Gateway video async task, workflow cleanup calls `/internal/provider/video/cancel-task`; completed shots stay succeeded and not-yet-started shots are marked cancelled.
 
@@ -66,7 +67,7 @@ API access is permission based through `role_bindings` and `role_permissions`, n
 
 - `apps/api`: Go public API server.
 - `apps/realtime`: Go realtime gateway.
-- `apps/web`: Next.js Studio web app.
+- `apps/web`: Next.js AI video creation workbench.
 - `services/provider-gateway`: CineWeave Gateway service.
 - `workers`: Temporal worker entry points.
 - `internal`: shared Go packages.

@@ -1,13 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --background: #09090b;
-  --foreground: #f4f4f5;
-  --muted: #a1a1aa;
-  --line: rgba(255, 255, 255, 0.1);
-  --panel: rgba(255, 255, 255, 0.045);
-  --panel-soft: rgba(255, 255, 255, 0.07);
-  --cyan: #67e8f9;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --panel: #ffffff;
+  --panel-soft: #f1f5f9;
+  --cyan: #2563eb;
   --amber: #fbbf24;
   --rose: #fb7185;
   --emerald: #6ee7b7;
@@ -53,7 +53,7 @@ button:disabled {
 }
 
 ::selection {
-  background: rgba(103, 232, 249, 0.25);
+  background: rgba(37, 99, 235, 0.18);
 }
 
 ::-webkit-scrollbar {
@@ -62,7 +62,7 @@ button:disabled {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(100, 116, 139, 0.28);
   border-radius: 999px;
 }
 
@@ -73,11 +73,11 @@ button:disabled {
   justify-content: center;
   gap: 0.5rem;
   border-radius: 0.375rem;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
   padding: 0 0.875rem;
   font-size: 0.875rem;
-  color: #f4f4f5;
+  color: #0f172a;
   transition:
     background 160ms ease,
     border-color 160ms ease,
@@ -85,39 +85,39 @@ button:disabled {
 }
 
 .studio-button:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(103, 232, 249, 0.35);
+  background: #f1f5f9;
+  border-color: #94a3b8;
 }
 
 .studio-button-primary {
-  border-color: rgba(103, 232, 249, 0.5);
-  background: #67e8f9;
-  color: #09090b;
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
 }
 
 .studio-input {
   min-height: 2.5rem;
   border-radius: 0.375rem;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
   padding: 0 0.75rem;
-  color: #f4f4f5;
+  color: #0f172a;
   outline: none;
 }
 
 .studio-input:focus {
-  border-color: rgba(103, 232, 249, 0.55);
+  border-color: #2563eb;
 }
 
 .studio-textarea {
   border-radius: 0.375rem;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
   padding: 0.625rem 0.75rem;
-  color: #f4f4f5;
+  color: #0f172a;
   outline: none;
 }
 
 .studio-textarea:focus {
-  border-color: rgba(103, 232, 249, 0.55);
+  border-color: #2563eb;
 }

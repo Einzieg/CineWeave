@@ -3,6 +3,7 @@ import type {
   AgentSession,
   ApiEnvelope,
   Artifact,
+  AuthResponse,
   CanonicalAsset,
   JsonRecord,
   ListEnvelope,
@@ -20,6 +21,7 @@ import type {
   Role,
   Script,
   ScriptVersion,
+  SetupState,
   ShotAssetRequirement,
   StoryboardShot,
   StudioSession,
@@ -89,6 +91,13 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
 }
 
 export const studioApi = {
+  getSetupState: () => apiRequest<SetupState>("/api/system/setup-state"),
+  setupSystem: (body: JsonRecord) => apiRequest<AuthResponse>("/api/system/setup", { method: "POST", body }),
+  login: (body: JsonRecord) => apiRequest<AuthResponse>("/api/auth/login", { method: "POST", body }),
+  refreshAuth: (refreshToken: string) => apiRequest<AuthResponse>("/api/auth/refresh", { method: "POST", body: { refreshToken } }),
+  logout: (refreshToken: string) => apiRequest<{ ok: boolean }>("/api/auth/logout", { method: "POST", body: { refreshToken } }),
+  me: (session: StudioSession) => apiRequest<{ user: AuthResponse["user"]; organizationId: string; workspaceId?: string }>("/api/auth/me", { session }),
+
   listOrganizations: (session: StudioSession) => apiRequest<ListEnvelope<Organization>>("/api/organizations", { session }),
   listWorkspaces: (session: StudioSession) => apiRequest<ListEnvelope<Workspace>>("/api/workspaces", { session }),
   listTeams: (session: StudioSession) => apiRequest<ListEnvelope<Team>>("/api/teams", { session }),

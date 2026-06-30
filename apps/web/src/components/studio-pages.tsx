@@ -87,8 +87,8 @@ function DashboardContent() {
         <Surface className="p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <h2 className="text-3xl font-semibold text-zinc-50">继续你的创作</h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">查看项目进度，继续上次未完成的内容，或新建一个项目。</p>
+              <h2 className="text-3xl font-semibold text-slate-950">继续你的创作</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">查看项目进度，继续上次未完成的内容，或新建一个项目。</p>
             </div>
             <Link className="studio-button studio-button-primary" href={"/projects/new" as Route}>
               <Plus size={16} />
@@ -123,15 +123,15 @@ function DashboardContent() {
           <SectionTitle title="最近更新" description="最近工作流、资产和成片更新会在这里汇总。" />
           <QueryBody state={workflows}>
             {workflows.data.length ? (
-              <div className="divide-y divide-white/10">
+              <div className="divide-y divide-slate-200">
                 {workflows.data.slice(0, 6).map((run) => (
                   <div className="grid gap-3 px-4 py-3 md:grid-cols-[1fr_auto_auto]" key={run.id}>
                     <div>
-                      <p className="text-sm font-medium text-zinc-100">{workflowLabel(stringFrom(run.input.workflowType) || "工作流")}</p>
-                      <p className="mt-1 text-xs text-zinc-500">{run.temporalWorkflowId}</p>
+                      <p className="text-sm font-medium text-slate-900">{workflowLabel(stringFrom(run.input.workflowType) || "工作流")}</p>
+                      <p className="mt-1 text-xs text-slate-500">{run.temporalWorkflowId}</p>
                     </div>
                     <StatusBadge status={run.status} />
-                    <span className="text-xs text-zinc-500">{formatTime(run.createdAt)}</span>
+                    <span className="text-xs text-slate-500">{formatTime(run.createdAt)}</span>
                   </div>
                 ))}
               </div>
@@ -169,11 +169,11 @@ function ProjectsContent() {
       <Surface className="mb-5 p-4">
         <div className="grid gap-3 lg:grid-cols-[1fr_180px_auto]">
           <label className="relative">
-            <Search className="pointer-events-none absolute left-3 top-3 text-zinc-500" size={15} />
+            <Search className="pointer-events-none absolute left-3 top-3 text-slate-500" size={15} />
             <input className="studio-input w-full pl-9" placeholder="搜索项目名称、简介或类型" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
           <label className="relative">
-            <Filter className="pointer-events-none absolute left-3 top-3 text-zinc-500" size={15} />
+            <Filter className="pointer-events-none absolute left-3 top-3 text-slate-500" size={15} />
             <select className="studio-input w-full pl-9" value={status} onChange={(event) => setStatus(event.target.value)}>
               <option value="all">全部状态</option>
               <option value="active">进行中</option>
@@ -236,8 +236,9 @@ function NewProjectContent() {
 
   async function submit() {
     setError("");
-    if (!ready || !session.workspaceId.trim()) {
-      setError("请先在顶部填写访问令牌、组织 ID 和工作区 ID。");
+    const workspaceId = session.workspaceId?.trim() ?? "";
+    if (!ready || !workspaceId) {
+      setError("当前账号没有可用工作区，请在权限管理中创建或分配工作区。");
       return;
     }
     if (!form.name.trim()) {
@@ -247,7 +248,7 @@ function NewProjectContent() {
     setBusy(true);
     try {
       const project = await studioApi.createProject(session, compactRecord({
-        workspaceId: session.workspaceId.trim(),
+        workspaceId,
         name: form.name,
         description: nullable(form.description),
         projectType: form.projectType,
@@ -279,15 +280,15 @@ function NewProjectContent() {
   return (
     <SessionGate>
       <Surface>
-        <div className="grid gap-4 border-b border-white/10 p-4 md:grid-cols-4">
+        <div className="grid gap-4 border-b border-slate-200 p-4 md:grid-cols-4">
           {steps.map((label, index) => (
             <button
-              className={cn("flex h-10 items-center gap-2 rounded-md px-3 text-sm", index === step ? "bg-cyan-300 text-zinc-950" : "bg-white/[0.04] text-zinc-400 hover:text-zinc-100")}
+              className={cn("flex h-10 items-center gap-2 rounded-md px-3 text-sm", index === step ? "bg-blue-600 text-slate-950" : "bg-slate-50 text-slate-600 hover:text-slate-900")}
               key={label}
               onClick={() => setStep(index)}
               type="button"
             >
-              <span className="grid h-5 w-5 place-items-center rounded bg-black/20 text-xs">{index + 1}</span>
+              <span className="grid h-5 w-5 place-items-center rounded bg-slate-200 text-xs">{index + 1}</span>
               {label}
             </button>
           ))}
@@ -353,7 +354,7 @@ function NewProjectContent() {
             </div>
           ) : null}
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 p-4">
           <ErrorPanel message={error} />
           <div className="ml-auto flex gap-2">
             <button className="studio-button" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))} type="button">
@@ -403,11 +404,11 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-3xl font-semibold text-zinc-50">{project.data.name}</h2>
+                    <h2 className="text-3xl font-semibold text-slate-950">{project.data.name}</h2>
                     <StatusBadge status={project.data.status ?? "active"} />
                   </div>
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{project.data.description || "暂无简介"}</p>
-                  <div className="mt-4 flex flex-wrap gap-2 text-xs text-zinc-400">
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{project.data.description || "暂无简介"}</p>
+                  <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600">
                     <Pill>{project.data.projectType || "未设置项目类型"}</Pill>
                     <Pill>{project.data.contentType || "未设置内容类型"}</Pill>
                     <Pill>{project.data.videoRatio || project.data.aspectRatio || "16:9"}</Pill>
@@ -423,11 +424,11 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
                 <div className="mt-5 grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
                   <div>
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-400">当前阶段：{productionStageLabel(production.data.overall.stage)}</span>
-                      <span className="font-medium text-zinc-100">{production.data.overall.progress}%</span>
+                      <span className="text-slate-600">当前阶段：{productionStageLabel(production.data.overall.stage)}</span>
+                      <span className="font-medium text-slate-900">{production.data.overall.progress}%</span>
                     </div>
-                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
-                      <div className="h-full rounded-full bg-cyan-300" style={{ width: `${Math.max(0, Math.min(100, production.data.overall.progress))}%` }} />
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                      <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.max(0, Math.min(100, production.data.overall.progress))}%` }} />
                     </div>
                   </div>
                   <StatusBadge status={production.data.overall.status} />
@@ -527,7 +528,7 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
               <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-3xl font-semibold text-zinc-50">{status.data.project.name}</h2>
+                    <h2 className="text-3xl font-semibold text-slate-950">{status.data.project.name}</h2>
                     <StatusBadge status={status.data.overall.status} />
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -538,11 +539,11 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   </div>
                   <div className="mt-5">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-400">当前阶段：{productionStageLabel(status.data.overall.stage)}</span>
-                      <span className="font-medium text-zinc-100">{status.data.overall.progress}%</span>
+                      <span className="text-slate-600">当前阶段：{productionStageLabel(status.data.overall.stage)}</span>
+                      <span className="font-medium text-slate-900">{status.data.overall.progress}%</span>
                     </div>
-                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
-                      <div className="h-full rounded-full bg-cyan-300" style={{ width: `${Math.max(0, Math.min(100, status.data.overall.progress))}%` }} />
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                      <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.max(0, Math.min(100, status.data.overall.progress))}%` }} />
                     </div>
                   </div>
                 </div>
@@ -559,9 +560,9 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                       查看最终成片
                     </a>
                   ) : null}
-                  {lastWorkflowRunId ? <p className="rounded-md border border-white/10 bg-white/[0.03] p-3 text-xs text-zinc-400">运行中 workflowRunId：{lastWorkflowRunId}</p> : null}
+                  {lastWorkflowRunId ? <p className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">运行中 workflowRunId：{lastWorkflowRunId}</p> : null}
                   <ErrorPanel message={error} />
-                  {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+                  {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
                 </div>
               </div>
             </Surface>
@@ -722,13 +723,13 @@ function ProductionStageCard({
       <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-lg font-semibold text-zinc-100">{title}</h3>
+            <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
             <StatusBadge status={status} />
           </div>
-          <p className="mt-2 text-sm leading-6 text-zinc-400">{description}</p>
+          <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
           <div className="mt-4 grid gap-2 md:grid-cols-3">
             {metrics.map((item) => (
-              <div className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-300" key={item}>
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700" key={item}>
                 {item}
               </div>
             ))}
@@ -837,17 +838,17 @@ function SourcesContent({ projectId }: { projectId: string }) {
           <div className="grid gap-3 p-4">
             <div className="grid gap-2">
               {sources.data.map((source) => (
-                <button className={cn("rounded-lg border p-3 text-left", effectiveSourceId === source.id ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-white/[0.03]")} key={source.id} onClick={() => setSelectedSourceId(source.id)} type="button">
+                <button className={cn("rounded-lg border p-3 text-left", effectiveSourceId === source.id ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50")} key={source.id} onClick={() => setSelectedSourceId(source.id)} type="button">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium text-zinc-100">{source.title}</p>
+                    <p className="text-sm font-medium text-slate-900">{source.title}</p>
                     <StatusBadge status={source.status} />
                   </div>
-                  <p className="mt-1 text-xs text-zinc-500">{source.sourceType === "novel" ? "小说原文" : "剧本原文"}</p>
+                  <p className="mt-1 text-xs text-slate-500">{source.sourceType === "novel" ? "小说原文" : "剧本原文"}</p>
                 </button>
               ))}
               {!sources.data.length ? <EmptyState title="还没有内容源" description="添加小说原文或剧本原文，之后可让 Agent 生成剧本。" /> : null}
             </div>
-            <div className="grid gap-2 border-t border-white/10 pt-3">
+            <div className="grid gap-2 border-t border-slate-200 pt-3">
               <SelectInput label="类型" value={sourceDraft.sourceType} values={["novel", "script"]} labels={{ novel: "小说原文", script: "剧本原文" }} onChange={(sourceType) => setSourceDraft({ ...sourceDraft, sourceType })} />
               <TextInput label="标题" value={sourceDraft.title} onChange={(title) => setSourceDraft({ ...sourceDraft, title })} />
               <TextAreaInput rows={7} label="正文" value={sourceDraft.content} onChange={(content) => setSourceDraft({ ...sourceDraft, content })} />
@@ -877,9 +878,9 @@ function SourcesContent({ projectId }: { projectId: string }) {
             <div className="grid gap-3 md:grid-cols-[240px_1fr]">
               <div className="grid content-start gap-2">
                 {scripts.data.map((script) => (
-                  <button className={cn("rounded-lg border p-3 text-left", effectiveScriptId === script.id ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-white/[0.03]")} key={script.id} onClick={() => setSelectedScriptId(script.id)} type="button">
-                    <p className="text-sm font-medium text-zinc-100">{script.title}</p>
-                    <p className="mt-1 text-xs text-zinc-500">{script.currentVersionId ? "已激活版本" : "暂无版本"}</p>
+                  <button className={cn("rounded-lg border p-3 text-left", effectiveScriptId === script.id ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50")} key={script.id} onClick={() => setSelectedScriptId(script.id)} type="button">
+                    <p className="text-sm font-medium text-slate-900">{script.title}</p>
+                    <p className="mt-1 text-xs text-slate-500">{script.currentVersionId ? "已激活版本" : "暂无版本"}</p>
                   </button>
                 ))}
                 {!scripts.data.length ? <EmptyState title="还没有剧本" description="导入剧本原文，或让 Script Agent 根据原文生成剧本。" /> : null}
@@ -936,10 +937,10 @@ function SourcesContent({ projectId }: { projectId: string }) {
                 {versions.data.length ? (
                   <div className="grid gap-2">
                     {versions.data.map((version) => (
-                      <div className="flex items-center justify-between rounded-md border border-white/10 px-3 py-2 text-sm" key={version.id}>
+                      <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2 text-sm" key={version.id}>
                         <span>版本 {version.version}</span>
                         <button
-                          className="text-cyan-100 hover:text-cyan-50"
+                          className="text-blue-700 hover:text-blue-900"
                           onClick={() =>
                             perform("激活版本", async () => {
                               await studioApi.activateScriptVersion(session, projectId, effectiveScriptId, version.id);
@@ -986,13 +987,13 @@ function SourcesContent({ projectId }: { projectId: string }) {
                 <Plus size={16} />
               </button>
             </div>
-            <div className="grid max-h-72 gap-2 overflow-auto rounded-lg border border-white/10 bg-black/20 p-3">
+            <div className="grid max-h-72 gap-2 overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-3">
               {messages.data.map((message) => (
-                <div className={cn("rounded-md px-3 py-2 text-sm", message.role === "user" ? "ml-8 bg-cyan-300/10 text-cyan-50" : "mr-8 bg-white/[0.05] text-zinc-200")} key={message.id}>
+                <div className={cn("rounded-md px-3 py-2 text-sm", message.role === "user" ? "ml-8 bg-blue-600/10 text-blue-900" : "mr-8 bg-slate-50 text-slate-800")} key={message.id}>
                   {message.content}
                 </div>
               ))}
-              {!messages.data.length ? <p className="text-sm text-zinc-500">还没有对话。发送指令，或直接生成/改写剧本。</p> : null}
+              {!messages.data.length ? <p className="text-sm text-slate-500">还没有对话。发送指令，或直接生成/改写剧本。</p> : null}
             </div>
             <TextAreaInput rows={5} label="Agent 指令" value={agentText} onChange={setAgentText} />
             <div className="grid gap-2">
@@ -1046,7 +1047,7 @@ function SourcesContent({ projectId }: { projectId: string }) {
               </button>
             </div>
             <ErrorPanel message={error} />
-            {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+            {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
           </div>
         </Surface>
       </div>
@@ -1131,14 +1132,14 @@ function AssetsContent({ projectId }: { projectId: string }) {
             const staleRequirementCount = linkedRequirements.filter((item) => item.staleState && item.staleState !== "fresh").length;
             return (
               <Surface className="overflow-hidden" key={asset.id}>
-                <div className="grid aspect-video place-items-center bg-black/30 text-zinc-600">
+                <div className="grid aspect-video place-items-center bg-slate-200 text-slate-400">
                   <ImageIcon size={28} />
                 </div>
                 <div className="grid gap-3 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-medium text-zinc-100">{asset.name}</p>
-                      <p className="mt-1 text-xs text-zinc-500">{assetTypeLabel(asset.assetType)}</p>
+                      <p className="font-medium text-slate-900">{asset.name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{assetTypeLabel(asset.assetType)}</p>
                     </div>
                     <div className="grid justify-items-end gap-1">
                       <StatusBadge status={asset.status} />
@@ -1147,10 +1148,10 @@ function AssetsContent({ projectId }: { projectId: string }) {
                       {asset.staleState && asset.staleState !== "fresh" ? <StatusBadge status={asset.staleState} /> : null}
                     </div>
                   </div>
-                  <p className="line-clamp-3 text-sm leading-6 text-zinc-400">{asset.description}</p>
-                  <p className="text-xs text-zinc-500">参考图：{asset.referenceArtifactId || asset.referenceStorageKey ? "已生成" : "未生成"}</p>
-                  <p className="text-xs text-zinc-500">关联派生需求：{linkedRequirements.length}</p>
-                  {staleRequirementCount ? <p className="text-xs text-amber-100">下游派生资产需重生成：{staleRequirementCount}</p> : null}
+                  <p className="line-clamp-3 text-sm leading-6 text-slate-600">{asset.description}</p>
+                  <p className="text-xs text-slate-500">参考图：{asset.referenceArtifactId || asset.referenceStorageKey ? "已生成" : "未生成"}</p>
+                  <p className="text-xs text-slate-500">关联派生需求：{linkedRequirements.length}</p>
+                  {staleRequirementCount ? <p className="text-xs text-amber-700">下游派生资产需重生成：{staleRequirementCount}</p> : null}
                   <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                     <button className="studio-button" disabled={busy !== ""} onClick={() => perform("确认资产", async () => void (await studioApi.reviewAsset(session, projectId, asset.id, { reviewStatus: "approved" })))} type="button">
                       <Check size={16} />
@@ -1290,7 +1291,7 @@ function StoryboardContent({ projectId }: { projectId: string }) {
       <div className="mb-5 flex gap-2 overflow-x-auto">
         {storyboardRuns
           .map((run) => (
-            <button className={cn("rounded-md border px-3 py-2 text-sm", effectiveWorkflowRunId === run.id ? "border-cyan-300/60 bg-cyan-300/10" : "border-white/10 bg-white/[0.04]")} key={run.id} onClick={() => setWorkflowRunId(run.id)} type="button">
+            <button className={cn("rounded-md border px-3 py-2 text-sm", effectiveWorkflowRunId === run.id ? "border-blue-600/60 bg-blue-600/10" : "border-slate-200 bg-slate-50")} key={run.id} onClick={() => setWorkflowRunId(run.id)} type="button">
               {workflowLabel(stringFrom(run.input.workflowType))} · {formatTime(run.createdAt)}
             </button>
           ))}
@@ -1305,14 +1306,14 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                 <MediaPreview shot={shot} />
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-zinc-100">镜头 {shot.shotNo}</h3>
+                    <h3 className="font-semibold text-slate-900">镜头 {shot.shotNo}</h3>
                     <StatusBadge status={shot.status} />
                     <StatusBadge status={shot.reviewStatus ?? "pending"} />
                     {shot.manualOverride ? <Pill>人工修改</Pill> : null}
                     {shot.staleState && shot.staleState !== "fresh" ? <StatusBadge status={shot.staleState} /> : null}
                   </div>
-                  <p className="mt-3 text-sm leading-6 text-zinc-300">{shot.visual || "暂无视觉描述"}</p>
-                  <dl className="mt-4 grid gap-2 text-sm text-zinc-400 md:grid-cols-2">
+                  <p className="mt-3 text-sm leading-6 text-slate-700">{shot.visual || "暂无视觉描述"}</p>
+                  <dl className="mt-4 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
                     <Meta label="运镜" value={shot.camera} />
                     <Meta label="动作" value={shot.motion} />
                     <Meta label="情绪" value={shot.mood} />
@@ -1342,11 +1343,11 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                   </div>
                 </div>
                 <div className="grid content-start gap-2">
-                  <p className="text-sm font-medium text-zinc-100">派生资产需求</p>
+                  <p className="text-sm font-medium text-slate-900">派生资产需求</p>
                   {shotRequirements.map((req) => (
-                    <div className="rounded-md border border-white/10 bg-white/[0.03] p-3 text-xs leading-5 text-zinc-400" key={req.id}>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600" key={req.id}>
                       <div className="flex items-start justify-between gap-2">
-                        <p className="font-medium text-zinc-200">
+                        <p className="font-medium text-slate-800">
                           {assetTypeLabel(req.assetType)}：{req.assetName || req.assetId}
                         </p>
                         <div className="grid justify-items-end gap-1">
@@ -1361,22 +1362,22 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                       <p>动作：{req.action || "未指定"}</p>
                       <p>状态：{req.sceneState || req.propState || "未指定"}</p>
                       <div className="mt-2 flex flex-wrap gap-2">
-                        <button className="text-cyan-100" onClick={() => perform("确认派生资产需求", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, req.id, { reviewStatus: "approved" })))} type="button">
+                        <button className="text-blue-700" onClick={() => perform("确认派生资产需求", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, req.id, { reviewStatus: "approved" })))} type="button">
                           确认需求
                         </button>
-                        <button className="text-amber-100" onClick={() => perform("标记派生资产需修改", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, req.id, { reviewStatus: "needs_edit" })))} type="button">
+                        <button className="text-amber-700" onClick={() => perform("标记派生资产需修改", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, req.id, { reviewStatus: "needs_edit" })))} type="button">
                           需修改
                         </button>
-                        <button className="text-cyan-100" onClick={() => setEditingRequirement(req)} type="button">
+                        <button className="text-blue-700" onClick={() => setEditingRequirement(req)} type="button">
                           编辑需求
                         </button>
-                        <button className="text-cyan-100" onClick={() => perform("重新生成派生资产图", async () => void (await studioApi.regenerate(session, projectId, { targetType: "derived_asset_image", targetId: req.id, options: { force: true } })))} type="button">
+                        <button className="text-blue-700" onClick={() => perform("重新生成派生资产图", async () => void (await studioApi.regenerate(session, projectId, { targetType: "derived_asset_image", targetId: req.id, options: { force: true } })))} type="button">
                           重生成派生图
                         </button>
                       </div>
                     </div>
                   ))}
-                  {!shotRequirements.length ? <p className="text-sm text-zinc-500">暂无派生资产需求。</p> : null}
+                  {!shotRequirements.length ? <p className="text-sm text-slate-500">暂无派生资产需求。</p> : null}
                 </div>
               </Surface>
             );
@@ -1644,10 +1645,10 @@ function RequirementEditDialogForm({
 function EditDialogShell({ title, error = "", children, onClose }: { title: string; error?: string; children: React.ReactNode; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
-      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/10 bg-zinc-950 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-          <h3 className="text-base font-semibold text-zinc-100">{title}</h3>
-          <button className="rounded-md p-1 text-zinc-400 hover:bg-white/10 hover:text-zinc-100" onClick={onClose} type="button">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+          <button className="rounded-md p-1 text-slate-600 hover:bg-slate-200 hover:text-slate-900" onClick={onClose} type="button">
             <X size={18} />
           </button>
         </div>
@@ -1755,15 +1756,15 @@ function WorkflowsContent({ projectId }: { projectId: string }) {
 
         <Surface>
           <SectionTitle title="工作流列表" description="查看状态、输入摘要、输出摘要和节点详情。" />
-          <div className="grid gap-0 divide-y divide-white/10">
+          <div className="grid gap-0 divide-y divide-slate-200">
             {runs.data.map((run) => (
-              <button className={cn("grid gap-3 px-4 py-3 text-left md:grid-cols-[1fr_auto_auto]", effectiveRunId === run.id ? "bg-cyan-300/10" : "hover:bg-white/[0.03]")} key={run.id} onClick={() => setSelectedRunId(run.id)} type="button">
+              <button className={cn("grid gap-3 px-4 py-3 text-left md:grid-cols-[1fr_auto_auto]", effectiveRunId === run.id ? "bg-blue-600/10" : "hover:bg-slate-50")} key={run.id} onClick={() => setSelectedRunId(run.id)} type="button">
                 <div>
-                  <p className="text-sm font-medium text-zinc-100">{workflowLabel(stringFrom(run.input.workflowType))}</p>
-                  <p className="mt-1 text-xs text-zinc-500">{inputSummary(run.input)}</p>
+                  <p className="text-sm font-medium text-slate-900">{workflowLabel(stringFrom(run.input.workflowType))}</p>
+                  <p className="mt-1 text-xs text-slate-500">{inputSummary(run.input)}</p>
                 </div>
                 <StatusBadge status={run.status} />
-                <span className="text-xs text-zinc-500">{formatTime(run.createdAt)}</span>
+                <span className="text-xs text-slate-500">{formatTime(run.createdAt)}</span>
               </button>
             ))}
             {!runs.data.length ? <EmptyState title="暂无工作流" description="从左侧选择生产链路并启动。" /> : null}
@@ -1774,10 +1775,10 @@ function WorkflowsContent({ projectId }: { projectId: string }) {
         <SectionTitle title="节点详情" description="显示节点名称、状态、错误和输出摘要。" />
         <div className="grid gap-2 p-4">
           {nodes.data.map((node) => (
-            <div className="grid gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 md:grid-cols-[1fr_auto]" key={node.id}>
+            <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-[1fr_auto]" key={node.id}>
               <div>
-                <p className="text-sm font-medium text-zinc-100">{node.nodeKey}</p>
-                <p className="mt-1 text-xs text-zinc-500">{node.nodeType}</p>
+                <p className="text-sm font-medium text-slate-900">{node.nodeKey}</p>
+                <p className="mt-1 text-xs text-slate-500">{node.nodeType}</p>
                 {node.errorMessage ? <p className="mt-2 text-xs text-rose-200">{node.errorMessage}</p> : null}
               </div>
               <StatusBadge status={node.status} />
@@ -1832,8 +1833,8 @@ function VaultContent({ projectId }: { projectId: string }) {
             <Surface className="overflow-hidden" key={artifact.id}>
               <MediaPreview artifact={artifact} />
               <div className="grid gap-2 p-4">
-                <p className="font-medium text-zinc-100">{artifactTypeLabel(artifact.type)}</p>
-                <p className="truncate text-xs text-zinc-500">{artifact.storageKey ?? "无存储键"}</p>
+                <p className="font-medium text-slate-900">{artifactTypeLabel(artifact.type)}</p>
+                <p className="truncate text-xs text-slate-500">{artifact.storageKey ?? "无存储键"}</p>
                 <div className="flex flex-wrap gap-2">
                   {artifact.previewUrl ? (
                     <a className="studio-button" href={artifact.previewUrl} rel="noreferrer" target="_blank">
@@ -1937,10 +1938,10 @@ function ProjectSettingsContent({ projectId }: { projectId: string }) {
           <TextAreaInput className="md:col-span-2" label="导演手册" value={form.directorManual ?? ""} onChange={(directorManual) => updateDraft({ directorManual })} />
           <TextAreaInput className="md:col-span-2" label="视觉手册" value={form.visualManual ?? ""} onChange={(visualManual) => updateDraft({ visualManual })} />
         </div>
-        <div className="flex items-center justify-between gap-3 border-t border-white/10 p-4">
+        <div className="flex items-center justify-between gap-3 border-t border-slate-200 p-4">
           <div>
             <ErrorPanel message={error} />
-            {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+            {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
           </div>
           <button className="studio-button studio-button-primary" disabled={busy} onClick={save} type="button">
             {busy ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
@@ -2024,7 +2025,7 @@ function ProvidersContent() {
               {busy === "创建供应商账号" ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
               创建账号
             </button>
-            <div className="h-px bg-white/10" />
+            <div className="h-px bg-slate-200" />
             <TextInput label="模型配置键" value={profileKey} onChange={setProfileKey} />
             <TextInput label="模型配置名称" value={profileName} onChange={setProfileName} />
             <TextInput label="用途" value={profilePurpose} onChange={setProfilePurpose} />
@@ -2050,7 +2051,7 @@ function ProvidersContent() {
               创建模型配置
             </button>
             <ErrorPanel message={error} />
-            {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+            {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
           </div>
         </Surface>
         <Surface>
@@ -2129,7 +2130,7 @@ function PromptsContent() {
             >
               创建模板
             </button>
-            <div className="h-px bg-white/10" />
+            <div className="h-px bg-slate-200" />
             <SelectFromList label="选择模板" value={effectiveTemplateId} items={templates.data} getLabel={(item) => item.name || item.templateKey} onChange={setSelectedTemplateId} />
             <TextInput label="版本标题" value={versionTitle} onChange={setVersionTitle} />
             <TextAreaInput rows={8} label="提示词内容" value={versionContent} onChange={setVersionContent} />
@@ -2158,7 +2159,7 @@ function PromptsContent() {
               创建并激活版本
             </button>
             <ErrorPanel message={error} />
-            {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+            {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
           </div>
         </Surface>
         <Surface>
@@ -2225,7 +2226,7 @@ function AccessContent() {
               创建团队
             </button>
             <ErrorPanel message={error} />
-            {notice ? <p className="text-sm text-cyan-100">{notice}</p> : null}
+            {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
           </div>
         </Surface>
         <Surface>
@@ -2254,9 +2255,9 @@ function AccessContent() {
           <SectionTitle title="权限" description="细粒度 RBAC 权限列表。" />
           <div className="grid gap-2 p-4 md:grid-cols-2 xl:grid-cols-3">
             {permissions.data.map((item) => (
-              <div className="rounded-md border border-white/10 bg-white/[0.03] p-3" key={item.permissionKey}>
-                <p className="text-sm font-medium text-zinc-100">{item.name || item.permissionKey}</p>
-                <p className="mt-1 text-xs text-zinc-500">{item.description || item.permissionKey}</p>
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3" key={item.permissionKey}>
+                <p className="text-sm font-medium text-slate-900">{item.name || item.permissionKey}</p>
+                <p className="mt-1 text-xs text-slate-500">{item.description || item.permissionKey}</p>
               </div>
             ))}
           </div>
@@ -2268,16 +2269,42 @@ function AccessContent() {
 
 export function GlobalSettingsPage() {
   return (
-    <AppShell active="settings" title="设置" description="配置当前浏览器会话和 Studio 入口。">
-      <SessionGate>
-        <Surface>
-          <SectionTitle title="本机会话" description="顶部的访问令牌、组织 ID 和工作区 ID 会保存在本机浏览器。" />
-          <div className="grid gap-3 p-4 text-sm text-zinc-400">
-            <p>正式登录页尚未纳入本次范围；当前阶段使用访问令牌直接调用接口。</p>
-          </div>
-        </Surface>
-      </SessionGate>
+    <AppShell active="settings" title="设置" description="查看当前账号、组织和本机登录状态。">
+      <SettingsContent />
     </AppShell>
+  );
+}
+
+function SettingsContent() {
+  const router = useRouter();
+  const { session, clearSession } = useStudioSession();
+
+  async function logout() {
+    if (session.refreshToken.trim()) {
+      await studioApi.logout(session.refreshToken).catch(() => undefined);
+    }
+    clearSession();
+    router.replace("/login" as Route);
+  }
+
+  return (
+    <SessionGate>
+      <Surface>
+        <SectionTitle title="账号信息" description="当前浏览器保存的是登录会话，不再需要手动维护认证信息。" />
+        <div className="grid gap-4 p-4 md:grid-cols-2">
+          <InfoTile label="显示名称" value={session.user?.displayName || "未设置"} />
+          <InfoTile label="邮箱" value={session.user?.email || "未设置"} />
+          <InfoTile label="组织" value={session.organizationId ? "已连接" : "未连接"} />
+          <InfoTile label="工作区" value={session.workspaceId ? "已连接" : "未连接"} />
+          <div className="md:col-span-2">
+            <button className="studio-button" onClick={logout} type="button">
+              <X size={16} />
+              退出登录
+            </button>
+          </div>
+        </div>
+      </Surface>
+    </SessionGate>
   );
 }
 
@@ -2287,7 +2314,7 @@ function SessionGate({ children }: { children: React.ReactNode }) {
     return <LoadingPanel />;
   }
   if (!ready) {
-    return <EmptyState title="需要会话信息" description="请先在顶部填写访问令牌和组织 ID。需要创建项目时还要填写工作区 ID。" />;
+    return <LoadingPanel />;
   }
   return <>{children}</>;
 }
@@ -2358,7 +2385,7 @@ function validSelection<TItem extends { id: string }>(selectedId: string, items:
 
 function LoadingPanel() {
   return (
-    <div className="grid min-h-40 place-items-center text-sm text-zinc-500">
+    <div className="grid min-h-40 place-items-center text-sm text-slate-500">
       <span className="inline-flex items-center gap-2">
         <Loader2 className="animate-spin" size={16} />
         正在加载
@@ -2369,11 +2396,11 @@ function LoadingPanel() {
 
 function ProjectCard({ project }: { project: Project }) {
   return (
-    <Link className="group rounded-lg border border-white/10 bg-white/[0.04] p-4 transition hover:border-cyan-300/40 hover:bg-white/[0.06]" href={projectHref(project.id) as Route}>
+    <Link className="group rounded-lg border border-slate-200 bg-slate-50 p-4 transition hover:border-blue-600/40 hover:bg-slate-50" href={projectHref(project.id) as Route}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold text-zinc-100">{project.name}</h3>
-          <p className="mt-2 line-clamp-2 text-sm leading-6 text-zinc-400">{project.description || "暂无简介"}</p>
+          <h3 className="text-base font-semibold text-slate-900">{project.name}</h3>
+          <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{project.description || "暂无简介"}</p>
         </div>
         <StatusBadge status={project.status ?? "active"} />
       </div>
@@ -2383,12 +2410,12 @@ function ProjectCard({ project }: { project: Project }) {
         <Pill>{project.videoRatio || project.aspectRatio || "16:9"}</Pill>
         <Pill>{project.artStyle || "未设置画风"}</Pill>
       </div>
-      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10">
-        <div className="h-full w-2/5 rounded-full bg-cyan-300 transition group-hover:w-3/5" />
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-slate-200">
+        <div className="h-full w-2/5 rounded-full bg-blue-600 transition group-hover:w-3/5" />
       </div>
-      <div className="mt-4 flex items-center justify-between text-xs text-zinc-500">
+      <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
         <span>最近更新：{formatTime(project.updatedAt)}</span>
-        <span className="inline-flex items-center gap-1 text-cyan-100">
+        <span className="inline-flex items-center gap-1 text-blue-700">
           打开项目 <ArrowRight size={13} />
         </span>
       </div>
@@ -2399,31 +2426,31 @@ function ProjectCard({ project }: { project: Project }) {
 function SummaryTile({ label, value, detail }: { label: string; value: string | number; detail: string }) {
   return (
     <Surface className="p-4">
-      <p className="text-sm text-zinc-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-zinc-100">{value}</p>
-      <p className="mt-1 text-xs text-zinc-500">{detail}</p>
+      <p className="text-sm text-slate-500">{label}</p>
+      <p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p>
+      <p className="mt-1 text-xs text-slate-500">{detail}</p>
     </Surface>
   );
 }
 
 function ProgressStep({ done, title, detail }: { done: boolean; title: string; detail: string }) {
   return (
-    <div className={cn("rounded-lg border p-3", done ? "border-cyan-300/35 bg-cyan-300/10" : "border-white/10 bg-white/[0.03]")}>
+    <div className={cn("rounded-lg border p-3", done ? "border-blue-600/35 bg-blue-600/10" : "border-slate-200 bg-slate-50")}>
       <div className="flex items-center gap-2">
-        <span className={cn("grid h-6 w-6 place-items-center rounded-md", done ? "bg-cyan-300 text-zinc-950" : "bg-white/10 text-zinc-500")}>{done ? <Check size={14} /> : <X size={14} />}</span>
-        <p className="text-sm font-medium text-zinc-100">{title}</p>
+        <span className={cn("grid h-6 w-6 place-items-center rounded-md", done ? "bg-blue-600 text-white" : "bg-slate-200 text-slate-500")}>{done ? <Check size={14} /> : <X size={14} />}</span>
+        <p className="text-sm font-medium text-slate-900">{title}</p>
       </div>
-      <p className="mt-2 text-xs leading-5 text-zinc-500">{detail}</p>
+      <p className="mt-2 text-xs leading-5 text-slate-500">{detail}</p>
     </div>
   );
 }
 
 function AssetRow({ asset }: { asset: CanonicalAsset }) {
   return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+    <div className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
       <div>
-        <p className="text-sm font-medium text-zinc-100">{asset.name}</p>
-        <p className="mt-1 text-xs text-zinc-500">{assetTypeLabel(asset.assetType)} · {asset.description}</p>
+        <p className="text-sm font-medium text-slate-900">{asset.name}</p>
+        <p className="mt-1 text-xs text-slate-500">{assetTypeLabel(asset.assetType)} · {asset.description}</p>
       </div>
       <StatusBadge status={asset.status} />
     </div>
@@ -2432,13 +2459,13 @@ function AssetRow({ asset }: { asset: CanonicalAsset }) {
 
 function ArtifactRow({ artifact }: { artifact: Artifact }) {
   return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+    <div className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
       <div className="min-w-0">
-        <p className="text-sm font-medium text-zinc-100">{artifactTypeLabel(artifact.type)}</p>
-        <p className="mt-1 truncate text-xs text-zinc-500">{artifact.storageKey ?? artifact.id}</p>
+        <p className="text-sm font-medium text-slate-900">{artifactTypeLabel(artifact.type)}</p>
+        <p className="mt-1 truncate text-xs text-slate-500">{artifact.storageKey ?? artifact.id}</p>
       </div>
       {artifact.previewUrl ? (
-        <a className="text-xs text-cyan-100" href={artifact.previewUrl} rel="noreferrer" target="_blank">
+        <a className="text-xs text-blue-700" href={artifact.previewUrl} rel="noreferrer" target="_blank">
           预览
         </a>
       ) : null}
@@ -2450,21 +2477,30 @@ function WorkflowRow({ run }: { run: WorkflowRun }) {
   return (
     <div className="grid gap-3 p-4 md:grid-cols-[1fr_auto]">
       <div>
-        <p className="font-medium text-zinc-100">{workflowLabel(stringFrom(run.input.workflowType))}</p>
-        <p className="mt-1 text-xs text-zinc-500">{run.temporalWorkflowId}</p>
-        <p className="mt-2 text-sm text-zinc-400">{inputSummary(run.input)}</p>
+        <p className="font-medium text-slate-900">{workflowLabel(stringFrom(run.input.workflowType))}</p>
+        <p className="mt-1 text-xs text-slate-500">{run.temporalWorkflowId}</p>
+        <p className="mt-2 text-sm text-slate-600">{inputSummary(run.input)}</p>
       </div>
       <StatusBadge status={run.status} />
     </div>
   );
 }
 
+function InfoTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-medium text-slate-950">{value}</p>
+    </div>
+  );
+}
+
 function SimpleRow({ title, detail, status }: { title: string; detail: string; status: string }) {
   return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+    <div className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-zinc-100">{title}</p>
-        <p className="mt-1 truncate text-xs text-zinc-500">{detail}</p>
+        <p className="truncate text-sm font-medium text-slate-900">{title}</p>
+        <p className="mt-1 truncate text-xs text-slate-500">{detail}</p>
       </div>
       <StatusBadge status={status} />
     </div>
@@ -2485,7 +2521,7 @@ function ListBlock<TItem>({ items, empty, render }: { items: TItem[]; empty: str
 function TextInput({ label, value, onChange, className = "" }: { label: string; value: string; onChange: (value: string) => void; className?: string }) {
   return (
     <label className={`grid gap-1 text-sm ${className}`}>
-      <span className="text-zinc-500">{label}</span>
+      <span className="text-slate-500">{label}</span>
       <input className="studio-input w-full" value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
@@ -2494,7 +2530,7 @@ function TextInput({ label, value, onChange, className = "" }: { label: string; 
 function TextAreaInput({ label, value, onChange, rows = 5, className = "" }: { label: string; value: string; onChange: (value: string) => void; rows?: number; className?: string }) {
   return (
     <label className={`grid gap-1 text-sm ${className}`}>
-      <span className="text-zinc-500">{label}</span>
+      <span className="text-slate-500">{label}</span>
       <textarea className="studio-textarea w-full resize-y" rows={rows} value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
@@ -2503,7 +2539,7 @@ function TextAreaInput({ label, value, onChange, rows = 5, className = "" }: { l
 function SelectInput({ label, value, values, labels, onChange }: { label: string; value: string; values: string[]; labels?: Record<string, string>; onChange: (value: string) => void }) {
   return (
     <label className="grid gap-1 text-sm">
-      <span className="text-zinc-500">{label}</span>
+      <span className="text-slate-500">{label}</span>
       <select className="studio-input w-full" value={value} onChange={(event) => onChange(event.target.value)}>
         {values.map((item) => (
           <option key={item} value={item}>
@@ -2518,7 +2554,7 @@ function SelectInput({ label, value, values, labels, onChange }: { label: string
 function SelectFromList<TItem extends { id: string }>({ label, value, items, getLabel, onChange }: { label: string; value: string; items: TItem[]; getLabel: (item: TItem) => string; onChange: (value: string) => void }) {
   return (
     <label className="grid gap-1 text-sm">
-      <span className="text-zinc-500">{label}</span>
+      <span className="text-slate-500">{label}</span>
       <select className="studio-input w-full" value={value} onChange={(event) => onChange(event.target.value)}>
         <option value="">请选择</option>
         {items.map((item) => (
@@ -2533,7 +2569,7 @@ function SelectFromList<TItem extends { id: string }>({ label, value, items, get
 
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return (
-    <label className="flex items-center justify-between gap-4 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-300">
+    <label className="flex items-center justify-between gap-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
       {label}
       <input checked={checked} onChange={(event) => onChange(event.target.checked)} type="checkbox" />
     </label>
@@ -2543,14 +2579,14 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 function Meta({ label, value }: { label: string; value?: string }) {
   return (
     <div>
-      <dt className="text-zinc-500">{label}</dt>
-      <dd className="mt-1 text-zinc-300">{value || "未设置"}</dd>
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="mt-1 text-slate-700">{value || "未设置"}</dd>
     </div>
   );
 }
 
 function Pill({ children }: { children: React.ReactNode }) {
-  return <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[12px] text-zinc-400">{children}</span>;
+  return <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[12px] text-slate-600">{children}</span>;
 }
 
 function productionActionLabel(action: string) {

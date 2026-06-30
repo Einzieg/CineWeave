@@ -17,12 +17,34 @@ export type ApiEnvelope<TData> = {
   error?: ApiErrorBody;
 };
 
+export type AuthUser = {
+  id: string;
+  email: string;
+  displayName?: string;
+};
+
 export type StudioSession = {
   accessToken: string;
-  currentUserId: string;
+  refreshToken: string;
   organizationId: string;
-  workspaceId: string;
+  workspaceId?: string;
+  user?: AuthUser;
   currentProjectId: string;
+};
+
+export type AuthResponse = {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+  organizationId: string;
+  workspaceId?: string;
+  user: AuthUser;
+};
+
+export type SetupState = {
+  needsSetup: boolean;
+  userCount: number;
+  organizationCount: number;
 };
 
 export type Project = {

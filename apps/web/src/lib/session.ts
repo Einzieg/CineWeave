@@ -2,17 +2,29 @@
 
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { StudioSession } from "./types";
+import type { AuthResponse, StudioSession } from "./types";
 
-const sessionKey = "cineweave.studio.session.v1";
+const sessionKey = "cineweave.session.v2";
+const legacySessionKey = "cineweave.studio.session.v1";
 
 export const emptySession: StudioSession = {
   accessToken: "",
-  currentUserId: "",
+  refreshToken: "",
   organizationId: "",
   workspaceId: "",
   currentProjectId: "",
 };
+
+export function sessionFromAuthResponse(response: AuthResponse, currentProjectId = ""): StudioSession {
+  return {
+    accessToken: response.accessToken,
+    refreshToken: response.refreshToken,
+    organizationId: response.organizationId,
+    workspaceId: response.workspaceId ?? "",
+    user: response.user,
+    currentProjectId,
+  };
+}
 
 export function readStoredSession(): StudioSession {
   if (typeof window === "undefined") {
@@ -21,16 +33,11 @@ export function readStoredSession(): StudioSession {
   try {
     const raw = window.localStorage.getItem(sessionKey);
     if (!raw) {
+      window.localStorage.removeItem(legacySessionKey);
       return emptySession;
     }
     const parsed = JSON.parse(raw) as Partial<StudioSession>;
-    return {
-      accessToken: String(parsed.accessToken ?? ""),
-      currentUserId: String(parsed.currentUserId ?? ""),
-      organizationId: String(parsed.organizationId ?? ""),
-      workspaceId: String(parsed.workspaceId ?? ""),
-      currentProjectId: String(parsed.currentProjectId ?? ""),
-    };
+    return normalizeSession(parsed);
   } catch {
     return emptySession;
   }
@@ -41,6 +48,15 @@ export function writeStoredSession(session: StudioSession) {
     return;
   }
   window.localStorage.setItem(sessionKey, JSON.stringify(session));
+  window.localStorage.removeItem(legacySessionKey);
+}
+
+export function clearStoredSession() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(sessionKey);
+  window.localStorage.removeItem(legacySessionKey);
 }
 
 type StudioSessionController = ReturnType<typeof useStudioSessionState>;
@@ -58,27 +74,27 @@ function useStudioSessionState() {
   }, []);
 
   const setSession = useCallback((next: StudioSession) => {
-    setSessionState(next);
-    writeStoredSession(next);
+    const normalized = normalizeSession(next);
+    setSessionState(normalized);
+    writeStoredSession(normalized);
   }, []);
 
-  const updateSession = useCallback(
-    (patch: Partial<StudioSession>) => {
-      setSessionState((current) => {
-        const next = { ...current, ...patch };
-        writeStoredSession(next);
-        return next;
-      });
-    },
-    [],
-  );
+  const updateSession = useCallback((patch: Partial<StudioSession>) => {
+    setSessionState((current) => {
+      const next = normalizeSession({ ...current, ...patch });
+      writeStoredSession(next);
+      return next;
+    });
+  }, []);
 
-  const ready = useMemo(
-    () => Boolean(session.accessToken.trim() && session.organizationId.trim()),
-    [session.accessToken, session.organizationId],
-  );
+  const clearSession = useCallback(() => {
+    setSessionState(emptySession);
+    clearStoredSession();
+  }, []);
 
-  return { session, hydrated, ready, setSession, updateSession };
+  const ready = useMemo(() => Boolean(session.accessToken.trim() && session.organizationId.trim()), [session.accessToken, session.organizationId]);
+
+  return { session, hydrated, ready, setSession, updateSession, clearSession };
 }
 
 export function StudioSessionProvider({ children }: { children: ReactNode }) {
@@ -104,4 +120,15 @@ export function useBindCurrentProject(projectId?: string) {
       updateSession({ currentProjectId: projectId });
     }
   }, [hydrated, projectId, session.currentProjectId, updateSession]);
+}
+
+function normalizeSession(session: Partial<StudioSession>): StudioSession {
+  return {
+    accessToken: String(session.accessToken ?? ""),
+    refreshToken: String(session.refreshToken ?? ""),
+    organizationId: String(session.organizationId ?? ""),
+    workspaceId: String(session.workspaceId ?? ""),
+    user: session.user,
+    currentProjectId: String(session.currentProjectId ?? ""),
+  };
 }

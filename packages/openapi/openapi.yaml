@@ -26,6 +26,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SystemStatusEnvelope"
+  /api/system/setup-state:
+    get:
+      operationId: getSystemSetupState
+      responses:
+        "200":
+          description: Whether the deployment needs first-run setup
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemSetupStateEnvelope"
+  /api/system/setup:
+    post:
+      operationId: setupSystem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SystemSetupRequest"
+      responses:
+        "201":
+          description: First administrator session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/auth/register:
     post:
       operationId: register
@@ -42,6 +72,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
         "422":
@@ -2815,6 +2847,30 @@ components:
           type: string
         organizationName:
           type: string
+        workspaceName:
+          type: string
+    SystemSetupRequest:
+      allOf:
+        - $ref: "#/components/schemas/RegisterRequest"
+    SystemSetupStateEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/SystemSetupState"
+    SystemSetupState:
+      type: object
+      required: [needsSetup, userCount, organizationCount]
+      properties:
+        needsSetup:
+          type: boolean
+        userCount:
+          type: integer
+          minimum: 0
+        organizationCount:
+          type: integer
+          minimum: 0
     LoginRequest:
       type: object
       required: [email, password]
@@ -2850,6 +2906,9 @@ components:
                 organizationId:
                   type: string
                   format: uuid
+                workspaceId:
+                  type: string
+                  format: uuid
     AuthToken:
       type: object
       required: [accessToken, expiresIn, refreshToken, user]
@@ -2861,6 +2920,9 @@ components:
         refreshToken:
           type: string
         organizationId:
+          type: string
+          format: uuid
+        workspaceId:
           type: string
           format: uuid
         user:

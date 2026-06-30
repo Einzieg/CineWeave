@@ -22,10 +22,12 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrEmailExists        = errors.New("email already exists")
-	ErrUnauthorized       = errors.New("unauthorized")
-	ErrForbidden          = errors.New("forbidden")
+	ErrInvalidCredentials         = errors.New("invalid credentials")
+	ErrEmailExists                = errors.New("email already exists")
+	ErrUnauthorized               = errors.New("unauthorized")
+	ErrForbidden                  = errors.New("forbidden")
+	ErrSetupComplete              = errors.New("setup already completed")
+	ErrPublicRegistrationDisabled = errors.New("public registration disabled")
 )
 
 type Service struct {
@@ -45,6 +47,7 @@ type RegisterRequest struct {
 	Password         string `json:"password"`
 	DisplayName      string `json:"displayName"`
 	OrganizationName string `json:"organizationName"`
+	WorkspaceName    string `json:"workspaceName"`
 }
 
 type LoginRequest struct {
@@ -62,6 +65,7 @@ type TokenResponse struct {
 	RefreshToken   string       `json:"refreshToken"`
 	User           UserResponse `json:"user"`
 	OrganizationID string       `json:"organizationId,omitempty"`
+	WorkspaceID    string       `json:"workspaceId,omitempty"`
 }
 
 type UserResponse struct {
@@ -88,6 +92,14 @@ func NewService(pool *pgxpool.Pool, jwtSecret string, accessTTL, refreshTTL time
 }
 
 func (s *Service) Register(ctx context.Context, req RegisterRequest, r *http.Request) (TokenResponse, error) {
+	return s.createUserOrganizationSession(ctx, req, r, false)
+}
+
+func (s *Service) Setup(ctx context.Context, req RegisterRequest, r *http.Request) (TokenResponse, error) {
+	return s.createUserOrganizationSession(ctx, req, r, true)
+}
+
+func (s *Service) createUserOrganizationSession(ctx context.Context, req RegisterRequest, r *http.Request, requireNoUsers bool) (TokenResponse, error) {
 	email := normalizeEmail(req.Email)
 	if email == "" || len(req.Password) < 8 {
 		return TokenResponse{}, ErrInvalidCredentials
@@ -100,6 +112,10 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest, r *http.Req
 	if orgName == "" {
 		orgName = displayName + "'s Organization"
 	}
+	workspaceName := strings.TrimSpace(req.WorkspaceName)
+	if workspaceName == "" {
+		workspaceName = "Default Workspace"
+	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -111,6 +127,19 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest, r *http.Req
 		return TokenResponse{}, err
 	}
 	defer rollback(ctx, tx)
+
+	if requireNoUsers {
+		if _, err := tx.Exec(ctx, `LOCK TABLE users IN EXCLUSIVE MODE`); err != nil {
+			return TokenResponse{}, err
+		}
+		var userCount int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&userCount); err != nil {
+			return TokenResponse{}, err
+		}
+		if userCount > 0 {
+			return TokenResponse{}, ErrSetupComplete
+		}
+	}
 
 	var userID string
 	err = tx.QueryRow(ctx, `
@@ -125,7 +154,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest, r *http.Req
 		return TokenResponse{}, err
 	}
 
-	orgID, err := createOrganizationForUser(ctx, tx, userID, orgName)
+	orgID, workspaceID, err := createOrganizationForUser(ctx, tx, userID, orgName, workspaceName)
 	if err != nil {
 		return TokenResponse{}, err
 	}
@@ -144,6 +173,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest, r *http.Req
 		ExpiresIn:      int64(s.accessTTL.Seconds()),
 		RefreshToken:   refresh,
 		OrganizationID: orgID,
+		WorkspaceID:    workspaceID,
 		User: UserResponse{
 			ID:          userID,
 			Email:       email,
@@ -174,6 +204,10 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, r *http.Request) 
 	if err != nil {
 		return TokenResponse{}, err
 	}
+	workspaceID, err := s.defaultWorkspace(ctx, orgID)
+	if err != nil {
+		return TokenResponse{}, err
+	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -194,6 +228,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, r *http.Request) 
 		ExpiresIn:      int64(s.accessTTL.Seconds()),
 		RefreshToken:   refresh,
 		OrganizationID: orgID,
+		WorkspaceID:    workspaceID,
 		User: UserResponse{
 			ID:          userID,
 			Email:       email,
@@ -240,6 +275,10 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest, r *http.Reque
 	if orgID != nil {
 		orgValue = *orgID
 	}
+	workspaceID, err := s.defaultWorkspace(ctx, orgValue)
+	if err != nil {
+		return TokenResponse{}, err
+	}
 	token, refresh, err := s.createSession(ctx, tx, userID, orgValue, r)
 	if err != nil {
 		return TokenResponse{}, err
@@ -253,6 +292,7 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest, r *http.Reque
 		ExpiresIn:      int64(s.accessTTL.Seconds()),
 		RefreshToken:   refresh,
 		OrganizationID: orgValue,
+		WorkspaceID:    workspaceID,
 		User: UserResponse{
 			ID:          userID,
 			Email:       email,
@@ -312,7 +352,7 @@ func (s *Service) CreateOrganization(ctx context.Context, userID, name string) (
 	}
 	defer rollback(ctx, tx)
 
-	orgID, err := createOrganizationForUser(ctx, tx, userID, name)
+	orgID, _, err := createOrganizationForUser(ctx, tx, userID, name, "Default Workspace")
 	if err != nil {
 		return "", err
 	}
@@ -375,14 +415,36 @@ func (s *Service) defaultOrganization(ctx context.Context, userID string) (strin
 	return orgID, err
 }
 
-func createOrganizationForUser(ctx context.Context, tx pgx.Tx, userID, name string) (string, error) {
+func (s *Service) defaultWorkspace(ctx context.Context, orgID string) (string, error) {
+	if strings.TrimSpace(orgID) == "" {
+		return "", nil
+	}
+	var workspaceID string
+	err := s.db.QueryRow(ctx, `
+		SELECT id
+		FROM workspaces
+		WHERE organization_id = $1
+		ORDER BY created_at
+		LIMIT 1
+	`, orgID).Scan(&workspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return workspaceID, err
+}
+
+func createOrganizationForUser(ctx context.Context, tx pgx.Tx, userID, name, workspaceName string) (string, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "Organization"
 	}
+	workspaceName = strings.TrimSpace(workspaceName)
+	if workspaceName == "" {
+		workspaceName = "Default Workspace"
+	}
 	slug, err := uniqueSlug(name)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	var orgID string
@@ -391,21 +453,23 @@ func createOrganizationForUser(ctx context.Context, tx pgx.Tx, userID, name stri
 		VALUES ($1, $2)
 		RETURNING id
 	`, name, slug).Scan(&orgID); err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO organization_members(organization_id, user_id, status)
 		VALUES ($1, $2, 'active')
 	`, orgID, userID); err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	if _, err := tx.Exec(ctx, `
+	var workspaceID string
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO workspaces(organization_id, name)
-		VALUES ($1, 'Default Workspace')
-	`, orgID); err != nil {
-		return "", err
+		VALUES ($1, $2)
+		RETURNING id
+	`, orgID, workspaceName).Scan(&workspaceID); err != nil {
+		return "", "", err
 	}
 
 	var ownerRoleID string
@@ -416,7 +480,7 @@ func createOrganizationForUser(ctx context.Context, tx pgx.Tx, userID, name stri
 		ORDER BY CASE WHEN role_key = 'org_owner' THEN 0 ELSE 1 END
 		LIMIT 1
 	`).Scan(&ownerRoleID); err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -427,10 +491,10 @@ func createOrganizationForUser(ctx context.Context, tx pgx.Tx, userID, name stri
 		VALUES ($1, $2, 'user', $3, 'organization', $1, $3)
 		ON CONFLICT DO NOTHING
 	`, orgID, ownerRoleID, userID); err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return orgID, nil
+	return orgID, workspaceID, nil
 }
 
 func normalizeEmail(email string) string {

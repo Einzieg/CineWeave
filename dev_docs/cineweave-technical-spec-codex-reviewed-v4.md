@@ -93,7 +93,7 @@ CineWeave 不要求兼容旧 Toonflow 的 TypeScript 供应商脚本。新版供
 英文产品名：CineWeave
 仓库 / monorepo 目录：cineweave
 Go module 示例：github.com/Einzieg/cineweave
-前端应用：CineWeave Studio
+前端应用：影织 / AI 视频创作工作台
 云端产品：CineWeave Cloud
 Provider Gateway 产品名：CineWeave Gateway
 工作流模块：CineWeave Flow
@@ -3436,9 +3436,10 @@ Task 025: Add prompt_templates and prompt_versions schema.
 ## Implementation Note: Silent Video MVP Hardening
 
 - Docker Compose app profile starts the production-shaped local stack with application services only: `docker compose -f compose.yml --profile app up -d --build`.
+- First-run deployments use `GET /api/system/setup-state` and `POST /api/system/setup` to create the initial administrator, organization, and workspace. Public `/api/auth/register` is disabled by default with `CINEWEAVE_ALLOW_PUBLIC_REGISTRATION=false`; the web app routes `/` to `/setup`, `/login`, or `/dashboard` based on setup and session state.
 - Provider accounts, provider models, and model profile bindings must be configured explicitly in Studio or through API before running script, image, or video workflows.
 - `GET /api/system/status` is non-auth and low sensitivity. It reports database plus configured Temporal, storage, and Provider Gateway readiness hints for service health checks.
-- Studio project pages surface workflow status, model profile hints, storyboard and media previews, and a final_video-first Vault view.
+- Project pages surface workflow status, model profile hints, storyboard and media previews, and a final_video-first Vault view.
 - Current MVP scope remains silent video only. Deferred audio scope:
   - Provider Gateway `audio.tts`
   - TTS Provider
