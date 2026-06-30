@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -97,11 +98,11 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 	if workflowType == "" {
 		workflowType = "video_production"
 	}
-	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "script_to_storyboard" {
+	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "source_to_script" && workflowType != "script_to_assets" && workflowType != "script_to_storyboard" && workflowType != "script_to_video" && workflowType != "full_production" {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowType is not supported", nil, false)
 		return
 	}
-	workflowRequestInput, err := normalizeWorkflowRequestInput(workflowType, req.Input, project.AspectRatio)
+	workflowRequestInput, err := normalizeWorkflowRequestInput(workflowType, req.Input, projectDefaultAspectRatio(project))
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error(), nil, false)
 		return
@@ -158,7 +159,13 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 	}
 	var workflowFunc any
 	switch workflowType {
+	case "source_to_script":
+		workflowFunc = workflows.SourceToScriptWorkflow
+	case "script_to_assets":
+		workflowFunc = workflows.ScriptToAssetsWorkflow
 	case "video_production":
+		workflowFunc = workflows.VideoProductionWorkflow
+	case "script_to_video", "full_production":
 		workflowFunc = workflows.VideoProductionWorkflow
 	case "script_to_storyboard":
 		workflowFunc = workflows.ScriptToStoryboardWorkflow
@@ -443,7 +450,28 @@ func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, pro
 			values["skipCompose"] = false
 		}
 	}
+	if workflowType == "source_to_script" {
+		if value, ok := values["sourceId"].(string); !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("input.sourceId is required")
+		}
+	}
+	if workflowType == "script_to_assets" || workflowType == "script_to_storyboard" || workflowType == "script_to_video" || workflowType == "full_production" {
+		if value, ok := values["maxShots"].(float64); ok && (value <= 0 || value > 3) {
+			values["maxShots"] = 3
+		}
+	}
 	return json.RawMessage(mustMarshal(values)), nil
+}
+
+func projectDefaultAspectRatio(project Project) *string {
+	if project.AspectRatio != nil && strings.TrimSpace(*project.AspectRatio) != "" {
+		return project.AspectRatio
+	}
+	if strings.TrimSpace(project.VideoRatio) != "" {
+		value := strings.TrimSpace(project.VideoRatio)
+		return &value
+	}
+	return nil
 }
 
 func mustMarshal(value any) []byte {

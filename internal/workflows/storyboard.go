@@ -581,7 +581,7 @@ func workflowErrorFromPrompt(err error) error {
 
 func (a Activities) projectAspectRatio(ctx context.Context, projectID string) (string, error) {
 	var aspectRatio sqlNullString
-	err := a.db.QueryRow(ctx, `SELECT aspect_ratio FROM projects WHERE id = $1`, projectID).Scan(&aspectRatio)
+	err := a.db.QueryRow(ctx, `SELECT COALESCE(video_ratio, aspect_ratio) FROM projects WHERE id = $1`, projectID).Scan(&aspectRatio)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "16:9", nil
 	}

@@ -73,15 +73,6 @@ type ProviderWebhookSignal struct {
 	Payload             map[string]any `json:"payload"`
 }
 
-func ScriptToStoryboardWorkflow(ctx workflow.Context, input TextToStoryboardInput) (WorkflowArtifact, error) {
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
-	var output WorkflowArtifact
-	if err := workflow.ExecuteActivity(ctx, "GenerateScriptStoryboard", input).Get(ctx, &output); err != nil {
-		return WorkflowArtifact{}, err
-	}
-	return output, nil
-}
-
 func StoryboardToImageWorkflow(ctx workflow.Context, input TextToStoryboardInput, storyboard WorkflowArtifact) (WorkflowArtifact, error) {
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
 	var output WorkflowArtifact
@@ -111,6 +102,9 @@ func VideoComposeWorkflow(ctx workflow.Context, input TextToStoryboardInput, cli
 
 func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) (result VideoProductionOutput, err error) {
 	options := resolveVideoProductionOptions(input.Input)
+	if scriptOptions := resolveScriptProductionOptions(input.Input); strings.TrimSpace(scriptOptions.ScriptID) != "" {
+		return ScriptDrivenVideoProduction(ctx, input, options, scriptOptions)
+	}
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
 	var currentCreate CreateShotVideoTaskOutput
 	var currentShot StoryboardShotRecord

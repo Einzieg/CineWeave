@@ -587,6 +587,463 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/sources:
+    get:
+      operationId: listProjectSources
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project sources
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectSourceListEnvelope"
+    post:
+      operationId: createProjectSource
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectSourceRequest"
+      responses:
+        "201":
+          description: Created project source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectSourceEnvelope"
+  /api/projects/{projectId}/sources/{sourceId}:
+    get:
+      operationId: getProjectSource
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "200":
+          description: Project source detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectSourceEnvelope"
+    patch:
+      operationId: updateProjectSource
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectSourceRequest"
+      responses:
+        "200":
+          description: Updated project source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectSourceEnvelope"
+    delete:
+      operationId: deleteProjectSource
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "200":
+          description: Deleted project source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/scripts:
+    get:
+      operationId: listScripts
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project scripts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptListEnvelope"
+    post:
+      operationId: createScript
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateScriptRequest"
+      responses:
+        "201":
+          description: Created script
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptEnvelope"
+  /api/projects/{projectId}/scripts/{scriptId}:
+    get:
+      operationId: getScript
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+      responses:
+        "200":
+          description: Script detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptEnvelope"
+    patch:
+      operationId: updateScript
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateScriptRequest"
+      responses:
+        "200":
+          description: Updated script
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptEnvelope"
+  /api/projects/{projectId}/scripts/{scriptId}/versions:
+    get:
+      operationId: listScriptVersions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+      responses:
+        "200":
+          description: Script versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptVersionListEnvelope"
+    post:
+      operationId: createScriptVersion
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateScriptVersionRequest"
+      responses:
+        "201":
+          description: Created script version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptVersionEnvelope"
+  /api/projects/{projectId}/scripts/{scriptId}/activate-version:
+    post:
+      operationId: activateScriptVersion
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [versionId]
+              properties:
+                versionId:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Activated script version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/scripts/{scriptId}/analyze-assets:
+    post:
+      operationId: analyzeScriptAssets
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeScriptAssetsRequest"
+      responses:
+        "202":
+          description: Started script_to_assets workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+  /api/projects/{projectId}/scripts/{scriptId}/generate-storyboard:
+    post:
+      operationId: generateScriptStoryboard
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateScriptStoryboardRequest"
+      responses:
+        "202":
+          description: Started script_to_storyboard workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+  /api/projects/{projectId}/script-agent/sessions:
+    get:
+      operationId: listScriptAgentSessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Script agent sessions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSessionListEnvelope"
+    post:
+      operationId: createScriptAgentSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+      responses:
+        "201":
+          description: Created script agent session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSessionEnvelope"
+  /api/projects/{projectId}/script-agent/sessions/{sessionId}/messages:
+    get:
+      operationId: listScriptAgentMessages
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Script agent messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentMessageListEnvelope"
+    post:
+      operationId: createScriptAgentMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentMessageRequest"
+      responses:
+        "201":
+          description: Created script agent message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentMessageEnvelope"
+  /api/projects/{projectId}/script-agent/generate-script:
+    post:
+      operationId: generateScriptFromAgent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateScriptRequest"
+      responses:
+        "200":
+          description: Generated script version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptAgentResultEnvelope"
+  /api/projects/{projectId}/script-agent/rewrite-script:
+    post:
+      operationId: rewriteScriptFromAgent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RewriteScriptRequest"
+      responses:
+        "200":
+          description: Rewritten script version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptAgentResultEnvelope"
+  /api/projects/{projectId}/canonical-assets:
+    get:
+      operationId: listCanonicalAssets
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Canonical assets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonicalAssetListEnvelope"
+  /api/projects/{projectId}/canonical-assets/{assetId}:
+    get:
+      operationId: getCanonicalAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: Canonical asset detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonicalAssetEnvelope"
+    patch:
+      operationId: updateCanonicalAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCanonicalAssetRequest"
+      responses:
+        "200":
+          description: Updated canonical asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonicalAssetEnvelope"
+  /api/projects/{projectId}/assets/{assetId}/generate-image:
+    post:
+      operationId: generateCanonicalAssetImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: Generated canonical asset image
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonicalAssetImageResultEnvelope"
+  /api/projects/{projectId}/shot-asset-requirements:
+    get:
+      operationId: listShotAssetRequirements
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Shot asset requirements
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotAssetRequirementListEnvelope"
+  /api/projects/{projectId}/shot-asset-requirements/{requirementId}/generate-image:
+    post:
+      operationId: generateDerivedAssetImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequirementId"
+      responses:
+        "200":
+          description: Generated derived asset image
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DerivedAssetImageResultEnvelope"
   /api/projects/{projectId}/assets:
     get:
       operationId: listAssets
@@ -1959,6 +2416,34 @@ components:
       schema:
         type: string
         format: uuid
+    SourceId:
+      name: sourceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ScriptId:
+      name: scriptId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RequirementId:
+      name: requirementId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     WorkflowRunId:
       name: workflowRunId
       in: path
@@ -2236,10 +2721,354 @@ components:
           type: string
         projectType:
           type: string
+        contentType:
+          type: string
         aspectRatio:
           type: string
+        videoRatio:
+          type: string
+          default: "16:9"
+        artStyle:
+          type: string
+        directorManual:
+          type: string
+        visualManual:
+          type: string
+        imageModelProfileKey:
+          type: string
+          default: image_generation_default
+        videoModelProfileKey:
+          type: string
+          default: video_generation_default
+        scriptModelProfileKey:
+          type: string
+          default: script_agent_default
+        imageQuality:
+          type: string
+          default: standard
+        productionMode:
+          type: string
+          default: silent_video
         settings:
           type: object
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ProjectSource:
+      type: object
+      required: [id, organizationId, projectId, sourceType, title, content, contentFormat, status, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sourceType:
+          type: string
+          enum: [novel, script]
+        title:
+          type: string
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+        originalFileName:
+          type: string
+        storageKey:
+          type: string
+        status:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        chapters:
+          type: array
+          items:
+            $ref: "#/components/schemas/NovelChapter"
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    NovelChapter:
+      type: object
+      required: [id, sourceId, chapterIndex, content, eventState, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+          format: uuid
+        chapterIndex:
+          type: integer
+        volumeTitle:
+          type: string
+        chapterTitle:
+          type: string
+        content:
+          type: string
+        eventState:
+          type: string
+        eventSummary:
+          type: object
+          additionalProperties: true
+        errorMessage:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Script:
+      type: object
+      required: [id, organizationId, projectId, title, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
+        currentVersionId:
+          type: string
+          format: uuid
+        currentVersion:
+          $ref: "#/components/schemas/ScriptVersion"
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ScriptVersion:
+      type: object
+      required: [id, organizationId, projectId, scriptId, version, content, contentFormat, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        scriptId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+        sourceType:
+          type: string
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    AgentSession:
+      type: object
+      required: [id, organizationId, projectId, agentType, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AgentMessage:
+      type: object
+      required: [id, organizationId, projectId, sessionId, role, content, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+        content:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    CanonicalAsset:
+      type: object
+      required: [id, organizationId, projectId, assetType, name, description, visualTraits, status, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        assetType:
+          type: string
+          enum: [character, scene, prop]
+        name:
+          type: string
+        description:
+          type: string
+        basePrompt:
+          type: string
+        visualTraits:
+          type: object
+          additionalProperties: true
+        referenceArtifactId:
+          type: string
+          format: uuid
+        referenceMediaFileId:
+          type: string
+          format: uuid
+        referenceStorageKey:
+          type: string
+        status:
+          type: string
+        sourceScriptIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ShotAssetRequirement:
+      type: object
+      required: [id, organizationId, projectId, storyboardShotId, assetId, requirementType, status, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        assetId:
+          type: string
+          format: uuid
+        requirementType:
+          type: string
+        roleInShot:
+          type: string
+        costume:
+          type: string
+        pose:
+          type: string
+        expression:
+          type: string
+        action:
+          type: string
+        cameraRelation:
+          type: string
+        sceneState:
+          type: string
+        propState:
+          type: string
+        prompt:
+          type: string
+        derivedArtifactId:
+          type: string
+          format: uuid
+        derivedMediaFileId:
+          type: string
+          format: uuid
+        derivedStorageKey:
+          type: string
+        status:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
         createdAt:
           type: string
           format: date-time
@@ -2902,6 +3731,177 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Project"
+    ProjectSourceEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectSource"
+    ProjectSourceListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProjectSource"
+    ScriptEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Script"
+    ScriptListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Script"
+    ScriptVersionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ScriptVersion"
+    ScriptVersionListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ScriptVersion"
+    AgentSessionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AgentSession"
+    AgentSessionListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/AgentSession"
+    AgentMessageEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AgentMessage"
+    AgentMessageListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/AgentMessage"
+    CanonicalAssetEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CanonicalAsset"
+    CanonicalAssetListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CanonicalAsset"
+    ShotAssetRequirementListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ShotAssetRequirement"
+    ScriptAgentResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                scriptId:
+                  type: string
+                  format: uuid
+                versionId:
+                  type: string
+                  format: uuid
+                content:
+                  type: string
+                agentRunId:
+                  type: string
+                  format: uuid
+    CanonicalAssetImageResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                asset:
+                  $ref: "#/components/schemas/CanonicalAsset"
+                providerCallId:
+                  type: string
+                  format: uuid
+    DerivedAssetImageResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                requirement:
+                  $ref: "#/components/schemas/ShotAssetRequirement"
+                providerCallId:
+                  type: string
+                  format: uuid
     AssetEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -5129,10 +6129,238 @@ components:
           type: string
         projectType:
           type: string
+        contentType:
+          type: string
         aspectRatio:
           type: string
+        videoRatio:
+          type: string
+          default: "16:9"
+        artStyle:
+          type: string
+        directorManual:
+          type: string
+        visualManual:
+          type: string
+        imageModelProfileKey:
+          type: string
+          default: image_generation_default
+        videoModelProfileKey:
+          type: string
+          default: video_generation_default
+        scriptModelProfileKey:
+          type: string
+          default: script_agent_default
+        imageQuality:
+          type: string
+          default: standard
+        productionMode:
+          type: string
+          default: silent_video
         settings:
           type: object
+    CreateProjectSourceRequest:
+      type: object
+      required: [sourceType, title, content]
+      properties:
+        sourceType:
+          type: string
+          enum: [novel, script]
+        title:
+          type: string
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+          default: plain_text
+        originalFileName:
+          type: string
+        storageKey:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        chapters:
+          type: array
+          items:
+            type: object
+            properties:
+              chapterIndex:
+                type: integer
+              volumeTitle:
+                type: string
+              chapterTitle:
+                type: string
+              content:
+                type: string
+    UpdateProjectSourceRequest:
+      type: object
+      properties:
+        sourceType:
+          type: string
+          enum: [novel, script]
+        title:
+          type: string
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+        originalFileName:
+          type: string
+        storageKey:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        chapters:
+          type: array
+          items:
+            type: object
+            properties:
+              chapterIndex:
+                type: integer
+              volumeTitle:
+                type: string
+              chapterTitle:
+                type: string
+              content:
+                type: string
+    CreateScriptRequest:
+      type: object
+      required: [title]
+      properties:
+        sourceId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+          default: markdown
+        sourceType:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    UpdateScriptRequest:
+      type: object
+      properties:
+        sourceId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
+    CreateScriptVersionRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+          default: markdown
+        sourceType:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        activate:
+          type: boolean
+          default: false
+    AnalyzeScriptAssetsRequest:
+      type: object
+      properties:
+        mergeExisting:
+          type: boolean
+          default: true
+        generateImages:
+          type: boolean
+          default: false
+    GenerateScriptStoryboardRequest:
+      type: object
+      properties:
+        maxShots:
+          type: integer
+          minimum: 1
+          maximum: 3
+          default: 3
+        generateDerivedAssets:
+          type: boolean
+          default: false
+    CreateAgentMessageRequest:
+      type: object
+      required: [content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+          default: user
+        content:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    GenerateScriptRequest:
+      type: object
+      required: [sourceId]
+      properties:
+        sourceId:
+          type: string
+          format: uuid
+        instruction:
+          type: string
+        title:
+          type: string
+        sessionId:
+          type: string
+          format: uuid
+    RewriteScriptRequest:
+      type: object
+      required: [scriptId]
+      properties:
+        scriptId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        instruction:
+          type: string
+        sessionId:
+          type: string
+          format: uuid
+        activate:
+          type: boolean
+          default: false
+    UpdateCanonicalAssetRequest:
+      type: object
+      properties:
+        assetType:
+          type: string
+          enum: [character, scene, prop]
+        name:
+          type: string
+        description:
+          type: string
+        basePrompt:
+          type: string
+        visualTraits:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
     CreateWorkflowRunRequest:
       type: object
       required: [projectId]
@@ -5142,16 +6370,26 @@ components:
           format: uuid
         workflowType:
           type: string
-          enum: [video_production, text_to_storyboard, script_to_storyboard]
+          enum: [video_production, text_to_storyboard, source_to_script, script_to_assets, script_to_storyboard, script_to_video, full_production]
           default: video_production
-          description: Use video_production for the real Temporal to Provider Gateway text/image/video path.
+          description: video_production keeps the prompt-only path unless input.scriptId is provided.
         prompt:
           type: string
         input:
           type: object
           additionalProperties: true
-          description: Optional workflow-specific input. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, maxPolls, maxShots, and skipCompose.
+          description: Optional workflow-specific input. source_to_script requires sourceId. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, maxPolls, maxShots, and skipCompose.
           properties:
+            sourceId:
+              type: string
+              format: uuid
+            instruction:
+              type: string
+            title:
+              type: string
+            scriptId:
+              type: string
+              format: uuid
             duration:
               type: number
               default: 5
@@ -5175,6 +6413,12 @@ components:
             skipCompose:
               type: boolean
               default: false
+            generateAssets:
+              type: boolean
+              default: true
+            generateDerivedAssets:
+              type: boolean
+              default: false
         idempotencyKey:
           type: string
           maxLength: 200
@@ -5193,7 +6437,27 @@ components:
           type: string
         projectType:
           type: string
+        contentType:
+          type: string
         aspectRatio:
+          type: string
+        videoRatio:
+          type: string
+        artStyle:
+          type: string
+        directorManual:
+          type: string
+        visualManual:
+          type: string
+        imageModelProfileKey:
+          type: string
+        videoModelProfileKey:
+          type: string
+        scriptModelProfileKey:
+          type: string
+        imageQuality:
+          type: string
+        productionMode:
           type: string
         settings:
           type: object

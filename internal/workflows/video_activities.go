@@ -229,18 +229,41 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 			return GenerateShotImageOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: aspectErr.Error()})
 		}
 	}
-	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardImage, map[string]any{
-		"input": map[string]any{"prompt": input.WorkflowPrompt},
-		"project": map[string]any{
-			"id":          input.ProjectID,
-			"aspectRatio": aspectRatio,
-		},
+	projectSettings, err := a.projectProductionSettings(ctx, input.ProjectID)
+	if err != nil {
+		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, "", "image_failed", "storyboard.shot.image.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	assetContext, err := a.shotAssetContext(ctx, input.ProjectID, shot.ID)
+	if err != nil {
+		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, "", "image_failed", "storyboard.shot.image.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	promptKey := promptKeyStoryboardImage
+	modelProfileKey := imageGenerationModelProfileKey
+	projectVariables := map[string]any{
+		"id":             input.ProjectID,
+		"aspectRatio":    aspectRatio,
+		"videoRatio":     firstNonEmptyString(projectSettings.VideoRatio, aspectRatio),
+		"artStyle":       projectSettings.ArtStyle,
+		"directorManual": projectSettings.DirectorManual,
+		"visualManual":   projectSettings.VisualManual,
+	}
+	if strings.TrimSpace(assetContext.RequirementsSummary) != "" {
+		promptKey = promptKeyShotImage
+		modelProfileKey = projectSettings.ImageModelProfileKey
+		projectVariables = projectSettings.asPromptVariables()
+	}
+	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKey, map[string]any{
+		"input":   map[string]any{"prompt": input.WorkflowPrompt},
+		"project": projectVariables,
 		"shot": map[string]any{
 			"visual":      shot.Visual,
 			"camera":      shot.Camera,
+			"motion":      shot.Motion,
 			"mood":        shot.Mood,
 			"imagePrompt": shot.ImagePrompt,
 		},
+		"assets":       map[string]any{"summary": assetContext.AssetsSummary},
+		"requirements": map[string]any{"summary": assetContext.RequirementsSummary},
 	})
 	if err != nil {
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, "", "image_failed", "storyboard.shot.image.failed", err)
@@ -256,7 +279,7 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 			"shotId":            shot.ID,
 			"shotIndex":         shot.ShotIndex,
 			"shotNo":            shot.ShotNo,
-			"modelProfileKey":   imageGenerationModelProfileKey,
+			"modelProfileKey":   modelProfileKey,
 			"promptTemplateKey": rendered.TemplateKey,
 			"promptVersionId":   rendered.PromptVersionID,
 			"promptHash":        rendered.RenderedHash,
@@ -272,7 +295,7 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 	if err := a.updateStoryboardShotStatus(ctx, shot.ID, "image_running"); err != nil {
 		return GenerateShotImageOutput{}, err
 	}
-	if err := a.ensureModelProfileConfigured(ctx, input.OrganizationID, imageGenerationModelProfileKey, []string{"image", "multimodal"}); err != nil {
+	if err := a.ensureModelProfileConfigured(ctx, input.OrganizationID, modelProfileKey, []string{"image", "multimodal"}); err != nil {
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeRunID, "image_failed", "storyboard.shot.image.failed", err)
 	}
 	if a.gateway == nil {
@@ -284,7 +307,7 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
 		NodeRunID:         nodeRunID,
-		ModelProfileKey:   imageGenerationModelProfileKey,
+		ModelProfileKey:   modelProfileKey,
 		PromptTemplateKey: rendered.TemplateKey,
 		PromptVersionID:   rendered.PromptVersionID,
 		PromptHash:        rendered.RenderedHash,
@@ -293,8 +316,9 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 			"prompt":  rendered.RenderedText,
 			"size":    "1024x1024",
 			"n":       1,
-			"quality": "standard",
+			"quality": projectSettings.ImageQuality,
 		}),
+		References: assetContext.ImageReferences,
 	})
 	if err != nil {
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeRunID, "image_failed", "storyboard.shot.image.failed", workflowErrorFromProvider(err, codeActivityFailed))
@@ -357,7 +381,21 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 	if resolution == "" {
 		resolution = "720p"
 	}
-	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardVideo, map[string]any{
+	projectSettings, err := a.projectProductionSettings(ctx, input.ProjectID)
+	if err != nil {
+		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, "", "video_failed", "storyboard.shot.video.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	assetContext, err := a.shotAssetContext(ctx, input.ProjectID, shot.ID)
+	if err != nil {
+		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, "", "video_failed", "storyboard.shot.video.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	promptKey := promptKeyStoryboardVideo
+	modelProfileKey := videoGenerationModelProfileKey
+	if strings.TrimSpace(assetContext.RequirementsSummary) != "" {
+		promptKey = promptKeyShotVideo
+		modelProfileKey = projectSettings.VideoModelProfileKey
+	}
+	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKey, map[string]any{
 		"input": map[string]any{"prompt": input.WorkflowPrompt},
 		"shot": map[string]any{
 			"visual":      shot.Visual,
@@ -371,6 +409,7 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 			"aspectRatio": aspectRatio,
 			"resolution":  resolution,
 		},
+		"requirements": map[string]any{"summary": assetContext.RequirementsSummary},
 	})
 	if err != nil {
 		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, "", "video_failed", "storyboard.shot.video.failed", err)
@@ -392,7 +431,7 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 			"duration":          duration,
 			"aspectRatio":       aspectRatio,
 			"resolution":        resolution,
-			"modelProfileKey":   videoGenerationModelProfileKey,
+			"modelProfileKey":   modelProfileKey,
 			"promptTemplateKey": rendered.TemplateKey,
 			"promptVersionId":   rendered.PromptVersionID,
 			"promptHash":        rendered.RenderedHash,
@@ -402,7 +441,7 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 	if err != nil {
 		return CreateShotVideoTaskOutput{}, err
 	}
-	if err := a.ensureModelProfileConfigured(ctx, input.OrganizationID, videoGenerationModelProfileKey, []string{"video", "multimodal"}); err != nil {
+	if err := a.ensureModelProfileConfigured(ctx, input.OrganizationID, modelProfileKey, []string{"video", "multimodal"}); err != nil {
 		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeRunID, "video_failed", "storyboard.shot.video.failed", err)
 	}
 	if a.gateway == nil {
@@ -413,7 +452,7 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
 		NodeRunID:         nodeRunID,
-		ModelProfileKey:   videoGenerationModelProfileKey,
+		ModelProfileKey:   modelProfileKey,
 		PromptTemplateKey: rendered.TemplateKey,
 		PromptVersionID:   rendered.PromptVersionID,
 		PromptHash:        rendered.RenderedHash,

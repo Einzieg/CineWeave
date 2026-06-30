@@ -42,16 +42,26 @@ type Workspace struct {
 }
 
 type Project struct {
-	ID             string          `json:"id"`
-	OrganizationID string          `json:"organizationId"`
-	WorkspaceID    string          `json:"workspaceId"`
-	Name           string          `json:"name"`
-	Description    *string         `json:"description,omitempty"`
-	ProjectType    *string         `json:"projectType,omitempty"`
-	AspectRatio    *string         `json:"aspectRatio,omitempty"`
-	Settings       json.RawMessage `json:"settings"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	UpdatedAt      time.Time       `json:"updatedAt"`
+	ID                    string          `json:"id"`
+	OrganizationID        string          `json:"organizationId"`
+	WorkspaceID           string          `json:"workspaceId"`
+	Name                  string          `json:"name"`
+	Description           *string         `json:"description,omitempty"`
+	ProjectType           *string         `json:"projectType,omitempty"`
+	ContentType           *string         `json:"contentType,omitempty"`
+	AspectRatio           *string         `json:"aspectRatio,omitempty"`
+	VideoRatio            string          `json:"videoRatio"`
+	ArtStyle              string          `json:"artStyle"`
+	DirectorManual        string          `json:"directorManual"`
+	VisualManual          string          `json:"visualManual"`
+	ImageModelProfileKey  string          `json:"imageModelProfileKey"`
+	VideoModelProfileKey  string          `json:"videoModelProfileKey"`
+	ScriptModelProfileKey string          `json:"scriptModelProfileKey"`
+	ImageQuality          string          `json:"imageQuality"`
+	ProductionMode        string          `json:"productionMode"`
+	Settings              json.RawMessage `json:"settings"`
+	CreatedAt             time.Time       `json:"createdAt"`
+	UpdatedAt             time.Time       `json:"updatedAt"`
 }
 
 func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provider.Service, storageClient *storage.Client, temporalClient client.Client, authorizers ...*authz.Authorizer) *Server {
@@ -101,9 +111,35 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{projectId}", s.withAuth(s.getProject))
 	mux.HandleFunc("PATCH /api/projects/{projectId}", s.withAuth(s.updateProject))
 	mux.HandleFunc("DELETE /api/projects/{projectId}", s.withAuth(s.deleteProject))
+	mux.HandleFunc("GET /api/projects/{projectId}/sources", s.withAuth(s.listProjectSources))
+	mux.HandleFunc("POST /api/projects/{projectId}/sources", s.withAuth(s.createProjectSource))
+	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.getProjectSource))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.updateProjectSource))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.deleteProjectSource))
+	mux.HandleFunc("GET /api/projects/{projectId}/scripts", s.withAuth(s.listScripts))
+	mux.HandleFunc("POST /api/projects/{projectId}/scripts", s.withAuth(s.createScript))
+	mux.HandleFunc("GET /api/projects/{projectId}/scripts/{scriptId}", s.withAuth(s.getScript))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/scripts/{scriptId}", s.withAuth(s.updateScript))
+	mux.HandleFunc("GET /api/projects/{projectId}/scripts/{scriptId}/versions", s.withAuth(s.listScriptVersions))
+	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/versions", s.withAuth(s.createScriptVersion))
+	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/activate-version", s.withAuth(s.activateScriptVersion))
+	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/analyze-assets", s.withAuth(s.analyzeScriptAssets))
+	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/generate-storyboard", s.withAuth(s.generateScriptStoryboard))
+	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/sessions", s.withAuth(s.createScriptAgentSession))
+	mux.HandleFunc("GET /api/projects/{projectId}/script-agent/sessions", s.withAuth(s.listScriptAgentSessions))
+	mux.HandleFunc("GET /api/projects/{projectId}/script-agent/sessions/{sessionId}/messages", s.withAuth(s.listScriptAgentMessages))
+	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/sessions/{sessionId}/messages", s.withAuth(s.createScriptAgentMessage))
+	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/generate-script", s.withAuth(s.generateScriptFromAgent))
+	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/rewrite-script", s.withAuth(s.rewriteScriptFromAgent))
+	mux.HandleFunc("GET /api/projects/{projectId}/canonical-assets", s.withAuth(s.listCanonicalAssets))
+	mux.HandleFunc("GET /api/projects/{projectId}/canonical-assets/{assetId}", s.withAuth(s.getCanonicalAsset))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/canonical-assets/{assetId}", s.withAuth(s.updateCanonicalAsset))
+	mux.HandleFunc("GET /api/projects/{projectId}/shot-asset-requirements", s.withAuth(s.listShotAssetRequirements))
+	mux.HandleFunc("POST /api/projects/{projectId}/shot-asset-requirements/{requirementId}/generate-image", s.withAuth(s.generateDerivedAssetImage))
 	mux.HandleFunc("GET /api/projects/{projectId}/assets", s.withAuth(s.listAssets))
 	mux.HandleFunc("POST /api/projects/{projectId}/assets", s.withAuth(s.createAsset))
 	mux.HandleFunc("POST /api/projects/{projectId}/assets/upload-url", s.withAuth(s.createAssetUploadURL))
+	mux.HandleFunc("POST /api/projects/{projectId}/assets/{assetId}/generate-image", s.withAuth(s.generateCanonicalAssetImage))
 	mux.HandleFunc("GET /api/projects/{projectId}/assets/{assetId}", s.withAuth(s.getAsset))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/assets/{assetId}", s.withAuth(s.updateAsset))
 	mux.HandleFunc("DELETE /api/projects/{projectId}/assets/{assetId}", s.withAuth(s.deleteAsset))
@@ -397,7 +433,10 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 	}
 
 	query := `
-		SELECT id, organization_id, workspace_id, name, description, project_type, aspect_ratio, settings, created_at, updated_at
+		SELECT id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
+		       video_ratio, art_style, director_manual, visual_manual,
+		       image_model_profile_key, video_model_profile_key, script_model_profile_key,
+		       image_quality, production_mode, settings, created_at, updated_at
 		FROM projects
 		WHERE organization_id = $1
 	`
@@ -429,12 +468,22 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	var req struct {
-		WorkspaceID string          `json:"workspaceId"`
-		Name        string          `json:"name"`
-		Description *string         `json:"description"`
-		ProjectType *string         `json:"projectType"`
-		AspectRatio *string         `json:"aspectRatio"`
-		Settings    json.RawMessage `json:"settings"`
+		WorkspaceID           string          `json:"workspaceId"`
+		Name                  string          `json:"name"`
+		Description           *string         `json:"description"`
+		ProjectType           *string         `json:"projectType"`
+		ContentType           *string         `json:"contentType"`
+		AspectRatio           *string         `json:"aspectRatio"`
+		VideoRatio            *string         `json:"videoRatio"`
+		ArtStyle              *string         `json:"artStyle"`
+		DirectorManual        *string         `json:"directorManual"`
+		VisualManual          *string         `json:"visualManual"`
+		ImageModelProfileKey  *string         `json:"imageModelProfileKey"`
+		VideoModelProfileKey  *string         `json:"videoModelProfileKey"`
+		ScriptModelProfileKey *string         `json:"scriptModelProfileKey"`
+		ImageQuality          *string         `json:"imageQuality"`
+		ProductionMode        *string         `json:"productionMode"`
+		Settings              json.RawMessage `json:"settings"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -447,6 +496,19 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 	if len(settings) == 0 {
 		settings = json.RawMessage(`{}`)
 	}
+	videoRatio := normalizedProjectString(req.VideoRatio, "16:9")
+	aspectRatio := req.AspectRatio
+	if aspectRatio == nil || strings.TrimSpace(*aspectRatio) == "" {
+		aspectRatio = &videoRatio
+	}
+	artStyle := normalizedProjectString(req.ArtStyle, "")
+	directorManual := normalizedProjectString(req.DirectorManual, "")
+	visualManual := normalizedProjectString(req.VisualManual, "")
+	imageModelProfileKey := normalizedProjectString(req.ImageModelProfileKey, "image_generation_default")
+	videoModelProfileKey := normalizedProjectString(req.VideoModelProfileKey, "video_generation_default")
+	scriptModelProfileKey := normalizedProjectString(req.ScriptModelProfileKey, "script_agent_default")
+	imageQuality := normalizedProjectString(req.ImageQuality, "standard")
+	productionMode := normalizedProjectString(req.ProductionMode, "silent_video")
 
 	var orgID string
 	err := s.db.QueryRow(r.Context(), `SELECT organization_id FROM workspaces WHERE id = $1`, req.WorkspaceID).Scan(&orgID)
@@ -467,11 +529,24 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 
 	var item Project
 	err = tx.QueryRow(r.Context(), `
-		INSERT INTO projects(organization_id, workspace_id, name, description, project_type, aspect_ratio, settings, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, organization_id, workspace_id, name, description, project_type, aspect_ratio, settings, created_at, updated_at
-	`, orgID, req.WorkspaceID, strings.TrimSpace(req.Name), req.Description, req.ProjectType, req.AspectRatio, settings, principal.UserID).
-		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectType, &item.AspectRatio, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
+		INSERT INTO projects(
+			organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
+			video_ratio, art_style, director_manual, visual_manual,
+			image_model_profile_key, video_model_profile_key, script_model_profile_key,
+			image_quality, production_mode, settings, created_by
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		RETURNING id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
+		          video_ratio, art_style, director_manual, visual_manual,
+		          image_model_profile_key, video_model_profile_key, script_model_profile_key,
+		          image_quality, production_mode, settings, created_at, updated_at
+	`, orgID, req.WorkspaceID, strings.TrimSpace(req.Name), req.Description, req.ProjectType, req.ContentType, aspectRatio,
+		videoRatio, artStyle, directorManual, visualManual, imageModelProfileKey, videoModelProfileKey, scriptModelProfileKey,
+		imageQuality, productionMode, settings, principal.UserID).
+		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectType, &item.ContentType, &item.AspectRatio,
+			&item.VideoRatio, &item.ArtStyle, &item.DirectorManual, &item.VisualManual,
+			&item.ImageModelProfileKey, &item.VideoModelProfileKey, &item.ScriptModelProfileKey,
+			&item.ImageQuality, &item.ProductionMode, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -536,11 +611,21 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal
 	}
 
 	var req struct {
-		Name        *string         `json:"name"`
-		Description *string         `json:"description"`
-		ProjectType *string         `json:"projectType"`
-		AspectRatio *string         `json:"aspectRatio"`
-		Settings    json.RawMessage `json:"settings"`
+		Name                  *string         `json:"name"`
+		Description           *string         `json:"description"`
+		ProjectType           *string         `json:"projectType"`
+		ContentType           *string         `json:"contentType"`
+		AspectRatio           *string         `json:"aspectRatio"`
+		VideoRatio            *string         `json:"videoRatio"`
+		ArtStyle              *string         `json:"artStyle"`
+		DirectorManual        *string         `json:"directorManual"`
+		VisualManual          *string         `json:"visualManual"`
+		ImageModelProfileKey  *string         `json:"imageModelProfileKey"`
+		VideoModelProfileKey  *string         `json:"videoModelProfileKey"`
+		ScriptModelProfileKey *string         `json:"scriptModelProfileKey"`
+		ImageQuality          *string         `json:"imageQuality"`
+		ProductionMode        *string         `json:"productionMode"`
+		Settings              json.RawMessage `json:"settings"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -556,12 +641,31 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal
 			name = COALESCE($2, name),
 			description = COALESCE($3, description),
 			project_type = COALESCE($4, project_type),
-			aspect_ratio = COALESCE($5, aspect_ratio),
-			settings = $6
+			content_type = COALESCE($5, content_type),
+			aspect_ratio = COALESCE($6, aspect_ratio),
+			video_ratio = COALESCE($7, video_ratio),
+			art_style = COALESCE($8, art_style),
+			director_manual = COALESCE($9, director_manual),
+			visual_manual = COALESCE($10, visual_manual),
+			image_model_profile_key = COALESCE($11, image_model_profile_key),
+			video_model_profile_key = COALESCE($12, video_model_profile_key),
+			script_model_profile_key = COALESCE($13, script_model_profile_key),
+			image_quality = COALESCE($14, image_quality),
+			production_mode = COALESCE($15, production_mode),
+			settings = $16
 		WHERE id = $1
-		RETURNING id, organization_id, workspace_id, name, description, project_type, aspect_ratio, settings, created_at, updated_at
-	`, projectID, req.Name, req.Description, req.ProjectType, req.AspectRatio, settings).
-		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectType, &item.AspectRatio, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
+		RETURNING id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
+		          video_ratio, art_style, director_manual, visual_manual,
+		          image_model_profile_key, video_model_profile_key, script_model_profile_key,
+		          image_quality, production_mode, settings, created_at, updated_at
+	`, projectID, req.Name, req.Description, req.ProjectType, req.ContentType, req.AspectRatio,
+		normalizedOptionalString(req.VideoRatio), normalizedOptionalString(req.ArtStyle), normalizedOptionalString(req.DirectorManual), normalizedOptionalString(req.VisualManual),
+		normalizedOptionalString(req.ImageModelProfileKey), normalizedOptionalString(req.VideoModelProfileKey), normalizedOptionalString(req.ScriptModelProfileKey),
+		normalizedOptionalString(req.ImageQuality), normalizedOptionalString(req.ProductionMode), settings).
+		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectType, &item.ContentType, &item.AspectRatio,
+			&item.VideoRatio, &item.ArtStyle, &item.DirectorManual, &item.VisualManual,
+			&item.ImageModelProfileKey, &item.VideoModelProfileKey, &item.ScriptModelProfileKey,
+			&item.ImageQuality, &item.ProductionMode, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -609,7 +713,10 @@ func (s *Server) organization(r *http.Request, orgID string) (Organization, erro
 
 func (s *Server) project(r *http.Request, projectID string) (Project, error) {
 	row := s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, workspace_id, name, description, project_type, aspect_ratio, settings, created_at, updated_at
+		SELECT id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
+		       video_ratio, art_style, director_manual, visual_manual,
+		       image_model_profile_key, video_model_profile_key, script_model_profile_key,
+		       image_quality, production_mode, settings, created_at, updated_at
 		FROM projects
 		WHERE id = $1
 	`, projectID)
@@ -663,12 +770,40 @@ func scanProject(row pgx.Row) (Project, error) {
 		&item.Name,
 		&item.Description,
 		&item.ProjectType,
+		&item.ContentType,
 		&item.AspectRatio,
+		&item.VideoRatio,
+		&item.ArtStyle,
+		&item.DirectorManual,
+		&item.VisualManual,
+		&item.ImageModelProfileKey,
+		&item.VideoModelProfileKey,
+		&item.ScriptModelProfileKey,
+		&item.ImageQuality,
+		&item.ProductionMode,
 		&item.Settings,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
 	return item, err
+}
+
+func normalizedProjectString(value *string, fallback string) string {
+	if value == nil {
+		return fallback
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
+}
+
+func normalizedOptionalString(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return strings.TrimSpace(*value)
 }
 
 func decode(w http.ResponseWriter, r *http.Request, target any) bool {
