@@ -75,6 +75,116 @@ func TestWorkflowGatewayIntegration(t *testing.T) {
 	assertWorkflowDidNotWriteProviderAccounting(t, ctx, pool, orgID)
 }
 
+func TestAnalyzeScriptAssetsWritesSceneAssetLinks(t *testing.T) {
+	ctx := context.Background()
+	pool := openWorkflowGatewayIntegrationDB(t, ctx)
+	defer pool.Close()
+
+	orgID, userID, projectID, workflowRunID, textModelID, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+	})
+	scriptID, _, sceneID := seedWorkflowScriptScene(t, ctx, pool, orgID, projectID, userID)
+	gateway := httptest.NewServer(mockScriptSceneProviderGateway(t, textModelID, map[string]string{
+		promptKeyScriptAssetExtraction: `{
+			"assets": [
+				{"assetType": "character", "name": "Lin Chu", "description": "A quiet traveler.", "basePrompt": "young traveler"},
+				{"assetType": "scene", "name": "Station Platform", "description": "A dawn railway platform."},
+				{"assetType": "prop", "name": "Camera", "description": "An old camera."}
+			]
+		}`,
+	}))
+	defer gateway.Close()
+
+	activities := NewActivities(pool, newWorkflowMemoryStorage(), &provider.GatewayClient{
+		BaseURL: gateway.URL,
+		Token:   "workflow-service-token",
+		Client:  gateway.Client(),
+	})
+	output, err := activities.AnalyzeScriptAssets(ctx, AnalyzeScriptAssetsInput{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		WorkflowRunID:  workflowRunID,
+		CreatedBy:      userID,
+		ScriptID:       scriptID,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeScriptAssets: %v", err)
+	}
+	if len(output.Assets) != 3 {
+		t.Fatalf("assets len = %d, want 3: %+v", len(output.Assets), output.Assets)
+	}
+	var linkCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM scene_asset_links
+		WHERE project_id = $1 AND script_scene_id = $2
+	`, projectID, sceneID).Scan(&linkCount); err != nil {
+		t.Fatalf("count scene_asset_links: %v", err)
+	}
+	if linkCount != 3 {
+		t.Fatalf("scene_asset_links count = %d, want 3", linkCount)
+	}
+}
+
+func TestGenerateStoryboardFromScriptStoresScriptSceneID(t *testing.T) {
+	ctx := context.Background()
+	pool := openWorkflowGatewayIntegrationDB(t, ctx)
+	defer pool.Close()
+
+	orgID, userID, projectID, workflowRunID, textModelID, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+	})
+	scriptID, _, sceneID := seedWorkflowScriptScene(t, ctx, pool, orgID, projectID, userID)
+	gateway := httptest.NewServer(mockScriptSceneProviderGateway(t, textModelID, map[string]string{
+		promptKeyStoryboardFromScript: `{
+			"title": "Station Storyboard",
+			"shots": [{
+				"shotNo": 1,
+				"sourceSceneNo": 1,
+				"duration": 4,
+				"visual": "Wide shot of Lin Chu waiting on the dawn platform.",
+				"camera": "Slow push in",
+				"imagePrompt": "cinematic dawn platform",
+				"videoPrompt": "slow cinematic push in"
+			}]
+		}`,
+	}))
+	defer gateway.Close()
+
+	activities := NewActivities(pool, newWorkflowMemoryStorage(), &provider.GatewayClient{
+		BaseURL: gateway.URL,
+		Token:   "workflow-service-token",
+		Client:  gateway.Client(),
+	})
+	output, err := activities.GenerateStoryboardFromScript(ctx, GenerateStoryboardFromScriptInput{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		WorkflowRunID:  workflowRunID,
+		CreatedBy:      userID,
+		ScriptID:       scriptID,
+		MaxShots:       1,
+	})
+	if err != nil {
+		t.Fatalf("GenerateStoryboardFromScript: %v", err)
+	}
+	if len(output.Shots) != 1 || output.Shots[0].ScriptSceneID != sceneID {
+		t.Fatalf("storyboard shots = %+v, want scene %s", output.Shots, sceneID)
+	}
+	var storedSceneID string
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(script_scene_id::text, '')
+		FROM storyboard_shots
+		WHERE workflow_run_id = $1
+	`, workflowRunID).Scan(&storedSceneID); err != nil {
+		t.Fatalf("select storyboard shot scene id: %v", err)
+	}
+	if storedSceneID != sceneID {
+		t.Fatalf("stored script_scene_id = %q, want %q", storedSceneID, sceneID)
+	}
+}
+
 func mockWorkflowProviderGateway(t *testing.T, textModelID, imageModelID string) http.Handler {
 	t.Helper()
 	_ = imageModelID
@@ -123,11 +233,59 @@ func mockWorkflowProviderGateway(t *testing.T, textModelID, imageModelID string)
 	})
 }
 
+func mockScriptSceneProviderGateway(t *testing.T, textModelID string, responses map[string]string) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer workflow-service-token" {
+			t.Fatalf("Authorization header = %q", r.Header.Get("Authorization"))
+		}
+		if r.URL.Path != "/internal/provider/text/generate" {
+			http.NotFound(w, r)
+			return
+		}
+		var req provider.GatewayTextRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode text request: %v", err)
+		}
+		text, ok := responses[req.PromptTemplateKey]
+		if !ok {
+			t.Fatalf("unexpected prompt template key %q request=%+v", req.PromptTemplateKey, req)
+		}
+		if req.ModelProfileKey != scriptModelProfileKey || req.NodeRunID == "" || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") {
+			t.Fatalf("text gateway request trace = %+v", req)
+		}
+		writeWorkflowGatewayEnvelope(t, w, provider.GatewayTextResponse{
+			ProviderCallID: uuid.NewString(),
+			ModelID:        textModelID,
+			Status:         "succeeded",
+			Output:         provider.GatewayTextOutput{Text: text},
+			Usage:          provider.GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
+			LatencyMS:      12,
+		})
+	})
+}
+
 func writeWorkflowGatewayEnvelope(t *testing.T, w http.ResponseWriter, data any) {
 	t.Helper()
 	if err := json.NewEncoder(w).Encode(map[string]any{"data": data}); err != nil {
 		t.Fatalf("encode gateway response: %v", err)
 	}
+}
+
+func openWorkflowGatewayIntegrationDB(t *testing.T, ctx context.Context) *pgxpool.Pool {
+	t.Helper()
+	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
+		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run workflow gateway integration tests")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is required for workflow gateway integration tests")
+	}
+	pool, err := db.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	return pool
 }
 
 func seedWorkflowGatewayIntegrationData(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string, string, string, string, string) {
@@ -215,6 +373,49 @@ func seedWorkflowGatewayIntegrationData(t *testing.T, ctx context.Context, pool 
 		t.Fatalf("insert profile bindings: %v", err)
 	}
 	return orgID, userID, projectID, workflowRunID, textModelID, imageModelID
+}
+
+func seedWorkflowScriptScene(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID, userID string) (string, string, string) {
+	t.Helper()
+	var scriptID, versionID, sceneID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO scripts(organization_id, project_id, title, status, created_by)
+		VALUES ($1, $2, 'Scene Script', 'draft', $3)
+		RETURNING id::text
+	`, orgID, projectID, userID).Scan(&scriptID); err != nil {
+		t.Fatalf("insert script: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO script_versions(organization_id, project_id, script_id, version_no, version, content, content_format, metadata, created_by)
+		VALUES ($1, $2, $3, 1, 1, 'Lin Chu waits on a dawn station platform with an old camera.', 'markdown', '{}', $4)
+		RETURNING id::text
+	`, orgID, projectID, scriptID, userID).Scan(&versionID); err != nil {
+		t.Fatalf("insert script version: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, scriptID, versionID); err != nil {
+		t.Fatalf("activate script: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO script_scenes(
+			organization_id, project_id, script_id, script_version_id,
+			scene_index, scene_no, title, summary, location, time_of_day, atmosphere,
+			characters, scenes, props, action, dialogue, visual_goal, emotional_tone,
+			conflict, outcome, source_event_ids, content, content_format, review_status,
+			stale_state, metadata, created_by
+		)
+		VALUES (
+			$1, $2, $3, $4,
+			0, 1, 'Dawn Platform', 'Lin Chu waits for the train.', 'Station Platform', 'Dawn', 'Quiet fog',
+			'["Lin Chu"]', '["Station Platform"]', '["Camera"]',
+			'Lin Chu raises the camera.', 'No dialogue.', 'Establish an expectant silent-video opening.', 'quiet',
+			'waiting versus uncertainty', 'the train approaches', '[]', '## Scene 1: Dawn Platform', 'markdown',
+			'approved', 'fresh', '{}', $5
+		)
+		RETURNING id::text
+	`, orgID, projectID, scriptID, versionID, userID).Scan(&sceneID); err != nil {
+		t.Fatalf("insert script scene: %v", err)
+	}
+	return scriptID, versionID, sceneID
 }
 
 func assertWorkflowGatewayNodeRuns(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workflowRunID string) {

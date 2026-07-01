@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,13 +20,19 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
+type temporalClient interface {
+	ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow interface{}, args ...interface{}) (client.WorkflowRun, error)
+	CancelWorkflow(ctx context.Context, workflowID string, runID string) error
+	SignalWorkflow(ctx context.Context, workflowID string, runID string, signalName string, arg interface{}) error
+}
+
 type Server struct {
 	db         *pgxpool.Pool
 	auth       *auth.Service
 	authorizer *authz.Authorizer
 	providers  *provider.Service
 	storage    *storage.Client
-	temporal   client.Client
+	temporal   temporalClient
 }
 
 type Organization struct {
