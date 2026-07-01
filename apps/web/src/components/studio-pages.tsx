@@ -67,6 +67,17 @@ type QueryState<TData> = {
   reload: () => void;
 };
 
+type ImportSourceType = "novel" | "script";
+
+type ImportDraft = {
+  sourceType: ImportSourceType;
+  title: string;
+  content: string;
+  contentFormat: "plain_text" | "markdown";
+  splitChapters: boolean;
+  createScript: boolean;
+};
+
 export function DashboardPage() {
   return (
     <AppShell active="dashboard" title="总览" description="查看项目进度，继续上次未完成的创作，或新建一个项目。">
@@ -217,6 +228,8 @@ function NewProjectContent() {
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [sourceInputMode, setSourceInputMode] = useState<"upload" | "paste">("upload");
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [form, setForm] = useState({
     name: "",
     description: "",
@@ -232,6 +245,8 @@ function NewProjectContent() {
     sourceTitle: "",
     sourceContent: "",
     sourceFormat: "plain_text",
+    sourceSplitChapters: true,
+    sourceCreateScript: false,
   });
   const steps = ["基础信息", "视频设定", "风格设定", "内容导入"];
 
@@ -261,13 +276,29 @@ function NewProjectContent() {
         imageQuality: form.imageQuality,
         productionMode: form.productionMode,
       }));
-      const hasSource = form.sourceMode !== "none" && form.sourceTitle.trim() && form.sourceContent.trim();
-      if (hasSource) {
+      const wantsSource = form.sourceMode !== "none";
+      const hasUploadSource = wantsSource && sourceInputMode === "upload" && sourceFile;
+      const hasPasteSource = wantsSource && sourceInputMode === "paste" && form.sourceTitle.trim() && form.sourceContent.trim();
+      const hasSource = Boolean(hasUploadSource || hasPasteSource);
+      if (hasUploadSource && sourceFile) {
+        const body = new FormData();
+        body.set("sourceType", form.sourceMode);
+        if (form.sourceTitle.trim()) {
+          body.set("title", form.sourceTitle.trim());
+        }
+        body.set("contentFormat", form.sourceFormat);
+        body.set("splitChapters", String(form.sourceMode === "novel" ? form.sourceSplitChapters : false));
+        body.set("createScript", String(form.sourceCreateScript));
+        body.set("file", sourceFile);
+        await studioApi.importSourceFile(session, project.id, body);
+      } else if (hasPasteSource) {
         await studioApi.createSource(session, project.id, compactRecord({
           sourceType: form.sourceMode,
           title: form.sourceTitle,
           content: form.sourceContent,
           contentFormat: form.sourceFormat,
+          splitChapters: form.sourceMode === "novel" ? form.sourceSplitChapters : false,
+          createScript: form.sourceCreateScript,
         }));
       }
       router.push(projectHref(project.id, hasSource ? "sources" : "") as Route);
@@ -334,11 +365,27 @@ function NewProjectContent() {
                 label="内容导入"
                 value={form.sourceMode}
                 values={["none", "novel", "script"]}
-                labels={{ none: "暂不导入", novel: "上传小说原文", script: "上传剧本原文" }}
-                onChange={(sourceMode) => setForm({ ...form, sourceMode })}
+                labels={{ none: "暂不导入", novel: "小说原文", script: "剧本原文" }}
+                onChange={(sourceMode) =>
+                  setForm({
+                    ...form,
+                    sourceMode,
+                    sourceSplitChapters: sourceMode === "novel",
+                    sourceCreateScript: sourceMode === "script",
+                    sourceFormat: sourceMode === "script" ? "markdown" : form.sourceFormat,
+                  })
+                }
               />
               {form.sourceMode !== "none" ? (
                 <>
+                  <div className="grid max-w-md grid-cols-2 gap-2 rounded-md bg-slate-100 p-1">
+                    <button className={cn("rounded px-3 py-2 text-sm", sourceInputMode === "upload" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600")} onClick={() => setSourceInputMode("upload")} type="button">
+                      上传文件
+                    </button>
+                    <button className={cn("rounded px-3 py-2 text-sm", sourceInputMode === "paste" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600")} onClick={() => setSourceInputMode("paste")} type="button">
+                      粘贴文本
+                    </button>
+                  </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <TextInput label="内容标题" value={form.sourceTitle} onChange={(sourceTitle) => setForm({ ...form, sourceTitle })} />
                     <SelectInput
@@ -349,7 +396,18 @@ function NewProjectContent() {
                       onChange={(sourceFormat) => setForm({ ...form, sourceFormat })}
                     />
                   </div>
-                  <TextAreaInput rows={10} label="正文" value={form.sourceContent} onChange={(sourceContent) => setForm({ ...form, sourceContent })} />
+                  {sourceInputMode === "upload" ? (
+                    <label className="grid gap-1 text-sm">
+                      <span className="text-slate-500">文件</span>
+                      <input className="studio-input w-full" accept=".txt,.md,.markdown,text/plain,text/markdown" onChange={(event) => setSourceFile(event.target.files?.[0] ?? null)} type="file" />
+                    </label>
+                  ) : (
+                    <TextAreaInput rows={10} label="正文" value={form.sourceContent} onChange={(sourceContent) => setForm({ ...form, sourceContent })} />
+                  )}
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {form.sourceMode === "novel" ? <Toggle label="自动切分章节" checked={form.sourceSplitChapters} onChange={(sourceSplitChapters) => setForm({ ...form, sourceSplitChapters })} /> : <div />}
+                    <Toggle label="导入后创建剧本" checked={form.sourceCreateScript} onChange={(sourceCreateScript) => setForm({ ...form, sourceCreateScript })} />
+                  </div>
                 </>
               ) : null}
             </div>
@@ -585,10 +643,11 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 metrics={[
                   metricText("小说原文", status.data.stages.source.novelSourceCount),
                   metricText("剧本原文", status.data.stages.source.scriptSourceCount),
+                  metricText("章节数量", status.data.stages.source.chapterCount),
                   status.data.stages.source.activeScriptTitle ? `当前剧本：${status.data.stages.source.activeScriptTitle}` : "当前剧本：暂无",
                 ]}
-                summary={status.data.stages.source.summary}
-                primary={{ label: "让 Agent 生成剧本", action: "generate_script", disabled: status.data.stages.source.novelSourceCount + status.data.stages.source.scriptSourceCount === 0 }}
+                summary={status.data.stages.source.novelSourceCount + status.data.stages.source.scriptSourceCount > 0 ? status.data.stages.source.summary : ["还没有原文或剧本，请先导入小说原文、上传剧本，或让 Agent 生成剧本。"]}
+                primary={{ label: "导入内容", href: projectHref(projectId, "sources") }}
                 secondary={{ label: "进入原文与剧本", href: projectHref(projectId, "sources") }}
                 busy={busy}
                 onRun={runAction}
@@ -712,13 +771,13 @@ function ProductionStageCard({
   description: string;
   metrics: string[];
   summary?: string[];
-  primary: { label: string; action: string; disabled?: boolean };
+  primary: { label: string; action?: string; href?: string; disabled?: boolean };
   secondary?: { label: string; action?: string; href?: string; disabled?: boolean };
   link?: { label: string; href: string };
   busy: string;
   onRun: (action: string) => void;
 }) {
-  const busyThis = busy === primary.action || (secondary?.action ? busy === secondary.action : false);
+  const busyThis = (primary.action ? busy === primary.action : false) || (secondary?.action ? busy === secondary.action : false);
   return (
     <Surface className="p-4">
       <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
@@ -744,10 +803,17 @@ function ProductionStageCard({
           ) : null}
         </div>
         <div className="grid content-start gap-2">
-          <button className="studio-button studio-button-primary justify-center" disabled={busy !== "" || primary.disabled} onClick={() => onRun(primary.action)} type="button">
-            {busy === primary.action ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
-            {primary.label}
-          </button>
+          {primary.href ? (
+            <Link className="studio-button studio-button-primary justify-center" href={primary.href as Route}>
+              <ArrowRight size={16} />
+              {primary.label}
+            </Link>
+          ) : (
+            <button className="studio-button studio-button-primary justify-center" disabled={busy !== "" || primary.disabled || !primary.action} onClick={() => primary.action && onRun(primary.action)} type="button">
+              {primary.action && busy === primary.action ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
+              {primary.label}
+            </button>
+          )}
           {secondary?.action ? (
             <button className="studio-button justify-center" disabled={busy !== "" || secondary.disabled} onClick={() => secondary.action && onRun(secondary.action)} type="button">
               {busyThis ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
@@ -781,38 +847,59 @@ function ProductionStageCard({
 
 export function SourcesPage({ projectId }: { projectId: string }) {
   return (
-    <AppShell active="projects" title="原文与剧本" description="左侧管理内容源，中间编辑剧本版本，右侧与 Script Agent 对话。" projectId={projectId} projectSection="sources">
+    <AppShell active="projects" title="原文与剧本" description="导入小说原文、上传剧本，或让 Agent 帮你生成剧本。" projectId={projectId} projectSection="sources">
       <SourcesContent projectId={projectId} />
     </AppShell>
   );
 }
 
 function SourcesContent({ projectId }: { projectId: string }) {
+  return <SourcesContentV2 projectId={projectId} />;
+}
+
+function SourcesContentV2({ projectId }: { projectId: string }) {
   const { session } = useStudioSession();
   const sources = useStudioQuery<ProjectSource[]>([], `sources:${projectId}`, async (activeSession) => (await studioApi.listSources(activeSession, projectId)).items);
   const scripts = useStudioQuery<Script[]>([], `scripts:${projectId}`, async (activeSession) => (await studioApi.listScripts(activeSession, projectId)).items);
-  const sessions = useStudioQuery<AgentSession[]>([], `agent-sessions:${projectId}`, async (activeSession) => (await studioApi.listAgentSessions(activeSession, projectId)).items);
+  const sessions = useStudioQuery<AgentSession[]>([], `agent-v2-sessions:${projectId}`, async (activeSession) => (await studioApi.listAgentSessions(activeSession, projectId)).items);
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [selectedScriptId, setSelectedScriptId] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState("");
-  const [sourceDraft, setSourceDraft] = useState({ sourceType: "novel", title: "", content: "", contentFormat: "plain_text" });
-  const [scriptDraft, setScriptDraft] = useState({ title: "", content: "", instruction: "" });
+  const [selectedChapterIndex, setSelectedChapterIndex] = useState(0);
+  const [scriptDraft, setScriptDraft] = useState({ title: "", content: "" });
   const [agentText, setAgentText] = useState("");
+  const [agentDraft, setAgentDraft] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
+  const [importMode, setImportMode] = useState<"upload" | "paste">("upload");
+  const [importDraft, setImportDraft] = useState<ImportDraft>(() => defaultImportDraft("novel"));
+  const [importFile, setImportFile] = useState<File | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const effectiveSourceId = validSelection(selectedSourceId, sources.data);
   const effectiveScriptId = validSelection(selectedScriptId, scripts.data);
   const effectiveSessionId = validSelection(selectedSessionId, sessions.data);
-  const scriptDetail = useStudioQuery<Script | null>(null, `script-detail:${projectId}:${effectiveScriptId}`, async (activeSession) =>
+  const sourceDetail = useStudioQuery<ProjectSource | null>(null, `source-v2-detail:${projectId}:${effectiveSourceId}`, async (activeSession) =>
+    effectiveSourceId ? studioApi.getSource(activeSession, projectId, effectiveSourceId) : Promise.resolve(null),
+  );
+  const scriptDetail = useStudioQuery<Script | null>(null, `script-v2-detail:${projectId}:${effectiveScriptId}`, async (activeSession) =>
     effectiveScriptId ? studioApi.getScript(activeSession, projectId, effectiveScriptId) : Promise.resolve(null),
   );
-  const versions = useStudioQuery<ScriptVersion[]>([], `script-versions:${projectId}:${effectiveScriptId}`, async (activeSession) =>
+  const versions = useStudioQuery<ScriptVersion[]>([], `script-v2-versions:${projectId}:${effectiveScriptId}`, async (activeSession) =>
     effectiveScriptId ? (await studioApi.listScriptVersions(activeSession, projectId, effectiveScriptId)).items : Promise.resolve([]),
   );
-  const messages = useStudioQuery<AgentMessage[]>([], `agent-messages:${projectId}:${effectiveSessionId}`, async (activeSession) =>
+  const messages = useStudioQuery<AgentMessage[]>([], `agent-v2-messages:${projectId}:${effectiveSessionId}`, async (activeSession) =>
     effectiveSessionId ? (await studioApi.listAgentMessages(activeSession, projectId, effectiveSessionId)).items : Promise.resolve([]),
   );
+
+  const selectedSource = sourceDetail.data ?? sources.data.find((item) => item.id === effectiveSourceId);
+  const selectedScript = scriptDetail.data ?? scripts.data.find((item) => item.id === effectiveScriptId);
+  const activeVersion = selectedScript?.currentVersion ?? versions.data.find((version) => version.id === selectedScript?.currentVersionId) ?? versions.data[0];
+  const chapters = selectedSource?.chapters ?? [];
+  const effectiveChapterIndex = Math.min(selectedChapterIndex, Math.max(0, chapters.length - 1));
+  const selectedChapter = chapters[effectiveChapterIndex];
+  const scriptEditorTitle = scriptDraft.title || selectedScript?.title || "";
+  const scriptEditorContent = scriptDraft.content || activeVersion?.content || "";
 
   async function perform(label: string, action: () => Promise<void>) {
     setBusy(label);
@@ -828,97 +915,263 @@ function SourcesContent({ projectId }: { projectId: string }) {
     }
   }
 
-  const selectedSource = sources.data.find((item) => item.id === effectiveSourceId);
-  const selectedScript = scriptDetail.data ?? scripts.data.find((item) => item.id === effectiveScriptId);
+  function openImport(sourceType: ImportSourceType = "novel") {
+    setImportDraft(defaultImportDraft(sourceType));
+    setImportMode("upload");
+    setImportFile(null);
+    setImportOpen(true);
+    setError("");
+    setNotice("");
+  }
+
+  function updateImportSourceType(sourceType: string) {
+    if (sourceType !== "novel" && sourceType !== "script") {
+      return;
+    }
+    setImportDraft((current) => ({ ...current, sourceType, splitChapters: sourceType === "novel", createScript: sourceType === "script" }));
+  }
+
+  async function importUploadedSource() {
+    const body = new FormData();
+    body.set("sourceType", importDraft.sourceType);
+    if (importDraft.title.trim()) {
+      body.set("title", importDraft.title.trim());
+    }
+    body.set("contentFormat", importDraft.contentFormat);
+    body.set("splitChapters", String(importDraft.sourceType === "novel" ? importDraft.splitChapters : false));
+    body.set("createScript", String(importDraft.createScript));
+    if (importFile) {
+      body.set("file", importFile);
+    }
+    return studioApi.importSourceFile(session, projectId, body);
+  }
+
+  async function runImport() {
+    await perform("导入内容", async () => {
+      if (importMode === "upload" && !importFile) {
+        throw new Error("请选择要导入的文件。");
+      }
+      if (importMode === "paste" && (!importDraft.title.trim() || !importDraft.content.trim())) {
+        throw new Error("标题和正文不能为空。");
+      }
+      const result =
+        importMode === "upload"
+          ? await importUploadedSource()
+          : await studioApi.createSource(session, projectId, compactRecord({
+              sourceType: importDraft.sourceType,
+              title: importDraft.title,
+              content: importDraft.content,
+              contentFormat: importDraft.contentFormat,
+              splitChapters: importDraft.sourceType === "novel" ? importDraft.splitChapters : false,
+              createScript: importDraft.createScript,
+            }));
+      setSelectedSourceId(result.source.id);
+      if (result.script) {
+        setSelectedScriptId(result.script.id);
+      }
+      setNotice(importSuccessText(result.chapters.length, result.script?.title));
+      setImportOpen(false);
+      setImportFile(null);
+      sources.reload();
+      sourceDetail.reload();
+      scripts.reload();
+    });
+  }
+
+  async function ensureAgentSession() {
+    if (effectiveSessionId) {
+      return effectiveSessionId;
+    }
+    const created = await studioApi.createAgentSession(session, projectId, "剧本创作会话");
+    setSelectedSessionId(created.id);
+    sessions.reload();
+    return created.id;
+  }
+
+  async function generateScriptFromSource() {
+    await perform("生成剧本", async () => {
+      if (!selectedSource) {
+        throw new Error("请先选择小说原文或剧本原文。");
+      }
+      const sessionId = await ensureAgentSession();
+      const result = await studioApi.generateScript(session, projectId, compactRecord({
+        sourceId: selectedSource.id,
+        instruction: agentText,
+        title: scriptDraft.title || `${selectedSource.title} 剧本`,
+        sessionId,
+      }));
+      setSelectedScriptId(result.scriptId);
+      setAgentDraft(result.content);
+      setScriptDraft({ title: scriptEditorTitle || `${selectedSource.title} 剧本`, content: result.content });
+      scripts.reload();
+      scriptDetail.reload();
+      versions.reload();
+      messages.reload();
+    });
+  }
+
+  async function rewriteCurrentScript() {
+    await perform("改写剧本", async () => {
+      if (!selectedScript) {
+        throw new Error("请先选择要改写的剧本。");
+      }
+      const sessionId = await ensureAgentSession();
+      const result = await studioApi.rewriteScript(session, projectId, compactRecord({
+        scriptId: selectedScript.id,
+        versionId: selectedScript.currentVersionId || activeVersion?.id,
+        instruction: agentText,
+        sessionId,
+        activate: true,
+      }));
+      setAgentDraft(result.content);
+      setScriptDraft({ title: selectedScript.title, content: result.content });
+      scriptDetail.reload();
+      versions.reload();
+      messages.reload();
+    });
+  }
 
   return (
     <SessionGate>
-      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)_340px]">
-        <Surface>
-          <SectionTitle title="内容源" description="添加小说原文或剧本原文。" />
-          <div className="grid gap-3 p-4">
-            <div className="grid gap-2">
-              {sources.data.map((source) => (
-                <button className={cn("rounded-lg border p-3 text-left", effectiveSourceId === source.id ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50")} key={source.id} onClick={() => setSelectedSourceId(source.id)} type="button">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium text-slate-900">{source.title}</p>
-                    <StatusBadge status={source.status} />
-                  </div>
-                  <p className="mt-1 text-xs text-slate-500">{source.sourceType === "novel" ? "小说原文" : "剧本原文"}</p>
-                </button>
-              ))}
-              {!sources.data.length ? <EmptyState title="还没有内容源" description="添加小说原文或剧本原文，之后可让 Agent 生成剧本。" /> : null}
+      <div className="grid gap-5">
+        <Surface className="p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-3xl font-semibold text-slate-950">原文与剧本</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">导入小说原文、上传剧本，或让 Agent 帮你生成剧本。</p>
             </div>
-            <div className="grid gap-2 border-t border-slate-200 pt-3">
-              <SelectInput label="类型" value={sourceDraft.sourceType} values={["novel", "script"]} labels={{ novel: "小说原文", script: "剧本原文" }} onChange={(sourceType) => setSourceDraft({ ...sourceDraft, sourceType })} />
-              <TextInput label="标题" value={sourceDraft.title} onChange={(title) => setSourceDraft({ ...sourceDraft, title })} />
-              <TextAreaInput rows={7} label="正文" value={sourceDraft.content} onChange={(content) => setSourceDraft({ ...sourceDraft, content })} />
-              <button
-                className="studio-button studio-button-primary"
-                disabled={busy !== ""}
-                onClick={() =>
-                  perform("添加内容源", async () => {
-                    const created = await studioApi.createSource(session, projectId, compactRecord(sourceDraft));
-                    setSelectedSourceId(created.id);
-                    setSourceDraft({ ...sourceDraft, title: "", content: "" });
-                    sources.reload();
-                  })
-                }
-                type="button"
-              >
+            <div className="flex flex-wrap gap-2">
+              <button className="studio-button studio-button-primary" disabled={busy !== ""} onClick={() => openImport("novel")} type="button">
                 <Plus size={16} />
-                添加内容源
+                导入内容
+              </button>
+              <button className="studio-button" disabled={!selectedSource || busy !== ""} onClick={generateScriptFromSource} type="button">
+                <Sparkles size={16} />
+                让 Agent 生成剧本
               </button>
             </div>
           </div>
+          <ErrorPanel message={error} />
+          {notice ? <p className="mt-3 text-sm text-blue-700">{notice}</p> : null}
         </Surface>
 
-        <Surface>
-          <SectionTitle title="剧本版本" description="保存剧本正文、查看版本，并激活当前版本。" />
-          <div className="grid gap-4 p-4">
-            <div className="grid gap-3 md:grid-cols-[240px_1fr]">
-              <div className="grid content-start gap-2">
-                {scripts.data.map((script) => (
-                  <button className={cn("rounded-lg border p-3 text-left", effectiveScriptId === script.id ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50")} key={script.id} onClick={() => setSelectedScriptId(script.id)} type="button">
-                    <p className="text-sm font-medium text-slate-900">{script.title}</p>
-                    <p className="mt-1 text-xs text-slate-500">{script.currentVersionId ? "已激活版本" : "暂无版本"}</p>
+        <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
+          <Surface>
+            <SectionTitle title="内容源" description="小说原文、剧本原文和导入状态。" />
+            <QueryBody state={sources}>
+              <div className="grid gap-3 p-4">
+                {sources.data.map((source) => (
+                  <button className={cn("rounded-lg border p-3 text-left", effectiveSourceId === source.id ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50 hover:border-slate-300")} key={source.id} onClick={() => setSelectedSourceId(source.id)} type="button">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-slate-900">{source.title}</p>
+                        <p className="mt-1 text-xs text-slate-500">{sourceTypeLabel(source.sourceType)} · {sourceChapterCount(source)} 章 · {formatTime(source.createdAt)}</p>
+                      </div>
+                      <StatusBadge status={source.status} />
+                    </div>
                   </button>
                 ))}
-                {!scripts.data.length ? <EmptyState title="还没有剧本" description="导入剧本原文，或让 Script Agent 根据原文生成剧本。" /> : null}
+                {!sources.data.length ? <EmptyState title="还没有内容源" description="导入小说原文、上传剧本，或让 Agent 帮你生成剧本。" /> : null}
               </div>
-              <div className="grid gap-3">
-                <TextInput label="剧本标题" value={scriptDraft.title} onChange={(title) => setScriptDraft({ ...scriptDraft, title })} />
-                <TextAreaInput rows={14} label="剧本正文" value={scriptDraft.content || selectedScript?.currentVersion?.content || ""} onChange={(content) => setScriptDraft({ ...scriptDraft, content })} />
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    className="studio-button"
-                    disabled={busy !== ""}
-                    onClick={() =>
-                      perform("保存剧本", async () => {
+            </QueryBody>
+          </Surface>
+
+          <div className="grid gap-5">
+            <Surface>
+              <SectionTitle title={selectedSource ? selectedSource.title : "内容详情"} description={selectedSource ? `${sourceTypeLabel(selectedSource.sourceType)} · ${contentFormatLabel(selectedSource.contentFormat)}` : "选择内容源后查看章节和正文预览。"} />
+              <QueryBody state={sourceDetail}>
+                {selectedSource ? (
+                  <div className="grid gap-4 p-4">
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      <InfoTile label="类型" value={sourceTypeLabel(selectedSource.sourceType)} />
+                      <InfoTile label="状态" value={selectedSource.status} />
+                      <InfoTile label="章节" value={String(sourceChapterCount(selectedSource))} />
+                      <InfoTile label="创建时间" value={formatTime(selectedSource.createdAt)} />
+                    </div>
+                    {selectedSource.sourceType === "novel" ? (
+                      <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
+                        <div className="grid max-h-[520px] content-start gap-2 overflow-auto">
+                          {chapters.map((chapter, index) => (
+                            <button className={cn("rounded-md border p-3 text-left", index === effectiveChapterIndex ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50")} key={chapter.id} onClick={() => setSelectedChapterIndex(index)} type="button">
+                              <p className="text-sm font-medium text-slate-900">{chapter.chapterTitle || `第 ${chapter.chapterIndex} 章`}</p>
+                              <p className="mt-1 text-xs text-slate-500">{chapter.volumeTitle ? `${chapter.volumeTitle} · ` : ""}{runeLength(chapter.content)} 字 · {chapter.eventState}</p>
+                            </button>
+                          ))}
+                          {!chapters.length ? <p className="text-sm text-slate-500">还没有切分章节。</p> : null}
+                        </div>
+                        <div className="grid gap-3">
+                          <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                            <p className="text-sm font-semibold text-slate-900">{selectedChapter?.chapterTitle || selectedSource.title}</p>
+                            <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{previewText(selectedChapter?.content || selectedSource.content, 2400)}</p>
+                          </div>
+                          <button className="studio-button studio-button-primary justify-center" disabled={busy !== ""} onClick={generateScriptFromSource} type="button">
+                            <Sparkles size={16} />
+                            让 Agent 改编为剧本
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="grid gap-3">
+                        <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                          <p className="text-sm font-semibold text-slate-900">剧本原文预览</p>
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{previewText(selectedSource.content, 2600)}</p>
+                        </div>
+                        <button className="studio-button justify-center" disabled={busy !== ""} onClick={() => openImport("script")} type="button">
+                          <Plus size={16} />
+                          继续上传剧本
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <EmptyState title="还没有选中内容" description="从左侧选择内容源，或先导入小说原文/剧本原文。" />
+                )}
+              </QueryBody>
+            </Surface>
+
+            <Surface>
+              <SectionTitle title="剧本与版本" description="查看剧本、激活版本，并进入资产分析或分镜生成。" />
+              <div className="grid gap-4 p-4">
+                <div className="grid gap-3 lg:grid-cols-[240px_1fr]">
+                  <div className="grid content-start gap-2">
+                    {scripts.data.map((script) => (
+                      <button
+                        className={cn("rounded-lg border p-3 text-left", effectiveScriptId === script.id ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50 hover:border-slate-300")}
+                        key={script.id}
+                        onClick={() => {
+                          setSelectedScriptId(script.id);
+                          setScriptDraft({ title: script.title, content: "" });
+                        }}
+                        type="button"
+                      >
+                        <p className="truncate text-sm font-medium text-slate-900">{script.title}</p>
+                        <p className="mt-1 text-xs text-slate-500">{script.currentVersionId ? "已激活版本" : "暂无版本"} · {formatTime(script.updatedAt)}</p>
+                      </button>
+                    ))}
+                    {!scripts.data.length ? <EmptyState title="还没有剧本" description="上传剧本原文，或让 Script Agent 根据小说原文生成剧本。" /> : null}
+                  </div>
+                  <div className="grid gap-3">
+                    <TextInput label="剧本标题" value={scriptEditorTitle} onChange={(title) => setScriptDraft({ ...scriptDraft, title })} />
+                    <TextAreaInput rows={12} label="剧本正文" value={scriptEditorContent} onChange={(content) => setScriptDraft({ ...scriptDraft, content })} />
+                    <div className="flex flex-wrap gap-2">
+                      <button className="studio-button" disabled={busy !== "" || !scriptEditorContent.trim()} onClick={() => perform("保存为剧本", async () => {
                         const created = await studioApi.createScript(session, projectId, compactRecord({
                           sourceId: effectiveSourceId || undefined,
-                          title: scriptDraft.title || selectedSource?.title || "未命名剧本",
-                          content: scriptDraft.content || selectedScript?.currentVersion?.content || "",
+                          title: scriptEditorTitle || selectedSource?.title || "未命名剧本",
+                          content: scriptEditorContent,
                           contentFormat: "markdown",
                           sourceType: "manual",
                         }));
                         setSelectedScriptId(created.id);
                         scripts.reload();
-                      })
-                    }
-                    type="button"
-                  >
-                    <Save size={16} />
-                    保存为剧本
-                  </button>
-                  {effectiveScriptId ? (
-                    <button
-                      className="studio-button"
-                      disabled={busy !== ""}
-                      onClick={() =>
-                        perform("保存新版本", async () => {
+                      })} type="button">
+                        <Save size={16} />
+                        新建版本
+                      </button>
+                      {effectiveScriptId ? (
+                        <button className="studio-button" disabled={busy !== "" || !scriptEditorContent.trim()} onClick={() => perform("保存新版本", async () => {
                           const version = await studioApi.createScriptVersion(session, projectId, effectiveScriptId, compactRecord({
-                            content: scriptDraft.content || selectedScript?.currentVersion?.content || "",
+                            content: scriptEditorContent,
                             contentFormat: "markdown",
                             sourceType: "manual",
                             activate: true,
@@ -926,131 +1179,153 @@ function SourcesContent({ projectId }: { projectId: string }) {
                           await studioApi.activateScriptVersion(session, projectId, effectiveScriptId, version.id);
                           scriptDetail.reload();
                           versions.reload();
-                        })
-                      }
-                      type="button"
-                    >
-                      <Copy size={16} />
-                      保存并激活新版本
-                    </button>
-                  ) : null}
-                </div>
-                {versions.data.length ? (
-                  <div className="grid gap-2">
-                    {versions.data.map((version) => (
-                      <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2 text-sm" key={version.id}>
-                        <span>版本 {version.version}</span>
-                        <button
-                          className="text-blue-700 hover:text-blue-900"
-                          onClick={() =>
-                            perform("激活版本", async () => {
+                          scripts.reload();
+                        })} type="button">
+                          <Copy size={16} />
+                          保存为新版本
+                        </button>
+                      ) : null}
+                      <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={rewriteCurrentScript} type="button">
+                        <MessageSquareText size={16} />
+                        让 Agent 改写
+                      </button>
+                      <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("分析剧本资产", async () => void (await studioApi.analyzeScriptAssets(session, projectId, effectiveScriptId, { generateImages: false })))} type="button">
+                        <ImageIcon size={16} />
+                        分析剧本资产
+                      </button>
+                      <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成分镜", async () => void (await studioApi.generateStoryboard(session, projectId, effectiveScriptId, { maxShots: 12 })))} type="button">
+                        <Clapperboard size={16} />
+                        生成分镜
+                      </button>
+                    </div>
+                    {activeVersion ? (
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-sm font-semibold text-slate-900">当前版本预览</p>
+                        <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{previewText(activeVersion.content, 2200)}</p>
+                      </div>
+                    ) : null}
+                    {versions.data.length ? (
+                      <div className="grid gap-2">
+                        {versions.data.map((version) => (
+                          <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-2 text-sm" key={version.id}>
+                            <span>版本 {version.version}{version.id === selectedScript?.currentVersionId ? " · 当前激活" : ""}</span>
+                            <button className="text-blue-700 hover:text-blue-900" disabled={busy !== ""} onClick={() => perform("激活版本", async () => {
                               await studioApi.activateScriptVersion(session, projectId, effectiveScriptId, version.id);
                               scriptDetail.reload();
                               scripts.reload();
-                            })
-                          }
-                          type="button"
-                        >
-                          激活此版本
-                        </button>
+                            })} type="button">
+                              激活此版本
+                            </button>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        </Surface>
-
-        <Surface>
-          <SectionTitle title="Script Agent" description="生成剧本、改写当前剧本，或记录创作指令。" />
-          <div className="grid gap-3 p-4">
-            <div className="flex gap-2">
-              <select className="studio-input min-w-0 flex-1" value={effectiveSessionId} onChange={(event) => setSelectedSessionId(event.target.value)}>
-                <option value="">选择会话</option>
-                {sessions.data.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.title || item.id}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="studio-button"
-                onClick={() =>
-                  perform("创建会话", async () => {
-                    const created = await studioApi.createAgentSession(session, projectId, "剧本创作会话");
-                    setSelectedSessionId(created.id);
-                    sessions.reload();
-                  })
-                }
-                type="button"
-              >
-                <Plus size={16} />
-              </button>
-            </div>
-            <div className="grid max-h-72 gap-2 overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-3">
-              {messages.data.map((message) => (
-                <div className={cn("rounded-md px-3 py-2 text-sm", message.role === "user" ? "ml-8 bg-blue-600/10 text-blue-900" : "mr-8 bg-slate-50 text-slate-800")} key={message.id}>
-                  {message.content}
                 </div>
-              ))}
-              {!messages.data.length ? <p className="text-sm text-slate-500">还没有对话。发送指令，或直接生成/改写剧本。</p> : null}
-            </div>
-            <TextAreaInput rows={5} label="Agent 指令" value={agentText} onChange={setAgentText} />
-            <div className="grid gap-2">
-              <button
-                className="studio-button"
-                disabled={!effectiveSessionId || busy !== ""}
-                onClick={() =>
-                  perform("发送指令", async () => {
-                    await studioApi.createAgentMessage(session, projectId, effectiveSessionId, agentText);
-                    setAgentText("");
-                    messages.reload();
-                  })
-                }
-                type="button"
-              >
-                <Send size={16} />
-                发送用户指令
-              </button>
-              <button
-                className="studio-button studio-button-primary"
-                disabled={!effectiveSourceId || busy !== ""}
-                onClick={() =>
-                  perform("生成剧本", async () => {
-                    const result = await studioApi.generateScript(session, projectId, compactRecord({ sourceId: effectiveSourceId, instruction: agentText, sessionId: effectiveSessionId || undefined }));
-                    setSelectedScriptId(result.scriptId);
-                    setScriptDraft({ ...scriptDraft, content: result.content });
-                    scripts.reload();
-                    messages.reload();
-                  })
-                }
-                type="button"
-              >
-                <Sparkles size={16} />
-                让 Agent 根据原文生成剧本
-              </button>
-              <button
-                className="studio-button"
-                disabled={!effectiveScriptId || busy !== ""}
-                onClick={() =>
-                  perform("改写剧本", async () => {
-                    const result = await studioApi.rewriteScript(session, projectId, compactRecord({ scriptId: effectiveScriptId, instruction: agentText, sessionId: effectiveSessionId || undefined, activate: true }));
-                    setScriptDraft({ ...scriptDraft, content: result.content });
-                    scriptDetail.reload();
-                    versions.reload();
-                  })
-                }
-                type="button"
-              >
-                <MessageSquareText size={16} />
-                让 Agent 改写当前剧本
-              </button>
-            </div>
-            <ErrorPanel message={error} />
-            {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
+              </div>
+            </Surface>
           </div>
-        </Surface>
+
+          <Surface>
+            <SectionTitle title="Script Agent" description="根据原文生成剧本，或对当前剧本做定向改写。" />
+            <div className="grid gap-3 p-4">
+              <div className="flex gap-2">
+                <select className="studio-input min-w-0 flex-1" value={effectiveSessionId} onChange={(event) => setSelectedSessionId(event.target.value)}>
+                  <option value="">选择会话</option>
+                  {sessions.data.map((item) => (
+                    <option key={item.id} value={item.id}>{item.title || item.id}</option>
+                  ))}
+                </select>
+                <button className="studio-button" disabled={busy !== ""} onClick={() => perform("创建会话", async () => {
+                  const created = await studioApi.createAgentSession(session, projectId, "剧本创作会话");
+                  setSelectedSessionId(created.id);
+                  sessions.reload();
+                })} type="button">
+                  <Plus size={16} />
+                </button>
+              </div>
+              <div className="grid max-h-72 gap-2 overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-3">
+                {messages.data.map((message) => (
+                  <div className={cn("rounded-md px-3 py-2 text-sm", message.role === "user" ? "ml-8 bg-blue-600/10 text-blue-900" : "mr-8 bg-slate-50 text-slate-800")} key={message.id}>
+                    {message.content}
+                  </div>
+                ))}
+                {!messages.data.length ? <p className="text-sm text-slate-500">还没有对话。发送指令，或直接生成/改写剧本。</p> : null}
+              </div>
+              <TextAreaInput rows={5} label="Agent 指令" value={agentText} onChange={setAgentText} />
+              <div className="grid gap-2">
+                <button className="studio-button" disabled={!effectiveSessionId || busy !== "" || !agentText.trim()} onClick={() => perform("发送指令", async () => {
+                  await studioApi.createAgentMessage(session, projectId, effectiveSessionId, agentText);
+                  setAgentText("");
+                  messages.reload();
+                })} type="button">
+                  <Send size={16} />
+                  发送用户指令
+                </button>
+                <button className="studio-button studio-button-primary" disabled={!selectedSource || busy !== ""} onClick={generateScriptFromSource} type="button">
+                  <Sparkles size={16} />
+                  根据原文生成剧本
+                </button>
+                <button className="studio-button" disabled={!selectedScript || busy !== ""} onClick={rewriteCurrentScript} type="button">
+                  <MessageSquareText size={16} />
+                  改写当前剧本
+                </button>
+              </div>
+              {agentDraft ? (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-semibold text-slate-900">Agent 返回草稿</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{previewText(agentDraft, 2200)}</p>
+                </div>
+              ) : null}
+            </div>
+          </Surface>
+        </div>
+
+        {importOpen ? (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4">
+            <Surface className="max-h-[90svh] w-full max-w-2xl overflow-auto">
+              <div className="flex items-center justify-between border-b border-slate-200 p-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-950">导入内容</h3>
+                  <p className="mt-1 text-sm text-slate-500">上传 txt、md、markdown 文件，或直接粘贴文本。</p>
+                </div>
+                <button className="studio-button" onClick={() => setImportOpen(false)} type="button">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="grid gap-4 p-4">
+                <div className="grid grid-cols-2 gap-2 rounded-md bg-slate-100 p-1">
+                  <button className={cn("rounded px-3 py-2 text-sm", importMode === "upload" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600")} onClick={() => setImportMode("upload")} type="button">上传文件</button>
+                  <button className={cn("rounded px-3 py-2 text-sm", importMode === "paste" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600")} onClick={() => setImportMode("paste")} type="button">粘贴文本</button>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <SelectInput label="内容类型" value={importDraft.sourceType} values={["novel", "script"]} labels={{ novel: "小说原文", script: "剧本原文" }} onChange={updateImportSourceType} />
+                  <SelectInput label="文本格式" value={importDraft.contentFormat} values={["plain_text", "markdown"]} labels={{ plain_text: "纯文本", markdown: "Markdown" }} onChange={(contentFormat) => setImportDraft({ ...importDraft, contentFormat: contentFormat === "markdown" ? "markdown" : "plain_text" })} />
+                </div>
+                <TextInput label="标题" value={importDraft.title} onChange={(title) => setImportDraft({ ...importDraft, title })} />
+                {importMode === "upload" ? (
+                  <label className="grid gap-1 text-sm">
+                    <span className="text-slate-500">文件</span>
+                    <input className="studio-input w-full" accept=".txt,.md,.markdown,text/plain,text/markdown" onChange={(event) => setImportFile(event.target.files?.[0] ?? null)} type="file" />
+                  </label>
+                ) : (
+                  <TextAreaInput rows={12} label="正文" value={importDraft.content} onChange={(content) => setImportDraft({ ...importDraft, content })} />
+                )}
+                <div className="grid gap-2 md:grid-cols-2">
+                  {importDraft.sourceType === "novel" ? <Toggle label="自动切分章节" checked={importDraft.splitChapters} onChange={(splitChapters) => setImportDraft({ ...importDraft, splitChapters })} /> : <div />}
+                  <Toggle label="导入后创建剧本" checked={importDraft.createScript} onChange={(createScript) => setImportDraft({ ...importDraft, createScript })} />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-slate-200 p-4">
+                <button className="studio-button" disabled={busy !== ""} onClick={() => setImportOpen(false)} type="button">取消</button>
+                <button className="studio-button studio-button-primary" disabled={busy !== ""} onClick={runImport} type="button">
+                  {busy === "导入内容" ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+                  开始导入
+                </button>
+              </div>
+            </Surface>
+          </div>
+        ) : null}
       </div>
     </SessionGate>
   );
@@ -2589,6 +2864,63 @@ function Meta({ label, value }: { label: string; value?: string }) {
 
 function Pill({ children }: { children: React.ReactNode }) {
   return <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[12px] text-slate-600">{children}</span>;
+}
+
+function defaultImportDraft(sourceType: ImportSourceType): ImportDraft {
+  return {
+    sourceType,
+    title: "",
+    content: "",
+    contentFormat: sourceType === "script" ? "markdown" : "plain_text",
+    splitChapters: sourceType === "novel",
+    createScript: sourceType === "script",
+  };
+}
+
+function sourceTypeLabel(sourceType: string) {
+  return sourceType === "script" ? "剧本原文" : "小说原文";
+}
+
+function contentFormatLabel(contentFormat: string) {
+  return contentFormat === "markdown" ? "Markdown" : "纯文本";
+}
+
+function sourceChapterCount(source: ProjectSource) {
+  return numberFromJson(jsonRecordValue(source.metadata?.import)?.chapterCount) ?? source.chapters?.length ?? 0;
+}
+
+function jsonRecordValue(value: JsonValue | undefined): JsonRecord | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as JsonRecord;
+}
+
+function numberFromJson(value: JsonValue | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function runeLength(value: string) {
+  return Array.from(value).length;
+}
+
+function previewText(value: string, maxLength: number) {
+  const text = value.trim();
+  if (runeLength(text) <= maxLength) {
+    return text || "暂无正文";
+  }
+  return `${Array.from(text).slice(0, maxLength).join("")}...`;
+}
+
+function importSuccessText(chapterCount: number, scriptTitle?: string) {
+  const parts = ["导入成功"];
+  if (chapterCount > 0) {
+    parts.push(`已生成 ${chapterCount} 个章节`);
+  }
+  if (scriptTitle) {
+    parts.push(`已创建剧本：${scriptTitle}`);
+  }
+  return parts.join("，");
 }
 
 function productionActionLabel(action: string) {

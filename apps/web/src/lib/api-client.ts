@@ -6,6 +6,7 @@ import type {
   AuthResponse,
   CanonicalAsset,
   JsonRecord,
+  ImportProjectSourceResponse,
   ListEnvelope,
   ModelProfile,
   Organization,
@@ -62,7 +63,8 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
     }
   }
   const headers = new Headers({ Accept: "application/json" });
-  if (options.body !== undefined) {
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (options.body !== undefined && !isFormData) {
     headers.set("Content-Type", "application/json");
   }
   const token = options.session?.accessToken.trim();
@@ -73,10 +75,11 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
   if (organizationId) {
     headers.set("X-Organization-Id", organizationId);
   }
+  const requestBody = options.body === undefined ? undefined : isFormData ? (options.body as BodyInit) : JSON.stringify(options.body);
   const response = await fetch(url, {
     method: options.method ?? (options.body === undefined ? "GET" : "POST"),
     headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body: requestBody,
   });
   const envelope = (await response.json().catch(() => ({}))) as ApiEnvelope<TData>;
   if (!response.ok || envelope.error || envelope.data === undefined) {
@@ -118,8 +121,12 @@ export const studioApi = {
     apiRequest<RegenerateResponse>(`/api/projects/${projectId}/regenerate`, { method: "POST", session, body }),
 
   listSources: (session: StudioSession, projectId: string) => apiRequest<ListEnvelope<ProjectSource>>(`/api/projects/${projectId}/sources`, { session }),
+  getSource: (session: StudioSession, projectId: string, sourceId: string) =>
+    apiRequest<ProjectSource>(`/api/projects/${projectId}/sources/${sourceId}`, { session }),
   createSource: (session: StudioSession, projectId: string, body: JsonRecord) =>
-    apiRequest<ProjectSource>(`/api/projects/${projectId}/sources`, { method: "POST", session, body }),
+    apiRequest<ImportProjectSourceResponse>(`/api/projects/${projectId}/sources`, { method: "POST", session, body }),
+  importSourceFile: (session: StudioSession, projectId: string, body: FormData) =>
+    apiRequest<ImportProjectSourceResponse>(`/api/projects/${projectId}/sources/import`, { method: "POST", session, body }),
   updateSource: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
     apiRequest<ProjectSource>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "PATCH", session, body }),
   deleteSource: (session: StudioSession, projectId: string, sourceId: string) =>

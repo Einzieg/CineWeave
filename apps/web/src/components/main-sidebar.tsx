@@ -9,7 +9,7 @@ import Link from "next/link";
 export function MainSidebar({ active }: { active: GlobalSection }) {
   return (
     <aside className="hidden min-h-svh w-64 shrink-0 border-r border-slate-200 bg-white px-3 py-4 lg:block">
-      <Link className="flex h-12 items-center gap-3 rounded-lg px-3" href={"/dashboard" as Route}>
+      <Link className="flex h-12 items-center gap-3 rounded-lg px-3" href={"/projects" as Route}>
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-blue-600 text-sm font-semibold text-white">影</span>
         <span>
           <span className="block text-sm font-semibold text-slate-950">影织</span>

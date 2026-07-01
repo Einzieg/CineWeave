@@ -703,6 +703,7 @@ paths:
                 $ref: "#/components/schemas/ProjectSourceListEnvelope"
     post:
       operationId: createProjectSource
+      description: Paste text into a project source. Novel sources can split chapters; script sources can initialize script/version.
       security:
         - bearerAuth: []
       parameters:
@@ -715,11 +716,40 @@ paths:
               $ref: "#/components/schemas/CreateProjectSourceRequest"
       responses:
         "201":
-          description: Created project source
+          description: Imported project source
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProjectSourceEnvelope"
+                $ref: "#/components/schemas/ImportProjectSourceResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/sources/import:
+    post:
+      operationId: importProjectSourceFile
+      description: Upload a txt, md, or markdown file as a novel/script source.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/ImportProjectSourceRequest"
+      responses:
+        "201":
+          description: Imported project source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportProjectSourceResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/sources/{sourceId}:
     get:
       operationId: getProjectSource
@@ -3109,6 +3139,45 @@ components:
         updatedAt:
           type: string
           format: date-time
+    NovelChapterSummary:
+      type: object
+      required: [id, chapterIndex, contentLength]
+      properties:
+        id:
+          type: string
+          format: uuid
+        chapterIndex:
+          type: integer
+        volumeTitle:
+          type: string
+        chapterTitle:
+          type: string
+        contentLength:
+          type: integer
+    CreatedScriptSummary:
+      type: object
+      required: [id, currentVersionId, title]
+      properties:
+        id:
+          type: string
+          format: uuid
+        currentVersionId:
+          type: string
+          format: uuid
+        title:
+          type: string
+    ImportProjectSourceResponse:
+      type: object
+      required: [source, chapters]
+      properties:
+        source:
+          $ref: "#/components/schemas/ProjectSource"
+        chapters:
+          type: array
+          items:
+            $ref: "#/components/schemas/NovelChapterSummary"
+        script:
+          $ref: "#/components/schemas/CreatedScriptSummary"
     Script:
       type: object
       required: [id, organizationId, projectId, title, status, createdAt, updatedAt]
@@ -3917,13 +3986,15 @@ components:
               $ref: "#/components/schemas/ProductionFinalVideoStage"
     ProductionSourceStage:
       type: object
-      required: [status, novelSourceCount, scriptSourceCount, summary]
+      required: [status, novelSourceCount, scriptSourceCount, chapterCount, summary]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
         novelSourceCount:
           type: integer
         scriptSourceCount:
+          type: integer
+        chapterCount:
           type: integer
         activeScriptId:
           type: string
@@ -4366,6 +4437,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ProjectSource"
+    ImportProjectSourceResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ImportProjectSourceResponse"
     ProjectSourceListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -6823,6 +6901,12 @@ components:
         metadata:
           type: object
           additionalProperties: true
+        splitChapters:
+          type: boolean
+          default: true
+        createScript:
+          type: boolean
+          description: Defaults to true for script sources and false for novel sources.
         chapters:
           type: array
           items:
@@ -6836,6 +6920,27 @@ components:
                 type: string
               content:
                 type: string
+    ImportProjectSourceRequest:
+      type: object
+      required: [sourceType, file]
+      properties:
+        sourceType:
+          type: string
+          enum: [novel, script]
+        title:
+          type: string
+        file:
+          type: string
+          format: binary
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+        splitChapters:
+          type: boolean
+          default: true
+        createScript:
+          type: boolean
+          description: Defaults to true for script sources and false for novel sources.
     UpdateProjectSourceRequest:
       type: object
       properties:

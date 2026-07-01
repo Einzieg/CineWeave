@@ -98,11 +98,11 @@ export default function LoginPage() {
 
 function nextPath() {
   if (typeof window === "undefined") {
-    return "/dashboard";
+    return "/projects";
   }
   const value = new URLSearchParams(window.location.search).get("next");
   if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return "/dashboard";
+    return "/projects";
   }
   return value;
 }

@@ -69,7 +69,7 @@ export default function SetupPage() {
         workspaceName: form.workspaceName,
       });
       setSession(sessionFromAuthResponse(response));
-      router.replace("/dashboard" as Route);
+      router.replace("/projects" as Route);
     } catch (cause) {
       if (cause instanceof StudioApiError && cause.code === "SETUP_ALREADY_COMPLETED") {
         router.replace("/login" as Route);

@@ -61,3 +61,6 @@ CREATE INDEX IF NOT EXISTS idx_shot_asset_requirements_project_manual_override
 
 CREATE INDEX IF NOT EXISTS idx_shot_asset_requirements_project_stale_state
   ON shot_asset_requirements(project_id, stale_state);
+
+INSERT INTO schema_migrations(version) VALUES ('000014_editable_creative_objects')
+ON CONFLICT (version) DO NOTHING;

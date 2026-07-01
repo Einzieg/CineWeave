@@ -2,7 +2,6 @@ import {
   Boxes,
   FileCode2,
   FolderKanban,
-  Gauge,
   KeyRound,
   Library,
   ListChecks,
@@ -14,7 +13,6 @@ import {
 } from "lucide-react";
 
 export const globalNavItems = [
-  { label: "总览", href: "/dashboard", icon: Gauge, section: "dashboard" },
   { label: "项目", href: "/projects", icon: FolderKanban, section: "projects" },
   { label: "供应商中心", href: "/providers", icon: KeyRound, section: "providers" },
   { label: "提示词中心", href: "/prompts", icon: FileCode2, section: "prompts" },
@@ -33,7 +31,7 @@ export const projectNavItems = [
   { label: "项目设置", segment: "settings", icon: Settings2 },
 ] as const;
 
-export type GlobalSection = (typeof globalNavItems)[number]["section"];
+export type GlobalSection = "dashboard" | (typeof globalNavItems)[number]["section"];
 export type ProjectSection = (typeof projectNavItems)[number]["segment"];
 
 export function projectHref(projectId: string, segment = "") {

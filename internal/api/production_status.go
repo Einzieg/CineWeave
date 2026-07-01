@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -49,6 +50,7 @@ type ProductionSourceStage struct {
 	Status            string   `json:"status"`
 	NovelSourceCount  int      `json:"novelSourceCount"`
 	ScriptSourceCount int      `json:"scriptSourceCount"`
+	ChapterCount      int      `json:"chapterCount"`
 	ActiveScriptID    *string  `json:"activeScriptId"`
 	ActiveScriptTitle *string  `json:"activeScriptTitle"`
 	Summary           []string `json:"summary"`
@@ -290,14 +292,19 @@ func (s *Server) productionStatus(r *http.Request, project Project) (ProductionS
 }
 
 func (s *Server) productionSourceStage(r *http.Request, projectID string) (ProductionSourceStage, error) {
-	var novelCount, scriptSourceCount int
+	var novelCount, scriptSourceCount, chapterCount int
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT
 			COUNT(*) FILTER (WHERE source_type = 'novel'),
-			COUNT(*) FILTER (WHERE source_type = 'script')
+			COUNT(*) FILTER (WHERE source_type = 'script'),
+			(
+				SELECT COUNT(*)
+				FROM novel_chapters nc
+				WHERE nc.project_id = $1 AND nc.source_id IS NOT NULL
+			)
 		FROM project_sources
 		WHERE project_id = $1
-	`, projectID).Scan(&novelCount, &scriptSourceCount); err != nil {
+	`, projectID).Scan(&novelCount, &scriptSourceCount, &chapterCount); err != nil {
 		return ProductionSourceStage{}, err
 	}
 	activeScriptID, activeScriptTitle, err := s.activeProductionScript(r, projectID, "")
@@ -312,18 +319,22 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 	}
 	summary := make([]string, 0, 2)
 	if novelCount > 0 {
-		summary = append(summary, "Novel sources imported")
+		summary = append(summary, "小说原文已导入")
 	}
 	if scriptSourceCount > 0 {
-		summary = append(summary, "Script sources imported")
+		summary = append(summary, "剧本原文已导入")
+	}
+	if chapterCount > 0 {
+		summary = append(summary, fmt.Sprintf("已切分章节：%d", chapterCount))
 	}
 	if activeScriptTitle != "" {
-		summary = append(summary, "Active script: "+activeScriptTitle)
+		summary = append(summary, "当前激活剧本："+activeScriptTitle)
 	}
 	return ProductionSourceStage{
 		Status:            status,
 		NovelSourceCount:  novelCount,
 		ScriptSourceCount: scriptSourceCount,
+		ChapterCount:      chapterCount,
 		ActiveScriptID:    stringPtrFromValue(activeScriptID),
 		ActiveScriptTitle: stringPtrFromValue(activeScriptTitle),
 		Summary:           summary,

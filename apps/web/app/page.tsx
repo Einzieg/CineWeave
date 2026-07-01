@@ -26,11 +26,11 @@ export default function Home() {
           router.replace("/setup" as Route);
           return;
         }
-        router.replace((ready ? "/dashboard" : "/login") as Route);
+        router.replace((ready ? "/projects" : "/login") as Route);
       })
       .catch(() => {
         if (!cancelled) {
-          router.replace((ready ? "/dashboard" : "/login") as Route);
+          router.replace((ready ? "/projects" : "/login") as Route);
         }
       });
     return () => {

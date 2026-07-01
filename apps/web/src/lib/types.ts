@@ -83,8 +83,43 @@ export type ProjectSource = {
   storageKey?: string;
   status: string;
   metadata?: JsonRecord;
+  chapters?: NovelChapter[];
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type NovelChapter = {
+  id: string;
+  sourceId: string;
+  chapterIndex: number;
+  volumeTitle?: string;
+  chapterTitle?: string;
+  content: string;
+  eventState: string;
+  eventSummary?: JsonValue;
+  errorMessage?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type NovelChapterSummary = {
+  id: string;
+  chapterIndex: number;
+  volumeTitle?: string;
+  chapterTitle?: string;
+  contentLength: number;
+};
+
+export type CreatedScriptSummary = {
+  id: string;
+  currentVersionId: string;
+  title: string;
+};
+
+export type ImportProjectSourceResponse = {
+  source: ProjectSource;
+  chapters: NovelChapterSummary[];
+  script?: CreatedScriptSummary;
 };
 
 export type ScriptVersion = {
@@ -262,6 +297,7 @@ export type ProductionStatus = {
       status: string;
       novelSourceCount: number;
       scriptSourceCount: number;
+      chapterCount: number;
       activeScriptId?: string | null;
       activeScriptTitle?: string | null;
       summary: string[];

@@ -119,6 +119,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/regenerate", s.withAuth(s.regenerateCreativeObject))
 	mux.HandleFunc("GET /api/projects/{projectId}/sources", s.withAuth(s.listProjectSources))
 	mux.HandleFunc("POST /api/projects/{projectId}/sources", s.withAuth(s.createProjectSource))
+	mux.HandleFunc("POST /api/projects/{projectId}/sources/import", s.withAuth(s.importProjectSourceFile))
 	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.getProjectSource))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.updateProjectSource))
 	mux.HandleFunc("DELETE /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.deleteProjectSource))

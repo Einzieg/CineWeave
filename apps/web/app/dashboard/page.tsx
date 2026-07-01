@@ -1,5 +1,5 @@
-import { DashboardPage } from "@/components/studio-pages";
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <DashboardPage />;
+  redirect("/projects");
 }
