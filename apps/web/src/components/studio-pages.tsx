@@ -33,6 +33,9 @@ import type {
   ProjectTimeline,
   PromptTemplate,
   ProviderAccount,
+  ReviewItem,
+  ReviewItemAction,
+  ReviewRun,
   Role,
   Script,
   ScriptScene,
@@ -56,6 +59,7 @@ import {
   ArrowUp,
   Check,
   Clapperboard,
+  ClipboardCheck,
   Copy,
   Archive,
   Download,
@@ -491,6 +495,8 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
   const workflows = useStudioQuery<WorkflowRun[]>([], `project:${projectId}:runs`, async (activeSession) => (await studioApi.listWorkflowRuns(activeSession, projectId)).items);
   const artifacts = useStudioQuery<Artifact[]>([], `project:${projectId}:artifacts`, async (activeSession) => (await studioApi.listArtifacts(activeSession, projectId)).items);
   const finalVideos = useStudioQuery<FinalVideoVersion[]>([], `project:${projectId}:final-videos`, async (activeSession) => (await studioApi.listFinalVideos(activeSession, projectId)).items);
+  const reviewItems = useStudioQuery<ReviewItem[]>([], `project:${projectId}:review-items`, async (activeSession) => (await studioApi.listReviewItems(activeSession, projectId, { status: "open" })).items);
+  const reviewRuns = useStudioQuery<ReviewRun[]>([], `project:${projectId}:review-runs`, async (activeSession) => (await studioApi.listReviewRuns(activeSession, projectId)).items);
   const [finalVideoBusy, setFinalVideoBusy] = useState(false);
   const [finalVideoError, setFinalVideoError] = useState("");
   const latestRun = workflows.data[0];
@@ -574,6 +580,19 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
             <ProgressStep done={workflows.data.some((item) => stringFrom(item.input.workflowType) === "script_to_storyboard")} title="分镜" detail="Storyboard Agent" />
             <ProgressStep done={workflows.data.some((item) => ["script_to_video", "full_production", "video_production"].includes(stringFrom(item.input.workflowType)))} title="镜头视频" detail="图片 / 视频生成" />
             <ProgressStep done={Boolean(finalVideo)} title="最终成片" detail={activeFinalVideo ? `v${activeFinalVideo.version} · ${activeFinalVideo.status}` : finalVideo?.storageKey ?? "等待合成"} />
+          </div>
+        </Surface>
+
+        <Surface>
+          <SectionTitle title="审阅状态" description="当前项目质量审查和问题闭环状态。" />
+          <div className="grid gap-3 p-4 md:grid-cols-[repeat(3,minmax(0,1fr))_auto] md:items-center">
+            <InfoTile label="未处理问题" value={String(reviewItems.data.length)} />
+            <InfoTile label="高优先级问题" value={String(reviewItems.data.filter((item) => item.severity === "high" || item.severity === "critical").length)} />
+            <InfoTile label="最近审阅" value={formatTime(reviewRuns.data[0]?.completedAt ?? reviewRuns.data[0]?.createdAt)} />
+            <Link className="studio-button studio-button-primary justify-center" href={projectHref(projectId, "review") as Route}>
+              <ClipboardCheck size={16} />
+              进入审阅中心
+            </Link>
           </div>
         </Surface>
 
@@ -1041,6 +1060,7 @@ export function ProjectProductionPage({ projectId }: { projectId: string }) {
 function ProjectProductionContent({ projectId }: { projectId: string }) {
   const { session } = useStudioSession();
   const status = useStudioQuery<ProductionStatus | null>(null, `production:${projectId}`, async (activeSession) => studioApi.getProductionStatus(activeSession, projectId));
+  const reviewItems = useStudioQuery<ReviewItem[]>([], `production:${projectId}:review-items`, async (activeSession) => (await studioApi.listReviewItems(activeSession, projectId, { status: "open" })).items);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -1136,12 +1156,14 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("结构化分场", status.data.stages.source.scriptSceneCount ?? 0),
                   metricText("已确认分场", status.data.stages.source.approvedScriptSceneCount ?? 0),
                   metricText("待处理分场", status.data.stages.source.pendingScriptSceneCount ?? 0),
+                  reviewIssueMetric(reviewItems.data, ["script"]),
                   status.data.stages.source.activeAdaptationTitle ? `当前计划：${status.data.stages.source.activeAdaptationTitle}` : "当前计划：暂无",
                   status.data.stages.source.activeScriptTitle ? `当前剧本：${status.data.stages.source.activeScriptTitle}` : "当前剧本：暂无",
                 ]}
                 summary={status.data.stages.source.novelSourceCount + status.data.stages.source.scriptSourceCount > 0 ? status.data.stages.source.summary : ["还没有原文或剧本，请先导入小说原文、上传剧本，或让 Agent 生成剧本。"]}
                 primary={sourceProductionPrimary(status.data, projectId)}
                 secondary={{ label: "进入原文与剧本", href: projectHref(projectId, "sources") }}
+                reviewLink={{ label: "查看剧本问题", href: `${projectHref(projectId, "review")}?category=script` }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -1162,11 +1184,13 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("待确认", status.data.stages.assets.pendingReviewCount),
                   metricText("人工修改", status.data.stages.assets.manualOverrideCount),
                   metricText("下游过期", status.data.stages.assets.downstreamStaleCount),
+                  reviewIssueMetric(reviewItems.data, ["asset"]),
                 ]}
                 summary={[...(status.data.stages.assets.summary.character ?? []), ...(status.data.stages.assets.summary.scene ?? []), ...(status.data.stages.assets.summary.prop ?? [])]}
                 primary={{ label: "分析剧本资产", action: "analyze_assets", disabled: !status.data.stages.source.activeScriptId }}
                 secondary={{ label: "生成缺失参考图", action: "generate_asset_images", disabled: !status.data.stages.source.activeScriptId }}
                 link={{ label: "进入资产", href: projectHref(projectId, "assets") }}
+                reviewLink={{ label: "查看资产问题", href: `${projectHref(projectId, "review")}?category=asset` }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -1180,10 +1204,12 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("待确认", status.data.stages.storyboard.pendingReviewCount),
                   metricText("人工修改", status.data.stages.storyboard.manualOverrideCount),
                   metricText("需重生成", status.data.stages.storyboard.staleShotCount),
+                  reviewIssueMetric(reviewItems.data, ["storyboard"]),
                 ]}
                 summary={status.data.stages.storyboard.summary}
                 primary={{ label: "生成分镜", action: "generate_storyboard", disabled: !status.data.stages.source.activeScriptId }}
                 secondary={{ label: "进入分镜工作台", href: projectHref(projectId, "storyboard") }}
+                reviewLink={{ label: "查看分镜问题", href: `${projectHref(projectId, "review")}?category=storyboard` }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -1200,11 +1226,13 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("待确认", status.data.stages.shotAssets.pendingReviewCount),
                   metricText("人工修改", status.data.stages.shotAssets.manualOverrideCount),
                   metricText("派生图过期", status.data.stages.shotAssets.staleRequirementCount),
+                  reviewIssueMetric(reviewItems.data, ["shot_asset"]),
                 ]}
                 summary={status.data.stages.shotAssets.summary}
                 primary={{ label: "分析镜头派生资产", action: "analyze_shot_assets", disabled: !status.data.stages.source.activeScriptId }}
                 secondary={{ label: "生成派生参考图", action: "generate_derived_asset_images", disabled: !status.data.stages.source.activeScriptId }}
                 link={{ label: "进入分镜工作台", href: projectHref(projectId, "storyboard") }}
+                reviewLink={{ label: "查看派生资产问题", href: `${projectHref(projectId, "review")}?category=shot_asset` }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -1212,10 +1240,11 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 title="镜头图片"
                 status={status.data.stages.shotImages.status}
                 description={productionStageDescription("shot_images", status.data.stages.shotImages.status)}
-                metrics={shotMediaMetrics(status.data.stages.shotImages)}
+                metrics={[...shotMediaMetrics(status.data.stages.shotImages), reviewIssueMetric(reviewItems.data, ["shot_image"])]}
                 primary={{ label: "生成镜头图片", action: "generate_shot_images", disabled: !status.data.stages.source.activeScriptId }}
                 secondary={{ label: "重新生成失败图片", action: "generate_shot_images", disabled: !status.data.stages.source.activeScriptId || status.data.stages.shotImages.failed === 0 }}
                 link={{ label: "进入分镜工作台", href: projectHref(projectId, "storyboard") }}
+                reviewLink={{ label: "查看图片问题", href: `${projectHref(projectId, "review")}?category=shot_image` }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -1223,10 +1252,11 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 title="镜头视频"
                 status={status.data.stages.shotVideos.status}
                 description={productionStageDescription("shot_videos", status.data.stages.shotVideos.status)}
-                metrics={shotMediaMetrics(status.data.stages.shotVideos)}
+                metrics={[...shotMediaMetrics(status.data.stages.shotVideos), reviewIssueMetric(reviewItems.data, ["shot_video"])]}
                 primary={{ label: "生成镜头视频", action: "generate_shot_videos", disabled: !status.data.stages.source.activeScriptId }}
                 secondary={{ label: "查看/取消运行任务", href: projectHref(projectId, "workflows") }}
                 link={{ label: "进入分镜工作台", href: projectHref(projectId, "storyboard") }}
+                reviewLink={{ label: "查看视频问题", href: `${projectHref(projectId, "review")}?category=shot_video` }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -1240,10 +1270,12 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("启用片段", status.data.stages.finalVideo.enabledClipCount ?? 0),
                   status.data.stages.finalVideo.storageKey ? `对象：${status.data.stages.finalVideo.storageKey}` : "媒体文件：等待合成",
                   status.data.stages.finalVideo.stale ? "最终成片可能不是最新" : "最终成片状态：最新",
+                  reviewIssueMetric(reviewItems.data, ["timeline", "final_video"]),
                 ]}
                 primary={{ label: "进入时间线", href: projectHref(projectId, "timeline") }}
                 secondary={status.data.stages.finalVideo.previewUrl ? { label: "预览最终成片", href: status.data.stages.finalVideo.previewUrl } : undefined}
                 link={{ label: "进入媒体资产", href: projectHref(projectId, "vault") }}
+                reviewLink={{ label: "查看成片问题", href: `${projectHref(projectId, "review")}?category=final_video` }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -1264,6 +1296,7 @@ function ProductionStageCard({
   primary,
   secondary,
   link,
+  reviewLink,
   busy,
   onRun,
 }: {
@@ -1275,6 +1308,7 @@ function ProductionStageCard({
   primary: { label: string; action?: string; href?: string; disabled?: boolean };
   secondary?: { label: string; action?: string; href?: string; disabled?: boolean };
   link?: { label: string; href: string };
+  reviewLink?: { label: string; href: string };
   busy: string;
   onRun: (action: string) => void;
 }) {
@@ -1338,6 +1372,12 @@ function ProductionStageCard({
             <Link className="studio-button justify-center" href={link.href as Route}>
               <ArrowRight size={16} />
               {link.label}
+            </Link>
+          ) : null}
+          {reviewLink ? (
+            <Link className="studio-button justify-center" href={reviewLink.href as Route}>
+              <ClipboardCheck size={16} />
+              {reviewLink.label}
             </Link>
           ) : null}
         </div>
@@ -3902,6 +3942,287 @@ export function ProjectExportPage({ projectId }: { projectId: string }) {
   );
 }
 
+export function ProjectReviewPage({ projectId, initialCategory = "all" }: { projectId: string; initialCategory?: string }) {
+  return (
+    <AppShell active="projects" title="审阅中心" description="检查剧本、资产、分镜、镜头与成片中的潜在问题。" projectId={projectId} projectSection="review">
+      <ProjectReviewContent initialCategory={initialCategory} projectId={projectId} />
+    </AppShell>
+  );
+}
+
+function ProjectReviewContent({ projectId, initialCategory }: { projectId: string; initialCategory: string }) {
+  const { session } = useStudioSession();
+  const [statusFilter, setStatusFilter] = useState("open");
+  const [severityFilter, setSeverityFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState(reviewFilterValue(initialCategory, reviewCategoryValues()));
+  const [entityFilter, setEntityFilter] = useState("all");
+  const [selectedItemId, setSelectedItemId] = useState("");
+  const [useAgent, setUseAgent] = useState(false);
+  const [resolutionNote, setResolutionNote] = useState("");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const runs = useStudioQuery<ReviewRun[]>([], `review:${projectId}:runs`, async (activeSession) => (await studioApi.listReviewRuns(activeSession, projectId)).items);
+  const allItems = useStudioQuery<ReviewItem[]>([], `review:${projectId}:all-items`, async (activeSession) => (await studioApi.listReviewItems(activeSession, projectId)).items);
+  const filterKey = `${statusFilter}:${severityFilter}:${categoryFilter}:${entityFilter}`;
+  const items = useStudioQuery<ReviewItem[]>([], `review:${projectId}:items:${filterKey}`, async (activeSession) => {
+    const query: Record<string, string> = {};
+    if (statusFilter !== "all") {
+      query.status = statusFilter;
+    }
+    if (severityFilter !== "all") {
+      query.severity = severityFilter;
+    }
+    if (categoryFilter !== "all") {
+      query.category = categoryFilter;
+    }
+    if (entityFilter !== "all") {
+      query.entityType = entityFilter;
+    }
+    return (await studioApi.listReviewItems(activeSession, projectId, query)).items;
+  });
+  const effectiveSelectedItemId = items.data.some((item) => item.id === selectedItemId) ? selectedItemId : items.data[0]?.id ?? "";
+  const selectedItem = items.data.find((item) => item.id === effectiveSelectedItemId) ?? null;
+  const openItems = allItems.data.filter((item) => item.status === "open");
+  const criticalItems = openItems.filter((item) => item.severity === "critical");
+  const highPriorityItems = openItems.filter((item) => item.severity === "critical" || item.severity === "high");
+  const resolvedItems = allItems.data.filter((item) => item.status === "resolved");
+  const ignoredItems = allItems.data.filter((item) => item.status === "ignored");
+
+  async function runReview() {
+    setBusy("run-review");
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.runProjectReview(session, projectId, {
+        reviewType: "project",
+        useAgent,
+        includeDeterministicChecks: true,
+      });
+      setNotice(`审阅完成，生成 ${response.itemCount} 个问题`);
+      runs.reload();
+      allItems.reload();
+      items.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function updateItemStatus(nextStatus: "resolved" | "ignored" | "open") {
+    if (!selectedItem) {
+      return;
+    }
+    setBusy(`${nextStatus}:${selectedItem.id}`);
+    setError("");
+    setNotice("");
+    try {
+      if (nextStatus === "resolved") {
+        await studioApi.resolveReviewItem(session, projectId, selectedItem.id, { note: resolutionNote });
+        setNotice("问题已标记为已解决");
+      } else if (nextStatus === "ignored") {
+        await studioApi.ignoreReviewItem(session, projectId, selectedItem.id, { note: resolutionNote });
+        setNotice("问题已忽略");
+      } else {
+        await studioApi.reopenReviewItem(session, projectId, selectedItem.id, { note: "" });
+        setNotice("问题已重新打开");
+      }
+      setResolutionNote("");
+      allItems.reload();
+      items.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function triggerRegenerate(action: ReviewItemAction) {
+    if (!action.targetType || !action.targetId) {
+      return;
+    }
+    setBusy(`regenerate:${action.targetType}:${action.targetId}`);
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.regenerate(session, projectId, {
+        targetType: action.targetType,
+        targetId: action.targetId,
+        options: { force: true },
+      });
+      setNotice(`重生成已启动：${response.workflowRunId}`);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <SessionGate>
+      <div className="grid gap-5">
+        <Surface className="p-5">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <h2 className="text-3xl font-semibold text-slate-950">审阅中心</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">检查剧本、资产、分镜、镜头与成片中的潜在问题。</p>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600">
+                <Pill>最近审阅：{formatTime(runs.data[0]?.completedAt ?? runs.data[0]?.createdAt)}</Pill>
+                <Pill>最近状态：{runs.data[0] ? reviewRunStatusLabel(runs.data[0].status) : "暂无"}</Pill>
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[auto_auto] sm:items-center">
+              <Toggle label="Agent 审阅" checked={useAgent} onChange={setUseAgent} />
+              <button className="studio-button studio-button-primary justify-center" disabled={busy !== ""} onClick={runReview} type="button">
+                {busy === "run-review" ? <Loader2 className="animate-spin" size={16} /> : <ClipboardCheck size={16} />}
+                运行审阅
+              </button>
+            </div>
+          </div>
+        </Surface>
+
+        <div className="grid gap-3 md:grid-cols-5">
+          <SummaryTile label="未处理问题" value={openItems.length} detail="当前仍需处理的审阅项" />
+          <SummaryTile label="严重问题" value={criticalItems.length} detail="会阻断生产或交付的问题" />
+          <SummaryTile label="高优先级" value={highPriorityItems.length} detail="critical 与 high 审阅项" />
+          <SummaryTile label="已解决" value={resolvedItems.length} detail="已完成闭环的问题" />
+          <SummaryTile label="已忽略" value={ignoredItems.length} detail="已手动忽略的问题" />
+        </div>
+
+        <div className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)_380px]">
+          <Surface>
+            <SectionTitle title="筛选" />
+            <div className="grid gap-3 p-4">
+              <SelectInput label="状态" value={statusFilter} values={["open", "all", "resolved", "ignored"]} labels={{ all: "全部", open: "未处理", resolved: "已解决", ignored: "已忽略" }} onChange={setStatusFilter} />
+              <SelectInput label="严重程度" value={severityFilter} values={["all", "critical", "high", "medium", "low"]} labels={{ all: "全部", critical: "严重", high: "高", medium: "中", low: "低" }} onChange={setSeverityFilter} />
+              <SelectInput label="分类" value={categoryFilter} values={reviewCategoryValues()} labels={reviewCategoryLabels()} onChange={setCategoryFilter} />
+              <SelectInput label="关联对象" value={entityFilter} values={reviewEntityValues()} labels={reviewEntityLabels()} onChange={setEntityFilter} />
+            </div>
+          </Surface>
+
+          <Surface>
+            <SectionTitle title="问题列表" description={`${items.data.length} 个匹配项`} />
+            <QueryBody state={items}>
+              {items.data.length ? (
+                <div className="grid gap-3 p-4">
+                  {items.data.map((item) => (
+                    <button
+                      className={cn("rounded-md border p-4 text-left transition", selectedItem?.id === item.id ? "border-blue-600 bg-blue-50" : "border-slate-200 bg-slate-50 hover:border-blue-600/40")}
+                      key={item.id}
+                      onClick={() => setSelectedItemId(item.id)}
+                      type="button"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={cn("rounded-md px-2 py-1 text-xs font-medium", reviewSeverityClass(item.severity))}>{reviewSeverityLabel(item.severity)}</span>
+                        <Pill>{reviewCategoryLabel(item.category)}</Pill>
+                        <Pill>{reviewStatusLabel(item.status)}</Pill>
+                      </div>
+                      <p className="mt-3 font-medium text-slate-900">{item.title}</p>
+                      <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{item.description}</p>
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                        <span>{reviewItemEntityLabel(item)}</span>
+                        <span>{formatTime(item.createdAt)}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="没有匹配的问题" description="调整筛选条件或重新运行审阅。" />
+              )}
+            </QueryBody>
+          </Surface>
+
+          <Surface>
+            <SectionTitle title="问题详情" />
+            {selectedItem ? (
+              <div className="grid gap-4 p-4">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={cn("rounded-md px-2 py-1 text-xs font-medium", reviewSeverityClass(selectedItem.severity))}>{reviewSeverityLabel(selectedItem.severity)}</span>
+                    <Pill>{reviewCategoryLabel(selectedItem.category)}</Pill>
+                    <Pill>{reviewStatusLabel(selectedItem.status)}</Pill>
+                  </div>
+                  <h3 className="mt-3 text-lg font-semibold text-slate-950">{selectedItem.title}</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{selectedItem.description}</p>
+                </div>
+                {selectedItem.suggestion ? (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">建议修复</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-700">{selectedItem.suggestion}</p>
+                  </div>
+                ) : null}
+                <div className="grid gap-3 md:grid-cols-2">
+                  <InfoTile label="关联对象" value={reviewItemEntityLabel(selectedItem)} />
+                  <InfoTile label="创建时间" value={formatTime(selectedItem.createdAt)} />
+                  <InfoTile label="更新时间" value={formatTime(selectedItem.updatedAt)} />
+                  <InfoTile label="来源" value={reviewItemSourceLabel(selectedItem)} />
+                </div>
+                {selectedItem.actions?.length ? (
+                  <div className="grid gap-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">可执行操作</p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedItem.actions.map((action, index) => (
+                        <ReviewActionButton action={action} busy={busy} key={`${action.actionType}:${action.targetType ?? action.href ?? index}`} onRegenerate={triggerRegenerate} />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <TextInput label="处理备注" value={resolutionNote} onChange={setResolutionNote} />
+                <div className="flex flex-wrap gap-2">
+                  {selectedItem.status === "open" ? (
+                    <>
+                      <button className="studio-button studio-button-primary" disabled={busy !== ""} onClick={() => updateItemStatus("resolved")} type="button">
+                        <Check size={16} />
+                        标记已解决
+                      </button>
+                      <button className="studio-button" disabled={busy !== ""} onClick={() => updateItemStatus("ignored")} type="button">
+                        <X size={16} />
+                        忽略问题
+                      </button>
+                    </>
+                  ) : (
+                    <button className="studio-button studio-button-primary" disabled={busy !== ""} onClick={() => updateItemStatus("open")} type="button">
+                      <RefreshCw size={16} />
+                      重新打开
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <EmptyState title="未选择问题" description="从问题列表中选择一个审阅项。" />
+            )}
+          </Surface>
+        </div>
+
+        <ErrorPanel message={error} />
+        {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
+      </div>
+    </SessionGate>
+  );
+}
+
+function ReviewActionButton({ action, busy, onRegenerate }: { action: ReviewItemAction; busy: string; onRegenerate: (action: ReviewItemAction) => void }) {
+  if (action.actionType === "navigate" && action.href) {
+    return (
+      <Link className="studio-button" href={action.href as Route}>
+        <ArrowRight size={16} />
+        {action.label}
+      </Link>
+    );
+  }
+  if (action.actionType === "regenerate") {
+    const busyKey = `regenerate:${action.targetType}:${action.targetId}`;
+    return (
+      <button className="studio-button" disabled={busy !== "" || !action.targetType || !action.targetId} onClick={() => onRegenerate(action)} type="button">
+        {busy === busyKey ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+        {action.label}
+      </button>
+    );
+  }
+  return null;
+}
+
 function ProjectExportContent({ projectId }: { projectId: string }) {
   const { session } = useStudioSession();
   const project = useStudioQuery<Project | null>(null, `export:${projectId}:project`, async (activeSession) => studioApi.getProject(activeSession, projectId));
@@ -4993,6 +5314,135 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 
 function Pill({ children }: { children: React.ReactNode }) {
   return <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[12px] text-slate-600">{children}</span>;
+}
+
+function reviewIssueMetric(items: ReviewItem[], categories: string[]) {
+  const matched = items.filter((item) => item.status === "open" && categories.includes(item.category));
+  const priorityCount = matched.filter((item) => item.severity === "critical" || item.severity === "high").length;
+  return priorityCount ? `审阅问题：${matched.length} 个（${priorityCount} 个高优先级）` : `审阅问题：${matched.length} 个`;
+}
+
+function reviewFilterValue(value: string, values: string[]) {
+  return values.includes(value) ? value : "all";
+}
+
+function reviewCategoryValues() {
+  return ["all", "script", "asset", "storyboard", "shot_asset", "shot_image", "shot_video", "timeline", "final_video"];
+}
+
+function reviewCategoryLabels() {
+  return {
+    all: "全部",
+    script: "剧本",
+    asset: "资产",
+    storyboard: "分镜",
+    shot_asset: "派生资产",
+    shot_image: "镜头图片",
+    shot_video: "镜头视频",
+    timeline: "时间线",
+    final_video: "最终成片",
+  };
+}
+
+function reviewCategoryLabel(value: string) {
+  return reviewCategoryLabels()[value as keyof ReturnType<typeof reviewCategoryLabels>] ?? value;
+}
+
+function reviewEntityValues() {
+  return ["all", "script_scene", "canonical_asset", "storyboard_shot", "shot_asset_requirement", "timeline_clip", "final_video_version", "project"];
+}
+
+function reviewEntityLabels() {
+  return {
+    all: "全部",
+    script_scene: "分场",
+    canonical_asset: "基础资产",
+    storyboard_shot: "分镜镜头",
+    shot_asset_requirement: "派生资产需求",
+    timeline_clip: "时间线片段",
+    final_video_version: "成片版本",
+    project: "项目",
+  };
+}
+
+function reviewEntityLabel(value: string) {
+  return reviewEntityLabels()[value as keyof ReturnType<typeof reviewEntityLabels>] ?? value;
+}
+
+function reviewSeverityLabel(value: string) {
+  switch (value) {
+    case "critical":
+      return "严重";
+    case "high":
+      return "高";
+    case "medium":
+      return "中";
+    case "low":
+      return "低";
+    default:
+      return value;
+  }
+}
+
+function reviewSeverityClass(value: string) {
+  switch (value) {
+    case "critical":
+      return "bg-red-100 text-red-800";
+    case "high":
+      return "bg-orange-100 text-orange-800";
+    case "medium":
+      return "bg-amber-100 text-amber-800";
+    case "low":
+      return "bg-slate-200 text-slate-700";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
+
+function reviewStatusLabel(value: string) {
+  switch (value) {
+    case "open":
+      return "未处理";
+    case "resolved":
+      return "已解决";
+    case "ignored":
+      return "已忽略";
+    default:
+      return value;
+  }
+}
+
+function reviewRunStatusLabel(value: string) {
+  switch (value) {
+    case "queued":
+      return "排队中";
+    case "running":
+      return "审阅中";
+    case "succeeded":
+      return "已完成";
+    case "failed":
+      return "失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return value;
+  }
+}
+
+function reviewItemEntityLabel(item: ReviewItem) {
+  const id = item.entityId ? item.entityId.slice(0, 8) : "未绑定";
+  return `${reviewEntityLabel(item.entityType)} · ${id}`;
+}
+
+function reviewItemSourceLabel(item: ReviewItem) {
+  const source = item.metadata?.source;
+  if (source === "agent") {
+    return "Agent";
+  }
+  if (source === "deterministic") {
+    return "规则检查";
+  }
+  return "审阅中心";
 }
 
 function defaultImportDraft(sourceType: ImportSourceType): ImportDraft {

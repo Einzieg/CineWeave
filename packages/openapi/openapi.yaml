@@ -1118,6 +1118,195 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/reviews/run:
+    post:
+      operationId: runProjectReview
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunProjectReviewRequest"
+      responses:
+        "200":
+          description: Project review completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunProjectReviewResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/reviews:
+    get:
+      operationId: listProjectReviewRuns
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project review runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewRunListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/reviews/{reviewRunId}:
+    get:
+      operationId: getProjectReviewRun
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewRunId"
+      responses:
+        "200":
+          description: Project review run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewRunEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-items:
+    get:
+      operationId: listProjectReviewItems
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, resolved, ignored]
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [script, asset, storyboard, shot_asset, shot_image, shot_video, timeline, final_video]
+        - name: entityType
+          in: query
+          schema:
+            type: string
+            enum: [script_scene, canonical_asset, storyboard_shot, shot_asset_requirement, timeline_clip, final_video_version, project]
+      responses:
+        "200":
+          description: Project review items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewItemListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-items/{itemId}:
+    get:
+      operationId: getProjectReviewItem
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewItemId"
+      responses:
+        "200":
+          description: Project review item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewItemEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-items/{itemId}/resolve:
+    post:
+      operationId: resolveProjectReviewItem
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewItemId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveReviewItemRequest"
+      responses:
+        "200":
+          description: Project review item resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewItemEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-items/{itemId}/ignore:
+    post:
+      operationId: ignoreProjectReviewItem
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewItemId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveReviewItemRequest"
+      responses:
+        "200":
+          description: Project review item ignored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewItemEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-items/{itemId}/reopen:
+    post:
+      operationId: reopenProjectReviewItem
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewItemId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveReviewItemRequest"
+      responses:
+        "200":
+          description: Project review item reopened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewItemEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/shot-production/status:
     get:
       operationId: getShotProductionStatus
@@ -3889,6 +4078,20 @@ components:
       schema:
         type: string
         format: uuid
+    ReviewRunId:
+      name: reviewRunId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ReviewItemId:
+      name: itemId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     WorkflowRunId:
       name: workflowRunId
       in: path
@@ -5840,6 +6043,179 @@ components:
         expiresAt:
           type: string
           format: date-time
+    ReviewRun:
+      type: object
+      required: [id, organizationId, projectId, reviewType, status, summary, input, output, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        reviewType:
+          type: string
+          enum: [project, script, assets, storyboard, production, timeline, final_video]
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        summary:
+          type: object
+          additionalProperties: true
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        providerCallId:
+          type: string
+          format: uuid
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    ReviewItemAction:
+      type: object
+      required: [label, actionType]
+      properties:
+        label:
+          type: string
+        actionType:
+          type: string
+          enum: [navigate, regenerate]
+        href:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+          format: uuid
+    ReviewItem:
+      type: object
+      required: [id, organizationId, projectId, itemType, category, severity, title, description, entityType, status, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        reviewRunId:
+          type: string
+          format: uuid
+        itemType:
+          type: string
+          enum: [issue, warning, suggestion]
+        category:
+          type: string
+          enum: [script, asset, storyboard, shot_asset, shot_image, shot_video, timeline, final_video]
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        title:
+          type: string
+        description:
+          type: string
+        suggestion:
+          type: string
+        entityType:
+          type: string
+          enum: [script_scene, canonical_asset, storyboard_shot, shot_asset_requirement, timeline_clip, final_video_version, project]
+        entityId:
+          type: string
+          format: uuid
+        relatedEntityType:
+          type: string
+        relatedEntityId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [open, resolved, ignored]
+        resolutionNote:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewItemAction"
+        createdBy:
+          type: string
+          format: uuid
+        resolvedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: string
+          format: date-time
+    RunProjectReviewRequest:
+      type: object
+      properties:
+        reviewType:
+          type: string
+          default: project
+          enum: [project, script, assets, storyboard, production, timeline, final_video]
+        useAgent:
+          type: boolean
+          default: false
+        includeDeterministicChecks:
+          type: boolean
+          default: true
+    RunProjectReviewResponse:
+      type: object
+      required: [reviewRunId, status, itemCount]
+      properties:
+        reviewRunId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        summary:
+          type: object
+          additionalProperties: true
+        itemCount:
+          type: integer
+    ResolveReviewItemRequest:
+      type: object
+      properties:
+        note:
+          type: string
     FinalVideoDownloadUrlRequest:
       type: object
       properties:
@@ -7017,6 +7393,51 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ProjectExportDownloadUrlResponse"
+    ReviewRunEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ReviewRun"
+    ReviewRunListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ReviewRun"
+    ReviewItemEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ReviewItem"
+    ReviewItemListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ReviewItem"
+    RunProjectReviewResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/RunProjectReviewResponse"
     ProductionStatusEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

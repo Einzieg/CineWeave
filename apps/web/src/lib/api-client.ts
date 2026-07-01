@@ -27,6 +27,9 @@ import type {
   ProjectExport,
   ProductionStatus,
   ProjectTimeline,
+  ReviewItem,
+  ReviewRun,
+  RunProjectReviewResponse,
   RegenerateResponse,
   PromptTemplate,
   ProviderAccount,
@@ -143,6 +146,22 @@ export const studioApi = {
     apiRequest<ProjectExport>(`/api/projects/${projectId}/exports/${exportId}`, { session }),
   createProjectExportDownloadUrl: (session: StudioSession, projectId: string, exportId: string, body: JsonRecord) =>
     apiRequest<DownloadUrlResponse>(`/api/projects/${projectId}/exports/${exportId}/download-url`, { method: "POST", session, body }),
+  runProjectReview: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<RunProjectReviewResponse>(`/api/projects/${projectId}/reviews/run`, { method: "POST", session, body }),
+  listReviewRuns: (session: StudioSession, projectId: string) =>
+    apiRequest<ListEnvelope<ReviewRun>>(`/api/projects/${projectId}/reviews`, { session }),
+  getReviewRun: (session: StudioSession, projectId: string, reviewRunId: string) =>
+    apiRequest<ReviewRun>(`/api/projects/${projectId}/reviews/${reviewRunId}`, { session }),
+  listReviewItems: (session: StudioSession, projectId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
+    apiRequest<ListEnvelope<ReviewItem>>(`/api/projects/${projectId}/review-items`, { session, query }),
+  getReviewItem: (session: StudioSession, projectId: string, itemId: string) =>
+    apiRequest<ReviewItem>(`/api/projects/${projectId}/review-items/${itemId}`, { session }),
+  resolveReviewItem: (session: StudioSession, projectId: string, itemId: string, body: JsonRecord) =>
+    apiRequest<ReviewItem>(`/api/projects/${projectId}/review-items/${itemId}/resolve`, { method: "POST", session, body }),
+  ignoreReviewItem: (session: StudioSession, projectId: string, itemId: string, body: JsonRecord) =>
+    apiRequest<ReviewItem>(`/api/projects/${projectId}/review-items/${itemId}/ignore`, { method: "POST", session, body }),
+  reopenReviewItem: (session: StudioSession, projectId: string, itemId: string, body: JsonRecord) =>
+    apiRequest<ReviewItem>(`/api/projects/${projectId}/review-items/${itemId}/reopen`, { method: "POST", session, body }),
   getShotProductionStatus: (session: StudioSession, projectId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
     apiRequest<ShotProductionStatus>(`/api/projects/${projectId}/shot-production/status`, { session, query }),
   runShotProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>

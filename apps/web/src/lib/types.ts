@@ -666,6 +666,68 @@ export type RegenerateResponse = {
   workflowType: string;
 };
 
+export type ReviewItemAction = {
+  label: string;
+  actionType: string;
+  href?: string;
+  targetType?: string;
+  targetId?: string;
+};
+
+export type ReviewRun = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  workflowRunId?: string | null;
+  reviewType: string;
+  status: string;
+  summary?: JsonRecord;
+  input?: JsonRecord;
+  output?: JsonRecord;
+  providerCallId?: string | null;
+  promptVersionId?: string | null;
+  promptHash?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
+export type ReviewItem = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  reviewRunId?: string | null;
+  itemType: string;
+  category: string;
+  severity: string;
+  title: string;
+  description: string;
+  suggestion?: string | null;
+  entityType: string;
+  entityId?: string | null;
+  relatedEntityType?: string | null;
+  relatedEntityId?: string | null;
+  status: string;
+  resolutionNote?: string | null;
+  metadata?: JsonRecord;
+  actions?: ReviewItemAction[];
+  createdBy?: string | null;
+  resolvedBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string | null;
+};
+
+export type RunProjectReviewResponse = {
+  reviewRunId: string;
+  status: string;
+  summary?: JsonRecord;
+  itemCount: number;
+};
+
 export type Artifact = {
   id: string;
   organizationId: string;
