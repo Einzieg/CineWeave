@@ -1170,7 +1170,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ReviewRequest"
+              $ref: "#/components/schemas/ReviewScriptSceneRequest"
       responses:
         "200":
           description: Updated structured script scene review status
@@ -8060,6 +8060,14 @@ components:
         outcome:
           type: string
         content:
+          type: string
+    ReviewScriptSceneRequest:
+      type: object
+      required: [reviewStatus]
+      properties:
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        note:
           type: string
     AnalyzeScriptAssetsRequest:
       type: object
