@@ -411,6 +411,7 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 			"aspectRatio": aspectRatio,
 			"resolution":  resolution,
 		},
+		"assets":       map[string]any{"summary": assetContext.AssetsSummary},
 		"requirements": map[string]any{"summary": assetContext.RequirementsSummary},
 	})
 	if err != nil {

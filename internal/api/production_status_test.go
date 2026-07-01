@@ -177,10 +177,15 @@ func TestCreativeObjectEditAPIMarksManualOverrideAndStale(t *testing.T) {
 	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID, seed.ownerToken, seed.organizationID, map[string]any{
 		"name":         "Lin Chu Revised",
 		"description":  "manual description",
+		"profile":      map[string]any{"appearance": "manual profile"},
 		"visualTraits": map[string]any{"hair": "black"},
 	}, &asset)
 	if !asset.ManualOverride || asset.StaleState != "fresh" || asset.ReviewStatus != "pending" || asset.Name != "Lin Chu Revised" {
 		t.Fatalf("updated asset = %+v", asset)
+	}
+	var profile map[string]string
+	if err := json.Unmarshal(asset.Profile, &profile); err != nil || profile["appearance"] != "manual profile" {
+		t.Fatalf("updated asset profile = %s err=%v", asset.Profile, err)
 	}
 	assertStaleState(t, seed, "shot_asset_requirements", requirementID, "upstream_changed")
 	assertStaleState(t, seed, "storyboard_shots", shotID, "needs_regeneration")

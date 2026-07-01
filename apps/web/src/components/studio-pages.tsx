@@ -15,6 +15,7 @@ import type {
   AgentSession,
   AdaptationPlan,
   Artifact,
+  AssetReference,
   CanonicalAsset,
   JsonRecord,
   JsonValue,
@@ -34,6 +35,7 @@ import type {
   ScriptVersion,
   ShotAssetRequirement,
   StoryboardShot,
+  StudioSession,
   Team,
   WorkflowNodeRun,
   WorkflowRun,
@@ -56,6 +58,8 @@ import {
   Search,
   Send,
   Sparkles,
+  Star,
+  Upload,
   Video,
   X,
 } from "lucide-react";
@@ -671,7 +675,12 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("角色", status.data.stages.assets.characterCount),
                   metricText("场景", status.data.stages.assets.sceneCount),
                   metricText("道具", status.data.stages.assets.propCount),
+                  metricText("资产卡", status.data.stages.assets.assetCardCount),
+                  metricText("缺失资产卡", status.data.stages.assets.missingAssetCardCount),
                   metricText("参考图", status.data.stages.assets.referenceImageCount),
+                  metricText("主参考", status.data.stages.assets.primaryReferenceCount),
+                  metricText("缺失主参考", status.data.stages.assets.missingPrimaryReferenceCount),
+                  metricText("锁定参考", status.data.stages.assets.lockedReferenceCount),
                   metricText("待确认", status.data.stages.assets.pendingReviewCount),
                   metricText("人工修改", status.data.stages.assets.manualOverrideCount),
                   metricText("下游过期", status.data.stages.assets.downstreamStaleCount),
@@ -1800,6 +1809,12 @@ function AssetsContent({ projectId }: { projectId: string }) {
     }
   }
 
+  async function openAssetCard(asset: CanonicalAsset) {
+    await perform("加载资产卡", async () => {
+      setEditingAsset(await studioApi.getCanonicalAsset(session, projectId, asset.id, true));
+    });
+  }
+
   return (
     <SessionGate>
       <Surface className="mb-5 p-4">
@@ -1840,11 +1855,11 @@ function AssetsContent({ projectId }: { projectId: string }) {
           {filtered.map((asset) => {
             const linkedRequirements = requirements.data.filter((item) => item.assetId === asset.id);
             const staleRequirementCount = linkedRequirements.filter((item) => item.staleState && item.staleState !== "fresh").length;
+            const primaryReference = primaryAssetReference(asset);
+            const hasCard = hasAssetCard(asset);
             return (
               <Surface className="overflow-hidden" key={asset.id}>
-                <div className="grid aspect-video place-items-center bg-slate-200 text-slate-400">
-                  <ImageIcon size={28} />
-                </div>
+                <AssetReferencePreview reference={primaryReference} storageKey={assetPrimaryStorageKey(asset)} />
                 <div className="grid gap-3 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -1856,13 +1871,13 @@ function AssetsContent({ projectId }: { projectId: string }) {
                       <StatusBadge status={asset.reviewStatus ?? "pending"} />
                       {asset.manualOverride ? <Pill>人工修改</Pill> : null}
                       {asset.staleState && asset.staleState !== "fresh" ? <StatusBadge status={asset.staleState} /> : null}
+                      {asset.lockReference ? <Pill>锁定参考</Pill> : null}
                     </div>
                   </div>
                   <p className="line-clamp-3 text-sm leading-6 text-slate-600">{asset.description}</p>
-                  <p className="text-xs text-slate-500">参考图：{asset.referenceArtifactId || asset.referenceStorageKey ? "已生成" : "未生成"}</p>
-                  <p className="text-xs text-slate-500">关联派生需求：{linkedRequirements.length}</p>
+                  <p className="text-xs text-slate-500">资产卡：{hasCard ? "已生成" : "缺失"} · 主参考：{assetHasPrimaryReference(asset) ? "已设置" : "缺失"} · 参考数：{asset.referenceCount ?? asset.references?.length ?? 0}</p>
+                  <p className="text-xs text-slate-500">出现分场：{asset.sceneCount ?? asset.sceneLinks?.length ?? 0} · 关联分镜：{asset.storyboardShotCount ?? 0} · 派生需求：{linkedRequirements.length}</p>
                   {staleRequirementCount ? <p className="text-xs text-amber-700">下游派生资产需重生成：{staleRequirementCount}</p> : null}
-                  <p className="text-xs text-slate-500">出现分场：{asset.sceneCount ?? asset.sceneLinks?.length ?? 0} · 关联分镜：{asset.storyboardShotCount ?? 0}</p>
                   {asset.sceneLinks?.length ? (
                     <div className="grid gap-1 rounded-md border border-slate-200 bg-slate-50 p-2">
                       {asset.sceneLinks.slice(0, 4).map((link) => (
@@ -1881,11 +1896,15 @@ function AssetsContent({ projectId }: { projectId: string }) {
                       <X size={16} />
                       需修改
                     </button>
-                    <button className="studio-button" disabled={busy !== ""} onClick={() => setEditingAsset(asset)} type="button">
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => openAssetCard(asset)} type="button">
                       <Pencil size={16} />
-                      编辑资产
+                      资产卡
                     </button>
-                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("重新生成参考图", async () => void (await studioApi.regenerate(session, projectId, { targetType: "canonical_asset_image", targetId: asset.id, options: { force: true } })))} type="button">
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("生成资产卡", async () => void (await studioApi.generateAssetCard(session, projectId, asset.id, { force: false })))} type="button">
+                      <Sparkles size={16} />
+                      生成卡
+                    </button>
+                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("生成参考图", async () => void (await studioApi.generateAssetImage(session, projectId, asset.id, { setPrimary: !assetHasPrimaryReference(asset) })))} type="button">
                       <RefreshCw size={16} />
                       参考图
                     </button>
@@ -1901,14 +1920,20 @@ function AssetsContent({ projectId }: { projectId: string }) {
       <AssetEditDialog
         asset={editingAsset}
         busy={busy !== ""}
+        projectId={projectId}
+        session={session}
         onClose={() => setEditingAsset(null)}
+        onChanged={(asset) => {
+          setEditingAsset(asset);
+          assets.reload();
+          requirements.reload();
+        }}
         onSave={(body) =>
           perform("保存资产修订", async () => {
             if (!editingAsset) {
               return;
             }
-            await studioApi.updateCanonicalAsset(session, projectId, editingAsset.id, body);
-            setEditingAsset(null);
+            setEditingAsset(await studioApi.updateCanonicalAsset(session, projectId, editingAsset.id, body));
           })
         }
       />
@@ -1929,6 +1954,7 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const scripts = useStudioQuery<Script[]>([], `storyboard:scripts:${projectId}`, async (activeSession) => (await studioApi.listScripts(activeSession, projectId)).items);
   const workflows = useStudioQuery<WorkflowRun[]>([], `storyboard:runs:${projectId}`, async (activeSession) => (await studioApi.listWorkflowRuns(activeSession, projectId)).items);
   const requirements = useStudioQuery<ShotAssetRequirement[]>([], `storyboard:reqs:${projectId}`, async (activeSession) => (await studioApi.listShotAssetRequirements(activeSession, projectId)).items);
+  const assets = useStudioQuery<CanonicalAsset[]>([], `storyboard:assets:${projectId}`, async (activeSession) => (await studioApi.listCanonicalAssets(activeSession, projectId)).items);
   const [scriptId, setScriptId] = useState("");
   const [sceneFilter, setSceneFilter] = useState("");
   const [workflowRunId, setWorkflowRunId] = useState("");
@@ -1937,6 +1963,7 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const [error, setError] = useState("");
   const [editingShot, setEditingShot] = useState<StoryboardShot | null>(null);
   const [editingRequirement, setEditingRequirement] = useState<ShotAssetRequirement | null>(null);
+  const [editingAsset, setEditingAsset] = useState<CanonicalAsset | null>(null);
   const storyboardRuns = workflows.data.filter((run) => ["script_to_storyboard", "script_to_video", "full_production"].includes(stringFrom(run.input.workflowType)));
   const effectiveScriptId = validSelection(scriptId, scripts.data);
   const scriptScenes = useStudioQuery<ScriptScene[]>([], `storyboard:scenes:${projectId}:${effectiveScriptId}`, async (activeSession) =>
@@ -1957,6 +1984,7 @@ function StoryboardContent({ projectId }: { projectId: string }) {
       workflows.reload();
       requirements.reload();
       shots.reload();
+      assets.reload();
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -1979,6 +2007,12 @@ function StoryboardContent({ projectId }: { projectId: string }) {
         },
       }),
     );
+  }
+
+  async function openRequirementAsset(req: ShotAssetRequirement) {
+    await perform("加载资产卡", async () => {
+      setEditingAsset(await studioApi.getCanonicalAsset(session, projectId, req.assetId, true));
+    });
   }
 
   return (
@@ -2084,18 +2118,22 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                 </div>
                 <div className="grid content-start gap-2">
                   <p className="text-sm font-medium text-slate-900">派生资产需求</p>
-                  {shotRequirements.map((req) => (
+                  {shotRequirements.map((req) => {
+                    const asset = assets.data.find((item) => item.id === req.assetId);
+                    return (
                     <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600" key={req.id}>
                       <div className="flex items-start justify-between gap-2">
-                        <p className="font-medium text-slate-800">
-                          {assetTypeLabel(req.assetType)}：{req.assetName || req.assetId}
-                        </p>
+                        <button className="text-left font-medium text-blue-700" onClick={() => openRequirementAsset(req)} type="button">
+                          {assetTypeLabel(req.assetType ?? asset?.assetType)}：{req.assetName || asset?.name || req.assetId}
+                        </button>
                         <div className="grid justify-items-end gap-1">
                           <StatusBadge status={req.reviewStatus ?? "pending"} />
                           {req.manualOverride ? <Pill>人工修改</Pill> : null}
                           {req.staleState && req.staleState !== "fresh" ? <StatusBadge status={req.staleState} /> : null}
                         </div>
                       </div>
+                      <p>主参考：{assetHasPrimaryReference(asset) ? "已设置" : "缺失"}{asset?.lockReference ? " · 已锁定" : ""}</p>
+                      <p>派生图：{req.derivedArtifactId || req.derivedStorageKey ? "已生成" : "未生成"} · 参考优先级：{req.derivedStorageKey ? "派生图" : assetHasPrimaryReference(asset) ? "主参考" : "文本"}</p>
                       <p>服装：{req.costume || "未指定"}</p>
                       <p>姿态：{req.pose || "未指定"}</p>
                       <p>表情：{req.expression || "未指定"}</p>
@@ -2116,7 +2154,8 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                   {!shotRequirements.length ? <p className="text-sm text-slate-500">暂无派生资产需求。</p> : null}
                 </div>
               </Surface>
@@ -2154,6 +2193,26 @@ function StoryboardContent({ projectId }: { projectId: string }) {
           })
         }
       />
+      <AssetEditDialog
+        asset={editingAsset}
+        busy={busy !== ""}
+        projectId={projectId}
+        session={session}
+        onClose={() => setEditingAsset(null)}
+        onChanged={(asset) => {
+          setEditingAsset(asset);
+          assets.reload();
+          requirements.reload();
+        }}
+        onSave={(body) =>
+          perform("保存资产修订", async () => {
+            if (!editingAsset) {
+              return;
+            }
+            setEditingAsset(await studioApi.updateCanonicalAsset(session, projectId, editingAsset.id, body));
+          })
+        }
+      />
     </SessionGate>
   );
 }
@@ -2161,36 +2220,79 @@ function StoryboardContent({ projectId }: { projectId: string }) {
 function AssetEditDialog({
   asset,
   busy,
+  projectId,
+  session,
   onClose,
+  onChanged,
   onSave,
 }: {
   asset: CanonicalAsset | null;
   busy: boolean;
+  projectId: string;
+  session: StudioSession;
   onClose: () => void;
+  onChanged: (asset: CanonicalAsset) => void;
   onSave: (body: JsonRecord) => Promise<void>;
 }) {
   if (!asset) {
     return null;
   }
-  return <AssetEditDialogForm key={asset.id} asset={asset} busy={busy} onClose={onClose} onSave={onSave} />;
+  return <AssetEditDialogForm key={asset.id} asset={asset} busy={busy} projectId={projectId} session={session} onClose={onClose} onChanged={onChanged} onSave={onSave} />;
 }
 
 function AssetEditDialogForm({
   asset,
   busy,
+  projectId,
+  session,
   onClose,
+  onChanged,
   onSave,
 }: {
   asset: CanonicalAsset;
   busy: boolean;
+  projectId: string;
+  session: StudioSession;
   onClose: () => void;
+  onChanged: (asset: CanonicalAsset) => void;
   onSave: (body: JsonRecord) => Promise<void>;
 }) {
+  const [currentAsset, setCurrentAsset] = useState(asset);
   const [form, setForm] = useState(assetEditForm(asset));
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadTitle, setUploadTitle] = useState("");
   const [localError, setLocalError] = useState("");
+  const [localBusy, setLocalBusy] = useState("");
+  const disabled = busy || localBusy !== "";
+
+  async function refreshAsset() {
+    const refreshed = await studioApi.getCanonicalAsset(session, projectId, currentAsset.id, true);
+    setCurrentAsset(refreshed);
+    setForm(assetEditForm(refreshed));
+    onChanged(refreshed);
+    return refreshed;
+  }
+
+  async function runAssetAction(label: string, action: () => Promise<void>) {
+    setLocalBusy(label);
+    setLocalError("");
+    try {
+      await action();
+      await refreshAsset();
+    } catch (cause) {
+      setLocalError(errorMessage(cause));
+    } finally {
+      setLocalBusy("");
+    }
+  }
 
   async function submit() {
     setLocalError("");
+    const parsedProfile = parseJsonRecordInput(form.profile);
+    if (parsedProfile.error) {
+      setLocalError(parsedProfile.error);
+      return;
+    }
     const parsedTraits = parseJsonRecordInput(form.visualTraits);
     if (parsedTraits.error) {
       setLocalError(parsedTraits.error);
@@ -2205,31 +2307,171 @@ function AssetEditDialogForm({
         assetType: form.assetType,
         name: form.name,
         description: form.description,
+        profile: parsedProfile.value,
         basePrompt: form.basePrompt,
+        consistencyPrompt: form.consistencyPrompt,
+        negativePrompt: form.negativePrompt,
+        lockReference: form.lockReference,
         visualTraits: parsedTraits.value,
       }),
     );
+    await refreshAsset();
+  }
+
+  async function uploadReference() {
+    if (!uploadFile) {
+      setLocalError("请选择参考图文件");
+      return;
+    }
+    const mimeType = uploadFile.type || "image/png";
+    await runAssetAction("上传参考图", async () => {
+      const upload = await studioApi.createAssetReferenceUploadUrl(session, projectId, currentAsset.id, {
+        fileName: uploadFile.name,
+        mimeType,
+      });
+      const response = await fetch(upload.uploadUrl, {
+        method: upload.method || "PUT",
+        headers: uploadHeaders(upload.headers),
+        body: uploadFile,
+      });
+      if (!response.ok) {
+        throw new Error(`上传失败：HTTP ${response.status}`);
+      }
+      await studioApi.createAssetReference(session, projectId, currentAsset.id, {
+        title: uploadTitle || uploadFile.name,
+        storageKey: upload.storageKey,
+        mimeType,
+        referenceType: "uploaded",
+        setPrimary: !assetHasPrimaryReference(currentAsset),
+        metadata: { fileName: uploadFile.name, byteSize: uploadFile.size },
+      });
+      setUploadFile(null);
+      setUploadTitle("");
+    });
   }
 
   return (
-    <EditDialogShell title="编辑基础资产" error={localError} onClose={onClose}>
-      <div className="grid gap-3">
+    <EditDialogShell title="资产设定卡" error={localError} onClose={onClose}>
+      <div className="grid gap-4">
+        <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
+          <AssetReferencePreview reference={primaryAssetReference(currentAsset)} storageKey={assetPrimaryStorageKey(currentAsset)} />
+          <div className="grid content-start gap-2 text-sm text-slate-600">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-medium text-slate-900">{currentAsset.name}</p>
+              <StatusBadge status={currentAsset.reviewStatus ?? "pending"} />
+              {currentAsset.manualOverride ? <Pill>人工修改</Pill> : null}
+              {currentAsset.staleState && currentAsset.staleState !== "fresh" ? <StatusBadge status={currentAsset.staleState} /> : null}
+            </div>
+            <p>资产卡：{hasAssetCard(currentAsset) ? "已生成" : "缺失"} · 主参考：{assetHasPrimaryReference(currentAsset) ? "已设置" : "缺失"} · 参考数：{currentAsset.references?.length ?? currentAsset.referenceCount ?? 0}</p>
+            <p>出现分场：{currentAsset.sceneCount ?? currentAsset.sceneLinks?.length ?? 0} · 派生需求：{currentAsset.shotRequirements?.length ?? currentAsset.shotRequirementCount ?? 0}</p>
+            {currentAsset.lockReference ? <p className="text-amber-700">主参考已锁定。</p> : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button className="studio-button" disabled={disabled} onClick={() => runAssetAction("生成资产卡", async () => void (await studioApi.generateAssetCard(session, projectId, currentAsset.id, { force: false })))} type="button">
+            {localBusy === "生成资产卡" ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+            生成资产卡
+          </button>
+          <button className="studio-button" disabled={disabled} onClick={() => runAssetAction("强制重生成资产卡", async () => void (await studioApi.generateAssetCard(session, projectId, currentAsset.id, { force: true })))} type="button">
+            <RefreshCw size={16} />
+            强制重生成卡
+          </button>
+          <button className="studio-button" disabled={disabled} onClick={() => runAssetAction("生成参考图", async () => void (await studioApi.generateAssetImage(session, projectId, currentAsset.id, { setPrimary: !assetHasPrimaryReference(currentAsset) })))} type="button">
+            <ImageIcon size={16} />
+            生成参考图
+          </button>
+        </div>
         <SelectInput label="类型" value={form.assetType} values={["character", "scene", "prop"]} labels={{ character: "角色", scene: "场景", prop: "道具" }} onChange={(assetType) => setForm({ ...form, assetType })} />
         <TextInput label="名称" value={form.name} onChange={(name) => setForm({ ...form, name })} />
         <TextAreaInput label="描述" rows={4} value={form.description} onChange={(description) => setForm({ ...form, description })} />
+        <div className="grid gap-3 md:grid-cols-2">
+          <ProfileQuickField label="外观/空间/形态" profile={form.profile} fieldKey="appearance" onChange={(profile) => setForm({ ...form, profile })} />
+          <ProfileQuickField label="基准服装/关键元素" profile={form.profile} fieldKey="baselineCostume" onChange={(profile) => setForm({ ...form, profile })} />
+          <ProfileQuickField label="色彩/材质" profile={form.profile} fieldKey="palette" onChange={(profile) => setForm({ ...form, profile })} />
+          <ProfileQuickField label="禁止变化" profile={form.profile} fieldKey="forbiddenChanges" onChange={(profile) => setForm({ ...form, profile })} />
+        </div>
+        <TextAreaInput label="资产 profile JSON" rows={7} value={form.profile} onChange={(profile) => setForm({ ...form, profile })} />
         <TextAreaInput label="基础提示词" rows={4} value={form.basePrompt} onChange={(basePrompt) => setForm({ ...form, basePrompt })} />
+        <TextAreaInput label="一致性提示词" rows={4} value={form.consistencyPrompt} onChange={(consistencyPrompt) => setForm({ ...form, consistencyPrompt })} />
+        <TextAreaInput label="负面提示词" rows={4} value={form.negativePrompt} onChange={(negativePrompt) => setForm({ ...form, negativePrompt })} />
+        <Toggle label="锁定主参考图" checked={form.lockReference} onChange={(lockReference) => setForm({ ...form, lockReference })} />
         <TextAreaInput label="视觉 traits JSON" rows={7} value={form.visualTraits} onChange={(visualTraits) => setForm({ ...form, visualTraits })} />
+        <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <p className="text-sm font-medium text-slate-900">参考图</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            {(currentAsset.references ?? []).map((reference) => (
+              <div className="grid gap-2 rounded-md border border-slate-200 bg-white p-2" key={reference.id}>
+                <AssetReferencePreview reference={reference} storageKey={reference.storageKey} />
+                <div className="flex items-start justify-between gap-2 text-xs text-slate-600">
+                  <div>
+                    <p className="font-medium text-slate-800">{reference.title || reference.referenceType}</p>
+                    <p>{reference.status}{reference.isPrimary ? " · 主参考" : ""}</p>
+                  </div>
+                  <button className="studio-button" disabled={disabled || reference.isPrimary} onClick={() => runAssetAction("设置主参考", async () => void (await studioApi.setPrimaryAssetReference(session, projectId, currentAsset.id, reference.id)))} type="button">
+                    <Star size={16} />
+                    设主
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!currentAsset.references?.length ? <p className="text-sm text-slate-500">暂无参考图。</p> : null}
+          </div>
+          <div className="grid gap-2 md:grid-cols-[1fr_180px_auto]">
+            <input className="studio-input" accept="image/*" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} type="file" />
+            <input className="studio-input" placeholder="标题" value={uploadTitle} onChange={(event) => setUploadTitle(event.target.value)} />
+            <button className="studio-button" disabled={disabled || !uploadFile} onClick={uploadReference} type="button">
+              {localBusy === "上传参考图" ? <Loader2 className="animate-spin" size={16} /> : <Upload size={16} />}
+              上传参考
+            </button>
+          </div>
+        </div>
+        {currentAsset.sceneLinks?.length ? (
+          <div className="grid gap-2 rounded-md border border-slate-200 p-3">
+            <p className="text-sm font-medium text-slate-900">关联分场</p>
+            {currentAsset.sceneLinks.map((link) => (
+              <p className="text-xs leading-5 text-slate-600" key={link.scriptSceneId}>S{link.sceneNo} {link.title}{link.assetRole ? ` · ${link.assetRole}` : ""}{link.usageNote ? ` · ${link.usageNote}` : ""}</p>
+            ))}
+          </div>
+        ) : null}
+        {currentAsset.shotRequirements?.length ? (
+          <div className="grid gap-2 rounded-md border border-slate-200 p-3">
+            <p className="text-sm font-medium text-slate-900">派生资产需求</p>
+            {currentAsset.shotRequirements.map((item) => (
+              <p className="text-xs leading-5 text-slate-600" key={item.id}>{item.requirementType} · {item.costume || item.pose || item.expression || item.action || item.sceneState || item.propState || item.prompt || "未指定"}</p>
+            ))}
+          </div>
+        ) : null}
         <div className="flex justify-end gap-2">
-          <button className="studio-button" disabled={busy} onClick={onClose} type="button">
+          <button className="studio-button" disabled={disabled} onClick={onClose} type="button">
             取消
           </button>
-          <button className="studio-button studio-button-primary" disabled={busy} onClick={submit} type="button">
-            {busy ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+          <button className="studio-button studio-button-primary" disabled={disabled} onClick={submit} type="button">
+            {disabled ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
             保存修订
           </button>
         </div>
       </div>
     </EditDialogShell>
+  );
+}
+
+function ProfileQuickField({ label, profile, fieldKey, onChange }: { label: string; profile: string; fieldKey: string; onChange: (profile: string) => void }) {
+  return (
+    <label className="grid gap-1 text-sm">
+      <span className="text-slate-500">{label}</span>
+      <input className="studio-input w-full" value={profileFieldText(profile, fieldKey)} onChange={(event) => onChange(setProfileFieldText(profile, fieldKey, event.target.value))} />
+    </label>
+  );
+}
+
+function AssetReferencePreview({ reference, storageKey }: { reference?: AssetReference; storageKey?: string | null }) {
+  const url = reference?.previewUrl;
+  return (
+    <div className="relative grid aspect-video min-h-[120px] place-items-center overflow-hidden rounded-md bg-slate-200 text-slate-400">
+      {url ? <div aria-label={reference?.title || storageKey || "asset reference"} className="h-full w-full bg-cover bg-center" role="img" style={{ backgroundImage: `url(${url})` }} /> : <ImageIcon size={28} />}
+      {reference?.isPrimary ? <span className="absolute left-2 top-2 rounded-md bg-white/90 px-2 py-1 text-xs text-slate-700">主参考</span> : null}
+      {storageKey ? <span className="absolute bottom-0 left-0 right-0 truncate bg-white/85 px-2 py-1 text-[11px] text-slate-600">{storageKey}</span> : null}
+    </div>
   );
 }
 
@@ -3777,7 +4019,11 @@ function assetEditForm(asset: CanonicalAsset | null) {
     assetType: asset?.assetType ?? "character",
     name: asset?.name ?? "",
     description: asset?.description ?? "",
+    profile: jsonRecordInputText(asset?.profile),
     basePrompt: asset?.basePrompt ?? "",
+    consistencyPrompt: asset?.consistencyPrompt ?? "",
+    negativePrompt: asset?.negativePrompt ?? "",
+    lockReference: asset?.lockReference ?? false,
     visualTraits: jsonRecordInputText(asset?.visualTraits),
   };
 }
@@ -3825,6 +4071,54 @@ function parseJsonRecordInput(raw: string): { value?: JsonRecord; error?: string
   } catch (cause) {
     return { error: cause instanceof Error ? cause.message : "JSON 解析失败" };
   }
+}
+
+function profileFieldText(raw: string, key: string) {
+  const parsed = parseJsonRecordInput(raw);
+  if (!parsed.value) {
+    return "";
+  }
+  return jsonTextValue(parsed.value[key]);
+}
+
+function setProfileFieldText(raw: string, key: string, value: string) {
+  const parsed = parseJsonRecordInput(raw);
+  const record: JsonRecord = parsed.value ? { ...parsed.value } : {};
+  const trimmed = value.trim();
+  if (trimmed) {
+    record[key] = trimmed;
+  } else {
+    delete record[key];
+  }
+  return JSON.stringify(record, null, 2);
+}
+
+function hasAssetCard(asset?: CanonicalAsset | null) {
+  return Boolean(asset && (recordHasEntries(asset.profile) || asset.basePrompt || asset.consistencyPrompt || asset.negativePrompt));
+}
+
+function assetHasPrimaryReference(asset?: CanonicalAsset | null) {
+  return Boolean(asset && (asset.primaryReferenceArtifactId || asset.primaryReferenceMediaFileId || asset.primaryReferenceStorageKey || asset.referenceArtifactId || asset.referenceMediaFileId || asset.referenceStorageKey || primaryAssetReference(asset)));
+}
+
+function primaryAssetReference(asset?: CanonicalAsset | null) {
+  return asset?.references?.find((reference) => reference.isPrimary && reference.status === "ready") ?? asset?.references?.find((reference) => reference.status === "ready");
+}
+
+function assetPrimaryStorageKey(asset?: CanonicalAsset | null) {
+  return primaryAssetReference(asset)?.storageKey ?? asset?.primaryReferenceStorageKey ?? asset?.referenceStorageKey ?? null;
+}
+
+function uploadHeaders(headers: Record<string, string | string[]> | undefined) {
+  const normalized = new Headers();
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    normalized.set(key, Array.isArray(value) ? value.join(",") : value);
+  }
+  return normalized;
+}
+
+function recordHasEntries(record?: JsonRecord) {
+  return Boolean(record && Object.keys(record).length > 0);
 }
 
 function compactRecord(record: Record<string, unknown>): JsonRecord {

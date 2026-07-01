@@ -78,7 +78,10 @@ func (a Activities) projectProductionSettings(ctx context.Context, projectID str
 func (a Activities) listCanonicalAssets(ctx context.Context, projectID string) ([]CanonicalAssetRecord, error) {
 	rows, err := a.db.Query(ctx, `
 		SELECT id::text, asset_type, name, description, COALESCE(base_prompt, ''),
-		       visual_traits, COALESCE(reference_artifact_id::text, ''),
+		       profile, COALESCE(consistency_prompt, ''), COALESCE(negative_prompt, ''),
+		       visual_traits, COALESCE(primary_reference_artifact_id::text, ''),
+		       COALESCE(primary_reference_media_file_id::text, ''), COALESCE(primary_reference_storage_key, ''),
+		       COALESCE(lock_reference, false), COALESCE(reference_artifact_id::text, ''),
 		       COALESCE(reference_media_file_id::text, ''), COALESCE(reference_storage_key, ''),
 		       status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
 		FROM canonical_assets
@@ -103,7 +106,10 @@ func (a Activities) listCanonicalAssets(ctx context.Context, projectID string) (
 func (a Activities) canonicalAssetByID(ctx context.Context, projectID, assetID string) (CanonicalAssetRecord, error) {
 	return scanCanonicalAssetRecord(a.db.QueryRow(ctx, `
 		SELECT id::text, asset_type, name, description, COALESCE(base_prompt, ''),
-		       visual_traits, COALESCE(reference_artifact_id::text, ''),
+		       profile, COALESCE(consistency_prompt, ''), COALESCE(negative_prompt, ''),
+		       visual_traits, COALESCE(primary_reference_artifact_id::text, ''),
+		       COALESCE(primary_reference_media_file_id::text, ''), COALESCE(primary_reference_storage_key, ''),
+		       COALESCE(lock_reference, false), COALESCE(reference_artifact_id::text, ''),
 		       COALESCE(reference_media_file_id::text, ''), COALESCE(reference_storage_key, ''),
 		       status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
 		FROM canonical_assets
@@ -141,7 +147,10 @@ func (a Activities) upsertCanonicalAssets(ctx context.Context, input AnalyzeScri
 					END,
 				updated_at = now()
 			RETURNING id::text, asset_type, name, description, COALESCE(base_prompt, ''),
-			          visual_traits, COALESCE(reference_artifact_id::text, ''),
+			          profile, COALESCE(consistency_prompt, ''), COALESCE(negative_prompt, ''),
+			          visual_traits, COALESCE(primary_reference_artifact_id::text, ''),
+			          COALESCE(primary_reference_media_file_id::text, ''), COALESCE(primary_reference_storage_key, ''),
+			          COALESCE(lock_reference, false), COALESCE(reference_artifact_id::text, ''),
 			          COALESCE(reference_media_file_id::text, ''), COALESCE(reference_storage_key, ''),
 			          status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
 		`, input.OrganizationID, input.ProjectID, candidate.AssetType, candidate.Name, candidate.Description, candidate.BasePrompt,
@@ -542,6 +551,11 @@ func (a Activities) shotAssetContext(ctx context.Context, projectID, shotID stri
 			a.asset_type,
 			a.name,
 			a.description,
+			COALESCE(a.profile, '{}'::jsonb),
+			COALESCE(a.consistency_prompt, ''),
+			COALESCE(a.negative_prompt, ''),
+			COALESCE(a.primary_reference_artifact_id::text, ''),
+			COALESCE(a.primary_reference_storage_key, ''),
 			COALESCE(a.reference_artifact_id::text, ''),
 			COALESCE(a.reference_storage_key, ''),
 			COALESCE(r.requirement_type, ''),
@@ -569,13 +583,22 @@ func (a Activities) shotAssetContext(ctx context.Context, projectID, shotID stri
 	requirementLines := []string{}
 	refs := []provider.GatewayImageReference{}
 	for rows.Next() {
-		var requirementID, assetID, assetType, name, description, referenceArtifactID, referenceStorageKey string
+		var requirementID, assetID, assetType, name, description string
+		var profile []byte
+		var consistencyPrompt, negativePrompt, primaryReferenceArtifactID, primaryReferenceStorageKey, referenceArtifactID, referenceStorageKey string
 		var requirementType, role, costume, pose, expression, action, camera, sceneState, propState, prompt string
 		var derivedArtifactID, derivedStorageKey string
-		if err := rows.Scan(&requirementID, &assetID, &assetType, &name, &description, &referenceArtifactID, &referenceStorageKey, &requirementType, &role, &costume, &pose, &expression, &action, &camera, &sceneState, &propState, &prompt, &derivedArtifactID, &derivedStorageKey); err != nil {
+		if err := rows.Scan(&requirementID, &assetID, &assetType, &name, &description, &profile, &consistencyPrompt, &negativePrompt, &primaryReferenceArtifactID, &primaryReferenceStorageKey, &referenceArtifactID, &referenceStorageKey, &requirementType, &role, &costume, &pose, &expression, &action, &camera, &sceneState, &propState, &prompt, &derivedArtifactID, &derivedStorageKey); err != nil {
 			return ShotAssetContext{}, err
 		}
-		assetLines = append(assetLines, strings.Join(compactStrings([]string{assetType, name, description}), " | "))
+		assetLines = append(assetLines, strings.Join(compactStrings([]string{
+			assetType,
+			name,
+			description,
+			"profile=" + string(jsonOrDefault(profile, `{}`)),
+			"consistency=" + consistencyPrompt,
+			"negative=" + negativePrompt,
+		}), " | "))
 		requirementLines = append(requirementLines, strings.Join(compactStrings([]string{
 			name + " (" + requirementType + ")",
 			"role=" + role,
@@ -588,8 +611,8 @@ func (a Activities) shotAssetContext(ctx context.Context, projectID, shotID stri
 			"prop=" + propState,
 			"prompt=" + prompt,
 		}), "; "))
-		refArtifactID := firstNonEmptyString(derivedArtifactID, referenceArtifactID)
-		refStorageKey := firstNonEmptyString(derivedStorageKey, referenceStorageKey)
+		refArtifactID := firstNonEmptyString(derivedArtifactID, primaryReferenceArtifactID, referenceArtifactID)
+		refStorageKey := firstNonEmptyString(derivedStorageKey, primaryReferenceStorageKey, referenceStorageKey)
 		if refArtifactID != "" || refStorageKey != "" {
 			refs = append(refs, provider.GatewayImageReference{
 				Type:       "image",
@@ -620,17 +643,49 @@ func (a Activities) completeCanonicalAssetImage(ctx context.Context, input Gener
 		return err
 	}
 	defer tx.Rollback(ctx)
+	shouldPrimary := strings.TrimSpace(asset.PrimaryReferenceStorageKey) == "" &&
+		strings.TrimSpace(asset.PrimaryReferenceArtifactID) == "" &&
+		strings.TrimSpace(asset.PrimaryReferenceMediaFileID) == ""
 	if _, err := tx.Exec(ctx, `
 		UPDATE canonical_assets
 		SET reference_artifact_id = NULLIF($2, '')::uuid,
 		    reference_media_file_id = NULLIF($3, '')::uuid,
 		    reference_storage_key = NULLIF($4, ''),
+		    primary_reference_artifact_id = CASE WHEN $5 THEN NULLIF($2, '')::uuid ELSE primary_reference_artifact_id END,
+		    primary_reference_media_file_id = CASE WHEN $5 THEN NULLIF($3, '')::uuid ELSE primary_reference_media_file_id END,
+		    primary_reference_storage_key = CASE WHEN $5 THEN NULLIF($4, '') ELSE primary_reference_storage_key END,
 		    status = 'image_succeeded',
 		    stale_state = 'fresh',
 		    updated_at = now()
 		WHERE id = $1
-	`, input.AssetID, output.ImageArtifactID, output.ImageMediaFileID, output.ImageStorageKey); err != nil {
+	`, input.AssetID, output.ImageArtifactID, output.ImageMediaFileID, output.ImageStorageKey, shouldPrimary); err != nil {
 		return err
+	}
+	var referenceID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO asset_references(
+			organization_id, project_id, asset_id, reference_type, title, description,
+			artifact_id, media_file_id, storage_key, prompt, prompt_version_id, prompt_hash,
+			is_primary, metadata, created_by
+		)
+		VALUES ($1, $2, $3, 'generated', $4, $5, NULLIF($6, '')::uuid, NULLIF($7, '')::uuid, NULLIF($8, ''),
+		        $9, NULLIF($10, '')::uuid, NULLIF($11, ''), $12, $13, $14)
+		RETURNING id::text
+	`, input.OrganizationID, input.ProjectID, input.AssetID, "Generated reference", asset.Description, output.ImageArtifactID, output.ImageMediaFileID, output.ImageStorageKey,
+		rendered.RenderedText, rendered.PromptVersionID, rendered.RenderedHash, shouldPrimary, mustJSON(map[string]any{
+			"source":         "canonical_asset_image_prompt",
+			"providerCallId": output.ProviderCallID,
+		}), input.CreatedBy).Scan(&referenceID); err != nil {
+		return err
+	}
+	if shouldPrimary {
+		if _, err := tx.Exec(ctx, `
+			UPDATE asset_references
+			SET is_primary = false, updated_at = now()
+			WHERE project_id = $1 AND asset_id = $2 AND id <> $3
+		`, input.ProjectID, input.AssetID, referenceID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO asset_versions(
@@ -667,14 +722,21 @@ func (a Activities) completeDerivedAssetImage(ctx context.Context, input Generat
 
 func scanCanonicalAssetRecord(row pgx.Row) (CanonicalAssetRecord, error) {
 	var item CanonicalAssetRecord
-	var visualTraits []byte
+	var profile, visualTraits []byte
 	err := row.Scan(
 		&item.ID,
 		&item.AssetType,
 		&item.Name,
 		&item.Description,
 		&item.BasePrompt,
+		&profile,
+		&item.ConsistencyPrompt,
+		&item.NegativePrompt,
 		&visualTraits,
+		&item.PrimaryReferenceArtifactID,
+		&item.PrimaryReferenceMediaFileID,
+		&item.PrimaryReferenceStorageKey,
+		&item.LockReference,
 		&item.ReferenceArtifactID,
 		&item.ReferenceMediaFileID,
 		&item.ReferenceStorageKey,
@@ -682,6 +744,7 @@ func scanCanonicalAssetRecord(row pgx.Row) (CanonicalAssetRecord, error) {
 		&item.ManualOverride,
 		&item.StaleState,
 	)
+	item.Profile = jsonOrDefault(profile, `{}`)
 	item.VisualTraits = jsonOrDefault(visualTraits, `{}`)
 	return item, err
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -15,35 +16,47 @@ import (
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/workflows"
+	"github.com/jackc/pgx/v5"
 	"go.temporal.io/sdk/client"
 )
 
 type CanonicalAsset struct {
-	ID                   string           `json:"id"`
-	OrganizationID       string           `json:"organizationId"`
-	ProjectID            string           `json:"projectId"`
-	AssetType            string           `json:"assetType"`
-	Name                 string           `json:"name"`
-	Description          string           `json:"description"`
-	BasePrompt           *string          `json:"basePrompt,omitempty"`
-	VisualTraits         json.RawMessage  `json:"visualTraits"`
-	ReferenceArtifactID  *string          `json:"referenceArtifactId,omitempty"`
-	ReferenceMediaFileID *string          `json:"referenceMediaFileId,omitempty"`
-	ReferenceStorageKey  *string          `json:"referenceStorageKey,omitempty"`
-	Status               string           `json:"status"`
-	ReviewStatus         string           `json:"reviewStatus"`
-	ManualOverride       bool             `json:"manualOverride"`
-	StaleState           string           `json:"staleState"`
-	EditedBy             *string          `json:"editedBy,omitempty"`
-	EditedAt             *time.Time       `json:"editedAt,omitempty"`
-	SourceScriptIDs      json.RawMessage  `json:"sourceScriptIds"`
-	Metadata             json.RawMessage  `json:"metadata"`
-	CreatedBy            *string          `json:"createdBy,omitempty"`
-	CreatedAt            time.Time        `json:"createdAt"`
-	UpdatedAt            time.Time        `json:"updatedAt"`
-	SceneLinks           []AssetSceneLink `json:"sceneLinks,omitempty"`
-	SceneCount           int              `json:"sceneCount"`
-	StoryboardShotCount  int              `json:"storyboardShotCount"`
+	ID                          string                 `json:"id"`
+	OrganizationID              string                 `json:"organizationId"`
+	ProjectID                   string                 `json:"projectId"`
+	AssetType                   string                 `json:"assetType"`
+	Name                        string                 `json:"name"`
+	Description                 string                 `json:"description"`
+	Profile                     json.RawMessage        `json:"profile"`
+	BasePrompt                  *string                `json:"basePrompt,omitempty"`
+	ConsistencyPrompt           *string                `json:"consistencyPrompt,omitempty"`
+	NegativePrompt              *string                `json:"negativePrompt,omitempty"`
+	VisualTraits                json.RawMessage        `json:"visualTraits"`
+	PrimaryReferenceArtifactID  *string                `json:"primaryReferenceArtifactId,omitempty"`
+	PrimaryReferenceMediaFileID *string                `json:"primaryReferenceMediaFileId,omitempty"`
+	PrimaryReferenceStorageKey  *string                `json:"primaryReferenceStorageKey,omitempty"`
+	LockReference               bool                   `json:"lockReference"`
+	ReferenceArtifactID         *string                `json:"referenceArtifactId,omitempty"`
+	ReferenceMediaFileID        *string                `json:"referenceMediaFileId,omitempty"`
+	ReferenceStorageKey         *string                `json:"referenceStorageKey,omitempty"`
+	Status                      string                 `json:"status"`
+	ReviewStatus                string                 `json:"reviewStatus"`
+	ManualOverride              bool                   `json:"manualOverride"`
+	StaleState                  string                 `json:"staleState"`
+	EditedBy                    *string                `json:"editedBy,omitempty"`
+	EditedAt                    *time.Time             `json:"editedAt,omitempty"`
+	SourceScriptIDs             json.RawMessage        `json:"sourceScriptIds"`
+	Metadata                    json.RawMessage        `json:"metadata"`
+	CreatedBy                   *string                `json:"createdBy,omitempty"`
+	CreatedAt                   time.Time              `json:"createdAt"`
+	UpdatedAt                   time.Time              `json:"updatedAt"`
+	SceneLinks                  []AssetSceneLink       `json:"sceneLinks,omitempty"`
+	References                  []AssetReference       `json:"references,omitempty"`
+	ShotRequirements            []ShotAssetRequirement `json:"shotRequirements,omitempty"`
+	SceneCount                  int                    `json:"sceneCount"`
+	StoryboardShotCount         int                    `json:"storyboardShotCount"`
+	ReferenceCount              int                    `json:"referenceCount"`
+	ShotRequirementCount        int                    `json:"shotRequirementCount"`
 }
 
 type AssetSceneLink struct {
@@ -54,6 +67,47 @@ type AssetSceneLink struct {
 	AssetRole           *string `json:"assetRole,omitempty"`
 	UsageNote           *string `json:"usageNote,omitempty"`
 	StoryboardShotCount int     `json:"storyboardShotCount"`
+}
+
+type AssetReference struct {
+	ID              string          `json:"id"`
+	OrganizationID  string          `json:"organizationId"`
+	ProjectID       string          `json:"projectId"`
+	AssetID         string          `json:"assetId"`
+	ReferenceType   string          `json:"referenceType"`
+	Title           *string         `json:"title,omitempty"`
+	Description     *string         `json:"description,omitempty"`
+	ArtifactID      *string         `json:"artifactId,omitempty"`
+	MediaFileID     *string         `json:"mediaFileId,omitempty"`
+	StorageKey      *string         `json:"storageKey,omitempty"`
+	PreviewURL      *string         `json:"previewUrl,omitempty"`
+	Prompt          *string         `json:"prompt,omitempty"`
+	PromptVersionID *string         `json:"promptVersionId,omitempty"`
+	PromptHash      *string         `json:"promptHash,omitempty"`
+	IsPrimary       bool            `json:"isPrimary"`
+	Status          string          `json:"status"`
+	Metadata        json.RawMessage `json:"metadata"`
+	CreatedBy       *string         `json:"createdBy,omitempty"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
+}
+
+type GenerateAssetCardResponse struct {
+	AssetID           string          `json:"assetId"`
+	Profile           json.RawMessage `json:"profile"`
+	BasePrompt        string          `json:"basePrompt"`
+	ConsistencyPrompt string          `json:"consistencyPrompt"`
+	NegativePrompt    string          `json:"negativePrompt"`
+	ProviderCallID    string          `json:"providerCallId,omitempty"`
+	ModelID           string          `json:"modelId,omitempty"`
+	Applied           bool            `json:"applied"`
+}
+
+type assetCardDraft struct {
+	Profile           json.RawMessage `json:"profile"`
+	BasePrompt        string          `json:"basePrompt"`
+	ConsistencyPrompt string          `json:"consistencyPrompt"`
+	NegativePrompt    string          `json:"negativePrompt"`
 }
 
 type ShotAssetRequirement struct {
@@ -95,7 +149,8 @@ func (s *Server) listCanonicalAssets(w http.ResponseWriter, r *http.Request, pri
 	}
 	assetType := strings.TrimSpace(r.URL.Query().Get("filter[type]"))
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
+		SELECT id, organization_id, project_id, asset_type, name, description, profile, base_prompt, consistency_prompt, negative_prompt, visual_traits,
+		       primary_reference_artifact_id, primary_reference_media_file_id, primary_reference_storage_key, lock_reference,
 		       reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
 		       manual_override, stale_state, edited_by, edited_at, source_script_ids, metadata, created_by, created_at, updated_at
 		FROM canonical_assets
@@ -121,6 +176,10 @@ func (s *Server) listCanonicalAssets(w http.ResponseWriter, r *http.Request, pri
 		s.writeError(w, r, err)
 		return
 	}
+	if err := s.attachCanonicalAssetReferences(r, project.ID, items, false); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
 }
 
@@ -139,6 +198,19 @@ func (s *Server) getCanonicalAsset(w http.ResponseWriter, r *http.Request, princ
 		s.writeError(w, r, err)
 		return
 	}
+	includePreview := strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true")
+	if includePreview && s.storage == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
+		return
+	}
+	if err := s.attachCanonicalAssetReferences(r, project.ID, items, includePreview); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := s.attachCanonicalAssetShotRequirements(r, project.ID, items); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	item = items[0]
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
@@ -154,13 +226,17 @@ func (s *Server) updateCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	var req struct {
-		AssetType    *string         `json:"assetType"`
-		Name         *string         `json:"name"`
-		Description  *string         `json:"description"`
-		BasePrompt   *string         `json:"basePrompt"`
-		VisualTraits json.RawMessage `json:"visualTraits"`
-		Metadata     json.RawMessage `json:"metadata"`
-		Status       *string         `json:"status"`
+		AssetType         *string         `json:"assetType"`
+		Name              *string         `json:"name"`
+		Description       *string         `json:"description"`
+		Profile           json.RawMessage `json:"profile"`
+		BasePrompt        *string         `json:"basePrompt"`
+		ConsistencyPrompt *string         `json:"consistencyPrompt"`
+		NegativePrompt    *string         `json:"negativePrompt"`
+		LockReference     *bool           `json:"lockReference"`
+		VisualTraits      json.RawMessage `json:"visualTraits"`
+		Metadata          json.RawMessage `json:"metadata"`
+		Status            *string         `json:"status"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -193,6 +269,14 @@ func (s *Server) updateCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 			return
 		}
 	}
+	profile := current.Profile
+	if len(req.Profile) > 0 {
+		var ok bool
+		profile, ok = jsonObjectOrDefault(w, r, req.Profile)
+		if !ok {
+			return
+		}
+	}
 	metadata := current.Metadata
 	if len(req.Metadata) > 0 {
 		var ok bool
@@ -206,6 +290,20 @@ func (s *Server) updateCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 	if req.BasePrompt != nil {
 		basePrompt = strings.TrimSpace(*req.BasePrompt)
 	}
+	consistencyPromptSet := req.ConsistencyPrompt != nil
+	consistencyPrompt := ""
+	if req.ConsistencyPrompt != nil {
+		consistencyPrompt = strings.TrimSpace(*req.ConsistencyPrompt)
+	}
+	negativePromptSet := req.NegativePrompt != nil
+	negativePrompt := ""
+	if req.NegativePrompt != nil {
+		negativePrompt = strings.TrimSpace(*req.NegativePrompt)
+	}
+	lockReference := current.LockReference
+	if req.LockReference != nil {
+		lockReference = *req.LockReference
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
@@ -217,21 +315,26 @@ func (s *Server) updateCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 		SET asset_type = $3,
 		    name = $4,
 		    description = $5,
-		    base_prompt = CASE WHEN $6 THEN NULLIF($7, '') ELSE base_prompt END,
-		    visual_traits = $8,
-		    metadata = $9,
-		    status = $10,
+		    profile = $6,
+		    base_prompt = CASE WHEN $7 THEN NULLIF($8, '') ELSE base_prompt END,
+		    consistency_prompt = CASE WHEN $9 THEN NULLIF($10, '') ELSE consistency_prompt END,
+		    negative_prompt = CASE WHEN $11 THEN NULLIF($12, '') ELSE negative_prompt END,
+		    lock_reference = $13,
+		    visual_traits = $14,
+		    metadata = $15,
+		    status = $16,
 		    review_status = 'pending',
 		    manual_override = true,
 		    stale_state = 'fresh',
-		    edited_by = $11,
+		    edited_by = $17,
 		    edited_at = now(),
 		    updated_at = now()
 		WHERE id = $1 AND project_id = $2
-		RETURNING id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
+		RETURNING id, organization_id, project_id, asset_type, name, description, profile, base_prompt, consistency_prompt, negative_prompt, visual_traits,
+		          primary_reference_artifact_id, primary_reference_media_file_id, primary_reference_storage_key, lock_reference,
 		          reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
 		          manual_override, stale_state, edited_by, edited_at, source_script_ids, metadata, created_by, created_at, updated_at
-	`, current.ID, project.ID, assetType, name, description, basePromptSet, basePrompt, visualTraits, metadata, status, principal.UserID))
+	`, current.ID, project.ID, assetType, name, description, profile, basePromptSet, basePrompt, consistencyPromptSet, consistencyPrompt, negativePromptSet, negativePrompt, lockReference, visualTraits, metadata, status, principal.UserID))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -252,11 +355,342 @@ func (s *Server) updateCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 		s.writeError(w, r, err)
 		return
 	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.card.updated", "canonical_asset", item.ID, mustRawJSON(map[string]any{
+		"assetId":        item.ID,
+		"manualOverride": item.ManualOverride,
+		"lockReference":  item.LockReference,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) generateAssetCard(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
+	if !ok {
+		return
+	}
+	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var req struct {
+		Force bool `json:"force"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	scenes, err := s.assetScenePromptContext(r, project.ID, asset.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "asset_card_generation", map[string]any{
+		"project": projectPromptVariables(project),
+		"asset": map[string]any{
+			"id":                asset.ID,
+			"assetType":         asset.AssetType,
+			"name":              asset.Name,
+			"description":       asset.Description,
+			"profile":           string(asset.Profile),
+			"basePrompt":        stringValue(asset.BasePrompt),
+			"consistencyPrompt": stringValue(asset.ConsistencyPrompt),
+			"negativePrompt":    stringValue(asset.NegativePrompt),
+		},
+		"scenes": scenes,
+	}, true)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	draft, err := normalizeAssetCardDraft(gatewayResp.Output.Text)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error(), nil, false)
+		return
+	}
+	applied := !asset.ManualOverride || req.Force
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	metadata := mustRawJSON(map[string]any{
+		"providerCallId":    gatewayResp.ProviderCallID,
+		"modelId":           gatewayResp.ModelID,
+		"promptTemplateKey": rendered.TemplateKey,
+		"promptVersionId":   rendered.PromptVersionID,
+		"promptHash":        rendered.RenderedHash,
+		"agentSuggestion":   draft,
+	})
+	if applied {
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE canonical_assets
+			SET profile = $3,
+			    base_prompt = NULLIF($4, ''),
+			    consistency_prompt = NULLIF($5, ''),
+			    negative_prompt = NULLIF($6, ''),
+			    manual_override = false,
+			    stale_state = 'fresh',
+			    metadata = COALESCE(metadata, '{}'::jsonb) || $7,
+			    updated_at = now()
+			WHERE id = $1 AND project_id = $2
+		`, asset.ID, project.ID, draft.Profile, draft.BasePrompt, draft.ConsistencyPrompt, draft.NegativePrompt, metadata); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if err := production.MarkAssetDownstreamStale(r.Context(), tx, project.ID, asset.ID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	} else {
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE canonical_assets
+			SET metadata = COALESCE(metadata, '{}'::jsonb) || $3,
+			    updated_at = now()
+			WHERE id = $1 AND project_id = $2
+		`, asset.ID, project.ID, metadata); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.card.generated", "canonical_asset", asset.ID, mustRawJSON(map[string]any{
+		"assetId":        asset.ID,
+		"applied":        applied,
+		"manualOverride": asset.ManualOverride,
+		"force":          req.Force,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, GenerateAssetCardResponse{
+		AssetID:           asset.ID,
+		Profile:           draft.Profile,
+		BasePrompt:        draft.BasePrompt,
+		ConsistencyPrompt: draft.ConsistencyPrompt,
+		NegativePrompt:    draft.NegativePrompt,
+		ProviderCallID:    gatewayResp.ProviderCallID,
+		ModelID:           gatewayResp.ModelID,
+		Applied:           applied,
+	}, nil)
+}
+
+func (s *Server) listAssetReferences(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetRead)
+	if !ok {
+		return
+	}
+	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	includePreview := strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true")
+	if includePreview && s.storage == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
+		return
+	}
+	items, err := s.assetReferences(r, project.ID, asset.ID, includePreview)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) createAssetReferenceUploadURL(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
+	if !ok {
+		return
+	}
+	if _, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if s.storage == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
+		return
+	}
+	var req struct {
+		FileName       string `json:"fileName"`
+		MimeType       string `json:"mimeType"`
+		ExpiresSeconds int    `json:"expiresSeconds"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	fileName := cleanFileName(req.FileName)
+	mimeType := strings.TrimSpace(req.MimeType)
+	if fileName == "" || !validAssetReferenceMimeType(mimeType) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "fileName and previewable image mimeType are required", nil, false)
+		return
+	}
+	expires := time.Duration(req.ExpiresSeconds) * time.Second
+	if expires <= 0 {
+		expires = 15 * time.Minute
+	}
+	if expires > time.Hour {
+		expires = time.Hour
+	}
+	storageKey := fmt.Sprintf("uploads/%s/%s/asset-references/%s/%s/%s", project.OrganizationID, project.ID, r.PathValue("assetId"), randomStorageSegment(), fileName)
+	put, err := s.storage.PresignPutObject(r.Context(), storageKey, mimeType, expires)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusCreated, map[string]any{
+		"storageKey": put.StorageKey,
+		"uploadUrl":  put.URL,
+		"method":     put.Method,
+		"headers":    put.Headers,
+		"expiresAt":  put.ExpiresAt,
+	}, nil)
+}
+
+func (s *Server) createAssetReference(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
+	if !ok {
+		return
+	}
+	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var req struct {
+		Title         string          `json:"title"`
+		Description   string          `json:"description"`
+		StorageKey    string          `json:"storageKey"`
+		MimeType      string          `json:"mimeType"`
+		ReferenceType string          `json:"referenceType"`
+		SetPrimary    bool            `json:"setPrimary"`
+		Metadata      json.RawMessage `json:"metadata"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	storageKey := strings.TrimSpace(req.StorageKey)
+	mimeType := strings.TrimSpace(req.MimeType)
+	referenceType := strings.TrimSpace(req.ReferenceType)
+	if referenceType == "" {
+		referenceType = "uploaded"
+	}
+	if storageKey == "" || !validAssetReferenceType(referenceType) || !validAssetReferenceMimeType(mimeType) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "storageKey, image mimeType, and referenceType are required", nil, false)
+		return
+	}
+	metadata := json.RawMessage(`{}`)
+	if len(req.Metadata) > 0 {
+		var valid bool
+		metadata, valid = jsonObjectOrDefault(w, r, req.Metadata)
+		if !valid {
+			return
+		}
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var artifactID string
+	if err := tx.QueryRow(r.Context(), `
+		INSERT INTO artifacts(organization_id, project_id, type, storage_key, mime_type, metadata, created_by)
+		VALUES ($1, $2, 'asset_reference_image', $3, $4, $5, $6)
+		RETURNING id::text
+	`, project.OrganizationID, project.ID, storageKey, mimeType, metadata, principal.UserID).Scan(&artifactID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var mediaFileID string
+	if err := tx.QueryRow(r.Context(), `
+		INSERT INTO media_files(organization_id, project_id, artifact_id, storage_key, mime_type, metadata, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id::text
+	`, project.OrganizationID, project.ID, artifactID, storageKey, mimeType, metadata, principal.UserID).Scan(&mediaFileID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	isPrimary := req.SetPrimary || !canonicalAssetHasPrimaryReference(asset)
+	reference, err := scanAssetReference(tx.QueryRow(r.Context(), `
+		INSERT INTO asset_references(
+			organization_id, project_id, asset_id, reference_type, title, description,
+			artifact_id, media_file_id, storage_key, is_primary, metadata, created_by
+		)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7, $8, NULLIF($9, ''), false, $10, $11)
+		RETURNING id, organization_id, project_id, asset_id, reference_type, title, description,
+		          artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
+		          is_primary, status, metadata, created_by, created_at, updated_at
+	`, project.OrganizationID, project.ID, asset.ID, referenceType, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), artifactID, mediaFileID, storageKey, metadata, principal.UserID))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if isPrimary {
+		reference, err = s.setPrimaryAssetReferenceTx(r.Context(), tx, project.ID, asset.ID, reference.ID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.reference.created", "asset_reference", reference.ID, mustRawJSON(map[string]any{
+		"assetId":     asset.ID,
+		"referenceId": reference.ID,
+		"isPrimary":   reference.IsPrimary,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusCreated, reference, nil)
+}
+
+func (s *Server) setPrimaryAssetReference(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
+	if !ok {
+		return
+	}
+	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	reference, err := s.setPrimaryAssetReferenceTx(r.Context(), tx, project.ID, asset.ID, r.PathValue("referenceId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.reference.primary_set", "asset_reference", reference.ID, mustRawJSON(map[string]any{
+		"assetId":     asset.ID,
+		"referenceId": reference.ID,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"assetId": asset.ID, "reference": reference}, nil)
 }
 
 func (s *Server) listShotAssetRequirements(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -355,6 +789,12 @@ func (s *Server) generateCanonicalAssetImage(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
+	var req struct {
+		SetPrimary bool `json:"setPrimary"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
 	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
 	if err != nil {
 		s.writeError(w, r, err)
@@ -363,11 +803,15 @@ func (s *Server) generateCanonicalAssetImage(w http.ResponseWriter, r *http.Requ
 	rendered, err := s.renderAPIProjectPrompt(r, project, "canonical_asset_image_prompt", map[string]any{
 		"project": projectPromptVariables(project),
 		"asset": map[string]any{
-			"type":         asset.AssetType,
-			"name":         asset.Name,
-			"description":  asset.Description,
-			"basePrompt":   stringValue(asset.BasePrompt),
-			"visualTraits": string(asset.VisualTraits),
+			"assetType":         asset.AssetType,
+			"type":              asset.AssetType,
+			"name":              asset.Name,
+			"description":       asset.Description,
+			"profile":           string(asset.Profile),
+			"basePrompt":        stringValue(asset.BasePrompt),
+			"consistencyPrompt": stringValue(asset.ConsistencyPrompt),
+			"negativePrompt":    stringValue(asset.NegativePrompt),
+			"visualTraits":      string(asset.VisualTraits),
 		},
 	})
 	if err != nil {
@@ -398,19 +842,68 @@ func (s *Server) generateCanonicalAssetImage(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, r, err)
 		return
 	}
-	item, err := scanCanonicalAsset(s.db.QueryRow(r.Context(), `
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	shouldPrimary := req.SetPrimary || !canonicalAssetHasPrimaryReference(asset)
+	item, err := scanCanonicalAsset(tx.QueryRow(r.Context(), `
 		UPDATE canonical_assets
 		SET reference_artifact_id = NULLIF($3, '')::uuid,
 		    reference_media_file_id = NULLIF($4, '')::uuid,
 		    reference_storage_key = NULLIF($5, ''),
+		    primary_reference_artifact_id = CASE WHEN $6 THEN NULLIF($3, '')::uuid ELSE primary_reference_artifact_id END,
+		    primary_reference_media_file_id = CASE WHEN $6 THEN NULLIF($4, '')::uuid ELSE primary_reference_media_file_id END,
+		    primary_reference_storage_key = CASE WHEN $6 THEN NULLIF($5, '') ELSE primary_reference_storage_key END,
 		    status = 'image_succeeded',
 		    stale_state = 'fresh'
 		WHERE id = $1 AND project_id = $2
-		RETURNING id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
+		RETURNING id, organization_id, project_id, asset_type, name, description, profile, base_prompt, consistency_prompt, negative_prompt, visual_traits,
+		          primary_reference_artifact_id, primary_reference_media_file_id, primary_reference_storage_key, lock_reference,
 		          reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
 		          manual_override, stale_state, edited_by, edited_at, source_script_ids, metadata, created_by, created_at, updated_at
-	`, asset.ID, project.ID, gatewayResp.Output.ArtifactID, gatewayResp.Output.MediaFileID, gatewayResp.Output.StorageKey))
+	`, asset.ID, project.ID, gatewayResp.Output.ArtifactID, gatewayResp.Output.MediaFileID, gatewayResp.Output.StorageKey, shouldPrimary))
 	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var referenceID string
+	if err := tx.QueryRow(r.Context(), `
+		INSERT INTO asset_references(
+			organization_id, project_id, asset_id, reference_type, title, description,
+			artifact_id, media_file_id, storage_key, prompt, prompt_version_id, prompt_hash,
+			is_primary, metadata, created_by
+		)
+		VALUES ($1, $2, $3, 'generated', $4, $5, NULLIF($6, '')::uuid, NULLIF($7, '')::uuid, NULLIF($8, ''),
+		        $9, NULLIF($10, '')::uuid, NULLIF($11, ''), false, $12, $13)
+		RETURNING id::text
+	`, project.OrganizationID, project.ID, asset.ID, "Generated reference", asset.Description, gatewayResp.Output.ArtifactID, gatewayResp.Output.MediaFileID, gatewayResp.Output.StorageKey,
+		rendered.RenderedText, rendered.PromptVersionID, rendered.RenderedHash, mustRawJSON(map[string]any{
+			"source":         "canonical_asset_image_prompt",
+			"providerCallId": gatewayResp.ProviderCallID,
+			"modelId":        gatewayResp.ModelID,
+		}), principal.UserID).Scan(&referenceID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if shouldPrimary {
+		if _, err := s.setPrimaryAssetReferenceTx(r.Context(), tx, project.ID, asset.ID, referenceID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.reference.created", "asset_reference", referenceID, mustRawJSON(map[string]any{
+		"assetId":     asset.ID,
+		"referenceId": referenceID,
+		"isPrimary":   shouldPrimary,
+		"source":      "generated",
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -587,12 +1080,182 @@ func (s *Server) renderAPIProjectPrompt(r *http.Request, project Project, templa
 
 func (s *Server) canonicalAsset(r *http.Request, projectID, assetID string) (CanonicalAsset, error) {
 	return scanCanonicalAsset(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, asset_type, name, description, base_prompt, visual_traits,
+		SELECT id, organization_id, project_id, asset_type, name, description, profile, base_prompt, consistency_prompt, negative_prompt, visual_traits,
+		       primary_reference_artifact_id, primary_reference_media_file_id, primary_reference_storage_key, lock_reference,
 		       reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
 		       manual_override, stale_state, edited_by, edited_at, source_script_ids, metadata, created_by, created_at, updated_at
 		FROM canonical_assets
 		WHERE project_id = $1 AND id = $2
 	`, projectID, assetID))
+}
+
+func (s *Server) assetScenePromptContext(r *http.Request, projectID, assetID string) (string, error) {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT sc.scene_no, sc.title, COALESCE(sc.location, ''), COALESCE(l.usage_note, ''), COALESCE(sc.content, '')
+		FROM scene_asset_links l
+		JOIN script_scenes sc ON sc.id = l.script_scene_id
+		WHERE l.project_id = $1 AND l.asset_id = $2
+		ORDER BY sc.scene_index ASC
+		LIMIT 12
+	`, projectID, assetID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	lines := []string{}
+	for rows.Next() {
+		var sceneNo int
+		var title, location, usage, content string
+		if err := rows.Scan(&sceneNo, &title, &location, &usage, &content); err != nil {
+			return "", err
+		}
+		lines = append(lines, strings.Join(compactStrings([]string{
+			fmt.Sprintf("Scene %d: %s", sceneNo, title),
+			"Location: " + location,
+			"Usage: " + usage,
+			"Content: " + content,
+		}), "\n"))
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return strings.Join(lines, "\n\n"), nil
+}
+
+func (s *Server) assetReferences(r *http.Request, projectID, assetID string, includePreview bool) ([]AssetReference, error) {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id, organization_id, project_id, asset_id, reference_type, title, description,
+		       artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
+		       is_primary, status, metadata, created_by, created_at, updated_at
+		FROM asset_references
+		WHERE project_id = $1 AND asset_id = $2
+		ORDER BY is_primary DESC, created_at DESC
+	`, projectID, assetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]AssetReference, 0)
+	for rows.Next() {
+		item, err := scanAssetReference(rows)
+		if err != nil {
+			return nil, err
+		}
+		if includePreview && s.storage != nil && item.StorageKey != nil && strings.TrimSpace(*item.StorageKey) != "" {
+			if presigned, err := s.storage.PresignGetObject(r.Context(), *item.StorageKey, 15*time.Minute); err == nil {
+				item.PreviewURL = &presigned.URL
+			}
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Server) attachCanonicalAssetReferences(r *http.Request, projectID string, items []CanonicalAsset, includePreview bool) error {
+	if len(items) == 0 {
+		return nil
+	}
+	index := map[string]int{}
+	for i := range items {
+		index[items[i].ID] = i
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id, organization_id, project_id, asset_id, reference_type, title, description,
+		       artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
+		       is_primary, status, metadata, created_by, created_at, updated_at
+		FROM asset_references
+		WHERE project_id = $1
+		ORDER BY asset_id, is_primary DESC, created_at DESC
+	`, projectID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		ref, err := scanAssetReference(rows)
+		if err != nil {
+			return err
+		}
+		i, ok := index[ref.AssetID]
+		if !ok {
+			continue
+		}
+		if includePreview && s.storage != nil && ref.StorageKey != nil && strings.TrimSpace(*ref.StorageKey) != "" {
+			if presigned, err := s.storage.PresignGetObject(r.Context(), *ref.StorageKey, 15*time.Minute); err == nil {
+				ref.PreviewURL = &presigned.URL
+			}
+		}
+		items[i].References = append(items[i].References, ref)
+		items[i].ReferenceCount++
+	}
+	return rows.Err()
+}
+
+func (s *Server) attachCanonicalAssetShotRequirements(r *http.Request, projectID string, items []CanonicalAsset) error {
+	if len(items) == 0 {
+		return nil
+	}
+	index := map[string]int{}
+	for i := range items {
+		index[items[i].ID] = i
+	}
+	rows, err := s.db.Query(r.Context(), shotAssetRequirementSelectSQL(`
+		WHERE r.project_id = $1
+		ORDER BY r.created_at DESC
+	`), projectID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		req, err := scanShotAssetRequirement(rows)
+		if err != nil {
+			return err
+		}
+		i, ok := index[req.AssetID]
+		if !ok {
+			continue
+		}
+		items[i].ShotRequirements = append(items[i].ShotRequirements, req)
+		items[i].ShotRequirementCount++
+	}
+	return rows.Err()
+}
+
+func (s *Server) setPrimaryAssetReferenceTx(ctx context.Context, tx pgx.Tx, projectID, assetID, referenceID string) (AssetReference, error) {
+	var ref AssetReference
+	if _, err := tx.Exec(ctx, `
+		UPDATE asset_references
+		SET is_primary = false, updated_at = now()
+		WHERE project_id = $1 AND asset_id = $2 AND id <> $3
+	`, projectID, assetID, referenceID); err != nil {
+		return AssetReference{}, err
+	}
+	ref, err := scanAssetReference(tx.QueryRow(ctx, `
+		UPDATE asset_references
+		SET is_primary = true, status = 'ready', updated_at = now()
+		WHERE project_id = $1 AND asset_id = $2 AND id = $3
+		RETURNING id, organization_id, project_id, asset_id, reference_type, title, description,
+		          artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
+		          is_primary, status, metadata, created_by, created_at, updated_at
+	`, projectID, assetID, referenceID))
+	if err != nil {
+		return AssetReference{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE canonical_assets
+		SET primary_reference_artifact_id = NULLIF($3, '')::uuid,
+		    primary_reference_media_file_id = NULLIF($4, '')::uuid,
+		    primary_reference_storage_key = NULLIF($5, ''),
+		    reference_artifact_id = NULLIF($3, '')::uuid,
+		    reference_media_file_id = NULLIF($4, '')::uuid,
+		    reference_storage_key = NULLIF($5, ''),
+		    updated_at = now()
+		WHERE project_id = $1 AND id = $2
+	`, projectID, assetID, stringValue(ref.ArtifactID), stringValue(ref.MediaFileID), stringValue(ref.StorageKey)); err != nil {
+		return AssetReference{}, err
+	}
+	return ref, nil
 }
 
 func (s *Server) attachCanonicalAssetSceneLinks(r *http.Request, projectID string, items []CanonicalAsset) error {
@@ -698,9 +1361,11 @@ func (s *Server) storyboardShotByID(r *http.Request, projectID, shotID string) (
 
 func scanCanonicalAsset(row rowScan) (CanonicalAsset, error) {
 	var item CanonicalAsset
-	var basePrompt, referenceArtifactID, referenceMediaFileID, referenceStorageKey, editedBy, createdBy sql.NullString
+	var basePrompt, consistencyPrompt, negativePrompt sql.NullString
+	var primaryReferenceArtifactID, primaryReferenceMediaFileID, primaryReferenceStorageKey sql.NullString
+	var referenceArtifactID, referenceMediaFileID, referenceStorageKey, editedBy, createdBy sql.NullString
 	var editedAt sql.NullTime
-	var visualTraits, sourceScriptIDs, metadata []byte
+	var profile, visualTraits, sourceScriptIDs, metadata []byte
 	err := row.Scan(
 		&item.ID,
 		&item.OrganizationID,
@@ -708,8 +1373,15 @@ func scanCanonicalAsset(row rowScan) (CanonicalAsset, error) {
 		&item.AssetType,
 		&item.Name,
 		&item.Description,
+		&profile,
 		&basePrompt,
+		&consistencyPrompt,
+		&negativePrompt,
 		&visualTraits,
+		&primaryReferenceArtifactID,
+		&primaryReferenceMediaFileID,
+		&primaryReferenceStorageKey,
+		&item.LockReference,
 		&referenceArtifactID,
 		&referenceMediaFileID,
 		&referenceStorageKey,
@@ -725,8 +1397,14 @@ func scanCanonicalAsset(row rowScan) (CanonicalAsset, error) {
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
+	item.Profile = rawOrDefaultBytes(profile, "{}")
 	item.BasePrompt = stringPtrFromNull(basePrompt)
+	item.ConsistencyPrompt = stringPtrFromNull(consistencyPrompt)
+	item.NegativePrompt = stringPtrFromNull(negativePrompt)
 	item.VisualTraits = rawOrDefaultBytes(visualTraits, "{}")
+	item.PrimaryReferenceArtifactID = stringPtrFromNull(primaryReferenceArtifactID)
+	item.PrimaryReferenceMediaFileID = stringPtrFromNull(primaryReferenceMediaFileID)
+	item.PrimaryReferenceStorageKey = stringPtrFromNull(primaryReferenceStorageKey)
 	item.ReferenceArtifactID = stringPtrFromNull(referenceArtifactID)
 	item.ReferenceMediaFileID = stringPtrFromNull(referenceMediaFileID)
 	item.ReferenceStorageKey = stringPtrFromNull(referenceStorageKey)
@@ -738,6 +1416,77 @@ func scanCanonicalAsset(row rowScan) (CanonicalAsset, error) {
 	item.Metadata = rawOrDefaultBytes(metadata, "{}")
 	item.CreatedBy = stringPtrFromNull(createdBy)
 	return item, err
+}
+
+func scanAssetReference(row rowScan) (AssetReference, error) {
+	var item AssetReference
+	var title, description, artifactID, mediaFileID, storageKey, previewURL sql.NullString
+	var prompt, promptVersionID, promptHash, createdBy sql.NullString
+	var metadata []byte
+	err := row.Scan(
+		&item.ID,
+		&item.OrganizationID,
+		&item.ProjectID,
+		&item.AssetID,
+		&item.ReferenceType,
+		&title,
+		&description,
+		&artifactID,
+		&mediaFileID,
+		&storageKey,
+		&previewURL,
+		&prompt,
+		&promptVersionID,
+		&promptHash,
+		&item.IsPrimary,
+		&item.Status,
+		&metadata,
+		&createdBy,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	item.Title = stringPtrFromNull(title)
+	item.Description = stringPtrFromNull(description)
+	item.ArtifactID = stringPtrFromNull(artifactID)
+	item.MediaFileID = stringPtrFromNull(mediaFileID)
+	item.StorageKey = stringPtrFromNull(storageKey)
+	item.PreviewURL = stringPtrFromNull(previewURL)
+	item.Prompt = stringPtrFromNull(prompt)
+	item.PromptVersionID = stringPtrFromNull(promptVersionID)
+	item.PromptHash = stringPtrFromNull(promptHash)
+	item.Metadata = rawOrDefaultBytes(metadata, "{}")
+	item.CreatedBy = stringPtrFromNull(createdBy)
+	return item, err
+}
+
+func normalizeAssetCardDraft(text string) (assetCardDraft, error) {
+	candidate := strings.TrimSpace(text)
+	if strings.HasPrefix(candidate, "```") {
+		candidate = strings.TrimPrefix(candidate, "```json")
+		candidate = strings.TrimPrefix(candidate, "```")
+		candidate = strings.TrimSuffix(candidate, "```")
+		candidate = strings.TrimSpace(candidate)
+	}
+	var draft assetCardDraft
+	if err := json.Unmarshal([]byte(candidate), &draft); err != nil {
+		return assetCardDraft{}, err
+	}
+	if len(draft.Profile) == 0 {
+		draft.Profile = json.RawMessage(`{}`)
+	}
+	var profile map[string]any
+	if err := json.Unmarshal(draft.Profile, &profile); err != nil {
+		return assetCardDraft{}, fmt.Errorf("profile must be a JSON object")
+	}
+	normalized, err := json.Marshal(profile)
+	if err != nil {
+		return assetCardDraft{}, err
+	}
+	draft.Profile = normalized
+	draft.BasePrompt = strings.TrimSpace(draft.BasePrompt)
+	draft.ConsistencyPrompt = strings.TrimSpace(draft.ConsistencyPrompt)
+	draft.NegativePrompt = strings.TrimSpace(draft.NegativePrompt)
+	return draft, nil
 }
 
 func shotAssetRequirementSelectSQL(where string) string {
@@ -816,6 +1565,23 @@ func validCanonicalAssetType(value string) bool {
 
 func validCanonicalAssetStatus(value string) bool {
 	return value == "draft" || value == "prompt_ready" || value == "image_running" || value == "image_succeeded" || value == "image_failed"
+}
+
+func validAssetReferenceType(value string) bool {
+	return value == "generated" || value == "uploaded" || value == "derived" || value == "selected"
+}
+
+func validAssetReferenceMimeType(value string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "image/") && canPreviewMimeType(value)
+}
+
+func canonicalAssetHasPrimaryReference(asset CanonicalAsset) bool {
+	return stringValue(asset.PrimaryReferenceArtifactID) != "" ||
+		stringValue(asset.PrimaryReferenceMediaFileID) != "" ||
+		stringValue(asset.PrimaryReferenceStorageKey) != "" ||
+		stringValue(asset.ReferenceArtifactID) != "" ||
+		stringValue(asset.ReferenceMediaFileID) != "" ||
+		stringValue(asset.ReferenceStorageKey) != ""
 }
 
 func shotSummary(shot StoryboardShot) string {

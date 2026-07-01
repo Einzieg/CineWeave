@@ -68,18 +68,25 @@ type ScriptAssetCandidate struct {
 }
 
 type CanonicalAssetRecord struct {
-	ID                   string          `json:"id"`
-	AssetType            string          `json:"assetType"`
-	Name                 string          `json:"name"`
-	Description          string          `json:"description"`
-	BasePrompt           string          `json:"basePrompt,omitempty"`
-	VisualTraits         json.RawMessage `json:"visualTraits,omitempty"`
-	ReferenceArtifactID  string          `json:"referenceArtifactId,omitempty"`
-	ReferenceMediaFileID string          `json:"referenceMediaFileId,omitempty"`
-	ReferenceStorageKey  string          `json:"referenceStorageKey,omitempty"`
-	Status               string          `json:"status"`
-	ManualOverride       bool            `json:"manualOverride,omitempty"`
-	StaleState           string          `json:"staleState,omitempty"`
+	ID                          string          `json:"id"`
+	AssetType                   string          `json:"assetType"`
+	Name                        string          `json:"name"`
+	Description                 string          `json:"description"`
+	BasePrompt                  string          `json:"basePrompt,omitempty"`
+	Profile                     json.RawMessage `json:"profile,omitempty"`
+	ConsistencyPrompt           string          `json:"consistencyPrompt,omitempty"`
+	NegativePrompt              string          `json:"negativePrompt,omitempty"`
+	VisualTraits                json.RawMessage `json:"visualTraits,omitempty"`
+	PrimaryReferenceArtifactID  string          `json:"primaryReferenceArtifactId,omitempty"`
+	PrimaryReferenceMediaFileID string          `json:"primaryReferenceMediaFileId,omitempty"`
+	PrimaryReferenceStorageKey  string          `json:"primaryReferenceStorageKey,omitempty"`
+	LockReference               bool            `json:"lockReference,omitempty"`
+	ReferenceArtifactID         string          `json:"referenceArtifactId,omitempty"`
+	ReferenceMediaFileID        string          `json:"referenceMediaFileId,omitempty"`
+	ReferenceStorageKey         string          `json:"referenceStorageKey,omitempty"`
+	Status                      string          `json:"status"`
+	ManualOverride              bool            `json:"manualOverride,omitempty"`
+	StaleState                  string          `json:"staleState,omitempty"`
 }
 
 type AnalyzeScriptAssetsInput struct {
@@ -896,11 +903,15 @@ func (a Activities) GenerateCanonicalAssetImage(ctx context.Context, input Gener
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyCanonicalAssetImage, map[string]any{
 		"project": project.asPromptVariables(),
 		"asset": map[string]any{
-			"type":         asset.AssetType,
-			"name":         asset.Name,
-			"description":  asset.Description,
-			"basePrompt":   asset.BasePrompt,
-			"visualTraits": string(asset.VisualTraits),
+			"assetType":         asset.AssetType,
+			"type":              asset.AssetType,
+			"name":              asset.Name,
+			"description":       asset.Description,
+			"profile":           string(asset.Profile),
+			"basePrompt":        asset.BasePrompt,
+			"consistencyPrompt": asset.ConsistencyPrompt,
+			"negativePrompt":    asset.NegativePrompt,
+			"visualTraits":      string(asset.VisualTraits),
 		},
 	})
 	if err != nil {

@@ -68,18 +68,23 @@ type ProductionSourceStage struct {
 }
 
 type ProductionAssetsStage struct {
-	Status                     string              `json:"status"`
-	CharacterCount             int                 `json:"characterCount"`
-	SceneCount                 int                 `json:"sceneCount"`
-	PropCount                  int                 `json:"propCount"`
-	ReferenceImageCount        int                 `json:"referenceImageCount"`
-	MissingReferenceImageCount int                 `json:"missingReferenceImageCount"`
-	ApprovedCount              int                 `json:"approvedCount"`
-	PendingReviewCount         int                 `json:"pendingReviewCount"`
-	ManualOverrideCount        int                 `json:"manualOverrideCount"`
-	StaleCount                 int                 `json:"staleCount"`
-	DownstreamStaleCount       int                 `json:"downstreamStaleCount"`
-	Summary                    map[string][]string `json:"summary"`
+	Status                       string              `json:"status"`
+	CharacterCount               int                 `json:"characterCount"`
+	SceneCount                   int                 `json:"sceneCount"`
+	PropCount                    int                 `json:"propCount"`
+	AssetCardCount               int                 `json:"assetCardCount"`
+	MissingAssetCardCount        int                 `json:"missingAssetCardCount"`
+	ReferenceImageCount          int                 `json:"referenceImageCount"`
+	MissingReferenceImageCount   int                 `json:"missingReferenceImageCount"`
+	PrimaryReferenceCount        int                 `json:"primaryReferenceCount"`
+	MissingPrimaryReferenceCount int                 `json:"missingPrimaryReferenceCount"`
+	LockedReferenceCount         int                 `json:"lockedReferenceCount"`
+	ApprovedCount                int                 `json:"approvedCount"`
+	PendingReviewCount           int                 `json:"pendingReviewCount"`
+	ManualOverrideCount          int                 `json:"manualOverrideCount"`
+	StaleCount                   int                 `json:"staleCount"`
+	DownstreamStaleCount         int                 `json:"downstreamStaleCount"`
+	Summary                      map[string][]string `json:"summary"`
 }
 
 type ProductionStoryboardStage struct {
@@ -421,13 +426,22 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 }
 
 func (s *Server) productionAssetsStage(r *http.Request, projectID string) (ProductionAssetsStage, error) {
-	var characterCount, sceneCount, propCount, referenceCount, runningCount, failedCount, approvedCount, pendingReviewCount, manualOverrideCount, staleCount, downstreamStaleCount int
+	var characterCount, sceneCount, propCount, assetCardCount, referenceCount, primaryReferenceCount, lockedReferenceCount int
+	var runningCount, failedCount, approvedCount, pendingReviewCount, manualOverrideCount, staleCount, downstreamStaleCount int
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT
 			COUNT(*) FILTER (WHERE asset_type = 'character'),
 			COUNT(*) FILTER (WHERE asset_type = 'scene'),
 			COUNT(*) FILTER (WHERE asset_type = 'prop'),
+			COUNT(*) FILTER (
+				WHERE COALESCE(profile, '{}'::jsonb) <> '{}'::jsonb
+				   OR COALESCE(base_prompt, '') <> ''
+				   OR COALESCE(consistency_prompt, '') <> ''
+				   OR COALESCE(negative_prompt, '') <> ''
+			),
 			COUNT(*) FILTER (WHERE reference_artifact_id IS NOT NULL OR reference_media_file_id IS NOT NULL OR COALESCE(reference_storage_key, '') <> ''),
+			COUNT(*) FILTER (WHERE primary_reference_artifact_id IS NOT NULL OR primary_reference_media_file_id IS NOT NULL OR COALESCE(primary_reference_storage_key, '') <> ''),
+			COUNT(*) FILTER (WHERE lock_reference),
 			COUNT(*) FILTER (WHERE status = 'image_running'),
 			COUNT(*) FILTER (WHERE status = 'image_failed'),
 			COUNT(*) FILTER (WHERE review_status = 'approved'),
@@ -442,11 +456,13 @@ func (s *Server) productionAssetsStage(r *http.Request, projectID string) (Produ
 			)
 		FROM canonical_assets
 		WHERE project_id = $1
-	`, projectID).Scan(&characterCount, &sceneCount, &propCount, &referenceCount, &runningCount, &failedCount, &approvedCount, &pendingReviewCount, &manualOverrideCount, &staleCount, &downstreamStaleCount); err != nil {
+	`, projectID).Scan(&characterCount, &sceneCount, &propCount, &assetCardCount, &referenceCount, &primaryReferenceCount, &lockedReferenceCount, &runningCount, &failedCount, &approvedCount, &pendingReviewCount, &manualOverrideCount, &staleCount, &downstreamStaleCount); err != nil {
 		return ProductionAssetsStage{}, err
 	}
 	total := characterCount + sceneCount + propCount
+	missingAssetCardCount := maxInt(total-assetCardCount, 0)
 	missingReferenceCount := maxInt(total-referenceCount, 0)
+	missingPrimaryReferenceCount := maxInt(total-primaryReferenceCount, 0)
 	status := "not_started"
 	switch {
 	case total == 0:
@@ -469,18 +485,23 @@ func (s *Server) productionAssetsStage(r *http.Request, projectID string) (Produ
 		return ProductionAssetsStage{}, err
 	}
 	return ProductionAssetsStage{
-		Status:                     status,
-		CharacterCount:             characterCount,
-		SceneCount:                 sceneCount,
-		PropCount:                  propCount,
-		ReferenceImageCount:        referenceCount,
-		MissingReferenceImageCount: missingReferenceCount,
-		ApprovedCount:              approvedCount,
-		PendingReviewCount:         pendingReviewCount,
-		ManualOverrideCount:        manualOverrideCount,
-		StaleCount:                 staleCount,
-		DownstreamStaleCount:       downstreamStaleCount,
-		Summary:                    summary,
+		Status:                       status,
+		CharacterCount:               characterCount,
+		SceneCount:                   sceneCount,
+		PropCount:                    propCount,
+		AssetCardCount:               assetCardCount,
+		MissingAssetCardCount:        missingAssetCardCount,
+		ReferenceImageCount:          referenceCount,
+		MissingReferenceImageCount:   missingReferenceCount,
+		PrimaryReferenceCount:        primaryReferenceCount,
+		MissingPrimaryReferenceCount: missingPrimaryReferenceCount,
+		LockedReferenceCount:         lockedReferenceCount,
+		ApprovedCount:                approvedCount,
+		PendingReviewCount:           pendingReviewCount,
+		ManualOverrideCount:          manualOverrideCount,
+		StaleCount:                   staleCount,
+		DownstreamStaleCount:         downstreamStaleCount,
+		Summary:                      summary,
 	}, nil
 }
 

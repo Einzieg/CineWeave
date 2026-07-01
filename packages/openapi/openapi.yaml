@@ -1509,6 +1509,10 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/AssetId"
+        - name: includePreviewUrl
+          in: query
+          schema:
+            type: boolean
       responses:
         "200":
           description: Canonical asset detail
@@ -1536,7 +1540,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CanonicalAssetEnvelope"
-  /api/projects/{projectId}/assets/{assetId}/generate-image:
+  /api/projects/{projectId}/canonical-assets/{assetId}/generate-card:
+    post:
+      operationId: generateAssetCard
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateAssetCardRequest"
+      responses:
+        "200":
+          description: Generated asset card draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerateAssetCardResponseEnvelope"
+  /api/projects/{projectId}/canonical-assets/{assetId}/generate-image:
     post:
       operationId: generateCanonicalAssetImage
       security:
@@ -1544,6 +1569,15 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                setPrimary:
+                  type: boolean
       responses:
         "200":
           description: Generated canonical asset image
@@ -1551,6 +1585,87 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CanonicalAssetImageResultEnvelope"
+  /api/projects/{projectId}/canonical-assets/{assetId}/references:
+    get:
+      operationId: listAssetReferences
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+        - name: includePreviewUrl
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Asset references
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetReferenceListEnvelope"
+    post:
+      operationId: createAssetReference
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetReferenceRequest"
+      responses:
+        "201":
+          description: Registered asset reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetReferenceEnvelope"
+  /api/projects/{projectId}/canonical-assets/{assetId}/references/upload-url:
+    post:
+      operationId: createAssetReferenceUploadUrl
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetReferenceUploadUrlRequest"
+      responses:
+        "201":
+          description: Presigned upload URL for an asset reference image
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetReferenceUploadUrlEnvelope"
+  /api/projects/{projectId}/canonical-assets/{assetId}/references/{referenceId}/set-primary:
+    post:
+      operationId: setPrimaryAssetReference
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+        - name: referenceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Selected primary asset reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetPrimaryAssetReferenceResponseEnvelope"
   /api/projects/{projectId}/assets/{assetId}/review:
     post:
       operationId: reviewCanonicalAsset
@@ -3803,9 +3918,12 @@ components:
         createdAt:
           type: string
           format: date-time
+    AssetProfile:
+      type: object
+      additionalProperties: true
     CanonicalAsset:
       type: object
-      required: [id, organizationId, projectId, assetType, name, description, visualTraits, status, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, assetType, name, description, profile, visualTraits, lockReference, status, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -3823,11 +3941,27 @@ components:
           type: string
         description:
           type: string
+        profile:
+          $ref: "#/components/schemas/AssetProfile"
         basePrompt:
+          type: string
+        consistencyPrompt:
+          type: string
+        negativePrompt:
           type: string
         visualTraits:
           type: object
           additionalProperties: true
+        primaryReferenceArtifactId:
+          type: string
+          format: uuid
+        primaryReferenceMediaFileId:
+          type: string
+          format: uuid
+        primaryReferenceStorageKey:
+          type: string
+        lockReference:
+          type: boolean
         referenceArtifactId:
           type: string
           format: uuid
@@ -3871,10 +4005,79 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AssetSceneLink"
+        references:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetReference"
+        shotRequirements:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShotAssetRequirement"
         sceneCount:
           type: integer
         storyboardShotCount:
           type: integer
+        referenceCount:
+          type: integer
+        shotRequirementCount:
+          type: integer
+    AssetReference:
+      type: object
+      required: [id, organizationId, projectId, assetId, referenceType, isPrimary, status, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        assetId:
+          type: string
+          format: uuid
+        referenceType:
+          type: string
+          enum: [generated, uploaded, derived, selected]
+        title:
+          type: string
+        description:
+          type: string
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        previewUrl:
+          type: string
+        prompt:
+          type: string
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        isPrimary:
+          type: boolean
+        status:
+          type: string
+          enum: [ready, archived, failed]
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     AssetSceneLink:
       type: object
       required: [scriptSceneId, sceneNo, title, storyboardShotCount]
@@ -4953,7 +5156,7 @@ components:
             type: string
     ProductionAssetsStage:
       type: object
-      required: [status, characterCount, sceneCount, propCount, referenceImageCount, missingReferenceImageCount, approvedCount, pendingReviewCount, manualOverrideCount, staleCount, downstreamStaleCount, summary]
+      required: [status, characterCount, sceneCount, propCount, assetCardCount, missingAssetCardCount, referenceImageCount, missingReferenceImageCount, primaryReferenceCount, missingPrimaryReferenceCount, lockedReferenceCount, approvedCount, pendingReviewCount, manualOverrideCount, staleCount, downstreamStaleCount, summary]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
@@ -4963,9 +5166,19 @@ components:
           type: integer
         propCount:
           type: integer
+        assetCardCount:
+          type: integer
+        missingAssetCardCount:
+          type: integer
         referenceImageCount:
           type: integer
         missingReferenceImageCount:
+          type: integer
+        primaryReferenceCount:
+          type: integer
+        missingPrimaryReferenceCount:
+          type: integer
+        lockedReferenceCount:
           type: integer
         approvedCount:
           type: integer
@@ -5523,6 +5736,60 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/CanonicalAsset"
+    GenerateAssetCardResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GenerateAssetCardResponse"
+    AssetReferenceEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AssetReference"
+    AssetReferenceListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/AssetReference"
+    AssetReferenceUploadUrlEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [storageKey, uploadUrl, method, headers, expiresAt]
+              properties:
+                storageKey:
+                  type: string
+                uploadUrl:
+                  type: string
+                method:
+                  type: string
+                headers:
+                  type: object
+                  additionalProperties: true
+                expiresAt:
+                  type: string
+                  format: date-time
+    SetPrimaryAssetReferenceResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/SetPrimaryAssetReferenceResponse"
     ShotAssetRequirementEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -8144,8 +8411,16 @@ components:
           type: string
         description:
           type: string
+        profile:
+          $ref: "#/components/schemas/AssetProfile"
         basePrompt:
           type: string
+        consistencyPrompt:
+          type: string
+        negativePrompt:
+          type: string
+        lockReference:
+          type: boolean
         visualTraits:
           type: object
           additionalProperties: true
@@ -8154,6 +8429,74 @@ components:
           additionalProperties: true
         status:
           type: string
+    GenerateAssetCardRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          default: false
+    GenerateAssetCardResponse:
+      type: object
+      required: [assetId, profile, basePrompt, consistencyPrompt, negativePrompt, applied]
+      properties:
+        assetId:
+          type: string
+          format: uuid
+        profile:
+          $ref: "#/components/schemas/AssetProfile"
+        basePrompt:
+          type: string
+        consistencyPrompt:
+          type: string
+        negativePrompt:
+          type: string
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+          format: uuid
+        applied:
+          type: boolean
+    CreateAssetReferenceUploadUrlRequest:
+      type: object
+      required: [fileName, mimeType]
+      properties:
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        expiresSeconds:
+          type: integer
+    CreateAssetReferenceRequest:
+      type: object
+      required: [storageKey, mimeType]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        storageKey:
+          type: string
+        mimeType:
+          type: string
+        referenceType:
+          type: string
+          enum: [generated, uploaded, derived, selected]
+        setPrimary:
+          type: boolean
+        metadata:
+          type: object
+          additionalProperties: true
+    SetPrimaryAssetReferenceResponse:
+      type: object
+      required: [assetId, reference]
+      properties:
+        assetId:
+          type: string
+          format: uuid
+        reference:
+          $ref: "#/components/schemas/AssetReference"
     UpdateShotAssetRequirementRequest:
       type: object
       properties:

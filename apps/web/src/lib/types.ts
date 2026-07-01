@@ -276,8 +276,15 @@ export type CanonicalAsset = {
   assetType: "character" | "scene" | "prop" | string;
   name: string;
   description: string;
+  profile?: JsonRecord;
   basePrompt?: string;
+  consistencyPrompt?: string;
+  negativePrompt?: string;
   visualTraits?: JsonRecord;
+  primaryReferenceArtifactId?: string;
+  primaryReferenceMediaFileId?: string;
+  primaryReferenceStorageKey?: string;
+  lockReference?: boolean;
   referenceArtifactId?: string;
   referenceMediaFileId?: string;
   referenceStorageKey?: string;
@@ -291,8 +298,43 @@ export type CanonicalAsset = {
   createdAt?: string;
   updatedAt?: string;
   sceneLinks?: AssetSceneLink[];
+  references?: AssetReference[];
+  shotRequirements?: ShotAssetRequirement[];
   sceneCount?: number;
   storyboardShotCount?: number;
+  referenceCount?: number;
+  shotRequirementCount?: number;
+};
+
+export type AssetReference = {
+  id: string;
+  assetId: string;
+  referenceType: string;
+  title?: string;
+  description?: string;
+  artifactId?: string;
+  mediaFileId?: string;
+  storageKey?: string;
+  previewUrl?: string;
+  prompt?: string;
+  promptVersionId?: string;
+  promptHash?: string;
+  isPrimary: boolean;
+  status: string;
+  metadata?: JsonRecord;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type GenerateAssetCardResponse = {
+  assetId: string;
+  profile: JsonRecord;
+  basePrompt: string;
+  consistencyPrompt: string;
+  negativePrompt: string;
+  providerCallId?: string;
+  modelId?: string;
+  applied: boolean;
 };
 
 export type AssetSceneLink = {
@@ -444,8 +486,13 @@ export type ProductionStatus = {
       characterCount: number;
       sceneCount: number;
       propCount: number;
+      assetCardCount: number;
+      missingAssetCardCount: number;
       referenceImageCount: number;
       missingReferenceImageCount: number;
+      primaryReferenceCount: number;
+      missingPrimaryReferenceCount: number;
+      lockedReferenceCount: number;
       approvedCount: number;
       pendingReviewCount: number;
       manualOverrideCount: number;

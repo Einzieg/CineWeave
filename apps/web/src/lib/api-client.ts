@@ -6,6 +6,8 @@ import type {
   Artifact,
   AuthResponse,
   CanonicalAsset,
+  AssetReference,
+  GenerateAssetCardResponse,
   JsonRecord,
   ImportProjectSourceResponse,
   ListEnvelope,
@@ -206,12 +208,24 @@ export const studioApi = {
 
   listCanonicalAssets: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<CanonicalAsset>>(`/api/projects/${projectId}/canonical-assets`, { session }),
+  getCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, includePreviewUrl = false) =>
+    apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, { session, query: includePreviewUrl ? { includePreviewUrl: "true" } : undefined }),
   updateCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
     apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, { method: "PATCH", session, body }),
+  generateAssetCard: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
+    apiRequest<GenerateAssetCardResponse>(`/api/projects/${projectId}/canonical-assets/${assetId}/generate-card`, { method: "POST", session, body }),
+  listAssetReferences: (session: StudioSession, projectId: string, assetId: string, includePreviewUrl = false) =>
+    apiRequest<ListEnvelope<AssetReference>>(`/api/projects/${projectId}/canonical-assets/${assetId}/references`, { session, query: includePreviewUrl ? { includePreviewUrl: "true" } : undefined }),
+  createAssetReferenceUploadUrl: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
+    apiRequest<{ storageKey: string; uploadUrl: string; method: string; headers: Record<string, string | string[]>; expiresAt: string }>(`/api/projects/${projectId}/canonical-assets/${assetId}/references/upload-url`, { method: "POST", session, body }),
+  createAssetReference: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
+    apiRequest<AssetReference>(`/api/projects/${projectId}/canonical-assets/${assetId}/references`, { method: "POST", session, body }),
+  setPrimaryAssetReference: (session: StudioSession, projectId: string, assetId: string, referenceId: string) =>
+    apiRequest<{ assetId: string; reference: AssetReference }>(`/api/projects/${projectId}/canonical-assets/${assetId}/references/${referenceId}/set-primary`, { method: "POST", session, body: {} }),
   analyzeScriptAssets: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/scripts/${scriptId}/analyze-assets`, { method: "POST", session, body }),
-  generateAssetImage: (session: StudioSession, projectId: string, assetId: string) =>
-    apiRequest<{ asset: CanonicalAsset; providerCallId: string }>(`/api/projects/${projectId}/assets/${assetId}/generate-image`, { method: "POST", session, body: {} }),
+  generateAssetImage: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord = {}) =>
+    apiRequest<{ asset: CanonicalAsset; providerCallId: string }>(`/api/projects/${projectId}/canonical-assets/${assetId}/generate-image`, { method: "POST", session, body }),
   reviewAsset: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/assets/${assetId}/review`, { method: "POST", session, body }),
   listShotAssetRequirements: (session: StudioSession, projectId: string) =>
