@@ -2,11 +2,15 @@
 
 const toneByStatus: Record<string, string> = {
   ready: "border-blue-200 bg-blue-50 text-blue-700",
+  enabled: "border-blue-200 bg-blue-50 text-blue-700",
   scenes_ready: "border-blue-200 bg-blue-50 text-blue-700",
   imported: "border-blue-200 bg-blue-50 text-blue-700",
   active: "border-blue-200 bg-blue-50 text-blue-700",
   running: "border-amber-200 bg-amber-50 text-amber-700",
   needs_review: "border-amber-200 bg-amber-50 text-amber-700",
+  events_pending_extraction: "border-amber-200 bg-amber-50 text-amber-700",
+  events_pending_review: "border-amber-200 bg-amber-50 text-amber-700",
+  adaptation_plan_pending: "border-amber-200 bg-amber-50 text-amber-700",
   scenes_pending_parse: "border-amber-200 bg-amber-50 text-amber-700",
   scenes_pending_review: "border-amber-200 bg-amber-50 text-amber-700",
   needs_edit: "border-amber-200 bg-amber-50 text-amber-700",
@@ -16,6 +20,7 @@ const toneByStatus: Record<string, string> = {
   queued: "border-slate-200 bg-slate-50 text-slate-700",
   draft: "border-slate-200 bg-slate-50 text-slate-700",
   pending: "border-slate-200 bg-slate-50 text-slate-700",
+  disabled: "border-slate-200 bg-slate-50 text-slate-700",
   not_started: "border-slate-200 bg-slate-50 text-slate-700",
   approved: "border-emerald-200 bg-emerald-50 text-emerald-700",
   fresh: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -40,6 +45,10 @@ export function statusLabel(status: string) {
   switch (status) {
     case "ready":
       return "就绪";
+    case "enabled":
+      return "已启用";
+    case "disabled":
+      return "已禁用";
     case "scenes_ready":
       return "分场就绪";
     case "imported":
@@ -58,6 +67,12 @@ export function statusLabel(status: string) {
       return "未开始";
     case "needs_review":
       return "待确认";
+    case "events_pending_extraction":
+      return "待提取事件";
+    case "events_pending_review":
+      return "事件待确认";
+    case "adaptation_plan_pending":
+      return "待生成改编计划";
     case "scenes_pending_parse":
       return "待解析分场";
     case "scenes_pending_review":

@@ -30,6 +30,7 @@ import type {
   ProjectExport,
   ProjectSource,
   ProductionStatus,
+  ProductionShotMediaStage,
   ProjectTimeline,
   PromptTemplate,
   ProviderAccount,
@@ -500,8 +501,12 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
   const reviewRuns = useStudioQuery<ReviewRun[]>([], `project:${projectId}:review-runs`, async (activeSession) => (await studioApi.listReviewRuns(activeSession, projectId)).items);
   const [finalVideoBusy, setFinalVideoBusy] = useState(false);
   const [finalVideoError, setFinalVideoError] = useState("");
+  const [nextStepBusy, setNextStepBusy] = useState("");
+  const [nextStepError, setNextStepError] = useState("");
+  const [nextStepNotice, setNextStepNotice] = useState("");
   const latestRun = workflows.data[0];
   const activeFinalVideo = finalVideos.data.find((item) => item.status === "active") ?? finalVideos.data[0] ?? null;
+  const nextStep = production.data ? projectNextStep(projectId, production.data, reviewItems.data) : null;
   const finalVideo = activeFinalVideo
     ? ({
         id: activeFinalVideo.artifactId ?? activeFinalVideo.id,
@@ -527,6 +532,22 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
       setFinalVideoError(errorMessage(cause));
     } finally {
       setFinalVideoBusy(false);
+    }
+  }
+
+  async function runOverviewNextStep(action: string) {
+    setNextStepBusy(action);
+    setNextStepError("");
+    setNextStepNotice("");
+    try {
+      await studioApi.runProductionAction(session, projectId, compactRecord({ action, options: { maxShots: 3 } }));
+      setNextStepNotice(`${productionActionLabel(action)}已启动`);
+      production.reload();
+      workflows.reload();
+    } catch (cause) {
+      setNextStepError(errorMessage(cause));
+    } finally {
+      setNextStepBusy("");
     }
   }
 
@@ -573,12 +594,37 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
           ) : null}
         </QueryBody>
 
+        {nextStep ? (
+          <Surface className="p-5">
+            <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">下一步建议</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">{nextStep.title}</h3>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{nextStep.description}</p>
+                {nextStepNotice ? <p className="mt-3 text-sm text-blue-700">{nextStepNotice}</p> : null}
+                <ErrorPanel message={nextStepError} />
+              </div>
+              {nextStep.href ? (
+                <Link className="studio-button studio-button-primary justify-center" href={nextStep.href as Route}>
+                  <ArrowRight size={16} />
+                  {nextStep.label}
+                </Link>
+              ) : (
+                <button className="studio-button studio-button-primary justify-center" disabled={!nextStep.action || nextStepBusy !== ""} onClick={() => nextStep.action && runOverviewNextStep(nextStep.action)} type="button">
+                  {nextStepBusy === nextStep.action ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
+                  {nextStep.label}
+                </button>
+              )}
+            </div>
+          </Surface>
+        ) : null}
+
         <Surface>
           <SectionTitle title="当前进度" description="正式生产链路从原文/剧本开始，逐步进入资产、分镜、镜头视频和最终成片。" />
           <div className="grid gap-3 p-4 md:grid-cols-5">
             <ProgressStep done={scripts.data.length > 0} title="原文/剧本" detail={`${scripts.data.length} 个剧本`} />
             <ProgressStep done={assets.data.length > 0} title="资产" detail={`${assets.data.length} 个基础资产`} />
-            <ProgressStep done={workflows.data.some((item) => stringFrom(item.input.workflowType) === "script_to_storyboard")} title="分镜" detail="Storyboard Agent" />
+            <ProgressStep done={workflows.data.some((item) => stringFrom(item.input.workflowType) === "script_to_storyboard")} title="分镜" detail="分镜生成" />
             <ProgressStep done={workflows.data.some((item) => ["script_to_video", "full_production", "video_production"].includes(stringFrom(item.input.workflowType)))} title="镜头视频" detail="图片 / 视频生成" />
             <ProgressStep done={Boolean(finalVideo)} title="最终成片" detail={activeFinalVideo ? `v${activeFinalVideo.version} · ${activeFinalVideo.status}` : finalVideo?.storageKey ?? "等待合成"} />
           </div>
@@ -600,7 +646,7 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
         <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
           <Surface>
             <SectionTitle title="最近工作流" description="最近一次完整生产或视频生产会显示在顶部。" />
-            {latestRun ? <WorkflowRow run={latestRun} /> : <EmptyState title="暂无工作流" description="在工作流页面启动 source_to_script、script_to_assets、script_to_storyboard 或 full_production。" />}
+            {latestRun ? <WorkflowRow run={latestRun} /> : <EmptyState title="暂无工作流" description="从下一步建议或生产看板启动内容导入、资产分析、分镜生成或镜头生产。" />}
           </Surface>
           <Surface>
             <SectionTitle title="最终成片" description="当前激活的最终视频版本。" />
@@ -686,7 +732,6 @@ function ProjectTimelineContent({ projectId, initialClipId, initialFinalVideoId 
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [lastCompose, setLastCompose] = useState("");
 
   function updateSelectedClipDraft(patch: Partial<TimelineClipDraft>) {
     if (!selectedClip) {
@@ -810,13 +855,12 @@ function ProjectTimelineContent({ projectId, initialClipId, initialFinalVideoId 
     setError("");
     setNotice("");
     try {
-      const response = await studioApi.composeTimeline(session, projectId, effectiveTimelineId, {
+      await studioApi.composeTimeline(session, projectId, effectiveTimelineId, {
         title: composeDraft.title,
         resolution: composeDraft.resolution,
         aspectRatio: composeDraft.aspectRatio,
       });
-      setLastCompose(response.workflowRunId);
-      setNotice("合成工作流已启动");
+      setNotice("最终成片合成已启动");
       reloadTimelineData();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -962,13 +1006,13 @@ function ProjectTimelineContent({ projectId, initialClipId, initialFinalVideoId 
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <Pill>#{index + 1}</Pill>
-                        {clip.shot ? <Pill>Shot {clip.shot.shotNo}</Pill> : null}
+                        {clip.shot ? <Pill>镜头 {clip.shot.shotNo}</Pill> : null}
                         <StatusBadge status={clip.enabled ? "enabled" : "disabled"} />
                       </div>
                       <p className="mt-2 truncate font-medium text-slate-900">{clip.title || clip.shot?.visual || "未命名片段"}</p>
-                      <p className="mt-1 truncate text-xs text-slate-500">{clip.sourceStorageKey ?? "无源视频"}</p>
+                      <p className="mt-1 truncate text-xs text-slate-500">来源镜头：{clip.shot ? `镜头 ${clip.shot.shotNo}` : "未绑定"} · 视频：{clip.sourceStorageKey ? "已连接" : "缺失"}</p>
                       <p className="mt-2 text-xs text-slate-500">
-                        {secondsLabel(clip.sourceDurationSeconds)} · {trimLabel(clip)}
+                        是否启用：{clip.enabled ? "是" : "否"} · 裁剪范围：{trimLabel(clip)} · 源时长：{secondsLabel(clip.sourceDurationSeconds)}
                       </p>
                     </div>
                     <div className="flex gap-1 md:flex-col">
@@ -1038,7 +1082,6 @@ function ProjectTimelineContent({ projectId, initialClipId, initialFinalVideoId 
                 {busy === "compose" ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
                 合成最终成片
               </button>
-              {lastCompose ? <p className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">workflowRunId：{lastCompose}</p> : null}
               {activeVersion?.previewUrl ? <video className="aspect-video w-full rounded-md bg-black" controls src={activeVersion.previewUrl} /> : null}
             </div>
           </Surface>
@@ -1063,10 +1106,10 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
   const { session } = useStudioSession();
   const status = useStudioQuery<ProductionStatus | null>(null, `production:${projectId}`, async (activeSession) => studioApi.getProductionStatus(activeSession, projectId));
   const reviewItems = useStudioQuery<ReviewItem[]>([], `production:${projectId}:review-items`, async (activeSession) => (await studioApi.listReviewItems(activeSession, projectId, { status: "open" })).items);
+  const exportsQuery = useStudioQuery<ProjectExport[]>([], `production:${projectId}:exports`, async (activeSession) => (await studioApi.listProjectExports(activeSession, projectId)).items);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [lastWorkflowRunId, setLastWorkflowRunId] = useState("");
 
   async function runAction(action: string) {
     setBusy(action);
@@ -1074,7 +1117,6 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
     setNotice("");
     try {
       const response = await studioApi.runProductionAction(session, projectId, compactRecord({ action, options: { maxShots: 3 } }));
-      setLastWorkflowRunId(response.workflowRunId);
       setNotice(response.note || `${productionActionLabel(action)}已启动`);
       status.reload();
     } catch (cause) {
@@ -1085,6 +1127,7 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
   }
 
   const nextAction = status.data ? nextProductionAction(status.data) : "";
+  const flowStages = status.data ? productionFlowStages(status.data, reviewItems.data, exportsQuery.data) : [];
 
   return (
     <SessionGate>
@@ -1127,10 +1170,18 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                       查看最终成片
                     </a>
                   ) : null}
-                  {lastWorkflowRunId ? <p className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">运行中 workflowRunId：{lastWorkflowRunId}</p> : null}
                   <ErrorPanel message={error} />
                   {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
                 </div>
+              </div>
+            </Surface>
+
+            <Surface>
+              <SectionTitle title="正式创作流程" description="从内容导入到最终导出的完整路径。" />
+              <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
+                {flowStages.map((stage, index) => (
+                  <FlowStepCard detail={stage.detail} index={index + 1} key={stage.title} status={stage.status} title={stage.title} />
+                ))}
               </div>
             </Surface>
 
@@ -1162,7 +1213,7 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   status.data.stages.source.activeAdaptationTitle ? `当前计划：${status.data.stages.source.activeAdaptationTitle}` : "当前计划：暂无",
                   status.data.stages.source.activeScriptTitle ? `当前剧本：${status.data.stages.source.activeScriptTitle}` : "当前剧本：暂无",
                 ]}
-                summary={status.data.stages.source.novelSourceCount + status.data.stages.source.scriptSourceCount > 0 ? status.data.stages.source.summary : ["还没有原文或剧本，请先导入小说原文、上传剧本，或让 Agent 生成剧本。"]}
+                summary={status.data.stages.source.novelSourceCount + status.data.stages.source.scriptSourceCount > 0 ? status.data.stages.source.summary : ["还没有原文或剧本，请先导入小说原文、上传剧本，或使用剧本助手生成剧本。"]}
                 primary={sourceProductionPrimary(status.data, projectId)}
                 secondary={{ label: "进入原文与剧本", href: projectHref(projectId, "sources") }}
                 reviewLink={{ label: "查看剧本问题", href: `${projectHref(projectId, "review")}?category=script` }}
@@ -1281,6 +1332,34 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 busy={busy}
                 onRun={runAction}
               />
+              <ProductionStageCard
+                title="审阅与修复"
+                status={reviewItems.data.length ? "needs_review" : status.data.stages.finalVideo.finalVideoVersionId ? "completed" : "not_started"}
+                description="运行项目审阅，处理未关闭问题，并对支持的审阅项生成修复建议。"
+                metrics={[
+                  metricText("未处理问题", reviewItems.data.length),
+                  metricText("高优先级", reviewItems.data.filter((item) => item.severity === "critical" || item.severity === "high").length),
+                  metricText("可自动修复", reviewItems.data.filter((item) => reviewFixSupported(item.entityType)).length),
+                ]}
+                primary={{ label: "进入审阅", href: projectHref(projectId, "review") }}
+                secondary={{ label: "运行审阅", href: projectHref(projectId, "review") }}
+                busy={busy}
+                onRun={runAction}
+              />
+              <ProductionStageCard
+                title="导出"
+                status={exportsQuery.data.some((item) => item.status === "succeeded" || item.status === "completed") ? "completed" : status.data.stages.finalVideo.finalVideoVersionId ? "ready" : "not_started"}
+                description="下载当前主成片，或导出项目文档、素材包和完整归档。"
+                metrics={[
+                  status.data.stages.finalVideo.finalVideoVersionId ? "主成片：可用" : "主成片：未生成",
+                  metricText("导出记录", exportsQuery.data.length),
+                  metricText("可下载记录", exportsQuery.data.filter((item) => item.storageKey).length),
+                ]}
+                primary={{ label: "进入导出", href: projectHref(projectId, "export") }}
+                secondary={{ label: "进入时间线", href: projectHref(projectId, "timeline") }}
+                busy={busy}
+                onRun={runAction}
+              />
             </div>
           </div>
         ) : null}
@@ -1388,9 +1467,33 @@ function ProductionStageCard({
   );
 }
 
+function FlowStepCard({ index, title, status, detail }: { index: number; title: string; status: string; detail: string }) {
+  return (
+    <div className="grid min-h-28 content-between gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-medium text-slate-500">阶段 {index}</p>
+          <p className="mt-1 text-sm font-semibold text-slate-900">{title}</p>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+      <p className="text-xs leading-5 text-slate-600">{detail}</p>
+    </div>
+  );
+}
+
+function ActionGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid gap-1">
+      <p className="text-[11px] font-medium text-slate-500">{label}</p>
+      <div className="flex flex-wrap gap-2">{children}</div>
+    </div>
+  );
+}
+
 export function SourcesPage({ projectId, initialSceneId = "" }: { projectId: string; initialSceneId?: string }) {
   return (
-    <AppShell active="projects" title="原文与剧本" description="导入小说原文、上传剧本，或让 Agent 帮你生成剧本。" projectId={projectId} projectSection="sources">
+    <AppShell active="projects" title="原文与剧本" description="导入小说原文、上传剧本，或使用剧本助手生成剧本。" projectId={projectId} projectSection="sources">
       <SourcesContent initialSceneId={initialSceneId} projectId={projectId} />
     </AppShell>
   );
@@ -1810,7 +1913,7 @@ function SourcesContentV2({ projectId, initialSceneId }: { projectId: string; in
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="text-3xl font-semibold text-slate-950">原文与剧本</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">导入小说原文、上传剧本，或让 Agent 帮你生成剧本。</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">导入小说原文、上传剧本，或使用剧本助手生成剧本。</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button className="studio-button studio-button-primary" disabled={busy !== ""} onClick={() => openImport("novel")} type="button">
@@ -1819,13 +1922,19 @@ function SourcesContentV2({ projectId, initialSceneId }: { projectId: string; in
               </button>
               <button className="studio-button" disabled={!selectedSource || busy !== ""} onClick={generateScriptFromSource} type="button">
                 <Sparkles size={16} />
-                {selectedSource?.sourceType === "novel" ? "提取事件并生成剧本" : "让 Agent 生成剧本"}
+                {selectedSource?.sourceType === "novel" ? "提取事件并生成剧本" : "生成剧本"}
               </button>
             </div>
           </div>
           <ErrorPanel message={error} />
           {notice ? <p className="mt-3 text-sm text-blue-700">{notice}</p> : null}
         </Surface>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <FlowStepCard index={1} title="内容源" status={sources.data.length ? "completed" : "not_started"} detail="导入小说原文或剧本原文，作为后续生产输入。" />
+          <FlowStepCard index={2} title="事件与改编计划" status={adaptationPlans.data.length ? "completed" : novelEvents.data.items.length ? "needs_review" : "pending"} detail="小说源先提取章节事件，再生成改编计划。" />
+          <FlowStepCard index={3} title="剧本与分场" status={scriptScenes.data.length ? "completed" : scripts.data.length ? "pending" : "not_started"} detail="生成剧本后解析结构化分场，并进入资产与分镜。" />
+        </div>
 
         <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
           <Surface>
@@ -1843,7 +1952,7 @@ function SourcesContentV2({ projectId, initialSceneId }: { projectId: string; in
                     </div>
                   </button>
                 ))}
-                {!sources.data.length ? <EmptyState title="还没有内容源" description="导入小说原文、上传剧本，或让 Agent 帮你生成剧本。" /> : null}
+                {!sources.data.length ? <EmptyState title="还没有内容源" description="导入小说原文、上传剧本，或使用剧本助手生成剧本。" /> : null}
               </div>
             </QueryBody>
           </Surface>
@@ -2019,7 +2128,7 @@ function SourcesContentV2({ projectId, initialSceneId }: { projectId: string; in
                         <p className="mt-1 text-xs text-slate-500">{script.currentVersionId ? "已激活版本" : "暂无版本"} · {formatTime(script.updatedAt)}</p>
                       </button>
                     ))}
-                    {!scripts.data.length ? <EmptyState title="还没有剧本" description="上传剧本原文，或让 Script Agent 根据小说原文生成剧本。" /> : null}
+                    {!scripts.data.length ? <EmptyState title="还没有剧本" description="上传剧本原文，或让剧本助手根据小说原文生成剧本。" /> : null}
                   </div>
                   <div className="grid gap-3">
                     <TextInput label="剧本标题" value={scriptEditorTitle} onChange={(title) => setScriptDraft({ ...scriptDraft, title })} />
@@ -2058,7 +2167,7 @@ function SourcesContentV2({ projectId, initialSceneId }: { projectId: string; in
                       ) : null}
                       <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={rewriteCurrentScript} type="button">
                         <MessageSquareText size={16} />
-                        让 Agent 改写
+                        智能改写
                       </button>
                       <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("分析剧本资产", async () => void (await studioApi.analyzeScriptAssets(session, projectId, effectiveScriptId, { generateImages: false })))} type="button">
                         <ImageIcon size={16} />
@@ -2193,7 +2302,7 @@ function SourcesContentV2({ projectId, initialSceneId }: { projectId: string; in
           </div>
 
           <Surface>
-            <SectionTitle title="Script Agent" description="根据原文生成剧本，或对当前剧本做定向改写。" />
+            <SectionTitle title="剧本助手" description="根据原文生成剧本，或对当前剧本做定向改写。" />
             <div className="grid gap-3 p-4">
               <div className="flex gap-2">
                 <select className="studio-input min-w-0 flex-1" value={effectiveSessionId} onChange={(event) => setSelectedSessionId(event.target.value)}>
@@ -2218,7 +2327,7 @@ function SourcesContentV2({ projectId, initialSceneId }: { projectId: string; in
                 ))}
                 {!messages.data.length ? <p className="text-sm text-slate-500">还没有对话。发送指令，或直接生成/改写剧本。</p> : null}
               </div>
-              <TextAreaInput rows={5} label="Agent 指令" value={agentText} onChange={setAgentText} />
+              <TextAreaInput rows={5} label="助手指令" value={agentText} onChange={setAgentText} />
               <div className="grid gap-2">
                 <button className="studio-button" disabled={!effectiveSessionId || busy !== "" || !agentText.trim()} onClick={() => perform("发送指令", async () => {
                   await studioApi.createAgentMessage(session, projectId, effectiveSessionId, agentText);
@@ -2239,7 +2348,7 @@ function SourcesContentV2({ projectId, initialSceneId }: { projectId: string; in
               </div>
               {agentDraft ? (
                 <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-sm font-semibold text-slate-900">Agent 返回草稿</p>
+                  <p className="text-sm font-semibold text-slate-900">助手返回草稿</p>
                   <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{previewText(agentDraft, 2200)}</p>
                 </div>
               ) : null}
@@ -2318,6 +2427,7 @@ function AssetsContent({ projectId, initialAssetId }: { projectId: string; initi
   const initialAssetOpenRef = useRef("");
   const effectiveScriptId = validSelection(scriptId, scripts.data);
   const filtered = assets.data.filter((asset) => filter === "all" || asset.assetType === filter);
+  const assetStageSummary = assetStageStats(assets.data);
 
   useEffect(() => {
     if (!initialAssetId || initialAssetOpenRef.current === initialAssetId || !assets.data.some((asset) => asset.id === initialAssetId)) {
@@ -2353,10 +2463,30 @@ function AssetsContent({ projectId, initialAssetId }: { projectId: string; initi
     });
   }
 
+  async function generateMissingAssetCards() {
+    await perform("生成缺失设定卡", async () => {
+      const missingCards = assets.data.filter((asset) => !hasAssetCard(asset));
+      if (!missingCards.length) {
+        throw new Error("当前没有缺失设定卡的资产。");
+      }
+      for (const asset of missingCards) {
+        await studioApi.generateAssetCard(session, projectId, asset.id, { force: false });
+      }
+    });
+  }
+
   return (
     <SessionGate>
       <Surface className="mb-5 p-4">
-        <div className="grid gap-3 lg:grid-cols-[1fr_220px_auto_auto]">
+        <div className="mb-4 grid gap-3 md:grid-cols-6">
+          <InfoTile label="角色数量" value={String(assetStageSummary.characters)} />
+          <InfoTile label="场景数量" value={String(assetStageSummary.scenes)} />
+          <InfoTile label="道具数量" value={String(assetStageSummary.props)} />
+          <InfoTile label="缺少主参考图" value={String(assetStageSummary.missingPrimary)} />
+          <InfoTile label="已人工修改" value={String(assetStageSummary.manualOverride)} />
+          <InfoTile label="需重生成" value={String(assetStageSummary.stale)} />
+        </div>
+        <div className="grid gap-3 lg:grid-cols-[1fr_220px_auto_auto_auto]">
           <select className="studio-input" value={effectiveScriptId} onChange={(event) => setScriptId(event.target.value)}>
             <option value="">选择剧本</option>
             {scripts.data.map((script) => (
@@ -2374,6 +2504,10 @@ function AssetsContent({ projectId, initialAssetId }: { projectId: string; initi
           <button className="studio-button studio-button-primary" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("分析剧本资产", async () => void (await studioApi.analyzeScriptAssets(session, projectId, effectiveScriptId, { generateImages: false })))} type="button">
             <Sparkles size={16} />
             分析剧本资产
+          </button>
+          <button className="studio-button" disabled={busy !== "" || assetStageSummary.missingCards === 0} onClick={generateMissingAssetCards} type="button">
+            <FileText size={16} />
+            生成缺失设定卡
           </button>
           <button
             className="studio-button"
@@ -2413,7 +2547,8 @@ function AssetsContent({ projectId, initialAssetId }: { projectId: string; initi
                     </div>
                   </div>
                   <p className="line-clamp-3 text-sm leading-6 text-slate-600">{asset.description}</p>
-                  <p className="text-xs text-slate-500">资产卡：{hasCard ? "已生成" : "缺失"} · 主参考：{assetHasPrimaryReference(asset) ? "已设置" : "缺失"} · 参考数：{asset.referenceCount ?? asset.references?.length ?? 0}</p>
+                  <p className="text-xs text-slate-500">设定卡状态：{hasCard ? "已生成" : "缺失"} · 主参考图状态：{assetHasPrimaryReference(asset) ? "已设置" : "缺失"} · 确认状态：{reviewStatusText(asset.reviewStatus ?? "pending")}</p>
+                  <p className="text-xs text-slate-500">是否影响下游：{asset.staleState && asset.staleState !== "fresh" ? "下游需要重生成" : "未标记影响"} · 参考数：{asset.referenceCount ?? asset.references?.length ?? 0}</p>
                   <p className="text-xs text-slate-500">出现分场：{asset.sceneCount ?? asset.sceneLinks?.length ?? 0} · 关联分镜：{asset.storyboardShotCount ?? 0} · 派生需求：{linkedRequirements.length}</p>
                   {staleRequirementCount ? <p className="text-xs text-amber-700">下游派生资产需重生成：{staleRequirementCount}</p> : null}
                   {asset.sceneLinks?.length ? (
@@ -2541,6 +2676,8 @@ function StoryboardContent({ projectId, initialShotId, initialRequirementId }: {
   const allVisibleShotsSelected = filteredShotIds.length > 0 && selectedVisibleShotIds.length === filteredShotIds.length;
   const creatingShot = selectedShotId === "new";
   const activeShot = creatingShot ? null : filteredShots.find((shot) => shot.id === selectedShotId) ?? filteredShots[0] ?? null;
+  const activeScene = scriptScenes.data.find((scene) => scene.id === effectiveSceneId) ?? null;
+  const sceneProductionSummary = storyboardSceneSummary(filteredShots, production.data?.shots ?? []);
   const shotDetail = useStudioQuery<StoryboardShotDetail | null>(null, `storyboard:shot-detail:${projectId}:${activeShot?.id ?? ""}:${creatingShot}`, async (activeSession) =>
     activeShot ? studioApi.getStoryboardShotDetail(activeSession, projectId, activeShot.id) : Promise.resolve(null),
   );
@@ -2676,25 +2813,25 @@ function StoryboardContent({ projectId, initialShotId, initialRequirementId }: {
 
   async function regenerateShotById(shot: StoryboardShot, targetType: "shot_image" | "shot_video") {
     await perform(targetType === "shot_image" ? "生成镜头图片" : "生成镜头视频", async () => {
-      const response = await studioApi.runShotProductionAction(session, projectId, {
+      await studioApi.runShotProductionAction(session, projectId, {
         action: targetType === "shot_image" ? "generate_selected_images" : "generate_selected_videos",
         shotIds: [shot.id],
         options: { force: true },
       });
-      setNotice(`已提交批量任务：${response.workflowRunId}`);
+      setNotice(targetType === "shot_image" ? "镜头图片生成已提交" : "镜头视频生成已提交");
     });
   }
 
   async function runShotProduction(action: string) {
     await perform("提交批量生产", async () => {
-      const response = await studioApi.runShotProductionAction(session, projectId, compactRecord({
+      await studioApi.runShotProductionAction(session, projectId, compactRecord({
         action,
         scriptSceneId: effectiveSceneId || undefined,
         workflowRunId: effectiveWorkflowRunId || undefined,
         shotIds: selectedVisibleShotIds.length ? selectedVisibleShotIds : undefined,
         options: { force: true },
       }));
-      setNotice(`已提交批量任务：${response.workflowRunId}`);
+      setNotice("批量生产任务已提交");
     });
   }
 
@@ -2711,15 +2848,15 @@ function StoryboardContent({ projectId, initialShotId, initialRequirementId }: {
       return;
     }
     await perform("生成当前分场分镜", async () => {
-      const response = await studioApi.regenerate(session, projectId, { targetType: "scene_storyboard", targetId: effectiveSceneId, options: { force: true, maxShots: Number(maxShots) } });
-      setNotice(`已提交工作流：${response.workflowRunId}`);
+      await studioApi.regenerate(session, projectId, { targetType: "scene_storyboard", targetId: effectiveSceneId, options: { force: true, maxShots: Number(maxShots) } });
+      setNotice("当前分场分镜重生成已提交");
     });
   }
 
   async function regenerateRequirement(requirement: ShotAssetRequirement) {
     await perform("生成派生资产图", async () => {
-      const response = await studioApi.regenerate(session, projectId, { targetType: "derived_asset_image", targetId: requirement.id, options: { force: true } });
-      setNotice(`已提交工作流：${response.workflowRunId}`);
+      await studioApi.regenerate(session, projectId, { targetType: "derived_asset_image", targetId: requirement.id, options: { force: true } });
+      setNotice("派生资产图生成已提交");
     });
   }
 
@@ -2751,7 +2888,14 @@ function StoryboardContent({ projectId, initialShotId, initialRequirementId }: {
   return (
     <SessionGate>
       <Surface className="mb-4 p-4">
-        <div className="grid gap-3 xl:grid-cols-[minmax(220px,1fr)_150px_auto_auto_auto_auto]">
+        <div className="mb-4 grid gap-3 md:grid-cols-5">
+          <InfoTile label="当前分场" value={activeScene ? `S${activeScene.sceneNo}` : "全部分场"} />
+          <InfoTile label="镜头数量" value={String(sceneProductionSummary.total)} />
+          <InfoTile label="图片完成" value={String(sceneProductionSummary.imageSucceeded)} />
+          <InfoTile label="视频完成" value={String(sceneProductionSummary.videoSucceeded)} />
+          <InfoTile label="待处理" value={String(sceneProductionSummary.pending)} />
+        </div>
+        <div className="grid gap-4 xl:grid-cols-[minmax(220px,1fr)_150px_repeat(4,minmax(0,auto))]">
           <select className="studio-input" value={effectiveScriptId} onChange={(event) => {
             setScriptId(event.target.value);
             setSelectedSceneId("");
@@ -2765,22 +2909,53 @@ function StoryboardContent({ projectId, initialShotId, initialRequirementId }: {
             ))}
           </select>
           <input className="studio-input" min={1} max={3} type="number" value={maxShots} onChange={(event) => setMaxShots(event.target.value)} />
-          <button className="studio-button studio-button-primary" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成分镜", async () => void (await studioApi.generateStoryboard(session, projectId, effectiveScriptId, { maxShots: Number(maxShots), generateDerivedAssets: false })))} type="button">
-            <Clapperboard size={16} />
-            生成分镜
-          </button>
-          <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("分析镜头派生资产", async () => void (await studioApi.generateStoryboard(session, projectId, effectiveScriptId, { maxShots: Number(maxShots), generateDerivedAssets: true })))} type="button">
-            <Sparkles size={16} />
-            分析派生资产
-          </button>
-          <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成镜头图片", async () => startScriptVideo(true))} type="button">
-            <ImageIcon size={16} />
-            生成镜头图片
-          </button>
-          <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成镜头视频", async () => startScriptVideo(false))} type="button">
-            <Video size={16} />
-            生成镜头视频
-          </button>
+          <ActionGroup label="分镜">
+            <button className="studio-button studio-button-primary" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成分镜", async () => void (await studioApi.generateStoryboard(session, projectId, effectiveScriptId, { maxShots: Number(maxShots), generateDerivedAssets: false })))} type="button">
+              <Clapperboard size={16} />
+              生成
+            </button>
+            <button className="studio-button" disabled={!effectiveSceneId || busy !== ""} onClick={regenerateCurrentScene} type="button">
+              <RefreshCw size={16} />
+              重生成
+            </button>
+          </ActionGroup>
+          <ActionGroup label="派生资产">
+            <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("分析镜头派生资产", async () => void (await studioApi.generateStoryboard(session, projectId, effectiveScriptId, { maxShots: Number(maxShots), generateDerivedAssets: true })))} type="button">
+              <Sparkles size={16} />
+              分析
+            </button>
+            <button className="studio-button" disabled={!activeShot || !shotDetail.data?.requirements.length || busy !== ""} onClick={() => shotDetail.data?.requirements[0] && regenerateRequirement(shotDetail.data.requirements[0])} type="button">
+              <ImageIcon size={16} />
+              派生图
+            </button>
+          </ActionGroup>
+          <ActionGroup label="图片">
+            <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成镜头图片", async () => startScriptVideo(true))} type="button">
+              <ImageIcon size={16} />
+              生成缺失
+            </button>
+            <button className="studio-button" disabled={!hasShotsForBatch(filteredShots) || busy !== ""} onClick={() => runShotProduction("regenerate_failed_images")} type="button">
+              重试失败
+            </button>
+            <button className="studio-button" disabled={!hasShotsForBatch(filteredShots) || busy !== ""} onClick={() => runShotProduction("regenerate_stale_images")} type="button">
+              重生成过期
+            </button>
+          </ActionGroup>
+          <ActionGroup label="视频">
+            <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成镜头视频", async () => startScriptVideo(false))} type="button">
+              <Video size={16} />
+              生成缺失
+            </button>
+            <button className="studio-button" disabled={!hasShotsForBatch(filteredShots) || busy !== ""} onClick={() => runShotProduction("regenerate_failed_videos")} type="button">
+              重试失败
+            </button>
+            <button className="studio-button" disabled={!hasShotsForBatch(filteredShots) || busy !== ""} onClick={() => runShotProduction("regenerate_stale_videos")} type="button">
+              重生成过期
+            </button>
+            <button className="studio-button border-red-200 text-red-700 hover:border-red-300" disabled={!hasShotsForBatch(filteredShots) || busy !== ""} onClick={() => runShotProduction("cancel_running_videos")} type="button">
+              取消运行中
+            </button>
+          </ActionGroup>
         </div>
         <ErrorPanel message={error} />
         {notice ? <p className="mt-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{notice}</p> : null}
@@ -3198,6 +3373,7 @@ function StoryboardShotDetailPanel({
 }) {
   const shot = detail?.shot ?? fallbackShot;
   const requirements = detail?.requirements ?? [];
+  const nextStep = shot ? storyboardShotNextStep(shot, requirements) : "选择或创建镜头后继续。";
   return (
     <div className="grid gap-4 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -3213,6 +3389,17 @@ function StoryboardShotDetailPanel({
           </div>
         ) : null}
       </div>
+
+      {shot ? (
+        <div className="grid gap-3 md:grid-cols-2">
+          <InfoTile label="来源分场" value={sceneLine(detail?.scriptScene ?? shot.sourceScene) || "未绑定"} />
+          <InfoTile label="参与资产" value={String(requirements.filter((item) => item.assetId).length)} />
+          <InfoTile label="派生资产" value={String(requirements.length)} />
+          <InfoTile label="图片状态" value={shotProductionStatusLabel("image", shot.imageStatus || (shot.imageStorageKey ? "succeeded" : "not_started"))} />
+          <InfoTile label="视频状态" value={shotProductionStatusLabel("video", shot.videoStatus || (shot.videoStorageKey ? "succeeded" : "not_started"))} />
+          <InfoTile label="下一步建议" value={nextStep} />
+        </div>
+      ) : null}
 
       <StoryboardShotForm busy={busy} creating={creating} key={creating ? "new" : shot?.id ?? "empty"} shot={shot} onSave={onSave} />
 
@@ -4128,11 +4315,11 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
     setError("");
     setNotice("");
     try {
-      const response = await studioApi.applyReviewFix(session, projectId, fix.id, {
+      await studioApi.applyReviewFix(session, projectId, fix.id, {
         resolveReviewItem: true,
         triggerRegeneration,
       });
-      setNotice(response.workflowRunId ? `修复已应用，重生成已启动：${response.workflowRunId}` : "修复已应用");
+      setNotice(triggerRegeneration ? "修复已应用，重生成已启动" : "修复已应用");
       fixes.reload();
       allItems.reload();
       items.reload();
@@ -4166,12 +4353,12 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
     setError("");
     setNotice("");
     try {
-      const response = await studioApi.regenerate(session, projectId, {
+      await studioApi.regenerate(session, projectId, {
         targetType: action.targetType,
         targetId: action.targetId,
         options: { force: true },
       });
-      setNotice(`重生成已启动：${response.workflowRunId}`);
+      setNotice("重生成已启动");
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -4193,7 +4380,7 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
               </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-[auto_auto] sm:items-center">
-              <Toggle label="Agent 审阅" checked={useAgent} onChange={setUseAgent} />
+              <Toggle label="智能审阅" checked={useAgent} onChange={setUseAgent} />
               <button className="studio-button studio-button-primary justify-center" disabled={busy !== ""} onClick={runReview} type="button">
                 {busy === "run-review" ? <Loader2 className="animate-spin" size={16} /> : <ClipboardCheck size={16} />}
                 运行审阅
@@ -4202,10 +4389,11 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
           </div>
         </Surface>
 
-        <div className="grid gap-3 md:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-6">
           <SummaryTile label="未处理问题" value={openItems.length} detail="当前仍需处理的审阅项" />
           <SummaryTile label="严重问题" value={criticalItems.length} detail="会阻断生产或交付的问题" />
           <SummaryTile label="高优先级" value={highPriorityItems.length} detail="critical 与 high 审阅项" />
+          <SummaryTile label="可自动修复" value={openItems.filter((item) => item.entityId && reviewFixSupported(item.entityType)).length} detail="可生成修复建议的审阅项" />
           <SummaryTile label="已解决" value={resolvedItems.length} detail="已完成闭环的问题" />
           <SummaryTile label="已忽略" value={ignoredItems.length} detail="已手动忽略的问题" />
         </div>
@@ -4240,6 +4428,8 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
                         <span className={cn("rounded-md px-2 py-1 text-xs font-medium", reviewSeverityClass(item.severity))}>{reviewSeverityLabel(item.severity)}</span>
                         <Pill>{reviewCategoryLabel(item.category)}</Pill>
                         <Pill>{reviewStatusLabel(item.status)}</Pill>
+                        <Pill>{item.entityId && reviewFixSupported(item.entityType) ? "可生成修复建议" : "只能手动处理"}</Pill>
+                        {item.actions?.some((action) => action.actionType === "regenerate") ? <Pill>可应用并重生成</Pill> : null}
                       </div>
                       <p className="mt-3 font-medium text-slate-900">{item.title}</p>
                       <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{item.description}</p>
@@ -4497,7 +4687,7 @@ function ProjectExportContent({ projectId }: { projectId: string }) {
     setError("");
     setNotice("");
     try {
-      const response = await studioApi.createProjectExport(session, projectId, compactRecord({
+      await studioApi.createProjectExport(session, projectId, compactRecord({
         exportType,
         format: exportFormatForType(exportType, documentFormat),
         title: exportTitle(project.data?.name ?? "", exportType),
@@ -4506,7 +4696,7 @@ function ProjectExportContent({ projectId }: { projectId: string }) {
           finalVideoVersionId: selectedFinalVideo?.id ?? "",
         }),
       }));
-      setNotice(`导出任务已创建：${response.workflowRunId}`);
+      setNotice("导出任务已创建");
       exportsQuery.reload();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -4834,7 +5024,7 @@ function ProvidersContent() {
   const [accountBaseUrl, setAccountBaseUrl] = useState("https://api.openai.com/v1");
   const [accountApiKey, setAccountApiKey] = useState("");
   const [profileKey, setProfileKey] = useState("script_agent_default");
-  const [profileName, setProfileName] = useState("脚本 Agent 默认配置");
+  const [profileName, setProfileName] = useState("脚本助手默认配置");
   const [profilePurpose, setProfilePurpose] = useState("script");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -5665,7 +5855,7 @@ function reviewItemEntityLabel(item: ReviewItem) {
 function reviewItemSourceLabel(item: ReviewItem) {
   const source = item.metadata?.source;
   if (source === "agent") {
-    return "Agent";
+    return "智能助手";
   }
   if (source === "deterministic") {
     return "规则检查";
@@ -6004,7 +6194,7 @@ function productionStageDescription(stage: string, status: string) {
   }
   switch (stage) {
     case "source":
-      return "导入小说原文或剧本原文，也可以让 Agent 从原文生成可生产剧本。";
+      return "导入小说原文或剧本原文，也可以使用剧本助手从原文生成可生产剧本。";
     case "assets":
       return "从剧本中沉淀角色、场景和道具，并为缺失项目生成基础参考图。";
     case "storyboard":
@@ -6103,6 +6293,166 @@ function shotMediaMetrics(stage: ProductionStatus["stages"]["shotImages"]) {
     metricText("待生成", stage.pending),
     metricText("已过期", stage.stale),
   ];
+}
+
+function projectNextStep(projectId: string, status: ProductionStatus, openReviewItems: ReviewItem[]) {
+  const source = status.stages.source;
+  if (source.novelSourceCount + source.scriptSourceCount === 0) {
+    return { title: "导入小说原文或剧本原文", description: "项目还没有内容源。先导入原文，后续才能提取事件、生成剧本和进入生产。", label: "导入内容", href: projectHref(projectId, "sources") };
+  }
+  if (source.status === "events_pending_extraction") {
+    return { title: "提取章节事件", description: "已导入小说原文，但还没有结构化事件。先提取事件，方便生成改编计划。", label: "提取事件", action: "extract_events" };
+  }
+  if (source.status === "events_pending_review") {
+    return { title: "确认章节事件", description: "章节事件已生成，请先确认关键事件，再进入改编计划。", label: "进入原文与剧本", href: projectHref(projectId, "sources") };
+  }
+  if (source.status === "adaptation_plan_pending") {
+    return { title: "生成改编计划", description: "已具备事件素材，下一步生成改编计划，明确故事结构和取舍。", label: "生成改编计划", action: "generate_adaptation_plan" };
+  }
+  if (source.activeAdaptationPlanId && !source.activeScriptId) {
+    return { title: "从改编计划生成剧本", description: "已有改编计划，还没有可生产剧本。下一步从计划生成剧本。", label: "生成剧本", action: "generate_script_from_plan" };
+  }
+  if (!source.activeScriptId) {
+    return { title: "生成剧本", description: "已有内容源，但还没有当前剧本。下一步生成或导入剧本。", label: "进入原文与剧本", href: projectHref(projectId, "sources") };
+  }
+  if (source.status === "scenes_pending_parse" || !source.scriptSceneCount) {
+    return { title: "解析剧本分场", description: "当前剧本还没有结构化分场。分场是资产分析和分镜生成的基础。", label: "解析分场", action: "parse_script_scenes" };
+  }
+  if (status.stages.assets.characterCount + status.stages.assets.sceneCount + status.stages.assets.propCount === 0) {
+    return { title: "分析剧本资产", description: "剧本分场已就绪，下一步提取角色、场景和道具资产。", label: "分析资产", action: "analyze_assets" };
+  }
+  if (status.stages.assets.missingPrimaryReferenceCount > 0 || status.stages.assets.missingAssetCardCount > 0) {
+    return { title: "生成或上传资产参考图", description: "已有基础资产，但仍缺设定卡或主参考图。先补齐资产设定，后续镜头会更稳定。", label: "进入资产", href: projectHref(projectId, "assets") };
+  }
+  if (status.stages.storyboard.shotCount === 0) {
+    return { title: "生成分镜", description: "已有分场和资产，下一步生成镜头列表。", label: "进入分镜", href: projectHref(projectId, "storyboard") };
+  }
+  if (status.stages.shotImages.succeeded < status.stages.shotImages.total) {
+    return { title: "生成镜头图片", description: "部分镜头还没有图片。先生成镜头图片，再进入视频生成。", label: "进入分镜", href: projectHref(projectId, "storyboard") };
+  }
+  if (status.stages.shotVideos.succeeded < status.stages.shotVideos.total) {
+    return { title: "生成镜头视频", description: "部分镜头还没有视频。生成镜头视频后即可创建时间线。", label: "进入分镜", href: projectHref(projectId, "storyboard") };
+  }
+  if ((status.stages.finalVideo.timelineCount ?? 0) === 0) {
+    return { title: "创建时间线", description: "镜头视频已就绪，下一步从已完成镜头视频创建时间线。", label: "进入时间线", href: projectHref(projectId, "timeline") };
+  }
+  if (!status.stages.finalVideo.finalVideoVersionId) {
+    return { title: "合成最终成片", description: "时间线已创建，还没有主成片。下一步合成最终成片。", label: "进入时间线", href: projectHref(projectId, "timeline") };
+  }
+  if (openReviewItems.some((item) => item.severity === "critical" || item.severity === "high")) {
+    return { title: "处理审阅问题", description: "主成片已生成，但仍有高优先级审阅问题。请先修复再导出。", label: "进入审阅", href: projectHref(projectId, "review") };
+  }
+  return { title: "导出项目成果", description: "主成片已可用，且没有高优先级未处理问题。可以进入导出中心交付成果。", label: "进入导出", href: projectHref(projectId, "export") };
+}
+
+function productionFlowStages(status: ProductionStatus, openReviewItems: ReviewItem[], exports: ProjectExport[]) {
+  const source = status.stages.source;
+  const assets = status.stages.assets;
+  const storyboard = status.stages.storyboard;
+  const shotAssets = status.stages.shotAssets;
+  const finalVideo = status.stages.finalVideo;
+  const reviewOpen = openReviewItems.length;
+  const exportDone = exports.some((item) => item.status === "succeeded" || item.status === "completed");
+  return [
+    { title: "内容导入", status: source.novelSourceCount + source.scriptSourceCount > 0 ? "completed" : "not_started", detail: `${source.novelSourceCount + source.scriptSourceCount} 个内容源` },
+    { title: "章节事件", status: source.eventCount > 0 ? (source.pendingEventReviewCount > 0 ? "needs_review" : "completed") : "pending", detail: `${source.eventCount} 个事件` },
+    { title: "改编计划", status: source.adaptationPlanCount > 0 ? "completed" : "pending", detail: `${source.adaptationPlanCount} 个计划` },
+    { title: "剧本与分场", status: source.scriptSceneCount ? "completed" : source.activeScriptId ? "pending" : "not_started", detail: `${source.scriptSceneCount ?? 0} 个分场` },
+    { title: "基础资产", status: assets.characterCount + assets.sceneCount + assets.propCount > 0 ? assetStageStatus(assets) : "not_started", detail: `${assets.characterCount + assets.sceneCount + assets.propCount} 个资产` },
+    { title: "分镜与派生资产", status: storyboard.shotCount > 0 ? (shotAssets.requirementCount > 0 ? "completed" : "pending") : "not_started", detail: `${storyboard.shotCount} 个镜头，${shotAssets.requirementCount} 个需求` },
+    { title: "镜头图片", status: mediaStageStatus(status.stages.shotImages), detail: `${status.stages.shotImages.succeeded}/${status.stages.shotImages.total} 已完成` },
+    { title: "镜头视频", status: mediaStageStatus(status.stages.shotVideos), detail: `${status.stages.shotVideos.succeeded}/${status.stages.shotVideos.total} 已完成` },
+    { title: "时间线与成片", status: finalVideo.finalVideoVersionId ? "completed" : (finalVideo.timelineCount ?? 0) > 0 ? "pending" : "not_started", detail: `${finalVideo.timelineCount ?? 0} 条时间线，${finalVideo.enabledClipCount ?? 0} 个启用片段` },
+    { title: "审阅与修复", status: reviewOpen ? "needs_review" : finalVideo.finalVideoVersionId ? "completed" : "not_started", detail: `${reviewOpen} 个未处理问题` },
+    { title: "导出", status: exportDone ? "completed" : finalVideo.finalVideoVersionId ? "ready" : "not_started", detail: `${exports.length} 条导出记录` },
+  ];
+}
+
+function assetStageStatus(stage: ProductionStatus["stages"]["assets"]) {
+  if (stage.missingAssetCardCount > 0 || stage.missingPrimaryReferenceCount > 0 || stage.pendingReviewCount > 0) {
+    return "needs_review";
+  }
+  return "completed";
+}
+
+function mediaStageStatus(stage: ProductionShotMediaStage) {
+  if (stage.running > 0) {
+    return "running";
+  }
+  if (stage.failed > 0) {
+    return "failed";
+  }
+  if (stage.total > 0 && stage.succeeded >= stage.total) {
+    return "completed";
+  }
+  return stage.total > 0 ? "pending" : "not_started";
+}
+
+function assetStageStats(assets: CanonicalAsset[]) {
+  return {
+    characters: assets.filter((asset) => asset.assetType === "character").length,
+    scenes: assets.filter((asset) => asset.assetType === "scene").length,
+    props: assets.filter((asset) => asset.assetType === "prop").length,
+    missingCards: assets.filter((asset) => !hasAssetCard(asset)).length,
+    missingPrimary: assets.filter((asset) => !assetHasPrimaryReference(asset)).length,
+    manualOverride: assets.filter((asset) => asset.manualOverride).length,
+    stale: assets.filter((asset) => asset.staleState && asset.staleState !== "fresh").length,
+  };
+}
+
+function reviewStatusText(value: string) {
+  switch (value) {
+    case "approved":
+      return "已确认";
+    case "needs_edit":
+      return "需修改";
+    case "pending":
+      return "待确认";
+    default:
+      return value || "待确认";
+  }
+}
+
+function storyboardSceneSummary(shots: StoryboardShot[], productionShots: ShotProductionShot[]) {
+  const productionById = new Map(productionShots.map((shot) => [shot.id, shot]));
+  let imageSucceeded = 0;
+  let videoSucceeded = 0;
+  let pending = 0;
+  for (const shot of shots) {
+    const production = productionById.get(shot.id);
+    const imageStatus = production?.imageStatus ?? shot.imageStatus ?? "";
+    const videoStatus = production?.videoStatus ?? shot.videoStatus ?? "";
+    if (imageStatus === "succeeded" || shot.imageStorageKey) {
+      imageSucceeded += 1;
+    }
+    if (videoStatus === "succeeded" || shot.videoStorageKey) {
+      videoSucceeded += 1;
+    }
+    if (imageStatus !== "succeeded" || videoStatus !== "succeeded") {
+      pending += 1;
+    }
+  }
+  return { total: shots.length, imageSucceeded, videoSucceeded, pending };
+}
+
+function storyboardShotNextStep(shot: StoryboardShot, requirements: ShotAssetRequirement[]) {
+  if (!shot.visual?.trim()) {
+    return "补充镜头画面描述";
+  }
+  if (!requirements.length) {
+    return "分析派生资产";
+  }
+  if (!shot.imageStorageKey && shot.imageStatus !== "succeeded") {
+    return "生成镜头图片";
+  }
+  if (!shot.videoStorageKey && shot.videoStatus !== "succeeded") {
+    return "生成镜头视频";
+  }
+  return "加入时间线";
+}
+
+function hasShotsForBatch(shots: StoryboardShot[]) {
+  return shots.length > 0;
 }
 
 function scriptSceneEditForm(scene: ScriptScene | null) {
