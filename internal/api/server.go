@@ -50,26 +50,27 @@ type Workspace struct {
 }
 
 type Project struct {
-	ID                    string          `json:"id"`
-	OrganizationID        string          `json:"organizationId"`
-	WorkspaceID           string          `json:"workspaceId"`
-	Name                  string          `json:"name"`
-	Description           *string         `json:"description,omitempty"`
-	ProjectType           *string         `json:"projectType,omitempty"`
-	ContentType           *string         `json:"contentType,omitempty"`
-	AspectRatio           *string         `json:"aspectRatio,omitempty"`
-	VideoRatio            string          `json:"videoRatio"`
-	ArtStyle              string          `json:"artStyle"`
-	DirectorManual        string          `json:"directorManual"`
-	VisualManual          string          `json:"visualManual"`
-	ImageModelProfileKey  string          `json:"imageModelProfileKey"`
-	VideoModelProfileKey  string          `json:"videoModelProfileKey"`
-	ScriptModelProfileKey string          `json:"scriptModelProfileKey"`
-	ImageQuality          string          `json:"imageQuality"`
-	ProductionMode        string          `json:"productionMode"`
-	Settings              json.RawMessage `json:"settings"`
-	CreatedAt             time.Time       `json:"createdAt"`
-	UpdatedAt             time.Time       `json:"updatedAt"`
+	ID                        string          `json:"id"`
+	OrganizationID            string          `json:"organizationId"`
+	WorkspaceID               string          `json:"workspaceId"`
+	Name                      string          `json:"name"`
+	Description               *string         `json:"description,omitempty"`
+	ProjectType               *string         `json:"projectType,omitempty"`
+	ContentType               *string         `json:"contentType,omitempty"`
+	AspectRatio               *string         `json:"aspectRatio,omitempty"`
+	VideoRatio                string          `json:"videoRatio"`
+	ArtStyle                  string          `json:"artStyle"`
+	DirectorManual            string          `json:"directorManual"`
+	VisualManual              string          `json:"visualManual"`
+	ImageModelProfileKey      string          `json:"imageModelProfileKey"`
+	VideoModelProfileKey      string          `json:"videoModelProfileKey"`
+	ScriptModelProfileKey     string          `json:"scriptModelProfileKey"`
+	ImageQuality              string          `json:"imageQuality"`
+	ProductionMode            string          `json:"productionMode"`
+	ActiveFinalVideoVersionID *string         `json:"activeFinalVideoVersionId,omitempty"`
+	Settings                  json.RawMessage `json:"settings"`
+	CreatedAt                 time.Time       `json:"createdAt"`
+	UpdatedAt                 time.Time       `json:"updatedAt"`
 }
 
 func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provider.Service, storageClient *storage.Client, temporalClient client.Client, authorizers ...*authz.Authorizer) *Server {
@@ -124,6 +125,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{projectId}/production/status", s.withAuth(s.getProductionStatus))
 	mux.HandleFunc("POST /api/projects/{projectId}/production/actions", s.withAuth(s.runProductionAction))
 	mux.HandleFunc("POST /api/projects/{projectId}/regenerate", s.withAuth(s.regenerateCreativeObject))
+	mux.HandleFunc("GET /api/projects/{projectId}/timelines", s.withAuth(s.listProjectTimelines))
+	mux.HandleFunc("POST /api/projects/{projectId}/timelines", s.withAuth(s.createProjectTimeline))
+	mux.HandleFunc("GET /api/projects/{projectId}/timelines/{timelineId}", s.withAuth(s.getProjectTimeline))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/timelines/{timelineId}", s.withAuth(s.updateProjectTimeline))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/timelines/{timelineId}", s.withAuth(s.deleteProjectTimeline))
+	mux.HandleFunc("GET /api/projects/{projectId}/timelines/{timelineId}/detail", s.withAuth(s.getTimelineDetail))
+	mux.HandleFunc("GET /api/projects/{projectId}/timelines/{timelineId}/clips", s.withAuth(s.listTimelineClips))
+	mux.HandleFunc("POST /api/projects/{projectId}/timelines/{timelineId}/clips", s.withAuth(s.createTimelineClip))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/timelines/{timelineId}/clips/{clipId}", s.withAuth(s.updateTimelineClip))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/timelines/{timelineId}/clips/{clipId}", s.withAuth(s.deleteTimelineClip))
+	mux.HandleFunc("POST /api/projects/{projectId}/timelines/{timelineId}/clips/reorder", s.withAuth(s.reorderTimelineClips))
+	mux.HandleFunc("POST /api/projects/{projectId}/timelines/{timelineId}/compose", s.withAuth(s.composeTimeline))
+	mux.HandleFunc("GET /api/projects/{projectId}/final-videos", s.withAuth(s.listFinalVideos))
+	mux.HandleFunc("GET /api/projects/{projectId}/final-videos/{versionId}", s.withAuth(s.getFinalVideo))
+	mux.HandleFunc("POST /api/projects/{projectId}/final-videos/{versionId}/activate", s.withAuth(s.activateFinalVideo))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/final-videos/{versionId}", s.withAuth(s.deleteFinalVideo))
 	mux.HandleFunc("GET /api/projects/{projectId}/sources", s.withAuth(s.listProjectSources))
 	mux.HandleFunc("POST /api/projects/{projectId}/sources", s.withAuth(s.createProjectSource))
 	mux.HandleFunc("POST /api/projects/{projectId}/sources/import", s.withAuth(s.importProjectSourceFile))
@@ -513,7 +530,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 		SELECT id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
 		       video_ratio, art_style, director_manual, visual_manual,
 		       image_model_profile_key, video_model_profile_key, script_model_profile_key,
-		       image_quality, production_mode, settings, created_at, updated_at
+		       image_quality, production_mode, active_final_video_version_id::text, settings, created_at, updated_at
 		FROM projects
 		WHERE organization_id = $1
 	`
@@ -616,14 +633,14 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 		RETURNING id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
 		          video_ratio, art_style, director_manual, visual_manual,
 		          image_model_profile_key, video_model_profile_key, script_model_profile_key,
-		          image_quality, production_mode, settings, created_at, updated_at
+		          image_quality, production_mode, active_final_video_version_id::text, settings, created_at, updated_at
 	`, orgID, req.WorkspaceID, strings.TrimSpace(req.Name), req.Description, req.ProjectType, req.ContentType, aspectRatio,
 		videoRatio, artStyle, directorManual, visualManual, imageModelProfileKey, videoModelProfileKey, scriptModelProfileKey,
 		imageQuality, productionMode, settings, principal.UserID).
 		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectType, &item.ContentType, &item.AspectRatio,
 			&item.VideoRatio, &item.ArtStyle, &item.DirectorManual, &item.VisualManual,
 			&item.ImageModelProfileKey, &item.VideoModelProfileKey, &item.ScriptModelProfileKey,
-			&item.ImageQuality, &item.ProductionMode, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
+			&item.ImageQuality, &item.ProductionMode, &item.ActiveFinalVideoVersionID, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -734,7 +751,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal
 		RETURNING id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
 		          video_ratio, art_style, director_manual, visual_manual,
 		          image_model_profile_key, video_model_profile_key, script_model_profile_key,
-		          image_quality, production_mode, settings, created_at, updated_at
+		          image_quality, production_mode, active_final_video_version_id::text, settings, created_at, updated_at
 	`, projectID, req.Name, req.Description, req.ProjectType, req.ContentType, req.AspectRatio,
 		normalizedOptionalString(req.VideoRatio), normalizedOptionalString(req.ArtStyle), normalizedOptionalString(req.DirectorManual), normalizedOptionalString(req.VisualManual),
 		normalizedOptionalString(req.ImageModelProfileKey), normalizedOptionalString(req.VideoModelProfileKey), normalizedOptionalString(req.ScriptModelProfileKey),
@@ -742,7 +759,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal
 		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectType, &item.ContentType, &item.AspectRatio,
 			&item.VideoRatio, &item.ArtStyle, &item.DirectorManual, &item.VisualManual,
 			&item.ImageModelProfileKey, &item.VideoModelProfileKey, &item.ScriptModelProfileKey,
-			&item.ImageQuality, &item.ProductionMode, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
+			&item.ImageQuality, &item.ProductionMode, &item.ActiveFinalVideoVersionID, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -793,7 +810,7 @@ func (s *Server) project(r *http.Request, projectID string) (Project, error) {
 		SELECT id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
 		       video_ratio, art_style, director_manual, visual_manual,
 		       image_model_profile_key, video_model_profile_key, script_model_profile_key,
-		       image_quality, production_mode, settings, created_at, updated_at
+		       image_quality, production_mode, active_final_video_version_id::text, settings, created_at, updated_at
 		FROM projects
 		WHERE id = $1
 	`, projectID)
@@ -858,6 +875,7 @@ func scanProject(row pgx.Row) (Project, error) {
 		&item.ScriptModelProfileKey,
 		&item.ImageQuality,
 		&item.ProductionMode,
+		&item.ActiveFinalVideoVersionID,
 		&item.Settings,
 		&item.CreatedAt,
 		&item.UpdatedAt,

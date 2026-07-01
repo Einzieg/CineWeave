@@ -98,7 +98,7 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 	if workflowType == "" {
 		workflowType = "video_production"
 	}
-	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "extract_novel_events" && workflowType != "generate_adaptation_plan" && workflowType != "adaptation_plan_to_script" && workflowType != "source_to_script" && workflowType != "parse_script_scenes" && workflowType != "script_to_assets" && workflowType != "script_to_storyboard" && workflowType != "script_to_video" && workflowType != "full_production" {
+	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "extract_novel_events" && workflowType != "generate_adaptation_plan" && workflowType != "adaptation_plan_to_script" && workflowType != "source_to_script" && workflowType != "parse_script_scenes" && workflowType != "script_to_assets" && workflowType != "script_to_storyboard" && workflowType != "script_to_video" && workflowType != "full_production" && workflowType != "compose_timeline" {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowType is not supported", nil, false)
 		return
 	}
@@ -177,6 +177,8 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		workflowFunc = workflows.VideoProductionWorkflow
 	case "script_to_storyboard":
 		workflowFunc = workflows.ScriptToStoryboardWorkflow
+	case "compose_timeline":
+		workflowFunc = workflows.ComposeTimelineWorkflow
 	default:
 		workflowFunc = workflows.TextToStoryboardWorkflow
 	}
@@ -471,6 +473,21 @@ func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, pro
 	if workflowType == "parse_script_scenes" {
 		if value, ok := values["scriptId"].(string); !ok || strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("input.scriptId is required")
+		}
+	}
+	if workflowType == "compose_timeline" {
+		if value, ok := values["timelineId"].(string); !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("input.timelineId is required")
+		}
+		if value, ok := values["aspectRatio"].(string); !ok || strings.TrimSpace(value) == "" {
+			aspectRatio := "16:9"
+			if projectAspectRatio != nil && strings.TrimSpace(*projectAspectRatio) != "" {
+				aspectRatio = strings.TrimSpace(*projectAspectRatio)
+			}
+			values["aspectRatio"] = aspectRatio
+		}
+		if value, ok := values["resolution"].(string); !ok || strings.TrimSpace(value) == "" {
+			values["resolution"] = "720p"
 		}
 	}
 	if workflowType == "script_to_assets" || workflowType == "script_to_storyboard" || workflowType == "script_to_video" || workflowType == "full_production" {

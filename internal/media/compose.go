@@ -58,7 +58,7 @@ func ComposeClipsWithStore(ctx context.Context, req ComposeRequest, objectStore 
 			return ComposeResult{}, err
 		}
 		normalizedPath := filepath.Join(tempDir, fmt.Sprintf("normalized-%03d.mp4", index))
-		if err := NormalizeClip(ctx, inputPath, normalizedPath, width, height, defaultFPS); err != nil {
+		if err := NormalizeClipWithTrim(ctx, inputPath, normalizedPath, width, height, defaultFPS, clip.TrimStartSeconds, clip.TrimEndSeconds); err != nil {
 			return ComposeResult{}, fmt.Errorf("normalize clip %d: %w", index, err)
 		}
 		normalizedPaths = append(normalizedPaths, normalizedPath)

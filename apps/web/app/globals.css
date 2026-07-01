@@ -89,6 +89,34 @@ button:disabled {
   border-color: #94a3b8;
 }
 
+.studio-icon-button {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  flex: 0 0 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.375rem;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.studio-icon-button:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.studio-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .studio-button-primary {
   border-color: #2563eb;
   background: #2563eb;

@@ -7,6 +7,8 @@ import type {
   AuthResponse,
   CanonicalAsset,
   AssetReference,
+  ComposeTimelineResponse,
+  FinalVideoVersion,
   GenerateAssetCardResponse,
   JsonRecord,
   ImportProjectSourceResponse,
@@ -21,6 +23,7 @@ import type {
   ProjectSource,
   ProductionActionResponse,
   ProductionStatus,
+  ProjectTimeline,
   RegenerateResponse,
   PromptTemplate,
   ProviderAccount,
@@ -37,6 +40,8 @@ import type {
   StoryboardShotDetail,
   StudioSession,
   Team,
+  TimelineClip,
+  TimelineDetail,
   WorkflowNodeRun,
   WorkflowRun,
   Workspace,
@@ -133,6 +138,34 @@ export const studioApi = {
     apiRequest<ShotProductionActionResponse>(`/api/projects/${projectId}/shot-production/actions`, { method: "POST", session, body }),
   regenerate: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<RegenerateResponse>(`/api/projects/${projectId}/regenerate`, { method: "POST", session, body }),
+  listTimelines: (session: StudioSession, projectId: string) =>
+    apiRequest<ListEnvelope<ProjectTimeline>>(`/api/projects/${projectId}/timelines`, { session }),
+  createTimeline: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<ProjectTimeline>(`/api/projects/${projectId}/timelines`, { method: "POST", session, body }),
+  getTimelineDetail: (session: StudioSession, projectId: string, timelineId: string) =>
+    apiRequest<TimelineDetail>(`/api/projects/${projectId}/timelines/${timelineId}/detail`, { session, query: { previewExpiresSeconds: 900 } }),
+  updateTimeline: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord) =>
+    apiRequest<ProjectTimeline>(`/api/projects/${projectId}/timelines/${timelineId}`, { method: "PATCH", session, body }),
+  deleteTimeline: (session: StudioSession, projectId: string, timelineId: string) =>
+    apiRequest<{ deleted: boolean }>(`/api/projects/${projectId}/timelines/${timelineId}`, { method: "DELETE", session }),
+  createTimelineClip: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord) =>
+    apiRequest<TimelineClip>(`/api/projects/${projectId}/timelines/${timelineId}/clips`, { method: "POST", session, body }),
+  updateTimelineClip: (session: StudioSession, projectId: string, timelineId: string, clipId: string, body: JsonRecord) =>
+    apiRequest<TimelineClip>(`/api/projects/${projectId}/timelines/${timelineId}/clips/${clipId}`, { method: "PATCH", session, body }),
+  deleteTimelineClip: (session: StudioSession, projectId: string, timelineId: string, clipId: string) =>
+    apiRequest<{ deleted: boolean; clipId: string }>(`/api/projects/${projectId}/timelines/${timelineId}/clips/${clipId}`, { method: "DELETE", session }),
+  reorderTimelineClips: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord) =>
+    apiRequest<{ items: { clipId: string; clipIndex: number }[] }>(`/api/projects/${projectId}/timelines/${timelineId}/clips/reorder`, { method: "POST", session, body }),
+  composeTimeline: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord) =>
+    apiRequest<ComposeTimelineResponse>(`/api/projects/${projectId}/timelines/${timelineId}/compose`, { method: "POST", session, body }),
+  listFinalVideos: (session: StudioSession, projectId: string) =>
+    apiRequest<ListEnvelope<FinalVideoVersion>>(`/api/projects/${projectId}/final-videos`, { session }),
+  getFinalVideo: (session: StudioSession, projectId: string, versionId: string) =>
+    apiRequest<FinalVideoVersion>(`/api/projects/${projectId}/final-videos/${versionId}`, { session }),
+  activateFinalVideo: (session: StudioSession, projectId: string, versionId: string) =>
+    apiRequest<FinalVideoVersion>(`/api/projects/${projectId}/final-videos/${versionId}/activate`, { method: "POST", session, body: {} }),
+  deleteFinalVideo: (session: StudioSession, projectId: string, versionId: string) =>
+    apiRequest<{ deleted: boolean; versionId: string }>(`/api/projects/${projectId}/final-videos/${versionId}`, { method: "DELETE", session }),
 
   listSources: (session: StudioSession, projectId: string) => apiRequest<ListEnvelope<ProjectSource>>(`/api/projects/${projectId}/sources`, { session }),
   getSource: (session: StudioSession, projectId: string, sourceId: string) =>

@@ -124,12 +124,16 @@ type ProductionShotMediaStage struct {
 
 type ProductionFinalVideoStage struct {
 	Status              string  `json:"status"`
+	FinalVideoVersionID *string `json:"finalVideoVersionId,omitempty"`
+	TimelineID          *string `json:"timelineId,omitempty"`
 	ArtifactID          *string `json:"artifactId"`
 	MediaFileID         *string `json:"mediaFileId"`
 	PreviewURL          *string `json:"previewUrl"`
 	StorageKey          *string `json:"storageKey"`
 	WorkflowRunID       *string `json:"workflowRunId,omitempty"`
 	SourceWorkflowRunID *string `json:"sourceWorkflowRunId,omitempty"`
+	TimelineCount       int     `json:"timelineCount"`
+	EnabledClipCount    int     `json:"enabledClipCount"`
 	Stale               bool    `json:"stale"`
 }
 
@@ -654,8 +658,66 @@ func (s *Server) productionShotMediaStage(r *http.Request, projectID, mediaKind 
 }
 
 func (s *Server) productionFinalVideoStage(r *http.Request, projectID string, workflowsByType map[string]productionWorkflowState) (ProductionFinalVideoStage, error) {
-	var artifactID, mediaFileID, storageKey, mimeType, workflowRunID, sourceWorkflowRunID, staleState sql.NullString
+	var timelineCount, enabledClipCount int
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT
+			(SELECT COUNT(*) FROM project_timelines WHERE project_id = $1),
+			(SELECT COUNT(*) FROM timeline_clips WHERE project_id = $1 AND enabled = true)
+	`, projectID).Scan(&timelineCount, &enabledClipCount); err != nil {
+		return ProductionFinalVideoStage{}, err
+	}
+	var staleShotCount int
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT COUNT(*)
+		FROM storyboard_shots
+		WHERE project_id = $1 AND stale_state <> 'fresh' AND deleted_at IS NULL
+	`, projectID).Scan(&staleShotCount); err != nil {
+		return ProductionFinalVideoStage{}, err
+	}
+	var versionID, timelineID, artifactID, mediaFileID, storageKey, mimeType, workflowRunID sql.NullString
 	err := s.db.QueryRow(r.Context(), `
+		SELECT fv.id::text, fv.timeline_id::text, fv.artifact_id::text, fv.media_file_id::text,
+		       COALESCE(fv.storage_key, a.storage_key, mf.storage_key, ''),
+		       COALESCE(a.mime_type, mf.mime_type, 'video/mp4'),
+		       fv.workflow_run_id::text
+		FROM final_video_versions fv
+		LEFT JOIN artifacts a ON a.id = fv.artifact_id
+		LEFT JOIN media_files mf ON mf.id = fv.media_file_id
+		WHERE fv.project_id = $1 AND fv.status = 'active'
+		ORDER BY fv.version DESC, fv.created_at DESC
+		LIMIT 1
+	`, projectID).Scan(&versionID, &timelineID, &artifactID, &mediaFileID, &storageKey, &mimeType, &workflowRunID)
+	if err != nil && err != pgx.ErrNoRows {
+		return ProductionFinalVideoStage{}, err
+	}
+	if versionID.Valid {
+		stale := staleShotCount > 0
+		status := "ready"
+		if stale {
+			status = "needs_regeneration"
+		}
+		stage := ProductionFinalVideoStage{
+			Status:              status,
+			FinalVideoVersionID: stringPtrFromNull(versionID),
+			TimelineID:          stringPtrFromNull(timelineID),
+			ArtifactID:          stringPtrFromNull(artifactID),
+			MediaFileID:         stringPtrFromNull(mediaFileID),
+			StorageKey:          stringPtrFromNull(storageKey),
+			WorkflowRunID:       stringPtrFromNull(workflowRunID),
+			TimelineCount:       timelineCount,
+			EnabledClipCount:    enabledClipCount,
+			Stale:               stale,
+		}
+		if s.storage != nil && storageKey.Valid && canPreviewMimeType(mimeType.String) {
+			if presigned, err := s.storage.PresignGetObject(r.Context(), storageKey.String, 15*time.Minute); err == nil {
+				stage.PreviewURL = &presigned.URL
+			}
+		}
+		return stage, nil
+	}
+
+	var sourceWorkflowRunID, staleState sql.NullString
+	err = s.db.QueryRow(r.Context(), `
 		SELECT a.id, mf.id, a.storage_key, a.mime_type, a.workflow_run_id::text,
 		       a.metadata->>'sourceWorkflowRunId',
 		       COALESCE(a.metadata->>'staleState', 'fresh')
@@ -666,14 +728,6 @@ func (s *Server) productionFinalVideoStage(r *http.Request, projectID string, wo
 		LIMIT 1
 	`, projectID).Scan(&artifactID, &mediaFileID, &storageKey, &mimeType, &workflowRunID, &sourceWorkflowRunID, &staleState)
 	if err != nil && err != pgx.ErrNoRows {
-		return ProductionFinalVideoStage{}, err
-	}
-	var staleShotCount int
-	if err := s.db.QueryRow(r.Context(), `
-		SELECT COUNT(*)
-		FROM storyboard_shots
-		WHERE project_id = $1 AND stale_state <> 'fresh' AND deleted_at IS NULL
-	`, projectID).Scan(&staleShotCount); err != nil {
 		return ProductionFinalVideoStage{}, err
 	}
 	if artifactID.Valid {
@@ -689,6 +743,8 @@ func (s *Server) productionFinalVideoStage(r *http.Request, projectID string, wo
 			StorageKey:          stringPtrFromNull(storageKey),
 			WorkflowRunID:       stringPtrFromNull(workflowRunID),
 			SourceWorkflowRunID: stringPtrFromNull(sourceWorkflowRunID),
+			TimelineCount:       timelineCount,
+			EnabledClipCount:    enabledClipCount,
 			Stale:               stale,
 		}
 		if s.storage != nil && storageKey.Valid && mimeType.Valid && canPreviewMimeType(mimeType.String) {
@@ -698,14 +754,14 @@ func (s *Server) productionFinalVideoStage(r *http.Request, projectID string, wo
 		}
 		return stage, nil
 	}
-	state := mergedWorkflowState(workflowsByType, "script_to_video", "full_production", "video_production", "regenerate_final_video")
+	state := mergedWorkflowState(workflowsByType, "compose_timeline", "script_to_video", "full_production", "video_production", "regenerate_final_video")
 	status := "not_started"
 	if state.Running {
 		status = "running"
 	} else if state.Failed {
 		status = "failed"
 	}
-	return ProductionFinalVideoStage{Status: status}, nil
+	return ProductionFinalVideoStage{Status: status, TimelineCount: timelineCount, EnabledClipCount: enabledClipCount}, nil
 }
 
 func (s *Server) loadProductionWorkflowState(r *http.Request, projectID string) (map[string]productionWorkflowState, error) {
@@ -939,6 +995,17 @@ func (s *Server) productionActionWorkflow(w http.ResponseWriter, r *http.Request
 		}
 		return "script_to_video", scriptVideoInput(scriptID, maxShots, true), workflows.VideoProductionWorkflow, "", true
 	case "compose_final_video":
+		if timelineID, timelineTitle, err := s.activeProductionTimeline(r, project.ID, productionOptionString(options, "timelineId")); err != nil {
+			s.writeError(w, r, err)
+			return "", nil, nil, "", false
+		} else if timelineID != "" {
+			return "compose_timeline", map[string]any{
+				"timelineId":  timelineID,
+				"title":       firstNonEmpty(productionOptionString(options, "title"), timelineTitle),
+				"resolution":  firstNonEmpty(productionOptionString(options, "resolution"), "720p"),
+				"aspectRatio": firstNonEmpty(productionOptionString(options, "aspectRatio"), project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
+			}, workflows.ComposeTimelineWorkflow, "", true
+		}
 		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
 		if !ok {
 			return "", nil, nil, "", false
@@ -1051,6 +1118,42 @@ func (s *Server) activeProductionAdaptationPlan(r *http.Request, projectID, expl
 		return "", "", "", nil
 	}
 	return id, title, status, err
+}
+
+func (s *Server) activeProductionTimeline(r *http.Request, projectID, explicitTimelineID string) (string, string, error) {
+	explicitTimelineID = strings.TrimSpace(explicitTimelineID)
+	var id, title string
+	if explicitTimelineID != "" {
+		err := s.db.QueryRow(r.Context(), `
+			SELECT t.id::text, t.title
+			FROM project_timelines t
+			WHERE t.project_id = $1
+			  AND t.id = $2
+			  AND EXISTS (
+			    SELECT 1 FROM timeline_clips c
+			    WHERE c.timeline_id = t.id AND c.enabled = true
+			  )
+		`, projectID, explicitTimelineID).Scan(&id, &title)
+		if err == pgx.ErrNoRows {
+			return "", "", nil
+		}
+		return id, title, err
+	}
+	err := s.db.QueryRow(r.Context(), `
+		SELECT t.id::text, t.title
+		FROM project_timelines t
+		WHERE t.project_id = $1
+		  AND EXISTS (
+		    SELECT 1 FROM timeline_clips c
+		    WHERE c.timeline_id = t.id AND c.enabled = true
+		  )
+		ORDER BY CASE t.status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END, t.updated_at DESC, t.created_at DESC
+		LIMIT 1
+	`, projectID).Scan(&id, &title)
+	if err == pgx.ErrNoRows {
+		return "", "", nil
+	}
+	return id, title, err
 }
 
 func (s *Server) updateReviewStatus(w http.ResponseWriter, r *http.Request, tableName, projectID, id, userID string) (ReviewResponse, bool) {

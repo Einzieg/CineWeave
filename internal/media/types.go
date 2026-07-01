@@ -7,11 +7,14 @@ import (
 )
 
 type Clip struct {
-	ShotID          string  `json:"shotId"`
-	ShotIndex       int     `json:"shotIndex"`
-	StorageKey      string  `json:"storageKey"`
-	MimeType        string  `json:"mimeType"`
-	DurationSeconds float64 `json:"durationSeconds,omitempty"`
+	ShotID                string   `json:"shotId"`
+	ShotIndex             int      `json:"shotIndex"`
+	StorageKey            string   `json:"storageKey"`
+	MimeType              string   `json:"mimeType"`
+	DurationSeconds       float64  `json:"durationSeconds,omitempty"`
+	TrimStartSeconds      float64  `json:"trimStartSeconds,omitempty"`
+	TrimEndSeconds        *float64 `json:"trimEndSeconds,omitempty"`
+	TargetDurationSeconds *float64 `json:"targetDurationSeconds,omitempty"`
 }
 
 type ComposeRequest struct {

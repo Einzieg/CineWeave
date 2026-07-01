@@ -661,6 +661,351 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/timelines:
+    get:
+      operationId: listProjectTimelines
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project timelines
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectTimelineListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createProjectTimeline
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectTimelineRequest"
+      responses:
+        "201":
+          description: Created project timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectTimelineEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/timelines/{timelineId}:
+    get:
+      operationId: getProjectTimeline
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+      responses:
+        "200":
+          description: Project timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectTimelineEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateProjectTimeline
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectTimelineRequest"
+      responses:
+        "200":
+          description: Updated project timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectTimelineEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteProjectTimeline
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+      responses:
+        "200":
+          description: Deleted project timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/timelines/{timelineId}/detail:
+    get:
+      operationId: getTimelineDetail
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+        - name: previewExpiresSeconds
+          in: query
+          schema:
+            type: integer
+            minimum: 60
+            maximum: 86400
+      responses:
+        "200":
+          description: Timeline detail with clips and final video versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineDetailEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/timelines/{timelineId}/clips:
+    get:
+      operationId: listTimelineClips
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+      responses:
+        "200":
+          description: Timeline clips
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineClipListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createTimelineClip
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTimelineClipRequest"
+      responses:
+        "201":
+          description: Created timeline clip
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineClipEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/timelines/{timelineId}/clips/reorder:
+    post:
+      operationId: reorderTimelineClips
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReorderTimelineClipsRequest"
+      responses:
+        "200":
+          description: Reordered timeline clips
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReorderTimelineClipsEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/timelines/{timelineId}/clips/{clipId}:
+    patch:
+      operationId: updateTimelineClip
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+        - $ref: "#/components/parameters/TimelineClipId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTimelineClipRequest"
+      responses:
+        "200":
+          description: Updated timeline clip
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineClipEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteTimelineClip
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+        - $ref: "#/components/parameters/TimelineClipId"
+      responses:
+        "200":
+          description: Deleted timeline clip
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/timelines/{timelineId}/compose:
+    post:
+      operationId: composeTimeline
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TimelineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComposeTimelineRequest"
+      responses:
+        "202":
+          description: Timeline compose workflow queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposeTimelineResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/final-videos:
+    get:
+      operationId: listFinalVideos
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Final video versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinalVideoVersionListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/final-videos/{versionId}:
+    get:
+      operationId: getFinalVideo
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/FinalVideoVersionId"
+      responses:
+        "200":
+          description: Final video version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinalVideoVersionEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteFinalVideo
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/FinalVideoVersionId"
+      responses:
+        "200":
+          description: Deleted final video version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/final-videos/{versionId}/activate:
+    post:
+      operationId: activateFinalVideo
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/FinalVideoVersionId"
+      responses:
+        "200":
+          description: Activated final video version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinalVideoVersionEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/shot-production/status:
     get:
       operationId: getShotProductionStatus
@@ -3404,6 +3749,27 @@ components:
       schema:
         type: string
         format: uuid
+    TimelineId:
+      name: timelineId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TimelineClipId:
+      name: clipId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    FinalVideoVersionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     WorkflowRunId:
       name: workflowRunId
       in: path
@@ -3743,6 +4109,9 @@ components:
         scriptModelProfileKey:
           type: string
           default: script_agent_default
+        activeFinalVideoVersionId:
+          type: string
+          format: uuid
         imageQuality:
           type: string
           default: standard
@@ -5070,6 +5439,302 @@ components:
         videoPreviewUrl:
           type: string
           format: uri
+    ProjectTimeline:
+      type: object
+      required: [id, organizationId, projectId, title, status, aspectRatio, resolution, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
+        aspectRatio:
+          type: string
+        resolution:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        editedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        editedAt:
+          type: string
+          format: date-time
+    TimelineClip:
+      type: object
+      required: [id, organizationId, projectId, timelineId, clipIndex, title, enabled, trimStartSeconds, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        timelineId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        videoArtifactId:
+          type: string
+          format: uuid
+        videoMediaFileId:
+          type: string
+          format: uuid
+        clipIndex:
+          type: integer
+        title:
+          type: string
+        enabled:
+          type: boolean
+        sourceStorageKey:
+          type: string
+        sourceDurationSeconds:
+          type: number
+          format: double
+        trimStartSeconds:
+          type: number
+          format: double
+        trimEndSeconds:
+          type: number
+          format: double
+        targetDurationSeconds:
+          type: number
+          format: double
+        notes:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TimelineClipDetail:
+      allOf:
+        - $ref: "#/components/schemas/TimelineClip"
+        - type: object
+          properties:
+            shot:
+              $ref: "#/components/schemas/StoryboardShot"
+            videoArtifact:
+              $ref: "#/components/schemas/Artifact"
+            previewUrl:
+              type: string
+              format: uri
+    FinalVideoVersion:
+      type: object
+      required: [id, organizationId, projectId, timelineId, version, title, status, resolution, aspectRatio, composeSettings, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        timelineId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+        title:
+          type: string
+        status:
+          type: string
+          enum: [ready, active, archived, failed]
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        durationSeconds:
+          type: number
+          format: double
+        resolution:
+          type: string
+        aspectRatio:
+          type: string
+        composeSettings:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        previewUrl:
+          type: string
+          format: uri
+    TimelineDetail:
+      type: object
+      required: [timeline, clips, finalVideoVersions]
+      properties:
+        timeline:
+          $ref: "#/components/schemas/ProjectTimeline"
+        clips:
+          type: array
+          items:
+            $ref: "#/components/schemas/TimelineClipDetail"
+        finalVideoVersions:
+          type: array
+          items:
+            $ref: "#/components/schemas/FinalVideoVersion"
+    CreateProjectTimelineRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        aspectRatio:
+          type: string
+        resolution:
+          type: string
+        fromStoryboardShots:
+          type: boolean
+          default: false
+    UpdateProjectTimelineRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
+        aspectRatio:
+          type: string
+        resolution:
+          type: string
+    CreateTimelineClipRequest:
+      type: object
+      properties:
+        storyboardShotId:
+          type: string
+          format: uuid
+        videoArtifactId:
+          type: string
+          format: uuid
+        videoMediaFileId:
+          type: string
+          format: uuid
+        clipIndex:
+          type: integer
+        title:
+          type: string
+        enabled:
+          type: boolean
+        sourceStorageKey:
+          type: string
+        sourceDurationSeconds:
+          type: number
+          format: double
+        trimStartSeconds:
+          type: number
+          format: double
+        trimEndSeconds:
+          type: number
+          format: double
+        targetDurationSeconds:
+          type: number
+          format: double
+        notes:
+          type: string
+    UpdateTimelineClipRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        enabled:
+          type: boolean
+        trimStartSeconds:
+          type: number
+          format: double
+        trimEndSeconds:
+          type: number
+          format: double
+        targetDurationSeconds:
+          type: number
+          format: double
+        notes:
+          type: string
+    ReorderTimelineClipItem:
+      type: object
+      required: [clipId, clipIndex]
+      properties:
+        clipId:
+          type: string
+          format: uuid
+        clipIndex:
+          type: integer
+    ReorderTimelineClipsRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReorderTimelineClipItem"
+    ComposeTimelineRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        resolution:
+          type: string
+        aspectRatio:
+          type: string
+    ComposeTimelineResponse:
+      type: object
+      required: [workflowRunId, timelineId, status]
+      properties:
+        workflowRunId:
+          type: string
+          format: uuid
+        timelineId:
+          type: string
+          format: uuid
+        status:
+          type: string
     NovelEvent:
       type: object
       required: [id, projectId, sourceId, eventIndex, sequenceNo, title, summary, importance, characters, scenes, props, keywords, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
@@ -5665,10 +6330,16 @@ components:
           type: integer
     ProductionFinalVideoStage:
       type: object
-      required: [status, stale]
+      required: [status, timelineCount, enabledClipCount, stale]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
+        finalVideoVersionId:
+          type: string
+          format: uuid
+        timelineId:
+          type: string
+          format: uuid
         artifactId:
           type: string
           format: uuid
@@ -5686,6 +6357,10 @@ components:
         sourceWorkflowRunId:
           type: string
           format: uuid
+        timelineCount:
+          type: integer
+        enabledClipCount:
+          type: integer
         stale:
           type: boolean
     ProductionActionRequest:
@@ -5960,6 +6635,89 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Project"
+    ProjectTimelineEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectTimeline"
+    ProjectTimelineListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProjectTimeline"
+    TimelineClipEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/TimelineClip"
+    TimelineClipListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/TimelineClip"
+    TimelineDetailEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/TimelineDetail"
+    ReorderTimelineClipsEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ReorderTimelineClipItem"
+    ComposeTimelineResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ComposeTimelineResponse"
+    FinalVideoVersionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/FinalVideoVersion"
+    FinalVideoVersionListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/FinalVideoVersion"
     ProductionStatusEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

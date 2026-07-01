@@ -52,8 +52,15 @@ func ResolveDimensions(aspectRatio, resolution string) (int, int) {
 }
 
 func NormalizeClip(ctx context.Context, inputPath, outputPath string, width, height, fps int) error {
+	return NormalizeClipWithTrim(ctx, inputPath, outputPath, width, height, fps, 0, nil)
+}
+
+func NormalizeClipWithTrim(ctx context.Context, inputPath, outputPath string, width, height, fps int, trimStartSeconds float64, trimEndSeconds *float64) error {
 	if fps <= 0 {
 		fps = defaultFPS
+	}
+	if trimStartSeconds < 0 {
+		trimStartSeconds = 0
 	}
 	filter := fmt.Sprintf(
 		"scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=%d,format=yuv420p",
@@ -67,7 +74,17 @@ func NormalizeClip(ctx context.Context, inputPath, outputPath string, width, hei
 		"-hide_banner",
 		"-loglevel", "error",
 		"-y",
+	}
+	if trimStartSeconds > 0 {
+		args = append(args, "-ss", formatSeconds(trimStartSeconds))
+	}
+	args = append(args,
 		"-i", inputPath,
+	)
+	if trimEndSeconds != nil && *trimEndSeconds > trimStartSeconds {
+		args = append(args, "-t", formatSeconds(*trimEndSeconds-trimStartSeconds))
+	}
+	args = append(args,
 		"-vf", filter,
 		"-r", strconv.Itoa(fps),
 		"-c:v", "libx264",
@@ -76,7 +93,7 @@ func NormalizeClip(ctx context.Context, inputPath, outputPath string, width, hei
 		"-an",
 		"-movflags", "+faststart",
 		outputPath,
-	}
+	)
 	return runFFmpeg(ctx, args...)
 }
 
@@ -145,4 +162,8 @@ func even(value int) int {
 		return value
 	}
 	return value - 1
+}
+
+func formatSeconds(value float64) string {
+	return strconv.FormatFloat(value, 'f', 3, 64)
 }

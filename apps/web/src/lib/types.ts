@@ -65,6 +65,7 @@ export type Project = {
   scriptModelProfileKey?: string;
   imageQuality?: string;
   productionMode?: string;
+  activeFinalVideoVersionId?: string | null;
   status?: string;
   settings?: JsonRecord;
   createdAt?: string;
@@ -617,12 +618,16 @@ export type ProductionStatus = {
     shotVideos: ProductionShotMediaStage;
     finalVideo: {
       status: string;
+      finalVideoVersionId?: string | null;
+      timelineId?: string | null;
       artifactId?: string | null;
       mediaFileId?: string | null;
       previewUrl?: string | null;
       storageKey?: string | null;
       workflowRunId?: string | null;
       sourceWorkflowRunId?: string | null;
+      timelineCount?: number;
+      enabledClipCount?: number;
       stale?: boolean;
     };
   };
@@ -674,6 +679,85 @@ export type Artifact = {
   createdAt?: string;
   previewUrl?: string;
   previewExpiresAt?: string;
+};
+
+export type ProjectTimeline = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  workflowRunId?: string | null;
+  title: string;
+  status: string;
+  aspectRatio: string;
+  resolution: string;
+  metadata?: JsonRecord;
+  createdBy?: string | null;
+  editedBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  editedAt?: string | null;
+};
+
+export type TimelineClip = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  timelineId: string;
+  storyboardShotId?: string | null;
+  videoArtifactId?: string | null;
+  videoMediaFileId?: string | null;
+  clipIndex: number;
+  title: string;
+  enabled: boolean;
+  sourceStorageKey?: string | null;
+  sourceDurationSeconds?: number | null;
+  trimStartSeconds: number;
+  trimEndSeconds?: number | null;
+  targetDurationSeconds?: number | null;
+  notes?: string | null;
+  metadata?: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TimelineClipDetail = TimelineClip & {
+  shot?: StoryboardShot | null;
+  videoArtifact?: Artifact | null;
+  previewUrl?: string | null;
+};
+
+export type FinalVideoVersion = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  timelineId: string;
+  workflowRunId?: string | null;
+  version: number;
+  title: string;
+  status: string;
+  artifactId?: string | null;
+  mediaFileId?: string | null;
+  storageKey?: string | null;
+  durationSeconds?: number | null;
+  resolution: string;
+  aspectRatio: string;
+  composeSettings?: JsonRecord;
+  metadata?: JsonRecord;
+  createdBy?: string | null;
+  createdAt: string;
+  previewUrl?: string | null;
+};
+
+export type TimelineDetail = {
+  timeline: ProjectTimeline;
+  clips: TimelineClipDetail[];
+  finalVideoVersions: FinalVideoVersion[];
+};
+
+export type ComposeTimelineResponse = {
+  workflowRunId: string;
+  timelineId: string;
+  status: string;
 };
 
 export type ProviderAccount = {

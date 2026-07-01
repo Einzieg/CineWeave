@@ -10,6 +10,7 @@ import {
   Workflow,
   Clapperboard,
   FileText,
+  Film,
 } from "lucide-react";
 
 export const globalNavItems = [
@@ -25,7 +26,8 @@ export const projectNavItems = [
   { label: "生产看板", segment: "production", icon: ListChecks },
   { label: "原文与剧本", segment: "sources", icon: FileText },
   { label: "资产", segment: "assets", icon: Boxes },
-  { label: "分镜工作台", segment: "storyboard", icon: Clapperboard },
+  { label: "分镜镜头", segment: "storyboard", icon: Clapperboard },
+  { label: "时间线", segment: "timeline", icon: Film },
   { label: "工作流", segment: "workflows", icon: Workflow },
   { label: "媒体资产", segment: "vault", icon: Library },
   { label: "项目设置", segment: "settings", icon: Settings2 },
@@ -76,6 +78,8 @@ export function workflowLabel(value: string) {
       return "批量生成镜头视频";
     case "batch_cancel_shot_videos":
       return "批量取消镜头视频";
+    case "compose_timeline":
+      return "时间线合成成片";
     default:
       return value;
   }

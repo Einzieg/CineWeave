@@ -18,6 +18,7 @@ import type {
   Artifact,
   AssetReference,
   CanonicalAsset,
+  FinalVideoVersion,
   JsonRecord,
   JsonValue,
   ModelProfile,
@@ -28,6 +29,7 @@ import type {
   Project,
   ProjectSource,
   ProductionStatus,
+  ProjectTimeline,
   PromptTemplate,
   ProviderAccount,
   Role,
@@ -41,15 +43,20 @@ import type {
   StoryboardShotDetail,
   StudioSession,
   Team,
+  TimelineClipDetail,
+  TimelineDetail,
   WorkflowNodeRun,
   WorkflowRun,
   Workspace,
 } from "@/lib/types";
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   Check,
   Clapperboard,
   Copy,
+  Film,
   Filter,
   ImageIcon,
   Loader2,
@@ -63,6 +70,7 @@ import {
   Send,
   Sparkles,
   Star,
+  Trash2,
   Upload,
   Video,
   X,
@@ -88,6 +96,20 @@ type ImportDraft = {
   contentFormat: "plain_text" | "markdown";
   splitChapters: boolean;
   createScript: boolean;
+};
+
+type TimelineClipDraft = {
+  enabled: boolean;
+  trimStartSeconds: string;
+  trimEndSeconds: string;
+  targetDurationSeconds: string;
+  notes: string;
+};
+
+type TimelineComposeDraft = {
+  title: string;
+  resolution: string;
+  aspectRatio: string;
 };
 
 export function DashboardPage() {
@@ -463,8 +485,20 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
   const assets = useStudioQuery<CanonicalAsset[]>([], `project:${projectId}:assets`, async (activeSession) => (await studioApi.listCanonicalAssets(activeSession, projectId)).items);
   const workflows = useStudioQuery<WorkflowRun[]>([], `project:${projectId}:runs`, async (activeSession) => (await studioApi.listWorkflowRuns(activeSession, projectId)).items);
   const artifacts = useStudioQuery<Artifact[]>([], `project:${projectId}:artifacts`, async (activeSession) => (await studioApi.listArtifacts(activeSession, projectId)).items);
+  const finalVideos = useStudioQuery<FinalVideoVersion[]>([], `project:${projectId}:final-videos`, async (activeSession) => (await studioApi.listFinalVideos(activeSession, projectId)).items);
   const latestRun = workflows.data[0];
-  const finalVideo = artifacts.data.find((item) => item.type === "final_video");
+  const activeFinalVideo = finalVideos.data.find((item) => item.status === "active") ?? finalVideos.data[0] ?? null;
+  const finalVideo = activeFinalVideo
+    ? ({
+        id: activeFinalVideo.artifactId ?? activeFinalVideo.id,
+        organizationId: activeFinalVideo.organizationId,
+        projectId: activeFinalVideo.projectId,
+        type: "final_video",
+        storageKey: activeFinalVideo.storageKey ?? undefined,
+        mimeType: "video/mp4",
+        previewUrl: activeFinalVideo.previewUrl ?? undefined,
+      } satisfies Artifact)
+    : artifacts.data.find((item) => item.type === "final_video");
 
   return (
     <SessionGate>
@@ -516,7 +550,7 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
             <ProgressStep done={assets.data.length > 0} title="资产" detail={`${assets.data.length} 个基础资产`} />
             <ProgressStep done={workflows.data.some((item) => stringFrom(item.input.workflowType) === "script_to_storyboard")} title="分镜" detail="Storyboard Agent" />
             <ProgressStep done={workflows.data.some((item) => ["script_to_video", "full_production", "video_production"].includes(stringFrom(item.input.workflowType)))} title="镜头视频" detail="图片 / 视频生成" />
-            <ProgressStep done={Boolean(finalVideo)} title="最终成片" detail={finalVideo?.storageKey ?? "等待合成"} />
+            <ProgressStep done={Boolean(finalVideo)} title="最终成片" detail={activeFinalVideo ? `v${activeFinalVideo.version} · ${activeFinalVideo.status}` : finalVideo?.storageKey ?? "等待合成"} />
           </div>
         </Surface>
 
@@ -526,8 +560,20 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
             {latestRun ? <WorkflowRow run={latestRun} /> : <EmptyState title="暂无工作流" description="在工作流页面启动 source_to_script、script_to_assets、script_to_storyboard 或 full_production。" />}
           </Surface>
           <Surface>
-            <SectionTitle title="最终成片" description="当 final_video 生成后会显示视频预览。" />
-            <div className="p-4">{finalVideo ? <MediaPreview artifact={finalVideo} /> : <EmptyState title="还没有最终成片" description="完成镜头视频后启动完整生产或合成流程。" />}</div>
+            <SectionTitle title="最终成片" description="当前激活的最终视频版本。" />
+            <div className="grid gap-3 p-4">
+              {finalVideo ? <MediaPreview artifact={finalVideo} /> : <EmptyState title="还没有最终成片" description="还没有最终成片，请进入时间线合成。" />}
+              <div className="flex flex-wrap gap-2">
+                <Link className="studio-button" href={projectHref(projectId, "timeline") as Route}>
+                  <Film size={16} />
+                  进入时间线
+                </Link>
+                <Link className="studio-button studio-button-primary" href={projectHref(projectId, "timeline") as Route}>
+                  <Play size={16} />
+                  合成最终成片
+                </Link>
+              </div>
+            </div>
           </Surface>
         </div>
 
@@ -550,6 +596,378 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
               {!artifacts.data.length ? <EmptyState title="还没有媒体资产" description="生成资产参考图、镜头图片或镜头视频后会出现在这里。" /> : null}
             </div>
           </Surface>
+        </div>
+      </div>
+    </SessionGate>
+  );
+}
+
+export function ProjectTimelinePage({ projectId }: { projectId: string }) {
+  return (
+    <AppShell active="projects" title="时间线" description="编排镜头视频，合成并管理最终成片版本。" projectId={projectId} projectSection="timeline">
+      <ProjectTimelineContent projectId={projectId} />
+    </AppShell>
+  );
+}
+
+function ProjectTimelineContent({ projectId }: { projectId: string }) {
+  const { session } = useStudioSession();
+  const timelines = useStudioQuery<ProjectTimeline[]>([], `timelines:${projectId}`, async (activeSession) => (await studioApi.listTimelines(activeSession, projectId)).items);
+  const finalVideos = useStudioQuery<FinalVideoVersion[]>([], `final-videos:${projectId}`, async (activeSession) => (await studioApi.listFinalVideos(activeSession, projectId)).items);
+  const [selectedTimelineId, setSelectedTimelineId] = useState("");
+  const [selectedClipId, setSelectedClipId] = useState("");
+  const [clipDrafts, setClipDrafts] = useState<Record<string, TimelineClipDraft>>({});
+  const [composeDrafts, setComposeDrafts] = useState<Record<string, TimelineComposeDraft>>({});
+  const selectedTimelineFromList = timelines.data.find((item) => item.id === selectedTimelineId) ?? timelines.data[0] ?? null;
+  const effectiveTimelineId = selectedTimelineFromList?.id ?? "";
+  const detail = useStudioQuery<TimelineDetail | null>(null, `timeline-detail:${projectId}:${effectiveTimelineId}`, async (activeSession) =>
+    effectiveTimelineId ? studioApi.getTimelineDetail(activeSession, projectId, effectiveTimelineId) : null,
+  );
+  const selectedTimeline = detail.data?.timeline ?? selectedTimelineFromList;
+  const clips = detail.data?.clips ?? [];
+  const selectedClip = clips.find((item) => item.id === selectedClipId) ?? clips[0] ?? null;
+  const clipDraft = selectedClip ? clipDrafts[selectedClip.id] ?? timelineClipDraft(selectedClip) : emptyTimelineClipDraft();
+  const composeDraft = selectedTimeline ? composeDrafts[selectedTimeline.id] ?? timelineComposeDraft(selectedTimeline) : { title: "", resolution: "720p", aspectRatio: "16:9" };
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [lastCompose, setLastCompose] = useState("");
+
+  function updateSelectedClipDraft(patch: Partial<TimelineClipDraft>) {
+    if (!selectedClip) {
+      return;
+    }
+    setClipDrafts((current) => ({ ...current, [selectedClip.id]: { ...clipDraft, ...patch } }));
+  }
+
+  function updateSelectedComposeDraft(patch: Partial<TimelineComposeDraft>) {
+    if (!selectedTimeline) {
+      return;
+    }
+    setComposeDrafts((current) => ({ ...current, [selectedTimeline.id]: { ...composeDraft, ...patch } }));
+  }
+
+  function reloadTimelineData() {
+    timelines.reload();
+    finalVideos.reload();
+    detail.reload();
+  }
+
+  async function createTimeline(fromStoryboardShots: boolean) {
+    setBusy(fromStoryboardShots ? "create-from-shots" : "create-timeline");
+    setError("");
+    setNotice("");
+    try {
+      const created = await studioApi.createTimeline(session, projectId, {
+        title: fromStoryboardShots ? "分镜视频时间线" : "默认时间线",
+        aspectRatio: composeDraft.aspectRatio,
+        resolution: composeDraft.resolution,
+        fromStoryboardShots,
+      });
+      setSelectedTimelineId(created.id);
+      setSelectedClipId("");
+      timelines.reload();
+      setNotice("时间线已创建");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function updateClip(clipId: string, body: JsonRecord) {
+    if (!effectiveTimelineId) {
+      return;
+    }
+    setBusy(`clip:${clipId}`);
+    setError("");
+    setNotice("");
+    try {
+      await studioApi.updateTimelineClip(session, projectId, effectiveTimelineId, clipId, body);
+      detail.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteClip(clipId: string) {
+    if (!effectiveTimelineId) {
+      return;
+    }
+    setBusy(`delete:${clipId}`);
+    setError("");
+    setNotice("");
+    try {
+      await studioApi.deleteTimelineClip(session, projectId, effectiveTimelineId, clipId);
+      setSelectedClipId("");
+      detail.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function moveClip(clip: TimelineClipDetail, delta: number) {
+    const index = clips.findIndex((item) => item.id === clip.id);
+    const target = clips[index + delta];
+    if (!effectiveTimelineId || !target) {
+      return;
+    }
+    setBusy(`move:${clip.id}`);
+    setError("");
+    try {
+      await studioApi.reorderTimelineClips(session, projectId, effectiveTimelineId, {
+        items: [
+          { clipId: clip.id, clipIndex: target.clipIndex },
+          { clipId: target.id, clipIndex: clip.clipIndex },
+        ],
+      });
+      detail.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveSelectedClip() {
+    if (!selectedClip) {
+      return;
+    }
+    await updateClip(selectedClip.id, {
+      enabled: clipDraft.enabled,
+      trimStartSeconds: numberOrZero(clipDraft.trimStartSeconds),
+      trimEndSeconds: nullableNumber(clipDraft.trimEndSeconds),
+      targetDurationSeconds: nullableNumber(clipDraft.targetDurationSeconds),
+      notes: nullable(clipDraft.notes),
+    });
+    setNotice("片段已保存");
+  }
+
+  async function composeTimeline() {
+    if (!effectiveTimelineId) {
+      return;
+    }
+    setBusy("compose");
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.composeTimeline(session, projectId, effectiveTimelineId, {
+        title: composeDraft.title,
+        resolution: composeDraft.resolution,
+        aspectRatio: composeDraft.aspectRatio,
+      });
+      setLastCompose(response.workflowRunId);
+      setNotice("合成工作流已启动");
+      reloadTimelineData();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function activateFinalVideo(versionId: string) {
+    setBusy(`activate:${versionId}`);
+    setError("");
+    setNotice("");
+    try {
+      await studioApi.activateFinalVideo(session, projectId, versionId);
+      finalVideos.reload();
+      detail.reload();
+      setNotice("最终成片已设为当前版本");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const activeVersion = finalVideos.data.find((item) => item.status === "active") ?? null;
+
+  return (
+    <SessionGate>
+      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+        <div className="grid content-start gap-5">
+          <Surface>
+            <SectionTitle title="时间线" description="项目内的镜头编排版本。" />
+            <QueryBody state={timelines}>
+              <div className="grid gap-2 p-4">
+                <button className="studio-button studio-button-primary justify-center" disabled={busy !== ""} onClick={() => createTimeline(true)} type="button">
+                  {busy === "create-from-shots" ? <Loader2 className="animate-spin" size={16} /> : <Film size={16} />}
+                  从分镜视频创建
+                </button>
+                <button className="studio-button justify-center" disabled={busy !== ""} onClick={() => createTimeline(false)} type="button">
+                  <Plus size={16} />
+                  新建时间线
+                </button>
+                <div className="mt-2 grid gap-2">
+                  {timelines.data.map((timeline) => (
+                    <button
+                      className={cn("rounded-md border p-3 text-left text-sm", effectiveTimelineId === timeline.id ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50")}
+                      key={timeline.id}
+                      onClick={() => {
+                        setSelectedTimelineId(timeline.id);
+                        setSelectedClipId("");
+                      }}
+                      type="button"
+                    >
+                      <span className="block font-medium text-slate-900">{timeline.title}</span>
+                      <span className="mt-1 flex gap-2 text-xs text-slate-500">
+                        <span>{timeline.status}</span>
+                        <span>{timeline.resolution}</span>
+                        <span>{timeline.aspectRatio}</span>
+                      </span>
+                    </button>
+                  ))}
+                  {!timelines.data.length ? <EmptyState title="还没有时间线" description="从已完成的镜头视频创建时间线。" /> : null}
+                </div>
+              </div>
+            </QueryBody>
+          </Surface>
+
+          <Surface>
+            <SectionTitle title="成片版本" description="当前可用的最终视频版本。" />
+            <div className="grid gap-2 p-4">
+              {finalVideos.data.map((version) => (
+                <div className="rounded-md border border-slate-200 p-3" key={version.id}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium text-slate-900">v{version.version} · {version.title}</p>
+                      <p className="mt-1 text-xs text-slate-500">{version.storageKey ?? "未写入媒体文件"}</p>
+                    </div>
+                    <StatusBadge status={version.status} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {version.previewUrl ? (
+                      <a className="studio-button" href={version.previewUrl} rel="noreferrer" target="_blank">
+                        <Video size={16} />
+                        预览
+                      </a>
+                    ) : null}
+                    <button className="studio-button" disabled={busy !== "" || version.status === "active"} onClick={() => activateFinalVideo(version.id)} type="button">
+                      {busy === `activate:${version.id}` ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
+                      设为当前
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {!finalVideos.data.length ? <EmptyState title="还没有成片版本" description="完成时间线合成后会生成版本。" /> : null}
+            </div>
+          </Surface>
+        </div>
+
+        <Surface>
+          <SectionTitle title="镜头片段" description={selectedTimeline ? `${selectedTimeline.title} · ${clips.length} 个片段` : "选择时间线"} />
+          <QueryBody state={detail}>
+            <div className="grid gap-3 p-4">
+              {clips.map((clip, index) => (
+                <div
+                  className={cn("grid gap-3 rounded-md border p-3 text-left", selectedClip?.id === clip.id ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50", !clip.enabled && "opacity-60")}
+                  key={clip.id}
+                  onClick={() => setSelectedClipId(clip.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedClipId(clip.id);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div className="grid gap-3 md:grid-cols-[168px_1fr_auto] md:items-start">
+                    <div className="overflow-hidden rounded-md bg-slate-100">
+                      {clip.previewUrl ? <video className="aspect-video w-full bg-black object-cover" muted src={clip.previewUrl} /> : <div className="grid aspect-video place-items-center text-slate-400"><Video size={22} /></div>}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Pill>#{index + 1}</Pill>
+                        {clip.shot ? <Pill>Shot {clip.shot.shotNo}</Pill> : null}
+                        <StatusBadge status={clip.enabled ? "enabled" : "disabled"} />
+                      </div>
+                      <p className="mt-2 truncate font-medium text-slate-900">{clip.title || clip.shot?.visual || "未命名片段"}</p>
+                      <p className="mt-1 truncate text-xs text-slate-500">{clip.sourceStorageKey ?? "无源视频"}</p>
+                      <p className="mt-2 text-xs text-slate-500">
+                        {secondsLabel(clip.sourceDurationSeconds)} · {trimLabel(clip)}
+                      </p>
+                    </div>
+                    <div className="flex gap-1 md:flex-col">
+                      <button className="studio-icon-button" disabled={index === 0 || busy !== ""} onClick={(event) => { event.stopPropagation(); moveClip(clip, -1); }} title="上移" type="button">
+                        <ArrowUp size={16} />
+                      </button>
+                      <button className="studio-icon-button" disabled={index === clips.length - 1 || busy !== ""} onClick={(event) => { event.stopPropagation(); moveClip(clip, 1); }} title="下移" type="button">
+                        <ArrowDown size={16} />
+                      </button>
+                      <button className="studio-icon-button" disabled={busy !== ""} onClick={(event) => { event.stopPropagation(); updateClip(clip.id, { enabled: !clip.enabled }); }} title={clip.enabled ? "禁用" : "启用"} type="button">
+                        {clip.enabled ? <X size={16} /> : <Check size={16} />}
+                      </button>
+                      <button className="studio-icon-button" disabled={busy !== ""} onClick={(event) => { event.stopPropagation(); deleteClip(clip.id); }} title="删除" type="button">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {!clips.length ? <EmptyState title="还没有片段" description="从分镜视频创建时间线后会自动填充。" /> : null}
+            </div>
+          </QueryBody>
+        </Surface>
+
+        <div className="grid content-start gap-5">
+          <Surface>
+            <SectionTitle title="预览与设置" description={selectedClip ? selectedClip.title || "片段设置" : "选择片段"} />
+            <div className="grid gap-4 p-4">
+              {selectedClip?.previewUrl ? <video className="aspect-video w-full rounded-md bg-black" controls src={selectedClip.previewUrl} /> : <div className="grid aspect-video place-items-center rounded-md bg-slate-100 text-slate-400"><Video size={24} /></div>}
+              {selectedClip ? (
+                <>
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input checked={clipDraft.enabled} onChange={(event) => updateSelectedClipDraft({ enabled: event.target.checked })} type="checkbox" />
+                    启用片段
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="grid gap-1 text-sm">
+                      <span className="text-slate-500">裁剪开始</span>
+                      <input className="studio-input" min="0" step="0.1" type="number" value={clipDraft.trimStartSeconds} onChange={(event) => updateSelectedClipDraft({ trimStartSeconds: event.target.value })} />
+                    </label>
+                    <label className="grid gap-1 text-sm">
+                      <span className="text-slate-500">裁剪结束</span>
+                      <input className="studio-input" min="0" step="0.1" type="number" value={clipDraft.trimEndSeconds} onChange={(event) => updateSelectedClipDraft({ trimEndSeconds: event.target.value })} />
+                    </label>
+                  </div>
+                  <label className="grid gap-1 text-sm">
+                    <span className="text-slate-500">目标时长</span>
+                    <input className="studio-input" min="0" step="0.1" type="number" value={clipDraft.targetDurationSeconds} onChange={(event) => updateSelectedClipDraft({ targetDurationSeconds: event.target.value })} />
+                  </label>
+                  <TextAreaInput label="备注" rows={4} value={clipDraft.notes} onChange={(notes) => updateSelectedClipDraft({ notes })} />
+                  <button className="studio-button studio-button-primary justify-center" disabled={busy !== ""} onClick={saveSelectedClip} type="button">
+                    {busy === `clip:${selectedClip.id}` ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                    保存片段
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </Surface>
+
+          <Surface>
+            <SectionTitle title="合成设置" description="生成新的最终成片版本。" />
+            <div className="grid gap-3 p-4">
+              <TextInput label="版本标题" value={composeDraft.title} onChange={(title) => updateSelectedComposeDraft({ title })} />
+              <SelectInput label="分辨率" value={composeDraft.resolution} values={["480p", "720p", "1080p"]} onChange={(resolution) => updateSelectedComposeDraft({ resolution })} />
+              <SelectInput label="画幅" value={composeDraft.aspectRatio} values={["16:9", "9:16", "1:1"]} onChange={(aspectRatio) => updateSelectedComposeDraft({ aspectRatio })} />
+              <button className="studio-button studio-button-primary justify-center" disabled={!effectiveTimelineId || clips.filter((clip) => clip.enabled).length === 0 || busy !== ""} onClick={composeTimeline} type="button">
+                {busy === "compose" ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
+                合成最终成片
+              </button>
+              {lastCompose ? <p className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">workflowRunId：{lastCompose}</p> : null}
+              {activeVersion?.previewUrl ? <video className="aspect-video w-full rounded-md bg-black" controls src={activeVersion.previewUrl} /> : null}
+            </div>
+          </Surface>
+
+          <ErrorPanel message={error} />
+          {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
         </div>
       </div>
     </SessionGate>
@@ -761,12 +1179,15 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 status={status.data.stages.finalVideo.status}
                 description={productionStageDescription("final_video", status.data.stages.finalVideo.status)}
                 metrics={[
-                  status.data.stages.finalVideo.artifactId ? "最终成片：已生成" : "最终成片：未生成",
-                  status.data.stages.finalVideo.storageKey ? `对象：${status.data.stages.finalVideo.storageKey}` : "时间线文件：等待合成",
+                  status.data.stages.finalVideo.finalVideoVersionId ? "成片版本：已生成" : "成片版本：未生成",
+                  metricText("时间线", status.data.stages.finalVideo.timelineCount ?? 0),
+                  metricText("启用片段", status.data.stages.finalVideo.enabledClipCount ?? 0),
+                  status.data.stages.finalVideo.storageKey ? `对象：${status.data.stages.finalVideo.storageKey}` : "媒体文件：等待合成",
                   status.data.stages.finalVideo.stale ? "最终成片可能不是最新" : "最终成片状态：最新",
                 ]}
-                primary={{ label: "合成最终成片", action: "compose_final_video", disabled: !status.data.stages.source.activeScriptId }}
-                secondary={status.data.stages.finalVideo.previewUrl ? { label: "预览最终成片", href: status.data.stages.finalVideo.previewUrl } : { label: "进入媒体资产", href: projectHref(projectId, "vault") }}
+                primary={{ label: "进入时间线", href: projectHref(projectId, "timeline") }}
+                secondary={status.data.stages.finalVideo.previewUrl ? { label: "预览最终成片", href: status.data.stages.finalVideo.previewUrl } : undefined}
+                link={{ label: "进入媒体资产", href: projectHref(projectId, "vault") }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -3260,17 +3681,43 @@ export function VaultPage({ projectId }: { projectId: string }) {
 }
 
 function VaultContent({ projectId }: { projectId: string }) {
+  const { session } = useStudioSession();
   const artifacts = useStudioQuery<Artifact[]>([], `vault:${projectId}`, async (activeSession) => (await studioApi.listArtifacts(activeSession, projectId)).items);
+  const finalVideos = useStudioQuery<FinalVideoVersion[]>([], `vault:${projectId}:final-videos`, async (activeSession) => (await studioApi.listFinalVideos(activeSession, projectId)).items);
   const [query, setQuery] = useState("");
   const [type, setType] = useState("all");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const priority = ["final_video", "generated_video", "generated_image"];
+  const normalizedQuery = query.trim().toLowerCase();
   const sorted = [...artifacts.data].sort((a, b) => priorityIndex(a.type, priority) - priorityIndex(b.type, priority));
   const filtered = sorted.filter((artifact) => {
     const matchesType = type === "all" || artifact.type === type;
     const text = `${artifact.type} ${artifact.storageKey ?? ""}`.toLowerCase();
-    return matchesType && text.includes(query.toLowerCase());
+    return matchesType && text.includes(normalizedQuery);
   });
-  const types = Array.from(new Set(artifacts.data.map((item) => item.type)));
+  const filteredFinalVideos = finalVideos.data.filter((version) => {
+    const matchesType = type === "all" || type === "final_video_version";
+    const text = `final_video_version ${version.title} ${version.status} ${version.storageKey ?? ""}`.toLowerCase();
+    return matchesType && text.includes(normalizedQuery);
+  });
+  const types = Array.from(new Set(["final_video_version", ...artifacts.data.map((item) => item.type)]));
+
+  async function activateVaultFinalVideo(versionId: string) {
+    setBusy(`activate:${versionId}`);
+    setError("");
+    setNotice("");
+    try {
+      await studioApi.activateFinalVideo(session, projectId, versionId);
+      finalVideos.reload();
+      setNotice("当前成片版本已更新");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
 
   return (
     <SessionGate>
@@ -3286,29 +3733,81 @@ function VaultContent({ projectId }: { projectId: string }) {
             ))}
           </select>
         </div>
+        <div className="mt-3">
+          <ErrorPanel message={error} />
+          {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
+        </div>
       </Surface>
-      {filtered.length ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((artifact) => (
-            <Surface className="overflow-hidden" key={artifact.id}>
-              <MediaPreview artifact={artifact} />
-              <div className="grid gap-2 p-4">
-                <p className="font-medium text-slate-900">{artifactTypeLabel(artifact.type)}</p>
-                <p className="truncate text-xs text-slate-500">{artifact.storageKey ?? "无存储键"}</p>
-                <div className="flex flex-wrap gap-2">
-                  {artifact.previewUrl ? (
-                    <a className="studio-button" href={artifact.previewUrl} rel="noreferrer" target="_blank">
-                      打开预览链接
-                    </a>
-                  ) : null}
-                  <button className="studio-button" onClick={() => navigator.clipboard.writeText(artifact.storageKey ?? "")} type="button">
-                    <Copy size={16} />
-                    复制存储键
-                  </button>
-                </div>
-              </div>
-            </Surface>
-          ))}
+      {filteredFinalVideos.length || filtered.length ? (
+        <div className="grid gap-4">
+          {filteredFinalVideos.length ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {filteredFinalVideos.map((version) => {
+                const artifact = {
+                  id: version.artifactId ?? version.id,
+                  organizationId: version.organizationId,
+                  projectId: version.projectId,
+                  type: "final_video",
+                  storageKey: version.storageKey ?? undefined,
+                  mimeType: "video/mp4",
+                  metadata: version.metadata,
+                  previewUrl: version.previewUrl ?? undefined,
+                } satisfies Artifact;
+                return (
+                  <Surface className="overflow-hidden" key={version.id}>
+                    <MediaPreview artifact={artifact} />
+                    <div className="grid gap-2 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-medium text-slate-900">最终成片 v{version.version}</p>
+                        <StatusBadge status={version.status} />
+                      </div>
+                      <p className="truncate text-xs text-slate-500">{version.title}</p>
+                      <p className="truncate text-xs text-slate-500">{version.storageKey ?? "无存储键"}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {version.previewUrl ? (
+                          <a className="studio-button" href={version.previewUrl} rel="noreferrer" target="_blank">
+                            打开预览链接
+                          </a>
+                        ) : null}
+                        <button className="studio-button" disabled={busy !== "" || version.status === "active"} onClick={() => activateVaultFinalVideo(version.id)} type="button">
+                          {busy === `activate:${version.id}` ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
+                          设为当前
+                        </button>
+                        <button className="studio-button" onClick={() => navigator.clipboard.writeText(version.storageKey ?? "")} type="button">
+                          <Copy size={16} />
+                          复制存储键
+                        </button>
+                      </div>
+                    </div>
+                  </Surface>
+                );
+              })}
+            </div>
+          ) : null}
+          {filtered.length ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {filtered.map((artifact) => (
+                <Surface className="overflow-hidden" key={artifact.id}>
+                  <MediaPreview artifact={artifact} />
+                  <div className="grid gap-2 p-4">
+                    <p className="font-medium text-slate-900">{artifactTypeLabel(artifact.type)}</p>
+                    <p className="truncate text-xs text-slate-500">{artifact.storageKey ?? "无存储键"}</p>
+                    <div className="flex flex-wrap gap-2">
+                      {artifact.previewUrl ? (
+                        <a className="studio-button" href={artifact.previewUrl} rel="noreferrer" target="_blank">
+                          打开预览链接
+                        </a>
+                      ) : null}
+                      <button className="studio-button" onClick={() => navigator.clipboard.writeText(artifact.storageKey ?? "")} type="button">
+                        <Copy size={16} />
+                        复制存储键
+                      </button>
+                    </div>
+                  </div>
+                </Surface>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : (
         <EmptyState title="还没有媒体资产" description="生成资产参考图、分镜、镜头图片或最终视频后会出现在这里。" />
@@ -4362,7 +4861,7 @@ function productionStageDescription(stage: string, status: string) {
     case "shot_videos":
       return "基于镜头图片生成短视频片段，失败项可在本阶段重跑。";
     case "final_video":
-      return "将已完成的镜头视频合成为最终成片，并在 Vault 中保存。";
+      return "在时间线工作台编排镜头视频，合成并管理最终成片版本。";
     default:
       return "按阶段推进生产流程。";
   }
@@ -4401,7 +4900,7 @@ function nextProductionAction(status: ProductionStatus) {
     case "shot_videos":
       return "generate_shot_videos";
     case "final_video":
-      return status.stages.finalVideo.status === "ready" ? "" : "compose_final_video";
+      return "";
     default:
       return "";
   }
@@ -4648,6 +5147,8 @@ function assetTypeLabel(type?: string) {
 
 function artifactTypeLabel(type: string) {
   switch (type) {
+    case "final_video_version":
+      return "成片版本";
     case "final_video":
       return "最终成片";
     case "generated_video":
@@ -4664,6 +5165,60 @@ function artifactTypeLabel(type: string) {
 function priorityIndex(value: string, priority: string[]) {
   const index = priority.indexOf(value);
   return index === -1 ? priority.length : index;
+}
+
+function emptyTimelineClipDraft(): TimelineClipDraft {
+  return {
+    enabled: true,
+    trimStartSeconds: "0",
+    trimEndSeconds: "",
+    targetDurationSeconds: "",
+    notes: "",
+  };
+}
+
+function timelineClipDraft(clip: TimelineClipDetail): TimelineClipDraft {
+  return {
+    enabled: clip.enabled,
+    trimStartSeconds: String(clip.trimStartSeconds ?? 0),
+    trimEndSeconds: clip.trimEndSeconds === null || clip.trimEndSeconds === undefined ? "" : String(clip.trimEndSeconds),
+    targetDurationSeconds: clip.targetDurationSeconds === null || clip.targetDurationSeconds === undefined ? "" : String(clip.targetDurationSeconds),
+    notes: clip.notes ?? "",
+  };
+}
+
+function timelineComposeDraft(timeline: ProjectTimeline): TimelineComposeDraft {
+  return {
+    title: timeline.title,
+    resolution: timeline.resolution || "720p",
+    aspectRatio: timeline.aspectRatio || "16:9",
+  };
+}
+
+function numberOrZero(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function nullableNumber(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function secondsLabel(value?: number | null) {
+  if (!value || value <= 0) {
+    return "时长未知";
+  }
+  return `${value.toFixed(1)}s`;
+}
+
+function trimLabel(clip: TimelineClipDetail) {
+  const start = clip.trimStartSeconds ?? 0;
+  const end = clip.trimEndSeconds;
+  if (!end || end <= 0) {
+    return start > 0 ? `裁剪 ${start.toFixed(1)}s 起` : "未裁剪";
+  }
+  return `裁剪 ${start.toFixed(1)}s-${end.toFixed(1)}s`;
 }
 
 function errorMessage(cause: unknown) {

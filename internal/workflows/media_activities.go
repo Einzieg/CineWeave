@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,48 +21,66 @@ type ComposeFinalVideoInput struct {
 	CreatedBy      string `json:"createdBy"`
 
 	SourceWorkflowRunID string `json:"sourceWorkflowRunId,omitempty"`
+	TimelineID          string `json:"timelineId,omitempty"`
+	Title               string `json:"title,omitempty"`
 	AspectRatio         string `json:"aspectRatio"`
 	Resolution          string `json:"resolution"`
 }
 
 type ComposeFinalVideoOutput struct {
-	NodeRunID          string  `json:"nodeRunId"`
-	ArtifactID         string  `json:"artifactId"`
-	MediaFileID        string  `json:"mediaFileId"`
-	StorageKey         string  `json:"storageKey"`
-	MimeType           string  `json:"mimeType"`
-	DurationSeconds    float64 `json:"durationSeconds,omitempty"`
-	Width              int     `json:"width,omitempty"`
-	Height             int     `json:"height,omitempty"`
-	TimelineArtifactID string  `json:"timelineArtifactId,omitempty"`
+	NodeRunID           string  `json:"nodeRunId"`
+	ArtifactID          string  `json:"artifactId"`
+	MediaFileID         string  `json:"mediaFileId"`
+	StorageKey          string  `json:"storageKey"`
+	MimeType            string  `json:"mimeType"`
+	DurationSeconds     float64 `json:"durationSeconds,omitempty"`
+	Width               int     `json:"width,omitempty"`
+	Height              int     `json:"height,omitempty"`
+	TimelineArtifactID  string  `json:"timelineArtifactId,omitempty"`
+	FinalVideoVersionID string  `json:"finalVideoVersionId,omitempty"`
 }
 
 type composeClipRecord struct {
-	ShotID           string
-	ShotIndex        int
-	ShotNo           int
-	VideoArtifactID  string
-	VideoMediaFileID string
-	StorageKey       string
-	MimeType         string
-	DurationSeconds  float64
+	TimelineClipID        string
+	ShotID                string
+	ShotIndex             int
+	ShotNo                int
+	ClipIndex             int
+	Title                 string
+	Enabled               bool
+	VideoArtifactID       string
+	VideoMediaFileID      string
+	StorageKey            string
+	MimeType              string
+	DurationSeconds       float64
+	TrimStartSeconds      float64
+	TrimEndSeconds        *float64
+	TargetDurationSeconds *float64
 }
 
 type timelineManifest struct {
 	WorkflowRunID string                 `json:"workflowRunId"`
 	ProjectID     string                 `json:"projectId"`
+	TimelineID    string                 `json:"timelineId,omitempty"`
 	Clips         []timelineManifestClip `json:"clips"`
 	Compose       map[string]string      `json:"compose"`
 }
 
 type timelineManifestClip struct {
-	ShotID           string  `json:"shotId"`
-	ShotNo           int     `json:"shotNo"`
-	ShotIndex        int     `json:"shotIndex"`
-	VideoArtifactID  string  `json:"videoArtifactId"`
-	VideoMediaFileID string  `json:"videoMediaFileId"`
-	StorageKey       string  `json:"storageKey"`
-	DurationSeconds  float64 `json:"durationSeconds,omitempty"`
+	TimelineClipID        string   `json:"timelineClipId,omitempty"`
+	ShotID                string   `json:"shotId"`
+	ShotNo                int      `json:"shotNo"`
+	ShotIndex             int      `json:"shotIndex"`
+	ClipIndex             int      `json:"clipIndex"`
+	Title                 string   `json:"title,omitempty"`
+	Enabled               bool     `json:"enabled"`
+	VideoArtifactID       string   `json:"videoArtifactId"`
+	VideoMediaFileID      string   `json:"videoMediaFileId"`
+	StorageKey            string   `json:"storageKey"`
+	DurationSeconds       float64  `json:"durationSeconds,omitempty"`
+	TrimStartSeconds      float64  `json:"trimStartSeconds,omitempty"`
+	TrimEndSeconds        *float64 `json:"trimEndSeconds,omitempty"`
+	TargetDurationSeconds *float64 `json:"targetDurationSeconds,omitempty"`
 }
 
 func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVideoInput) (ComposeFinalVideoOutput, error) {
@@ -83,6 +102,8 @@ func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVid
 		Input: mustJSON(map[string]any{
 			"aspectRatio": input.AspectRatio,
 			"resolution":  input.Resolution,
+			"timelineId":  input.TimelineID,
+			"title":       input.Title,
 		}),
 	})
 	if err != nil {
@@ -90,7 +111,12 @@ func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVid
 	}
 
 	sourceWorkflowRunID := firstNonEmptyString(input.SourceWorkflowRunID, input.WorkflowRunID)
-	clips, err := a.composeVideoClips(ctx, sourceWorkflowRunID)
+	var clips []composeClipRecord
+	if strings.TrimSpace(input.TimelineID) != "" {
+		clips, err = a.composeTimelineClips(ctx, strings.TrimSpace(input.TimelineID))
+	} else {
+		clips, err = a.composeVideoClips(ctx, sourceWorkflowRunID)
+	}
 	if err != nil {
 		return ComposeFinalVideoOutput{}, a.failComposeFinalVideo(ctx, input, nodeRunID, codeActivityFailed, err.Error())
 	}
@@ -119,11 +145,14 @@ func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVid
 	}
 	for _, clip := range clips {
 		composeReq.Clips = append(composeReq.Clips, mediapkg.Clip{
-			ShotID:          clip.ShotID,
-			ShotIndex:       clip.ShotIndex,
-			StorageKey:      clip.StorageKey,
-			MimeType:        clip.MimeType,
-			DurationSeconds: clip.DurationSeconds,
+			ShotID:                clip.ShotID,
+			ShotIndex:             clip.ShotIndex,
+			StorageKey:            clip.StorageKey,
+			MimeType:              clip.MimeType,
+			DurationSeconds:       clip.DurationSeconds,
+			TrimStartSeconds:      clip.TrimStartSeconds,
+			TrimEndSeconds:        clip.TrimEndSeconds,
+			TargetDurationSeconds: clip.TargetDurationSeconds,
 		})
 	}
 	result, err := mediapkg.ComposeClipsWithStore(ctx, composeReq, objectStore)
@@ -201,6 +230,73 @@ func (a Activities) composeVideoClips(ctx context.Context, workflowRunID string)
 		); err != nil {
 			return nil, err
 		}
+		clip.ClipIndex = clip.ShotIndex
+		clip.Enabled = true
+		clips = append(clips, clip)
+	}
+	return clips, rows.Err()
+}
+
+func (a Activities) composeTimelineClips(ctx context.Context, timelineID string) ([]composeClipRecord, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			c.id::text,
+			COALESCE(c.storyboard_shot_id::text, ''),
+			COALESCE(s.shot_index, c.clip_index),
+			COALESCE(s.shot_no, s.shot_index + 1, c.clip_index + 1),
+			c.clip_index,
+			COALESCE(c.title, s.title, s.visual, ''),
+			COALESCE(c.enabled, true),
+			COALESCE(c.video_artifact_id::text, s.video_artifact_id::text, ''),
+			COALESCE(c.video_media_file_id::text, s.video_media_file_id::text, ''),
+			COALESCE(c.source_storage_key, s.video_storage_key, mf.storage_key, va.storage_key, ''),
+			COALESCE(mf.mime_type, va.mime_type, 'video/mp4'),
+			COALESCE(c.source_duration_seconds, mf.duration_seconds, s.duration_seconds, 0)::float8,
+			COALESCE(c.trim_start_seconds, 0)::float8,
+			c.trim_end_seconds::float8,
+			c.target_duration_seconds::float8
+		FROM timeline_clips c
+		LEFT JOIN storyboard_shots s ON s.id = c.storyboard_shot_id
+		LEFT JOIN media_files mf ON mf.id = COALESCE(c.video_media_file_id, s.video_media_file_id)
+		LEFT JOIN artifacts va ON va.id = COALESCE(c.video_artifact_id, s.video_artifact_id)
+		WHERE c.timeline_id = $1
+		  AND c.enabled = true
+		  AND COALESCE(c.source_storage_key, s.video_storage_key, mf.storage_key, va.storage_key, '') <> ''
+		ORDER BY c.clip_index ASC
+	`, timelineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	clips := make([]composeClipRecord, 0)
+	for rows.Next() {
+		var clip composeClipRecord
+		var trimEnd, targetDuration sql.NullFloat64
+		if err := rows.Scan(
+			&clip.TimelineClipID,
+			&clip.ShotID,
+			&clip.ShotIndex,
+			&clip.ShotNo,
+			&clip.ClipIndex,
+			&clip.Title,
+			&clip.Enabled,
+			&clip.VideoArtifactID,
+			&clip.VideoMediaFileID,
+			&clip.StorageKey,
+			&clip.MimeType,
+			&clip.DurationSeconds,
+			&clip.TrimStartSeconds,
+			&trimEnd,
+			&targetDuration,
+		); err != nil {
+			return nil, err
+		}
+		if trimEnd.Valid {
+			clip.TrimEndSeconds = &trimEnd.Float64
+		}
+		if targetDuration.Valid {
+			clip.TargetDurationSeconds = &targetDuration.Float64
+		}
 		clips = append(clips, clip)
 	}
 	return clips, rows.Err()
@@ -247,6 +343,7 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 		"nodeRunId":           nodeRunID,
 		"workflowRunId":       input.WorkflowRunID,
 		"sourceWorkflowRunId": firstNonEmptyString(input.SourceWorkflowRunID, input.WorkflowRunID),
+		"timelineId":          input.TimelineID,
 		"staleState":          "fresh",
 		"shotIds":             shotIDs,
 		"clipStorageKeys":     clipStorageKeys,
@@ -275,6 +372,7 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 		"source":              "media_worker",
 		"workflowRunId":       input.WorkflowRunID,
 		"sourceWorkflowRunId": firstNonEmptyString(input.SourceWorkflowRunID, input.WorkflowRunID),
+		"timelineId":          input.TimelineID,
 		"shotIds":             shotIDs,
 		"clipCount":           len(clips),
 	}), nullIfEmpty(input.CreatedBy)).Scan(&mediaFileID); err != nil {
@@ -288,16 +386,88 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 		return ComposeFinalVideoOutput{}, err
 	}
 
+	var finalVideoVersionID string
+	if strings.TrimSpace(input.TimelineID) != "" {
+		status := "ready"
+		var activeFinalVideoVersionID sql.NullString
+		if err := tx.QueryRow(ctx, `
+			SELECT active_final_video_version_id::text
+			FROM projects
+			WHERE id = $1
+			FOR UPDATE
+		`, input.ProjectID).Scan(&activeFinalVideoVersionID); err != nil {
+			return ComposeFinalVideoOutput{}, err
+		}
+		if !activeFinalVideoVersionID.Valid || strings.TrimSpace(activeFinalVideoVersionID.String) == "" {
+			status = "active"
+		}
+		var version int
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(MAX(version), 0) + 1
+			FROM final_video_versions
+			WHERE project_id = $1
+		`, input.ProjectID).Scan(&version); err != nil {
+			return ComposeFinalVideoOutput{}, err
+		}
+		title := strings.TrimSpace(input.Title)
+		if title == "" {
+			title = fmt.Sprintf("成片 v%d", version)
+		}
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO final_video_versions(
+				organization_id, project_id, timeline_id, workflow_run_id, version, title, status,
+				artifact_id, media_file_id, storage_key, duration_seconds, resolution, aspect_ratio,
+				compose_settings, metadata, created_by
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			RETURNING id::text
+		`, input.OrganizationID, input.ProjectID, input.TimelineID, input.WorkflowRunID, version, title, status,
+			finalArtifactID, mediaFileID, result.StorageKey, nullFloat(result.DurationSeconds),
+			defaultString(input.Resolution, "720p"), defaultString(input.AspectRatio, "16:9"),
+			mustJSON(map[string]any{
+				"aspectRatio": defaultString(input.AspectRatio, "16:9"),
+				"resolution":  defaultString(input.Resolution, "720p"),
+				"format":      "mp4",
+			}),
+			mustJSON(map[string]any{
+				"source":             "compose_timeline",
+				"nodeRunId":          nodeRunID,
+				"timelineArtifactId": timelineArtifactID,
+				"clipCount":          len(clips),
+			}),
+			nullIfEmpty(input.CreatedBy),
+		).Scan(&finalVideoVersionID); err != nil {
+			return ComposeFinalVideoOutput{}, err
+		}
+		if status == "active" {
+			if _, err := tx.Exec(ctx, `
+				UPDATE projects
+				SET active_final_video_version_id = $2
+				WHERE id = $1
+			`, input.ProjectID, finalVideoVersionID); err != nil {
+				return ComposeFinalVideoOutput{}, err
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE artifacts
+			SET metadata = metadata || $2::jsonb
+			WHERE id = $1
+		`, finalArtifactID, mustJSON(map[string]any{"finalVideoVersionId": finalVideoVersionID})); err != nil {
+			return ComposeFinalVideoOutput{}, err
+		}
+	}
+
 	output := ComposeFinalVideoOutput{
-		NodeRunID:          nodeRunID,
-		ArtifactID:         finalArtifactID,
-		MediaFileID:        mediaFileID,
-		StorageKey:         result.StorageKey,
-		MimeType:           result.MimeType,
-		DurationSeconds:    result.DurationSeconds,
-		Width:              result.Width,
-		Height:             result.Height,
-		TimelineArtifactID: timelineArtifactID,
+		NodeRunID:           nodeRunID,
+		ArtifactID:          finalArtifactID,
+		MediaFileID:         mediaFileID,
+		StorageKey:          result.StorageKey,
+		MimeType:            result.MimeType,
+		DurationSeconds:     result.DurationSeconds,
+		Width:               result.Width,
+		Height:              result.Height,
+		TimelineArtifactID:  timelineArtifactID,
+		FinalVideoVersionID: finalVideoVersionID,
 	}
 	outputJSON := mustJSON(output)
 	if _, err := tx.Exec(ctx, `
@@ -335,12 +505,14 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 			"output":        json.RawMessage(outputJSON),
 		})},
 		{"media.compose.completed", "workflow_node_run", nodeRunID, mustJSON(map[string]any{
-			"workflowRunId":      input.WorkflowRunID,
-			"artifactId":         finalArtifactID,
-			"mediaFileId":        mediaFileID,
-			"storageKey":         result.StorageKey,
-			"timelineArtifactId": timelineArtifactID,
-			"clipCount":          len(clips),
+			"workflowRunId":       input.WorkflowRunID,
+			"artifactId":          finalArtifactID,
+			"mediaFileId":         mediaFileID,
+			"storageKey":          result.StorageKey,
+			"timelineId":          input.TimelineID,
+			"timelineArtifactId":  timelineArtifactID,
+			"finalVideoVersionId": finalVideoVersionID,
+			"clipCount":           len(clips),
 		})},
 	}
 	for _, event := range events {
@@ -384,23 +556,32 @@ func buildTimelineManifest(input ComposeFinalVideoInput, clips []composeClipReco
 	manifest := timelineManifest{
 		WorkflowRunID: input.WorkflowRunID,
 		ProjectID:     input.ProjectID,
+		TimelineID:    input.TimelineID,
 		Clips:         make([]timelineManifestClip, 0, len(clips)),
 		Compose: map[string]string{
 			"aspectRatio":         defaultString(input.AspectRatio, "16:9"),
 			"resolution":          defaultString(input.Resolution, "720p"),
 			"format":              "mp4",
 			"sourceWorkflowRunId": firstNonEmptyString(input.SourceWorkflowRunID, input.WorkflowRunID),
+			"title":               strings.TrimSpace(input.Title),
 		},
 	}
 	for _, clip := range clips {
 		manifest.Clips = append(manifest.Clips, timelineManifestClip{
-			ShotID:           clip.ShotID,
-			ShotNo:           clip.ShotNo,
-			ShotIndex:        clip.ShotIndex,
-			VideoArtifactID:  clip.VideoArtifactID,
-			VideoMediaFileID: clip.VideoMediaFileID,
-			StorageKey:       clip.StorageKey,
-			DurationSeconds:  clip.DurationSeconds,
+			TimelineClipID:        clip.TimelineClipID,
+			ShotID:                clip.ShotID,
+			ShotNo:                clip.ShotNo,
+			ShotIndex:             clip.ShotIndex,
+			ClipIndex:             clip.ClipIndex,
+			Title:                 clip.Title,
+			Enabled:               clip.Enabled,
+			VideoArtifactID:       clip.VideoArtifactID,
+			VideoMediaFileID:      clip.VideoMediaFileID,
+			StorageKey:            clip.StorageKey,
+			DurationSeconds:       clip.DurationSeconds,
+			TrimStartSeconds:      clip.TrimStartSeconds,
+			TrimEndSeconds:        clip.TrimEndSeconds,
+			TargetDurationSeconds: clip.TargetDurationSeconds,
 		})
 	}
 	return manifest
