@@ -70,6 +70,12 @@ export function workflowLabel(value: string) {
       return "重新生成镜头视频";
     case "regenerate_final_video":
       return "重新合成最终成片";
+    case "batch_generate_shot_images":
+      return "批量生成镜头图片";
+    case "batch_generate_shot_videos":
+      return "批量生成镜头视频";
+    case "batch_cancel_shot_videos":
+      return "批量取消镜头视频";
     default:
       return value;
   }

@@ -22,6 +22,14 @@ func MarkAssetDownstreamStale(ctx context.Context, db Execer, projectID, assetID
 	_, err := db.Exec(ctx, `
 		UPDATE storyboard_shots s
 		SET stale_state = 'needs_regeneration',
+		    image_status = CASE
+		      WHEN s.image_artifact_id IS NOT NULL OR s.image_media_file_id IS NOT NULL OR COALESCE(s.image_storage_key, '') <> '' THEN 'stale'
+		      ELSE s.image_status
+		    END,
+		    video_status = CASE
+		      WHEN s.video_artifact_id IS NOT NULL OR s.video_media_file_id IS NOT NULL OR COALESCE(s.video_storage_key, '') <> '' THEN 'stale'
+		      ELSE s.video_status
+		    END,
 		    updated_at = now()
 		WHERE s.project_id = $1
 		  AND EXISTS (
@@ -38,6 +46,14 @@ func MarkShotDownstreamStale(ctx context.Context, db Execer, projectID, shotID s
 	_, err := db.Exec(ctx, `
 		UPDATE storyboard_shots
 		SET stale_state = 'needs_regeneration',
+		    image_status = CASE
+		      WHEN image_artifact_id IS NOT NULL OR image_media_file_id IS NOT NULL OR COALESCE(image_storage_key, '') <> '' THEN 'stale'
+		      ELSE image_status
+		    END,
+		    video_status = CASE
+		      WHEN video_artifact_id IS NOT NULL OR video_media_file_id IS NOT NULL OR COALESCE(video_storage_key, '') <> '' THEN 'stale'
+		      ELSE video_status
+		    END,
 		    updated_at = now()
 		WHERE project_id = $1 AND id = $2
 	`, projectID, shotID)
@@ -56,6 +72,14 @@ func MarkRequirementDownstreamStale(ctx context.Context, db Execer, projectID, r
 	_, err := db.Exec(ctx, `
 		UPDATE storyboard_shots s
 		SET stale_state = 'needs_regeneration',
+		    image_status = CASE
+		      WHEN s.image_artifact_id IS NOT NULL OR s.image_media_file_id IS NOT NULL OR COALESCE(s.image_storage_key, '') <> '' THEN 'stale'
+		      ELSE s.image_status
+		    END,
+		    video_status = CASE
+		      WHEN s.video_artifact_id IS NOT NULL OR s.video_media_file_id IS NOT NULL OR COALESCE(s.video_storage_key, '') <> '' THEN 'stale'
+		      ELSE s.video_status
+		    END,
 		    updated_at = now()
 		FROM shot_asset_requirements r
 		WHERE r.storyboard_shot_id = s.id

@@ -35,6 +35,8 @@ import type {
   ScriptScene,
   ScriptVersion,
   ShotAssetRequirement,
+  ShotProductionShot,
+  ShotProductionStatus,
   StoryboardShot,
   StoryboardShotDetail,
   StudioSession,
@@ -1959,6 +1961,7 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const [workflowRunId, setWorkflowRunId] = useState("");
   const [selectedShotId, setSelectedShotId] = useState("");
+  const [selectedShotIds, setSelectedShotIds] = useState<string[]>([]);
   const [maxShots, setMaxShots] = useState("3");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -1972,11 +1975,24 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   );
   const effectiveSceneId = selectedSceneId && scriptScenes.data.some((scene) => scene.id === selectedSceneId) ? selectedSceneId : "";
   const effectiveWorkflowRunId = validSelection(workflowRunId, storyboardRuns);
+  const production = useStudioQuery<ShotProductionStatus | null>(null, `storyboard:production:${projectId}:${effectiveSceneId}:${effectiveWorkflowRunId}`, async (activeSession) =>
+    studioApi.getShotProductionStatus(activeSession, projectId, {
+      scriptSceneId: effectiveSceneId || undefined,
+      workflowRunId: effectiveWorkflowRunId || undefined,
+      includePreviewUrl: true,
+      previewExpiresSeconds: 900,
+    }),
+  );
   const shots = useStudioQuery<StoryboardShot[]>([], `storyboard:shots:${effectiveWorkflowRunId}`, async (activeSession) =>
     effectiveWorkflowRunId ? (await studioApi.listWorkflowShots(activeSession, effectiveWorkflowRunId)).items : Promise.resolve([]),
   );
   const allShots = [...shots.data].sort((left, right) => left.shotIndex - right.shotIndex);
   const filteredShots = allShots.filter((shot) => !effectiveSceneId || shot.scriptSceneId === effectiveSceneId);
+  const productionByShotId = new Map((production.data?.shots ?? []).map((shot) => [shot.id, shot]));
+  const filteredShotIds = filteredShots.map((shot) => shot.id);
+  const selectedShotSet = new Set(selectedShotIds);
+  const selectedVisibleShotIds = selectedShotIds.filter((shotId) => filteredShotIds.includes(shotId));
+  const allVisibleShotsSelected = filteredShotIds.length > 0 && selectedVisibleShotIds.length === filteredShotIds.length;
   const creatingShot = selectedShotId === "new";
   const activeShot = creatingShot ? null : filteredShots.find((shot) => shot.id === selectedShotId) ?? filteredShots[0] ?? null;
   const shotDetail = useStudioQuery<StoryboardShotDetail | null>(null, `storyboard:shot-detail:${projectId}:${activeShot?.id ?? ""}:${creatingShot}`, async (activeSession) =>
@@ -1993,6 +2009,19 @@ function StoryboardContent({ projectId }: { projectId: string }) {
     }
   }
 
+  useEffect(() => {
+    if (!production.data || production.data.summary.running <= 0) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      production.reload();
+      workflows.reload();
+      shots.reload();
+      shotDetail.reload();
+    }, 4000);
+    return () => window.clearInterval(interval);
+  }, [production, workflows, shots, shotDetail]);
+
   async function perform(label: string, action: () => Promise<void>) {
     setBusy(label);
     setError("");
@@ -2000,6 +2029,7 @@ function StoryboardContent({ projectId }: { projectId: string }) {
     try {
       await action();
       workflows.reload();
+      production.reload();
       shots.reload();
       shotDetail.reload();
     } catch (cause) {
@@ -2082,9 +2112,34 @@ function StoryboardContent({ projectId }: { projectId: string }) {
 
   async function regenerateShotById(shot: StoryboardShot, targetType: "shot_image" | "shot_video") {
     await perform(targetType === "shot_image" ? "生成镜头图片" : "生成镜头视频", async () => {
-      const response = await studioApi.regenerate(session, projectId, { targetType, targetId: shot.id, options: { force: true } });
-      setNotice(`已提交工作流：${response.workflowRunId}`);
+      const response = await studioApi.runShotProductionAction(session, projectId, {
+        action: targetType === "shot_image" ? "generate_selected_images" : "generate_selected_videos",
+        shotIds: [shot.id],
+        options: { force: true },
+      });
+      setNotice(`已提交批量任务：${response.workflowRunId}`);
     });
+  }
+
+  async function runShotProduction(action: string) {
+    await perform("提交批量生产", async () => {
+      const response = await studioApi.runShotProductionAction(session, projectId, compactRecord({
+        action,
+        scriptSceneId: effectiveSceneId || undefined,
+        workflowRunId: effectiveWorkflowRunId || undefined,
+        shotIds: selectedVisibleShotIds.length ? selectedVisibleShotIds : undefined,
+        options: { force: true },
+      }));
+      setNotice(`已提交批量任务：${response.workflowRunId}`);
+    });
+  }
+
+  function toggleShotSelection(shotId: string) {
+    setSelectedShotIds((values) => (values.includes(shotId) ? values.filter((value) => value !== shotId) : [...values, shotId]));
+  }
+
+  function setAllVisibleShotSelection(checked: boolean) {
+    setSelectedShotIds(checked ? filteredShotIds : []);
   }
 
   async function regenerateCurrentScene() {
@@ -2239,6 +2294,16 @@ function StoryboardContent({ projectId }: { projectId: string }) {
               </button>
             </div>
           </div>
+          <ShotProductionToolbar
+            allSelected={allVisibleShotsSelected}
+            busy={busy !== ""}
+            hasShots={filteredShots.length > 0}
+            selectedCount={selectedVisibleShotIds.length}
+            summary={production.data?.summary}
+            onClearSelection={() => setSelectedShotIds([])}
+            onRun={runShotProduction}
+            onSelectAll={setAllVisibleShotSelection}
+          />
           <QueryBody state={shots}>
             {filteredShots.length ? (
               <div className="grid gap-3 p-4">
@@ -2253,6 +2318,9 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                     onRegenerateVideo={() => regenerateShotById(shot, "shot_video")}
                     onReview={(reviewStatus) => reviewShotById(shot, reviewStatus)}
                     onSelect={() => setSelectedShotId(shot.id)}
+                    onToggleSelected={() => toggleShotSelection(shot.id)}
+                    productionShot={productionByShotId.get(shot.id)}
+                    selected={selectedShotSet.has(shot.id)}
                     shot={shot}
                     totalShots={allShots.length}
                     orderIndex={allShots.findIndex((item) => item.id === shot.id)}
@@ -2326,13 +2394,96 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   );
 }
 
+function ShotProductionToolbar({
+  summary,
+  selectedCount,
+  allSelected,
+  hasShots,
+  busy,
+  onSelectAll,
+  onClearSelection,
+  onRun,
+}: {
+  summary?: ShotProductionStatus["summary"];
+  selectedCount: number;
+  allSelected: boolean;
+  hasShots: boolean;
+  busy: boolean;
+  onSelectAll: (checked: boolean) => void;
+  onClearSelection: () => void;
+  onRun: (action: string) => void;
+}) {
+  const hasSelection = selectedCount > 0;
+  const imageAction = hasSelection ? "generate_selected_images" : "generate_missing_images";
+  const videoAction = hasSelection ? "generate_selected_videos" : "generate_missing_videos";
+  return (
+    <div className="grid gap-3 border-b border-slate-200 bg-slate-50/70 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+          <input checked={allSelected} disabled={!hasShots || busy} onChange={(event) => onSelectAll(event.target.checked)} type="checkbox" />
+          全选
+        </label>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <Pill>图片完成 {summary?.imageSucceeded ?? 0}</Pill>
+          <Pill>图片待处理 {(summary?.imageMissing ?? 0) + (summary?.imageStale ?? 0)}</Pill>
+          <Pill>视频完成 {summary?.videoSucceeded ?? 0}</Pill>
+          <Pill>视频待处理 {(summary?.videoMissing ?? 0) + (summary?.videoStale ?? 0)}</Pill>
+          <Pill>运行中 {summary?.running ?? 0}</Pill>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button className="studio-button studio-button-primary" disabled={!hasShots || busy} onClick={() => onRun(imageAction)} type="button">
+          <ImageIcon size={15} />
+          {hasSelection ? `生成选中图片 ${selectedCount}` : "生成缺失/过期图片"}
+        </button>
+        <button className="studio-button studio-button-primary" disabled={!hasShots || busy} onClick={() => onRun(videoAction)} type="button">
+          <Video size={15} />
+          {hasSelection ? `生成选中视频 ${selectedCount}` : "生成缺失/过期视频"}
+        </button>
+        {!hasSelection ? (
+          <>
+            <button className="studio-button" disabled={!hasShots || busy} onClick={() => onRun("regenerate_stale_images")} type="button">
+              <RefreshCw size={15} />
+              重生成过期图片
+            </button>
+            <button className="studio-button" disabled={!hasShots || busy} onClick={() => onRun("regenerate_failed_images")} type="button">
+              <RefreshCw size={15} />
+              重试失败图片
+            </button>
+            <button className="studio-button" disabled={!hasShots || busy} onClick={() => onRun("regenerate_stale_videos")} type="button">
+              <RefreshCw size={15} />
+              重生成过期视频
+            </button>
+            <button className="studio-button" disabled={!hasShots || busy} onClick={() => onRun("regenerate_failed_videos")} type="button">
+              <RefreshCw size={15} />
+              重试失败视频
+            </button>
+          </>
+        ) : null}
+        <button className="studio-button border-red-200 text-red-700 hover:border-red-300" disabled={!hasShots || busy} onClick={() => onRun("cancel_running_videos")} type="button">
+          <X size={15} />
+          取消运行视频
+        </button>
+        {hasSelection ? (
+          <button className="studio-button" disabled={busy} onClick={onClearSelection} type="button">
+            清除选择
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function StoryboardShotListCard({
   shot,
+  productionShot,
   active,
+  selected,
   busy,
   orderIndex,
   totalShots,
   onSelect,
+  onToggleSelected,
   onMoveUp,
   onMoveDown,
   onReview,
@@ -2340,11 +2491,14 @@ function StoryboardShotListCard({
   onRegenerateVideo,
 }: {
   shot: StoryboardShot;
+  productionShot?: ShotProductionShot;
   active: boolean;
+  selected: boolean;
   busy: boolean;
   orderIndex: number;
   totalShots: number;
   onSelect: () => void;
+  onToggleSelected: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onReview: (reviewStatus: "approved" | "needs_edit") => void;
@@ -2353,21 +2507,30 @@ function StoryboardShotListCard({
 }) {
   return (
     <div className={cn("grid gap-3 rounded-md border p-3", active ? "border-blue-500 bg-blue-50/60" : "border-slate-200 bg-white")}>
-      <button className="grid gap-3 text-left md:grid-cols-[150px_minmax(0,1fr)]" onClick={onSelect} type="button">
-        <MediaPreview className="rounded-md" shot={shot} />
-        <div className="min-w-0">
+      <div className="grid gap-3 md:grid-cols-[24px_150px_minmax(0,1fr)]">
+        <label className="mt-1 flex justify-center">
+          <input checked={selected} disabled={busy} onChange={onToggleSelected} type="checkbox" />
+        </label>
+        <button className="text-left" onClick={onSelect} type="button">
+          <MediaPreview className="rounded-md" shot={shot} />
+        </button>
+        <button className="min-w-0 text-left" onClick={onSelect} type="button">
           <div className="flex flex-wrap items-center gap-2">
             <p className="font-semibold text-slate-900">镜头 {shot.shotNo}</p>
             <StatusBadge status={shot.status} />
             <StatusBadge status={shot.reviewStatus ?? "pending"} />
             {shot.manualOverride ? <Pill>人工修改</Pill> : null}
             {shot.staleState && shot.staleState !== "fresh" ? <StatusBadge status={shot.staleState} /> : null}
-            <Pill>{shot.videoPreviewUrl || shot.videoStorageKey ? "视频已生成" : "视频未生成"}</Pill>
+            <ShotProductionStatusPill kind="image" status={productionShot?.imageStatus ?? shot.imageStatus ?? ""} />
+            <ShotProductionStatusPill kind="video" status={productionShot?.videoStatus ?? shot.videoStatus ?? ""} />
           </div>
           <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-700">{shot.visual || "暂无画面描述"}</p>
           {shot.sourceScene ? <p className="mt-2 text-xs text-slate-500">S{shot.sourceScene.sceneNo} {shot.sourceScene.title}</p> : null}
-        </div>
-      </button>
+          {productionShot?.imageErrorMessage || productionShot?.videoErrorMessage ? (
+            <p className="mt-2 line-clamp-2 text-xs text-red-700">{productionShot.imageErrorMessage || productionShot.videoErrorMessage}</p>
+          ) : null}
+        </button>
+      </div>
       <div className="flex flex-wrap justify-end gap-2">
         <button className="studio-button" disabled={busy} onClick={onSelect} type="button">
           <Pencil size={15} />
@@ -2398,6 +2561,40 @@ function StoryboardShotListCard({
       </div>
     </div>
   );
+}
+
+function ShotProductionStatusPill({ kind, status }: { kind: "image" | "video"; status?: string }) {
+  const normalized = status && status.trim() ? status : "not_started";
+  const tone =
+    normalized === "failed"
+      ? "border-red-200 bg-red-50 text-red-700"
+      : normalized === "queued" || normalized === "running"
+        ? "border-blue-200 bg-blue-50 text-blue-700"
+        : normalized === "succeeded"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : normalized === "stale"
+            ? "border-amber-200 bg-amber-50 text-amber-700"
+            : "border-slate-200 bg-slate-50 text-slate-600";
+  return <span className={cn("rounded-md border px-2 py-1 text-[12px]", tone)}>{shotProductionStatusLabel(kind, normalized)}</span>;
+}
+
+function shotProductionStatusLabel(kind: "image" | "video", status: string) {
+  const prefix = kind === "image" ? "图片" : "视频";
+  switch (status) {
+    case "queued":
+    case "running":
+      return `${prefix}生成中`;
+    case "succeeded":
+      return `${prefix}已完成`;
+    case "failed":
+      return `${prefix}失败`;
+    case "cancelled":
+      return `${prefix}已取消`;
+    case "stale":
+      return `${prefix}已过期`;
+    default:
+      return `${prefix}未生成`;
+  }
 }
 
 function StoryboardShotDetailPanel({

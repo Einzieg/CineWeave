@@ -661,6 +661,66 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/shot-production/status:
+    get:
+      operationId: getShotProductionStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: scriptSceneId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: workflowRunId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: includePreviewUrl
+          in: query
+          schema:
+            type: boolean
+        - name: previewExpiresSeconds
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Shot production status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotProductionStatusEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/shot-production/actions:
+    post:
+      operationId: runShotProductionAction
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShotProductionActionRequest"
+      responses:
+        "202":
+          description: Shot production workflow queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotProductionActionResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/regenerate:
     post:
       operationId: regenerateCreativeObject
@@ -4704,7 +4764,7 @@ components:
           type: string
     StoryboardShot:
       type: object
-      required: [id, workflowRunId, shotIndex, shotNo, status, reviewStatus, manualOverride, staleState]
+      required: [id, workflowRunId, shotIndex, shotNo, imageStatus, videoStatus, status, reviewStatus, manualOverride, staleState]
       properties:
         id:
           type: string
@@ -4763,6 +4823,38 @@ components:
           format: uuid
         externalTaskId:
           type: string
+        imageStatus:
+          type: string
+          enum: [not_started, queued, running, succeeded, failed, cancelled, stale]
+        videoStatus:
+          type: string
+          enum: [not_started, queued, running, succeeded, failed, cancelled, stale]
+        imageErrorCode:
+          type: string
+        imageErrorMessage:
+          type: string
+        videoErrorCode:
+          type: string
+        videoErrorMessage:
+          type: string
+        imageStartedAt:
+          type: string
+          format: date-time
+        imageCompletedAt:
+          type: string
+          format: date-time
+        videoStartedAt:
+          type: string
+          format: date-time
+        videoCompletedAt:
+          type: string
+          format: date-time
+        imageWorkflowRunId:
+          type: string
+          format: uuid
+        videoWorkflowRunId:
+          type: string
+          format: uuid
         status:
           type: string
         reviewStatus:
@@ -4777,6 +4869,168 @@ components:
         editedAt:
           type: string
           format: date-time
+    ShotProductionStatus:
+      type: object
+      required: [projectId, summary, shots]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        summary:
+          $ref: "#/components/schemas/ShotProductionSummary"
+        shots:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShotProductionShot"
+    ShotProductionSummary:
+      type: object
+      required: [total, imageSucceeded, imageMissing, imageFailed, imageStale, videoSucceeded, videoMissing, videoFailed, videoStale, running]
+      properties:
+        total:
+          type: integer
+        imageSucceeded:
+          type: integer
+        imageMissing:
+          type: integer
+        imageFailed:
+          type: integer
+        imageStale:
+          type: integer
+        videoSucceeded:
+          type: integer
+        videoMissing:
+          type: integer
+        videoFailed:
+          type: integer
+        videoStale:
+          type: integer
+        running:
+          type: integer
+    ShotProductionShot:
+      type: object
+      required: [id, workflowRunId, shotIndex, shotNo, imageStatus, videoStatus, staleState, canGenerateImage, canGenerateVideo, canRetryImage, canRetryVideo]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        scriptSceneId:
+          type: string
+          format: uuid
+        shotIndex:
+          type: integer
+        shotNo:
+          type: integer
+        visual:
+          type: string
+        imageStatus:
+          type: string
+          enum: [not_started, queued, running, succeeded, failed, cancelled, stale]
+        videoStatus:
+          type: string
+          enum: [not_started, queued, running, succeeded, failed, cancelled, stale]
+        staleState:
+          $ref: "#/components/schemas/StaleState"
+        imageArtifactId:
+          type: string
+          format: uuid
+        imageMediaFileId:
+          type: string
+          format: uuid
+        imageStorageKey:
+          type: string
+        imagePreviewUrl:
+          type: string
+          format: uri
+        videoArtifactId:
+          type: string
+          format: uuid
+        videoMediaFileId:
+          type: string
+          format: uuid
+        videoStorageKey:
+          type: string
+        videoPreviewUrl:
+          type: string
+          format: uri
+        imageErrorCode:
+          type: string
+        imageErrorMessage:
+          type: string
+        videoErrorCode:
+          type: string
+        videoErrorMessage:
+          type: string
+        imageWorkflowRunId:
+          type: string
+          format: uuid
+        videoWorkflowRunId:
+          type: string
+          format: uuid
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        canGenerateImage:
+          type: boolean
+        canGenerateVideo:
+          type: boolean
+        canRetryImage:
+          type: boolean
+        canRetryVideo:
+          type: boolean
+    ShotProductionActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum:
+            - generate_missing_images
+            - regenerate_stale_images
+            - regenerate_failed_images
+            - generate_selected_images
+            - generate_missing_videos
+            - regenerate_stale_videos
+            - regenerate_failed_videos
+            - generate_selected_videos
+            - cancel_running_videos
+        scriptSceneId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        shotIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        options:
+          type: object
+          additionalProperties: true
+    ShotProductionActionResponse:
+      type: object
+      required: [action, workflowRunId, status, workflowType, targetShotIds]
+      properties:
+        action:
+          type: string
+        workflowRunId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        workflowType:
+          type: string
+          enum: [batch_generate_shot_images, batch_generate_shot_videos, batch_cancel_shot_videos]
+        targetShotIds:
+          type: array
+          items:
+            type: string
+            format: uuid
     ShotSourceScene:
       type: object
       required: [id, sceneNo, title, characters]
@@ -5720,6 +5974,20 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ProductionActionResponse"
+    ShotProductionStatusEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ShotProductionStatus"
+    ShotProductionActionResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ShotProductionActionResponse"
     RegenerateResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

@@ -294,7 +294,7 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 	if err := a.recordShotEvent(ctx, input.OrganizationID, input.ProjectID, "storyboard.shot.image.started", shot, "image_running"); err != nil {
 		return GenerateShotImageOutput{}, err
 	}
-	if err := a.updateStoryboardShotStatus(ctx, shot.ID, "image_running"); err != nil {
+	if err := a.updateShotProductionStatus(ctx, shot.ID, input.WorkflowRunID, "image_running", "", ""); err != nil {
 		return GenerateShotImageOutput{}, err
 	}
 	if err := a.ensureModelProfileConfigured(ctx, input.OrganizationID, modelProfileKey, []string{"image", "multimodal"}); err != nil {
@@ -917,7 +917,10 @@ func (a Activities) CancelVideoProductionWorkflow(ctx context.Context, input Tex
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
-		SET status = 'cancelled', updated_at = now()
+		SET status = 'cancelled',
+		    video_status = 'cancelled',
+		    video_completed_at = now(),
+		    updated_at = now()
 		WHERE workflow_run_id = $1
 		  AND status NOT IN ('video_succeeded', 'video_failed', 'cancelled')
 	`, input.WorkflowRunID); err != nil {
@@ -1168,6 +1171,77 @@ func (a Activities) updateStoryboardShotStatus(ctx context.Context, shotID, stat
 	return err
 }
 
+func (a Activities) updateShotProductionStatus(ctx context.Context, shotID, workflowRunID, status, code, message string) error {
+	switch status {
+	case "image_running":
+		_, err := a.db.Exec(ctx, `
+			UPDATE storyboard_shots
+			SET status = $2,
+			    image_status = 'running',
+			    image_error_code = NULL,
+			    image_error_message = NULL,
+			    image_started_at = COALESCE(image_started_at, now()),
+			    image_completed_at = NULL,
+			    image_workflow_run_id = NULLIF($3, '')::uuid,
+			    updated_at = now()
+			WHERE id = $1
+		`, shotID, status, workflowRunID)
+		return err
+	case "image_failed":
+		_, err := a.db.Exec(ctx, `
+			UPDATE storyboard_shots
+			SET status = $2,
+			    image_status = 'failed',
+			    image_error_code = NULLIF($3, ''),
+			    image_error_message = NULLIF($4, ''),
+			    image_completed_at = now(),
+			    updated_at = now()
+			WHERE id = $1
+		`, shotID, status, code, message)
+		return err
+	case "video_running":
+		_, err := a.db.Exec(ctx, `
+			UPDATE storyboard_shots
+			SET status = $2,
+			    video_status = 'running',
+			    video_error_code = NULL,
+			    video_error_message = NULL,
+			    video_started_at = COALESCE(video_started_at, now()),
+			    video_completed_at = NULL,
+			    video_workflow_run_id = NULLIF($3, '')::uuid,
+			    updated_at = now()
+			WHERE id = $1
+		`, shotID, status, workflowRunID)
+		return err
+	case "video_failed":
+		_, err := a.db.Exec(ctx, `
+			UPDATE storyboard_shots
+			SET status = $2,
+			    video_status = 'failed',
+			    video_error_code = NULLIF($3, ''),
+			    video_error_message = NULLIF($4, ''),
+			    video_completed_at = now(),
+			    updated_at = now()
+			WHERE id = $1
+		`, shotID, status, code, message)
+		return err
+	case "cancelled":
+		_, err := a.db.Exec(ctx, `
+			UPDATE storyboard_shots
+			SET status = $2,
+			    video_status = 'cancelled',
+			    video_error_code = NULLIF($3, ''),
+			    video_error_message = NULLIF($4, ''),
+			    video_completed_at = now(),
+			    updated_at = now()
+			WHERE id = $1
+		`, shotID, status, code, message)
+		return err
+	default:
+		return a.updateStoryboardShotStatus(ctx, shotID, status)
+	}
+}
+
 func (a Activities) recordShotEvent(ctx context.Context, organizationID, projectID, eventType string, shot StoryboardShotRecord, status string) error {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
@@ -1183,13 +1257,15 @@ func (a Activities) recordShotEvent(ctx context.Context, organizationID, project
 func (a Activities) failShotActivity(ctx context.Context, input TextToStoryboardInput, shot StoryboardShotRecord, nodeRunID, status, eventType string, cause error) error {
 	code, message := workflowErrorFields(cause, codeActivityFailed)
 	if strings.TrimSpace(shot.ID) != "" {
-		_ = a.updateStoryboardShotStatus(ctx, shot.ID, status)
+		_ = a.updateShotProductionStatus(ctx, shot.ID, input.WorkflowRunID, status, code, message)
 		_ = a.recordShotEvent(ctx, input.OrganizationID, input.ProjectID, eventType, shot, status)
 	}
 	if strings.TrimSpace(nodeRunID) != "" {
 		_ = FailNodeRun(ctx, a.db, nodeRunID, code, message)
 	}
-	_ = a.markWorkflowFailed(ctx, input, code, message)
+	if !strings.HasPrefix(input.Prompt, "batch_") {
+		_ = a.markWorkflowFailed(ctx, input, code, message)
+	}
 	return temporal.NewApplicationError(message, code)
 }
 
@@ -1206,10 +1282,16 @@ func (a Activities) completeShotImage(ctx context.Context, input GenerateShotIma
 		    image_media_file_id = $3,
 		    image_storage_key = NULLIF($4, ''),
 		    status = 'image_succeeded',
+		    image_status = 'succeeded',
+		    image_error_code = NULL,
+		    image_error_message = NULL,
+		    image_started_at = COALESCE(image_started_at, now()),
+		    image_completed_at = now(),
+		    image_workflow_run_id = NULLIF($5, '')::uuid,
 		    stale_state = 'fresh',
 		    updated_at = now()
 		WHERE id = $1
-	`, shot.ID, nullIfEmpty(output.ImageArtifactID), nullIfEmpty(output.ImageMediaFileID), output.ImageStorageKey); err != nil {
+	`, shot.ID, nullIfEmpty(output.ImageArtifactID), nullIfEmpty(output.ImageMediaFileID), output.ImageStorageKey, input.WorkflowRunID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -1263,9 +1345,15 @@ func (a Activities) markShotVideoCreated(ctx context.Context, input CreateShotVi
 		SET video_provider_async_task_id = $2,
 		    video_external_task_id = NULLIF($3, ''),
 		    status = 'video_running',
+		    video_status = 'running',
+		    video_error_code = NULL,
+		    video_error_message = NULL,
+		    video_started_at = COALESCE(video_started_at, now()),
+		    video_completed_at = NULL,
+		    video_workflow_run_id = NULLIF($4, '')::uuid,
 		    updated_at = now()
 		WHERE id = $1
-	`, shot.ID, nullIfEmpty(output.ProviderAsyncTaskID), output.ExternalTaskID); err != nil {
+	`, shot.ID, nullIfEmpty(output.ProviderAsyncTaskID), output.ExternalTaskID, input.WorkflowRunID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -1295,7 +1383,10 @@ func (a Activities) markShotVideoPolled(ctx context.Context, input PollShotVideo
 	outputJSON := mustJSON(output)
 	if _, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
-		SET status = 'video_running', updated_at = now()
+		SET status = 'video_running',
+		    video_status = 'running',
+		    video_started_at = COALESCE(video_started_at, now()),
+		    updated_at = now()
 		WHERE id = $1
 	`, shot.ID); err != nil {
 		return err
@@ -1335,10 +1426,16 @@ func (a Activities) completeShotVideo(ctx context.Context, input PollShotVideoTa
 		    video_provider_async_task_id = $5,
 		    video_external_task_id = NULLIF($6, ''),
 		    status = 'video_succeeded',
+		    video_status = 'succeeded',
+		    video_error_code = NULL,
+		    video_error_message = NULL,
+		    video_started_at = COALESCE(video_started_at, now()),
+		    video_completed_at = now(),
+		    video_workflow_run_id = NULLIF($7, '')::uuid,
 		    stale_state = 'fresh',
 		    updated_at = now()
 		WHERE id = $1
-	`, shot.ID, nullIfEmpty(output.ArtifactID), nullIfEmpty(output.MediaFileID), output.StorageKey, nullIfEmpty(output.ProviderAsyncTaskID), output.ExternalTaskID); err != nil {
+	`, shot.ID, nullIfEmpty(output.ArtifactID), nullIfEmpty(output.MediaFileID), output.StorageKey, nullIfEmpty(output.ProviderAsyncTaskID), output.ExternalTaskID, input.WorkflowRunID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -1389,11 +1486,15 @@ func (a Activities) cancelStoryboardShot(ctx context.Context, input CancelShotVi
 	if _, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
 		SET status = 'cancelled',
+		    video_status = 'cancelled',
 		    video_provider_async_task_id = COALESCE($2, video_provider_async_task_id),
 		    video_external_task_id = COALESCE(NULLIF($3, ''), video_external_task_id),
+		    video_error_code = CASE WHEN $4 = 'cancel_failed' THEN 'CANCEL_FAILED' ELSE NULL END,
+		    video_error_message = NULLIF($5, ''),
+		    video_completed_at = now(),
 		    updated_at = now()
 		WHERE id = $1
-	`, input.ShotID, nullIfEmpty(output.ProviderAsyncTaskID), output.ExternalTaskID); err != nil {
+	`, input.ShotID, nullIfEmpty(output.ProviderAsyncTaskID), output.ExternalTaskID, output.Status, output.ErrorMessage); err != nil {
 		return err
 	}
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "storyboard.shot.cancelled", "storyboard_shot", input.ShotID, mustJSON(map[string]any{

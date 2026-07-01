@@ -29,6 +29,8 @@ import type {
   Script,
   ScriptScene,
   ScriptVersion,
+  ShotProductionActionResponse,
+  ShotProductionStatus,
   SetupState,
   ShotAssetRequirement,
   StoryboardShot,
@@ -125,6 +127,10 @@ export const studioApi = {
     apiRequest<ProductionStatus>(`/api/projects/${projectId}/production/status`, { session }),
   runProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<ProductionActionResponse>(`/api/projects/${projectId}/production/actions`, { method: "POST", session, body }),
+  getShotProductionStatus: (session: StudioSession, projectId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
+    apiRequest<ShotProductionStatus>(`/api/projects/${projectId}/shot-production/status`, { session, query }),
+  runShotProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<ShotProductionActionResponse>(`/api/projects/${projectId}/shot-production/actions`, { method: "POST", session, body }),
   regenerate: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<RegenerateResponse>(`/api/projects/${projectId}/regenerate`, { method: "POST", session, body }),
 

@@ -692,7 +692,16 @@ func markScriptSceneDownstreamStale(ctx context.Context, tx pgx.Tx, projectID, s
 	}
 	_, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
-		SET stale_state = 'needs_regeneration', updated_at = now()
+		SET stale_state = 'needs_regeneration',
+		    image_status = CASE
+		      WHEN image_artifact_id IS NOT NULL OR image_media_file_id IS NOT NULL OR COALESCE(image_storage_key, '') <> '' THEN 'stale'
+		      ELSE image_status
+		    END,
+		    video_status = CASE
+		      WHEN video_artifact_id IS NOT NULL OR video_media_file_id IS NOT NULL OR COALESCE(video_storage_key, '') <> '' THEN 'stale'
+		      ELSE video_status
+		    END,
+		    updated_at = now()
 		WHERE project_id = $1 AND script_scene_id = $2 AND deleted_at IS NULL
 	`, projectID, sceneID)
 	return err

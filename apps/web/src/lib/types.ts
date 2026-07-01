@@ -447,6 +447,18 @@ export type StoryboardShot = {
   videoPreviewUrl?: string;
   providerAsyncTaskId?: string;
   externalTaskId?: string;
+  imageStatus?: string;
+  videoStatus?: string;
+  imageErrorCode?: string;
+  imageErrorMessage?: string;
+  videoErrorCode?: string;
+  videoErrorMessage?: string;
+  imageStartedAt?: string;
+  imageCompletedAt?: string;
+  videoStartedAt?: string;
+  videoCompletedAt?: string;
+  imageWorkflowRunId?: string;
+  videoWorkflowRunId?: string;
   status: string;
   reviewStatus?: string;
   manualOverride?: boolean;
@@ -463,6 +475,65 @@ export type StoryboardShotDetail = {
   imagePreviewUrl?: string;
   videoArtifact?: Artifact;
   videoPreviewUrl?: string;
+};
+
+export type ShotProductionSummary = {
+  total: number;
+  imageSucceeded: number;
+  imageMissing: number;
+  imageFailed: number;
+  imageStale: number;
+  videoSucceeded: number;
+  videoMissing: number;
+  videoFailed: number;
+  videoStale: number;
+  running: number;
+};
+
+export type ShotProductionShot = {
+  id: string;
+  workflowRunId: string;
+  scriptSceneId?: string;
+  shotIndex: number;
+  shotNo: number;
+  visual?: string;
+  imageStatus: string;
+  videoStatus: string;
+  staleState: string;
+  imageArtifactId?: string;
+  imageMediaFileId?: string;
+  imageStorageKey?: string;
+  imagePreviewUrl?: string;
+  videoArtifactId?: string;
+  videoMediaFileId?: string;
+  videoStorageKey?: string;
+  videoPreviewUrl?: string;
+  imageErrorCode?: string;
+  imageErrorMessage?: string;
+  videoErrorCode?: string;
+  videoErrorMessage?: string;
+  imageWorkflowRunId?: string;
+  videoWorkflowRunId?: string;
+  providerAsyncTaskId?: string;
+  externalTaskId?: string;
+  canGenerateImage: boolean;
+  canGenerateVideo: boolean;
+  canRetryImage: boolean;
+  canRetryVideo: boolean;
+};
+
+export type ShotProductionStatus = {
+  projectId: string;
+  summary: ShotProductionSummary;
+  shots: ShotProductionShot[];
+};
+
+export type ShotProductionActionResponse = {
+  action: string;
+  workflowRunId: string;
+  status: string;
+  workflowType: string;
+  targetShotIds: string[];
 };
 
 export type ProductionStatus = {

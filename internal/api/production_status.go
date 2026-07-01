@@ -611,37 +611,33 @@ func (s *Server) productionShotAssetsStage(r *http.Request, projectID string) (P
 }
 
 func (s *Server) productionShotMediaStage(r *http.Request, projectID, mediaKind string) (ProductionShotMediaStage, error) {
-	var total, succeeded, failed, running, stale int
-	var err error
-	if mediaKind == "image" {
-		err = s.db.QueryRow(r.Context(), `
-			SELECT
-				COUNT(*),
-				COUNT(*) FILTER (WHERE image_artifact_id IS NOT NULL OR image_media_file_id IS NOT NULL OR COALESCE(image_storage_key, '') <> '' OR status IN ('image_succeeded', 'video_running', 'video_succeeded')),
-				COUNT(*) FILTER (WHERE status = 'image_failed'),
-				COUNT(*) FILTER (WHERE status = 'image_running'),
-				COUNT(*) FILTER (WHERE stale_state = 'needs_regeneration')
-			FROM storyboard_shots
-			WHERE project_id = $1
-			  AND deleted_at IS NULL
-		`, projectID).Scan(&total, &succeeded, &failed, &running, &stale)
-	} else {
-		err = s.db.QueryRow(r.Context(), `
-			SELECT
-				COUNT(*),
-				COUNT(*) FILTER (WHERE video_artifact_id IS NOT NULL OR video_media_file_id IS NOT NULL OR COALESCE(video_storage_key, '') <> '' OR status = 'video_succeeded'),
-				COUNT(*) FILTER (WHERE status = 'video_failed'),
-				COUNT(*) FILTER (WHERE status = 'video_running'),
-				COUNT(*) FILTER (WHERE stale_state = 'needs_regeneration')
-			FROM storyboard_shots
-			WHERE project_id = $1
-			  AND deleted_at IS NULL
-		`, projectID).Scan(&total, &succeeded, &failed, &running, &stale)
-	}
+	production, err := s.loadShotProductionStatus(r, projectID, "", "", false)
 	if err != nil {
 		return ProductionShotMediaStage{}, err
 	}
-	pending := maxInt(total-succeeded-failed-running, 0)
+	total := production.Summary.Total
+	succeeded := production.Summary.ImageSucceeded
+	failed := production.Summary.ImageFailed
+	stale := production.Summary.ImageStale
+	pending := production.Summary.ImageMissing
+	running := 0
+	for _, shot := range production.Shots {
+		if shot.ImageStatus == "queued" || shot.ImageStatus == "running" {
+			running++
+		}
+	}
+	if mediaKind != "image" {
+		succeeded = production.Summary.VideoSucceeded
+		failed = production.Summary.VideoFailed
+		stale = production.Summary.VideoStale
+		pending = production.Summary.VideoMissing
+		running = 0
+		for _, shot := range production.Shots {
+			if shot.VideoStatus == "queued" || shot.VideoStatus == "running" {
+				running++
+			}
+		}
+	}
 	status := productionMediaStatus(total, succeeded, failed, running)
 	if stale > 0 && status != "running" && status != "failed" {
 		status = "needs_regeneration"

@@ -54,6 +54,14 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		    review_status = 'pending',
 		    manual_override = true,
 		    stale_state = 'needs_regeneration',
+		    image_status = CASE
+		      WHEN image_artifact_id IS NOT NULL OR image_media_file_id IS NOT NULL OR COALESCE(image_storage_key, '') <> '' THEN 'stale'
+		      ELSE image_status
+		    END,
+		    video_status = CASE
+		      WHEN video_artifact_id IS NOT NULL OR video_media_file_id IS NOT NULL OR COALESCE(video_storage_key, '') <> '' THEN 'stale'
+		      ELSE video_status
+		    END,
 		    edited_by = $17,
 		    edited_at = now(),
 		    updated_at = now()
@@ -82,6 +90,18 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 			NULL,
 			video_provider_async_task_id,
 			video_external_task_id,
+			COALESCE(image_status, 'not_started'),
+			COALESCE(video_status, 'not_started'),
+			image_error_code,
+			image_error_message,
+			video_error_code,
+			video_error_message,
+			image_started_at,
+			image_completed_at,
+			video_started_at,
+			video_completed_at,
+			image_workflow_run_id::text,
+			video_workflow_run_id::text,
 			COALESCE(status, 'pending'),
 			COALESCE(review_status, 'pending'),
 			COALESCE(manual_override, false),

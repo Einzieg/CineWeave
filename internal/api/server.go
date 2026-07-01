@@ -185,6 +185,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/projects/{projectId}/assets/{assetId}", s.withAuth(s.updateAsset))
 	mux.HandleFunc("DELETE /api/projects/{projectId}/assets/{assetId}", s.withAuth(s.deleteAsset))
 	mux.HandleFunc("POST /api/projects/{projectId}/assets/{assetId}/variants", s.withAuth(s.createAssetVariant))
+	mux.HandleFunc("GET /api/projects/{projectId}/shot-production/status", s.withAuth(s.getShotProductionStatus))
+	mux.HandleFunc("POST /api/projects/{projectId}/shot-production/actions", s.withAuth(s.runShotProductionAction))
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots", s.withAuth(s.createStoryboardShot))
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/reorder", s.withAuth(s.reorderStoryboardShots))
 	mux.HandleFunc("GET /api/projects/{projectId}/storyboard-shots/{shotId}/detail", s.withAuth(s.getStoryboardShotDetail))

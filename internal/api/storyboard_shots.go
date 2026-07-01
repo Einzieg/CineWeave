@@ -38,6 +38,18 @@ type StoryboardShot struct {
 	VideoPreviewURL          *string          `json:"videoPreviewUrl,omitempty"`
 	VideoProviderAsyncTaskID *string          `json:"providerAsyncTaskId,omitempty"`
 	VideoExternalTaskID      *string          `json:"externalTaskId,omitempty"`
+	ImageStatus              string           `json:"imageStatus"`
+	VideoStatus              string           `json:"videoStatus"`
+	ImageErrorCode           *string          `json:"imageErrorCode,omitempty"`
+	ImageErrorMessage        *string          `json:"imageErrorMessage,omitempty"`
+	VideoErrorCode           *string          `json:"videoErrorCode,omitempty"`
+	VideoErrorMessage        *string          `json:"videoErrorMessage,omitempty"`
+	ImageStartedAt           *time.Time       `json:"imageStartedAt,omitempty"`
+	ImageCompletedAt         *time.Time       `json:"imageCompletedAt,omitempty"`
+	VideoStartedAt           *time.Time       `json:"videoStartedAt,omitempty"`
+	VideoCompletedAt         *time.Time       `json:"videoCompletedAt,omitempty"`
+	ImageWorkflowRunID       *string          `json:"imageWorkflowRunId,omitempty"`
+	VideoWorkflowRunID       *string          `json:"videoWorkflowRunId,omitempty"`
 	Status                   string           `json:"status"`
 	ReviewStatus             string           `json:"reviewStatus"`
 	ManualOverride           bool             `json:"manualOverride"`
@@ -412,6 +424,18 @@ func storyboardShotSelectSQL(where string) string {
 			va.mime_type,
 			s.video_provider_async_task_id,
 			s.video_external_task_id,
+			COALESCE(s.image_status, 'not_started'),
+			COALESCE(s.video_status, 'not_started'),
+			s.image_error_code,
+			s.image_error_message,
+			s.video_error_code,
+			s.video_error_message,
+			s.image_started_at,
+			s.image_completed_at,
+			s.video_started_at,
+			s.video_completed_at,
+			s.image_workflow_run_id::text,
+			s.video_workflow_run_id::text,
 			COALESCE(s.status, 'pending'),
 			COALESCE(s.review_status, 'pending'),
 			COALESCE(s.manual_override, false),
@@ -436,11 +460,11 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	var duration sql.NullFloat64
 	var imageArtifactID, imageMediaFileID, imageStorageKey, imageArtifactStorageKey, imageArtifactMimeType sql.NullString
 	var videoArtifactID, videoMediaFileID, videoStorageKey, videoArtifactStorageKey, videoArtifactMimeType sql.NullString
-	var providerAsyncTaskID, externalTaskID, editedBy sql.NullString
+	var providerAsyncTaskID, externalTaskID, imageErrorCode, imageErrorMessage, videoErrorCode, videoErrorMessage, imageWorkflowRunID, videoWorkflowRunID, editedBy sql.NullString
 	var scriptSceneID, sourceSceneID, sourceSceneTitle, sourceSceneLocation sql.NullString
 	var sourceSceneNo sql.NullInt64
 	var sourceSceneCharacters []byte
-	var editedAt sql.NullTime
+	var imageStartedAt, imageCompletedAt, videoStartedAt, videoCompletedAt, editedAt sql.NullTime
 	err := row.Scan(
 		&item.ID,
 		&item.WorkflowRunID,
@@ -465,6 +489,18 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 		&videoArtifactMimeType,
 		&providerAsyncTaskID,
 		&externalTaskID,
+		&item.ImageStatus,
+		&item.VideoStatus,
+		&imageErrorCode,
+		&imageErrorMessage,
+		&videoErrorCode,
+		&videoErrorMessage,
+		&imageStartedAt,
+		&imageCompletedAt,
+		&videoStartedAt,
+		&videoCompletedAt,
+		&imageWorkflowRunID,
+		&videoWorkflowRunID,
 		&item.Status,
 		&item.ReviewStatus,
 		&item.ManualOverride,
@@ -493,6 +529,24 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	item.videoArtifactMimeType = stringPtrFromNull(videoArtifactMimeType)
 	item.VideoProviderAsyncTaskID = stringPtrFromNull(providerAsyncTaskID)
 	item.VideoExternalTaskID = stringPtrFromNull(externalTaskID)
+	item.ImageErrorCode = stringPtrFromNull(imageErrorCode)
+	item.ImageErrorMessage = stringPtrFromNull(imageErrorMessage)
+	item.VideoErrorCode = stringPtrFromNull(videoErrorCode)
+	item.VideoErrorMessage = stringPtrFromNull(videoErrorMessage)
+	item.ImageWorkflowRunID = stringPtrFromNull(imageWorkflowRunID)
+	item.VideoWorkflowRunID = stringPtrFromNull(videoWorkflowRunID)
+	if imageStartedAt.Valid {
+		item.ImageStartedAt = &imageStartedAt.Time
+	}
+	if imageCompletedAt.Valid {
+		item.ImageCompletedAt = &imageCompletedAt.Time
+	}
+	if videoStartedAt.Valid {
+		item.VideoStartedAt = &videoStartedAt.Time
+	}
+	if videoCompletedAt.Valid {
+		item.VideoCompletedAt = &videoCompletedAt.Time
+	}
 	item.EditedBy = stringPtrFromNull(editedBy)
 	item.ScriptSceneID = stringPtrFromNull(scriptSceneID)
 	if sourceSceneID.Valid && strings.TrimSpace(sourceSceneID.String) != "" {
@@ -507,7 +561,69 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	if editedAt.Valid {
 		item.EditedAt = &editedAt.Time
 	}
+	normalizeStoryboardShotProductionStatus(&item)
 	return item, err
+}
+
+func normalizeStoryboardShotProductionStatus(item *StoryboardShot) {
+	hasImage := item.ImageArtifactID != nil || item.ImageMediaFileID != nil || stringValue(item.ImageStorageKey) != ""
+	hasVideo := item.VideoArtifactID != nil || item.VideoMediaFileID != nil || stringValue(item.VideoStorageKey) != ""
+	item.ImageStatus = normalizeShotProductionStatus(item.ImageStatus, item.Status, item.StaleState, hasImage, "image")
+	item.VideoStatus = normalizeShotProductionStatus(item.VideoStatus, item.Status, item.StaleState, hasVideo, "video")
+}
+
+func normalizeShotProductionStatus(current, legacyStatus, staleState string, hasArtifact bool, mediaKind string) string {
+	current = strings.TrimSpace(current)
+	legacyStatus = strings.TrimSpace(legacyStatus)
+	stale := strings.TrimSpace(staleState) != "" && staleState != "fresh"
+	if mediaKind == "image" {
+		if legacyStatus == "image_running" {
+			return "running"
+		}
+		if legacyStatus == "image_failed" {
+			return "failed"
+		}
+		if legacyStatus == "image_succeeded" || legacyStatus == "video_running" || legacyStatus == "video_succeeded" {
+			if stale && hasArtifact {
+				return "stale"
+			}
+			return "succeeded"
+		}
+	} else {
+		if legacyStatus == "video_running" {
+			return "running"
+		}
+		if legacyStatus == "video_failed" {
+			return "failed"
+		}
+		if legacyStatus == "cancelled" {
+			return "cancelled"
+		}
+		if legacyStatus == "video_succeeded" {
+			if stale && hasArtifact {
+				return "stale"
+			}
+			return "succeeded"
+		}
+	}
+	switch current {
+	case "queued", "running", "succeeded", "failed", "cancelled":
+		if stale && hasArtifact && current == "succeeded" {
+			return "stale"
+		}
+		return current
+	case "stale":
+		if hasArtifact {
+			return "stale"
+		}
+	}
+	if stale && hasArtifact {
+		return "stale"
+	}
+	if hasArtifact {
+		return "succeeded"
+	}
+	return "not_started"
 }
 
 func (s *Server) attachShotPreviewURLs(r *http.Request, item *StoryboardShot, expires time.Duration) error {
