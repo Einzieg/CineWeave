@@ -40,6 +40,12 @@ export function projectHref(projectId: string, segment = "") {
 
 export function workflowLabel(value: string) {
   switch (value) {
+    case "extract_novel_events":
+      return "提取小说事件";
+    case "generate_adaptation_plan":
+      return "生成改编计划";
+    case "adaptation_plan_to_script":
+      return "改编计划生成剧本";
     case "source_to_script":
       return "从原文生成剧本";
     case "script_to_assets":

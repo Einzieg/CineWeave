@@ -1,6 +1,7 @@
 import type {
   AgentMessage,
   AgentSession,
+  AdaptationPlan,
   ApiEnvelope,
   Artifact,
   AuthResponse,
@@ -9,6 +10,8 @@ import type {
   ImportProjectSourceResponse,
   ListEnvelope,
   ModelProfile,
+  NovelEvent,
+  NovelEventLink,
   Organization,
   Permission,
   Project,
@@ -131,6 +134,29 @@ export const studioApi = {
     apiRequest<ProjectSource>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "PATCH", session, body }),
   deleteSource: (session: StudioSession, projectId: string, sourceId: string) =>
     apiRequest<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE", session }),
+  extractNovelEvents: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
+    apiRequest<WorkflowRun>(`/api/projects/${projectId}/sources/${sourceId}/extract-events`, { method: "POST", session, body }),
+  listSourceNovelEvents: (session: StudioSession, projectId: string, sourceId: string) =>
+    apiRequest<{ items: NovelEvent[]; links: NovelEventLink[] }>(`/api/projects/${projectId}/sources/${sourceId}/events`, { session }),
+  updateNovelEvent: (session: StudioSession, projectId: string, eventId: string, body: JsonRecord) =>
+    apiRequest<NovelEvent>(`/api/projects/${projectId}/novel-events/${eventId}`, { method: "PATCH", session, body }),
+  reviewNovelEvent: (session: StudioSession, projectId: string, eventId: string, body: JsonRecord) =>
+    apiRequest<ReviewResponse>(`/api/projects/${projectId}/novel-events/${eventId}/review`, { method: "POST", session, body }),
+  listAdaptationPlans: (session: StudioSession, projectId: string, sourceId?: string) =>
+    apiRequest<ListEnvelope<AdaptationPlan>>(`/api/projects/${projectId}/adaptation-plans`, { session, query: sourceId ? { sourceId } : undefined }),
+  generateAdaptationPlan: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
+    apiRequest<AdaptationPlan>(`/api/projects/${projectId}/sources/${sourceId}/generate-adaptation-plan`, { method: "POST", session, body }),
+  updateAdaptationPlan: (session: StudioSession, projectId: string, planId: string, body: JsonRecord) =>
+    apiRequest<AdaptationPlan>(`/api/projects/${projectId}/adaptation-plans/${planId}`, { method: "PATCH", session, body }),
+  reviewAdaptationPlan: (session: StudioSession, projectId: string, planId: string, body: JsonRecord) =>
+    apiRequest<ReviewResponse>(`/api/projects/${projectId}/adaptation-plans/${planId}/review`, { method: "POST", session, body }),
+  activateAdaptationPlan: (session: StudioSession, projectId: string, planId: string) =>
+    apiRequest<AdaptationPlan>(`/api/projects/${projectId}/adaptation-plans/${planId}/activate`, { method: "POST", session, body: {} }),
+  generateScriptFromAdaptationPlan: (session: StudioSession, projectId: string, planId: string, body: JsonRecord) =>
+    apiRequest<{ scriptId: string; versionId: string; adaptationPlanId: string; content: string; providerCallId?: string; modelId?: string }>(
+      `/api/projects/${projectId}/adaptation-plans/${planId}/generate-script`,
+      { method: "POST", session, body },
+    ),
 
   listScripts: (session: StudioSession, projectId: string) => apiRequest<ListEnvelope<Script>>(`/api/projects/${projectId}/scripts`, { session }),
   getScript: (session: StudioSession, projectId: string, scriptId: string) => apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}`, { session }),

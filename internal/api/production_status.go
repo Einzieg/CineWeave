@@ -47,13 +47,20 @@ type ProductionStages struct {
 }
 
 type ProductionSourceStage struct {
-	Status            string   `json:"status"`
-	NovelSourceCount  int      `json:"novelSourceCount"`
-	ScriptSourceCount int      `json:"scriptSourceCount"`
-	ChapterCount      int      `json:"chapterCount"`
-	ActiveScriptID    *string  `json:"activeScriptId"`
-	ActiveScriptTitle *string  `json:"activeScriptTitle"`
-	Summary           []string `json:"summary"`
+	Status                  string   `json:"status"`
+	NovelSourceCount        int      `json:"novelSourceCount"`
+	ScriptSourceCount       int      `json:"scriptSourceCount"`
+	ChapterCount            int      `json:"chapterCount"`
+	EventCount              int      `json:"eventCount"`
+	ApprovedEventCount      int      `json:"approvedEventCount"`
+	PendingEventReviewCount int      `json:"pendingEventReviewCount"`
+	AdaptationPlanCount     int      `json:"adaptationPlanCount"`
+	ActiveAdaptationPlanID  *string  `json:"activeAdaptationPlanId"`
+	ActiveAdaptationTitle   *string  `json:"activeAdaptationTitle"`
+	ActiveAdaptationStatus  *string  `json:"activeAdaptationStatus"`
+	ActiveScriptID          *string  `json:"activeScriptId"`
+	ActiveScriptTitle       *string  `json:"activeScriptTitle"`
+	Summary                 []string `json:"summary"`
 }
 
 type ProductionAssetsStage struct {
@@ -292,7 +299,7 @@ func (s *Server) productionStatus(r *http.Request, project Project) (ProductionS
 }
 
 func (s *Server) productionSourceStage(r *http.Request, projectID string) (ProductionSourceStage, error) {
-	var novelCount, scriptSourceCount, chapterCount int
+	var novelCount, scriptSourceCount, chapterCount, eventCount, approvedEventCount, adaptationPlanCount int
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT
 			COUNT(*) FILTER (WHERE source_type = 'novel'),
@@ -301,43 +308,85 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 				SELECT COUNT(*)
 				FROM novel_chapters nc
 				WHERE nc.project_id = $1 AND nc.source_id IS NOT NULL
+			),
+			(
+				SELECT COUNT(*)
+				FROM novel_events ne
+				WHERE ne.project_id = $1
+			),
+			(
+				SELECT COUNT(*)
+				FROM novel_events ne
+				WHERE ne.project_id = $1 AND ne.review_status = 'approved'
+			),
+			(
+				SELECT COUNT(*)
+				FROM adaptation_plans ap
+				WHERE ap.project_id = $1
 			)
 		FROM project_sources
 		WHERE project_id = $1
-	`, projectID).Scan(&novelCount, &scriptSourceCount, &chapterCount); err != nil {
+	`, projectID).Scan(&novelCount, &scriptSourceCount, &chapterCount, &eventCount, &approvedEventCount, &adaptationPlanCount); err != nil {
 		return ProductionSourceStage{}, err
 	}
 	activeScriptID, activeScriptTitle, err := s.activeProductionScript(r, projectID, "")
 	if err != nil {
 		return ProductionSourceStage{}, err
 	}
+	activePlanID, activePlanTitle, activePlanStatus, err := s.activeProductionAdaptationPlan(r, projectID, "")
+	if err != nil {
+		return ProductionSourceStage{}, err
+	}
+	pendingEventReviewCount := maxInt(eventCount-approvedEventCount, 0)
 	status := "not_started"
-	if activeScriptID != "" {
+	switch {
+	case activeScriptID != "":
 		status = "ready"
-	} else if novelCount+scriptSourceCount > 0 {
+	case novelCount+scriptSourceCount == 0:
+		status = "not_started"
+	case novelCount > 0 && chapterCount > 0 && eventCount == 0:
+		status = "events_pending_extraction"
+	case novelCount > 0 && eventCount > 0 && pendingEventReviewCount > 0:
+		status = "events_pending_review"
+	case novelCount > 0 && adaptationPlanCount == 0:
+		status = "adaptation_plan_pending"
+	default:
 		status = "imported"
 	}
 	summary := make([]string, 0, 2)
 	if novelCount > 0 {
-		summary = append(summary, "小说原文已导入")
+		summary = append(summary, "Novel source imported")
 	}
 	if scriptSourceCount > 0 {
-		summary = append(summary, "剧本原文已导入")
+		summary = append(summary, "Script source imported")
 	}
 	if chapterCount > 0 {
-		summary = append(summary, fmt.Sprintf("已切分章节：%d", chapterCount))
+		summary = append(summary, fmt.Sprintf("Chapters: %d", chapterCount))
+	}
+	if eventCount > 0 {
+		summary = append(summary, fmt.Sprintf("Events: %d, approved: %d", eventCount, approvedEventCount))
+	}
+	if activePlanTitle != "" {
+		summary = append(summary, "Active adaptation plan: "+activePlanTitle)
 	}
 	if activeScriptTitle != "" {
-		summary = append(summary, "当前激活剧本："+activeScriptTitle)
+		summary = append(summary, "Active script: "+activeScriptTitle)
 	}
 	return ProductionSourceStage{
-		Status:            status,
-		NovelSourceCount:  novelCount,
-		ScriptSourceCount: scriptSourceCount,
-		ChapterCount:      chapterCount,
-		ActiveScriptID:    stringPtrFromValue(activeScriptID),
-		ActiveScriptTitle: stringPtrFromValue(activeScriptTitle),
-		Summary:           summary,
+		Status:                  status,
+		NovelSourceCount:        novelCount,
+		ScriptSourceCount:       scriptSourceCount,
+		ChapterCount:            chapterCount,
+		EventCount:              eventCount,
+		ApprovedEventCount:      approvedEventCount,
+		PendingEventReviewCount: pendingEventReviewCount,
+		AdaptationPlanCount:     adaptationPlanCount,
+		ActiveAdaptationPlanID:  stringPtrFromValue(activePlanID),
+		ActiveAdaptationTitle:   stringPtrFromValue(activePlanTitle),
+		ActiveAdaptationStatus:  stringPtrFromValue(activePlanStatus),
+		ActiveScriptID:          stringPtrFromValue(activeScriptID),
+		ActiveScriptTitle:       stringPtrFromValue(activeScriptTitle),
+		Summary:                 summary,
 	}, nil
 }
 
@@ -728,6 +777,53 @@ func (s *Server) productionActionWorkflow(w http.ResponseWriter, r *http.Request
 		maxShots = 3
 	}
 	switch action {
+	case "extract_events":
+		sourceID, err := s.activeProductionSourceID(r, project.ID, firstNonEmpty(req.SourceID, productionOptionString(options, "sourceId")))
+		if err != nil {
+			s.writeError(w, r, err)
+			return "", nil, nil, "", false
+		}
+		if sourceID == "" {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source", nil, false)
+			return "", nil, nil, "", false
+		}
+		return "extract_novel_events", map[string]any{
+			"sourceId": sourceID,
+			"force":    productionOptionBool(options, "force", false),
+		}, workflows.ExtractNovelEventsWorkflow, "", true
+	case "generate_adaptation_plan":
+		sourceID, err := s.activeProductionSourceID(r, project.ID, firstNonEmpty(req.SourceID, productionOptionString(options, "sourceId")))
+		if err != nil {
+			s.writeError(w, r, err)
+			return "", nil, nil, "", false
+		}
+		if sourceID == "" {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source", nil, false)
+			return "", nil, nil, "", false
+		}
+		return "generate_adaptation_plan", map[string]any{
+			"sourceId":              sourceID,
+			"eventIds":              productionOptionStringSlice(options, "eventIds"),
+			"targetFormat":          firstNonEmpty(productionOptionString(options, "targetFormat"), "short_video"),
+			"targetDurationSeconds": productionOptionInt(options, "targetDurationSeconds", 0),
+			"maxShots":              productionOptionInt(options, "maxShots", 0),
+			"instruction":           productionOptionString(options, "instruction"),
+		}, workflows.GenerateAdaptationPlanWorkflow, "", true
+	case "generate_script_from_plan":
+		planID, _, _, err := s.activeProductionAdaptationPlan(r, project.ID, productionOptionString(options, "planId"))
+		if err != nil {
+			s.writeError(w, r, err)
+			return "", nil, nil, "", false
+		}
+		if planID == "" {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "planId is required when the project has no adaptation plan", nil, false)
+			return "", nil, nil, "", false
+		}
+		return "adaptation_plan_to_script", map[string]any{
+			"planId":      planID,
+			"title":       productionOptionString(options, "title"),
+			"instruction": productionOptionString(options, "instruction"),
+		}, workflows.AdaptationPlanToScriptWorkflow, "", true
 	case "generate_script":
 		sourceID, err := s.activeProductionSourceID(r, project.ID, firstNonEmpty(req.SourceID, productionOptionString(options, "sourceId")))
 		if err != nil {
@@ -872,6 +968,30 @@ func (s *Server) activeProductionSourceID(r *http.Request, projectID, explicitSo
 	return id, err
 }
 
+func (s *Server) activeProductionAdaptationPlan(r *http.Request, projectID, explicitPlanID string) (string, string, string, error) {
+	explicitPlanID = strings.TrimSpace(explicitPlanID)
+	var id, title, status string
+	if explicitPlanID != "" {
+		err := s.db.QueryRow(r.Context(), `
+			SELECT id, title, status
+			FROM adaptation_plans
+			WHERE project_id = $1 AND id = $2
+		`, projectID, explicitPlanID).Scan(&id, &title, &status)
+		return id, title, status, err
+	}
+	err := s.db.QueryRow(r.Context(), `
+		SELECT id, title, status
+		FROM adaptation_plans
+		WHERE project_id = $1
+		ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, updated_at DESC, created_at DESC
+		LIMIT 1
+	`, projectID).Scan(&id, &title, &status)
+	if err == pgx.ErrNoRows {
+		return "", "", "", nil
+	}
+	return id, title, status, err
+}
+
 func (s *Server) updateReviewStatus(w http.ResponseWriter, r *http.Request, tableName, projectID, id, userID string) (ReviewResponse, bool) {
 	var req ReviewRequest
 	if !decode(w, r, &req) {
@@ -906,6 +1026,10 @@ func (s *Server) updateReviewStatus(w http.ResponseWriter, r *http.Request, tabl
 
 func productionActionPermission(action string) (string, bool) {
 	switch action {
+	case "extract_events":
+		return authz.PermissionNovelEventWrite, true
+	case "generate_adaptation_plan", "generate_script_from_plan":
+		return authz.PermissionAdaptationPlanWrite, true
 	case "generate_script":
 		return authz.PermissionScriptWrite, true
 	case "analyze_assets":
@@ -979,6 +1103,10 @@ func productionStageProgress(status string) int {
 	switch status {
 	case "ready", "completed":
 		return 100
+	case "events_pending_review":
+		return 55
+	case "adaptation_plan_pending":
+		return 60
 	case "needs_review":
 		return 70
 	case "partial":
@@ -989,6 +1117,8 @@ func productionStageProgress(status string) int {
 		return 40
 	case "imported":
 		return 35
+	case "events_pending_extraction":
+		return 45
 	default:
 		return 0
 	}
@@ -1071,6 +1201,27 @@ func productionOptionBool(options map[string]any, key string, fallback bool) boo
 		return value
 	}
 	return fallback
+}
+
+func productionOptionStringSlice(options map[string]any, key string) []string {
+	raw, ok := options[key]
+	if !ok {
+		return nil
+	}
+	switch values := raw.(type) {
+	case []string:
+		return values
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, strings.TrimSpace(text))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func validReviewStatus(value string) bool {

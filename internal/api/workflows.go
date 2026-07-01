@@ -98,7 +98,7 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 	if workflowType == "" {
 		workflowType = "video_production"
 	}
-	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "source_to_script" && workflowType != "script_to_assets" && workflowType != "script_to_storyboard" && workflowType != "script_to_video" && workflowType != "full_production" {
+	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "extract_novel_events" && workflowType != "generate_adaptation_plan" && workflowType != "adaptation_plan_to_script" && workflowType != "source_to_script" && workflowType != "script_to_assets" && workflowType != "script_to_storyboard" && workflowType != "script_to_video" && workflowType != "full_production" {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowType is not supported", nil, false)
 		return
 	}
@@ -159,6 +159,12 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 	}
 	var workflowFunc any
 	switch workflowType {
+	case "extract_novel_events":
+		workflowFunc = workflows.ExtractNovelEventsWorkflow
+	case "generate_adaptation_plan":
+		workflowFunc = workflows.GenerateAdaptationPlanWorkflow
+	case "adaptation_plan_to_script":
+		workflowFunc = workflows.AdaptationPlanToScriptWorkflow
 	case "source_to_script":
 		workflowFunc = workflows.SourceToScriptWorkflow
 	case "script_to_assets":
@@ -450,9 +456,14 @@ func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, pro
 			values["skipCompose"] = false
 		}
 	}
-	if workflowType == "source_to_script" {
+	if workflowType == "source_to_script" || workflowType == "extract_novel_events" || workflowType == "generate_adaptation_plan" {
 		if value, ok := values["sourceId"].(string); !ok || strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("input.sourceId is required")
+		}
+	}
+	if workflowType == "adaptation_plan_to_script" {
+		if value, ok := values["planId"].(string); !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("input.planId is required")
 		}
 	}
 	if workflowType == "script_to_assets" || workflowType == "script_to_storyboard" || workflowType == "script_to_video" || workflowType == "full_production" {

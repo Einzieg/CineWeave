@@ -110,6 +110,68 @@ export type NovelChapterSummary = {
   contentLength: number;
 };
 
+export type NovelEvent = {
+  id: string;
+  projectId: string;
+  sourceId: string;
+  chapterId?: string;
+  chapterIndex?: number;
+  eventIndex: number;
+  sequenceNo: number;
+  title: string;
+  summary: string;
+  eventType?: string;
+  importance: number;
+  timelineHint?: string;
+  locationHint?: string;
+  emotionalTone?: string;
+  conflict?: string;
+  outcome?: string;
+  adaptationHint?: string;
+  characters: string[];
+  scenes: string[];
+  props: string[];
+  keywords: string[];
+  rawExcerpt?: string;
+  reviewStatus: string;
+  manualOverride: boolean;
+  staleState: string;
+  metadata?: JsonRecord;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type NovelEventLink = {
+  id: string;
+  projectId: string;
+  sourceEventId: string;
+  targetEventId: string;
+  linkType: string;
+  description?: string;
+  metadata?: JsonRecord;
+  createdAt?: string;
+};
+
+export type AdaptationPlan = {
+  id: string;
+  projectId: string;
+  sourceId?: string;
+  scriptId?: string;
+  title: string;
+  status: string;
+  targetFormat: string;
+  targetDurationSeconds?: number;
+  maxShots?: number;
+  selectedEventIds: string[];
+  structure: JsonRecord;
+  content: string;
+  reviewStatus: string;
+  manualOverride: boolean;
+  metadata?: JsonRecord;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type CreatedScriptSummary = {
   id: string;
   currentVersionId: string;
@@ -298,6 +360,13 @@ export type ProductionStatus = {
       novelSourceCount: number;
       scriptSourceCount: number;
       chapterCount: number;
+      eventCount: number;
+      approvedEventCount: number;
+      pendingEventReviewCount: number;
+      adaptationPlanCount: number;
+      activeAdaptationPlanId?: string | null;
+      activeAdaptationTitle?: string | null;
+      activeAdaptationStatus?: string | null;
       activeScriptId?: string | null;
       activeScriptTitle?: string | null;
       summary: string[];

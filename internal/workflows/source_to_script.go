@@ -41,13 +41,14 @@ type GenerateScriptFromSourceInput struct {
 }
 
 type SourceToScriptOutput struct {
-	SourceID        string `json:"sourceId"`
-	ScriptID        string `json:"scriptId"`
-	ScriptVersionID string `json:"scriptVersionId"`
-	AgentRunID      string `json:"agentRunId,omitempty"`
-	ProviderCallID  string `json:"providerCallId,omitempty"`
-	ModelID         string `json:"modelId,omitempty"`
-	Content         string `json:"content"`
+	SourceID         string `json:"sourceId"`
+	AdaptationPlanID string `json:"adaptationPlanId,omitempty"`
+	ScriptID         string `json:"scriptId"`
+	ScriptVersionID  string `json:"scriptVersionId"`
+	AgentRunID       string `json:"agentRunId,omitempty"`
+	ProviderCallID   string `json:"providerCallId,omitempty"`
+	ModelID          string `json:"modelId,omitempty"`
+	Content          string `json:"content"`
 }
 
 func SourceToScriptWorkflow(ctx workflow.Context, input TextToStoryboardInput) (SourceToScriptOutput, error) {
@@ -83,6 +84,9 @@ func (a Activities) GenerateScriptFromSource(ctx context.Context, input Generate
 	source, err := a.projectSourceRecord(ctx, input.ProjectID, input.SourceID)
 	if err != nil {
 		return SourceToScriptOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	if source.SourceType == "novel" {
+		return a.generateScriptFromNovelSource(ctx, input, source)
 	}
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyScriptAgentGenerate, map[string]any{
 		"project": project.asPromptVariables(),
@@ -164,6 +168,57 @@ func (a Activities) GenerateScriptFromSource(ctx context.Context, input Generate
 		return SourceToScriptOutput{}, err
 	}
 	return output, nil
+}
+
+func (a Activities) generateScriptFromNovelSource(ctx context.Context, input GenerateScriptFromSourceInput, source ProjectSourceRecord) (SourceToScriptOutput, error) {
+	baseInput := TextToStoryboardInput{OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID, Prompt: "source_to_script", CreatedBy: input.CreatedBy}
+	eventCount, err := a.countNovelEventsForSource(ctx, input.ProjectID, source.ID)
+	if err != nil {
+		return SourceToScriptOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	if eventCount == 0 {
+		if _, err := a.ExtractNovelEvents(ctx, ExtractNovelEventsInput{
+			OrganizationID: input.OrganizationID,
+			ProjectID:      input.ProjectID,
+			WorkflowRunID:  input.WorkflowRunID,
+			CreatedBy:      input.CreatedBy,
+			SourceID:       source.ID,
+		}); err != nil {
+			return SourceToScriptOutput{}, err
+		}
+	}
+	plan, err := a.GenerateAdaptationPlan(ctx, GenerateAdaptationPlanInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
+		CreatedBy:      input.CreatedBy,
+		SourceID:       source.ID,
+		Instruction:    input.Instruction,
+	})
+	if err != nil {
+		return SourceToScriptOutput{}, err
+	}
+	script, err := a.GenerateScriptFromAdaptationPlan(ctx, GenerateScriptFromPlanInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
+		CreatedBy:      input.CreatedBy,
+		PlanID:         plan.PlanID,
+		Title:          input.Title,
+		Instruction:    input.Instruction,
+	})
+	if err != nil {
+		return SourceToScriptOutput{}, err
+	}
+	return SourceToScriptOutput{
+		SourceID:         source.ID,
+		AdaptationPlanID: plan.PlanID,
+		ScriptID:         script.ScriptID,
+		ScriptVersionID:  script.ScriptVersionID,
+		ProviderCallID:   script.ProviderCallID,
+		ModelID:          script.ModelID,
+		Content:          script.Content,
+	}, nil
 }
 
 func (a Activities) CompleteSourceToScriptWorkflow(ctx context.Context, input TextToStoryboardInput, output SourceToScriptOutput) error {

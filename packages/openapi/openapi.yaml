@@ -799,6 +799,134 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/sources/{sourceId}/extract-events:
+    post:
+      operationId: extractNovelEvents
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExtractNovelEventsRequest"
+      responses:
+        "202":
+          description: Started extract_novel_events workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+  /api/projects/{projectId}/sources/{sourceId}/events:
+    get:
+      operationId: listSourceNovelEvents
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "200":
+          description: Source novel events and links
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NovelEventListEnvelope"
+  /api/projects/{projectId}/sources/{sourceId}/generate-adaptation-plan:
+    post:
+      operationId: generateAdaptationPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateAdaptationPlanRequest"
+      responses:
+        "201":
+          description: Generated adaptation plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdaptationPlanEnvelope"
+  /api/projects/{projectId}/novel-events/{eventId}:
+    get:
+      operationId: getNovelEvent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: eventId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Novel event detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NovelEventEnvelope"
+    patch:
+      operationId: updateNovelEvent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: eventId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateNovelEventRequest"
+      responses:
+        "200":
+          description: Updated novel event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NovelEventEnvelope"
+  /api/projects/{projectId}/novel-events/{eventId}/review:
+    post:
+      operationId: reviewNovelEvent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: eventId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+      responses:
+        "200":
+          description: Reviewed novel event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewResponseEnvelope"
   /api/projects/{projectId}/scripts:
     get:
       operationId: listScripts
@@ -970,6 +1098,162 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkflowRunEnvelope"
+  /api/projects/{projectId}/adaptation-plans:
+    get:
+      operationId: listAdaptationPlans
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: sourceId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Project adaptation plans
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdaptationPlanListEnvelope"
+    post:
+      operationId: createAdaptationPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAdaptationPlanRequest"
+      responses:
+        "201":
+          description: Created adaptation plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdaptationPlanEnvelope"
+  /api/projects/{projectId}/adaptation-plans/{planId}:
+    get:
+      operationId: getAdaptationPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Adaptation plan detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdaptationPlanEnvelope"
+    patch:
+      operationId: updateAdaptationPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAdaptationPlanRequest"
+      responses:
+        "200":
+          description: Updated adaptation plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdaptationPlanEnvelope"
+  /api/projects/{projectId}/adaptation-plans/{planId}/review:
+    post:
+      operationId: reviewAdaptationPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+      responses:
+        "200":
+          description: Reviewed adaptation plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewResponseEnvelope"
+  /api/projects/{projectId}/adaptation-plans/{planId}/activate:
+    post:
+      operationId: activateAdaptationPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Activated adaptation plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdaptationPlanEnvelope"
+  /api/projects/{projectId}/adaptation-plans/{planId}/generate-script:
+    post:
+      operationId: generateScriptFromAdaptationPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateScriptFromAdaptationPlanRequest"
+      responses:
+        "201":
+          description: Generated script from adaptation plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdaptationScriptResultEnvelope"
   /api/projects/{projectId}/script-agent/sessions:
     get:
       operationId: listScriptAgentSessions
@@ -3923,6 +4207,391 @@ components:
         editedAt:
           type: string
           format: date-time
+    NovelEvent:
+      type: object
+      required: [id, projectId, sourceId, eventIndex, sequenceNo, title, summary, importance, characters, scenes, props, keywords, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+          format: uuid
+        chapterId:
+          type: string
+          format: uuid
+        chapterIndex:
+          type: integer
+        eventIndex:
+          type: integer
+        sequenceNo:
+          type: integer
+        title:
+          type: string
+        summary:
+          type: string
+        eventType:
+          type: string
+        importance:
+          type: integer
+          minimum: 1
+          maximum: 5
+        timelineHint:
+          type: string
+        locationHint:
+          type: string
+        emotionalTone:
+          type: string
+        conflict:
+          type: string
+        outcome:
+          type: string
+        adaptationHint:
+          type: string
+        characters:
+          type: array
+          items:
+            type: string
+        scenes:
+          type: array
+          items:
+            type: string
+        props:
+          type: array
+          items:
+            type: string
+        keywords:
+          type: array
+          items:
+            type: string
+        rawExcerpt:
+          type: string
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        manualOverride:
+          type: boolean
+        staleState:
+          $ref: "#/components/schemas/StaleState"
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        editedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        editedAt:
+          type: string
+          format: date-time
+    NovelEventLink:
+      type: object
+      required: [id, projectId, sourceEventId, targetEventId, linkType, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sourceEventId:
+          type: string
+          format: uuid
+        targetEventId:
+          type: string
+          format: uuid
+        linkType:
+          type: string
+          enum: [next, causes, foreshadows, resolves, parallels]
+        description:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    AdaptationPlan:
+      type: object
+      required: [id, projectId, title, status, targetFormat, selectedEventIds, structure, content, reviewStatus, manualOverride, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+          format: uuid
+        scriptId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
+        targetFormat:
+          type: string
+        targetDurationSeconds:
+          type: integer
+        maxShots:
+          type: integer
+        selectedEventIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        structure:
+          type: object
+          additionalProperties: true
+        content:
+          type: string
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        manualOverride:
+          type: boolean
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        editedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        editedAt:
+          type: string
+          format: date-time
+    ExtractNovelEventsRequest:
+      type: object
+      properties:
+        chapterIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        force:
+          type: boolean
+          default: false
+    GenerateAdaptationPlanRequest:
+      type: object
+      properties:
+        eventIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        targetFormat:
+          type: string
+          default: short_video
+        targetDurationSeconds:
+          type: integer
+        maxShots:
+          type: integer
+        instruction:
+          type: string
+    GenerateScriptFromAdaptationPlanRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        instruction:
+          type: string
+    CreateAdaptationPlanRequest:
+      allOf:
+        - $ref: "#/components/schemas/GenerateAdaptationPlanRequest"
+        - type: object
+          required: [title]
+          properties:
+            sourceId:
+              type: string
+              format: uuid
+            title:
+              type: string
+            status:
+              type: string
+              enum: [draft, active, archived]
+            selectedEventIds:
+              type: array
+              items:
+                type: string
+                format: uuid
+            structure:
+              type: object
+              additionalProperties: true
+            content:
+              type: string
+    UpdateNovelEventRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+        eventType:
+          type: string
+        importance:
+          type: integer
+          minimum: 1
+          maximum: 5
+        timelineHint:
+          type: string
+        locationHint:
+          type: string
+        emotionalTone:
+          type: string
+        conflict:
+          type: string
+        outcome:
+          type: string
+        adaptationHint:
+          type: string
+        characters:
+          type: array
+          items:
+            type: string
+        scenes:
+          type: array
+          items:
+            type: string
+        props:
+          type: array
+          items:
+            type: string
+        keywords:
+          type: array
+          items:
+            type: string
+        rawExcerpt:
+          type: string
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+    UpdateAdaptationPlanRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
+        targetFormat:
+          type: string
+        targetDurationSeconds:
+          type: integer
+        maxShots:
+          type: integer
+        selectedEventIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        structure:
+          type: object
+          additionalProperties: true
+        content:
+          type: string
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+    NovelEventEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/NovelEvent"
+    NovelEventListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items, links]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/NovelEvent"
+                links:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/NovelEventLink"
+    AdaptationPlanEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AdaptationPlan"
+    AdaptationPlanListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/AdaptationPlan"
+    AdaptationScriptResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [scriptId, versionId, adaptationPlanId, content]
+              properties:
+                scriptId:
+                  type: string
+                  format: uuid
+                versionId:
+                  type: string
+                  format: uuid
+                adaptationPlanId:
+                  type: string
+                  format: uuid
+                providerCallId:
+                  type: string
+                  format: uuid
+                modelId:
+                  type: string
+                content:
+                  type: string
     ReviewStatus:
       type: string
       enum: [pending, approved, rejected, needs_edit]
@@ -3931,7 +4600,7 @@ components:
       enum: [fresh, upstream_changed, needs_regeneration]
     ProductionStageStatus:
       type: string
-      enum: [pending, not_started, imported, ready, needs_review, needs_regeneration, running, partial, failed, completed]
+      enum: [pending, not_started, imported, events_pending_extraction, events_pending_review, adaptation_plan_pending, ready, needs_review, needs_regeneration, running, partial, failed, completed]
     ProductionStatus:
       type: object
       required: [projectId, project, overall, stages]
@@ -3986,7 +4655,7 @@ components:
               $ref: "#/components/schemas/ProductionFinalVideoStage"
     ProductionSourceStage:
       type: object
-      required: [status, novelSourceCount, scriptSourceCount, chapterCount, summary]
+      required: [status, novelSourceCount, scriptSourceCount, chapterCount, eventCount, approvedEventCount, pendingEventReviewCount, adaptationPlanCount, summary]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
@@ -3996,6 +4665,22 @@ components:
           type: integer
         chapterCount:
           type: integer
+        eventCount:
+          type: integer
+        approvedEventCount:
+          type: integer
+        pendingEventReviewCount:
+          type: integer
+        adaptationPlanCount:
+          type: integer
+        activeAdaptationPlanId:
+          type: string
+          format: uuid
+        activeAdaptationTitle:
+          type: string
+        activeAdaptationStatus:
+          type: string
+          enum: [draft, active, archived]
         activeScriptId:
           type: string
           format: uuid
@@ -7155,7 +7840,7 @@ components:
           format: uuid
         workflowType:
           type: string
-          enum: [video_production, text_to_storyboard, source_to_script, script_to_assets, script_to_storyboard, script_to_video, full_production, regenerate_canonical_asset_image, regenerate_derived_asset_image, regenerate_shot_image, regenerate_shot_video, regenerate_final_video]
+          enum: [video_production, text_to_storyboard, extract_novel_events, generate_adaptation_plan, adaptation_plan_to_script, source_to_script, script_to_assets, script_to_storyboard, script_to_video, full_production, regenerate_canonical_asset_image, regenerate_derived_asset_image, regenerate_shot_image, regenerate_shot_video, regenerate_final_video]
           default: video_production
           description: video_production keeps the prompt-only path unless input.scriptId is provided.
         prompt:
@@ -7163,11 +7848,26 @@ components:
         input:
           type: object
           additionalProperties: true
-          description: Optional workflow-specific input. source_to_script requires sourceId. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, maxPolls, maxShots, and skipCompose.
+          description: Optional workflow-specific input. source_to_script, extract_novel_events, and generate_adaptation_plan require sourceId. adaptation_plan_to_script requires planId. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, maxPolls, maxShots, and skipCompose.
           properties:
             sourceId:
               type: string
               format: uuid
+            planId:
+              type: string
+              format: uuid
+            eventIds:
+              type: array
+              items:
+                type: string
+                format: uuid
+            chapterIds:
+              type: array
+              items:
+                type: string
+                format: uuid
+            force:
+              type: boolean
             instruction:
               type: string
             title:

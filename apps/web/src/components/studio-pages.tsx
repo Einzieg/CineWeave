@@ -13,11 +13,14 @@ import { useStudioSession } from "@/lib/session";
 import type {
   AgentMessage,
   AgentSession,
+  AdaptationPlan,
   Artifact,
   CanonicalAsset,
   JsonRecord,
   JsonValue,
   ModelProfile,
+  NovelEvent,
+  NovelEventLink,
   Organization,
   Permission,
   Project,
@@ -644,10 +647,14 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("小说原文", status.data.stages.source.novelSourceCount),
                   metricText("剧本原文", status.data.stages.source.scriptSourceCount),
                   metricText("章节数量", status.data.stages.source.chapterCount),
+                  metricText("事件数量", status.data.stages.source.eventCount),
+                  metricText("已确认事件", status.data.stages.source.approvedEventCount),
+                  metricText("改编计划", status.data.stages.source.adaptationPlanCount),
+                  status.data.stages.source.activeAdaptationTitle ? `当前计划：${status.data.stages.source.activeAdaptationTitle}` : "当前计划：暂无",
                   status.data.stages.source.activeScriptTitle ? `当前剧本：${status.data.stages.source.activeScriptTitle}` : "当前剧本：暂无",
                 ]}
                 summary={status.data.stages.source.novelSourceCount + status.data.stages.source.scriptSourceCount > 0 ? status.data.stages.source.summary : ["还没有原文或剧本，请先导入小说原文、上传剧本，或让 Agent 生成剧本。"]}
-                primary={{ label: "导入内容", href: projectHref(projectId, "sources") }}
+                primary={sourceProductionPrimary(status.data, projectId)}
                 secondary={{ label: "进入原文与剧本", href: projectHref(projectId, "sources") }}
                 busy={busy}
                 onRun={runAction}
@@ -865,8 +872,12 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [selectedScriptId, setSelectedScriptId] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState("");
+  const [selectedEventId, setSelectedEventId] = useState("");
+  const [selectedPlanId, setSelectedPlanId] = useState("");
   const [selectedChapterIndex, setSelectedChapterIndex] = useState(0);
   const [scriptDraft, setScriptDraft] = useState({ title: "", content: "" });
+  const [eventDraft, setEventDraft] = useState({ id: "", title: "", summary: "", adaptationHint: "" });
+  const [planDraft, setPlanDraft] = useState({ id: "", title: "", content: "" });
   const [agentText, setAgentText] = useState("");
   const [agentDraft, setAgentDraft] = useState("");
   const [importOpen, setImportOpen] = useState(false);
@@ -891,6 +902,12 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
   const messages = useStudioQuery<AgentMessage[]>([], `agent-v2-messages:${projectId}:${effectiveSessionId}`, async (activeSession) =>
     effectiveSessionId ? (await studioApi.listAgentMessages(activeSession, projectId, effectiveSessionId)).items : Promise.resolve([]),
   );
+  const novelEvents = useStudioQuery<{ items: NovelEvent[]; links: NovelEventLink[] }>({ items: [], links: [] }, `novel-events:${projectId}:${effectiveSourceId}`, async (activeSession) =>
+    effectiveSourceId ? studioApi.listSourceNovelEvents(activeSession, projectId, effectiveSourceId) : Promise.resolve({ items: [], links: [] }),
+  );
+  const adaptationPlans = useStudioQuery<AdaptationPlan[]>([], `adaptation-plans:${projectId}:${effectiveSourceId}`, async (activeSession) =>
+    effectiveSourceId ? (await studioApi.listAdaptationPlans(activeSession, projectId, effectiveSourceId)).items : Promise.resolve([]),
+  );
 
   const selectedSource = sourceDetail.data ?? sources.data.find((item) => item.id === effectiveSourceId);
   const selectedScript = scriptDetail.data ?? scripts.data.find((item) => item.id === effectiveScriptId);
@@ -898,8 +915,32 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
   const chapters = selectedSource?.chapters ?? [];
   const effectiveChapterIndex = Math.min(selectedChapterIndex, Math.max(0, chapters.length - 1));
   const selectedChapter = chapters[effectiveChapterIndex];
+  const selectedEvent = novelEvents.data.items.find((item) => item.id === selectedEventId) ?? novelEvents.data.items[0];
+  const activePlan = adaptationPlans.data.find((item) => item.status === "active") ?? adaptationPlans.data[0];
+  const selectedPlan = adaptationPlans.data.find((item) => item.id === selectedPlanId) ?? activePlan;
   const scriptEditorTitle = scriptDraft.title || selectedScript?.title || "";
   const scriptEditorContent = scriptDraft.content || activeVersion?.content || "";
+  const novelEventsById = indexNovelEvents(novelEvents.data.items);
+  const selectedEventLinks = selectedEvent
+    ? novelEvents.data.links.filter((link) => link.sourceEventId === selectedEvent.id || link.targetEventId === selectedEvent.id)
+    : novelEvents.data.links;
+  const currentEventDraft =
+    eventDraft.id === selectedEvent?.id
+      ? eventDraft
+      : {
+          id: selectedEvent?.id ?? "",
+          title: selectedEvent?.title ?? "",
+          summary: selectedEvent?.summary ?? "",
+          adaptationHint: selectedEvent?.adaptationHint ?? "",
+        };
+  const currentPlanDraft =
+    planDraft.id === selectedPlan?.id
+      ? planDraft
+      : {
+          id: selectedPlan?.id ?? "",
+          title: selectedPlan?.title ?? "",
+          content: selectedPlan?.content ?? "",
+        };
 
   async function perform(label: string, action: () => Promise<void>) {
     setBusy(label);
@@ -993,6 +1034,31 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
       if (!selectedSource) {
         throw new Error("请先选择小说原文或剧本原文。");
       }
+      if (selectedSource.sourceType === "novel") {
+        if (!novelEvents.data.items.length) {
+          await studioApi.extractNovelEvents(session, projectId, selectedSource.id, {});
+          novelEvents.reload();
+          sourceDetail.reload();
+          return;
+        }
+        const plan = selectedPlan ?? (await studioApi.generateAdaptationPlan(session, projectId, selectedSource.id, compactRecord({
+          instruction: agentText,
+          targetFormat: "short_video",
+        })));
+        const result = await studioApi.generateScriptFromAdaptationPlan(session, projectId, plan.id, compactRecord({
+          instruction: agentText,
+          title: scriptDraft.title || `${selectedSource.title} 剧本`,
+        }));
+        setSelectedPlanId(plan.id);
+        setSelectedScriptId(result.scriptId);
+        setAgentDraft(result.content);
+        setScriptDraft({ title: scriptEditorTitle || `${selectedSource.title} 剧本`, content: result.content });
+        adaptationPlans.reload();
+        scripts.reload();
+        scriptDetail.reload();
+        versions.reload();
+        return;
+      }
       const sessionId = await ensureAgentSession();
       const result = await studioApi.generateScript(session, projectId, compactRecord({
         sourceId: selectedSource.id,
@@ -1007,6 +1073,112 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
       scriptDetail.reload();
       versions.reload();
       messages.reload();
+    });
+  }
+
+  async function extractEventsForSource() {
+    await perform("提取事件", async () => {
+      if (!selectedSource) {
+        throw new Error("请先选择小说原文。");
+      }
+      await studioApi.extractNovelEvents(session, projectId, selectedSource.id, {});
+      novelEvents.reload();
+      sourceDetail.reload();
+    });
+  }
+
+  async function saveSelectedEvent() {
+    await perform("保存事件", async () => {
+      if (!selectedEvent) {
+        throw new Error("请先选择事件。");
+      }
+      await studioApi.updateNovelEvent(session, projectId, selectedEvent.id, compactRecord({
+        title: currentEventDraft.title,
+        summary: currentEventDraft.summary,
+        adaptationHint: currentEventDraft.adaptationHint,
+      }));
+      novelEvents.reload();
+    });
+  }
+
+  async function reviewSelectedEvent(reviewStatus: string) {
+    await perform("更新事件状态", async () => {
+      if (!selectedEvent) {
+        throw new Error("请先选择事件。");
+      }
+      await studioApi.reviewNovelEvent(session, projectId, selectedEvent.id, { reviewStatus });
+      novelEvents.reload();
+    });
+  }
+
+  async function addSelectedEventToPlan() {
+    await perform("加入改编计划", async () => {
+      if (!selectedEvent) {
+        throw new Error("请先选择事件。");
+      }
+      if (!selectedPlan) {
+        throw new Error("请先选择改编计划。");
+      }
+      const selectedEventIds = appendUniqueString(selectedPlan.selectedEventIds, selectedEvent.id);
+      await studioApi.updateAdaptationPlan(session, projectId, selectedPlan.id, { selectedEventIds });
+      adaptationPlans.reload();
+    });
+  }
+
+  async function generatePlanForSource() {
+    await perform("生成改编计划", async () => {
+      if (!selectedSource) {
+        throw new Error("请先选择小说原文。");
+      }
+      const plan = await studioApi.generateAdaptationPlan(session, projectId, selectedSource.id, compactRecord({
+        instruction: agentText,
+        targetFormat: "short_video",
+      }));
+      setSelectedPlanId(plan.id);
+      adaptationPlans.reload();
+    });
+  }
+
+  async function saveSelectedPlan() {
+    await perform("保存改编计划", async () => {
+      if (!selectedPlan) {
+        throw new Error("请先选择改编计划。");
+      }
+      await studioApi.updateAdaptationPlan(session, projectId, selectedPlan.id, compactRecord({
+        title: currentPlanDraft.title,
+        content: currentPlanDraft.content,
+      }));
+      adaptationPlans.reload();
+    });
+  }
+
+  async function approveSelectedPlan() {
+    await perform("确认改编计划", async () => {
+      if (!selectedPlan) {
+        throw new Error("请先选择改编计划。");
+      }
+      await studioApi.reviewAdaptationPlan(session, projectId, selectedPlan.id, { reviewStatus: "approved" });
+      await studioApi.activateAdaptationPlan(session, projectId, selectedPlan.id);
+      adaptationPlans.reload();
+    });
+  }
+
+  async function generateScriptFromPlan() {
+    await perform("从计划生成剧本", async () => {
+      if (!selectedPlan) {
+        throw new Error("请先选择改编计划。");
+      }
+      const result = await studioApi.generateScriptFromAdaptationPlan(session, projectId, selectedPlan.id, compactRecord({
+        instruction: agentText,
+        title: scriptDraft.title || `${selectedPlan.title} 剧本`,
+      }));
+      setSelectedScriptId(result.scriptId);
+      setAgentDraft(result.content);
+      setScriptDraft({ title: scriptEditorTitle || `${selectedPlan.title} 剧本`, content: result.content });
+      scripts.reload();
+      scriptDetail.reload();
+      versions.reload();
+      adaptationPlans.reload();
     });
   }
 
@@ -1047,7 +1219,7 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
               </button>
               <button className="studio-button" disabled={!selectedSource || busy !== ""} onClick={generateScriptFromSource} type="button">
                 <Sparkles size={16} />
-                让 Agent 生成剧本
+                {selectedSource?.sourceType === "novel" ? "提取事件并生成剧本" : "让 Agent 生成剧本"}
               </button>
             </div>
           </div>
@@ -1104,10 +1276,108 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
                             <p className="text-sm font-semibold text-slate-900">{selectedChapter?.chapterTitle || selectedSource.title}</p>
                             <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{previewText(selectedChapter?.content || selectedSource.content, 2400)}</p>
                           </div>
-                          <button className="studio-button studio-button-primary justify-center" disabled={busy !== ""} onClick={generateScriptFromSource} type="button">
-                            <Sparkles size={16} />
-                            让 Agent 改编为剧本
-                          </button>
+                          <div className="flex flex-wrap gap-2">
+                            <button className="studio-button" disabled={busy !== ""} onClick={extractEventsForSource} type="button">
+                              <Filter size={16} />
+                              提取章节事件
+                            </button>
+                            <button className="studio-button" disabled={busy !== "" || novelEvents.data.items.length === 0} onClick={generatePlanForSource} type="button">
+                              <Sparkles size={16} />
+                              生成改编计划
+                            </button>
+                            <button className="studio-button studio-button-primary" disabled={busy !== "" || !selectedPlan} onClick={generateScriptFromPlan} type="button">
+                              <Clapperboard size={16} />
+                              从计划生成剧本
+                            </button>
+                          </div>
+                          <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm font-semibold text-slate-900">章节事件</p>
+                              <StatusBadge status={novelEvents.loading ? "running" : `${novelEvents.data.items.length}`} />
+                            </div>
+                            {novelEvents.data.items.length ? (
+                              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+                                <div className="grid max-h-80 gap-2 overflow-auto">
+                                  {novelEvents.data.items.map((event) => (
+                                    <button className={cn("rounded-md border p-3 text-left", selectedEvent?.id === event.id ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50")} key={event.id} onClick={() => setSelectedEventId(event.id)} type="button">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <p className="text-sm font-medium text-slate-900">{event.title}</p>
+                                        <StatusBadge status={event.reviewStatus} />
+                                      </div>
+                                      <p className="mt-1 text-xs text-slate-500">第 {event.chapterIndex || "-"} 章 · 重要度 {event.importance}/5 · {event.eventType || "未分类"}</p>
+                                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{event.summary}</p>
+                                      <div className="mt-2 grid gap-1">
+                                        <CompactPillList items={event.characters.slice(0, 4)} prefix="人物" />
+                                        <CompactPillList items={event.scenes.slice(0, 3)} prefix="场景" />
+                                        <CompactPillList items={event.props.slice(0, 3)} prefix="道具" />
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="grid content-start gap-2">
+                                  {selectedEvent ? (
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <InfoTile label="章节" value={`第 ${selectedEvent.chapterIndex || "-"} 章`} />
+                                      <InfoTile label="重要度" value={`${selectedEvent.importance}/5`} />
+                                      <InfoTile label="类型" value={selectedEvent.eventType || "未分类"} />
+                                      <InfoTile label="关系" value={String(selectedEventLinks.length)} />
+                                    </div>
+                                  ) : null}
+                                  <TextInput label="事件标题" value={currentEventDraft.title} onChange={(title) => setEventDraft({ ...currentEventDraft, title })} />
+                                  <TextAreaInput rows={4} label="事件摘要" value={currentEventDraft.summary} onChange={(summary) => setEventDraft({ ...currentEventDraft, summary })} />
+                                  <TextAreaInput rows={3} label="改编提示" value={currentEventDraft.adaptationHint} onChange={(adaptationHint) => setEventDraft({ ...currentEventDraft, adaptationHint })} />
+                                  <EventLinkList eventsById={novelEventsById} links={selectedEventLinks} selectedEventId={selectedEvent?.id} />
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <button className="studio-button justify-center" disabled={busy !== "" || !selectedEvent} onClick={saveSelectedEvent} type="button"><Save size={16} /></button>
+                                    <button className="studio-button justify-center" disabled={busy !== "" || !selectedEvent} onClick={() => reviewSelectedEvent("approved")} type="button"><Check size={16} /></button>
+                                    <button className="studio-button justify-center" disabled={busy !== "" || !selectedEvent} onClick={() => reviewSelectedEvent("needs_edit")} type="button"><Pencil size={16} /></button>
+                                    <button className="studio-button justify-center" disabled={busy !== "" || !selectedEvent || !selectedPlan || selectedPlan.selectedEventIds.includes(selectedEvent.id)} onClick={addSelectedEventToPlan} type="button"><Plus size={16} /></button>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <EmptyState title="还没有事件" description="待提取" />
+                            )}
+                          </div>
+                          <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm font-semibold text-slate-900">改编计划</p>
+                              <StatusBadge status={selectedPlan?.status ?? "pending"} />
+                            </div>
+                            {adaptationPlans.data.length ? (
+                              <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+                                <div className="grid content-start gap-2">
+                                  {adaptationPlans.data.map((plan) => (
+                                    <button className={cn("rounded-md border p-3 text-left", selectedPlan?.id === plan.id ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50")} key={plan.id} onClick={() => setSelectedPlanId(plan.id)} type="button">
+                                      <p className="truncate text-sm font-medium text-slate-900">{plan.title}</p>
+                                      <p className="mt-1 text-xs text-slate-500">{plan.status} · {plan.reviewStatus}</p>
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="grid gap-2">
+                                  <TextInput label="计划标题" value={currentPlanDraft.title} onChange={(title) => setPlanDraft({ ...currentPlanDraft, title })} />
+                                  <TextAreaInput rows={8} label="计划内容" value={currentPlanDraft.content} onChange={(content) => setPlanDraft({ ...currentPlanDraft, content })} />
+                                  {selectedPlan ? <AdaptationPlanInsight plan={selectedPlan} eventsById={novelEventsById} /> : null}
+                                  <div className="flex flex-wrap gap-2">
+                                    <button className="studio-button" disabled={busy !== "" || !selectedPlan} onClick={saveSelectedPlan} type="button">
+                                      <Save size={16} />
+                                      保存计划
+                                    </button>
+                                    <button className="studio-button" disabled={busy !== "" || !selectedPlan} onClick={approveSelectedPlan} type="button">
+                                      <Check size={16} />
+                                      确认计划
+                                    </button>
+                                    <button className="studio-button studio-button-primary" disabled={busy !== "" || !selectedPlan} onClick={generateScriptFromPlan} type="button">
+                                      <Clapperboard size={16} />
+                                      生成剧本
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <EmptyState title="还没有改编计划" description="待生成" />
+                            )}
+                          </div>
                         </div>
                       </div>
                     ) : (
@@ -1264,7 +1534,7 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
                 </button>
                 <button className="studio-button studio-button-primary" disabled={!selectedSource || busy !== ""} onClick={generateScriptFromSource} type="button">
                   <Sparkles size={16} />
-                  根据原文生成剧本
+                  {selectedSource?.sourceType === "novel" ? "提取事件并生成剧本" : "根据原文生成剧本"}
                 </button>
                 <button className="studio-button" disabled={!selectedScript || busy !== ""} onClick={rewriteCurrentScript} type="button">
                   <MessageSquareText size={16} />
@@ -2784,13 +3054,110 @@ function SimpleRow({ title, detail, status }: { title: string; detail: string; s
   );
 }
 
+function CompactPillList({ prefix, items }: { prefix: string; items: string[] }) {
+  if (!items.length) {
+    return null;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <span className="text-[11px] text-slate-500">{prefix}</span>
+      {items.map((item) => <Pill key={`${prefix}:${item}`}>{item}</Pill>)}
+    </div>
+  );
+}
+
+function EventLinkList({ links, eventsById, selectedEventId }: { links: NovelEventLink[]; eventsById: Map<string, NovelEvent>; selectedEventId?: string }) {
+  if (!links.length) {
+    return (
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+        <p className="text-xs font-medium text-slate-500">事件关系</p>
+        <p className="mt-1 text-xs text-slate-600">暂无关系</p>
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <p className="text-xs font-medium text-slate-500">事件关系</p>
+      {links.slice(0, 6).map((link) => {
+        const source = eventsById.get(link.sourceEventId);
+        const target = eventsById.get(link.targetEventId);
+        const title = selectedEventId === link.sourceEventId
+          ? `${linkTypeLabel(link.linkType)} → ${target?.title ?? link.targetEventId}`
+          : `${source?.title ?? link.sourceEventId} → ${linkTypeLabel(link.linkType)}`;
+        return (
+          <div className="rounded-md bg-white px-2 py-1.5" key={link.id}>
+            <p className="text-xs font-medium text-slate-800">{title}</p>
+            {link.description ? <p className="mt-1 text-xs leading-5 text-slate-500">{link.description}</p> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AdaptationPlanInsight({ plan, eventsById }: { plan: AdaptationPlan; eventsById: Map<string, NovelEvent> }) {
+  const metadata = plan.metadata ?? {};
+  const structure = Object.entries(plan.structure ?? {});
+  const omittedEvents = jsonArrayValue(metadata.omittedEvents);
+  const selectedEventTitles = plan.selectedEventIds.map((id) => eventsById.get(id)?.title ?? id);
+  return (
+    <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <div className="grid gap-3 md:grid-cols-2">
+        <PlanField label="一句话故事" value={jsonTextValue(metadata.logline)} />
+        <PlanField label="主题" value={jsonTextValue(metadata.theme)} />
+        <PlanField label="视觉策略" value={jsonTextValue(metadata.visualStrategy)} />
+        <PlanField label="角色策略" value={jsonTextValue(metadata.characterStrategy)} />
+        <PlanField label="镜头策略" value={jsonTextValue(metadata.shotStrategy)} />
+        <PlanField label="预计镜头" value={jsonTextValue(metadata.estimatedShots)} />
+      </div>
+      {structure.length ? (
+        <div>
+          <p className="text-xs font-medium text-slate-500">结构</p>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {structure.map(([key, value]) => (
+              <div className="rounded-md bg-white p-2" key={key}>
+                <p className="text-xs font-medium text-slate-700">{structureLabel(key)}</p>
+                <p className="mt-1 text-xs leading-5 text-slate-600">{jsonTextValue(value) || "暂无"}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="grid gap-3 md:grid-cols-2">
+        <PlanList label="选用事件" items={selectedEventTitles} />
+        <PlanList label="删减事件" items={omittedEvents.map(omittedEventLabel)} />
+      </div>
+    </div>
+  );
+}
+
+function PlanField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <p className="mt-1 text-xs leading-5 text-slate-700">{value || "暂无"}</p>
+    </div>
+  );
+}
+
+function PlanList({ label, items }: { label: string; items: string[] }) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <div className="mt-2 flex flex-wrap gap-1">
+        {items.length ? items.map((item, index) => <Pill key={`${label}:${index}:${item}`}>{item}</Pill>) : <span className="text-xs text-slate-500">暂无</span>}
+      </div>
+    </div>
+  );
+}
+
 function ListBlock<TItem>({ items, empty, render }: { items: TItem[]; empty: string; render: (item: TItem) => React.ReactNode }) {
   return (
     <div className="grid gap-3 p-4">
       {items.map((item, index) => (
         <div key={index}>{render(item)}</div>
       ))}
-      {!items.length ? <EmptyState title={empty} description="请使用本页创建入口完成初始化，或先确认当前会话是否有管理权限。" /> : null}
+      {!items.length ? <EmptyState title={empty} description="暂无数据" /> : null}
     </div>
   );
 }
@@ -2889,11 +3256,82 @@ function sourceChapterCount(source: ProjectSource) {
   return numberFromJson(jsonRecordValue(source.metadata?.import)?.chapterCount) ?? source.chapters?.length ?? 0;
 }
 
+function indexNovelEvents(events: NovelEvent[]) {
+  const indexed = new Map<string, NovelEvent>();
+  for (const event of events) {
+    indexed.set(event.id, event);
+  }
+  return indexed;
+}
+
+function appendUniqueString(values: string[], value: string) {
+  return values.includes(value) ? values : [...values, value];
+}
+
 function jsonRecordValue(value: JsonValue | undefined): JsonRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
   return value as JsonRecord;
+}
+
+function jsonArrayValue(value: JsonValue | undefined): JsonValue[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function jsonTextValue(value: JsonValue | undefined): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function omittedEventLabel(value: JsonValue) {
+  const record = jsonRecordValue(value);
+  if (!record) {
+    return jsonTextValue(value);
+  }
+  const event = jsonTextValue(record.event);
+  const reason = jsonTextValue(record.reason);
+  return [event, reason].filter(Boolean).join("：") || JSON.stringify(record);
+}
+
+function structureLabel(key: string) {
+  switch (key) {
+    case "opening":
+      return "开场";
+    case "development":
+      return "发展";
+    case "climax":
+      return "高潮";
+    case "ending":
+      return "结尾";
+    default:
+      return key;
+  }
+}
+
+function linkTypeLabel(value: string) {
+  switch (value) {
+    case "next":
+      return "后续";
+    case "causes":
+      return "导致";
+    case "foreshadows":
+      return "伏笔";
+    case "resolves":
+      return "解决";
+    case "parallels":
+      return "呼应";
+    default:
+      return value || "关联";
+  }
 }
 
 function numberFromJson(value: JsonValue | undefined) {
@@ -2925,6 +3363,12 @@ function importSuccessText(chapterCount: number, scriptTitle?: string) {
 
 function productionActionLabel(action: string) {
   switch (action) {
+    case "extract_events":
+      return "提取事件";
+    case "generate_adaptation_plan":
+      return "生成改编计划";
+    case "generate_script_from_plan":
+      return "从计划生成剧本";
     case "generate_script":
       return "生成剧本";
     case "analyze_assets":
@@ -2972,6 +3416,15 @@ function productionStageLabel(stage: string) {
 }
 
 function productionStageDescription(stage: string, status: string) {
+  if (stage === "source" && status === "events_pending_extraction") {
+    return "小说章节已就绪，等待提取结构化事件。";
+  }
+  if (stage === "source" && status === "events_pending_review") {
+    return "章节事件已生成，等待确认后进入改编计划。";
+  }
+  if (stage === "source" && status === "adaptation_plan_pending") {
+    return "已确认事件可用于生成改编计划。";
+  }
   if (status === "needs_review") {
     return "仍有未确认内容。可以继续运行后续阶段，但建议先检查并确认输出。";
   }
@@ -3004,6 +3457,18 @@ function productionStageDescription(stage: string, status: string) {
 function nextProductionAction(status: ProductionStatus) {
   switch (status.overall.stage) {
     case "source":
+      if (status.stages.source.status === "events_pending_extraction") {
+        return "extract_events";
+      }
+      if (status.stages.source.status === "events_pending_review") {
+        return "";
+      }
+      if (status.stages.source.status === "adaptation_plan_pending") {
+        return "generate_adaptation_plan";
+      }
+      if (status.stages.source.activeAdaptationPlanId && !status.stages.source.activeScriptId) {
+        return "generate_script_from_plan";
+      }
       return status.stages.source.novelSourceCount + status.stages.source.scriptSourceCount > 0 ? "generate_script" : "";
     case "assets":
       return status.stages.assets.missingReferenceImageCount > 0 && status.stages.assets.pendingReviewCount === 0 ? "generate_asset_images" : "analyze_assets";
@@ -3020,6 +3485,29 @@ function nextProductionAction(status: ProductionStatus) {
     default:
       return "";
   }
+}
+
+function sourceProductionPrimary(status: ProductionStatus, projectId: string) {
+  const source = status.stages.source;
+  if (source.novelSourceCount + source.scriptSourceCount === 0) {
+    return { label: "导入内容", href: projectHref(projectId, "sources") };
+  }
+  if (source.status === "events_pending_extraction") {
+    return { label: "提取事件", action: "extract_events" };
+  }
+  if (source.status === "events_pending_review") {
+    return { label: "确认章节事件", href: projectHref(projectId, "sources") };
+  }
+  if (source.status === "adaptation_plan_pending") {
+    return { label: "生成改编计划", action: "generate_adaptation_plan" };
+  }
+  if (source.activeAdaptationPlanId && !source.activeScriptId) {
+    return { label: "从计划生成剧本", action: "generate_script_from_plan" };
+  }
+  if (!source.activeScriptId) {
+    return { label: "生成剧本", action: "generate_script" };
+  }
+  return { label: "进入原文与剧本", href: projectHref(projectId, "sources") };
 }
 
 function metricText(label: string, value: number) {
