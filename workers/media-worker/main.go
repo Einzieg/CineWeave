@@ -36,7 +36,9 @@ func main() {
 
 	activities := workflows.NewActivities(pool, storageClient, nil)
 	temporalWorker := worker.New(temporalClient, workflows.MediaTaskQueue, worker.Options{})
+	temporalWorker.RegisterWorkflow(workflows.ExportProjectWorkflow)
 	temporalWorker.RegisterActivityWithOptions(activities.ComposeFinalVideo, activity.RegisterOptions{Name: "ComposeFinalVideo"})
+	temporalWorker.RegisterActivityWithOptions(activities.ExportProject, activity.RegisterOptions{Name: "ExportProject"})
 
 	if err := temporalWorker.Run(worker.InterruptCh()); err != nil {
 		log.Fatal(err)

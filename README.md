@@ -51,7 +51,7 @@ Prompt management APIs are available at `/api/prompt-templates`, `/api/prompt-te
 
 `video_production` v1 now generates up to 3 storyboard shots sequentially. Each shot gets its own Provider Gateway `image.generate` output and async `video.create_task` / `video.poll_task` `generated_video` artifact, with links persisted on `storyboard_shots`. After all shot videos succeed, the Media Worker runs FFmpeg to normalize and concatenate the clips into a `final_video` MP4 artifact and writes a `timeline_json` manifest artifact. `POST /api/workflow-runs` accepts optional `input.duration`, `input.aspectRatio`, `input.resolution`, `input.pollIntervalSeconds`, `input.maxPolls`, `input.maxShots` (capped at 3), and `input.skipCompose` for debugging.
 
-`media-worker` listens on Temporal task queue `cineweave-media`. It uses only `media_files`, `artifacts`, and S3 / MinIO object storage; it does not call Provider Gateway or access provider credentials. The Docker Compose media-worker image uses `deploy/docker-compose/Dockerfile-media-worker` and installs FFmpeg in that runtime image.
+`media-worker` listens on Temporal task queue `cineweave-media`. It registers final-video composition and project export activities, using `media_files`, `artifacts`, `project_exports`, and S3 / MinIO object storage; it does not call Provider Gateway or access provider credentials. The Docker Compose media-worker image uses `deploy/docker-compose/Dockerfile-media-worker` and installs FFmpeg in that runtime image.
 
 Shot results are available through `GET /api/workflow-runs/{id}/shots?includePreviewUrl=true`, and the project workspace shows storyboard shots with image/video previews while retaining the Vault artifact list.
 

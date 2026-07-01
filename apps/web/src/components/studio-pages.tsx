@@ -27,6 +27,7 @@ import type {
   Organization,
   Permission,
   Project,
+  ProjectExport,
   ProjectSource,
   ProductionStatus,
   ProjectTimeline,
@@ -56,7 +57,10 @@ import {
   Check,
   Clapperboard,
   Copy,
+  Archive,
+  Download,
   Film,
+  FileText,
   Filter,
   ImageIcon,
   Loader2,
@@ -479,6 +483,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
 }
 
 function ProjectOverviewContent({ projectId }: { projectId: string }) {
+  const { session } = useStudioSession();
   const project = useStudioQuery<Project | null>(null, `project:${projectId}`, async (activeSession) => studioApi.getProject(activeSession, projectId));
   const production = useStudioQuery<ProductionStatus | null>(null, `project:${projectId}:production`, async (activeSession) => studioApi.getProductionStatus(activeSession, projectId));
   const scripts = useStudioQuery<Script[]>([], `project:${projectId}:scripts`, async (activeSession) => (await studioApi.listScripts(activeSession, projectId)).items);
@@ -486,6 +491,8 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
   const workflows = useStudioQuery<WorkflowRun[]>([], `project:${projectId}:runs`, async (activeSession) => (await studioApi.listWorkflowRuns(activeSession, projectId)).items);
   const artifacts = useStudioQuery<Artifact[]>([], `project:${projectId}:artifacts`, async (activeSession) => (await studioApi.listArtifacts(activeSession, projectId)).items);
   const finalVideos = useStudioQuery<FinalVideoVersion[]>([], `project:${projectId}:final-videos`, async (activeSession) => (await studioApi.listFinalVideos(activeSession, projectId)).items);
+  const [finalVideoBusy, setFinalVideoBusy] = useState(false);
+  const [finalVideoError, setFinalVideoError] = useState("");
   const latestRun = workflows.data[0];
   const activeFinalVideo = finalVideos.data.find((item) => item.status === "active") ?? finalVideos.data[0] ?? null;
   const finalVideo = activeFinalVideo
@@ -499,6 +506,22 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
         previewUrl: activeFinalVideo.previewUrl ?? undefined,
       } satisfies Artifact)
     : artifacts.data.find((item) => item.type === "final_video");
+
+  async function downloadOverviewFinalVideo() {
+    if (!activeFinalVideo) {
+      return;
+    }
+    setFinalVideoBusy(true);
+    setFinalVideoError("");
+    try {
+      const response = await studioApi.createFinalVideoDownloadUrl(session, projectId, activeFinalVideo.id, { expiresSeconds: 900 });
+      window.open(response.url, "_blank", "noopener,noreferrer");
+    } catch (cause) {
+      setFinalVideoError(errorMessage(cause));
+    } finally {
+      setFinalVideoBusy(false);
+    }
+  }
 
   return (
     <SessionGate>
@@ -564,6 +587,16 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
             <div className="grid gap-3 p-4">
               {finalVideo ? <MediaPreview artifact={finalVideo} /> : <EmptyState title="还没有最终成片" description="还没有最终成片，请进入时间线合成。" />}
               <div className="flex flex-wrap gap-2">
+                {activeFinalVideo ? (
+                  <button className="studio-button" disabled={finalVideoBusy} onClick={downloadOverviewFinalVideo} type="button">
+                    {finalVideoBusy ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
+                    下载成片
+                  </button>
+                ) : null}
+                <Link className="studio-button" href={projectHref(projectId, "export") as Route}>
+                  <Archive size={16} />
+                  进入导出中心
+                </Link>
                 <Link className="studio-button" href={projectHref(projectId, "timeline") as Route}>
                   <Film size={16} />
                   进入时间线
@@ -573,6 +606,7 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
                   合成最终成片
                 </Link>
               </div>
+              <ErrorPanel message={finalVideoError} />
             </div>
           </Surface>
         </div>
@@ -786,6 +820,20 @@ function ProjectTimelineContent({ projectId }: { projectId: string }) {
     }
   }
 
+  async function downloadTimelineFinalVideo(versionId: string) {
+    setBusy(`download-final:${versionId}`);
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.createFinalVideoDownloadUrl(session, projectId, versionId, { expiresSeconds: 900 });
+      window.open(response.url, "_blank", "noopener,noreferrer");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
   const activeVersion = finalVideos.data.find((item) => item.status === "active") ?? null;
 
   return (
@@ -852,6 +900,14 @@ function ProjectTimelineContent({ projectId }: { projectId: string }) {
                       {busy === `activate:${version.id}` ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
                       设为当前
                     </button>
+                    <button className="studio-button" disabled={busy !== "" || !version.storageKey} onClick={() => downloadTimelineFinalVideo(version.id)} type="button">
+                      {busy === `download-final:${version.id}` ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
+                      下载
+                    </button>
+                    <Link className="studio-button" href={projectHref(projectId, "export") as Route}>
+                      <Archive size={16} />
+                      导出
+                    </Link>
                   </div>
                 </div>
               ))}
@@ -3719,6 +3775,20 @@ function VaultContent({ projectId }: { projectId: string }) {
     }
   }
 
+  async function downloadVaultFinalVideo(versionId: string) {
+    setBusy(`download-final:${versionId}`);
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.createFinalVideoDownloadUrl(session, projectId, versionId, { expiresSeconds: 900 });
+      window.open(response.url, "_blank", "noopener,noreferrer");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
   return (
     <SessionGate>
       <Surface className="mb-5 p-4">
@@ -3773,6 +3843,14 @@ function VaultContent({ projectId }: { projectId: string }) {
                           {busy === `activate:${version.id}` ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
                           设为当前
                         </button>
+                        <button className="studio-button" disabled={busy !== "" || !version.storageKey} onClick={() => downloadVaultFinalVideo(version.id)} type="button">
+                          {busy === `download-final:${version.id}` ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
+                          下载成片
+                        </button>
+                        <Link className="studio-button" href={projectHref(projectId, "export") as Route}>
+                          <Archive size={16} />
+                          导出项目
+                        </Link>
                         <button className="studio-button" onClick={() => navigator.clipboard.writeText(version.storageKey ?? "")} type="button">
                           <Copy size={16} />
                           复制存储键
@@ -3813,6 +3891,286 @@ function VaultContent({ projectId }: { projectId: string }) {
         <EmptyState title="还没有媒体资产" description="生成资产参考图、分镜、镜头图片或最终视频后会出现在这里。" />
       )}
     </SessionGate>
+  );
+}
+
+export function ProjectExportPage({ projectId }: { projectId: string }) {
+  return (
+    <AppShell active="projects" title="导出" description="下载成片、素材包或完整项目归档。" projectId={projectId} projectSection="export">
+      <ProjectExportContent projectId={projectId} />
+    </AppShell>
+  );
+}
+
+function ProjectExportContent({ projectId }: { projectId: string }) {
+  const { session } = useStudioSession();
+  const project = useStudioQuery<Project | null>(null, `export:${projectId}:project`, async (activeSession) => studioApi.getProject(activeSession, projectId));
+  const finalVideos = useStudioQuery<FinalVideoVersion[]>([], `export:${projectId}:final-videos`, async (activeSession) => (await studioApi.listFinalVideos(activeSession, projectId)).items);
+  const exportsQuery = useStudioQuery<ProjectExport[]>([], `export:${projectId}:exports`, async (activeSession) => (await studioApi.listProjectExports(activeSession, projectId)).items);
+  const reloadExportsRef = useRef(exportsQuery.reload);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [documentFormat, setDocumentFormat] = useState("json");
+  const [selectedFinalVideoId, setSelectedFinalVideoId] = useState("");
+  const [selectedExportId, setSelectedExportId] = useState("");
+  const [options, setOptions] = useState({
+    includeSources: true,
+    includeScripts: true,
+    includeEvents: true,
+    includeAssets: true,
+    includeShotImages: true,
+    includeShotVideos: true,
+    includeFinalVideos: true,
+  });
+  const activeFinalVideo = finalVideos.data.find((item) => item.status === "active") ?? finalVideos.data[0] ?? null;
+  const selectedFinalVideo = finalVideos.data.find((item) => item.id === selectedFinalVideoId) ?? activeFinalVideo;
+  const selectedExport = exportsQuery.data.find((item) => item.id === selectedExportId) ?? null;
+  const hasRunningExports = exportsQuery.data.some((item) => item.status === "queued" || item.status === "running");
+
+  useEffect(() => {
+    reloadExportsRef.current = exportsQuery.reload;
+  }, [exportsQuery.reload]);
+
+  useEffect(() => {
+    if (!hasRunningExports) {
+      return;
+    }
+    const timer = window.setInterval(() => reloadExportsRef.current(), 4000);
+    return () => window.clearInterval(timer);
+  }, [hasRunningExports]);
+
+  function updateOption(key: keyof typeof options, value: boolean) {
+    setOptions((current) => ({ ...current, [key]: value }));
+  }
+
+  async function createExport(exportType: string) {
+    setBusy(`create:${exportType}`);
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.createProjectExport(session, projectId, compactRecord({
+        exportType,
+        format: exportFormatForType(exportType, documentFormat),
+        title: exportTitle(project.data?.name ?? "", exportType),
+        options: compactRecord({
+          ...options,
+          finalVideoVersionId: selectedFinalVideo?.id ?? "",
+        }),
+      }));
+      setNotice(`导出任务已创建：${response.workflowRunId}`);
+      exportsQuery.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openFinalVideoDownload(copyOnly: boolean) {
+    if (!selectedFinalVideo) {
+      return;
+    }
+    setBusy(copyOnly ? "copy-final" : "download-final");
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.createFinalVideoDownloadUrl(session, projectId, selectedFinalVideo.id, { expiresSeconds: 900 });
+      if (copyOnly) {
+        await navigator.clipboard.writeText(response.url);
+        setNotice("下载链接已复制");
+      } else {
+        window.open(response.url, "_blank", "noopener,noreferrer");
+      }
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openExportDownload(item: ProjectExport, copyOnly: boolean) {
+    setBusy(`${copyOnly ? "copy" : "download"}:${item.id}`);
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.createProjectExportDownloadUrl(session, projectId, item.id, { expiresSeconds: 900 });
+      if (copyOnly) {
+        await navigator.clipboard.writeText(response.url);
+        setNotice("下载链接已复制");
+      } else {
+        window.open(response.url, "_blank", "noopener,noreferrer");
+      }
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const activeArtifact = selectedFinalVideo
+    ? ({
+        id: selectedFinalVideo.artifactId ?? selectedFinalVideo.id,
+        organizationId: selectedFinalVideo.organizationId,
+        projectId: selectedFinalVideo.projectId,
+        type: "final_video",
+        storageKey: selectedFinalVideo.storageKey ?? undefined,
+        mimeType: "video/mp4",
+        previewUrl: selectedFinalVideo.previewUrl ?? undefined,
+      } satisfies Artifact)
+    : null;
+
+  return (
+    <SessionGate>
+      <div className="grid gap-5">
+        <Surface>
+          <SectionTitle title="当前主成片" description="下载当前激活的最终视频版本。" />
+          <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            {activeArtifact ? <MediaPreview artifact={activeArtifact} /> : <EmptyState title="还没有主成片" description="请先进入时间线合成最终视频。" />}
+            <div className="grid content-start gap-3">
+              {selectedFinalVideo ? (
+                <>
+                  <div>
+                    <p className="text-base font-semibold text-slate-900">{selectedFinalVideo.title}</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      v{selectedFinalVideo.version} · {selectedFinalVideo.resolution} · {selectedFinalVideo.aspectRatio}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">{secondsLabel(selectedFinalVideo.durationSeconds)} · {formatTime(selectedFinalVideo.createdAt)}</p>
+                  </div>
+                  <SelectInput label="成片版本" value={selectedFinalVideo.id} values={finalVideos.data.map((item) => item.id)} labels={Object.fromEntries(finalVideos.data.map((item) => [item.id, `v${item.version} · ${item.title}`]))} onChange={setSelectedFinalVideoId} />
+                  <button className="studio-button studio-button-primary justify-center" disabled={busy !== ""} onClick={() => openFinalVideoDownload(false)} type="button">
+                    {busy === "download-final" ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
+                    下载成片
+                  </button>
+                  <button className="studio-button justify-center" disabled={busy !== ""} onClick={() => openFinalVideoDownload(true)} type="button">
+                    {busy === "copy-final" ? <Loader2 className="animate-spin" size={16} /> : <Copy size={16} />}
+                    复制下载链接
+                  </button>
+                </>
+              ) : (
+                <Link className="studio-button studio-button-primary justify-center" href={projectHref(projectId, "timeline") as Route}>
+                  <Film size={16} />
+                  进入时间线
+                </Link>
+              )}
+            </div>
+          </div>
+        </Surface>
+
+        <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <Surface>
+            <SectionTitle title="导出选项" description="选择归档中包含的数据和媒体。" />
+            <div className="grid gap-3 p-4">
+              <SelectInput label="文档格式" value={documentFormat} values={["json", "markdown"]} labels={{ json: "JSON", markdown: "Markdown" }} onChange={setDocumentFormat} />
+              <ExportOption checked={options.includeSources} label="包含原文" onChange={(value) => updateOption("includeSources", value)} />
+              <ExportOption checked={options.includeScripts} label="包含剧本" onChange={(value) => updateOption("includeScripts", value)} />
+              <ExportOption checked={options.includeEvents} label="包含事件图谱" onChange={(value) => updateOption("includeEvents", value)} />
+              <ExportOption checked={options.includeAssets} label="包含资产设定" onChange={(value) => updateOption("includeAssets", value)} />
+              <ExportOption checked={options.includeShotImages} label="包含镜头图片" onChange={(value) => updateOption("includeShotImages", value)} />
+              <ExportOption checked={options.includeShotVideos} label="包含镜头视频" onChange={(value) => updateOption("includeShotVideos", value)} />
+              <ExportOption checked={options.includeFinalVideos} label="包含最终成片" onChange={(value) => updateOption("includeFinalVideos", value)} />
+            </div>
+          </Surface>
+
+          <Surface>
+            <SectionTitle title="创建导出" description="导出任务会在后台生成文件。" />
+            <div className="grid gap-3 p-4 md:grid-cols-2">
+              {exportCards().map((card) => (
+                <div className="rounded-md border border-slate-200 p-4" key={card.type}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-slate-900">{card.title}</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-600">{card.description}</p>
+                    </div>
+                    {card.type === "final_video" ? <Video className="text-slate-500" size={20} /> : card.type === "documents" ? <FileText className="text-slate-500" size={20} /> : <Archive className="text-slate-500" size={20} />}
+                  </div>
+                  <button className="studio-button studio-button-primary mt-4 w-full" disabled={busy !== "" || (card.type === "final_video" && !selectedFinalVideo)} onClick={() => createExport(card.type)} type="button">
+                    {busy === `create:${card.type}` ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+                    创建导出
+                  </button>
+                </div>
+              ))}
+            </div>
+          </Surface>
+        </div>
+
+        <Surface>
+          <SectionTitle title="导出历史" description="已创建的导出任务和下载入口。" />
+          <QueryBody state={exportsQuery}>
+            {exportsQuery.data.length ? (
+              <div className="divide-y divide-slate-200">
+                {exportsQuery.data.map((item) => (
+                  <div className="grid gap-3 px-4 py-3 xl:grid-cols-[1.2fr_120px_120px_120px_150px_220px] xl:items-center" key={item.id}>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-slate-900">{item.title}</p>
+                      <p className="mt-1 truncate text-xs text-slate-500">{item.storageKey ?? item.workflowRunId ?? item.id}</p>
+                    </div>
+                    <span className="text-sm text-slate-600">{exportTypeLabel(item.exportType)}</span>
+                    <span className="text-sm text-slate-600">{exportFormatLabel(item.format)}</span>
+                    <StatusBadge status={item.status} />
+                    <span className="text-sm text-slate-600">{formatBytes(item.byteSize)}</span>
+                    <div className="flex flex-wrap gap-2">
+                      <button className="studio-button" disabled={busy !== "" || item.status !== "succeeded"} onClick={() => openExportDownload(item, false)} type="button">
+                        {busy === `download:${item.id}` ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
+                        下载
+                      </button>
+                      <button className="studio-button" onClick={() => setSelectedExportId(item.id)} type="button">
+                        查看详情
+                      </button>
+                    </div>
+                    <div className="text-xs text-slate-500 xl:col-span-6">
+                      创建：{formatTime(item.createdAt)} · 完成：{formatTime(item.completedAt ?? undefined)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="还没有导出记录" description="创建导出后会显示在这里。" />
+            )}
+          </QueryBody>
+        </Surface>
+
+        {selectedExport ? (
+          <Surface>
+            <SectionTitle title="导出详情" description={selectedExport.title} />
+            <div className="grid gap-3 p-4 text-sm text-slate-700 md:grid-cols-2">
+              <InfoTile label="类型" value={exportTypeLabel(selectedExport.exportType)} />
+              <InfoTile label="格式" value={exportFormatLabel(selectedExport.format)} />
+              <InfoTile label="状态" value={selectedExport.status} />
+              <InfoTile label="大小" value={formatBytes(selectedExport.byteSize)} />
+              <InfoTile label="创建时间" value={formatTime(selectedExport.createdAt)} />
+              <InfoTile label="完成时间" value={formatTime(selectedExport.completedAt ?? undefined)} />
+              <div className="md:col-span-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">输出</p>
+                <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-50">{JSON.stringify(selectedExport.output ?? {}, null, 2)}</pre>
+              </div>
+              <div className="flex flex-wrap gap-2 md:col-span-2">
+                <button className="studio-button studio-button-primary" disabled={busy !== "" || selectedExport.status !== "succeeded"} onClick={() => openExportDownload(selectedExport, false)} type="button">
+                  <Download size={16} />
+                  下载
+                </button>
+                <button className="studio-button" disabled={busy !== "" || selectedExport.status !== "succeeded"} onClick={() => openExportDownload(selectedExport, true)} type="button">
+                  <Copy size={16} />
+                  复制下载链接
+                </button>
+              </div>
+            </div>
+          </Surface>
+        ) : null}
+
+        <ErrorPanel message={error} />
+        {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
+      </div>
+    </SessionGate>
+  );
+}
+
+function ExportOption({ checked, label, onChange }: { checked: boolean; label: string; onChange: (value: boolean) => void }) {
+  return (
+    <label className="flex items-center gap-2 text-sm text-slate-700">
+      <input checked={checked} onChange={(event) => onChange(event.target.checked)} type="checkbox" />
+      {label}
+    </label>
   );
 }
 
@@ -5219,6 +5577,89 @@ function trimLabel(clip: TimelineClipDetail) {
     return start > 0 ? `裁剪 ${start.toFixed(1)}s 起` : "未裁剪";
   }
   return `裁剪 ${start.toFixed(1)}s-${end.toFixed(1)}s`;
+}
+
+function exportCards() {
+  return [
+    { type: "final_video", title: "最终成片", description: "导出当前选择的最终视频版本。" },
+    { type: "documents", title: "项目文档", description: "导出项目设定、剧本、资产、分镜和时间线数据。" },
+    { type: "asset_package", title: "素材包", description: "打包资产参考图、镜头图片、镜头视频和成片媒体。" },
+    { type: "project_archive", title: "完整归档", description: "生成包含文档、素材和最终成片的项目归档包。" },
+  ];
+}
+
+function exportFormatForType(exportType: string, documentFormat: string) {
+  switch (exportType) {
+    case "final_video":
+      return "mp4";
+    case "documents":
+      return documentFormat === "markdown" ? "markdown" : "json";
+    default:
+      return "zip";
+  }
+}
+
+function exportTitle(projectName: string, exportType: string) {
+  const name = projectName.trim() || "CineWeave 项目";
+  switch (exportType) {
+    case "final_video":
+      return `${name} 最终成片`;
+    case "documents":
+      return `${name} 项目文档`;
+    case "asset_package":
+      return `${name} 素材包`;
+    case "project_archive":
+      return `${name} 完整归档`;
+    default:
+      return `${name} 导出`;
+  }
+}
+
+function exportTypeLabel(value: string) {
+  switch (value) {
+    case "final_video":
+      return "最终成片";
+    case "documents":
+      return "项目文档";
+    case "asset_package":
+      return "素材包";
+    case "project_archive":
+      return "完整归档";
+    default:
+      return value;
+  }
+}
+
+function exportFormatLabel(value: string) {
+  switch (value) {
+    case "mp4":
+      return "MP4";
+    case "json":
+      return "JSON";
+    case "markdown":
+      return "Markdown";
+    case "zip":
+      return "ZIP";
+    default:
+      return value;
+  }
+}
+
+function formatBytes(value?: number | null) {
+  if (!value || value <= 0) {
+    return "暂无";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = value / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && size >= 1024; index += 1) {
+    size /= 1024;
+    unit = units[index];
+  }
+  return `${size.toFixed(size >= 10 ? 1 : 2)} ${unit}`;
 }
 
 function errorMessage(cause: unknown) {

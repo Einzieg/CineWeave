@@ -8,6 +8,8 @@ import type {
   CanonicalAsset,
   AssetReference,
   ComposeTimelineResponse,
+  CreateProjectExportResponse,
+  DownloadUrlResponse,
   FinalVideoVersion,
   GenerateAssetCardResponse,
   JsonRecord,
@@ -22,6 +24,7 @@ import type {
   Project,
   ProjectSource,
   ProductionActionResponse,
+  ProjectExport,
   ProductionStatus,
   ProjectTimeline,
   RegenerateResponse,
@@ -132,6 +135,14 @@ export const studioApi = {
     apiRequest<ProductionStatus>(`/api/projects/${projectId}/production/status`, { session }),
   runProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<ProductionActionResponse>(`/api/projects/${projectId}/production/actions`, { method: "POST", session, body }),
+  listProjectExports: (session: StudioSession, projectId: string) =>
+    apiRequest<ListEnvelope<ProjectExport>>(`/api/projects/${projectId}/exports`, { session }),
+  createProjectExport: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<CreateProjectExportResponse>(`/api/projects/${projectId}/exports`, { method: "POST", session, body }),
+  getProjectExport: (session: StudioSession, projectId: string, exportId: string) =>
+    apiRequest<ProjectExport>(`/api/projects/${projectId}/exports/${exportId}`, { session }),
+  createProjectExportDownloadUrl: (session: StudioSession, projectId: string, exportId: string, body: JsonRecord) =>
+    apiRequest<DownloadUrlResponse>(`/api/projects/${projectId}/exports/${exportId}/download-url`, { method: "POST", session, body }),
   getShotProductionStatus: (session: StudioSession, projectId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
     apiRequest<ShotProductionStatus>(`/api/projects/${projectId}/shot-production/status`, { session, query }),
   runShotProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>
@@ -164,6 +175,8 @@ export const studioApi = {
     apiRequest<FinalVideoVersion>(`/api/projects/${projectId}/final-videos/${versionId}`, { session }),
   activateFinalVideo: (session: StudioSession, projectId: string, versionId: string) =>
     apiRequest<FinalVideoVersion>(`/api/projects/${projectId}/final-videos/${versionId}/activate`, { method: "POST", session, body: {} }),
+  createFinalVideoDownloadUrl: (session: StudioSession, projectId: string, versionId: string, body: JsonRecord) =>
+    apiRequest<DownloadUrlResponse>(`/api/projects/${projectId}/final-videos/${versionId}/download-url`, { method: "POST", session, body }),
   deleteFinalVideo: (session: StudioSession, projectId: string, versionId: string) =>
     apiRequest<{ deleted: boolean; versionId: string }>(`/api/projects/${projectId}/final-videos/${versionId}`, { method: "DELETE", session }),
 

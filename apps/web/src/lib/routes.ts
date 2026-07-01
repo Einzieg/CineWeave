@@ -1,6 +1,7 @@
 import {
   Boxes,
   FileCode2,
+  Download,
   FolderKanban,
   KeyRound,
   Library,
@@ -30,6 +31,7 @@ export const projectNavItems = [
   { label: "时间线", segment: "timeline", icon: Film },
   { label: "工作流", segment: "workflows", icon: Workflow },
   { label: "媒体资产", segment: "vault", icon: Library },
+  { label: "导出", segment: "export", icon: Download },
   { label: "项目设置", segment: "settings", icon: Settings2 },
 ] as const;
 
@@ -80,6 +82,8 @@ export function workflowLabel(value: string) {
       return "批量取消镜头视频";
     case "compose_timeline":
       return "时间线合成成片";
+    case "export_project":
+      return "项目导出";
     default:
       return value;
   }

@@ -1006,6 +1006,118 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/final-videos/{versionId}/download-url:
+    post:
+      operationId: createFinalVideoDownloadUrl
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/FinalVideoVersionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FinalVideoDownloadUrlRequest"
+      responses:
+        "200":
+          description: Signed final video download URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinalVideoDownloadUrlEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/exports:
+    get:
+      operationId: listProjectExports
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project exports
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectExportListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createProjectExport
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectExportRequest"
+      responses:
+        "202":
+          description: Export workflow queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateProjectExportResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/exports/{exportId}:
+    get:
+      operationId: getProjectExport
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ProjectExportId"
+      responses:
+        "200":
+          description: Project export
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectExportEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/exports/{exportId}/download-url:
+    post:
+      operationId: createProjectExportDownloadUrl
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ProjectExportId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectExportDownloadUrlRequest"
+      responses:
+        "200":
+          description: Signed project export download URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectExportDownloadUrlEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/shot-production/status:
     get:
       operationId: getShotProductionStatus
@@ -3770,6 +3882,13 @@ components:
       schema:
         type: string
         format: uuid
+    ProjectExportId:
+      name: exportId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     WorkflowRunId:
       name: workflowRunId
       in: path
@@ -5606,6 +5725,146 @@ components:
         previewUrl:
           type: string
           format: uri
+    ProjectExport:
+      type: object
+      required: [id, organizationId, projectId, exportType, status, title, format, request, output, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        exportType:
+          type: string
+          enum: [final_video, documents, asset_package, project_archive]
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        title:
+          type: string
+        format:
+          type: string
+          enum: [mp4, json, markdown, zip]
+        workflowRunId:
+          type: string
+          format: uuid
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        byteSize:
+          type: integer
+          format: int64
+        contentHash:
+          type: string
+        request:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    CreateProjectExportRequest:
+      type: object
+      required: [exportType]
+      properties:
+        exportType:
+          type: string
+          enum: [final_video, documents, asset_package, project_archive]
+        format:
+          type: string
+          enum: [mp4, json, markdown, zip]
+        title:
+          type: string
+        options:
+          type: object
+          additionalProperties: true
+    CreateProjectExportResponse:
+      type: object
+      required: [exportId, workflowRunId, status]
+      properties:
+        exportId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued]
+    ProjectExportDownloadUrlRequest:
+      type: object
+      properties:
+        expiresSeconds:
+          type: integer
+          default: 900
+          maximum: 3600
+    ProjectExportDownloadUrlResponse:
+      type: object
+      required: [exportId, storageKey, url, method, expiresAt]
+      properties:
+        exportId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        url:
+          type: string
+          format: uri
+        method:
+          type: string
+          enum: [GET]
+        expiresAt:
+          type: string
+          format: date-time
+    FinalVideoDownloadUrlRequest:
+      type: object
+      properties:
+        expiresSeconds:
+          type: integer
+          default: 900
+          maximum: 3600
+    FinalVideoDownloadUrlResponse:
+      type: object
+      required: [finalVideoVersionId, storageKey, url, method, expiresAt]
+      properties:
+        finalVideoVersionId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        url:
+          type: string
+          format: uri
+        method:
+          type: string
+          enum: [GET]
+        expiresAt:
+          type: string
+          format: date-time
     TimelineDetail:
       type: object
       required: [timeline, clips, finalVideoVersions]
@@ -6718,6 +6977,46 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/FinalVideoVersion"
+    FinalVideoDownloadUrlEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/FinalVideoDownloadUrlResponse"
+    ProjectExportEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectExport"
+    ProjectExportListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProjectExport"
+    CreateProjectExportResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CreateProjectExportResponse"
+    ProjectExportDownloadUrlEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectExportDownloadUrlResponse"
     ProductionStatusEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

@@ -760,6 +760,45 @@ export type ComposeTimelineResponse = {
   status: string;
 };
 
+export type ProjectExport = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  exportType: string;
+  status: string;
+  title: string;
+  format: string;
+  workflowRunId?: string | null;
+  artifactId?: string | null;
+  mediaFileId?: string | null;
+  storageKey?: string | null;
+  byteSize?: number | null;
+  contentHash?: string | null;
+  request?: JsonRecord;
+  output?: JsonRecord;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
+export type CreateProjectExportResponse = {
+  exportId: string;
+  workflowRunId: string;
+  status: string;
+};
+
+export type DownloadUrlResponse = {
+  storageKey: string;
+  url: string;
+  method: string;
+  expiresAt: string;
+  exportId?: string;
+  finalVideoVersionId?: string;
+};
+
 export type ProviderAccount = {
   id: string;
   displayName?: string;
