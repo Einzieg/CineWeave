@@ -1772,6 +1772,64 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots:
+    post:
+      operationId: createStoryboardShot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStoryboardShotRequest"
+      responses:
+        "201":
+          description: Created storyboard shot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardShotEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/reorder:
+    post:
+      operationId: reorderStoryboardShots
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReorderStoryboardShotsRequest"
+      responses:
+        "200":
+          description: Reordered storyboard shots
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/ReorderStoryboardShotItem"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/storyboard-shots/{shotId}:
     patch:
       operationId: updateStoryboardShot
@@ -1798,6 +1856,61 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteStoryboardShot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "200":
+          description: Soft-deleted storyboard shot
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [deleted, shotId]
+                        properties:
+                          deleted:
+                            type: boolean
+                          shotId:
+                            type: string
+                            format: uuid
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/detail:
+    get:
+      operationId: getStoryboardShotDetail
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+        - name: previewExpiresSeconds
+          in: query
+          schema:
+            type: integer
+            minimum: 60
+            maximum: 86400
+      responses:
+        "200":
+          description: Storyboard shot detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardShotDetailEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/storyboard-shots/{shotId}/review:
     post:
@@ -4170,6 +4283,16 @@ components:
         updatedAt:
           type: string
           format: date-time
+    StoryboardShotRequirementDetail:
+      allOf:
+        - $ref: "#/components/schemas/ShotAssetRequirement"
+        - type: object
+          properties:
+            derivedPreviewUrl:
+              type: string
+              format: uri
+            asset:
+              $ref: "#/components/schemas/CanonicalAsset"
     Asset:
       type: object
       required: [id, organizationId, projectId, assetType, name, metadata, createdAt, updatedAt]
@@ -4671,6 +4794,28 @@ components:
           type: array
           items:
             type: string
+    StoryboardShotDetail:
+      type: object
+      required: [shot, requirements]
+      properties:
+        shot:
+          $ref: "#/components/schemas/StoryboardShot"
+        scriptScene:
+          $ref: "#/components/schemas/ShotSourceScene"
+        requirements:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardShotRequirementDetail"
+        imageArtifact:
+          $ref: "#/components/schemas/Artifact"
+        imagePreviewUrl:
+          type: string
+          format: uri
+        videoArtifact:
+          $ref: "#/components/schemas/Artifact"
+        videoPreviewUrl:
+          type: string
+          format: uri
     NovelEvent:
       type: object
       required: [id, projectId, sourceId, eventIndex, sequenceNo, title, summary, importance, characters, scenes, props, keywords, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
@@ -5925,6 +6070,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/StoryboardShot"
+    StoryboardShotDetailEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/StoryboardShotDetail"
     StoryboardShotListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -8516,6 +8668,59 @@ components:
           type: string
         prompt:
           type: string
+    CreateStoryboardShotRequest:
+      type: object
+      properties:
+        workflowRunId:
+          type: string
+          format: uuid
+        scriptSceneId:
+          type: string
+          format: uuid
+        shotNo:
+          type: integer
+          minimum: 1
+        shotIndex:
+          type: integer
+          minimum: 0
+        durationSeconds:
+          type: number
+          format: double
+          minimum: 0
+        visual:
+          type: string
+        camera:
+          type: string
+        motion:
+          type: string
+        mood:
+          type: string
+        imagePrompt:
+          type: string
+        videoPrompt:
+          type: string
+    ReorderStoryboardShotItem:
+      type: object
+      required: [shotId, shotIndex, shotNo]
+      properties:
+        shotId:
+          type: string
+          format: uuid
+        shotIndex:
+          type: integer
+          minimum: 0
+        shotNo:
+          type: integer
+          minimum: 1
+    ReorderStoryboardShotsRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReorderStoryboardShotItem"
     UpdateStoryboardShotRequest:
       type: object
       properties:

@@ -1,6 +1,7 @@
 "use client";
 
 import { AppShell, SectionTitle, Surface } from "@/components/app-shell";
+import { AssetCardPanel } from "@/components/assets/asset-card-panel";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorPanel } from "@/components/error-panel";
 import { MediaPreview } from "@/components/media-preview";
@@ -35,6 +36,7 @@ import type {
   ScriptVersion,
   ShotAssetRequirement,
   StoryboardShot,
+  StoryboardShotDetail,
   StudioSession,
   Team,
   WorkflowNodeRun,
@@ -705,7 +707,7 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 ]}
                 summary={status.data.stages.storyboard.summary}
                 primary={{ label: "生成分镜", action: "generate_storyboard", disabled: !status.data.stages.source.activeScriptId }}
-                secondary={{ label: "进入分镜镜头", href: projectHref(projectId, "storyboard") }}
+                secondary={{ label: "进入分镜工作台", href: projectHref(projectId, "storyboard") }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -726,7 +728,7 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 summary={status.data.stages.shotAssets.summary}
                 primary={{ label: "分析镜头派生资产", action: "analyze_shot_assets", disabled: !status.data.stages.source.activeScriptId }}
                 secondary={{ label: "生成派生参考图", action: "generate_derived_asset_images", disabled: !status.data.stages.source.activeScriptId }}
-                link={{ label: "进入分镜镜头", href: projectHref(projectId, "storyboard") }}
+                link={{ label: "进入分镜工作台", href: projectHref(projectId, "storyboard") }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -737,7 +739,7 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 metrics={shotMediaMetrics(status.data.stages.shotImages)}
                 primary={{ label: "生成镜头图片", action: "generate_shot_images", disabled: !status.data.stages.source.activeScriptId }}
                 secondary={{ label: "重新生成失败图片", action: "generate_shot_images", disabled: !status.data.stages.source.activeScriptId || status.data.stages.shotImages.failed === 0 }}
-                link={{ label: "进入分镜镜头", href: projectHref(projectId, "storyboard") }}
+                link={{ label: "进入分镜工作台", href: projectHref(projectId, "storyboard") }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -748,7 +750,7 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                 metrics={shotMediaMetrics(status.data.stages.shotVideos)}
                 primary={{ label: "生成镜头视频", action: "generate_shot_videos", disabled: !status.data.stages.source.activeScriptId }}
                 secondary={{ label: "查看/取消运行任务", href: projectHref(projectId, "workflows") }}
-                link={{ label: "进入分镜镜头", href: projectHref(projectId, "storyboard") }}
+                link={{ label: "进入分镜工作台", href: projectHref(projectId, "storyboard") }}
                 busy={busy}
                 onRun={runAction}
               />
@@ -1943,7 +1945,7 @@ function AssetsContent({ projectId }: { projectId: string }) {
 
 export function StoryboardPage({ projectId }: { projectId: string }) {
   return (
-    <AppShell active="projects" title="分镜镜头" description="展示从剧本生成的分镜，以及每个镜头的派生资产需求。" projectId={projectId} projectSection="storyboard">
+    <AppShell active="projects" title="分镜工作台" description="按分场管理镜头、派生资产、镜头图片和镜头视频。" projectId={projectId} projectSection="storyboard">
       <StoryboardContent projectId={projectId} />
     </AppShell>
   );
@@ -1953,15 +1955,14 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const { session } = useStudioSession();
   const scripts = useStudioQuery<Script[]>([], `storyboard:scripts:${projectId}`, async (activeSession) => (await studioApi.listScripts(activeSession, projectId)).items);
   const workflows = useStudioQuery<WorkflowRun[]>([], `storyboard:runs:${projectId}`, async (activeSession) => (await studioApi.listWorkflowRuns(activeSession, projectId)).items);
-  const requirements = useStudioQuery<ShotAssetRequirement[]>([], `storyboard:reqs:${projectId}`, async (activeSession) => (await studioApi.listShotAssetRequirements(activeSession, projectId)).items);
-  const assets = useStudioQuery<CanonicalAsset[]>([], `storyboard:assets:${projectId}`, async (activeSession) => (await studioApi.listCanonicalAssets(activeSession, projectId)).items);
   const [scriptId, setScriptId] = useState("");
-  const [sceneFilter, setSceneFilter] = useState("");
+  const [selectedSceneId, setSelectedSceneId] = useState("");
   const [workflowRunId, setWorkflowRunId] = useState("");
+  const [selectedShotId, setSelectedShotId] = useState("");
   const [maxShots, setMaxShots] = useState("3");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [editingShot, setEditingShot] = useState<StoryboardShot | null>(null);
+  const [notice, setNotice] = useState("");
   const [editingRequirement, setEditingRequirement] = useState<ShotAssetRequirement | null>(null);
   const [editingAsset, setEditingAsset] = useState<CanonicalAsset | null>(null);
   const storyboardRuns = workflows.data.filter((run) => ["script_to_storyboard", "script_to_video", "full_production"].includes(stringFrom(run.input.workflowType)));
@@ -1969,22 +1970,38 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const scriptScenes = useStudioQuery<ScriptScene[]>([], `storyboard:scenes:${projectId}:${effectiveScriptId}`, async (activeSession) =>
     effectiveScriptId ? (await studioApi.listScriptScenes(activeSession, projectId, effectiveScriptId)).items : Promise.resolve([]),
   );
-  const effectiveSceneFilter = validSelection(sceneFilter, scriptScenes.data);
+  const effectiveSceneId = selectedSceneId && scriptScenes.data.some((scene) => scene.id === selectedSceneId) ? selectedSceneId : "";
   const effectiveWorkflowRunId = validSelection(workflowRunId, storyboardRuns);
   const shots = useStudioQuery<StoryboardShot[]>([], `storyboard:shots:${effectiveWorkflowRunId}`, async (activeSession) =>
     effectiveWorkflowRunId ? (await studioApi.listWorkflowShots(activeSession, effectiveWorkflowRunId)).items : Promise.resolve([]),
   );
-  const filteredShots = effectiveSceneFilter ? shots.data.filter((shot) => shot.scriptSceneId === effectiveSceneFilter) : shots.data;
+  const allShots = [...shots.data].sort((left, right) => left.shotIndex - right.shotIndex);
+  const filteredShots = allShots.filter((shot) => !effectiveSceneId || shot.scriptSceneId === effectiveSceneId);
+  const creatingShot = selectedShotId === "new";
+  const activeShot = creatingShot ? null : filteredShots.find((shot) => shot.id === selectedShotId) ?? filteredShots[0] ?? null;
+  const shotDetail = useStudioQuery<StoryboardShotDetail | null>(null, `storyboard:shot-detail:${projectId}:${activeShot?.id ?? ""}:${creatingShot}`, async (activeSession) =>
+    activeShot ? studioApi.getStoryboardShotDetail(activeSession, projectId, activeShot.id) : Promise.resolve(null),
+  );
+  const sceneShotCounts = new Map<string, number>();
+  const sceneStaleCounts = new Map<string, number>();
+  for (const shot of allShots) {
+    if (shot.scriptSceneId) {
+      sceneShotCounts.set(shot.scriptSceneId, (sceneShotCounts.get(shot.scriptSceneId) ?? 0) + 1);
+      if (shot.staleState && shot.staleState !== "fresh") {
+        sceneStaleCounts.set(shot.scriptSceneId, (sceneStaleCounts.get(shot.scriptSceneId) ?? 0) + 1);
+      }
+    }
+  }
 
   async function perform(label: string, action: () => Promise<void>) {
     setBusy(label);
     setError("");
+    setNotice("");
     try {
       await action();
       workflows.reload();
-      requirements.reload();
       shots.reload();
-      assets.reload();
+      shotDetail.reload();
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -2009,32 +2026,122 @@ function StoryboardContent({ projectId }: { projectId: string }) {
     );
   }
 
-  async function openRequirementAsset(req: ShotAssetRequirement) {
+  async function openAssetCard(asset: CanonicalAsset) {
     await perform("加载资产卡", async () => {
-      setEditingAsset(await studioApi.getCanonicalAsset(session, projectId, req.assetId, true));
+      setEditingAsset(await studioApi.getCanonicalAsset(session, projectId, asset.id, true));
     });
+  }
+
+  async function saveShot(body: JsonRecord) {
+    if (creatingShot) {
+      const created = await studioApi.createStoryboardShot(
+        session,
+        projectId,
+        compactRecord({
+          workflowRunId: effectiveWorkflowRunId || undefined,
+          scriptSceneId: effectiveSceneId || undefined,
+          ...body,
+        }),
+      );
+      setWorkflowRunId(created.workflowRunId);
+      setSelectedShotId(created.id);
+      return;
+    }
+    if (activeShot) {
+      await studioApi.updateStoryboardShot(session, projectId, activeShot.id, body);
+    }
+  }
+
+  async function reviewShot(reviewStatus: "approved" | "needs_edit") {
+    if (!activeShot) {
+      return;
+    }
+    await reviewShotById(activeShot, reviewStatus);
+  }
+
+  async function reviewShotById(shot: StoryboardShot, reviewStatus: "approved" | "needs_edit") {
+    await perform(reviewStatus === "approved" ? "确认镜头" : "标记镜头需修改", async () => void (await studioApi.reviewStoryboardShot(session, projectId, shot.id, { reviewStatus })));
+  }
+
+  async function deleteShot() {
+    if (!activeShot) {
+      return;
+    }
+    await perform("删除镜头", async () => {
+      await studioApi.deleteStoryboardShot(session, projectId, activeShot.id);
+      setSelectedShotId("");
+    });
+  }
+
+  async function regenerateShot(targetType: "shot_image" | "shot_video") {
+    if (!activeShot) {
+      return;
+    }
+    await regenerateShotById(activeShot, targetType);
+  }
+
+  async function regenerateShotById(shot: StoryboardShot, targetType: "shot_image" | "shot_video") {
+    await perform(targetType === "shot_image" ? "生成镜头图片" : "生成镜头视频", async () => {
+      const response = await studioApi.regenerate(session, projectId, { targetType, targetId: shot.id, options: { force: true } });
+      setNotice(`已提交工作流：${response.workflowRunId}`);
+    });
+  }
+
+  async function regenerateCurrentScene() {
+    if (!effectiveSceneId) {
+      return;
+    }
+    await perform("生成当前分场分镜", async () => {
+      const response = await studioApi.regenerate(session, projectId, { targetType: "scene_storyboard", targetId: effectiveSceneId, options: { force: true, maxShots: Number(maxShots) } });
+      setNotice(`已提交工作流：${response.workflowRunId}`);
+    });
+  }
+
+  async function regenerateRequirement(requirement: ShotAssetRequirement) {
+    await perform("生成派生资产图", async () => {
+      const response = await studioApi.regenerate(session, projectId, { targetType: "derived_asset_image", targetId: requirement.id, options: { force: true } });
+      setNotice(`已提交工作流：${response.workflowRunId}`);
+    });
+  }
+
+  async function reorderAll(nextOrder: StoryboardShot[]) {
+    await perform("调整镜头顺序", async () => {
+      await studioApi.reorderStoryboardShots(session, projectId, {
+        items: nextOrder.map((shot, index) => ({ shotId: shot.id, shotIndex: index, shotNo: index + 1 })),
+      });
+    });
+  }
+
+  async function moveShot(shot: StoryboardShot, direction: -1 | 1) {
+    const index = allShots.findIndex((item) => item.id === shot.id);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= allShots.length) {
+      return;
+    }
+    const nextOrder = [...allShots];
+    [nextOrder[index], nextOrder[nextIndex]] = [nextOrder[nextIndex], nextOrder[index]];
+    await reorderAll(nextOrder);
+    setSelectedShotId(shot.id);
+  }
+
+  async function sortByShotNo() {
+    const nextOrder = [...allShots].sort((left, right) => left.shotNo - right.shotNo || left.shotIndex - right.shotIndex);
+    await reorderAll(nextOrder);
   }
 
   return (
     <SessionGate>
-      <Surface className="mb-5 p-4">
-        <div className="grid gap-3 xl:grid-cols-[1fr_220px_120px_auto_auto_auto_auto]">
+      <Surface className="mb-4 p-4">
+        <div className="grid gap-3 xl:grid-cols-[minmax(220px,1fr)_150px_auto_auto_auto_auto]">
           <select className="studio-input" value={effectiveScriptId} onChange={(event) => {
             setScriptId(event.target.value);
-            setSceneFilter("");
+            setSelectedSceneId("");
+            setSelectedShotId("");
           }}>
             <option value="">选择剧本</option>
             {scripts.data.map((script) => (
               <option key={script.id} value={script.id}>
                 {script.title}
-              </option>
-            ))}
-          </select>
-          <select className="studio-input" value={effectiveSceneFilter} onChange={(event) => setSceneFilter(event.target.value)}>
-            <option value="">全部分场</option>
-            {scriptScenes.data.map((scene) => (
-              <option key={scene.id} value={scene.id}>
-                S{scene.sceneNo} {scene.title}
               </option>
             ))}
           </select>
@@ -2057,128 +2164,130 @@ function StoryboardContent({ projectId }: { projectId: string }) {
           </button>
         </div>
         <ErrorPanel message={error} />
+        {notice ? <p className="mt-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{notice}</p> : null}
       </Surface>
 
-      <div className="mb-5 flex gap-2 overflow-x-auto">
-        {storyboardRuns
-          .map((run) => (
-            <button className={cn("rounded-md border px-3 py-2 text-sm", effectiveWorkflowRunId === run.id ? "border-blue-600/60 bg-blue-600/10" : "border-slate-200 bg-slate-50")} key={run.id} onClick={() => setWorkflowRunId(run.id)} type="button">
-              {workflowLabel(stringFrom(run.input.workflowType))} · {formatTime(run.createdAt)}
-            </button>
-          ))}
+      <div className="mb-4 flex gap-2 overflow-x-auto">
+        {storyboardRuns.map((run) => (
+          <button className={cn("rounded-md border px-3 py-2 text-sm", effectiveWorkflowRunId === run.id ? "border-blue-600/60 bg-blue-600/10 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:text-slate-900")} key={run.id} onClick={() => {
+            setWorkflowRunId(run.id);
+            setSelectedShotId("");
+          }} type="button">
+            {workflowLabel(stringFrom(run.input.workflowType))} · {formatTime(run.createdAt)}
+          </button>
+        ))}
       </div>
 
-      {filteredShots.length ? (
-        <div className="grid gap-4">
-          {filteredShots.map((shot) => {
-            const shotRequirements = requirements.data.filter((item) => item.storyboardShotId === shot.id);
-            return (
-              <Surface className="grid gap-4 p-4 xl:grid-cols-[240px_minmax(0,1fr)_320px]" key={shot.id}>
-                <MediaPreview shot={shot} />
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-slate-900">镜头 {shot.shotNo}</h3>
-                    <StatusBadge status={shot.status} />
-                    <StatusBadge status={shot.reviewStatus ?? "pending"} />
-                    {shot.manualOverride ? <Pill>人工修改</Pill> : null}
-                    {shot.staleState && shot.staleState !== "fresh" ? <StatusBadge status={shot.staleState} /> : null}
-                  </div>
-                  <p className="mt-3 text-sm leading-6 text-slate-700">{shot.visual || "暂无视觉描述"}</p>
-                  {shot.sourceScene ? (
-                    <p className="mt-2 text-xs text-slate-500">来源分场：S{shot.sourceScene.sceneNo} {shot.sourceScene.title}{shot.sourceScene.location ? ` · ${shot.sourceScene.location}` : ""}</p>
-                  ) : null}
-                  <dl className="mt-4 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
-                    <Meta label="运镜" value={shot.camera} />
-                    <Meta label="动作" value={shot.motion} />
-                    <Meta label="情绪" value={shot.mood} />
-                    <Meta label="时长" value={shot.durationSeconds ? `${shot.durationSeconds}s` : "未设置"} />
-                  </dl>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("确认镜头", async () => void (await studioApi.reviewStoryboardShot(session, projectId, shot.id, { reviewStatus: "approved" })))} type="button">
-                      <Check size={16} />
-                      确认镜头
-                    </button>
-                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("标记镜头需修改", async () => void (await studioApi.reviewStoryboardShot(session, projectId, shot.id, { reviewStatus: "needs_edit" })))} type="button">
-                      <X size={16} />
-                      需修改
-                    </button>
-                    <button className="studio-button" disabled={busy !== ""} onClick={() => setEditingShot(shot)} type="button">
-                      <Pencil size={16} />
-                      编辑镜头
-                    </button>
-                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("重新生成镜头图片", async () => void (await studioApi.regenerate(session, projectId, { targetType: "shot_image", targetId: shot.id, options: { force: true } })))} type="button">
-                      <RefreshCw size={16} />
-                      镜头图
-                    </button>
-                    <button className="studio-button" disabled={busy !== ""} onClick={() => perform("重新生成镜头视频", async () => void (await studioApi.regenerate(session, projectId, { targetType: "shot_video", targetId: shot.id, options: { force: true } })))} type="button">
-                      <Video size={16} />
-                      镜头视频
-                    </button>
-                  </div>
-                </div>
-                <div className="grid content-start gap-2">
-                  <p className="text-sm font-medium text-slate-900">派生资产需求</p>
-                  {shotRequirements.map((req) => {
-                    const asset = assets.data.find((item) => item.id === req.assetId);
-                    return (
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600" key={req.id}>
-                      <div className="flex items-start justify-between gap-2">
-                        <button className="text-left font-medium text-blue-700" onClick={() => openRequirementAsset(req)} type="button">
-                          {assetTypeLabel(req.assetType ?? asset?.assetType)}：{req.assetName || asset?.name || req.assetId}
-                        </button>
-                        <div className="grid justify-items-end gap-1">
-                          <StatusBadge status={req.reviewStatus ?? "pending"} />
-                          {req.manualOverride ? <Pill>人工修改</Pill> : null}
-                          {req.staleState && req.staleState !== "fresh" ? <StatusBadge status={req.staleState} /> : null}
-                        </div>
-                      </div>
-                      <p>主参考：{assetHasPrimaryReference(asset) ? "已设置" : "缺失"}{asset?.lockReference ? " · 已锁定" : ""}</p>
-                      <p>派生图：{req.derivedArtifactId || req.derivedStorageKey ? "已生成" : "未生成"} · 参考优先级：{req.derivedStorageKey ? "派生图" : assetHasPrimaryReference(asset) ? "主参考" : "文本"}</p>
-                      <p>服装：{req.costume || "未指定"}</p>
-                      <p>姿态：{req.pose || "未指定"}</p>
-                      <p>表情：{req.expression || "未指定"}</p>
-                      <p>动作：{req.action || "未指定"}</p>
-                      <p>状态：{req.sceneState || req.propState || "未指定"}</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <button className="text-blue-700" onClick={() => perform("确认派生资产需求", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, req.id, { reviewStatus: "approved" })))} type="button">
-                          确认需求
-                        </button>
-                        <button className="text-amber-700" onClick={() => perform("标记派生资产需修改", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, req.id, { reviewStatus: "needs_edit" })))} type="button">
-                          需修改
-                        </button>
-                        <button className="text-blue-700" onClick={() => setEditingRequirement(req)} type="button">
-                          编辑需求
-                        </button>
-                        <button className="text-blue-700" onClick={() => perform("重新生成派生资产图", async () => void (await studioApi.regenerate(session, projectId, { targetType: "derived_asset_image", targetId: req.id, options: { force: true } })))} type="button">
-                          重生成派生图
-                        </button>
-                      </div>
-                    </div>
-                    );
-                  })}
-                  {!shotRequirements.length ? <p className="text-sm text-slate-500">暂无派生资产需求。</p> : null}
-                </div>
-              </Surface>
-            );
-          })}
-        </div>
-      ) : (
-        <EmptyState title="还没有分镜" description="选择剧本后生成分镜，系统会展示镜头、参与资产和派生资产需求。" />
-      )}
-      <ShotEditDialog
-        busy={busy !== ""}
-        shot={editingShot}
-        onClose={() => setEditingShot(null)}
-        onSave={(body) =>
-          perform("保存镜头修订", async () => {
-            if (!editingShot) {
-              return;
-            }
-            await studioApi.updateStoryboardShot(session, projectId, editingShot.id, body);
-            setEditingShot(null);
-          })
-        }
-      />
+      <div className="grid min-h-[680px] gap-4 xl:grid-cols-[260px_minmax(360px,1fr)_420px]">
+        <Surface className="overflow-hidden">
+          <div className="grid gap-3 border-b border-slate-200 p-4">
+            <p className="font-semibold text-slate-900">剧本分场</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("解析分场", async () => void (await studioApi.runProductionAction(session, projectId, { action: "parse_script_scenes", options: { scriptId: effectiveScriptId } })))} type="button">
+                解析分场
+              </button>
+              <button className="studio-button studio-button-primary" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("生成分镜", async () => void (await studioApi.generateStoryboard(session, projectId, effectiveScriptId, { maxShots: Number(maxShots), generateDerivedAssets: false })))} type="button">
+                生成分镜
+              </button>
+            </div>
+          </div>
+          <div className="grid gap-2 p-3">
+            <button className={cn("rounded-md border px-3 py-2 text-left text-sm", !effectiveSceneId ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-700")} onClick={() => {
+              setSelectedSceneId("");
+              setSelectedShotId("");
+            }} type="button">
+              全部分场
+              <span className="ml-2 text-xs text-slate-500">{allShots.length} 镜头</span>
+            </button>
+            {scriptScenes.data.map((scene) => (
+              <button className={cn("rounded-md border px-3 py-2 text-left text-sm", effectiveSceneId === scene.id ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-700 hover:border-slate-300")} key={scene.id} onClick={() => {
+                setSelectedSceneId(scene.id);
+                setSelectedShotId("");
+              }} type="button">
+                <span className="font-medium">场景 {scene.sceneNo}：{scene.title}</span>
+                <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <span>{scene.location || "未设置地点"}</span>
+                  <StatusBadge status={scene.reviewStatus ?? "pending"} />
+                  <span>{sceneShotCounts.get(scene.id) ?? 0} 镜头</span>
+                  {sceneStaleCounts.get(scene.id) ? <span className="text-amber-700">{sceneStaleCounts.get(scene.id)} 过期</span> : null}
+                </span>
+              </button>
+            ))}
+            {!scriptScenes.data.length ? <p className="px-1 py-2 text-sm text-slate-500">还没有结构化分场，请先在“原文与剧本”中解析剧本分场。</p> : null}
+          </div>
+        </Surface>
+
+        <Surface className="overflow-hidden">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
+            <div>
+              <p className="font-semibold text-slate-900">镜头列表</p>
+              <p className="mt-1 text-xs text-slate-500">{filteredShots.length} 个镜头</p>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button className="studio-button studio-button-primary" disabled={busy !== ""} onClick={() => setSelectedShotId("new")} type="button">
+                <Plus size={16} />
+                新增镜头
+              </button>
+              <button className="studio-button" disabled={!effectiveScriptId || busy !== ""} onClick={() => perform("自动生成分镜", async () => void (await studioApi.generateStoryboard(session, projectId, effectiveScriptId, { maxShots: Number(maxShots), generateDerivedAssets: false })))} type="button">
+                自动生成分镜
+              </button>
+              <button className="studio-button" disabled={!effectiveSceneId || busy !== ""} onClick={regenerateCurrentScene} type="button">
+                重新生成当前分场分镜
+              </button>
+              <button className="studio-button" disabled={!allShots.length || busy !== ""} onClick={sortByShotNo} type="button">
+                按编号排序
+              </button>
+            </div>
+          </div>
+          <QueryBody state={shots}>
+            {filteredShots.length ? (
+              <div className="grid gap-3 p-4">
+                {filteredShots.map((shot) => (
+                  <StoryboardShotListCard
+                    active={activeShot?.id === shot.id}
+                    busy={busy !== ""}
+                    key={shot.id}
+                    onMoveDown={() => moveShot(shot, 1)}
+                    onMoveUp={() => moveShot(shot, -1)}
+                    onRegenerateImage={() => regenerateShotById(shot, "shot_image")}
+                    onRegenerateVideo={() => regenerateShotById(shot, "shot_video")}
+                    onReview={(reviewStatus) => reviewShotById(shot, reviewStatus)}
+                    onSelect={() => setSelectedShotId(shot.id)}
+                    shot={shot}
+                    totalShots={allShots.length}
+                    orderIndex={allShots.findIndex((item) => item.id === shot.id)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="p-4">
+                <EmptyState title="暂无分镜" description="当前分场还没有分镜，可以点击“生成当前分场分镜”。" />
+              </div>
+            )}
+          </QueryBody>
+        </Surface>
+
+        <Surface className="overflow-hidden">
+          <QueryBody state={shotDetail}>
+            <StoryboardShotDetailPanel
+              busy={busy !== ""}
+              creating={creatingShot}
+              detail={shotDetail.data}
+              fallbackShot={activeShot}
+              onDelete={deleteShot}
+              onEditRequirement={setEditingRequirement}
+              onOpenAsset={openAssetCard}
+              onRegenerateRequirement={regenerateRequirement}
+              onRegenerateShot={regenerateShot}
+              onReviewRequirement={(requirement, reviewStatus) =>
+                perform(reviewStatus === "approved" ? "确认派生资产需求" : "标记派生资产需修改", async () => void (await studioApi.reviewShotAssetRequirement(session, projectId, requirement.id, { reviewStatus })))
+              }
+              onReviewShot={reviewShot}
+              onSave={(body) => perform(creatingShot ? "创建镜头" : "保存镜头修订", async () => saveShot(body))}
+            />
+          </QueryBody>
+        </Surface>
+      </div>
       <RequirementEditDialog
         busy={busy !== ""}
         requirement={editingRequirement}
@@ -2201,8 +2310,8 @@ function StoryboardContent({ projectId }: { projectId: string }) {
         onClose={() => setEditingAsset(null)}
         onChanged={(asset) => {
           setEditingAsset(asset);
-          assets.reload();
-          requirements.reload();
+          shotDetail.reload();
+          shots.reload();
         }}
         onSave={(body) =>
           perform("保存资产修订", async () => {
@@ -2215,6 +2324,255 @@ function StoryboardContent({ projectId }: { projectId: string }) {
       />
     </SessionGate>
   );
+}
+
+function StoryboardShotListCard({
+  shot,
+  active,
+  busy,
+  orderIndex,
+  totalShots,
+  onSelect,
+  onMoveUp,
+  onMoveDown,
+  onReview,
+  onRegenerateImage,
+  onRegenerateVideo,
+}: {
+  shot: StoryboardShot;
+  active: boolean;
+  busy: boolean;
+  orderIndex: number;
+  totalShots: number;
+  onSelect: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onReview: (reviewStatus: "approved" | "needs_edit") => void;
+  onRegenerateImage: () => void;
+  onRegenerateVideo: () => void;
+}) {
+  return (
+    <div className={cn("grid gap-3 rounded-md border p-3", active ? "border-blue-500 bg-blue-50/60" : "border-slate-200 bg-white")}>
+      <button className="grid gap-3 text-left md:grid-cols-[150px_minmax(0,1fr)]" onClick={onSelect} type="button">
+        <MediaPreview className="rounded-md" shot={shot} />
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-semibold text-slate-900">镜头 {shot.shotNo}</p>
+            <StatusBadge status={shot.status} />
+            <StatusBadge status={shot.reviewStatus ?? "pending"} />
+            {shot.manualOverride ? <Pill>人工修改</Pill> : null}
+            {shot.staleState && shot.staleState !== "fresh" ? <StatusBadge status={shot.staleState} /> : null}
+            <Pill>{shot.videoPreviewUrl || shot.videoStorageKey ? "视频已生成" : "视频未生成"}</Pill>
+          </div>
+          <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-700">{shot.visual || "暂无画面描述"}</p>
+          {shot.sourceScene ? <p className="mt-2 text-xs text-slate-500">S{shot.sourceScene.sceneNo} {shot.sourceScene.title}</p> : null}
+        </div>
+      </button>
+      <div className="flex flex-wrap justify-end gap-2">
+        <button className="studio-button" disabled={busy} onClick={onSelect} type="button">
+          <Pencil size={15} />
+          编辑
+        </button>
+        <button className="studio-button" disabled={busy} onClick={() => onReview("approved")} type="button">
+          <Check size={15} />
+          确认
+        </button>
+        <button className="studio-button" disabled={busy} onClick={() => onReview("needs_edit")} type="button">
+          <X size={15} />
+          需修改
+        </button>
+        <button className="studio-button" disabled={busy} onClick={onRegenerateImage} type="button">
+          <ImageIcon size={15} />
+          图片
+        </button>
+        <button className="studio-button" disabled={busy} onClick={onRegenerateVideo} type="button">
+          <Video size={15} />
+          视频
+        </button>
+        <button className="studio-button" disabled={busy || orderIndex <= 0} onClick={onMoveUp} type="button">
+          上移
+        </button>
+        <button className="studio-button" disabled={busy || orderIndex < 0 || orderIndex >= totalShots - 1} onClick={onMoveDown} type="button">
+          下移
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StoryboardShotDetailPanel({
+  detail,
+  fallbackShot,
+  creating,
+  busy,
+  onSave,
+  onReviewShot,
+  onDelete,
+  onRegenerateShot,
+  onOpenAsset,
+  onEditRequirement,
+  onReviewRequirement,
+  onRegenerateRequirement,
+}: {
+  detail: StoryboardShotDetail | null;
+  fallbackShot: StoryboardShot | null;
+  creating: boolean;
+  busy: boolean;
+  onSave: (body: JsonRecord) => Promise<void>;
+  onReviewShot: (reviewStatus: "approved" | "needs_edit") => void;
+  onDelete: () => void;
+  onRegenerateShot: (targetType: "shot_image" | "shot_video") => void;
+  onOpenAsset: (asset: CanonicalAsset) => void;
+  onEditRequirement: (requirement: ShotAssetRequirement) => void;
+  onReviewRequirement: (requirement: ShotAssetRequirement, reviewStatus: "approved" | "needs_edit") => void;
+  onRegenerateRequirement: (requirement: ShotAssetRequirement) => void;
+}) {
+  const shot = detail?.shot ?? fallbackShot;
+  const requirements = detail?.requirements ?? [];
+  return (
+    <div className="grid gap-4 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-semibold text-slate-900">{creating ? "新增镜头" : shot ? `镜头 ${shot.shotNo}` : "镜头详情"}</p>
+          {shot?.sourceScene || detail?.scriptScene ? <p className="mt-1 text-xs text-slate-500">{sceneLine(detail?.scriptScene ?? shot?.sourceScene)}</p> : null}
+        </div>
+        {shot ? (
+          <div className="grid justify-items-end gap-1">
+            <StatusBadge status={shot.status} />
+            <StatusBadge status={shot.reviewStatus ?? "pending"} />
+            {shot.staleState && shot.staleState !== "fresh" ? <StatusBadge status={shot.staleState} /> : null}
+          </div>
+        ) : null}
+      </div>
+
+      <StoryboardShotForm busy={busy} creating={creating} key={creating ? "new" : shot?.id ?? "empty"} shot={shot} onSave={onSave} />
+
+      {shot ? (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <button className="studio-button" disabled={busy} onClick={() => onReviewShot("approved")} type="button">
+              <Check size={16} />
+              确认镜头
+            </button>
+            <button className="studio-button" disabled={busy} onClick={() => onReviewShot("needs_edit")} type="button">
+              <X size={16} />
+              需修改
+            </button>
+            <button className="studio-button" disabled={busy} onClick={() => onRegenerateShot("shot_image")} type="button">
+              <ImageIcon size={16} />
+              生成图片
+            </button>
+            <button className="studio-button" disabled={busy} onClick={() => onRegenerateShot("shot_video")} type="button">
+              <Video size={16} />
+              生成视频
+            </button>
+            <button className="studio-button border-red-200 text-red-700 hover:border-red-300" disabled={busy} onClick={onDelete} type="button">
+              删除镜头
+            </button>
+          </div>
+
+          <div className="grid gap-3">
+            <p className="text-sm font-medium text-slate-900">生成结果</p>
+            <ShotResultPreview kind="image" previewUrl={detail?.imagePreviewUrl ?? shot.imagePreviewUrl} storageKey={shot.imageStorageKey} stale={shot.staleState !== "fresh"} />
+            <ShotResultPreview kind="video" previewUrl={detail?.videoPreviewUrl ?? shot.videoPreviewUrl} providerTaskId={shot.providerAsyncTaskId} storageKey={shot.videoStorageKey} stale={shot.staleState !== "fresh"} />
+          </div>
+
+          <div className="grid gap-3">
+            <p className="text-sm font-medium text-slate-900">关联资产与派生需求</p>
+            <AssetCardPanel
+              busy={busy}
+              requirements={requirements}
+              onEditRequirement={onEditRequirement}
+              onOpenAsset={onOpenAsset}
+              onRegenerateRequirement={onRegenerateRequirement}
+              onReviewRequirement={onReviewRequirement}
+            />
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function StoryboardShotForm({
+  shot,
+  creating,
+  busy,
+  onSave,
+}: {
+  shot: StoryboardShot | null;
+  creating: boolean;
+  busy: boolean;
+  onSave: (body: JsonRecord) => Promise<void>;
+}) {
+  const [form, setForm] = useState(shotEditForm(shot));
+  const [localError, setLocalError] = useState("");
+
+  async function submit() {
+    setLocalError("");
+    const durationSeconds = form.durationSeconds.trim() ? Number(form.durationSeconds) : undefined;
+    if (durationSeconds !== undefined && (!Number.isFinite(durationSeconds) || durationSeconds <= 0)) {
+      setLocalError("时长必须大于 0");
+      return;
+    }
+    await onSave(
+      compactRecord({
+        visual: form.visual,
+        camera: form.camera,
+        motion: form.motion,
+        mood: form.mood,
+        durationSeconds,
+        imagePrompt: form.imagePrompt,
+        videoPrompt: form.videoPrompt,
+      }),
+    );
+  }
+
+  return (
+    <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <ErrorPanel message={localError} />
+      <TextAreaInput label="画面描述" rows={4} value={form.visual} onChange={(visual) => setForm({ ...form, visual })} />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <TextInput label="运镜" value={form.camera} onChange={(camera) => setForm({ ...form, camera })} />
+        <TextInput label="动作" value={form.motion} onChange={(motion) => setForm({ ...form, motion })} />
+        <TextInput label="情绪" value={form.mood} onChange={(mood) => setForm({ ...form, mood })} />
+      </div>
+      <TextInput label="时长秒" value={form.durationSeconds} onChange={(durationSeconds) => setForm({ ...form, durationSeconds })} />
+      <TextAreaInput label="图片提示词" rows={3} value={form.imagePrompt} onChange={(imagePrompt) => setForm({ ...form, imagePrompt })} />
+      <TextAreaInput label="视频提示词" rows={3} value={form.videoPrompt} onChange={(videoPrompt) => setForm({ ...form, videoPrompt })} />
+      <button className="studio-button studio-button-primary justify-self-end" disabled={busy} onClick={submit} type="button">
+        {busy ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+        {creating ? "创建镜头" : "保存修订"}
+      </button>
+    </div>
+  );
+}
+
+function ShotResultPreview({ kind, previewUrl, storageKey, providerTaskId, stale }: { kind: "image" | "video"; previewUrl?: string; storageKey?: string; providerTaskId?: string; stale: boolean }) {
+  return (
+    <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+      <div className="grid aspect-video place-items-center bg-slate-100">
+        {previewUrl && kind === "image" ? <div aria-label={storageKey || "镜头图片"} className="h-full w-full bg-cover bg-center" role="img" style={{ backgroundImage: `url(${previewUrl})` }} /> : null}
+        {previewUrl && kind === "video" ? <video className="h-full w-full object-cover" controls src={previewUrl} /> : null}
+        {!previewUrl ? <div className="grid justify-items-center gap-2 text-sm text-slate-500">{kind === "image" ? <ImageIcon size={24} /> : <Video size={24} />}暂无结果</div> : null}
+      </div>
+      <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
+        <span className="truncate">{kind === "image" ? "镜头图片" : "镜头视频"} · {storageKey || "未生成"}</span>
+        <span className="flex shrink-0 items-center gap-2">
+          {previewUrl ? <a className="text-blue-700" href={previewUrl} rel="noreferrer" target="_blank">打开预览</a> : null}
+          {stale ? <span className="text-amber-700">已过期</span> : null}
+        </span>
+      </div>
+      {providerTaskId ? <div className="truncate border-t border-slate-200 px-3 py-2 text-xs text-slate-500">任务：{providerTaskId}</div> : null}
+    </div>
+  );
+}
+
+function sceneLine(scene?: StoryboardShot["sourceScene"]) {
+  if (!scene) {
+    return "";
+  }
+  return `S${scene.sceneNo} ${scene.title}${scene.location ? ` · ${scene.location}` : ""}`;
 }
 
 function AssetEditDialog({
@@ -2472,83 +2830,6 @@ function AssetReferencePreview({ reference, storageKey }: { reference?: AssetRef
       {reference?.isPrimary ? <span className="absolute left-2 top-2 rounded-md bg-white/90 px-2 py-1 text-xs text-slate-700">主参考</span> : null}
       {storageKey ? <span className="absolute bottom-0 left-0 right-0 truncate bg-white/85 px-2 py-1 text-[11px] text-slate-600">{storageKey}</span> : null}
     </div>
-  );
-}
-
-function ShotEditDialog({
-  shot,
-  busy,
-  onClose,
-  onSave,
-}: {
-  shot: StoryboardShot | null;
-  busy: boolean;
-  onClose: () => void;
-  onSave: (body: JsonRecord) => Promise<void>;
-}) {
-  if (!shot) {
-    return null;
-  }
-  return <ShotEditDialogForm key={shot.id} shot={shot} busy={busy} onClose={onClose} onSave={onSave} />;
-}
-
-function ShotEditDialogForm({
-  shot,
-  busy,
-  onClose,
-  onSave,
-}: {
-  shot: StoryboardShot;
-  busy: boolean;
-  onClose: () => void;
-  onSave: (body: JsonRecord) => Promise<void>;
-}) {
-  const [form, setForm] = useState(shotEditForm(shot));
-  const [localError, setLocalError] = useState("");
-
-  async function submit() {
-    setLocalError("");
-    const durationSeconds = form.durationSeconds.trim() ? Number(form.durationSeconds) : undefined;
-    if (durationSeconds !== undefined && (!Number.isFinite(durationSeconds) || durationSeconds <= 0)) {
-      setLocalError("时长必须大于 0");
-      return;
-    }
-    await onSave(
-      compactRecord({
-        visual: form.visual,
-        camera: form.camera,
-        motion: form.motion,
-        mood: form.mood,
-        durationSeconds,
-        imagePrompt: form.imagePrompt,
-        videoPrompt: form.videoPrompt,
-      }),
-    );
-  }
-
-  return (
-    <EditDialogShell title={`编辑镜头 ${shot.shotNo}`} error={localError} onClose={onClose}>
-      <div className="grid gap-3">
-        <TextAreaInput label="画面描述" rows={4} value={form.visual} onChange={(visual) => setForm({ ...form, visual })} />
-        <div className="grid gap-3 md:grid-cols-3">
-          <TextInput label="运镜" value={form.camera} onChange={(camera) => setForm({ ...form, camera })} />
-          <TextInput label="动作" value={form.motion} onChange={(motion) => setForm({ ...form, motion })} />
-          <TextInput label="情绪" value={form.mood} onChange={(mood) => setForm({ ...form, mood })} />
-        </div>
-        <TextInput label="时长秒" value={form.durationSeconds} onChange={(durationSeconds) => setForm({ ...form, durationSeconds })} />
-        <TextAreaInput label="图片提示词" rows={4} value={form.imagePrompt} onChange={(imagePrompt) => setForm({ ...form, imagePrompt })} />
-        <TextAreaInput label="视频提示词" rows={4} value={form.videoPrompt} onChange={(videoPrompt) => setForm({ ...form, videoPrompt })} />
-        <div className="flex justify-end gap-2">
-          <button className="studio-button" disabled={busy} onClick={onClose} type="button">
-            取消
-          </button>
-          <button className="studio-button studio-button-primary" disabled={busy} onClick={submit} type="button">
-            {busy ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-            保存修订
-          </button>
-        </div>
-      </div>
-    </EditDialogShell>
   );
 }
 
@@ -3653,15 +3934,6 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
       {label}
       <input checked={checked} onChange={(event) => onChange(event.target.checked)} type="checkbox" />
     </label>
-  );
-}
-
-function Meta({ label, value }: { label: string; value?: string }) {
-  return (
-    <div>
-      <dt className="text-slate-500">{label}</dt>
-      <dd className="mt-1 text-slate-700">{value || "未设置"}</dd>
-    </div>
   );
 }
 

@@ -25,7 +25,7 @@ export const projectNavItems = [
   { label: "生产看板", segment: "production", icon: ListChecks },
   { label: "原文与剧本", segment: "sources", icon: FileText },
   { label: "资产", segment: "assets", icon: Boxes },
-  { label: "分镜镜头", segment: "storyboard", icon: Clapperboard },
+  { label: "分镜工作台", segment: "storyboard", icon: Clapperboard },
   { label: "工作流", segment: "workflows", icon: Workflow },
   { label: "媒体资产", segment: "vault", icon: Library },
   { label: "项目设置", segment: "settings", icon: Settings2 },

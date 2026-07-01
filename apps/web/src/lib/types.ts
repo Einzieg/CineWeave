@@ -349,6 +349,9 @@ export type AssetSceneLink = {
 
 export type ShotAssetRequirement = {
   id: string;
+  organizationId?: string;
+  projectId?: string;
+  workflowRunId?: string;
   storyboardShotId: string;
   assetId: string;
   assetType?: string;
@@ -374,6 +377,12 @@ export type ShotAssetRequirement = {
   editedAt?: string;
   createdAt?: string;
   updatedAt?: string;
+  metadata?: JsonRecord;
+  asset?: CanonicalAsset;
+};
+
+export type StoryboardShotRequirementDetail = ShotAssetRequirement & {
+  derivedPreviewUrl?: string;
 };
 
 export type WorkflowRun = {
@@ -444,6 +453,16 @@ export type StoryboardShot = {
   staleState?: string;
   editedBy?: string;
   editedAt?: string;
+};
+
+export type StoryboardShotDetail = {
+  shot: StoryboardShot;
+  scriptScene?: StoryboardShot["sourceScene"];
+  requirements: StoryboardShotRequirementDetail[];
+  imageArtifact?: Artifact;
+  imagePreviewUrl?: string;
+  videoArtifact?: Artifact;
+  videoPreviewUrl?: string;
 };
 
 export type ProductionStatus = {

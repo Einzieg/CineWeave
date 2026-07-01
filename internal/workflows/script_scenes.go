@@ -686,13 +686,14 @@ func markScriptSceneDownstreamStale(ctx context.Context, tx pgx.Tx, projectID, s
 		WHERE r.storyboard_shot_id = s.id
 		  AND r.project_id = $1
 		  AND s.script_scene_id = $2
+		  AND s.deleted_at IS NULL
 	`, projectID, sceneID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
 		SET stale_state = 'needs_regeneration', updated_at = now()
-		WHERE project_id = $1 AND script_scene_id = $2
+		WHERE project_id = $1 AND script_scene_id = $2 AND deleted_at IS NULL
 	`, projectID, sceneID)
 	return err
 }

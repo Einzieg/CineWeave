@@ -1278,7 +1278,7 @@ func (s *Server) attachCanonicalAssetSceneLinks(r *http.Request, projectID strin
 			COUNT(DISTINCT ss.id)
 		FROM scene_asset_links l
 		JOIN script_scenes sc ON sc.id = l.script_scene_id
-		LEFT JOIN storyboard_shots ss ON ss.project_id = l.project_id AND ss.script_scene_id = l.script_scene_id
+		LEFT JOIN storyboard_shots ss ON ss.project_id = l.project_id AND ss.script_scene_id = l.script_scene_id AND ss.deleted_at IS NULL
 		WHERE l.project_id = $1
 		GROUP BY l.asset_id, l.script_scene_id, sc.scene_index, sc.scene_no, sc.title, sc.location, l.asset_role, l.usage_note
 		ORDER BY sc.scene_index ASC, sc.scene_no ASC
@@ -1314,49 +1314,9 @@ func (s *Server) shotAssetRequirement(r *http.Request, projectID, requirementID 
 }
 
 func (s *Server) storyboardShotByID(r *http.Request, projectID, shotID string) (StoryboardShot, error) {
-	return scanStoryboardShot(s.db.QueryRow(r.Context(), `
-		SELECT
-			s.id,
-			COALESCE(s.workflow_run_id::text, ''),
-			s.shot_index,
-			COALESCE(s.shot_no, s.shot_index + 1),
-			s.duration_seconds,
-			COALESCE(s.visual, ''),
-			COALESCE(s.camera, ''),
-			COALESCE(s.motion, ''),
-			COALESCE(s.mood, ''),
-			COALESCE(s.image_prompt, ''),
-			COALESCE(s.video_prompt, ''),
-			s.image_artifact_id,
-			s.image_media_file_id,
-			COALESCE(s.image_storage_key, ia.storage_key),
-			ia.storage_key,
-			ia.mime_type,
-			s.video_artifact_id,
-			s.video_media_file_id,
-			COALESCE(s.video_storage_key, va.storage_key),
-			va.storage_key,
-			va.mime_type,
-			s.video_provider_async_task_id,
-			s.video_external_task_id,
-			COALESCE(s.status, 'pending'),
-			COALESCE(s.review_status, 'pending'),
-			COALESCE(s.manual_override, false),
-			COALESCE(s.stale_state, 'fresh'),
-			s.edited_by,
-			s.edited_at,
-			s.script_scene_id::text,
-			sc.id::text,
-			COALESCE(sc.scene_no, 0),
-			COALESCE(sc.title, ''),
-			COALESCE(sc.location, ''),
-			COALESCE(sc.characters, '[]'::jsonb)
-		FROM storyboard_shots s
-		LEFT JOIN artifacts ia ON ia.id = s.image_artifact_id
-		LEFT JOIN artifacts va ON va.id = s.video_artifact_id
-		LEFT JOIN script_scenes sc ON sc.id = s.script_scene_id
-		WHERE s.project_id = $1 AND s.id = $2
-	`, projectID, shotID))
+	return scanStoryboardShot(s.db.QueryRow(r.Context(), storyboardShotSelectSQL(`
+		WHERE s.project_id = $1 AND s.id = $2 AND s.deleted_at IS NULL
+	`), projectID, shotID))
 }
 
 func scanCanonicalAsset(row rowScan) (CanonicalAsset, error) {

@@ -155,6 +155,7 @@ func (s *Server) latestVideoSourceWorkflowRun(r *http.Request, projectID string)
 		WHERE project_id = $1
 		  AND workflow_run_id IS NOT NULL
 		  AND status = 'video_succeeded'
+		  AND deleted_at IS NULL
 		ORDER BY updated_at DESC
 		LIMIT 1
 	`, projectID).Scan(&workflowRunID)

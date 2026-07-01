@@ -32,6 +32,7 @@ import type {
   SetupState,
   ShotAssetRequirement,
   StoryboardShot,
+  StoryboardShotDetail,
   StudioSession,
   Team,
   WorkflowNodeRun,
@@ -250,6 +251,17 @@ export const studioApi = {
     apiRequest<ListEnvelope<StoryboardShot>>(`/api/workflow-runs/${workflowRunId}/shots`, {
       session,
       query: { includePreviewUrl: true, previewExpiresSeconds: 900 },
+    }),
+  createStoryboardShot: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<StoryboardShot>(`/api/projects/${projectId}/storyboard-shots`, { method: "POST", session, body }),
+  deleteStoryboardShot: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<{ deleted: boolean; shotId: string }>(`/api/projects/${projectId}/storyboard-shots/${shotId}`, { method: "DELETE", session }),
+  reorderStoryboardShots: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<{ items: { shotId: string; shotIndex: number; shotNo: number }[] }>(`/api/projects/${projectId}/storyboard-shots/reorder`, { method: "POST", session, body }),
+  getStoryboardShotDetail: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<StoryboardShotDetail>(`/api/projects/${projectId}/storyboard-shots/${shotId}/detail`, {
+      session,
+      query: { previewExpiresSeconds: 900 },
     }),
   reviewStoryboardShot: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord) =>
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/review`, { method: "POST", session, body }),

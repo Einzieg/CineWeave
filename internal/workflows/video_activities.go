@@ -1072,6 +1072,7 @@ func (a Activities) listStoryboardShots(ctx context.Context, workflowRunID strin
 			COALESCE(stale_state, 'fresh')
 		FROM storyboard_shots
 		WHERE workflow_run_id = $1
+		  AND deleted_at IS NULL
 		ORDER BY shot_index ASC
 	`, workflowRunID)
 	if err != nil {
@@ -1127,7 +1128,7 @@ func (a Activities) storyboardShot(ctx context.Context, projectID, workflowRunID
 			COALESCE(manual_override, false),
 			COALESCE(stale_state, 'fresh')
 		FROM storyboard_shots
-		WHERE `+where+`
+		WHERE `+where+` AND deleted_at IS NULL
 	`, args...))
 }
 

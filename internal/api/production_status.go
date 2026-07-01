@@ -516,6 +516,7 @@ func (s *Server) productionStoryboardStage(r *http.Request, projectID string, wo
 			COUNT(*) FILTER (WHERE stale_state <> 'fresh')
 		FROM storyboard_shots
 		WHERE project_id = $1
+		  AND deleted_at IS NULL
 	`, projectID).Scan(&shotCount, &confirmedCount, &pendingReviewCount, &manualOverrideCount, &staleShotCount); err != nil {
 		return ProductionStoryboardStage{}, err
 	}
@@ -622,6 +623,7 @@ func (s *Server) productionShotMediaStage(r *http.Request, projectID, mediaKind 
 				COUNT(*) FILTER (WHERE stale_state = 'needs_regeneration')
 			FROM storyboard_shots
 			WHERE project_id = $1
+			  AND deleted_at IS NULL
 		`, projectID).Scan(&total, &succeeded, &failed, &running, &stale)
 	} else {
 		err = s.db.QueryRow(r.Context(), `
@@ -633,6 +635,7 @@ func (s *Server) productionShotMediaStage(r *http.Request, projectID, mediaKind 
 				COUNT(*) FILTER (WHERE stale_state = 'needs_regeneration')
 			FROM storyboard_shots
 			WHERE project_id = $1
+			  AND deleted_at IS NULL
 		`, projectID).Scan(&total, &succeeded, &failed, &running, &stale)
 	}
 	if err != nil {
@@ -673,7 +676,7 @@ func (s *Server) productionFinalVideoStage(r *http.Request, projectID string, wo
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT COUNT(*)
 		FROM storyboard_shots
-		WHERE project_id = $1 AND stale_state <> 'fresh'
+		WHERE project_id = $1 AND stale_state <> 'fresh' AND deleted_at IS NULL
 	`, projectID).Scan(&staleShotCount); err != nil {
 		return ProductionFinalVideoStage{}, err
 	}
@@ -775,6 +778,7 @@ func (s *Server) productionShotSummary(r *http.Request, projectID string) ([]str
 		SELECT COALESCE(shot_no, shot_index + 1), COALESCE(visual, title, '')
 		FROM storyboard_shots
 		WHERE project_id = $1
+		  AND deleted_at IS NULL
 		ORDER BY created_at DESC, shot_index ASC
 		LIMIT 5
 	`, projectID)

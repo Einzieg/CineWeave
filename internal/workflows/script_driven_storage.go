@@ -533,7 +533,7 @@ func (a Activities) storyboardShotByID(ctx context.Context, projectID, shotID st
 			COALESCE(manual_override, false),
 			COALESCE(stale_state, 'fresh')
 		FROM storyboard_shots
-		WHERE project_id = $1 AND id = $2
+		WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
 	`, projectID, shotID))
 }
 

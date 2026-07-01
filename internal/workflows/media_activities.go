@@ -179,6 +179,7 @@ func (a Activities) composeVideoClips(ctx context.Context, workflowRunID string)
 		WHERE s.workflow_run_id = $1
 		  AND s.status = 'video_succeeded'
 		  AND COALESCE(s.video_storage_key, mf.storage_key, '') <> ''
+		  AND s.deleted_at IS NULL
 		ORDER BY s.shot_index ASC
 	`, workflowRunID)
 	if err != nil {

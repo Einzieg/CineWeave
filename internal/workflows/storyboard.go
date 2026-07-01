@@ -551,6 +551,7 @@ func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStory
 		WHERE workflow_run_id = $1
 		  AND shot_index >= $2
 		  AND status IN ('pending', 'storyboard_ready')
+		  AND deleted_at IS NULL
 	`, input.WorkflowRunID, len(shots)); err != nil {
 		return nil, err
 	}
