@@ -1056,6 +1056,128 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/scripts/{scriptId}/versions/{versionId}/parse-scenes:
+    post:
+      operationId: parseScriptScenes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParseScriptScenesRequest"
+      responses:
+        "200":
+          description: Parsed structured script scenes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParseScriptScenesResponseEnvelope"
+  /api/projects/{projectId}/scripts/{scriptId}/scenes:
+    get:
+      operationId: listScriptScenes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+        - name: scriptVersionId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: reviewStatus
+          in: query
+          schema:
+            $ref: "#/components/schemas/ReviewStatus"
+      responses:
+        "200":
+          description: Structured script scenes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptSceneListEnvelope"
+  /api/projects/{projectId}/script-scenes/{sceneId}:
+    get:
+      operationId: getScriptScene
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: sceneId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Structured script scene detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptSceneEnvelope"
+    patch:
+      operationId: updateScriptScene
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: sceneId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateScriptSceneRequest"
+      responses:
+        "200":
+          description: Updated structured script scene
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptSceneEnvelope"
+  /api/projects/{projectId}/script-scenes/{sceneId}/review:
+    post:
+      operationId: reviewScriptScene
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: sceneId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+      responses:
+        "200":
+          description: Updated structured script scene review status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewResponseEnvelope"
   /api/projects/{projectId}/scripts/{scriptId}/analyze-assets:
     post:
       operationId: analyzeScriptAssets
@@ -3536,6 +3658,96 @@ components:
         createdAt:
           type: string
           format: date-time
+    ScriptScene:
+      type: object
+      required: [id, projectId, scriptId, scriptVersionId, sceneIndex, sceneNo, title, characters, scenes, props, sourceEventIds, content, contentFormat, reviewStatus, manualOverride, staleState]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        scriptId:
+          type: string
+          format: uuid
+        scriptVersionId:
+          type: string
+          format: uuid
+        sceneIndex:
+          type: integer
+        sceneNo:
+          type: integer
+        title:
+          type: string
+        summary:
+          type: string
+        location:
+          type: string
+        timeOfDay:
+          type: string
+        atmosphere:
+          type: string
+        characters:
+          type: array
+          items:
+            type: string
+        scenes:
+          type: array
+          items:
+            type: string
+        props:
+          type: array
+          items:
+            type: string
+        action:
+          type: string
+        dialogue:
+          type: string
+        visualGoal:
+          type: string
+        emotionalTone:
+          type: string
+        conflict:
+          type: string
+        outcome:
+          type: string
+        sourceEventIds:
+          type: array
+          items:
+            type: string
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        manualOverride:
+          type: boolean
+        staleState:
+          $ref: "#/components/schemas/StaleState"
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        editedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        editedAt:
+          type: string
+          format: date-time
     AgentSession:
       type: object
       required: [id, organizationId, projectId, agentType, status, createdAt, updatedAt]
@@ -3655,6 +3867,33 @@ components:
         updatedAt:
           type: string
           format: date-time
+        sceneLinks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetSceneLink"
+        sceneCount:
+          type: integer
+        storyboardShotCount:
+          type: integer
+    AssetSceneLink:
+      type: object
+      required: [scriptSceneId, sceneNo, title, storyboardShotCount]
+      properties:
+        scriptSceneId:
+          type: string
+          format: uuid
+        sceneNo:
+          type: integer
+        title:
+          type: string
+        location:
+          type: string
+        assetRole:
+          type: string
+        usageNote:
+          type: string
+        storyboardShotCount:
+          type: integer
     ShotAssetRequirement:
       type: object
       required: [id, organizationId, projectId, storyboardShotId, assetId, requirementType, status, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
@@ -4147,6 +4386,11 @@ components:
         workflowRunId:
           type: string
           format: uuid
+        scriptSceneId:
+          type: string
+          format: uuid
+        sourceScene:
+          $ref: "#/components/schemas/ShotSourceScene"
         shotIndex:
           type: integer
         shotNo:
@@ -4207,6 +4451,23 @@ components:
         editedAt:
           type: string
           format: date-time
+    ShotSourceScene:
+      type: object
+      required: [id, sceneNo, title, characters]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sceneNo:
+          type: integer
+        title:
+          type: string
+        location:
+          type: string
+        characters:
+          type: array
+          items:
+            type: string
     NovelEvent:
       type: object
       required: [id, projectId, sourceId, eventIndex, sequenceNo, title, summary, importance, characters, scenes, props, keywords, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
@@ -4852,7 +5113,7 @@ components:
       properties:
         targetType:
           type: string
-          enum: [canonical_asset_image, derived_asset_image, shot_image, shot_video, final_video]
+          enum: [canonical_asset_image, derived_asset_image, shot_image, shot_video, final_video, script_scene, scene_storyboard]
         targetId:
           type: string
           format: uuid
@@ -5179,6 +5440,32 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/ScriptVersion"
+    ScriptSceneEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ScriptScene"
+    ScriptSceneListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ScriptScene"
+    ParseScriptScenesResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ParseScriptScenesResponse"
     AgentSessionEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -7708,6 +7995,72 @@ components:
         activate:
           type: boolean
           default: false
+    ParseScriptScenesRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          default: false
+    ParseScriptScenesResponse:
+      type: object
+      required: [scriptId, versionId, sceneCount, scenes]
+      properties:
+        scriptId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        sceneCount:
+          type: integer
+        scenes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScriptScene"
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+    UpdateScriptSceneRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+        location:
+          type: string
+        timeOfDay:
+          type: string
+        atmosphere:
+          type: string
+        characters:
+          type: array
+          items:
+            type: string
+        scenes:
+          type: array
+          items:
+            type: string
+        props:
+          type: array
+          items:
+            type: string
+        action:
+          type: string
+        dialogue:
+          type: string
+        visualGoal:
+          type: string
+        emotionalTone:
+          type: string
+        conflict:
+          type: string
+        outcome:
+          type: string
+        content:
+          type: string
     AnalyzeScriptAssetsRequest:
       type: object
       properties:
@@ -7840,7 +8193,7 @@ components:
           format: uuid
         workflowType:
           type: string
-          enum: [video_production, text_to_storyboard, extract_novel_events, generate_adaptation_plan, adaptation_plan_to_script, source_to_script, script_to_assets, script_to_storyboard, script_to_video, full_production, regenerate_canonical_asset_image, regenerate_derived_asset_image, regenerate_shot_image, regenerate_shot_video, regenerate_final_video]
+          enum: [video_production, text_to_storyboard, extract_novel_events, generate_adaptation_plan, adaptation_plan_to_script, source_to_script, parse_script_scenes, script_to_assets, script_to_storyboard, script_to_video, full_production, regenerate_canonical_asset_image, regenerate_derived_asset_image, regenerate_shot_image, regenerate_shot_video, regenerate_final_video, regenerate_script_scene, regenerate_scene_storyboard]
           default: video_production
           description: video_production keeps the prompt-only path unless input.scriptId is provided.
         prompt:

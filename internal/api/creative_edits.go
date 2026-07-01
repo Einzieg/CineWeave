@@ -87,7 +87,13 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 			COALESCE(manual_override, false),
 			COALESCE(stale_state, 'fresh'),
 			edited_by,
-			edited_at
+			edited_at,
+			script_scene_id::text,
+			NULL::text,
+			0,
+			'',
+			'',
+			'[]'::jsonb
 	`, project.ID, current.ID,
 		req.Visual != nil, trimPtr(req.Visual),
 		req.Camera != nil, trimPtr(req.Camera),

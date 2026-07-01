@@ -209,6 +209,49 @@ export type Script = {
   updatedAt?: string;
 };
 
+export type ScriptScene = {
+  id: string;
+  projectId: string;
+  scriptId: string;
+  scriptVersionId: string;
+  sceneIndex: number;
+  sceneNo: number;
+  title: string;
+  summary?: string;
+  location?: string;
+  timeOfDay?: string;
+  atmosphere?: string;
+  characters?: string[];
+  scenes?: string[];
+  props?: string[];
+  action?: string;
+  dialogue?: string;
+  visualGoal?: string;
+  emotionalTone?: string;
+  conflict?: string;
+  outcome?: string;
+  sourceEventIds?: string[];
+  content: string;
+  contentFormat: string;
+  reviewStatus: string;
+  manualOverride?: boolean;
+  staleState?: string;
+  metadata?: JsonRecord;
+  editedBy?: string;
+  editedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ParseScriptScenesResponse = {
+  scriptId: string;
+  versionId: string;
+  sceneCount: number;
+  scenes: ScriptScene[];
+  providerCallId?: string;
+  modelId?: string;
+};
+
 export type AgentSession = {
   id: string;
   projectId: string;
@@ -247,6 +290,19 @@ export type CanonicalAsset = {
   sourceScriptIds?: string[];
   createdAt?: string;
   updatedAt?: string;
+  sceneLinks?: AssetSceneLink[];
+  sceneCount?: number;
+  storyboardShotCount?: number;
+};
+
+export type AssetSceneLink = {
+  scriptSceneId: string;
+  sceneNo: number;
+  title: string;
+  location?: string;
+  assetRole?: string;
+  usageNote?: string;
+  storyboardShotCount: number;
 };
 
 export type ShotAssetRequirement = {
@@ -313,6 +369,14 @@ export type WorkflowNodeRun = {
 export type StoryboardShot = {
   id: string;
   workflowRunId: string;
+  scriptSceneId?: string;
+  sourceScene?: {
+    id: string;
+    sceneNo: number;
+    title: string;
+    location?: string;
+    characters?: string[];
+  };
   shotIndex: number;
   shotNo: number;
   durationSeconds?: number;
@@ -369,6 +433,10 @@ export type ProductionStatus = {
       activeAdaptationStatus?: string | null;
       activeScriptId?: string | null;
       activeScriptTitle?: string | null;
+      scriptSceneCount?: number;
+      approvedScriptSceneCount?: number;
+      pendingScriptSceneCount?: number;
+      staleScriptSceneCount?: number;
       summary: string[];
     };
     assets: {

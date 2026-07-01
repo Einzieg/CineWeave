@@ -13,20 +13,24 @@ const (
 )
 
 type StoryboardShot struct {
-	ShotNo      int     `json:"shotNo"`
-	Duration    float64 `json:"duration"`
-	Visual      string  `json:"visual"`
-	Camera      string  `json:"camera"`
-	Motion      string  `json:"motion"`
-	Mood        string  `json:"mood"`
-	ImagePrompt string  `json:"imagePrompt"`
-	VideoPrompt string  `json:"videoPrompt"`
-	Title       string  `json:"title,omitempty"`
+	ShotNo        int     `json:"shotNo"`
+	Duration      float64 `json:"duration"`
+	Visual        string  `json:"visual"`
+	Camera        string  `json:"camera"`
+	Motion        string  `json:"motion"`
+	Mood          string  `json:"mood"`
+	ImagePrompt   string  `json:"imagePrompt"`
+	VideoPrompt   string  `json:"videoPrompt"`
+	Title         string  `json:"title,omitempty"`
+	ScriptSceneID string  `json:"scriptSceneId,omitempty"`
+	SceneNo       int     `json:"sceneNo,omitempty"`
+	SourceSceneNo int     `json:"sourceSceneNo,omitempty"`
 }
 
 type StoryboardShotRecord struct {
 	ID                       string  `json:"shotId"`
 	WorkflowRunID            string  `json:"workflowRunId,omitempty"`
+	ScriptSceneID            string  `json:"scriptSceneId,omitempty"`
 	ShotIndex                int     `json:"shotIndex"`
 	ShotNo                   int     `json:"shotNo"`
 	Title                    string  `json:"title,omitempty"`
@@ -160,6 +164,7 @@ func storyboardShotRecordFromShot(shot StoryboardShot, shotID, workflowRunID str
 	return StoryboardShotRecord{
 		ID:            shotID,
 		WorkflowRunID: workflowRunID,
+		ScriptSceneID: shot.ScriptSceneID,
 		ShotIndex:     shotIndex,
 		ShotNo:        shot.ShotNo,
 		Title:         shot.Title,
@@ -172,6 +177,46 @@ func storyboardShotRecordFromShot(shot StoryboardShot, shotID, workflowRunID str
 		VideoPrompt:   shot.VideoPrompt,
 		Status:        "storyboard_ready",
 	}
+}
+
+func assignScriptScenesToShots(shots []StoryboardShot, scenes []ScriptSceneRecord) []StoryboardShot {
+	if len(shots) == 0 || len(scenes) == 0 {
+		return shots
+	}
+	sceneByID := map[string]ScriptSceneRecord{}
+	sceneByNo := map[int]ScriptSceneRecord{}
+	for _, scene := range scenes {
+		sceneByID[scene.ID] = scene
+		sceneByNo[scene.SceneNo] = scene
+	}
+	out := make([]StoryboardShot, 0, len(shots))
+	for i, shot := range shots {
+		if scene, ok := sceneByID[strings.TrimSpace(shot.ScriptSceneID)]; ok {
+			shot.ScriptSceneID = scene.ID
+		} else if scene, ok := sceneByNo[firstPositiveInt(shot.SourceSceneNo, shot.SceneNo)]; ok {
+			shot.ScriptSceneID = scene.ID
+		} else {
+			sceneIndex := 0
+			if len(shots) > 0 {
+				sceneIndex = i * len(scenes) / len(shots)
+			}
+			if sceneIndex >= len(scenes) {
+				sceneIndex = len(scenes) - 1
+			}
+			shot.ScriptSceneID = scenes[sceneIndex].ID
+		}
+		out = append(out, shot)
+	}
+	return out
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func storyboardShotEventPayload(workflowRunID string, shot StoryboardShotRecord, status string) json.RawMessage {

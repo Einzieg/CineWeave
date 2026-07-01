@@ -493,6 +493,7 @@ func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStory
 			RETURNING
 				id::text,
 				workflow_run_id::text,
+				COALESCE(script_scene_id::text, ''),
 				shot_index,
 				shot_no,
 				COALESCE(title, ''),
@@ -518,6 +519,7 @@ func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStory
 		})).Scan(
 			&record.ID,
 			&record.WorkflowRunID,
+			&record.ScriptSceneID,
 			&record.ShotIndex,
 			&record.ShotNo,
 			&record.Title,

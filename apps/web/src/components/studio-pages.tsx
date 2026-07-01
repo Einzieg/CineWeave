@@ -30,6 +30,7 @@ import type {
   ProviderAccount,
   Role,
   Script,
+  ScriptScene,
   ScriptVersion,
   ShotAssetRequirement,
   StoryboardShot,
@@ -650,6 +651,9 @@ function ProjectProductionContent({ projectId }: { projectId: string }) {
                   metricText("事件数量", status.data.stages.source.eventCount),
                   metricText("已确认事件", status.data.stages.source.approvedEventCount),
                   metricText("改编计划", status.data.stages.source.adaptationPlanCount),
+                  metricText("结构化分场", status.data.stages.source.scriptSceneCount ?? 0),
+                  metricText("已确认分场", status.data.stages.source.approvedScriptSceneCount ?? 0),
+                  metricText("待处理分场", status.data.stages.source.pendingScriptSceneCount ?? 0),
                   status.data.stages.source.activeAdaptationTitle ? `当前计划：${status.data.stages.source.activeAdaptationTitle}` : "当前计划：暂无",
                   status.data.stages.source.activeScriptTitle ? `当前剧本：${status.data.stages.source.activeScriptTitle}` : "当前剧本：暂无",
                 ]}
@@ -871,6 +875,7 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
   const sessions = useStudioQuery<AgentSession[]>([], `agent-v2-sessions:${projectId}`, async (activeSession) => (await studioApi.listAgentSessions(activeSession, projectId)).items);
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [selectedScriptId, setSelectedScriptId] = useState("");
+  const [selectedSceneId, setSelectedSceneId] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [selectedEventId, setSelectedEventId] = useState("");
   const [selectedPlanId, setSelectedPlanId] = useState("");
@@ -878,6 +883,7 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
   const [scriptDraft, setScriptDraft] = useState({ title: "", content: "" });
   const [eventDraft, setEventDraft] = useState({ id: "", title: "", summary: "", adaptationHint: "" });
   const [planDraft, setPlanDraft] = useState({ id: "", title: "", content: "" });
+  const [sceneDraft, setSceneDraft] = useState(scriptSceneEditForm(null));
   const [agentText, setAgentText] = useState("");
   const [agentDraft, setAgentDraft] = useState("");
   const [importOpen, setImportOpen] = useState(false);
@@ -912,6 +918,9 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
   const selectedSource = sourceDetail.data ?? sources.data.find((item) => item.id === effectiveSourceId);
   const selectedScript = scriptDetail.data ?? scripts.data.find((item) => item.id === effectiveScriptId);
   const activeVersion = selectedScript?.currentVersion ?? versions.data.find((version) => version.id === selectedScript?.currentVersionId) ?? versions.data[0];
+  const scriptScenes = useStudioQuery<ScriptScene[]>([], `script-scenes:${projectId}:${effectiveScriptId}:${activeVersion?.id ?? ""}`, async (activeSession) =>
+    effectiveScriptId && activeVersion ? (await studioApi.listScriptScenes(activeSession, projectId, effectiveScriptId, { scriptVersionId: activeVersion.id })).items : Promise.resolve([]),
+  );
   const chapters = selectedSource?.chapters ?? [];
   const effectiveChapterIndex = Math.min(selectedChapterIndex, Math.max(0, chapters.length - 1));
   const selectedChapter = chapters[effectiveChapterIndex];
@@ -920,6 +929,9 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
   const selectedPlan = adaptationPlans.data.find((item) => item.id === selectedPlanId) ?? activePlan;
   const scriptEditorTitle = scriptDraft.title || selectedScript?.title || "";
   const scriptEditorContent = scriptDraft.content || activeVersion?.content || "";
+  const effectiveSceneId = validSelection(selectedSceneId, scriptScenes.data);
+  const selectedScriptScene = scriptScenes.data.find((item) => item.id === effectiveSceneId) ?? scriptScenes.data[0];
+  const currentSceneDraft = sceneDraft.id === selectedScriptScene?.id ? sceneDraft : scriptSceneEditForm(selectedScriptScene);
   const novelEventsById = indexNovelEvents(novelEvents.data.items);
   const selectedEventLinks = selectedEvent
     ? novelEvents.data.links.filter((link) => link.sourceEventId === selectedEvent.id || link.targetEventId === selectedEvent.id)
@@ -1203,6 +1215,62 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
     });
   }
 
+  async function parseCurrentScriptScenes(force: boolean) {
+    await perform(force ? "重新解析分场" : "解析分场", async () => {
+      if (!selectedScript || !activeVersion) {
+        throw new Error("请先选择脚本版本。");
+      }
+      const result = await studioApi.parseScriptScenes(session, projectId, selectedScript.id, activeVersion.id, { force });
+      setSelectedSceneId(result.scenes[0]?.id ?? "");
+      scriptScenes.reload();
+    });
+  }
+
+  async function saveSelectedScriptScene() {
+    await perform("保存分场", async () => {
+      if (!selectedScriptScene) {
+        throw new Error("请先选择分场。");
+      }
+      await studioApi.updateScriptScene(session, projectId, selectedScriptScene.id, compactRecord({
+        title: currentSceneDraft.title,
+        summary: currentSceneDraft.summary,
+        location: currentSceneDraft.location,
+        timeOfDay: currentSceneDraft.timeOfDay,
+        atmosphere: currentSceneDraft.atmosphere,
+        characters: splitListInput(currentSceneDraft.characters),
+        scenes: splitListInput(currentSceneDraft.scenes),
+        props: splitListInput(currentSceneDraft.props),
+        action: currentSceneDraft.action,
+        dialogue: currentSceneDraft.dialogue,
+        visualGoal: currentSceneDraft.visualGoal,
+        emotionalTone: currentSceneDraft.emotionalTone,
+        conflict: currentSceneDraft.conflict,
+        outcome: currentSceneDraft.outcome,
+        content: currentSceneDraft.content,
+      }));
+      scriptScenes.reload();
+    });
+  }
+
+  async function reviewSelectedScriptScene(reviewStatus: string) {
+    await perform(reviewStatus === "approved" ? "确认分场" : "标记分场需修改", async () => {
+      if (!selectedScriptScene) {
+        throw new Error("请先选择分场。");
+      }
+      await studioApi.reviewScriptScene(session, projectId, selectedScriptScene.id, { reviewStatus });
+      scriptScenes.reload();
+    });
+  }
+
+  async function regenerateSelectedSceneStoryboard() {
+    await perform("重生成分场分镜", async () => {
+      if (!selectedScriptScene) {
+        throw new Error("请先选择分场。");
+      }
+      await studioApi.regenerate(session, projectId, { targetType: "scene_storyboard", targetId: selectedScriptScene.id, options: { force: true, maxShots: 3 } });
+    });
+  }
+
   return (
     <SessionGate>
       <div className="grid gap-5">
@@ -1410,6 +1478,7 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
                         key={script.id}
                         onClick={() => {
                           setSelectedScriptId(script.id);
+                          setSelectedSceneId("");
                           setScriptDraft({ title: script.title, content: "" });
                         }}
                         type="button"
@@ -1474,6 +1543,101 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
                         <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{previewText(activeVersion.content, 2200)}</p>
                       </div>
                     ) : null}
+                    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">结构化分场</p>
+                          <p className="mt-1 text-xs text-slate-500">{scriptScenes.data.length ? `${scriptScenes.data.length} 个分场` : "未解析"}</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button className="studio-button" disabled={!effectiveScriptId || !activeVersion || busy !== ""} onClick={() => parseCurrentScriptScenes(false)} type="button">
+                            <Sparkles size={16} />
+                            解析分场
+                          </button>
+                          <button className="studio-button" disabled={!effectiveScriptId || !activeVersion || busy !== ""} onClick={() => parseCurrentScriptScenes(true)} type="button">
+                            <RefreshCw size={16} />
+                            强制重解析
+                          </button>
+                        </div>
+                      </div>
+                      {scriptScenes.data.length ? (
+                        <div className="grid gap-3 lg:grid-cols-[240px_minmax(0,1fr)]">
+                          <div className="grid max-h-[520px] content-start gap-2 overflow-auto">
+                            {scriptScenes.data.map((scene) => (
+                              <button
+                                className={cn("rounded-md border p-3 text-left", selectedScriptScene?.id === scene.id ? "border-blue-600/50 bg-blue-600/10" : "border-slate-200 bg-slate-50")}
+                                key={scene.id}
+                                onClick={() => {
+                                  setSelectedSceneId(scene.id);
+                                  setSceneDraft(scriptSceneEditForm(scene));
+                                }}
+                                type="button"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-sm font-medium text-slate-900">S{scene.sceneNo} {scene.title}</p>
+                                  <StatusBadge status={scene.reviewStatus} />
+                                </div>
+                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{scene.summary || scene.content}</p>
+                                {scene.staleState && scene.staleState !== "fresh" ? <p className="mt-1 text-xs text-amber-700">{scene.staleState}</p> : null}
+                              </button>
+                            ))}
+                          </div>
+                          {selectedScriptScene ? (
+                            <div className="grid gap-3">
+                              <div className="grid gap-2 md:grid-cols-4">
+                                <InfoTile label="场次" value={`S${selectedScriptScene.sceneNo}`} />
+                                <InfoTile label="状态" value={selectedScriptScene.reviewStatus} />
+                                <InfoTile label="人工修改" value={selectedScriptScene.manualOverride ? "是" : "否"} />
+                                <InfoTile label="下游状态" value={selectedScriptScene.staleState || "fresh"} />
+                              </div>
+                              <TextInput label="标题" value={currentSceneDraft.title} onChange={(title) => setSceneDraft({ ...currentSceneDraft, title })} />
+                              <div className="grid gap-3 md:grid-cols-3">
+                                <TextInput label="地点" value={currentSceneDraft.location} onChange={(location) => setSceneDraft({ ...currentSceneDraft, location })} />
+                                <TextInput label="时间" value={currentSceneDraft.timeOfDay} onChange={(timeOfDay) => setSceneDraft({ ...currentSceneDraft, timeOfDay })} />
+                                <TextInput label="氛围" value={currentSceneDraft.atmosphere} onChange={(atmosphere) => setSceneDraft({ ...currentSceneDraft, atmosphere })} />
+                              </div>
+                              <div className="grid gap-3 md:grid-cols-3">
+                                <TextInput label="人物" value={currentSceneDraft.characters} onChange={(characters) => setSceneDraft({ ...currentSceneDraft, characters })} />
+                                <TextInput label="场景资产" value={currentSceneDraft.scenes} onChange={(scenes) => setSceneDraft({ ...currentSceneDraft, scenes })} />
+                                <TextInput label="道具" value={currentSceneDraft.props} onChange={(props) => setSceneDraft({ ...currentSceneDraft, props })} />
+                              </div>
+                              <TextAreaInput rows={3} label="摘要" value={currentSceneDraft.summary} onChange={(summary) => setSceneDraft({ ...currentSceneDraft, summary })} />
+                              <TextAreaInput rows={3} label="动作" value={currentSceneDraft.action} onChange={(action) => setSceneDraft({ ...currentSceneDraft, action })} />
+                              <TextAreaInput rows={3} label="对白" value={currentSceneDraft.dialogue} onChange={(dialogue) => setSceneDraft({ ...currentSceneDraft, dialogue })} />
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <TextAreaInput rows={3} label="视觉目标" value={currentSceneDraft.visualGoal} onChange={(visualGoal) => setSceneDraft({ ...currentSceneDraft, visualGoal })} />
+                                <TextAreaInput rows={3} label="情绪" value={currentSceneDraft.emotionalTone} onChange={(emotionalTone) => setSceneDraft({ ...currentSceneDraft, emotionalTone })} />
+                              </div>
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <TextAreaInput rows={3} label="冲突" value={currentSceneDraft.conflict} onChange={(conflict) => setSceneDraft({ ...currentSceneDraft, conflict })} />
+                                <TextAreaInput rows={3} label="结果" value={currentSceneDraft.outcome} onChange={(outcome) => setSceneDraft({ ...currentSceneDraft, outcome })} />
+                              </div>
+                              <TextAreaInput rows={7} label="正文" value={currentSceneDraft.content} onChange={(content) => setSceneDraft({ ...currentSceneDraft, content })} />
+                              <div className="flex flex-wrap gap-2">
+                                <button className="studio-button" disabled={busy !== ""} onClick={saveSelectedScriptScene} type="button">
+                                  <Save size={16} />
+                                  保存分场
+                                </button>
+                                <button className="studio-button" disabled={busy !== ""} onClick={() => reviewSelectedScriptScene("approved")} type="button">
+                                  <Check size={16} />
+                                  确认分场
+                                </button>
+                                <button className="studio-button" disabled={busy !== ""} onClick={() => reviewSelectedScriptScene("needs_edit")} type="button">
+                                  <Pencil size={16} />
+                                  需修改
+                                </button>
+                                <button className="studio-button studio-button-primary" disabled={busy !== ""} onClick={regenerateSelectedSceneStoryboard} type="button">
+                                  <Clapperboard size={16} />
+                                  重生成分场分镜
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <EmptyState title="未解析分场" description="选择脚本版本后解析分场。" />
+                      )}
+                    </div>
                     {versions.data.length ? (
                       <div className="grid gap-2">
                         {versions.data.map((version) => (
@@ -1698,6 +1862,16 @@ function AssetsContent({ projectId }: { projectId: string }) {
                   <p className="text-xs text-slate-500">参考图：{asset.referenceArtifactId || asset.referenceStorageKey ? "已生成" : "未生成"}</p>
                   <p className="text-xs text-slate-500">关联派生需求：{linkedRequirements.length}</p>
                   {staleRequirementCount ? <p className="text-xs text-amber-700">下游派生资产需重生成：{staleRequirementCount}</p> : null}
+                  <p className="text-xs text-slate-500">出现分场：{asset.sceneCount ?? asset.sceneLinks?.length ?? 0} · 关联分镜：{asset.storyboardShotCount ?? 0}</p>
+                  {asset.sceneLinks?.length ? (
+                    <div className="grid gap-1 rounded-md border border-slate-200 bg-slate-50 p-2">
+                      {asset.sceneLinks.slice(0, 4).map((link) => (
+                        <div className="text-xs leading-5 text-slate-600" key={link.scriptSceneId}>
+                          S{link.sceneNo} {link.title}{link.assetRole ? ` · ${link.assetRole}` : ""}{link.storyboardShotCount ? ` · ${link.storyboardShotCount} 镜头` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                     <button className="studio-button" disabled={busy !== ""} onClick={() => perform("确认资产", async () => void (await studioApi.reviewAsset(session, projectId, asset.id, { reviewStatus: "approved" })))} type="button">
                       <Check size={16} />
@@ -1756,6 +1930,7 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const workflows = useStudioQuery<WorkflowRun[]>([], `storyboard:runs:${projectId}`, async (activeSession) => (await studioApi.listWorkflowRuns(activeSession, projectId)).items);
   const requirements = useStudioQuery<ShotAssetRequirement[]>([], `storyboard:reqs:${projectId}`, async (activeSession) => (await studioApi.listShotAssetRequirements(activeSession, projectId)).items);
   const [scriptId, setScriptId] = useState("");
+  const [sceneFilter, setSceneFilter] = useState("");
   const [workflowRunId, setWorkflowRunId] = useState("");
   const [maxShots, setMaxShots] = useState("3");
   const [busy, setBusy] = useState("");
@@ -1764,10 +1939,15 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const [editingRequirement, setEditingRequirement] = useState<ShotAssetRequirement | null>(null);
   const storyboardRuns = workflows.data.filter((run) => ["script_to_storyboard", "script_to_video", "full_production"].includes(stringFrom(run.input.workflowType)));
   const effectiveScriptId = validSelection(scriptId, scripts.data);
+  const scriptScenes = useStudioQuery<ScriptScene[]>([], `storyboard:scenes:${projectId}:${effectiveScriptId}`, async (activeSession) =>
+    effectiveScriptId ? (await studioApi.listScriptScenes(activeSession, projectId, effectiveScriptId)).items : Promise.resolve([]),
+  );
+  const effectiveSceneFilter = validSelection(sceneFilter, scriptScenes.data);
   const effectiveWorkflowRunId = validSelection(workflowRunId, storyboardRuns);
   const shots = useStudioQuery<StoryboardShot[]>([], `storyboard:shots:${effectiveWorkflowRunId}`, async (activeSession) =>
     effectiveWorkflowRunId ? (await studioApi.listWorkflowShots(activeSession, effectiveWorkflowRunId)).items : Promise.resolve([]),
   );
+  const filteredShots = effectiveSceneFilter ? shots.data.filter((shot) => shot.scriptSceneId === effectiveSceneFilter) : shots.data;
 
   async function perform(label: string, action: () => Promise<void>) {
     setBusy(label);
@@ -1804,12 +1984,23 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   return (
     <SessionGate>
       <Surface className="mb-5 p-4">
-        <div className="grid gap-3 xl:grid-cols-[1fr_120px_auto_auto_auto_auto]">
-          <select className="studio-input" value={effectiveScriptId} onChange={(event) => setScriptId(event.target.value)}>
+        <div className="grid gap-3 xl:grid-cols-[1fr_220px_120px_auto_auto_auto_auto]">
+          <select className="studio-input" value={effectiveScriptId} onChange={(event) => {
+            setScriptId(event.target.value);
+            setSceneFilter("");
+          }}>
             <option value="">选择剧本</option>
             {scripts.data.map((script) => (
               <option key={script.id} value={script.id}>
                 {script.title}
+              </option>
+            ))}
+          </select>
+          <select className="studio-input" value={effectiveSceneFilter} onChange={(event) => setSceneFilter(event.target.value)}>
+            <option value="">全部分场</option>
+            {scriptScenes.data.map((scene) => (
+              <option key={scene.id} value={scene.id}>
+                S{scene.sceneNo} {scene.title}
               </option>
             ))}
           </select>
@@ -1843,9 +2034,9 @@ function StoryboardContent({ projectId }: { projectId: string }) {
           ))}
       </div>
 
-      {shots.data.length ? (
+      {filteredShots.length ? (
         <div className="grid gap-4">
-          {shots.data.map((shot) => {
+          {filteredShots.map((shot) => {
             const shotRequirements = requirements.data.filter((item) => item.storyboardShotId === shot.id);
             return (
               <Surface className="grid gap-4 p-4 xl:grid-cols-[240px_minmax(0,1fr)_320px]" key={shot.id}>
@@ -1859,6 +2050,9 @@ function StoryboardContent({ projectId }: { projectId: string }) {
                     {shot.staleState && shot.staleState !== "fresh" ? <StatusBadge status={shot.staleState} /> : null}
                   </div>
                   <p className="mt-3 text-sm leading-6 text-slate-700">{shot.visual || "暂无视觉描述"}</p>
+                  {shot.sourceScene ? (
+                    <p className="mt-2 text-xs text-slate-500">来源分场：S{shot.sourceScene.sceneNo} {shot.sourceScene.title}{shot.sourceScene.location ? ` · ${shot.sourceScene.location}` : ""}</p>
+                  ) : null}
                   <dl className="mt-4 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
                     <Meta label="运镜" value={shot.camera} />
                     <Meta label="动作" value={shot.motion} />
@@ -3425,6 +3619,15 @@ function productionStageDescription(stage: string, status: string) {
   if (stage === "source" && status === "adaptation_plan_pending") {
     return "已确认事件可用于生成改编计划。";
   }
+  if (stage === "source" && status === "scenes_pending_parse") {
+    return "当前脚本等待解析为结构化分场。";
+  }
+  if (stage === "source" && status === "scenes_pending_review") {
+    return "结构化分场已生成，等待确认或修改。";
+  }
+  if (stage === "source" && status === "scenes_ready") {
+    return "结构化分场已就绪，可以继续资产分析和分镜生成。";
+  }
   if (status === "needs_review") {
     return "仍有未确认内容。可以继续运行后续阶段，但建议先检查并确认输出。";
   }
@@ -3457,6 +3660,12 @@ function productionStageDescription(stage: string, status: string) {
 function nextProductionAction(status: ProductionStatus) {
   switch (status.overall.stage) {
     case "source":
+      if (status.stages.source.status === "scenes_pending_parse") {
+        return "parse_script_scenes";
+      }
+      if (status.stages.source.status === "scenes_pending_review") {
+        return "";
+      }
       if (status.stages.source.status === "events_pending_extraction") {
         return "extract_events";
       }
@@ -3501,6 +3710,12 @@ function sourceProductionPrimary(status: ProductionStatus, projectId: string) {
   if (source.status === "adaptation_plan_pending") {
     return { label: "生成改编计划", action: "generate_adaptation_plan" };
   }
+  if (source.status === "scenes_pending_parse") {
+    return { label: "解析分场", action: "parse_script_scenes" };
+  }
+  if (source.status === "scenes_pending_review") {
+    return { label: "确认分场", href: projectHref(projectId, "sources") };
+  }
   if (source.activeAdaptationPlanId && !source.activeScriptId) {
     return { label: "从计划生成剧本", action: "generate_script_from_plan" };
   }
@@ -3523,6 +3738,38 @@ function shotMediaMetrics(stage: ProductionStatus["stages"]["shotImages"]) {
     metricText("待生成", stage.pending),
     metricText("已过期", stage.stale),
   ];
+}
+
+function scriptSceneEditForm(scene: ScriptScene | null) {
+  return {
+    id: scene?.id ?? "",
+    title: scene?.title ?? "",
+    summary: scene?.summary ?? "",
+    location: scene?.location ?? "",
+    timeOfDay: scene?.timeOfDay ?? "",
+    atmosphere: scene?.atmosphere ?? "",
+    characters: listInputText(scene?.characters),
+    scenes: listInputText(scene?.scenes),
+    props: listInputText(scene?.props),
+    action: scene?.action ?? "",
+    dialogue: scene?.dialogue ?? "",
+    visualGoal: scene?.visualGoal ?? "",
+    emotionalTone: scene?.emotionalTone ?? "",
+    conflict: scene?.conflict ?? "",
+    outcome: scene?.outcome ?? "",
+    content: scene?.content ?? "",
+  };
+}
+
+function listInputText(values?: string[]) {
+  return (values ?? []).join(", ");
+}
+
+function splitListInput(value: string) {
+  return value
+    .split(/[,，、\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function assetEditForm(asset: CanonicalAsset | null) {

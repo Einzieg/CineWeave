@@ -13,6 +13,7 @@ import type {
   NovelEvent,
   NovelEventLink,
   Organization,
+  ParseScriptScenesResponse,
   Permission,
   Project,
   ProjectSource,
@@ -24,6 +25,7 @@ import type {
   ReviewResponse,
   Role,
   Script,
+  ScriptScene,
   ScriptVersion,
   SetupState,
   ShotAssetRequirement,
@@ -168,6 +170,14 @@ export const studioApi = {
     apiRequest<ScriptVersion>(`/api/projects/${projectId}/scripts/${scriptId}/versions`, { method: "POST", session, body }),
   activateScriptVersion: (session: StudioSession, projectId: string, scriptId: string, versionId: string) =>
     apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}/activate-version`, { method: "POST", session, body: { versionId } }),
+  parseScriptScenes: (session: StudioSession, projectId: string, scriptId: string, versionId: string, body: JsonRecord) =>
+    apiRequest<ParseScriptScenesResponse>(`/api/projects/${projectId}/scripts/${scriptId}/versions/${versionId}/parse-scenes`, { method: "POST", session, body }),
+  listScriptScenes: (session: StudioSession, projectId: string, scriptId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
+    apiRequest<ListEnvelope<ScriptScene>>(`/api/projects/${projectId}/scripts/${scriptId}/scenes`, { session, query }),
+  updateScriptScene: (session: StudioSession, projectId: string, sceneId: string, body: JsonRecord) =>
+    apiRequest<ScriptScene>(`/api/projects/${projectId}/script-scenes/${sceneId}`, { method: "PATCH", session, body }),
+  reviewScriptScene: (session: StudioSession, projectId: string, sceneId: string, body: JsonRecord) =>
+    apiRequest<ReviewResponse>(`/api/projects/${projectId}/script-scenes/${sceneId}/review`, { method: "POST", session, body }),
 
   listAgentSessions: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<AgentSession>>(`/api/projects/${projectId}/script-agent/sessions`, { session }),

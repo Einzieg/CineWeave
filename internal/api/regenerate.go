@@ -106,6 +106,16 @@ func (s *Server) requireRegenerationTarget(w http.ResponseWriter, r *http.Reques
 			return "", false
 		}
 		return targetID, true
+	case "script_scene", "scene_storyboard":
+		if targetID == "" {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "targetId is required", nil, false)
+			return "", false
+		}
+		if _, err := s.scriptScene(r, projectID, targetID); err != nil {
+			s.writeError(w, r, err)
+			return "", false
+		}
+		return targetID, true
 	case "final_video":
 		if targetID != "" {
 			var exists bool
@@ -172,6 +182,10 @@ func regenerationWorkflow(targetType string) (string, any, []string, bool) {
 		return "regenerate_shot_video", workflows.RegenerateShotVideoWorkflow, []string{authz.PermissionWorkflowRun}, true
 	case "final_video":
 		return "regenerate_final_video", workflows.RegenerateFinalVideoWorkflow, []string{authz.PermissionWorkflowRun}, true
+	case "script_scene":
+		return "regenerate_script_scene", workflows.RegenerateScriptSceneWorkflow, []string{authz.PermissionScriptWrite}, true
+	case "scene_storyboard":
+		return "regenerate_scene_storyboard", workflows.RegenerateSceneStoryboardWorkflow, []string{authz.PermissionStoryboardGenerate, authz.PermissionScriptWrite}, true
 	default:
 		return "", nil, nil, false
 	}

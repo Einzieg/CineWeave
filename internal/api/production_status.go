@@ -47,20 +47,24 @@ type ProductionStages struct {
 }
 
 type ProductionSourceStage struct {
-	Status                  string   `json:"status"`
-	NovelSourceCount        int      `json:"novelSourceCount"`
-	ScriptSourceCount       int      `json:"scriptSourceCount"`
-	ChapterCount            int      `json:"chapterCount"`
-	EventCount              int      `json:"eventCount"`
-	ApprovedEventCount      int      `json:"approvedEventCount"`
-	PendingEventReviewCount int      `json:"pendingEventReviewCount"`
-	AdaptationPlanCount     int      `json:"adaptationPlanCount"`
-	ActiveAdaptationPlanID  *string  `json:"activeAdaptationPlanId"`
-	ActiveAdaptationTitle   *string  `json:"activeAdaptationTitle"`
-	ActiveAdaptationStatus  *string  `json:"activeAdaptationStatus"`
-	ActiveScriptID          *string  `json:"activeScriptId"`
-	ActiveScriptTitle       *string  `json:"activeScriptTitle"`
-	Summary                 []string `json:"summary"`
+	Status                   string   `json:"status"`
+	NovelSourceCount         int      `json:"novelSourceCount"`
+	ScriptSourceCount        int      `json:"scriptSourceCount"`
+	ChapterCount             int      `json:"chapterCount"`
+	EventCount               int      `json:"eventCount"`
+	ApprovedEventCount       int      `json:"approvedEventCount"`
+	PendingEventReviewCount  int      `json:"pendingEventReviewCount"`
+	AdaptationPlanCount      int      `json:"adaptationPlanCount"`
+	ActiveAdaptationPlanID   *string  `json:"activeAdaptationPlanId"`
+	ActiveAdaptationTitle    *string  `json:"activeAdaptationTitle"`
+	ActiveAdaptationStatus   *string  `json:"activeAdaptationStatus"`
+	ActiveScriptID           *string  `json:"activeScriptId"`
+	ActiveScriptTitle        *string  `json:"activeScriptTitle"`
+	ScriptSceneCount         int      `json:"scriptSceneCount"`
+	ApprovedScriptSceneCount int      `json:"approvedScriptSceneCount"`
+	PendingScriptSceneCount  int      `json:"pendingScriptSceneCount"`
+	StaleScriptSceneCount    int      `json:"staleScriptSceneCount"`
+	Summary                  []string `json:"summary"`
 }
 
 type ProductionAssetsStage struct {
@@ -333,6 +337,21 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 	if err != nil {
 		return ProductionSourceStage{}, err
 	}
+	var scriptSceneCount, approvedScriptSceneCount, pendingScriptSceneCount, staleScriptSceneCount int
+	if activeScriptID != "" {
+		if err := s.db.QueryRow(r.Context(), `
+			SELECT
+				COUNT(sc.id),
+				COUNT(sc.id) FILTER (WHERE sc.review_status = 'approved'),
+				COUNT(sc.id) FILTER (WHERE sc.review_status <> 'approved'),
+				COUNT(sc.id) FILTER (WHERE sc.stale_state <> 'fresh')
+			FROM scripts s
+			LEFT JOIN script_scenes sc ON sc.script_version_id = s.current_version_id
+			WHERE s.project_id = $1 AND s.id = $2
+		`, projectID, activeScriptID).Scan(&scriptSceneCount, &approvedScriptSceneCount, &pendingScriptSceneCount, &staleScriptSceneCount); err != nil {
+			return ProductionSourceStage{}, err
+		}
+	}
 	activePlanID, activePlanTitle, activePlanStatus, err := s.activeProductionAdaptationPlan(r, projectID, "")
 	if err != nil {
 		return ProductionSourceStage{}, err
@@ -340,8 +359,12 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 	pendingEventReviewCount := maxInt(eventCount-approvedEventCount, 0)
 	status := "not_started"
 	switch {
+	case activeScriptID != "" && scriptSceneCount == 0:
+		status = "scenes_pending_parse"
+	case activeScriptID != "" && pendingScriptSceneCount > 0:
+		status = "scenes_pending_review"
 	case activeScriptID != "":
-		status = "ready"
+		status = "scenes_ready"
 	case novelCount+scriptSourceCount == 0:
 		status = "not_started"
 	case novelCount > 0 && chapterCount > 0 && eventCount == 0:
@@ -372,21 +395,28 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 	if activeScriptTitle != "" {
 		summary = append(summary, "Active script: "+activeScriptTitle)
 	}
+	if scriptSceneCount > 0 {
+		summary = append(summary, fmt.Sprintf("Script scenes: %d, approved: %d", scriptSceneCount, approvedScriptSceneCount))
+	}
 	return ProductionSourceStage{
-		Status:                  status,
-		NovelSourceCount:        novelCount,
-		ScriptSourceCount:       scriptSourceCount,
-		ChapterCount:            chapterCount,
-		EventCount:              eventCount,
-		ApprovedEventCount:      approvedEventCount,
-		PendingEventReviewCount: pendingEventReviewCount,
-		AdaptationPlanCount:     adaptationPlanCount,
-		ActiveAdaptationPlanID:  stringPtrFromValue(activePlanID),
-		ActiveAdaptationTitle:   stringPtrFromValue(activePlanTitle),
-		ActiveAdaptationStatus:  stringPtrFromValue(activePlanStatus),
-		ActiveScriptID:          stringPtrFromValue(activeScriptID),
-		ActiveScriptTitle:       stringPtrFromValue(activeScriptTitle),
-		Summary:                 summary,
+		Status:                   status,
+		NovelSourceCount:         novelCount,
+		ScriptSourceCount:        scriptSourceCount,
+		ChapterCount:             chapterCount,
+		EventCount:               eventCount,
+		ApprovedEventCount:       approvedEventCount,
+		PendingEventReviewCount:  pendingEventReviewCount,
+		AdaptationPlanCount:      adaptationPlanCount,
+		ActiveAdaptationPlanID:   stringPtrFromValue(activePlanID),
+		ActiveAdaptationTitle:    stringPtrFromValue(activePlanTitle),
+		ActiveAdaptationStatus:   stringPtrFromValue(activePlanStatus),
+		ActiveScriptID:           stringPtrFromValue(activeScriptID),
+		ActiveScriptTitle:        stringPtrFromValue(activeScriptTitle),
+		ScriptSceneCount:         scriptSceneCount,
+		ApprovedScriptSceneCount: approvedScriptSceneCount,
+		PendingScriptSceneCount:  pendingScriptSceneCount,
+		StaleScriptSceneCount:    staleScriptSceneCount,
+		Summary:                  summary,
 	}, nil
 }
 
@@ -835,6 +865,16 @@ func (s *Server) productionActionWorkflow(w http.ResponseWriter, r *http.Request
 			return "", nil, nil, "", false
 		}
 		return "source_to_script", map[string]any{"sourceId": sourceID}, workflows.SourceToScriptWorkflow, "", true
+	case "parse_script_scenes":
+		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
+		if !ok {
+			return "", nil, nil, "", false
+		}
+		input := map[string]any{"scriptId": scriptID, "force": productionOptionBool(options, "force", false)}
+		if versionID := productionOptionString(options, "scriptVersionId"); versionID != "" {
+			input["scriptVersionId"] = versionID
+		}
+		return "parse_script_scenes", input, workflows.ParseScriptScenesWorkflow, "", true
 	case "analyze_assets":
 		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
 		if !ok {
@@ -1032,6 +1072,8 @@ func productionActionPermission(action string) (string, bool) {
 		return authz.PermissionAdaptationPlanWrite, true
 	case "generate_script":
 		return authz.PermissionScriptWrite, true
+	case "parse_script_scenes":
+		return authz.PermissionScriptWrite, true
 	case "analyze_assets":
 		return authz.PermissionAssetAnalyze, true
 	case "generate_asset_images", "generate_derived_asset_images":
@@ -1078,7 +1120,7 @@ func productionOverall(stages ProductionStages) ProductionOverall {
 }
 
 func productionCurrentStage(stages ProductionStages) string {
-	if stages.Source.Status != "ready" {
+	if !sourceStageReady(stages.Source.Status) {
 		return "source"
 	}
 	if stages.Assets.Status != "completed" {
@@ -1103,6 +1145,12 @@ func productionStageProgress(status string) int {
 	switch status {
 	case "ready", "completed":
 		return 100
+	case "scenes_ready":
+		return 100
+	case "scenes_pending_review":
+		return 75
+	case "scenes_pending_parse":
+		return 65
 	case "events_pending_review":
 		return 55
 	case "adaptation_plan_pending":
@@ -1122,6 +1170,10 @@ func productionStageProgress(status string) int {
 	default:
 		return 0
 	}
+}
+
+func sourceStageReady(status string) bool {
+	return status == "ready" || status == "scenes_ready"
 }
 
 func productionMediaStatus(total, succeeded, failed, running int) string {

@@ -215,18 +215,19 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 		err := tx.QueryRow(ctx, `
 			INSERT INTO storyboard_shots(
 				organization_id, project_id, workflow_run_id, storyboard_artifact_id,
-				script_id, script_version_id, storyboard_source,
+				script_id, script_version_id, script_scene_id, storyboard_source,
 				shot_index, shot_no, title, duration_seconds,
 				visual, camera, motion, mood, image_prompt, video_prompt,
 				status, metadata
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, 'script_agent', $7, $8, NULLIF($9, ''), $10,
-			        NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''), NULLIF($16, ''),
-			        'storyboard_ready', $17)
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::uuid, 'script_agent', $8, $9, NULLIF($10, ''), $11,
+			        NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''), NULLIF($16, ''), NULLIF($17, ''),
+			        'storyboard_ready', $18)
 			ON CONFLICT (workflow_run_id, shot_index) DO UPDATE SET
 				storyboard_artifact_id = EXCLUDED.storyboard_artifact_id,
 				script_id = EXCLUDED.script_id,
 				script_version_id = EXCLUDED.script_version_id,
+				script_scene_id = EXCLUDED.script_scene_id,
 				storyboard_source = EXCLUDED.storyboard_source,
 				shot_no = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.shot_no ELSE EXCLUDED.shot_no END,
 				title = CASE WHEN storyboard_shots.manual_override THEN storyboard_shots.title ELSE EXCLUDED.title END,
@@ -248,6 +249,7 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 			RETURNING
 				id::text,
 				COALESCE(workflow_run_id::text, ''),
+				COALESCE(script_scene_id::text, ''),
 				shot_index,
 				COALESCE(shot_no, shot_index + 1),
 				COALESCE(title, ''),
@@ -269,14 +271,16 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 				status,
 				COALESCE(manual_override, false),
 				COALESCE(stale_state, 'fresh')
-		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, artifactID, script.ID, script.VersionID,
+		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, artifactID, script.ID, script.VersionID, shot.ScriptSceneID,
 			shotIndex, shot.ShotNo, shot.Title, shot.Duration, shot.Visual, shot.Camera, shot.Motion, shot.Mood,
 			shot.ImagePrompt, shot.VideoPrompt, mustJSON(map[string]any{
 				"source":               "script_to_storyboard",
 				"storyboardArtifactId": artifactID,
+				"scriptSceneId":        shot.ScriptSceneID,
 			})).Scan(
 			&record.ID,
 			&record.WorkflowRunID,
+			&record.ScriptSceneID,
 			&record.ShotIndex,
 			&record.ShotNo,
 			&record.Title,
@@ -497,6 +501,7 @@ func (a Activities) storyboardShotByID(ctx context.Context, projectID, shotID st
 		SELECT
 			id::text,
 			COALESCE(workflow_run_id::text, ''),
+			COALESCE(script_scene_id::text, ''),
 			shot_index,
 			COALESCE(shot_no, shot_index + 1),
 			COALESCE(title, ''),

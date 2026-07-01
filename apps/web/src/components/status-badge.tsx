@@ -2,10 +2,13 @@
 
 const toneByStatus: Record<string, string> = {
   ready: "border-blue-200 bg-blue-50 text-blue-700",
+  scenes_ready: "border-blue-200 bg-blue-50 text-blue-700",
   imported: "border-blue-200 bg-blue-50 text-blue-700",
   active: "border-blue-200 bg-blue-50 text-blue-700",
   running: "border-amber-200 bg-amber-50 text-amber-700",
   needs_review: "border-amber-200 bg-amber-50 text-amber-700",
+  scenes_pending_parse: "border-amber-200 bg-amber-50 text-amber-700",
+  scenes_pending_review: "border-amber-200 bg-amber-50 text-amber-700",
   needs_edit: "border-amber-200 bg-amber-50 text-amber-700",
   needs_regeneration: "border-amber-200 bg-amber-50 text-amber-700",
   upstream_changed: "border-amber-200 bg-amber-50 text-amber-700",
@@ -37,6 +40,8 @@ export function statusLabel(status: string) {
   switch (status) {
     case "ready":
       return "就绪";
+    case "scenes_ready":
+      return "分场就绪";
     case "imported":
       return "已导入";
     case "active":
@@ -53,6 +58,10 @@ export function statusLabel(status: string) {
       return "未开始";
     case "needs_review":
       return "待确认";
+    case "scenes_pending_parse":
+      return "待解析分场";
+    case "scenes_pending_review":
+      return "分场待确认";
     case "needs_edit":
       return "需修改";
     case "needs_regeneration":

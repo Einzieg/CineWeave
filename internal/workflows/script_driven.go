@@ -27,6 +27,7 @@ const (
 
 type ScriptProductionOptions struct {
 	ScriptID              string `json:"scriptId"`
+	ScriptSceneID         string `json:"scriptSceneId,omitempty"`
 	MergeExisting         bool   `json:"mergeExisting"`
 	GenerateImages        bool   `json:"generateImages"`
 	GenerateDerivedAssets bool   `json:"generateDerivedAssets"`
@@ -104,6 +105,7 @@ type GenerateStoryboardFromScriptInput struct {
 	WorkflowRunID  string `json:"workflowRunId"`
 	CreatedBy      string `json:"createdBy"`
 	ScriptID       string `json:"scriptId"`
+	ScriptSceneID  string `json:"scriptSceneId,omitempty"`
 	MaxShots       int    `json:"maxShots,omitempty"`
 }
 
@@ -205,6 +207,7 @@ func ScriptToStoryboardWorkflow(ctx workflow.Context, input TextToStoryboardInpu
 		WorkflowRunID:  input.WorkflowRunID,
 		CreatedBy:      input.CreatedBy,
 		ScriptID:       options.ScriptID,
+		ScriptSceneID:  options.ScriptSceneID,
 		MaxShots:       options.MaxShots,
 	}).Get(ctx, &output); err != nil {
 		return ScriptStoryboardOutput{}, err
@@ -266,6 +269,7 @@ func ScriptDrivenVideoProduction(ctx workflow.Context, input TextToStoryboardInp
 		WorkflowRunID:  input.WorkflowRunID,
 		CreatedBy:      input.CreatedBy,
 		ScriptID:       scriptOptions.ScriptID,
+		ScriptSceneID:  scriptOptions.ScriptSceneID,
 		MaxShots:       options.MaxShots,
 	}).Get(ctx, &storyboard); err != nil {
 		return VideoProductionOutput{}, err
@@ -462,8 +466,16 @@ func (a Activities) AnalyzeScriptAssets(ctx context.Context, input AnalyzeScript
 	if err != nil {
 		return ScriptAssetsOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
+	scriptScenes, err := a.scriptScenesForVersion(ctx, input.ProjectID, script.VersionID)
+	if err != nil {
+		return ScriptAssetsOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	scriptContent := script.Content
+	if len(scriptScenes) > 0 {
+		scriptContent = FormatScriptScenesForPrompt(scriptScenes)
+	}
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyScriptAssetExtraction, map[string]any{
-		"script": map[string]any{"id": script.ID, "versionId": script.VersionID, "content": script.Content},
+		"script": map[string]any{"id": script.ID, "versionId": script.VersionID, "content": scriptContent, "scenes": string(mustJSON(scriptScenes))},
 		"assets": map[string]any{"existing": string(mustJSON(existing))},
 	})
 	if err != nil {
@@ -517,6 +529,11 @@ func (a Activities) AnalyzeScriptAssets(ctx context.Context, input AnalyzeScript
 	if err != nil {
 		return ScriptAssetsOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
+	if len(scriptScenes) > 0 {
+		if err := a.upsertSceneAssetLinks(ctx, input, scriptScenes, assets); err != nil {
+			return ScriptAssetsOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
+		}
+	}
 	output := ScriptAssetsOutput{
 		ScriptID:        script.ID,
 		ScriptVersionID: script.VersionID,
@@ -532,12 +549,29 @@ func (a Activities) AnalyzeScriptAssets(ctx context.Context, input AnalyzeScript
 
 func (a Activities) GenerateStoryboardFromScript(ctx context.Context, input GenerateStoryboardFromScriptInput) (ScriptStoryboardOutput, error) {
 	baseInput := TextToStoryboardInput{OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID, Prompt: "script_to_storyboard", CreatedBy: input.CreatedBy}
-	if err := validateScriptWorkflowInput(input.OrganizationID, input.ProjectID, input.WorkflowRunID, input.ScriptID); err != nil {
+	if err := validateScriptWorkflowInput(input.OrganizationID, input.ProjectID, input.WorkflowRunID, firstNonEmptyString(input.ScriptID, input.ScriptSceneID)); err != nil {
 		return ScriptStoryboardOutput{}, err
+	}
+	if input.ScriptID == "" && input.ScriptSceneID != "" {
+		scene, err := a.scriptSceneByID(ctx, input.ProjectID, input.ScriptSceneID)
+		if err != nil {
+			return ScriptStoryboardOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+		}
+		input.ScriptID = scene.ScriptID
 	}
 	script, err := a.activeScript(ctx, input.ProjectID, input.ScriptID)
 	if err != nil {
 		return ScriptStoryboardOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	if input.ScriptSceneID != "" {
+		scene, err := a.scriptSceneByID(ctx, input.ProjectID, input.ScriptSceneID)
+		if err != nil {
+			return ScriptStoryboardOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+		}
+		script, err = a.scriptForSceneParse(ctx, input.ProjectID, scene.ScriptID, scene.ScriptVersionID)
+		if err != nil {
+			return ScriptStoryboardOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+		}
 	}
 	project, err := a.projectProductionSettings(ctx, input.ProjectID)
 	if err != nil {
@@ -551,9 +585,17 @@ func (a Activities) GenerateStoryboardFromScript(ctx context.Context, input Gene
 	if maxShots <= 0 || maxShots > defaultMaxStoryboardShots {
 		maxShots = defaultMaxStoryboardShots
 	}
+	scriptScenes, err := a.storyboardScenesForScript(ctx, input.ProjectID, script.VersionID, input.ScriptSceneID)
+	if err != nil {
+		return ScriptStoryboardOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	scriptContent := script.Content
+	if len(scriptScenes) > 0 {
+		scriptContent = FormatScriptScenesForPrompt(scriptScenes)
+	}
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardFromScript, map[string]any{
 		"project": project.asPromptVariables(),
-		"script":  map[string]any{"id": script.ID, "versionId": script.VersionID, "content": script.Content},
+		"script":  map[string]any{"id": script.ID, "versionId": script.VersionID, "content": scriptContent, "scenes": string(mustJSON(scriptScenes))},
 		"assets":  map[string]any{"items": string(mustJSON(assets))},
 		"input":   map[string]any{"maxShots": maxShots},
 	})
@@ -606,7 +648,8 @@ func (a Activities) GenerateStoryboardFromScript(ctx context.Context, input Gene
 	if parseShotsErr != nil && parseError == "" {
 		parseError = parseShotsErr.Error()
 	}
-	normalizedShots := NormalizeStoryboardShotsWithLimit(parsedShots, script.Content, maxShots)
+	normalizedShots := NormalizeStoryboardShotsWithLimit(parsedShots, scriptContent, maxShots)
+	normalizedShots = assignScriptScenesToShots(normalizedShots, scriptScenes)
 	requirements := NormalizeShotAssetRequirements(storyboard)
 	storyboardValue := map[string]any{
 		"storyboard":    storyboard,
@@ -615,6 +658,7 @@ func (a Activities) GenerateStoryboardFromScript(ctx context.Context, input Gene
 		"requirements":  requirements,
 		"scriptId":      script.ID,
 		"scriptVersion": script.VersionID,
+		"scriptScenes":  scriptScenes,
 	}
 	if parseError != "" {
 		storyboardValue["parseError"] = parseError

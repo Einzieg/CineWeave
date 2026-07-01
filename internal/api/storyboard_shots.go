@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -13,38 +14,48 @@ import (
 )
 
 type StoryboardShot struct {
-	ID                       string     `json:"id"`
-	WorkflowRunID            string     `json:"workflowRunId"`
-	ShotIndex                int        `json:"shotIndex"`
-	ShotNo                   int        `json:"shotNo"`
-	DurationSeconds          *float64   `json:"durationSeconds,omitempty"`
-	Visual                   string     `json:"visual,omitempty"`
-	Camera                   string     `json:"camera,omitempty"`
-	Motion                   string     `json:"motion,omitempty"`
-	Mood                     string     `json:"mood,omitempty"`
-	ImagePrompt              string     `json:"imagePrompt,omitempty"`
-	VideoPrompt              string     `json:"videoPrompt,omitempty"`
-	ImageArtifactID          *string    `json:"imageArtifactId,omitempty"`
-	ImageMediaFileID         *string    `json:"imageMediaFileId,omitempty"`
-	ImageStorageKey          *string    `json:"imageStorageKey,omitempty"`
-	ImagePreviewURL          *string    `json:"imagePreviewUrl,omitempty"`
-	VideoArtifactID          *string    `json:"videoArtifactId,omitempty"`
-	VideoMediaFileID         *string    `json:"videoMediaFileId,omitempty"`
-	VideoStorageKey          *string    `json:"videoStorageKey,omitempty"`
-	VideoPreviewURL          *string    `json:"videoPreviewUrl,omitempty"`
-	VideoProviderAsyncTaskID *string    `json:"providerAsyncTaskId,omitempty"`
-	VideoExternalTaskID      *string    `json:"externalTaskId,omitempty"`
-	Status                   string     `json:"status"`
-	ReviewStatus             string     `json:"reviewStatus"`
-	ManualOverride           bool       `json:"manualOverride"`
-	StaleState               string     `json:"staleState"`
-	EditedBy                 *string    `json:"editedBy,omitempty"`
-	EditedAt                 *time.Time `json:"editedAt,omitempty"`
+	ID                       string           `json:"id"`
+	WorkflowRunID            string           `json:"workflowRunId"`
+	ScriptSceneID            *string          `json:"scriptSceneId,omitempty"`
+	SourceScene              *ShotSourceScene `json:"sourceScene,omitempty"`
+	ShotIndex                int              `json:"shotIndex"`
+	ShotNo                   int              `json:"shotNo"`
+	DurationSeconds          *float64         `json:"durationSeconds,omitempty"`
+	Visual                   string           `json:"visual,omitempty"`
+	Camera                   string           `json:"camera,omitempty"`
+	Motion                   string           `json:"motion,omitempty"`
+	Mood                     string           `json:"mood,omitempty"`
+	ImagePrompt              string           `json:"imagePrompt,omitempty"`
+	VideoPrompt              string           `json:"videoPrompt,omitempty"`
+	ImageArtifactID          *string          `json:"imageArtifactId,omitempty"`
+	ImageMediaFileID         *string          `json:"imageMediaFileId,omitempty"`
+	ImageStorageKey          *string          `json:"imageStorageKey,omitempty"`
+	ImagePreviewURL          *string          `json:"imagePreviewUrl,omitempty"`
+	VideoArtifactID          *string          `json:"videoArtifactId,omitempty"`
+	VideoMediaFileID         *string          `json:"videoMediaFileId,omitempty"`
+	VideoStorageKey          *string          `json:"videoStorageKey,omitempty"`
+	VideoPreviewURL          *string          `json:"videoPreviewUrl,omitempty"`
+	VideoProviderAsyncTaskID *string          `json:"providerAsyncTaskId,omitempty"`
+	VideoExternalTaskID      *string          `json:"externalTaskId,omitempty"`
+	Status                   string           `json:"status"`
+	ReviewStatus             string           `json:"reviewStatus"`
+	ManualOverride           bool             `json:"manualOverride"`
+	StaleState               string           `json:"staleState"`
+	EditedBy                 *string          `json:"editedBy,omitempty"`
+	EditedAt                 *time.Time       `json:"editedAt,omitempty"`
 
 	imageArtifactStorageKey *string
 	imageArtifactMimeType   *string
 	videoArtifactStorageKey *string
 	videoArtifactMimeType   *string
+}
+
+type ShotSourceScene struct {
+	ID         string          `json:"id"`
+	SceneNo    int             `json:"sceneNo"`
+	Title      string          `json:"title"`
+	Location   string          `json:"location,omitempty"`
+	Characters json.RawMessage `json:"characters"`
 }
 
 func (s *Server) listWorkflowRunShots(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -96,10 +107,17 @@ func (s *Server) listWorkflowRunShots(w http.ResponseWriter, r *http.Request, pr
 			COALESCE(s.manual_override, false),
 			COALESCE(s.stale_state, 'fresh'),
 			s.edited_by,
-			s.edited_at
+			s.edited_at,
+			s.script_scene_id::text,
+			sc.id::text,
+			COALESCE(sc.scene_no, 0),
+			COALESCE(sc.title, ''),
+			COALESCE(sc.location, ''),
+			COALESCE(sc.characters, '[]'::jsonb)
 		FROM storyboard_shots s
 		LEFT JOIN artifacts ia ON ia.id = s.image_artifact_id
 		LEFT JOIN artifacts va ON va.id = s.video_artifact_id
+		LEFT JOIN script_scenes sc ON sc.id = s.script_scene_id
 		WHERE s.workflow_run_id = $1
 		ORDER BY s.shot_index ASC
 	`, run.ID)
@@ -132,6 +150,9 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	var imageArtifactID, imageMediaFileID, imageStorageKey, imageArtifactStorageKey, imageArtifactMimeType sql.NullString
 	var videoArtifactID, videoMediaFileID, videoStorageKey, videoArtifactStorageKey, videoArtifactMimeType sql.NullString
 	var providerAsyncTaskID, externalTaskID, editedBy sql.NullString
+	var scriptSceneID, sourceSceneID, sourceSceneTitle, sourceSceneLocation sql.NullString
+	var sourceSceneNo sql.NullInt64
+	var sourceSceneCharacters []byte
 	var editedAt sql.NullTime
 	err := row.Scan(
 		&item.ID,
@@ -163,6 +184,12 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 		&item.StaleState,
 		&editedBy,
 		&editedAt,
+		&scriptSceneID,
+		&sourceSceneID,
+		&sourceSceneNo,
+		&sourceSceneTitle,
+		&sourceSceneLocation,
+		&sourceSceneCharacters,
 	)
 	if duration.Valid {
 		item.DurationSeconds = &duration.Float64
@@ -180,6 +207,16 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	item.VideoProviderAsyncTaskID = stringPtrFromNull(providerAsyncTaskID)
 	item.VideoExternalTaskID = stringPtrFromNull(externalTaskID)
 	item.EditedBy = stringPtrFromNull(editedBy)
+	item.ScriptSceneID = stringPtrFromNull(scriptSceneID)
+	if sourceSceneID.Valid && strings.TrimSpace(sourceSceneID.String) != "" {
+		item.SourceScene = &ShotSourceScene{
+			ID:         sourceSceneID.String,
+			SceneNo:    int(sourceSceneNo.Int64),
+			Title:      sourceSceneTitle.String,
+			Location:   sourceSceneLocation.String,
+			Characters: rawOrDefaultBytes(sourceSceneCharacters, "[]"),
+		}
+	}
 	if editedAt.Valid {
 		item.EditedAt = &editedAt.Time
 	}

@@ -16,6 +16,8 @@ type RegenerationOptions struct {
 	Duration            float64 `json:"duration"`
 	AspectRatio         string  `json:"aspectRatio"`
 	Resolution          string  `json:"resolution"`
+	Instruction         string  `json:"instruction,omitempty"`
+	MaxShots            int     `json:"maxShots,omitempty"`
 	PollIntervalSeconds int     `json:"pollIntervalSeconds"`
 	MaxPolls            int     `json:"maxPolls"`
 }
@@ -194,6 +196,8 @@ func resolveRegenerationOptions(raw json.RawMessage) RegenerationOptions {
 		Duration            float64 `json:"duration"`
 		AspectRatio         string  `json:"aspectRatio"`
 		Resolution          string  `json:"resolution"`
+		Instruction         string  `json:"instruction"`
+		MaxShots            int     `json:"maxShots"`
 		PollIntervalSeconds int     `json:"pollIntervalSeconds"`
 		MaxPolls            int     `json:"maxPolls"`
 	}
@@ -215,6 +219,12 @@ func resolveRegenerationOptions(raw json.RawMessage) RegenerationOptions {
 	}
 	if strings.TrimSpace(decoded.Resolution) != "" {
 		options.Resolution = strings.TrimSpace(decoded.Resolution)
+	}
+	if strings.TrimSpace(decoded.Instruction) != "" {
+		options.Instruction = strings.TrimSpace(decoded.Instruction)
+	}
+	if decoded.MaxShots > 0 {
+		options.MaxShots = decoded.MaxShots
 	}
 	if decoded.PollIntervalSeconds > 0 {
 		options.PollIntervalSeconds = decoded.PollIntervalSeconds

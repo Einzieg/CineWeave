@@ -98,7 +98,7 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 	if workflowType == "" {
 		workflowType = "video_production"
 	}
-	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "extract_novel_events" && workflowType != "generate_adaptation_plan" && workflowType != "adaptation_plan_to_script" && workflowType != "source_to_script" && workflowType != "script_to_assets" && workflowType != "script_to_storyboard" && workflowType != "script_to_video" && workflowType != "full_production" {
+	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "extract_novel_events" && workflowType != "generate_adaptation_plan" && workflowType != "adaptation_plan_to_script" && workflowType != "source_to_script" && workflowType != "parse_script_scenes" && workflowType != "script_to_assets" && workflowType != "script_to_storyboard" && workflowType != "script_to_video" && workflowType != "full_production" {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowType is not supported", nil, false)
 		return
 	}
@@ -167,6 +167,8 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		workflowFunc = workflows.AdaptationPlanToScriptWorkflow
 	case "source_to_script":
 		workflowFunc = workflows.SourceToScriptWorkflow
+	case "parse_script_scenes":
+		workflowFunc = workflows.ParseScriptScenesWorkflow
 	case "script_to_assets":
 		workflowFunc = workflows.ScriptToAssetsWorkflow
 	case "video_production":
@@ -464,6 +466,11 @@ func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, pro
 	if workflowType == "adaptation_plan_to_script" {
 		if value, ok := values["planId"].(string); !ok || strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("input.planId is required")
+		}
+	}
+	if workflowType == "parse_script_scenes" {
+		if value, ok := values["scriptId"].(string); !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("input.scriptId is required")
 		}
 	}
 	if workflowType == "script_to_assets" || workflowType == "script_to_storyboard" || workflowType == "script_to_video" || workflowType == "full_production" {

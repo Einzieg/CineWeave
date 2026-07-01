@@ -19,28 +19,41 @@ import (
 )
 
 type CanonicalAsset struct {
-	ID                   string          `json:"id"`
-	OrganizationID       string          `json:"organizationId"`
-	ProjectID            string          `json:"projectId"`
-	AssetType            string          `json:"assetType"`
-	Name                 string          `json:"name"`
-	Description          string          `json:"description"`
-	BasePrompt           *string         `json:"basePrompt,omitempty"`
-	VisualTraits         json.RawMessage `json:"visualTraits"`
-	ReferenceArtifactID  *string         `json:"referenceArtifactId,omitempty"`
-	ReferenceMediaFileID *string         `json:"referenceMediaFileId,omitempty"`
-	ReferenceStorageKey  *string         `json:"referenceStorageKey,omitempty"`
-	Status               string          `json:"status"`
-	ReviewStatus         string          `json:"reviewStatus"`
-	ManualOverride       bool            `json:"manualOverride"`
-	StaleState           string          `json:"staleState"`
-	EditedBy             *string         `json:"editedBy,omitempty"`
-	EditedAt             *time.Time      `json:"editedAt,omitempty"`
-	SourceScriptIDs      json.RawMessage `json:"sourceScriptIds"`
-	Metadata             json.RawMessage `json:"metadata"`
-	CreatedBy            *string         `json:"createdBy,omitempty"`
-	CreatedAt            time.Time       `json:"createdAt"`
-	UpdatedAt            time.Time       `json:"updatedAt"`
+	ID                   string           `json:"id"`
+	OrganizationID       string           `json:"organizationId"`
+	ProjectID            string           `json:"projectId"`
+	AssetType            string           `json:"assetType"`
+	Name                 string           `json:"name"`
+	Description          string           `json:"description"`
+	BasePrompt           *string          `json:"basePrompt,omitempty"`
+	VisualTraits         json.RawMessage  `json:"visualTraits"`
+	ReferenceArtifactID  *string          `json:"referenceArtifactId,omitempty"`
+	ReferenceMediaFileID *string          `json:"referenceMediaFileId,omitempty"`
+	ReferenceStorageKey  *string          `json:"referenceStorageKey,omitempty"`
+	Status               string           `json:"status"`
+	ReviewStatus         string           `json:"reviewStatus"`
+	ManualOverride       bool             `json:"manualOverride"`
+	StaleState           string           `json:"staleState"`
+	EditedBy             *string          `json:"editedBy,omitempty"`
+	EditedAt             *time.Time       `json:"editedAt,omitempty"`
+	SourceScriptIDs      json.RawMessage  `json:"sourceScriptIds"`
+	Metadata             json.RawMessage  `json:"metadata"`
+	CreatedBy            *string          `json:"createdBy,omitempty"`
+	CreatedAt            time.Time        `json:"createdAt"`
+	UpdatedAt            time.Time        `json:"updatedAt"`
+	SceneLinks           []AssetSceneLink `json:"sceneLinks,omitempty"`
+	SceneCount           int              `json:"sceneCount"`
+	StoryboardShotCount  int              `json:"storyboardShotCount"`
+}
+
+type AssetSceneLink struct {
+	ScriptSceneID       string  `json:"scriptSceneId"`
+	SceneNo             int     `json:"sceneNo"`
+	Title               string  `json:"title"`
+	Location            string  `json:"location,omitempty"`
+	AssetRole           *string `json:"assetRole,omitempty"`
+	UsageNote           *string `json:"usageNote,omitempty"`
+	StoryboardShotCount int     `json:"storyboardShotCount"`
 }
 
 type ShotAssetRequirement struct {
@@ -104,6 +117,10 @@ func (s *Server) listCanonicalAssets(w http.ResponseWriter, r *http.Request, pri
 		}
 		items = append(items, item)
 	}
+	if err := s.attachCanonicalAssetSceneLinks(r, project.ID, items); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
 }
 
@@ -117,6 +134,12 @@ func (s *Server) getCanonicalAsset(w http.ResponseWriter, r *http.Request, princ
 		s.writeError(w, r, err)
 		return
 	}
+	items := []CanonicalAsset{item}
+	if err := s.attachCanonicalAssetSceneLinks(r, project.ID, items); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	item = items[0]
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -572,6 +595,55 @@ func (s *Server) canonicalAsset(r *http.Request, projectID, assetID string) (Can
 	`, projectID, assetID))
 }
 
+func (s *Server) attachCanonicalAssetSceneLinks(r *http.Request, projectID string, items []CanonicalAsset) error {
+	if len(items) == 0 {
+		return nil
+	}
+	index := map[string]int{}
+	for i := range items {
+		index[items[i].ID] = i
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT
+			l.asset_id::text,
+			l.script_scene_id::text,
+			sc.scene_no,
+			sc.title,
+			COALESCE(sc.location, ''),
+			l.asset_role,
+			l.usage_note,
+			COUNT(DISTINCT ss.id)
+		FROM scene_asset_links l
+		JOIN script_scenes sc ON sc.id = l.script_scene_id
+		LEFT JOIN storyboard_shots ss ON ss.project_id = l.project_id AND ss.script_scene_id = l.script_scene_id
+		WHERE l.project_id = $1
+		GROUP BY l.asset_id, l.script_scene_id, sc.scene_index, sc.scene_no, sc.title, sc.location, l.asset_role, l.usage_note
+		ORDER BY sc.scene_index ASC, sc.scene_no ASC
+	`, projectID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var assetID string
+		var link AssetSceneLink
+		var role, usageNote sql.NullString
+		if err := rows.Scan(&assetID, &link.ScriptSceneID, &link.SceneNo, &link.Title, &link.Location, &role, &usageNote, &link.StoryboardShotCount); err != nil {
+			return err
+		}
+		i, ok := index[assetID]
+		if !ok {
+			continue
+		}
+		link.AssetRole = stringPtrFromNull(role)
+		link.UsageNote = stringPtrFromNull(usageNote)
+		items[i].SceneLinks = append(items[i].SceneLinks, link)
+		items[i].SceneCount = len(items[i].SceneLinks)
+		items[i].StoryboardShotCount += link.StoryboardShotCount
+	}
+	return rows.Err()
+}
+
 func (s *Server) shotAssetRequirement(r *http.Request, projectID, requirementID string) (ShotAssetRequirement, error) {
 	return scanShotAssetRequirement(s.db.QueryRow(r.Context(), shotAssetRequirementSelectSQL(`
 		WHERE r.project_id = $1 AND r.id = $2
@@ -609,10 +681,17 @@ func (s *Server) storyboardShotByID(r *http.Request, projectID, shotID string) (
 			COALESCE(s.manual_override, false),
 			COALESCE(s.stale_state, 'fresh'),
 			s.edited_by,
-			s.edited_at
+			s.edited_at,
+			s.script_scene_id::text,
+			sc.id::text,
+			COALESCE(sc.scene_no, 0),
+			COALESCE(sc.title, ''),
+			COALESCE(sc.location, ''),
+			COALESCE(sc.characters, '[]'::jsonb)
 		FROM storyboard_shots s
 		LEFT JOIN artifacts ia ON ia.id = s.image_artifact_id
 		LEFT JOIN artifacts va ON va.id = s.video_artifact_id
+		LEFT JOIN script_scenes sc ON sc.id = s.script_scene_id
 		WHERE s.project_id = $1 AND s.id = $2
 	`, projectID, shotID))
 }

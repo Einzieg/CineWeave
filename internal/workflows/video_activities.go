@@ -1047,6 +1047,7 @@ func (a Activities) listStoryboardShots(ctx context.Context, workflowRunID strin
 		SELECT
 			id::text,
 			COALESCE(workflow_run_id::text, ''),
+			COALESCE(script_scene_id::text, ''),
 			shot_index,
 			COALESCE(shot_no, shot_index + 1),
 			COALESCE(title, ''),
@@ -1102,6 +1103,7 @@ func (a Activities) storyboardShot(ctx context.Context, projectID, workflowRunID
 		SELECT
 			id::text,
 			COALESCE(workflow_run_id::text, ''),
+			COALESCE(script_scene_id::text, ''),
 			shot_index,
 			COALESCE(shot_no, shot_index + 1),
 			COALESCE(title, ''),
@@ -1133,6 +1135,7 @@ func scanStoryboardShotRecord(row pgx.Row) (StoryboardShotRecord, error) {
 	err := row.Scan(
 		&shot.ID,
 		&shot.WorkflowRunID,
+		&shot.ScriptSceneID,
 		&shot.ShotIndex,
 		&shot.ShotNo,
 		&shot.Title,
