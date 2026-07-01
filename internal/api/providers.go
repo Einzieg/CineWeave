@@ -10,6 +10,52 @@ import (
 	"github.com/Einzieg/cineweave/internal/provider"
 )
 
+func (s *Server) listProviderCatalog(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	items, err := s.providers.ListCatalogEntries(r.Context(), orgID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) getProviderCatalogEntry(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.GetCatalogEntry(r.Context(), r.PathValue("providerKey"), orgID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) installProviderCatalogEntry(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req provider.InstallCatalogRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := req.OrganizationID
+	if orgID == "" {
+		orgID = organizationID(r, principal)
+	}
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.InstallCatalogEntry(r.Context(), orgID, principal.UserID, r.PathValue("providerKey"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+}
+
 func (s *Server) listProviderConnectors(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
 	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {

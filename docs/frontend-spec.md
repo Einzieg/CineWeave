@@ -16,7 +16,7 @@ Core frontend choices:
 The current Studio dashboard includes:
 
 - Workflow Board MVP: starts `video_production`, shows run status, node status, retry counts, realtime events, and generated artifacts.
-- Provider Center MVP: provisions OpenAI-compatible providers, imports Provider Manifests, edits model capability JSON, runs model tests, binds `script_agent_default`, and shows call logs plus usage.
+- Provider Center MVP: provisions OpenAI-compatible providers, installs Provider Catalog presets for DeepSeek, Volcengine, Kling, and custom OpenAI-compatible services, imports Provider Manifests, runs model tests, and binds `script_agent_default`, `image_generation_default`, or `video_generation_default`.
 - CineWeave Vault MVP: lists generated artifacts for the active project.
 
 The page remains an operational Studio dashboard shell, not a marketing landing page.

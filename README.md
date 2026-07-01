@@ -39,6 +39,12 @@ Provider limits are enforced only inside Provider Gateway. `provider_limit_polic
 
 Model profiles can bind multiple provider models. Provider Gateway supports `priority`, `priority_with_fallback`, `weighted`, `cost_optimized`, and `latency_optimized` routing strategies, and every Gateway text/image/video-create response can include an `attempts` summary. Guard-blocked and retryable upstream failures can fall back to the next candidate according to `fallback_strategy`; `AUTH_FAILED`, `MODEL_NOT_FOUND`, `INVALID_REQUEST`, `UNSUPPORTED_CAPABILITY`, and `CONTENT_REJECTED` stop by default. Text streaming only falls back before the first delta is sent. Video poll/cancel are pinned to the `provider_async_tasks` row created by video create-task and are not rerouted.
 
+## Multi-Platform Providers
+
+Provider Center includes a Provider Catalog for installing official presets without writing scripts. The first presets are DeepSeek text, Volcengine Ark text, Volcengine Seedream image, Volcengine Seedance video, Kling video, and a custom OpenAI-compatible connector. Catalog installation creates the connector, provider account, encrypted credential, provider models, model capabilities, and optional Model Profile bindings; it does not call upstream services during installation.
+
+All installed providers still run through Provider Gateway. DeepSeek uses the OpenAI-compatible adapter with `https://api.deepseek.com` and `/chat/completions`, and supports `providerOptions.deepseek` / `extraBody` pass-through for reasoning options. Volcengine image/video and Kling video use Declarative Manifest presets with editable base URL, endpoint paths, and model IDs. Recommended bindings are DeepSeek or Volcengine text to `script_agent_default`, Volcengine image to `image_generation_default`, and Volcengine/Kling video to `video_generation_default`.
+
 ## Prompt Registry
 
 System prompts are seeded during migration for `storyboard_planner`, `storyboard_image_prompt`, and `storyboard_video_prompt`. Prompt templates are versioned through `prompt_versions`; active versions are immutable operational records, and prompt edits should create a new version before activation.

@@ -31,7 +31,7 @@ func TestBuildProviderURLNormalizesOpenAICompatibleImageV1(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildProviderURL(&tt.baseURL, tt.endpoint)
+			got, err := buildProviderURL(&tt.baseURL, tt.endpoint, true)
 			if err != nil {
 				t.Fatalf("buildProviderURL() error = %v", err)
 			}

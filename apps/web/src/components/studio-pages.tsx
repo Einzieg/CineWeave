@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorPanel } from "@/components/error-panel";
 import { MediaPreview } from "@/components/media-preview";
 import { StatusBadge } from "@/components/status-badge";
-import { studioApi } from "@/lib/api-client";
+import { StudioApiError, studioApi } from "@/lib/api-client";
 import { cn } from "@/lib/cn";
 import { projectHref, workflowLabel } from "@/lib/routes";
 import { useSessionDetails } from "@/lib/session-details";
@@ -34,6 +34,11 @@ import type {
   ProjectTimeline,
   PromptTemplate,
   ProviderAccount,
+  ProviderCatalogEntry,
+  ProviderCatalogModelTemplate,
+  ProviderCatalogSetupField,
+  ProviderModel,
+  ProviderTestResult,
   ReviewFix,
   ReviewItem,
   ReviewItemAction,
@@ -95,6 +100,24 @@ type QueryState<TData> = {
   loading: boolean;
   error: string;
   reload: () => void;
+};
+
+type CatalogInstallModelDraft = ProviderCatalogModelTemplate & {
+  inputLimits?: JsonRecord;
+  outputLimits?: JsonRecord;
+  qualityTiers?: JsonValue;
+};
+
+type CatalogInstallDraft = {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  authType: string;
+  setup: Record<string, string>;
+  models: CatalogInstallModelDraft[];
+  bindScript: boolean;
+  bindImage: boolean;
+  bindVideo: boolean;
 };
 
 type ImportSourceType = "novel" | "script";
@@ -5018,14 +5041,26 @@ export function ProvidersPage() {
 
 function ProvidersContent() {
   const { session } = useStudioSession();
+  const catalog = useStudioQuery<ProviderCatalogEntry[]>([], "providers:catalog", async (session) => (await studioApi.listProviderCatalog(session)).items);
   const accounts = useStudioQuery<ProviderAccount[]>([], "providers:accounts", async (session) => (await studioApi.listProviderAccounts(session)).items);
   const profiles = useStudioQuery<ModelProfile[]>([], "providers:profiles", async (session) => (await studioApi.listModelProfiles(session)).items);
+  const accountModelKey = accounts.data.map((account) => account.id).sort().join(":");
+  const providerModels = useStudioQuery<ProviderModel[]>([], `providers:models:${accountModelKey}`, async (session) => {
+    if (!accounts.data.length) {
+      return [];
+    }
+    const responses = await Promise.all(accounts.data.map((account) => studioApi.listProviderModels(session, account.id)));
+    return responses.flatMap((response) => response.items);
+  });
   const [accountName, setAccountName] = useState("New API");
   const [accountBaseUrl, setAccountBaseUrl] = useState("https://api.openai.com/v1");
   const [accountApiKey, setAccountApiKey] = useState("");
   const [profileKey, setProfileKey] = useState("script_agent_default");
   const [profileName, setProfileName] = useState("脚本助手默认配置");
   const [profilePurpose, setProfilePurpose] = useState("script");
+  const [installEntry, setInstallEntry] = useState<ProviderCatalogEntry | null>(null);
+  const [installDraft, setInstallDraft] = useState<CatalogInstallDraft | null>(null);
+  const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -5037,8 +5072,10 @@ function ProvidersContent() {
     try {
       await action();
       setNotice(`${label}已完成。`);
+      catalog.reload();
       accounts.reload();
       profiles.reload();
+      providerModels.reload();
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -5046,9 +5083,79 @@ function ProvidersContent() {
     }
   }
 
+  function openCatalogInstall(entry: ProviderCatalogEntry) {
+    setInstallEntry(entry);
+    setInstallDraft(catalogInstallDraft(entry));
+    setError("");
+    setNotice("");
+  }
+
+  async function submitCatalogInstall() {
+    if (!installEntry || !installDraft) {
+      return;
+    }
+    await perform("安装供应商", async () => {
+      const models = installDraft.models
+        .filter((model) => model.modelKey.trim())
+        .map((model) => ({
+          modelKey: model.modelKey.trim(),
+          displayName: (model.displayName || model.modelKey).trim(),
+          modality: model.modality.trim(),
+          taskTypes: model.taskTypes.filter((taskType) => taskType.trim()),
+          inputLimits: model.inputLimits,
+          outputLimits: model.outputLimits,
+          qualityTiers: model.qualityTiers,
+          providerOptionsSchema: model.providerOptionsSchema,
+          pricingPolicy: model.pricingPolicy,
+        }));
+      await studioApi.installProviderCatalogEntry(
+        session,
+        installEntry.providerKey,
+        compactRecord({
+          organizationId: session.organizationId,
+          name: installDraft.name,
+          baseUrl: installDraft.baseUrl,
+          apiKey: installDraft.apiKey,
+          authType: installDraft.authType,
+          setup: installDraft.setup,
+          models,
+          bindProfiles: catalogProfileBindings(installDraft),
+        }),
+      );
+      setInstallEntry(null);
+      setInstallDraft(null);
+    });
+  }
+
+  async function runModelTest(model: ProviderModel, testType: string) {
+    setTestResult(null);
+    await perform(providerTestLabel(testType), async () => {
+      const result = await studioApi.testProviderModel(
+        session,
+        model.id,
+        compactRecord({
+          testType,
+          input: providerTestInput(model, testType),
+        }),
+      );
+      setTestResult(result);
+    });
+  }
+
   return (
     <SessionGate>
       <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <Surface className="xl:col-span-2">
+          <SectionTitle title="供应商目录" description="选择预设后填写接口、密钥和模型，安装后由供应商网关统一调用。" />
+          <QueryBody state={catalog}>
+            <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+              {catalog.data.map((entry) => (
+                <ProviderCatalogCard entry={entry} key={entry.providerKey} onInstall={() => openCatalogInstall(entry)} />
+              ))}
+              {!catalog.data.length ? <EmptyState title="还没有供应商预设" description="暂无数据" /> : null}
+            </div>
+          </QueryBody>
+        </Surface>
         <Surface>
           <SectionTitle title="创建供应商" description="先接入兼容 OpenAI 的账号，再创建模型配置。" />
           <div className="grid gap-3 p-4">
@@ -5107,19 +5214,373 @@ function ProvidersContent() {
             </button>
             <ErrorPanel message={error} />
             {notice ? <p className="text-sm text-blue-700">{notice}</p> : null}
+            {testResult ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                <p className="font-medium text-slate-900">测试结果：{testResult.status}</p>
+                <p className="mt-1">耗时：{testResult.latencyMs}ms</p>
+                {testResult.providerCallId ? <p className="mt-1 truncate">调用编号：{testResult.providerCallId}</p> : null}
+                {testResult.errorMessage ? <p className="mt-1 text-red-700">{testResult.errorMessage}</p> : null}
+              </div>
+            ) : null}
           </div>
         </Surface>
         <Surface>
           <SectionTitle title="供应商账号" description="用于供应商网关的上游账号。" />
-          <ListBlock items={accounts.data} empty="还没有供应商账号" render={(item) => <SimpleRow title={item.displayName || item.name || item.id} detail={item.providerType || "兼容 OpenAI"} status={item.status} />} />
+          <QueryBody state={accounts}>
+            <ListBlock
+              items={accounts.data}
+              empty="还没有供应商账号"
+              render={(item) => <SimpleRow title={item.displayName || item.name || item.id} detail={item.connectorKey || item.providerType || "兼容 OpenAI"} status={item.status} />}
+            />
+          </QueryBody>
         </Surface>
         <Surface className="xl:col-start-2">
           <SectionTitle title="模型配置" description="脚本、图片和视频生产通过模型配置路由。" />
-          <ListBlock items={profiles.data} empty="还没有模型配置" render={(item) => <SimpleRow title={item.profileKey} detail={item.purpose || "未设置用途"} status={item.status || "active"} />} />
+          <QueryBody state={profiles}>
+            <ListBlock items={profiles.data} empty="还没有模型配置" render={(item) => <SimpleRow title={item.profileKey} detail={item.purpose || "未设置用途"} status={item.status || "active"} />} />
+          </QueryBody>
+        </Surface>
+        <Surface className="xl:col-start-2">
+          <SectionTitle title="模型测试" description="通过供应商网关运行文本、图片和视频测试。" />
+          <QueryBody state={providerModels}>
+            <ListBlock items={providerModels.data} empty="还没有可测试模型" render={(model) => <ProviderModelTestRow busy={busy} model={model} onTest={runModelTest} />} />
+          </QueryBody>
         </Surface>
       </div>
+      {installEntry && installDraft ? (
+        <ProviderCatalogInstallDialog
+          busy={busy}
+          draft={installDraft}
+          entry={installEntry}
+          error={error}
+          onChange={setInstallDraft}
+          onClose={() => {
+            setInstallEntry(null);
+            setInstallDraft(null);
+            setError("");
+          }}
+          onSubmit={submitCatalogInstall}
+        />
+      ) : null}
     </SessionGate>
   );
+}
+
+function ProviderCatalogCard({ entry, onInstall }: { entry: ProviderCatalogEntry; onInstall: () => void }) {
+  return (
+    <div className="grid min-h-[190px] gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-base font-semibold text-slate-900">{entry.displayName}</h3>
+          <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{entry.description || "官方供应商预设"}</p>
+        </div>
+        <StatusBadge status={entry.installedCount ? "installed" : "pending"} />
+      </div>
+      <div className="flex flex-wrap gap-1">
+        <Pill>{categoryLabel(entry.category)}</Pill>
+        <Pill>{providerTypeLabel(entry.providerType)}</Pill>
+        {entry.supportedTaskTypes.slice(0, 3).map((taskType) => (
+          <Pill key={`${entry.providerKey}:${taskType}`}>{taskTypeLabel(taskType)}</Pill>
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-3 self-end">
+        <span className="text-xs text-slate-500">{entry.installedCount ? `已安装 ${entry.installedCount} 个账号` : "未安装"}</span>
+        <button className="studio-button studio-button-primary" onClick={onInstall} type="button">
+          <Plus size={16} />
+          {entry.installedCount ? "配置" : "安装"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ProviderCatalogInstallDialog({
+  busy,
+  draft,
+  entry,
+  error,
+  onChange,
+  onClose,
+  onSubmit,
+}: {
+  busy: string;
+  draft: CatalogInstallDraft;
+  entry: ProviderCatalogEntry;
+  error: string;
+  onChange: (draft: CatalogInstallDraft) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  const setupFields = catalogSetupFields(entry);
+  const canSubmit = Boolean(
+    draft.name.trim() &&
+      draft.baseUrl.trim() &&
+      (draft.authType === "none" || draft.apiKey.trim()) &&
+      draft.models.some((model) => model.modelKey.trim()) &&
+      !catalogRequiredSetupMissing(setupFields, draft.setup),
+  );
+  const updateModel = (index: number, patch: Partial<CatalogInstallModelDraft>) => {
+    onChange({
+      ...draft,
+      models: draft.models.map((model, modelIndex) => (modelIndex === index ? { ...model, ...patch } : model)),
+    });
+  };
+
+  return (
+    <EditDialogShell title={`安装 ${entry.displayName}`} error={error} onClose={onClose}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <TextInput label="供应商名称" value={draft.name} onChange={(name) => onChange({ ...draft, name })} />
+        <SelectInput label="认证方式" value={draft.authType} values={["bearer", "api_key", "basic", "none"]} onChange={(authType) => onChange({ ...draft, authType })} />
+        <TextInput className="md:col-span-2" label="接口地址" value={draft.baseUrl} onChange={(baseUrl) => onChange({ ...draft, baseUrl })} />
+        <TextInput className="md:col-span-2" label="API 密钥" value={draft.apiKey} onChange={(apiKey) => onChange({ ...draft, apiKey })} />
+        {setupFields.map((field) => (
+          <TextInput
+            className="md:col-span-2"
+            key={field.key}
+            label={field.label || field.key}
+            value={draft.setup[field.key] ?? ""}
+            onChange={(value) => onChange({ ...draft, setup: { ...draft.setup, [field.key]: value } })}
+          />
+        ))}
+      </div>
+      <div className="h-px bg-slate-200" />
+      <div className="grid gap-3">
+        <p className="text-sm font-medium text-slate-900">模型</p>
+        {draft.models.map((model, index) => (
+          <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-2" key={`${model.modelKey}:${index}`}>
+            <TextInput label="模型 ID" value={model.modelKey} onChange={(modelKey) => updateModel(index, { modelKey })} />
+            <TextInput label="显示名称" value={model.displayName} onChange={(displayName) => updateModel(index, { displayName })} />
+            <SelectInput
+              label="模型类型"
+              labels={{ text: "文本", image: "图片", video: "视频", multimodal: "多模态" }}
+              value={model.modality}
+              values={["text", "image", "video", "multimodal"]}
+              onChange={(modality) => updateModel(index, { modality })}
+            />
+            <TextInput label="任务类型" value={model.taskTypes.join(", ")} onChange={(value) => updateModel(index, { taskTypes: splitCSV(value) })} />
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-2 md:grid-cols-3">
+        <Toggle label="脚本生成默认模型" checked={draft.bindScript} onChange={(bindScript) => onChange({ ...draft, bindScript })} />
+        <Toggle label="图片生成默认模型" checked={draft.bindImage} onChange={(bindImage) => onChange({ ...draft, bindImage })} />
+        <Toggle label="视频生成默认模型" checked={draft.bindVideo} onChange={(bindVideo) => onChange({ ...draft, bindVideo })} />
+      </div>
+      {entry.providerType === "declarative_manifest" ? (
+        <details className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+          <summary className="cursor-pointer text-sm font-medium text-slate-900">高级：查看 Manifest</summary>
+          <div className="mt-3 flex justify-end">
+            <button className="studio-button" onClick={() => void navigator.clipboard.writeText(JSON.stringify(entry.connectorManifest ?? {}, null, 2))} type="button">
+              <Copy size={15} />
+              复制 Manifest
+            </button>
+          </div>
+          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-slate-950 p-3 text-slate-100">{JSON.stringify(entry.connectorManifest ?? {}, null, 2)}</pre>
+        </details>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <button className="studio-button" onClick={onClose} type="button">
+          取消
+        </button>
+        <button className="studio-button studio-button-primary" disabled={busy !== "" || !canSubmit} onClick={onSubmit} type="button">
+          {busy === "安装供应商" ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
+          安装
+        </button>
+      </div>
+    </EditDialogShell>
+  );
+}
+
+function ProviderModelTestRow({ busy, model, onTest }: { busy: string; model: ProviderModel; onTest: (model: ProviderModel, testType: string) => void }) {
+  const tests = providerTestTypes(model);
+  return (
+    <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-slate-900">{model.displayName || model.modelKey}</p>
+          <p className="mt-1 truncate text-xs text-slate-500">{model.modelKey}</p>
+        </div>
+        <StatusBadge status={model.status} />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {tests.map((testType) => (
+          <button className="studio-button" disabled={busy !== ""} key={`${model.id}:${testType}`} onClick={() => onTest(model, testType)} type="button">
+            <Play size={15} />
+            {providerTestLabel(testType)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function catalogInstallDraft(entry: ProviderCatalogEntry): CatalogInstallDraft {
+  const setup = catalogSetupFields(entry).reduce<Record<string, string>>((acc, field) => {
+    const defaultConfigValue = entry.setupSchema.defaultConfig?.[field.key];
+    const value = field.defaultValue ?? defaultConfigValue ?? "";
+    acc[field.key] = String(value ?? "");
+    return acc;
+  }, {});
+  const models = (entry.modelTemplates.length ? entry.modelTemplates : [fallbackCatalogModel(entry)]).map((model) => ({
+    ...model,
+    modelKey: model.modelKey || "custom-model-id",
+    displayName: model.displayName || model.modelKey || "自定义模型",
+    modality: model.modality || catalogDefaultModality(entry.category),
+    taskTypes: model.taskTypes?.length ? model.taskTypes : entry.supportedTaskTypes,
+  }));
+  return {
+    name: entry.displayName,
+    baseUrl: entry.defaultBaseUrl ?? "",
+    apiKey: "",
+    authType: entry.defaultAuthType || "bearer",
+    setup,
+    models,
+    bindScript: models.some((model) => model.modality === "text" || model.modality === "multimodal"),
+    bindImage: models.some((model) => model.modality === "image"),
+    bindVideo: models.some((model) => model.modality === "video"),
+  };
+}
+
+function catalogSetupFields(entry: ProviderCatalogEntry): ProviderCatalogSetupField[] {
+  return Array.isArray(entry.setupSchema.fields) ? entry.setupSchema.fields : [];
+}
+
+function fallbackCatalogModel(entry: ProviderCatalogEntry): ProviderCatalogModelTemplate {
+  const modality = catalogDefaultModality(entry.category);
+  return {
+    modelKey: "custom-model-id",
+    displayName: "自定义模型 ID",
+    modality,
+    taskTypes: entry.supportedTaskTypes.length ? entry.supportedTaskTypes : modality === "image" ? ["image.generate"] : modality === "video" ? ["video.create_task", "video.poll_task"] : ["text.generate"],
+  };
+}
+
+function catalogProfileBindings(draft: CatalogInstallDraft) {
+  const bindings: { profileKey: string; modelKey: string; priority: number; weight: number; enabled: boolean }[] = [];
+  const scriptModel = firstCatalogModelFor(draft.models, ["text", "multimodal"]);
+  const imageModel = firstCatalogModelFor(draft.models, ["image"]);
+  const videoModel = firstCatalogModelFor(draft.models, ["video"]);
+  if (draft.bindScript && scriptModel) {
+    bindings.push({ profileKey: "script_agent_default", modelKey: scriptModel.modelKey, priority: 100, weight: 100, enabled: true });
+  }
+  if (draft.bindImage && imageModel) {
+    bindings.push({ profileKey: "image_generation_default", modelKey: imageModel.modelKey, priority: 100, weight: 100, enabled: true });
+  }
+  if (draft.bindVideo && videoModel) {
+    bindings.push({ profileKey: "video_generation_default", modelKey: videoModel.modelKey, priority: 100, weight: 100, enabled: true });
+  }
+  return bindings;
+}
+
+function firstCatalogModelFor(models: CatalogInstallModelDraft[], modalities: string[]) {
+  return models.find((model) => modalities.includes(model.modality) && model.modelKey.trim());
+}
+
+function catalogRequiredSetupMissing(fields: ProviderCatalogSetupField[], setup: Record<string, string>) {
+  return fields.some((field) => field.required && !String(setup[field.key] ?? "").trim());
+}
+
+function catalogDefaultModality(category: string) {
+  if (category === "image" || category === "video" || category === "multimodal") {
+    return category;
+  }
+  return "text";
+}
+
+function providerTypeLabel(value: string) {
+  switch (value) {
+    case "declarative_manifest":
+      return "声明式接口";
+    case "native":
+      return "原生接入";
+    default:
+      return "兼容 OpenAI";
+  }
+}
+
+function categoryLabel(value: string) {
+  switch (value) {
+    case "image":
+      return "图片";
+    case "video":
+      return "视频";
+    case "multimodal":
+      return "多模态";
+    default:
+      return "文本";
+  }
+}
+
+function taskTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    "text.generate": "文本生成",
+    "text.stream": "流式文本",
+    "image.generate": "图片生成",
+    "video.text_to_video": "文生视频",
+    "video.image_to_video": "图生视频",
+    "video.create_task": "视频创建",
+    "video.poll_task": "视频轮询",
+    "video.cancel_task": "视频取消",
+  };
+  return labels[value] ?? value;
+}
+
+function providerTestTypes(model: ProviderModel) {
+  const taskTypes = providerModelTaskTypes(model);
+  const tests: string[] = [];
+  if (model.modality === "text" || model.modality === "multimodal" || taskTypes.includes("text.generate")) {
+    tests.push("text_generation_test");
+  }
+  if (taskTypes.includes("text.stream")) {
+    tests.push("streaming_test");
+  }
+  if (model.modality === "image" || taskTypes.includes("image.generate")) {
+    tests.push("image_generation_test");
+  }
+  if (model.modality === "video" || taskTypes.some((taskType) => taskType.startsWith("video."))) {
+    tests.push("video_generation_test");
+  }
+  return tests.length ? tests : ["text_generation_test"];
+}
+
+function providerModelTaskTypes(model: ProviderModel): string[] {
+  const taskTypes: string[] = [];
+  for (const capability of model.capabilities ?? []) {
+    if (!Array.isArray(capability.taskTypes)) {
+      continue;
+    }
+    for (const item of capability.taskTypes) {
+      if (typeof item === "string") {
+        taskTypes.push(item);
+      }
+    }
+  }
+  return taskTypes;
+}
+
+function providerTestLabel(testType: string) {
+  const labels: Record<string, string> = {
+    text_generation_test: "测试文本生成",
+    streaming_test: "测试流式输出",
+    image_generation_test: "测试图片生成",
+    video_generation_test: "测试视频生成",
+  };
+  return labels[testType] ?? "测试模型";
+}
+
+function providerTestInput(model: ProviderModel, testType: string): JsonRecord {
+  switch (testType) {
+    case "image_generation_test":
+      return { prompt: "cinematic production still", size: "1024x1024", responseFormat: "url" };
+    case "video_generation_test":
+      return { prompt: "short silent establishing shot", duration: 1, aspectRatio: "16:9", resolution: "720p" };
+    default:
+      return { prompt: `用一句话回复 ${model.modelKey} 已连接。`, maxOutputTokens: 64 };
+  }
+}
+
+function splitCSV(value: string) {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 export function PromptsPage() {
@@ -6810,5 +7271,19 @@ function formatBytes(value?: number | null) {
 }
 
 function errorMessage(cause: unknown) {
+  if (cause instanceof StudioApiError) {
+    return apiErrorLabel(cause.code) ?? cause.message;
+  }
   return cause instanceof Error ? cause.message : "请求失败，请稍后重试。";
+}
+
+function apiErrorLabel(code: string) {
+  const labels: Record<string, string> = {
+    PROVIDER_PRESET_NOT_FOUND: "供应商预设不存在",
+    PROVIDER_INSTALL_FAILED: "安装供应商失败",
+    PROVIDER_MANIFEST_INVALID: "接口配置无效",
+    PROVIDER_MODEL_TEMPLATE_INVALID: "模型模板无效",
+    PROVIDER_SETUP_FIELD_MISSING: "缺少必要配置项",
+  };
+  return labels[code];
 }

@@ -96,11 +96,18 @@ func TestRBAC(t *testing.T) {
 	}
 
 	assertAPIErrorCode(t, server, http.MethodPost, "/api/providers/accounts", member.AccessToken, owner.OrganizationID, providerAccountBody(owner.OrganizationID), http.StatusForbidden, "ACCESS_DENIED")
+	ensureRBACProviderCatalog(t, ctx, pool)
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/provider-catalog/deepseek/install", member.AccessToken, owner.OrganizationID, providerCatalogInstallBody(owner.OrganizationID), http.StatusForbidden, "ACCESS_DENIED")
 	createUserRoleBinding(t, server, pool, owner, member.User.ID, "provider_admin", "organization", owner.OrganizationID, "", "")
 	var account provider.Account
 	doAPISuccess(t, server, http.MethodPost, "/api/providers/accounts", member.AccessToken, owner.OrganizationID, providerAccountBody(owner.OrganizationID), &account)
 	if account.OrganizationID != owner.OrganizationID {
 		t.Fatalf("provider account org = %s", account.OrganizationID)
+	}
+	var installed provider.InstallCatalogResponse
+	doAPISuccess(t, server, http.MethodPost, "/api/provider-catalog/deepseek/install", member.AccessToken, owner.OrganizationID, providerCatalogInstallBody(owner.OrganizationID), &installed)
+	if installed.Account.OrganizationID != owner.OrganizationID || len(installed.Models) == 0 {
+		t.Fatalf("catalog install response = %+v", installed)
 	}
 
 	viewerOnly := registerRBACOrgMember(t, ctx, pool, authService, owner.OrganizationID, suffix)
@@ -171,6 +178,31 @@ func ensureRBACProviderConnector(t *testing.T, ctx context.Context, pool dbQuery
 	}
 }
 
+func ensureRBACProviderCatalog(t *testing.T, ctx context.Context, pool dbQueryer) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO provider_catalog_entries(
+			provider_key, name, display_name, provider_type, category,
+			default_base_url, default_auth_type, connector_manifest,
+			model_templates, supported_task_types, setup_schema,
+			enabled, is_official
+		)
+		VALUES (
+			'deepseek', 'deepseek', 'DeepSeek', 'openai_compatible', 'text',
+			'https://api.deepseek.com', 'bearer', '{}',
+			'[{"modelKey":"deepseek-chat","displayName":"DeepSeek Chat","modality":"text","taskTypes":["text.generate","text.stream"]}]',
+			'["text.generate","text.stream"]',
+			'{"defaultConfig":{"disableV1Prefix":true,"chatCompletionsEndpoint":"/chat/completions","modelsEndpoint":"/models"},"fields":[]}',
+			true, true
+		)
+		ON CONFLICT (provider_key) DO UPDATE SET
+			model_templates = EXCLUDED.model_templates,
+			setup_schema = EXCLUDED.setup_schema
+	`); err != nil {
+		t.Fatalf("ensure provider catalog: %v", err)
+	}
+}
+
 func firstWorkspaceID(t *testing.T, ctx context.Context, pool dbQueryer, orgID string) string {
 	t.Helper()
 	var workspaceID string
@@ -213,6 +245,21 @@ func providerAccountBody(orgID string) map[string]any {
 			"apiKey": "sk-rbac-test",
 		},
 		"config": map[string]any{},
+	}
+}
+
+func providerCatalogInstallBody(orgID string) map[string]any {
+	return map[string]any{
+		"organizationId": orgID,
+		"name":           "RBAC Catalog DeepSeek " + uuid.NewString(),
+		"baseUrl":        "https://api.deepseek.com",
+		"apiKey":         "sk-rbac-catalog-test",
+		"models": []map[string]any{{
+			"modelKey":    "deepseek-chat",
+			"displayName": "DeepSeek Chat",
+			"modality":    "text",
+			"taskTypes":   []string{"text.generate", "text.stream"},
+		}},
 	}
 }
 

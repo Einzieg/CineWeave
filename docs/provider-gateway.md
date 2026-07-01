@@ -19,6 +19,18 @@ Image runtime v1 exposes `POST /internal/provider/image/generate` for internal s
 
 `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=false` is the default. Set it to `true` only for controlled development providers whose media URLs resolve to localhost or private networks.
 
+## Provider Catalog
+
+Provider Catalog is the onboarding layer for upstream AI platforms. Catalog APIs are:
+
+- `GET /api/provider-catalog`
+- `GET /api/provider-catalog/{providerKey}`
+- `POST /api/provider-catalog/{providerKey}/install`
+
+Catalog installation requires `provider.manage` and only creates local resources: provider connector, account, encrypted credential, models, capabilities, and optional Model Profile bindings. It must not call upstream services. Runtime execution, credential decryption, rate limits, logs, cost records, media transfer, and fallback remain inside Provider Gateway.
+
+Seeded presets are `deepseek`, `volcengine_ark_text`, `volcengine_seedream_image`, `volcengine_seedance_video`, `kling_video`, and `openai_compatible_custom`. DeepSeek and Volcengine text use the OpenAI-compatible runtime. Volcengine image/video and Kling video use Declarative Manifest presets with editable base URL and endpoint paths. Example manifests live under `examples/providers/`.
+
 ## Provider Guard
 
 Provider Guard runs inside Provider Gateway before text, image, video create-task, video poll-task, and video cancel-task calls. API Server and Workers do not enforce provider rate limits and must not call upstream providers directly.

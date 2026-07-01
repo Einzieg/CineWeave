@@ -306,13 +306,23 @@ func callManifestEndpointWithContext(ctx context.Context, manifest ProviderManif
 	if err := json.Unmarshal(input, &inputValue); err != nil {
 		return manifestRunResult{}, err
 	}
+	accountValue := map[string]any{
+		"authType": account.AuthType,
+		"config":   rawJSONValue(account.Config),
+	}
+	if account.BaseURL != nil {
+		accountValue["baseUrl"] = *account.BaseURL
+	}
+	for key, value := range extra.Account {
+		accountValue[key] = value
+	}
 	contextValue := map[string]any{
 		"input":      inputValue,
 		"references": extra.References,
 		"credential": credential,
 		"endpoint":   map[string]any{"key": endpointKey},
 		"model":      extra.Model,
-		"account":    extra.Account,
+		"account":    accountValue,
 		"task":       extra.Task,
 	}
 	path, err := renderTemplateString(endpoint.PathTemplate, contextValue)

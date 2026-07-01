@@ -194,9 +194,32 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 		s.releaseGatewayLease(lease, providerCallID)
 	}()
 
-	client := newOpenAICompatibleClient(timeout)
 	started := time.Now()
-	result, runErr := client.imageGeneration(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input)
+	var result imageGenerationResult
+	var runErr error
+	if accountConfigString(selection.Account.Config, "runtime") == "declarative_manifest" {
+		manifest, err := s.manifestForAccount(ctx, selection.Account)
+		if err != nil {
+			return GatewayImageResponse{}, GatewayAttempt{}, err
+		}
+		endpointKey, endpoint, err := selectImageGenerateEndpoint(selection, manifest)
+		if err != nil {
+			return GatewayImageResponse{}, GatewayAttempt{}, err
+		}
+		manifestInput := mergeJSONObjects(mustJSON(map[string]any{
+			"prompt":         imageInput.Prompt,
+			"size":           imageInput.Size,
+			"aspectRatio":    "",
+			"quality":        imageInput.Quality,
+			"responseFormat": "url",
+		}), req.Input)
+		manifestResult, err := callManifestEndpointWithContext(callCtx, manifest, selection.Account, selection.Credential, endpointKey, endpoint, manifestInput, imageManifestContext(selection, req.References))
+		runErr = err
+		result = imageResultFromManifest(manifestResult)
+	} else {
+		client := newOpenAICompatibleClient(timeout)
+		result, runErr = client.imageGeneration(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input)
+	}
 	latencyMS := int(time.Since(started).Milliseconds())
 	if result.LatencyMS > latencyMS {
 		latencyMS = result.LatencyMS
@@ -356,6 +379,72 @@ func parseGatewayImageInput(input json.RawMessage) (gatewayImageInput, error) {
 		Quality: imageStringOption(decoded, "quality", ""),
 		N:       n,
 	}, nil
+}
+
+func selectImageGenerateEndpoint(selection gatewayModelSelection, manifest ProviderManifest) (string, ManifestEndpoint, error) {
+	return firstManifestEndpoint(manifest, "sync", []string{
+		accountConfigString(selection.Account.Config, "imageEndpointKey"),
+		accountConfigString(selection.Account.Config, "imageGenerationEndpointKey"),
+		"image_generate",
+		"image_generation",
+		"generate_image",
+	})
+}
+
+func imageManifestContext(selection gatewayModelSelection, references []GatewayImageReference) manifestCallContext {
+	refValues := make([]map[string]any, 0, len(references))
+	for _, ref := range references {
+		refValues = append(refValues, map[string]any{
+			"type":       ref.Type,
+			"assetId":    ref.AssetID,
+			"artifactId": ref.ArtifactID,
+			"url":        ref.URL,
+			"storageKey": ref.StorageKey,
+			"metadata":   rawJSONValue(ref.Metadata),
+		})
+	}
+	return manifestCallContext{
+		References: refValues,
+		Model: map[string]any{
+			"id":          selection.Model.ModelKey,
+			"displayName": selection.Model.DisplayName,
+			"modality":    selection.Model.Modality,
+		},
+	}
+}
+
+func imageResultFromManifest(result manifestRunResult) imageGenerationResult {
+	output := result.NormalizedOutput
+	parsed := map[string]any{}
+	_ = json.Unmarshal(output, &parsed)
+	imageURL, _ := parsed["imageUrl"].(string)
+	if strings.TrimSpace(imageURL) == "" {
+		imageURL, _ = parsed["url"].(string)
+	}
+	b64JSON, _ := parsed["b64Json"].(string)
+	if strings.TrimSpace(b64JSON) == "" {
+		b64JSON, _ = parsed["b64_json"].(string)
+	}
+	mimeType, _ := parsed["mimeType"].(string)
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = "image/png"
+	}
+	responseType := ""
+	if strings.TrimSpace(imageURL) != "" {
+		responseType = "url"
+	} else if strings.TrimSpace(b64JSON) != "" {
+		responseType = "b64_json"
+	}
+	return imageGenerationResult{
+		RequestSnapshot:  result.RequestSnapshot,
+		ResponseSnapshot: result.ResponseSnapshot,
+		NormalizedOutput: output,
+		ImageURL:         strings.TrimSpace(imageURL),
+		B64JSON:          strings.TrimSpace(b64JSON),
+		MimeType:         strings.TrimSpace(mimeType),
+		ResponseType:     responseType,
+		LatencyMS:        result.LatencyMS,
+	}
 }
 
 func materializeGatewayImageMedia(ctx context.Context, result imageGenerationResult, timeout time.Duration) (gatewayImageMedia, error) {

@@ -199,8 +199,16 @@ func (s *Service) executeGatewayVideoCreateAttempt(ctx context.Context, req Gate
 		s.releaseGatewayLease(lease, providerCallID)
 	}()
 
+	manifestInput := mergeJSONObjects(mustJSON(map[string]any{
+		"prompt":         videoInput.Prompt,
+		"duration":       videoInput.DurationSeconds,
+		"aspectRatio":    videoInput.AspectRatio,
+		"resolution":     videoInput.Resolution,
+		"mode":           videoInput.Mode,
+		"negativePrompt": "",
+	}), req.Input)
 	started := time.Now()
-	result, runErr := callManifestEndpointWithContext(callCtx, manifest, selection.Account, selection.Credential, endpointKey, endpoint, req.Input, videoManifestContext(selection, req.References, nil))
+	result, runErr := callManifestEndpointWithContext(callCtx, manifest, selection.Account, selection.Credential, endpointKey, endpoint, manifestInput, videoManifestContext(selection, req.References, nil))
 	latencyMS := int(time.Since(started).Milliseconds())
 	if result.LatencyMS > latencyMS {
 		latencyMS = result.LatencyMS
@@ -778,6 +786,18 @@ func videoManifestContext(selection gatewayModelSelection, references []GatewayV
 			"storageKey":  ref.StorageKey,
 			"mimeType":    ref.MimeType,
 			"metadata":    rawJSONValue(ref.Metadata),
+		})
+	}
+	if len(refValues) == 0 {
+		refValues = append(refValues, map[string]any{
+			"type":        "",
+			"assetId":     "",
+			"artifactId":  "",
+			"mediaFileId": "",
+			"url":         "",
+			"storageKey":  "",
+			"mimeType":    "",
+			"metadata":    map[string]any{},
 		})
 	}
 	taskValue := map[string]any{}

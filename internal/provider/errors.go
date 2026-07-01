@@ -13,6 +13,18 @@ var (
 	ErrProviderGatewayRequired = errors.New("provider gateway required")
 )
 
+type CatalogError struct {
+	Code    string
+	Message string
+}
+
+func (e CatalogError) Error() string {
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	return e.Code
+}
+
 const (
 	CodeAuthFailed                    = "AUTH_FAILED"
 	CodeQuotaExceeded                 = "QUOTA_EXCEEDED"
@@ -37,6 +49,11 @@ const (
 	CodeProviderCircuitOpen           = "PROVIDER_CIRCUIT_OPEN"
 	CodeProviderLeaseExpired          = "PROVIDER_LEASE_EXPIRED"
 	CodeModelProfileNotConfigured     = "MODEL_PROFILE_NOT_CONFIGURED"
+	CodeProviderPresetNotFound        = "PROVIDER_PRESET_NOT_FOUND"
+	CodeProviderInstallFailed         = "PROVIDER_INSTALL_FAILED"
+	CodeProviderManifestInvalid       = "PROVIDER_MANIFEST_INVALID"
+	CodeProviderModelTemplateInvalid  = "PROVIDER_MODEL_TEMPLATE_INVALID"
+	CodeProviderSetupFieldMissing     = "PROVIDER_SETUP_FIELD_MISSING"
 	CodeUnknownError                  = "UNKNOWN_ERROR"
 )
 

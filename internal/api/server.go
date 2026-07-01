@@ -229,6 +229,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/projects/{projectId}/storyboard-shots/{shotId}", s.withAuth(s.deleteStoryboardShot))
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/review", s.withAuth(s.reviewStoryboardShot))
 
+	mux.HandleFunc("GET /api/provider-catalog", s.withAuth(s.listProviderCatalog))
+	mux.HandleFunc("GET /api/provider-catalog/{providerKey}", s.withAuth(s.getProviderCatalogEntry))
+	mux.HandleFunc("POST /api/provider-catalog/{providerKey}/install", s.withAuth(s.installProviderCatalogEntry))
 	mux.HandleFunc("GET /api/providers/connectors", s.withAuth(s.listProviderConnectors))
 	mux.HandleFunc("POST /api/providers/connectors/import", s.withAuth(s.importProviderConnector))
 	mux.HandleFunc("GET /api/providers/accounts", s.withAuth(s.listProviderAccounts))
@@ -940,9 +943,16 @@ func organizationID(r *http.Request, principal auth.Principal) string {
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var upstreamErr *provider.UpstreamError
 	var accessErr authz.AccessError
+	var catalogErr provider.CatalogError
 	switch {
 	case errors.As(err, &accessErr):
 		httpx.WriteError(w, r, http.StatusForbidden, "ACCESS_DENIED", "missing permission "+accessErr.Permission, accessDeniedDetails(accessErr), false)
+	case errors.As(err, &catalogErr):
+		status := http.StatusUnprocessableEntity
+		if catalogErr.Code == provider.CodeProviderPresetNotFound {
+			status = http.StatusNotFound
+		}
+		httpx.WriteError(w, r, status, catalogErr.Code, catalogErr.Message, nil, false)
 	case errors.Is(err, authz.ErrAccessDenied):
 		httpx.WriteError(w, r, http.StatusForbidden, "ACCESS_DENIED", "access denied", nil, false)
 	case errors.Is(err, auth.ErrInvalidCredentials):

@@ -1,0 +1,71 @@
+kind: ProviderConnector
+version: v1
+id: kling-video
+name: 可灵视频
+transport: http
+baseUrl: https://example.invalid
+auth:
+  type: bearer
+models:
+  - id: kling-configured-model
+    displayName: 可灵可配置模型
+    modality: video
+    capabilities:
+      taskTypes:
+        - video.text_to_video
+        - video.image_to_video
+        - video.create_task
+        - video.poll_task
+        - video.cancel_task
+      executionMode: async
+endpoints:
+  video_create:
+    endpointType: async_create
+    method: POST
+    pathTemplate: "{{ account.config.createTaskPath }}"
+    pollEndpointKey: video_poll
+    headersTemplate:
+      Content-Type: application/json
+    requestTemplate:
+      model: "{{ model.id }}"
+      prompt: "{{ input.prompt }}"
+      duration: "{{ input.duration }}"
+      aspect_ratio: "{{ input.aspectRatio }}"
+      resolution: "{{ input.resolution }}"
+      negative_prompt: "{{ input.negativePrompt }}"
+      image_url: "{{ references.0.url }}"
+    responseMapping:
+      externalTaskId: $.id
+      status: $.status
+      videoUrl: $.video.url
+      errorMessage: $.error.message
+      progress: $.progress
+    timeoutMs: 120000
+  video_poll:
+    endpointType: async_poll
+    method: POST
+    pathTemplate: "{{ account.config.pollTaskPath }}"
+    headersTemplate:
+      Content-Type: application/json
+    requestTemplate:
+      task_id: "{{ task.externalTaskId }}"
+    responseMapping:
+      externalTaskId: $.id
+      status: $.status
+      videoUrl: $.video.url
+      errorMessage: $.error.message
+      progress: $.progress
+    timeoutMs: 120000
+  video_cancel:
+    endpointType: sync
+    method: POST
+    pathTemplate: "{{ account.config.cancelTaskPath }}"
+    headersTemplate:
+      Content-Type: application/json
+    requestTemplate:
+      task_id: "{{ task.externalTaskId }}"
+    responseMapping:
+      externalTaskId: $.id
+      status: $.status
+      errorMessage: $.error.message
+    timeoutMs: 60000

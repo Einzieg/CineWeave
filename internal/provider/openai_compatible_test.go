@@ -84,7 +84,7 @@ func TestBuildProviderURLNormalizesOpenAICompatibleV1(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildProviderURL(&tt.baseURL, tt.endpoint)
+			got, err := buildProviderURL(&tt.baseURL, tt.endpoint, true)
 			if err != nil {
 				t.Fatalf("buildProviderURL() error = %v", err)
 			}
@@ -92,6 +92,55 @@ func TestBuildProviderURLNormalizesOpenAICompatibleV1(t *testing.T) {
 				t.Fatalf("url = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildProviderURLCanDisableV1Prefix(t *testing.T) {
+	baseURL := "https://api.deepseek.com"
+	got, err := buildProviderURL(&baseURL, "/chat/completions", false)
+	if err != nil {
+		t.Fatalf("buildProviderURL() error = %v", err)
+	}
+	if got != "https://api.deepseek.com/chat/completions" {
+		t.Fatalf("url = %q, want DeepSeek chat completions URL without v1", got)
+	}
+}
+
+func TestBuildChatCompletionRequestMergesDeepSeekOptions(t *testing.T) {
+	request, err := buildChatCompletionRequest("deepseek-chat", json.RawMessage(`{
+		"prompt": "hello",
+		"extraBody": {
+			"model": "ignored",
+			"stream": false,
+			"temperature": 0.2
+		},
+		"providerOptions": {
+			"deepseek": {
+				"model": "ignored",
+				"messages": [],
+				"thinking": { "type": "enabled" },
+				"reasoning_effort": "high"
+			}
+		}
+	}`), true)
+	if err != nil {
+		t.Fatalf("buildChatCompletionRequest() error = %v", err)
+	}
+	if request["model"] != "deepseek-chat" {
+		t.Fatalf("model = %v, want deepseek-chat", request["model"])
+	}
+	if request["stream"] != true {
+		t.Fatalf("stream = %v, want true", request["stream"])
+	}
+	if request["temperature"] != float64(0.2) {
+		t.Fatalf("temperature = %v, want 0.2", request["temperature"])
+	}
+	thinking, ok := request["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "enabled" {
+		t.Fatalf("thinking = %#v, want enabled", request["thinking"])
+	}
+	if request["reasoning_effort"] != "high" {
+		t.Fatalf("reasoning_effort = %v, want high", request["reasoning_effort"])
 	}
 }
 

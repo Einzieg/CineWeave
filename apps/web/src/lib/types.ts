@@ -902,12 +902,104 @@ export type DownloadUrlResponse = {
 
 export type ProviderAccount = {
   id: string;
+  organizationId?: string;
+  connectorId?: string;
+  connectorKey?: string;
   displayName?: string;
   name?: string;
+  baseUrl?: string | null;
+  authType?: string;
   providerType?: string;
+  credentialPreview?: string | null;
   status: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type ProviderModelCapability = {
+  id: string;
+  providerModelId: string;
+  taskTypes?: string[] | JsonValue;
+  inputLimits?: JsonRecord;
+  outputLimits?: JsonRecord;
+  qualityTiers?: JsonValue;
+  providerOptionsSchema?: JsonRecord;
+  pricingPolicy?: JsonRecord;
+};
+
+export type ProviderModel = {
+  id: string;
+  providerAccountId: string;
+  modelKey: string;
+  displayName: string;
+  modality: string;
+  status: string;
+  capabilities?: ProviderModelCapability[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ProviderCatalogSetupField = {
+  key: string;
+  label?: string;
+  type?: string;
+  required?: boolean;
+  defaultValue?: JsonValue;
+};
+
+export type ProviderCatalogSetupSchema = {
+  fields?: ProviderCatalogSetupField[];
+  defaultConfig?: JsonRecord;
+};
+
+export type ProviderCatalogModelTemplate = {
+  modelKey: string;
+  displayName: string;
+  modality: string;
+  taskTypes: string[];
+  providerOptionsSchema?: JsonRecord;
+  pricingPolicy?: JsonRecord;
+};
+
+export type ProviderCatalogEntry = {
+  id: string;
+  providerKey: string;
+  name: string;
+  displayName: string;
+  description?: string | null;
+  providerType: string;
+  category: string;
+  logoKey?: string | null;
+  docsUrl?: string | null;
+  defaultBaseUrl?: string | null;
+  defaultAuthType: string;
+  connectorManifest?: JsonRecord;
+  modelTemplates: ProviderCatalogModelTemplate[];
+  supportedTaskTypes: string[];
+  setupSchema: ProviderCatalogSetupSchema;
+  enabled: boolean;
+  isOfficial: boolean;
+  installedCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ProviderCatalogInstallResponse = {
+  providerKey: string;
+  account: ProviderAccount;
+  models: ProviderModel[];
+  bindings: { profileId: string; profileKey: string; modelId: string; bindingId: string }[];
+};
+
+export type ProviderTestResult = {
+  testRunId: string;
+  providerCallId: string;
+  status: string;
+  latencyMs: number;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  normalizedOutput?: JsonValue;
+  attempts?: JsonValue[];
 };
 
 export type ModelProfile = {

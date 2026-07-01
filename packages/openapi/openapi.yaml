@@ -3141,6 +3141,66 @@ paths:
                 $ref: "#/components/schemas/MediaFileDownloadUrlEnvelope"
         "404":
           $ref: "#/components/responses/Error"
+  /api/provider-catalog:
+    get:
+      operationId: listProviderCatalog
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Provider catalog presets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCatalogListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/provider-catalog/{providerKey}:
+    get:
+      operationId: getProviderCatalogEntry
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ProviderKey"
+      responses:
+        "200":
+          description: Provider catalog preset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCatalogEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/provider-catalog/{providerKey}/install:
+    post:
+      operationId: installProviderCatalogEntry
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ProviderKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderCatalogInstallRequest"
+      responses:
+        "201":
+          description: Installed provider account, models, and optional profile bindings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCatalogInstallEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/providers/connectors:
     get:
       operationId: listProviderConnectors
@@ -4249,6 +4309,12 @@ components:
       schema:
         type: string
         format: uuid
+    ProviderKey:
+      name: providerKey
+      in: path
+      required: true
+      schema:
+        type: string
     ProfileId:
       name: profileId
       in: path
@@ -8158,6 +8224,217 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/MediaFileDownloadUrlResponse"
+    ProviderCatalogSetupField:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        type:
+          type: string
+        required:
+          type: boolean
+        defaultValue: {}
+    ProviderCatalogSetupSchema:
+      type: object
+      properties:
+        defaultConfig:
+          type: object
+          additionalProperties: true
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCatalogSetupField"
+    ProviderCatalogModelTemplate:
+      type: object
+      required: [modelKey, displayName, modality, taskTypes]
+      properties:
+        modelKey:
+          type: string
+        displayName:
+          type: string
+        modality:
+          type: string
+          enum: [text, image, video, audio, embedding, multimodal]
+        taskTypes:
+          type: array
+          items:
+            type: string
+        executionMode:
+          type: string
+        supportsJsonOutput:
+          type: boolean
+        supportsToolCalls:
+          type: boolean
+        supportsReasoning:
+          type: boolean
+        inputLimits:
+          type: object
+          additionalProperties: true
+        outputLimits:
+          type: object
+          additionalProperties: true
+        qualityTiers:
+          type: array
+          items: {}
+        providerOptionsSchema:
+          type: object
+          additionalProperties: true
+        pricingPolicy:
+          type: object
+          additionalProperties: true
+    ProviderCatalogEntry:
+      type: object
+      required:
+        - id
+        - providerKey
+        - name
+        - displayName
+        - providerType
+        - category
+        - defaultAuthType
+        - connectorManifest
+        - modelTemplates
+        - supportedTaskTypes
+        - setupSchema
+        - enabled
+        - isOfficial
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        providerKey:
+          type: string
+        name:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        providerType:
+          type: string
+          enum: [openai_compatible, declarative_manifest, native]
+        category:
+          type: string
+          enum: [text, image, video, multimodal]
+        logoKey:
+          type: string
+        docsUrl:
+          type: string
+          format: uri
+        defaultBaseUrl:
+          type: string
+        defaultAuthType:
+          type: string
+          enum: [none, bearer, api_key, basic]
+        connectorManifest:
+          type: object
+          additionalProperties: true
+        modelTemplates:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCatalogModelTemplate"
+        supportedTaskTypes:
+          type: array
+          items:
+            type: string
+        setupSchema:
+          $ref: "#/components/schemas/ProviderCatalogSetupSchema"
+        enabled:
+          type: boolean
+        isOfficial:
+          type: boolean
+        installedCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ProviderCatalogInstallModel:
+      allOf:
+        - $ref: "#/components/schemas/ProviderCatalogModelTemplate"
+    ProviderCatalogInstallProfileBinding:
+      type: object
+      required: [profileKey, modelKey]
+      properties:
+        profileKey:
+          type: string
+        modelKey:
+          type: string
+        priority:
+          type: integer
+        weight:
+          type: integer
+        enabled:
+          type: boolean
+    ProviderCatalogInstallRequest:
+      type: object
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        baseUrl:
+          type: string
+        apiKey:
+          type: string
+        authType:
+          type: string
+          enum: [none, bearer, api_key, basic]
+        setup:
+          type: object
+          additionalProperties: true
+        config:
+          type: object
+          additionalProperties: true
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCatalogInstallModel"
+        bindProfiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCatalogInstallProfileBinding"
+    ProviderCatalogProfileBindingResult:
+      type: object
+      required: [profileId, profileKey, modelId, bindingId]
+      properties:
+        profileId:
+          type: string
+          format: uuid
+        profileKey:
+          type: string
+        modelId:
+          type: string
+          format: uuid
+        bindingId:
+          type: string
+          format: uuid
+    ProviderCatalogInstallResponse:
+      type: object
+      required: [providerKey, connector, account, models, bindings]
+      properties:
+        providerKey:
+          type: string
+        connector:
+          $ref: "#/components/schemas/ProviderConnector"
+        account:
+          $ref: "#/components/schemas/ProviderAccount"
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderModel"
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCatalogProfileBindingResult"
     ProviderConnector:
       type: object
       required: [id, connectorKey, name, type, isOfficial, manifest, version, createdAt]
@@ -9770,6 +10047,32 @@ components:
           type: string
         signalStatus:
           type: string
+    ProviderCatalogEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderCatalogEntry"
+    ProviderCatalogListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProviderCatalogEntry"
+    ProviderCatalogInstallEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderCatalogInstallResponse"
     ProviderConnectorEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

@@ -1,0 +1,35 @@
+kind: ProviderConnector
+version: v1
+id: volcengine-seedream-image
+name: 火山方舟图片
+transport: http
+baseUrl: https://example.invalid
+auth:
+  type: bearer
+models:
+  - id: seedream-configured-model
+    displayName: Seedream 可配置模型
+    modality: image
+    capabilities:
+      taskTypes:
+        - image.generate
+      executionMode: sync
+endpoints:
+  image_generate:
+    endpointType: sync
+    method: POST
+    pathTemplate: "{{ account.config.imageGenerationPath }}"
+    headersTemplate:
+      Content-Type: application/json
+    requestTemplate:
+      model: "{{ model.id }}"
+      prompt: "{{ input.prompt }}"
+      size: "{{ input.size }}"
+      aspect_ratio: "{{ input.aspectRatio }}"
+      quality: "{{ input.quality }}"
+      response_format: "{{ input.responseFormat }}"
+    responseMapping:
+      imageUrl: $.data[0].url
+      b64Json: $.data[0].b64_json
+      errorMessage: $.error.message
+    timeoutMs: 120000

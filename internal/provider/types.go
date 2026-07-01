@@ -26,6 +26,92 @@ type ImportConnectorRequest struct {
 	Version      string          `json:"version"`
 }
 
+type CatalogEntry struct {
+	ID                 string          `json:"id"`
+	ProviderKey        string          `json:"providerKey"`
+	Name               string          `json:"name"`
+	DisplayName        string          `json:"displayName"`
+	Description        *string         `json:"description,omitempty"`
+	ProviderType       string          `json:"providerType"`
+	Category           string          `json:"category"`
+	LogoKey            *string         `json:"logoKey,omitempty"`
+	DocsURL            *string         `json:"docsUrl,omitempty"`
+	DefaultBaseURL     *string         `json:"defaultBaseUrl,omitempty"`
+	DefaultAuthType    string          `json:"defaultAuthType"`
+	ConnectorManifest  json.RawMessage `json:"connectorManifest"`
+	ModelTemplates     json.RawMessage `json:"modelTemplates"`
+	SupportedTaskTypes json.RawMessage `json:"supportedTaskTypes"`
+	SetupSchema        json.RawMessage `json:"setupSchema"`
+	Enabled            bool            `json:"enabled"`
+	IsOfficial         bool            `json:"isOfficial"`
+	InstalledCount     int             `json:"installedCount,omitempty"`
+	CreatedAt          time.Time       `json:"createdAt"`
+	UpdatedAt          time.Time       `json:"updatedAt"`
+}
+
+type CatalogModelTemplate struct {
+	ModelKey              string          `json:"modelKey"`
+	DisplayName           string          `json:"displayName"`
+	Modality              string          `json:"modality"`
+	TaskTypes             []string        `json:"taskTypes"`
+	ExecutionMode         string          `json:"executionMode,omitempty"`
+	SupportsJsonOutput    bool            `json:"supportsJsonOutput,omitempty"`
+	SupportsToolCalls     bool            `json:"supportsToolCalls,omitempty"`
+	SupportsReasoning     bool            `json:"supportsReasoning,omitempty"`
+	InputLimits           json.RawMessage `json:"inputLimits,omitempty"`
+	OutputLimits          json.RawMessage `json:"outputLimits,omitempty"`
+	QualityTiers          json.RawMessage `json:"qualityTiers,omitempty"`
+	ProviderOptionsSchema json.RawMessage `json:"providerOptionsSchema,omitempty"`
+	PricingPolicy         json.RawMessage `json:"pricingPolicy,omitempty"`
+}
+
+type CatalogInstallModel struct {
+	ModelKey              string          `json:"modelKey"`
+	DisplayName           string          `json:"displayName"`
+	Modality              string          `json:"modality"`
+	TaskTypes             []string        `json:"taskTypes"`
+	InputLimits           json.RawMessage `json:"inputLimits,omitempty"`
+	OutputLimits          json.RawMessage `json:"outputLimits,omitempty"`
+	QualityTiers          json.RawMessage `json:"qualityTiers,omitempty"`
+	ProviderOptionsSchema json.RawMessage `json:"providerOptionsSchema,omitempty"`
+	PricingPolicy         json.RawMessage `json:"pricingPolicy,omitempty"`
+}
+
+type CatalogInstallProfileBinding struct {
+	ProfileKey string `json:"profileKey"`
+	ModelKey   string `json:"modelKey"`
+	Priority   *int   `json:"priority,omitempty"`
+	Weight     *int   `json:"weight,omitempty"`
+	Enabled    *bool  `json:"enabled,omitempty"`
+}
+
+type InstallCatalogRequest struct {
+	OrganizationID string                         `json:"organizationId"`
+	Name           string                         `json:"name"`
+	BaseURL        string                         `json:"baseUrl"`
+	APIKey         string                         `json:"apiKey"`
+	AuthType       string                         `json:"authType"`
+	Setup          map[string]any                 `json:"setup"`
+	Config         json.RawMessage                `json:"config"`
+	Models         []CatalogInstallModel          `json:"models"`
+	BindProfiles   []CatalogInstallProfileBinding `json:"bindProfiles"`
+}
+
+type CatalogProfileBindingResult struct {
+	ProfileID  string `json:"profileId"`
+	ProfileKey string `json:"profileKey"`
+	ModelID    string `json:"modelId"`
+	BindingID  string `json:"bindingId"`
+}
+
+type InstallCatalogResponse struct {
+	ProviderKey string                        `json:"providerKey"`
+	Connector   Connector                     `json:"connector"`
+	Account     Account                       `json:"account"`
+	Models      []Model                       `json:"models"`
+	Bindings    []CatalogProfileBindingResult `json:"bindings"`
+}
+
 type Account struct {
 	ID                string          `json:"id"`
 	OrganizationID    string          `json:"organizationId"`

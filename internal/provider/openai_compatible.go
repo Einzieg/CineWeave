@@ -21,6 +21,7 @@ type openAICompatibleConfig struct {
 	ChatCompletionsEndpoint   string `json:"chatCompletionsEndpoint"`
 	ImagesGenerationsEndpoint string `json:"imagesGenerationsEndpoint"`
 	TimeoutMS                 int    `json:"timeoutMs"`
+	DisableV1Prefix           bool   `json:"disableV1Prefix"`
 }
 
 type chatCompletionResult struct {
@@ -69,7 +70,7 @@ func parseOpenAICompatibleConfig(raw json.RawMessage) openAICompatibleConfig {
 }
 
 func (c openAICompatibleClient) discoverModels(ctx context.Context, account Account, apiKey string, cfg openAICompatibleConfig) (ModelDiscoveryResult, error) {
-	endpoint, err := buildProviderURL(account.BaseURL, cfg.ModelsEndpoint)
+	endpoint, err := buildProviderURL(account.BaseURL, cfg.ModelsEndpoint, !cfg.DisableV1Prefix)
 	if err != nil {
 		return ModelDiscoveryResult{}, err
 	}
@@ -102,7 +103,7 @@ func (c openAICompatibleClient) discoverModels(ctx context.Context, account Acco
 }
 
 func (c openAICompatibleClient) chatCompletion(ctx context.Context, account Account, model Model, apiKey string, cfg openAICompatibleConfig, input json.RawMessage) (chatCompletionResult, error) {
-	endpoint, err := buildProviderURL(account.BaseURL, cfg.ChatCompletionsEndpoint)
+	endpoint, err := buildProviderURL(account.BaseURL, cfg.ChatCompletionsEndpoint, !cfg.DisableV1Prefix)
 	if err != nil {
 		return chatCompletionResult{}, err
 	}
@@ -155,7 +156,7 @@ func (c openAICompatibleClient) chatCompletion(ctx context.Context, account Acco
 }
 
 func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, account Account, model Model, apiKey string, cfg openAICompatibleConfig, input json.RawMessage, onDelta func(string) error) (chatCompletionResult, error) {
-	endpoint, err := buildProviderURL(account.BaseURL, cfg.ChatCompletionsEndpoint)
+	endpoint, err := buildProviderURL(account.BaseURL, cfg.ChatCompletionsEndpoint, !cfg.DisableV1Prefix)
 	if err != nil {
 		return chatCompletionResult{}, err
 	}
@@ -251,7 +252,7 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 }
 
 func (c openAICompatibleClient) imageGeneration(ctx context.Context, account Account, model Model, apiKey string, cfg openAICompatibleConfig, input json.RawMessage) (imageGenerationResult, error) {
-	endpoint, err := buildProviderURL(account.BaseURL, cfg.ImagesGenerationsEndpoint)
+	endpoint, err := buildProviderURL(account.BaseURL, cfg.ImagesGenerationsEndpoint, !cfg.DisableV1Prefix)
 	if err != nil {
 		return imageGenerationResult{}, err
 	}
@@ -291,7 +292,7 @@ func (c openAICompatibleClient) imageGeneration(ctx context.Context, account Acc
 	return result, err
 }
 
-func buildProviderURL(baseURL *string, endpoint string) (string, error) {
+func buildProviderURL(baseURL *string, endpoint string, autoV1Prefix bool) (string, error) {
 	if baseURL == nil || strings.TrimSpace(*baseURL) == "" {
 		return "", fmt.Errorf("%w: provider account baseUrl is required", ErrValidation)
 	}
@@ -307,7 +308,7 @@ func buildProviderURL(baseURL *string, endpoint string) (string, error) {
 	if strings.HasPrefix(path, "v1/") && strings.HasSuffix(base, "/v1") {
 		path = strings.TrimPrefix(path, "v1/")
 	}
-	if openAICompatiblePathNeedsV1(path) && !strings.HasSuffix(base, "/v1") {
+	if autoV1Prefix && openAICompatiblePathNeedsV1(path) && !strings.HasSuffix(base, "/v1") {
 		base += "/v1"
 	}
 	return base + "/" + path, nil
@@ -377,6 +378,24 @@ func buildChatCompletionRequest(modelKey string, input json.RawMessage, stream b
 	if value, ok := decoded["responseFormat"]; ok {
 		if responseFormat := normalizeResponseFormat(value); responseFormat != nil {
 			requestBody["response_format"] = responseFormat
+		}
+	}
+	if extraBody, ok := decoded["extraBody"].(map[string]any); ok {
+		for key, value := range extraBody {
+			if key == "model" || key == "messages" || key == "stream" {
+				continue
+			}
+			requestBody[key] = value
+		}
+	}
+	if providerOptions, ok := decoded["providerOptions"].(map[string]any); ok {
+		if deepseek, ok := providerOptions["deepseek"].(map[string]any); ok {
+			for key, value := range deepseek {
+				if key == "model" || key == "messages" || key == "stream" {
+					continue
+				}
+				requestBody[key] = value
+			}
 		}
 	}
 	return requestBody, nil

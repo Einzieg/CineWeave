@@ -36,6 +36,10 @@ import type {
   RegenerateResponse,
   PromptTemplate,
   ProviderAccount,
+  ProviderCatalogEntry,
+  ProviderCatalogInstallResponse,
+  ProviderModel,
+  ProviderTestResult,
   ReviewResponse,
   Role,
   Script,
@@ -360,6 +364,13 @@ export const studioApi = {
 
   listProviderAccounts: (session: StudioSession) => apiRequest<ListEnvelope<ProviderAccount>>("/api/providers/accounts", { session }),
   createProviderAccount: (session: StudioSession, body: JsonRecord) => apiRequest<ProviderAccount>("/api/providers/accounts", { method: "POST", session, body }),
+  listProviderCatalog: (session: StudioSession) => apiRequest<ListEnvelope<ProviderCatalogEntry>>("/api/provider-catalog", { session }),
+  getProviderCatalogEntry: (session: StudioSession, providerKey: string) => apiRequest<ProviderCatalogEntry>(`/api/provider-catalog/${providerKey}`, { session }),
+  installProviderCatalogEntry: (session: StudioSession, providerKey: string, body: JsonRecord) =>
+    apiRequest<ProviderCatalogInstallResponse>(`/api/provider-catalog/${providerKey}/install`, { method: "POST", session, body }),
+  listProviderModels: (session: StudioSession, accountId: string) => apiRequest<ListEnvelope<ProviderModel>>(`/api/providers/accounts/${accountId}/models`, { session }),
+  testProviderModel: (session: StudioSession, modelId: string, body: JsonRecord) =>
+    apiRequest<ProviderTestResult>(`/api/providers/models/${modelId}/test`, { method: "POST", session, body }),
   listModelProfiles: (session: StudioSession) => apiRequest<ListEnvelope<ModelProfile>>("/api/model-profiles", { session }),
   createModelProfile: (session: StudioSession, body: JsonRecord) => apiRequest<ModelProfile>("/api/model-profiles", { method: "POST", session, body }),
   listPromptTemplates: (session: StudioSession) => apiRequest<ListEnvelope<PromptTemplate>>("/api/prompt-templates", { session }),
