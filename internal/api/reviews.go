@@ -583,7 +583,7 @@ func normalizeReviewSeverity(value string) string {
 
 func normalizeReviewEntityType(value string) string {
 	switch value {
-	case "script_scene", "canonical_asset", "storyboard_shot", "shot_asset_requirement", "timeline_clip", "final_video_version", "project":
+	case "script_scene", "canonical_asset", "storyboard_shot", "shot_asset_requirement", "timeline_clip", "project_timeline", "final_video_version", "project":
 		return value
 	default:
 		return "project"

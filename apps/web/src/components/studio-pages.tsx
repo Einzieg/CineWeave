@@ -33,6 +33,7 @@ import type {
   ProjectTimeline,
   PromptTemplate,
   ProviderAccount,
+  ReviewFix,
   ReviewItem,
   ReviewItemAction,
   ReviewRun,
@@ -655,20 +656,20 @@ function ProjectOverviewContent({ projectId }: { projectId: string }) {
   );
 }
 
-export function ProjectTimelinePage({ projectId }: { projectId: string }) {
+export function ProjectTimelinePage({ projectId, initialClipId = "", initialFinalVideoId = "" }: { projectId: string; initialClipId?: string; initialFinalVideoId?: string }) {
   return (
     <AppShell active="projects" title="时间线" description="编排镜头视频，合成并管理最终成片版本。" projectId={projectId} projectSection="timeline">
-      <ProjectTimelineContent projectId={projectId} />
+      <ProjectTimelineContent initialClipId={initialClipId} initialFinalVideoId={initialFinalVideoId} projectId={projectId} />
     </AppShell>
   );
 }
 
-function ProjectTimelineContent({ projectId }: { projectId: string }) {
+function ProjectTimelineContent({ projectId, initialClipId, initialFinalVideoId }: { projectId: string; initialClipId: string; initialFinalVideoId: string }) {
   const { session } = useStudioSession();
   const timelines = useStudioQuery<ProjectTimeline[]>([], `timelines:${projectId}`, async (activeSession) => (await studioApi.listTimelines(activeSession, projectId)).items);
   const finalVideos = useStudioQuery<FinalVideoVersion[]>([], `final-videos:${projectId}`, async (activeSession) => (await studioApi.listFinalVideos(activeSession, projectId)).items);
   const [selectedTimelineId, setSelectedTimelineId] = useState("");
-  const [selectedClipId, setSelectedClipId] = useState("");
+  const [selectedClipId, setSelectedClipId] = useState(initialClipId);
   const [clipDrafts, setClipDrafts] = useState<Record<string, TimelineClipDraft>>({});
   const [composeDrafts, setComposeDrafts] = useState<Record<string, TimelineComposeDraft>>({});
   const selectedTimelineFromList = timelines.data.find((item) => item.id === selectedTimelineId) ?? timelines.data[0] ?? null;
@@ -681,6 +682,7 @@ function ProjectTimelineContent({ projectId }: { projectId: string }) {
   const selectedClip = clips.find((item) => item.id === selectedClipId) ?? clips[0] ?? null;
   const clipDraft = selectedClip ? clipDrafts[selectedClip.id] ?? timelineClipDraft(selectedClip) : emptyTimelineClipDraft();
   const composeDraft = selectedTimeline ? composeDrafts[selectedTimeline.id] ?? timelineComposeDraft(selectedTimeline) : { title: "", resolution: "720p", aspectRatio: "16:9" };
+  const orderedFinalVideos = initialFinalVideoId ? [...finalVideos.data].sort((left, right) => Number(right.id === initialFinalVideoId) - Number(left.id === initialFinalVideoId)) : finalVideos.data;
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -899,7 +901,7 @@ function ProjectTimelineContent({ projectId }: { projectId: string }) {
           <Surface>
             <SectionTitle title="成片版本" description="当前可用的最终视频版本。" />
             <div className="grid gap-2 p-4">
-              {finalVideos.data.map((version) => (
+              {orderedFinalVideos.map((version) => (
                 <div className="rounded-md border border-slate-200 p-3" key={version.id}>
                   <div className="flex items-center justify-between gap-2">
                     <div>
@@ -1386,26 +1388,26 @@ function ProductionStageCard({
   );
 }
 
-export function SourcesPage({ projectId }: { projectId: string }) {
+export function SourcesPage({ projectId, initialSceneId = "" }: { projectId: string; initialSceneId?: string }) {
   return (
     <AppShell active="projects" title="原文与剧本" description="导入小说原文、上传剧本，或让 Agent 帮你生成剧本。" projectId={projectId} projectSection="sources">
-      <SourcesContent projectId={projectId} />
+      <SourcesContent initialSceneId={initialSceneId} projectId={projectId} />
     </AppShell>
   );
 }
 
-function SourcesContent({ projectId }: { projectId: string }) {
-  return <SourcesContentV2 projectId={projectId} />;
+function SourcesContent({ projectId, initialSceneId }: { projectId: string; initialSceneId: string }) {
+  return <SourcesContentV2 initialSceneId={initialSceneId} projectId={projectId} />;
 }
 
-function SourcesContentV2({ projectId }: { projectId: string }) {
+function SourcesContentV2({ projectId, initialSceneId }: { projectId: string; initialSceneId: string }) {
   const { session } = useStudioSession();
   const sources = useStudioQuery<ProjectSource[]>([], `sources:${projectId}`, async (activeSession) => (await studioApi.listSources(activeSession, projectId)).items);
   const scripts = useStudioQuery<Script[]>([], `scripts:${projectId}`, async (activeSession) => (await studioApi.listScripts(activeSession, projectId)).items);
   const sessions = useStudioQuery<AgentSession[]>([], `agent-v2-sessions:${projectId}`, async (activeSession) => (await studioApi.listAgentSessions(activeSession, projectId)).items);
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [selectedScriptId, setSelectedScriptId] = useState("");
-  const [selectedSceneId, setSelectedSceneId] = useState("");
+  const [selectedSceneId, setSelectedSceneId] = useState(initialSceneId);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [selectedEventId, setSelectedEventId] = useState("");
   const [selectedPlanId, setSelectedPlanId] = useState("");
@@ -2295,15 +2297,15 @@ function SourcesContentV2({ projectId }: { projectId: string }) {
   );
 }
 
-export function AssetsPage({ projectId }: { projectId: string }) {
+export function AssetsPage({ projectId, initialAssetId = "" }: { projectId: string; initialAssetId?: string }) {
   return (
     <AppShell active="projects" title="资产" description="展示和管理角色、场景、道具等基础资产。" projectId={projectId} projectSection="assets">
-      <AssetsContent projectId={projectId} />
+      <AssetsContent initialAssetId={initialAssetId} projectId={projectId} />
     </AppShell>
   );
 }
 
-function AssetsContent({ projectId }: { projectId: string }) {
+function AssetsContent({ projectId, initialAssetId }: { projectId: string; initialAssetId: string }) {
   const { session } = useStudioSession();
   const scripts = useStudioQuery<Script[]>([], `assets:scripts:${projectId}`, async (activeSession) => (await studioApi.listScripts(activeSession, projectId)).items);
   const assets = useStudioQuery<CanonicalAsset[]>([], `assets:list:${projectId}`, async (activeSession) => (await studioApi.listCanonicalAssets(activeSession, projectId)).items);
@@ -2313,8 +2315,23 @@ function AssetsContent({ projectId }: { projectId: string }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [editingAsset, setEditingAsset] = useState<CanonicalAsset | null>(null);
+  const initialAssetOpenRef = useRef("");
   const effectiveScriptId = validSelection(scriptId, scripts.data);
   const filtered = assets.data.filter((asset) => filter === "all" || asset.assetType === filter);
+
+  useEffect(() => {
+    if (!initialAssetId || initialAssetOpenRef.current === initialAssetId || !assets.data.some((asset) => asset.id === initialAssetId)) {
+      return;
+    }
+    initialAssetOpenRef.current = initialAssetId;
+    setBusy("加载资产卡");
+    setError("");
+    studioApi
+      .getCanonicalAsset(session, projectId, initialAssetId, true)
+      .then((asset) => setEditingAsset(asset))
+      .catch((cause: unknown) => setError(errorMessage(cause)))
+      .finally(() => setBusy(""));
+  }, [assets.data, initialAssetId, projectId, session]);
 
   async function perform(label: string, action: () => Promise<void>) {
     setBusy(label);
@@ -2462,22 +2479,22 @@ function AssetsContent({ projectId }: { projectId: string }) {
   );
 }
 
-export function StoryboardPage({ projectId }: { projectId: string }) {
+export function StoryboardPage({ projectId, initialShotId = "", initialRequirementId = "" }: { projectId: string; initialShotId?: string; initialRequirementId?: string }) {
   return (
     <AppShell active="projects" title="分镜工作台" description="按分场管理镜头、派生资产、镜头图片和镜头视频。" projectId={projectId} projectSection="storyboard">
-      <StoryboardContent projectId={projectId} />
+      <StoryboardContent initialRequirementId={initialRequirementId} initialShotId={initialShotId} projectId={projectId} />
     </AppShell>
   );
 }
 
-function StoryboardContent({ projectId }: { projectId: string }) {
+function StoryboardContent({ projectId, initialShotId, initialRequirementId }: { projectId: string; initialShotId: string; initialRequirementId: string }) {
   const { session } = useStudioSession();
   const scripts = useStudioQuery<Script[]>([], `storyboard:scripts:${projectId}`, async (activeSession) => (await studioApi.listScripts(activeSession, projectId)).items);
   const workflows = useStudioQuery<WorkflowRun[]>([], `storyboard:runs:${projectId}`, async (activeSession) => (await studioApi.listWorkflowRuns(activeSession, projectId)).items);
   const [scriptId, setScriptId] = useState("");
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const [workflowRunId, setWorkflowRunId] = useState("");
-  const [selectedShotId, setSelectedShotId] = useState("");
+  const [selectedShotId, setSelectedShotId] = useState(initialShotId);
   const [selectedShotIds, setSelectedShotIds] = useState<string[]>([]);
   const [maxShots, setMaxShots] = useState("3");
   const [busy, setBusy] = useState("");
@@ -2485,6 +2502,18 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const [notice, setNotice] = useState("");
   const [editingRequirement, setEditingRequirement] = useState<ShotAssetRequirement | null>(null);
   const [editingAsset, setEditingAsset] = useState<CanonicalAsset | null>(null);
+  const [closedInitialRequirementId, setClosedInitialRequirementId] = useState("");
+  const initialStoryboardSelectionRef = useRef("");
+  const initialRequirement = useStudioQuery<ShotAssetRequirement | null>(null, `storyboard:initial-requirement:${projectId}:${initialRequirementId || "none"}`, async (activeSession) => {
+    if (!initialRequirementId) {
+      return null;
+    }
+    return (await studioApi.listShotAssetRequirements(activeSession, projectId)).items.find((item) => item.id === initialRequirementId) ?? null;
+  });
+  const initialTargetShotId = initialShotId || initialRequirement.data?.storyboardShotId || "";
+  const initialShotDetail = useStudioQuery<StoryboardShotDetail | null>(null, `storyboard:initial-shot:${projectId}:${initialTargetShotId || "none"}`, async (activeSession) =>
+    initialTargetShotId ? studioApi.getStoryboardShotDetail(activeSession, projectId, initialTargetShotId) : Promise.resolve(null),
+  );
   const storyboardRuns = workflows.data.filter((run) => ["script_to_storyboard", "script_to_video", "full_production"].includes(stringFrom(run.input.workflowType)));
   const effectiveScriptId = validSelection(scriptId, scripts.data);
   const scriptScenes = useStudioQuery<ScriptScene[]>([], `storyboard:scenes:${projectId}:${effectiveScriptId}`, async (activeSession) =>
@@ -2515,6 +2544,10 @@ function StoryboardContent({ projectId }: { projectId: string }) {
   const shotDetail = useStudioQuery<StoryboardShotDetail | null>(null, `storyboard:shot-detail:${projectId}:${activeShot?.id ?? ""}:${creatingShot}`, async (activeSession) =>
     activeShot ? studioApi.getStoryboardShotDetail(activeSession, projectId, activeShot.id) : Promise.resolve(null),
   );
+  const initialRequirementDialog = initialRequirementId && closedInitialRequirementId !== initialRequirementId
+    ? shotDetail.data?.requirements.find((item) => item.id === initialRequirementId) ?? initialRequirement.data
+    : null;
+  const activeEditingRequirement = editingRequirement ?? initialRequirementDialog;
   const sceneShotCounts = new Map<string, number>();
   const sceneStaleCounts = new Map<string, number>();
   for (const shot of allShots) {
@@ -2525,6 +2558,20 @@ function StoryboardContent({ projectId }: { projectId: string }) {
       }
     }
   }
+
+  useEffect(() => {
+    const shot = initialShotDetail.data?.shot;
+    if (!shot || initialStoryboardSelectionRef.current === shot.id) {
+      return;
+    }
+    initialStoryboardSelectionRef.current = shot.id;
+    window.setTimeout(() => {
+      setWorkflowRunId(shot.workflowRunId);
+      setSelectedSceneId(shot.scriptSceneId ?? "");
+      setSelectedShotId(shot.id);
+      setSelectedShotIds([shot.id]);
+    }, 0);
+  }, [initialShotDetail.data]);
 
   useEffect(() => {
     if (!production.data || production.data.summary.running <= 0) {
@@ -2875,14 +2922,22 @@ function StoryboardContent({ projectId }: { projectId: string }) {
       </div>
       <RequirementEditDialog
         busy={busy !== ""}
-        requirement={editingRequirement}
-        onClose={() => setEditingRequirement(null)}
+        requirement={activeEditingRequirement}
+        onClose={() => {
+          if (initialRequirementDialog) {
+            setClosedInitialRequirementId(initialRequirementId);
+          }
+          setEditingRequirement(null);
+        }}
         onSave={(body) =>
           perform("保存派生资产需求修订", async () => {
-            if (!editingRequirement) {
+            if (!activeEditingRequirement) {
               return;
             }
-            await studioApi.updateShotAssetRequirement(session, projectId, editingRequirement.id, body);
+            await studioApi.updateShotAssetRequirement(session, projectId, activeEditingRequirement.id, body);
+            if (initialRequirementDialog) {
+              setClosedInitialRequirementId(initialRequirementId);
+            }
             setEditingRequirement(null);
           })
         }
@@ -3957,6 +4012,7 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
   const [categoryFilter, setCategoryFilter] = useState(reviewFilterValue(initialCategory, reviewCategoryValues()));
   const [entityFilter, setEntityFilter] = useState("all");
   const [selectedItemId, setSelectedItemId] = useState("");
+  const [selectedFixId, setSelectedFixId] = useState("");
   const [useAgent, setUseAgent] = useState(false);
   const [resolutionNote, setResolutionNote] = useState("");
   const [busy, setBusy] = useState("");
@@ -3983,6 +4039,16 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
   });
   const effectiveSelectedItemId = items.data.some((item) => item.id === selectedItemId) ? selectedItemId : items.data[0]?.id ?? "";
   const selectedItem = items.data.find((item) => item.id === effectiveSelectedItemId) ?? null;
+  const fixes = useStudioQuery<ReviewFix[]>([], `review:${projectId}:fixes:${effectiveSelectedItemId || "none"}`, async (activeSession) => {
+    if (!effectiveSelectedItemId) {
+      return [];
+    }
+    return (await studioApi.listReviewFixes(activeSession, projectId, effectiveSelectedItemId)).items;
+  });
+  const effectiveSelectedFixId = fixes.data.some((fix) => fix.id === selectedFixId) ? selectedFixId : fixes.data[0]?.id ?? "";
+  const selectedFix = fixes.data.find((fix) => fix.id === effectiveSelectedFixId) ?? null;
+  const selectedFixDiffs = selectedFix ? reviewFixDiffRows(selectedFix) : [];
+  const canGenerateFix = Boolean(selectedItem?.entityId && selectedItem && reviewFixSupported(selectedItem.entityType));
   const openItems = allItems.data.filter((item) => item.status === "open");
   const criticalItems = openItems.filter((item) => item.severity === "critical");
   const highPriorityItems = openItems.filter((item) => item.severity === "critical" || item.severity === "high");
@@ -4031,6 +4097,60 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
       setResolutionNote("");
       allItems.reload();
       items.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function generateFix(mode: "agent" | "deterministic") {
+    if (!selectedItem) {
+      return;
+    }
+    setBusy(`generate-fix:${mode}:${selectedItem.id}`);
+    setError("");
+    setNotice("");
+    try {
+      const fix = await studioApi.generateReviewFix(session, projectId, selectedItem.id, { mode });
+      setSelectedFixId(fix.id);
+      setNotice("修复建议已生成");
+      fixes.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function applyFix(fix: ReviewFix, triggerRegeneration: boolean) {
+    setBusy(`${triggerRegeneration ? "apply-fix-regenerate" : "apply-fix"}:${fix.id}`);
+    setError("");
+    setNotice("");
+    try {
+      const response = await studioApi.applyReviewFix(session, projectId, fix.id, {
+        resolveReviewItem: true,
+        triggerRegeneration,
+      });
+      setNotice(response.workflowRunId ? `修复已应用，重生成已启动：${response.workflowRunId}` : "修复已应用");
+      fixes.reload();
+      allItems.reload();
+      items.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function dismissFix(fix: ReviewFix) {
+    setBusy(`dismiss-fix:${fix.id}`);
+    setError("");
+    setNotice("");
+    try {
+      await studioApi.dismissReviewFix(session, projectId, fix.id);
+      setNotice("修复建议已放弃");
+      fixes.reload();
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -4110,7 +4230,10 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
                     <button
                       className={cn("rounded-md border p-4 text-left transition", selectedItem?.id === item.id ? "border-blue-600 bg-blue-50" : "border-slate-200 bg-slate-50 hover:border-blue-600/40")}
                       key={item.id}
-                      onClick={() => setSelectedItemId(item.id)}
+                      onClick={() => {
+                        setSelectedItemId(item.id);
+                        setSelectedFixId("");
+                      }}
                       type="button"
                     >
                       <div className="flex flex-wrap items-center gap-2">
@@ -4168,6 +4291,98 @@ function ProjectReviewContent({ projectId, initialCategory }: { projectId: strin
                     </div>
                   </div>
                 ) : null}
+                <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">修复建议</p>
+                      <p className="mt-1 text-sm text-slate-600">{canGenerateFix ? "生成字段补丁，应用后关闭该审阅项。" : "当前问题暂不支持自动修复，请手动处理。"}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button className="studio-button studio-button-primary" disabled={busy !== "" || !canGenerateFix} onClick={() => generateFix("agent")} type="button">
+                        {busy === `generate-fix:agent:${selectedItem.id}` ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                        生成修复建议
+                      </button>
+                      <button className="studio-button" disabled={busy !== "" || !canGenerateFix} onClick={() => generateFix("deterministic")} type="button">
+                        {busy === `generate-fix:deterministic:${selectedItem.id}` ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+                        生成简单修复
+                      </button>
+                    </div>
+                  </div>
+                  <QueryBody state={fixes}>
+                    {fixes.data.length ? (
+                      <div className="grid gap-3">
+                        <div className="grid gap-2">
+                          {fixes.data.map((fix) => (
+                            <button
+                              className={cn("rounded-md border bg-white p-3 text-left transition", selectedFix?.id === fix.id ? "border-blue-600" : "border-slate-200 hover:border-blue-600/40")}
+                              key={fix.id}
+                              onClick={() => setSelectedFixId(fix.id)}
+                              type="button"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Pill>{reviewFixStatusLabel(fix.status)}</Pill>
+                                <Pill>{reviewFixTypeLabel(fix.fixType)}</Pill>
+                                <span className="text-xs text-slate-500">{formatTime(fix.createdAt)}</span>
+                              </div>
+                              <p className="mt-2 text-sm font-medium text-slate-900">{fix.title}</p>
+                            </button>
+                          ))}
+                        </div>
+                        {selectedFix ? (
+                          <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Pill>{reviewFixStatusLabel(selectedFix.status)}</Pill>
+                                <Pill>{reviewFixTypeLabel(selectedFix.fixType)}</Pill>
+                              </div>
+                              <p className="mt-2 text-sm font-semibold text-slate-950">{selectedFix.title}</p>
+                              <p className="mt-1 text-sm leading-6 text-slate-600">{selectedFix.explanation}</p>
+                            </div>
+                            <div className="grid gap-2">
+                              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">字段变更</p>
+                              {selectedFixDiffs.length ? (
+                                selectedFixDiffs.map((row) => (
+                                  <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-2" key={row.field}>
+                                    <p className="text-xs font-medium text-slate-700">{reviewFieldLabel(row.field)}</p>
+                                    <div className="grid gap-2 md:grid-cols-2">
+                                      <div>
+                                        <p className="text-[11px] text-slate-500">当前值</p>
+                                        <ReviewDiffValue value={row.before} />
+                                      </div>
+                                      <div>
+                                        <p className="text-[11px] text-slate-500">应用后</p>
+                                        <ReviewDiffValue value={row.after} />
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="text-sm text-slate-600">该建议不包含自动字段变更。</p>
+                              )}
+                            </div>
+                            <InfoTile label="重生成" value={reviewRegenerateLabel(selectedFix.regenerateRequest)} />
+                            <div className="flex flex-wrap gap-2">
+                              <button className="studio-button studio-button-primary" disabled={busy !== "" || selectedFix.status !== "draft"} onClick={() => applyFix(selectedFix, false)} type="button">
+                                {busy === `apply-fix:${selectedFix.id}` ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
+                                应用修复
+                              </button>
+                              <button className="studio-button" disabled={busy !== "" || selectedFix.status !== "draft" || !hasReviewRegenerateRequest(selectedFix)} onClick={() => applyFix(selectedFix, true)} type="button">
+                                {busy === `apply-fix-regenerate:${selectedFix.id}` ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                                应用并重生成
+                              </button>
+                              <button className="studio-button" disabled={busy !== "" || selectedFix.status !== "draft"} onClick={() => dismissFix(selectedFix)} type="button">
+                                {busy === `dismiss-fix:${selectedFix.id}` ? <Loader2 className="animate-spin" size={16} /> : <X size={16} />}
+                                放弃建议
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : canGenerateFix ? (
+                      <p className="text-sm text-slate-600">暂无修复建议。</p>
+                    ) : null}
+                  </QueryBody>
+                </div>
                 <TextInput label="处理备注" value={resolutionNote} onChange={setResolutionNote} />
                 <div className="flex flex-wrap gap-2">
                   {selectedItem.status === "open" ? (
@@ -4221,6 +4436,18 @@ function ReviewActionButton({ action, busy, onRegenerate }: { action: ReviewItem
     );
   }
   return null;
+}
+
+function ReviewDiffValue({ value }: { value: JsonValue | undefined }) {
+  if (value && typeof value === "object") {
+    return (
+      <details className="mt-1 text-xs text-slate-700">
+        <summary className="cursor-pointer text-blue-700">查看 JSON</summary>
+        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-white p-2 text-[11px] leading-5 text-slate-700">{JSON.stringify(value, null, 2)}</pre>
+      </details>
+    );
+  }
+  return <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-700">{reviewValueLabel(value)}</p>;
 }
 
 function ProjectExportContent({ projectId }: { projectId: string }) {
@@ -5349,7 +5576,7 @@ function reviewCategoryLabel(value: string) {
 }
 
 function reviewEntityValues() {
-  return ["all", "script_scene", "canonical_asset", "storyboard_shot", "shot_asset_requirement", "timeline_clip", "final_video_version", "project"];
+  return ["all", "script_scene", "canonical_asset", "storyboard_shot", "shot_asset_requirement", "timeline_clip", "project_timeline", "final_video_version", "project"];
 }
 
 function reviewEntityLabels() {
@@ -5360,6 +5587,7 @@ function reviewEntityLabels() {
     storyboard_shot: "分镜镜头",
     shot_asset_requirement: "派生资产需求",
     timeline_clip: "时间线片段",
+    project_timeline: "时间线",
     final_video_version: "成片版本",
     project: "项目",
   };
@@ -5443,6 +5671,125 @@ function reviewItemSourceLabel(item: ReviewItem) {
     return "规则检查";
   }
   return "审阅中心";
+}
+
+function reviewFixSupported(entityType: string) {
+  return ["script_scene", "canonical_asset", "storyboard_shot", "shot_asset_requirement", "timeline_clip", "project_timeline"].includes(entityType);
+}
+
+function reviewFixStatusLabel(value: string) {
+  switch (value) {
+    case "draft":
+      return "待应用";
+    case "applied":
+      return "已应用";
+    case "dismissed":
+      return "已放弃";
+    default:
+      return value;
+  }
+}
+
+function reviewFixTypeLabel(value: string) {
+  switch (value) {
+    case "patch":
+      return "字段修复";
+    case "regenerate":
+      return "重生成建议";
+    case "navigate":
+      return "跳转处理";
+    case "note":
+      return "人工处理";
+    default:
+      return value;
+  }
+}
+
+function reviewFixDiffRows(fix: ReviewFix) {
+  const patch = fix.patch ?? {};
+  const before = fix.beforeSnapshot ?? {};
+  const after = fix.afterPreview ?? {};
+  return Object.keys(patch)
+    .sort()
+    .map((field) => ({
+      field,
+      before: before[field],
+      after: after[field] ?? patch[field],
+    }))
+    .filter((row) => JSON.stringify(row.before ?? null) !== JSON.stringify(row.after ?? null));
+}
+
+function reviewFieldLabel(field: string) {
+  const labels: Record<string, string> = {
+    action: "动作",
+    aspectRatio: "画幅",
+    assetType: "资产类型",
+    atmosphere: "氛围",
+    beat: "节拍",
+    camera: "镜头",
+    cameraRelation: "镜头关系",
+    characters: "人物",
+    consistencyPrompt: "一致性提示",
+    costume: "服装",
+    description: "描述",
+    dialogue: "对白",
+    durationSeconds: "时长秒",
+    enabled: "启用",
+    expression: "表情",
+    location: "地点",
+    motion: "运镜",
+    mood: "情绪",
+    name: "名称",
+    notes: "备注",
+    pose: "姿态",
+    prompt: "提示词",
+    propState: "道具状态",
+    props: "道具",
+    resolution: "分辨率",
+    scenes: "场景资产",
+    sceneState: "场景状态",
+    tags: "标签",
+    targetDurationSeconds: "目标时长秒",
+    timeOfDay: "时间",
+    title: "标题",
+    trimEndSeconds: "裁剪结束秒",
+    trimStartSeconds: "裁剪开始秒",
+    visual: "画面",
+  };
+  return labels[field] ?? field;
+}
+
+function reviewValueLabel(value: JsonValue | undefined) {
+  if (value === undefined || value === null || value === "") {
+    return "空";
+  }
+  if (typeof value === "boolean") {
+    return value ? "是" : "否";
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.length ? value.map((item) => jsonTextValue(item)).join("，") : "空";
+  }
+  return JSON.stringify(value);
+}
+
+function hasReviewRegenerateRequest(fix: ReviewFix) {
+  const request = fix.regenerateRequest;
+  return Boolean(request && jsonTextValue(request.targetType) && jsonTextValue(request.targetId));
+}
+
+function reviewRegenerateLabel(request?: JsonRecord | null) {
+  if (!request) {
+    return "无";
+  }
+  const targetType = jsonTextValue(request.targetType);
+  const targetId = jsonTextValue(request.targetId);
+  if (!targetType || !targetId) {
+    return "无";
+  }
+  return `${workflowLabel(targetType)} · ${targetId.slice(0, 8)}`;
 }
 
 function defaultImportDraft(sourceType: ImportSourceType): ImportDraft {

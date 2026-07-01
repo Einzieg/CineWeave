@@ -728,6 +728,45 @@ export type RunProjectReviewResponse = {
   itemCount: number;
 };
 
+export type ReviewFix = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  reviewItemId: string;
+  targetEntityType: string;
+  targetEntityId?: string | null;
+  status: string;
+  fixType: string;
+  title: string;
+  explanation: string;
+  beforeSnapshot?: JsonRecord;
+  patch?: JsonRecord;
+  afterPreview?: JsonRecord;
+  regenerateRequest?: JsonRecord | null;
+  promptVersionId?: string | null;
+  promptHash?: string | null;
+  providerCallId?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  createdBy?: string | null;
+  appliedBy?: string | null;
+  createdAt: string;
+  appliedAt?: string | null;
+  updatedAt: string;
+};
+
+export type ApplyReviewFixResponse = {
+  fixId: string;
+  status: string;
+  reviewItemStatus?: string | null;
+  workflowRunId?: string | null;
+};
+
+export type DismissReviewFixResponse = {
+  fixId: string;
+  status: string;
+};
+
 export type Artifact = {
   id: string;
   organizationId: string;

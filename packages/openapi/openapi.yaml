@@ -1203,7 +1203,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [script_scene, canonical_asset, storyboard_shot, shot_asset_requirement, timeline_clip, final_video_version, project]
+            enum: [script_scene, canonical_asset, storyboard_shot, shot_asset_requirement, timeline_clip, project_timeline, final_video_version, project]
       responses:
         "200":
           description: Project review items
@@ -1231,6 +1231,121 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-items/{itemId}/fixes/generate:
+    post:
+      operationId: generateProjectReviewFix
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewItemId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateReviewFixRequest"
+      responses:
+        "200":
+          description: Generated review fix draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewFixEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-items/{itemId}/fixes:
+    get:
+      operationId: listProjectReviewFixes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewItemId"
+      responses:
+        "200":
+          description: Review fix drafts and history for an item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewFixListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-fixes/{fixId}:
+    get:
+      operationId: getProjectReviewFix
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewFixId"
+      responses:
+        "200":
+          description: Review fix
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewFixEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-fixes/{fixId}/apply:
+    post:
+      operationId: applyProjectReviewFix
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewFixId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplyReviewFixRequest"
+      responses:
+        "200":
+          description: Review fix applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplyReviewFixResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/review-fixes/{fixId}/dismiss:
+    post:
+      operationId: dismissProjectReviewFix
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ReviewFixId"
+      responses:
+        "200":
+          description: Review fix dismissed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DismissReviewFixResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/review-items/{itemId}/resolve:
     post:
@@ -4092,6 +4207,13 @@ components:
       schema:
         type: string
         format: uuid
+    ReviewFixId:
+      name: fixId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     WorkflowRunId:
       name: workflowRunId
       in: path
@@ -6147,7 +6269,7 @@ components:
           type: string
         entityType:
           type: string
-          enum: [script_scene, canonical_asset, storyboard_shot, shot_asset_requirement, timeline_clip, final_video_version, project]
+          enum: [script_scene, canonical_asset, storyboard_shot, shot_asset_requirement, timeline_clip, project_timeline, final_video_version, project]
         entityId:
           type: string
           format: uuid
@@ -6216,6 +6338,134 @@ components:
       properties:
         note:
           type: string
+    GenerateReviewFixRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          default: deterministic
+          enum: [deterministic, agent]
+        instruction:
+          type: string
+    ApplyReviewFixRequest:
+      type: object
+      properties:
+        resolveReviewItem:
+          type: boolean
+          default: true
+        triggerRegeneration:
+          type: boolean
+          default: false
+    ReviewPatchPreview:
+      type: object
+      required: [beforeSnapshot, patch, afterPreview]
+      properties:
+        beforeSnapshot:
+          type: object
+          additionalProperties: true
+        patch:
+          type: object
+          additionalProperties: true
+        afterPreview:
+          type: object
+          additionalProperties: true
+    ReviewFix:
+      type: object
+      required: [id, organizationId, projectId, reviewItemId, targetEntityType, status, fixType, title, explanation, beforeSnapshot, patch, afterPreview, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        reviewItemId:
+          type: string
+          format: uuid
+        targetEntityType:
+          type: string
+          enum: [script_scene, canonical_asset, storyboard_shot, shot_asset_requirement, timeline_clip, project_timeline]
+        targetEntityId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [draft, applied, dismissed]
+        fixType:
+          type: string
+          enum: [patch, regenerate, navigate, note]
+        title:
+          type: string
+        explanation:
+          type: string
+        beforeSnapshot:
+          type: object
+          additionalProperties: true
+        patch:
+          type: object
+          additionalProperties: true
+        afterPreview:
+          type: object
+          additionalProperties: true
+        regenerateRequest:
+          type: object
+          additionalProperties: true
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        providerCallId:
+          type: string
+          format: uuid
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        appliedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        appliedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ApplyReviewFixResponse:
+      type: object
+      required: [fixId, status]
+      properties:
+        fixId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [applied]
+        reviewItemStatus:
+          type: string
+          enum: [resolved]
+        workflowRunId:
+          type: string
+          format: uuid
+    DismissReviewFixResponse:
+      type: object
+      required: [fixId, status]
+      properties:
+        fixId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [dismissed]
     FinalVideoDownloadUrlRequest:
       type: object
       properties:
@@ -7431,6 +7681,39 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/ReviewItem"
+    ReviewFixEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ReviewFix"
+    ReviewFixListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ReviewFix"
+    ApplyReviewFixResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ApplyReviewFixResponse"
+    DismissReviewFixResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/DismissReviewFixResponse"
     RunProjectReviewResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

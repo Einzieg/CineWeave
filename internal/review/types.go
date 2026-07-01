@@ -31,6 +31,13 @@ type Summary struct {
 	LowCount      int    `json:"lowCount"`
 }
 
+type ReviewFixTarget struct {
+	EntityType     string         `json:"entityType"`
+	EntityID       string         `json:"entityId"`
+	Snapshot       map[string]any `json:"snapshot"`
+	EditableFields map[string]bool
+}
+
 func Summarize(items []ReviewItemDraft) Summary {
 	summary := Summary{OverallStatus: "healthy", OpenCount: len(items)}
 	for _, item := range items {

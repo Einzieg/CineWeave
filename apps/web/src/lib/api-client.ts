@@ -27,6 +27,9 @@ import type {
   ProjectExport,
   ProductionStatus,
   ProjectTimeline,
+  ApplyReviewFixResponse,
+  DismissReviewFixResponse,
+  ReviewFix,
   ReviewItem,
   ReviewRun,
   RunProjectReviewResponse,
@@ -162,6 +165,16 @@ export const studioApi = {
     apiRequest<ReviewItem>(`/api/projects/${projectId}/review-items/${itemId}/ignore`, { method: "POST", session, body }),
   reopenReviewItem: (session: StudioSession, projectId: string, itemId: string, body: JsonRecord) =>
     apiRequest<ReviewItem>(`/api/projects/${projectId}/review-items/${itemId}/reopen`, { method: "POST", session, body }),
+  generateReviewFix: (session: StudioSession, projectId: string, itemId: string, body: JsonRecord) =>
+    apiRequest<ReviewFix>(`/api/projects/${projectId}/review-items/${itemId}/fixes/generate`, { method: "POST", session, body }),
+  listReviewFixes: (session: StudioSession, projectId: string, itemId: string) =>
+    apiRequest<ListEnvelope<ReviewFix>>(`/api/projects/${projectId}/review-items/${itemId}/fixes`, { session }),
+  getReviewFix: (session: StudioSession, projectId: string, fixId: string) =>
+    apiRequest<ReviewFix>(`/api/projects/${projectId}/review-fixes/${fixId}`, { session }),
+  applyReviewFix: (session: StudioSession, projectId: string, fixId: string, body: JsonRecord) =>
+    apiRequest<ApplyReviewFixResponse>(`/api/projects/${projectId}/review-fixes/${fixId}/apply`, { method: "POST", session, body }),
+  dismissReviewFix: (session: StudioSession, projectId: string, fixId: string) =>
+    apiRequest<DismissReviewFixResponse>(`/api/projects/${projectId}/review-fixes/${fixId}/dismiss`, { method: "POST", session }),
   getShotProductionStatus: (session: StudioSession, projectId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
     apiRequest<ShotProductionStatus>(`/api/projects/${projectId}/shot-production/status`, { session, query }),
   runShotProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>

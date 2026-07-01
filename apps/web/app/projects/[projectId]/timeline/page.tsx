@@ -1,6 +1,6 @@
 import { ProjectTimelinePage } from "@/components/studio-pages";
 
-export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
-  const { projectId } = await params;
-  return <ProjectTimelinePage projectId={projectId} />;
+export default async function Page({ params, searchParams }: { params: Promise<{ projectId: string }>; searchParams: Promise<{ clipId?: string; finalVideoId?: string }> }) {
+  const [{ projectId }, query] = await Promise.all([params, searchParams]);
+  return <ProjectTimelinePage initialClipId={query.clipId ?? ""} initialFinalVideoId={query.finalVideoId ?? ""} projectId={projectId} />;
 }
