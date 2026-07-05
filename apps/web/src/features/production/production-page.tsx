@@ -7,7 +7,10 @@ import { Surface, SectionTitle } from "@/components/layout/app-shell";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { Activity, CheckCircle2, Clock, XCircle } from "lucide-react";
+import { Activity, CheckCircle2, Clock, XCircle, type LucideIcon } from "lucide-react";
+import type { ProductionStatus } from "@/lib/types";
+
+type ProductionStage = ProductionStatus["stages"][keyof ProductionStatus["stages"]];
 
 export function ProductionPage({ projectId }: { projectId: string }) {
   // 获取生产状态
@@ -71,7 +74,7 @@ export function ProductionPage({ projectId }: { projectId: string }) {
   );
 }
 
-function StageCard({ title, icon: Icon, stage }: any) {
+function StageCard({ title, icon: Icon, stage }: { title: string; icon: LucideIcon; stage: ProductionStage }) {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "completed": return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;

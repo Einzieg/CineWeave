@@ -6,6 +6,11 @@ import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
 import { Surface, SectionTitle } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +18,6 @@ import {
   FileText,
   Upload,
   Wand2,
-  CheckCircle2,
   Clock,
   AlertCircle
 } from "lucide-react";
@@ -21,9 +25,10 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
 
+type ImportSourceType = "novel" | "script";
+
 export function SourcesPage({
   projectId,
-  initialSceneId = ""
 }: {
   projectId: string;
   initialSceneId?: string;
@@ -31,6 +36,12 @@ export function SourcesPage({
   const [activeTab, setActiveTab] = useState("sources");
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importTitle, setImportTitle] = useState("");
+  const [importSourceType, setImportSourceType] = useState<ImportSourceType>("novel");
+  const [splitChapters, setSplitChapters] = useState(true);
+  const [createScript, setCreateScript] = useState(false);
   const invalidate = useInvalidateKeys();
   const { open: openAgent, setContext } = useAgentDrawerStore();
 
@@ -107,6 +118,50 @@ export function SourcesPage({
     },
   });
 
+  const importFileMutation = useApiMutation({
+    mutationFn: (session) => {
+      if (!importFile) {
+        throw new Error("请选择文件");
+      }
+      const form = new FormData();
+      form.append("file", importFile);
+      form.append("sourceType", importSourceType);
+      form.append("title", importTitle.trim() || importFile.name.replace(/\.[^.]+$/, ""));
+      form.append("splitChapters", splitChapters ? "true" : "false");
+      form.append("createScript", createScript ? "true" : "false");
+      return studioApi.importSourceFile(session, projectId, form);
+    },
+    onSuccess: (response) => {
+      toast.success("文件已导入");
+      setSelectedSourceId(response.source.id);
+      if (response.script?.id) {
+        setSelectedScriptId(response.script.id);
+        setActiveTab("scripts");
+      } else {
+        setActiveTab("sources");
+      }
+      setImportOpen(false);
+      setImportFile(null);
+      setImportTitle("");
+      invalidate([
+        qk.sources(projectId),
+        qk.scripts(projectId),
+        qk.productionStatus(projectId),
+        qk.project(projectId),
+      ]);
+    },
+    onError: (error) => {
+      toast.error("导入失败：" + error.message);
+    },
+  });
+
+  const updateImportSourceType = (value: string) => {
+    const next = value === "script" ? "script" : "novel";
+    setImportSourceType(next);
+    setSplitChapters(next === "novel");
+    setCreateScript(next === "script");
+  };
+
   const handleUseAgent = () => {
     setContext({
       projectId,
@@ -146,7 +201,7 @@ export function SourcesPage({
         {/* 原文管理 */}
         <TabsContent value="sources" className="space-y-4">
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
               <Upload className="h-4 w-4 mr-2" />
               导入文件
             </Button>
@@ -156,18 +211,75 @@ export function SourcesPage({
             </Button>
           </div>
 
+          <Dialog open={importOpen} onOpenChange={setImportOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>导入文件</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="source-file">文件</Label>
+                  <Input
+                    id="source-file"
+                    accept=".txt,.md,.markdown,text/plain,text/markdown"
+                    type="file"
+                    onChange={(event) => {
+                      const file = event.currentTarget.files?.[0] ?? null;
+                      setImportFile(file);
+                      if (file && !importTitle.trim()) {
+                        setImportTitle(file.name.replace(/\.[^.]+$/, ""));
+                      }
+                    }}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="source-title">标题</Label>
+                  <Input id="source-title" value={importTitle} onChange={(event) => setImportTitle(event.target.value)} />
+                </div>
+                <div className="grid gap-2">
+                  <Label>类型</Label>
+                  <Select value={importSourceType} onValueChange={updateImportSourceType}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="novel">小说</SelectItem>
+                      <SelectItem value="script">剧本</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox checked={splitChapters} onCheckedChange={(checked) => setSplitChapters(checked === true)} />
+                  拆分章节
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox checked={createScript} onCheckedChange={(checked) => setCreateScript(checked === true)} />
+                  创建剧本
+                </label>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setImportOpen(false)} type="button">
+                  取消
+                </Button>
+                <Button disabled={!importFile || importFileMutation.isPending} onClick={() => importFileMutation.mutate()} type="button">
+                  导入
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
           {sourcesLoading && <Skeleton className="h-32" />}
 
           {!sourcesLoading && sources.length === 0 && (
             <div className="rounded-lg border border-dashed p-12 text-center">
               <FileText className="mx-auto h-12 w-12 text-muted-foreground opacity-50" />
               <p className="mt-4 text-sm text-muted-foreground">暂无原文</p>
-              <p className="mt-1 text-xs text-muted-foreground">点击"导入文件"上传小说原文</p>
+              <p className="mt-1 text-xs text-muted-foreground">点击“导入文件”上传小说原文</p>
             </div>
           )}
 
           <div className="grid gap-3">
-            {sources.map((source: any) => (
+            {sources.map((source) => (
               <button
                 key={source.id}
                 onClick={() => setSelectedSourceId(source.id)}
@@ -221,7 +333,7 @@ export function SourcesPage({
           )}
 
           <div className="space-y-2">
-            {events.map((event: any) => (
+            {events.map((event) => (
               <div
                 key={event.id}
                 className="flex items-start gap-3 rounded-lg border p-3 text-sm"
@@ -270,7 +382,7 @@ export function SourcesPage({
           )}
 
           <div className="grid gap-3">
-            {plans.map((plan: any) => (
+            {plans.map((plan) => (
               <div
                 key={plan.id}
                 className="flex items-start gap-4 rounded-lg border p-4"
@@ -313,7 +425,7 @@ export function SourcesPage({
           )}
 
           <div className="grid gap-3">
-            {scripts.map((script: any) => (
+            {scripts.map((script) => (
               <button
                 key={script.id}
                 onClick={() => setSelectedScriptId(script.id)}

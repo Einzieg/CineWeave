@@ -196,7 +196,7 @@ func (s *Server) listProviderModels(w http.ResponseWriter, r *http.Request, prin
 	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
-	items, err := s.providers.ListModels(r.Context(), orgID, r.PathValue("accountId"))
+	items, err := s.providers.ListModels(r.Context(), orgID, r.PathValue("accountId"), r.URL.Query().Get("filter[status]"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return

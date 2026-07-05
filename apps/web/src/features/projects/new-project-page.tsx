@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import type { Route } from "next";
 import { useState } from "react";
 import { Check, Loader2 } from "lucide-react";
-import { AppShell, Surface } from "@/components/layout/app-shell";
+import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +12,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
-import { Switch } from "@/components/ui/switch";
 import { ErrorPanel } from "@/components/shared/error-panel";
 import { useStudioSession } from "@/lib/session";
 import { studioApi, StudioApiError } from "@/lib/api-client";
@@ -223,7 +222,7 @@ function NewProjectContent() {
 
           <TabsContent value="import" className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              内容导入功能暂时简化,创建项目后可在"原文与剧本"页面导入
+              创建项目后可在原文与剧本页面导入内容
             </p>
           </TabsContent>
         </Tabs>

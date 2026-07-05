@@ -60,7 +60,7 @@ export function AuthField({
       <span className="font-medium text-slate-700">{label}</span>
       <input
         autoComplete={autoComplete}
-        className="studio-input"
+        className="min-h-10 rounded-md border border-slate-300 bg-white px-3 text-slate-950 outline-none transition focus:border-blue-600"
         onChange={(event) => onChange(event.target.value)}
         required={required}
         type={type}

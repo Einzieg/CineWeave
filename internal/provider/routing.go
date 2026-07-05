@@ -33,6 +33,7 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 		return nil, fmt.Errorf("%w: organizationId and modelProfileKey are required", ErrValidation)
 	}
 	modality := routingModality(req)
+	taskType := strings.TrimSpace(req.TaskType)
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			p.id,
@@ -57,8 +58,17 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 		  AND m.status = 'active'
 		  AND a.status = 'active'
 		  AND ($3 = '' OR m.modality = $3 OR m.modality = 'multimodal')
+		  AND (
+		    $4 = ''
+		    OR EXISTS (
+		      SELECT 1
+		      FROM provider_model_capabilities c
+		      WHERE c.provider_model_id = m.id
+		        AND c.task_types ? $4
+		    )
+		  )
 		ORDER BY b.priority ASC, b.weight DESC, b.created_at ASC
-	`, req.OrganizationID, strings.TrimSpace(req.ModelProfileKey), modality)
+	`, req.OrganizationID, strings.TrimSpace(req.ModelProfileKey), modality, taskType)
 	if err != nil {
 		return nil, err
 	}

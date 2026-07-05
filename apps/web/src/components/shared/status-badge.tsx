@@ -1,11 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
 
-/**
- * 状态徽章,使用新设计系统的状态色 token(--status-running/success/danger/warning)。
- * 保持与旧 StatusBadge 的接口兼容。
- */
-
 type StatusVariant = "running" | "success" | "warning" | "pending" | "danger";
 
 const variantByStatus: Record<string, StatusVariant> = {

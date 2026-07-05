@@ -69,6 +69,8 @@ type ApiRequestOptions = {
   query?: Record<string, string | number | boolean | undefined | null>;
 };
 
+type ProviderListStatus = "active" | "disabled" | "all";
+
 export class StudioApiError extends Error {
   code: string;
   status: number;
@@ -362,7 +364,11 @@ export const studioApi = {
       query: { "filter[projectId]": projectId, includePreviewUrl: true, previewExpiresSeconds: 900 },
     }),
 
-  listProviderAccounts: (session: StudioSession) => apiRequest<ListEnvelope<ProviderAccount>>("/api/providers/accounts", { session }),
+  listProviderAccounts: (session: StudioSession, status?: ProviderListStatus) =>
+    apiRequest<ListEnvelope<ProviderAccount>>("/api/providers/accounts", {
+      session,
+      query: status ? { "filter[status]": status } : undefined,
+    }),
   createProviderAccount: (session: StudioSession, body: JsonRecord) => apiRequest<ProviderAccount>("/api/providers/accounts", { method: "POST", session, body }),
   updateProviderAccount: (session: StudioSession, accountId: string, body: JsonRecord) =>
     apiRequest<ProviderAccount>(`/api/providers/accounts/${accountId}`, { method: "PATCH", session, body }),
@@ -376,7 +382,11 @@ export const studioApi = {
   getProviderCatalogEntry: (session: StudioSession, providerKey: string) => apiRequest<ProviderCatalogEntry>(`/api/provider-catalog/${providerKey}`, { session }),
   installProviderCatalogEntry: (session: StudioSession, providerKey: string, body: JsonRecord) =>
     apiRequest<ProviderCatalogInstallResponse>(`/api/provider-catalog/${providerKey}/install`, { method: "POST", session, body }),
-  listProviderModels: (session: StudioSession, accountId: string) => apiRequest<ListEnvelope<ProviderModel>>(`/api/providers/accounts/${accountId}/models`, { session }),
+  listProviderModels: (session: StudioSession, accountId: string, status?: ProviderListStatus) =>
+    apiRequest<ListEnvelope<ProviderModel>>(`/api/providers/accounts/${accountId}/models`, {
+      session,
+      query: status ? { "filter[status]": status } : undefined,
+    }),
   createProviderModel: (session: StudioSession, accountId: string, body: JsonRecord) =>
     apiRequest<ProviderModel>(`/api/providers/accounts/${accountId}/models`, { method: "POST", session, body }),
   updateProviderModel: (session: StudioSession, modelId: string, body: JsonRecord) =>

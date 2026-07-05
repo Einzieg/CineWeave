@@ -127,6 +127,11 @@ func (s *Service) InstallCatalogEntry(ctx context.Context, organizationID, userI
 
 	modelIDsByKey := map[string]string{}
 	for _, model := range models {
+		if preset, ok, err := s.lookupModelCapabilityPreset(ctx, tx, model.ModelKey); err != nil {
+			return InstallCatalogResponse{}, err
+		} else if ok {
+			model = applyPresetToCatalogModel(model, preset)
+		}
 		modelID, err := insertCatalogModel(ctx, tx, accountID, model)
 		if err != nil {
 			return InstallCatalogResponse{}, err

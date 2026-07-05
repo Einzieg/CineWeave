@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useApiQuery, useApiMutation, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi, StudioApiError } from "@/lib/api-client";
-import type { JsonRecord, Organization, Workspace, Team, Role, Permission } from "@/lib/types";
+import type { JsonRecord } from "@/lib/types";
 
 export function AccessPage() {
   return (

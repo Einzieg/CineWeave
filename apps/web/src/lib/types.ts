@@ -924,8 +924,25 @@ export type ProviderModelCapability = {
   inputLimits?: JsonRecord;
   outputLimits?: JsonRecord;
   qualityTiers?: JsonValue;
-  providerOptionsSchema?: JsonRecord;
+  providerOptionsSchema?: ProviderModelCapabilityOptions;
   pricingPolicy?: JsonRecord;
+};
+
+export type ProviderModelCapabilityOptions = JsonRecord & {
+  xCapabilities?: ProviderModelXCapabilities;
+};
+
+export type ProviderModelXCapabilities = JsonRecord & {
+  supportsAsyncTask?: boolean;
+  supportsStreaming?: boolean;
+  supportsReasoning?: boolean;
+  supportsReasoningLevels?: boolean;
+  supportsMultimodalInput?: boolean;
+  supportsReferences?: boolean;
+  supportsReferenceImages?: boolean;
+  supportsFirstFrame?: boolean;
+  supportsLastFrame?: boolean;
+  supportsVideoReference?: boolean;
 };
 
 export type ProviderModel = {
@@ -961,7 +978,7 @@ export type ProviderCatalogModelTemplate = {
   inputLimits?: JsonRecord;
   outputLimits?: JsonRecord;
   qualityTiers?: JsonValue;
-  providerOptionsSchema?: JsonRecord;
+  providerOptionsSchema?: ProviderModelCapabilityOptions;
   pricingPolicy?: JsonRecord;
 };
 

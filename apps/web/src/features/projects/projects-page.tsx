@@ -16,7 +16,6 @@ import { useApiQuery } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
 import { projectHref } from "@/lib/routes";
-import { cn } from "@/lib/cn";
 import type { Project } from "@/lib/types";
 
 export function ProjectsPage() {

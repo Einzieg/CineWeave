@@ -9,7 +9,7 @@ interface QuickActionsProps {
 }
 
 export function QuickActions({ context, onAction }: QuickActionsProps) {
-  const { scriptId, assetId } = context;
+  const { scriptId } = context;
 
   const actions = [
     {

@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
@@ -39,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -50,6 +52,7 @@ import {
   RefreshCw,
   Sparkles,
   Trash2,
+  X,
   XCircle,
   Zap,
 } from "lucide-react";
@@ -58,6 +61,7 @@ import { cn } from "@/lib/utils";
 
 type AccountDialogMode = "create" | "edit";
 type ModelDialogMode = "create" | "edit";
+type ModelDraft = ProviderCatalogModelTemplate & { source: "catalog" | "custom" };
 
 type AccountForm = {
   name: string;
@@ -74,6 +78,7 @@ type ModelForm = {
   displayName: string;
   modality: string;
   status: string;
+  supportsAsyncTask: boolean;
   taskTypesText: string;
   inputLimitsText: string;
   outputLimitsText: string;
@@ -124,6 +129,10 @@ export function ProvidersPage() {
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<ProviderAccount | null>(null);
   const [accountForm, setAccountForm] = useState<AccountForm>(emptyAccountForm);
+  const [selectedTemplateModelKeys, setSelectedTemplateModelKeys] = useState<string[]>([]);
+  const [pendingCustomModels, setPendingCustomModels] = useState<ModelDraft[]>([]);
+  const [customModelName, setCustomModelName] = useState("");
+  const [customModelModality, setCustomModelModality] = useState("text");
   const [modelsDialogOpen, setModelsDialogOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [modelDialogMode, setModelDialogMode] = useState<ModelDialogMode>("create");
@@ -133,6 +142,8 @@ export function ProvidersPage() {
   const [modelToDelete, setModelToDelete] = useState<ProviderModel | null>(null);
   const [modelForm, setModelForm] = useState<ModelForm>(emptyModelForm("text"));
   const invalidate = useInvalidateKeys();
+  const lastDialogInnerPointerDownAtRef = useRef(0);
+  const portaledControlOpenUntilRef = useRef(0);
 
   const { data: catalogData } = useApiQuery({
     key: qk.providerCatalog(),
@@ -158,6 +169,13 @@ export function ProvidersPage() {
   const selectedCatalogEntry = catalogEntries.find((entry) => entry.providerKey === selectedCatalogKey) || null;
   const selectedAccountCatalog = catalogEntries.find((entry) => entry.providerKey === selectedAccount?.connectorKey) || null;
   const setupFields = catalogSetupFields(selectedCatalogEntry);
+  const dialogModelTemplates = selectedCatalogEntry?.modelTemplates || [];
+  const selectedCreateModelDrafts = [
+    ...dialogModelTemplates
+      .filter((template) => selectedTemplateModelKeys.includes(template.modelKey))
+      .map((template) => ({ ...template, source: "catalog" as const })),
+    ...pendingCustomModels,
+  ];
   const modelTemplates = selectedAccountCatalog?.modelTemplates || [];
 
   const { data: modelsData, isLoading: modelsLoading } = useApiQuery({
@@ -174,10 +192,9 @@ export function ProvidersPage() {
   const createAccountMutation = useApiMutation({
     mutationFn: (session, data: { providerKey: string; body: JsonRecord }) =>
       studioApi.installProviderCatalogEntry(session, data.providerKey, data.body),
-    onSuccess: () => {
+    onSuccess: (result) => {
       toast.success("供应商账号已创建");
-      invalidate([qk.providerAccounts(), qk.providerCatalog(), qk.modelProfiles()]);
-      closeAccountDialog();
+      invalidate([qk.providerAccounts(), qk.providerCatalog(), qk.modelProfiles(), qk.providerModels(result.account.id)]);
     },
     onError: (error) => toast.error("创建失败：" + error.message),
   });
@@ -195,8 +212,7 @@ export function ProvidersPage() {
     },
     onSuccess: () => {
       toast.success("供应商账号已保存");
-      invalidate([qk.providerAccounts(), qk.providerCatalog()]);
-      closeAccountDialog();
+      invalidate([qk.providerAccounts(), qk.providerCatalog(), qk.modelProfiles()]);
     },
     onError: (error) => toast.error("保存失败：" + error.message),
   });
@@ -223,6 +239,15 @@ export function ProvidersPage() {
       invalidate([qk.providerModels(accountId), qk.modelProfiles()]);
     },
     onError: (error) => toast.error("模型发现失败：" + error.message),
+  });
+
+  const quickCreateModelMutation = useApiMutation({
+    mutationFn: (session, data: { accountId: string; model: ModelDraft | ProviderCatalogModelTemplate }) =>
+      studioApi.createProviderModel(session, data.accountId, modelCreateBody(data.model)),
+    onSuccess: (_result, data) => {
+      invalidate([qk.providerModels(data.accountId), qk.modelProfiles()]);
+    },
+    onError: (error) => toast.error("模型添加失败：" + error.message),
   });
 
   const saveModelMutation = useApiMutation({
@@ -281,14 +306,20 @@ export function ProvidersPage() {
     const preferred = catalogEntries.find((entry) => entry.providerKey === "volcengine_ark") || catalogEntries[0] || null;
     setAccountDialogMode("create");
     setEditingAccount(null);
+    setSelectedAccountId(null);
     setSelectedCatalogKey(preferred?.providerKey || null);
     setAccountForm(accountFormFromCatalog(preferred));
+    setSelectedTemplateModelKeys((preferred?.modelTemplates || []).map((template) => template.modelKey));
+    setPendingCustomModels([]);
+    setCustomModelName("");
+    setCustomModelModality("text");
     setAccountDialogOpen(true);
   }
 
   function openEditAccountDialog(account: ProviderAccount) {
     setAccountDialogMode("edit");
     setEditingAccount(account);
+    setSelectedAccountId(account.id);
     setSelectedCatalogKey(account.connectorKey || null);
     setAccountForm({
       name: account.name || "",
@@ -299,6 +330,10 @@ export function ProvidersPage() {
       setup: {},
       configText: jsonText(account.config || {}),
     });
+    setSelectedTemplateModelKeys([]);
+    setPendingCustomModels([]);
+    setCustomModelName("");
+    setCustomModelModality("text");
     setAccountDialogOpen(true);
   }
 
@@ -307,6 +342,61 @@ export function ProvidersPage() {
     setEditingAccount(null);
     setSelectedCatalogKey(null);
     setAccountForm(emptyAccountForm);
+    setSelectedTemplateModelKeys([]);
+    setPendingCustomModels([]);
+    setCustomModelName("");
+    setCustomModelModality("text");
+  }
+
+  function trackPortaledControlOpen(open: boolean) {
+    const now = Date.now();
+    portaledControlOpenUntilRef.current = open ? Number.MAX_SAFE_INTEGER : now + 500;
+  }
+
+  function markDialogInnerPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest("[data-slot='dialog-close']")) {
+      return;
+    }
+    lastDialogInnerPointerDownAtRef.current = Date.now();
+  }
+
+  function shouldIgnoreDialogCloseFromPortaledControl() {
+    const now = Date.now();
+    return now - lastDialogInnerPointerDownAtRef.current < 500 && now <= portaledControlOpenUntilRef.current;
+  }
+
+  function handleAccountDialogOpenChange(open: boolean) {
+    if (open) {
+      setAccountDialogOpen(true);
+      return;
+    }
+    if (shouldIgnoreDialogCloseFromPortaledControl()) {
+      return;
+    }
+    closeAccountDialog();
+  }
+
+  function handleModelsDialogOpenChange(open: boolean) {
+    if (open) {
+      setModelsDialogOpen(true);
+      return;
+    }
+    if (shouldIgnoreDialogCloseFromPortaledControl()) {
+      return;
+    }
+    setModelsDialogOpen(false);
+  }
+
+  function handleModelDialogOpenChange(open: boolean) {
+    if (open) {
+      setModelDialogOpen(true);
+      return;
+    }
+    if (shouldIgnoreDialogCloseFromPortaledControl()) {
+      return;
+    }
+    setModelDialogOpen(false);
   }
 
   function handleCatalogChange(providerKey: string) {
@@ -319,59 +409,67 @@ export function ProvidersPage() {
       setup: defaultSetupValues(entry),
       configText: jsonText(entry?.setupSchema?.defaultConfig || {}),
     }));
+    setSelectedTemplateModelKeys((entry?.modelTemplates || []).map((template) => template.modelKey));
+    setPendingCustomModels([]);
+    setCustomModelName("");
+    setCustomModelModality("text");
   }
 
-  function handleSaveAccount() {
-    if (accountDialogMode === "create") {
-      if (!selectedCatalogEntry) {
-        toast.error("请选择供应商类型");
-        return;
-      }
-      if (!accountForm.name.trim() || (accountForm.authType !== "none" && !accountForm.apiKey.trim())) {
-        toast.error("请填写账号名称和 API Key");
-        return;
-      }
-      const missing = setupFields.find((field) => field.required && !String(accountForm.setup[field.key] ?? "").trim());
-      if (missing) {
-        toast.error(`请填写${missing.label || missing.key}`);
-        return;
-      }
-      const config = parseJsonRecord(accountForm.configText, "账号配置");
-      if (!config) {
-        return;
-      }
-      const setup = setupFields.reduce<Record<string, JsonValue>>((acc, field) => {
-        const defaultValue = field.defaultValue ?? selectedCatalogEntry.setupSchema?.defaultConfig?.[field.key] ?? "";
-        acc[field.key] = accountForm.setup[field.key] || String(defaultValue ?? "");
-        return acc;
-      }, {});
-      createAccountMutation.mutate({
-        providerKey: selectedCatalogEntry.providerKey,
-        body: {
-          name: accountForm.name.trim(),
-          baseUrl: accountForm.baseUrl.trim() || selectedCatalogEntry.defaultBaseUrl || "",
-          authType: accountForm.authType || selectedCatalogEntry.defaultAuthType || "bearer",
-          apiKey: accountForm.apiKey.trim(),
-          setup,
-          config,
-        },
-      });
-      return;
+  function buildCreateAccountPayload() {
+    if (!selectedCatalogEntry) {
+      toast.error("请选择供应商类型");
+      return null;
     }
-
-    if (!editingAccount) {
-      toast.error("请选择要编辑的供应商账号");
-      return;
+    if (!accountForm.name.trim() || (accountForm.authType !== "none" && !accountForm.apiKey.trim())) {
+      toast.error("请填写账号名称和 API Key");
+      return null;
     }
-    if (!accountForm.name.trim()) {
-      toast.error("请填写账号名称");
-      return;
+    const missing = setupFields.find((field) => field.required && !String(accountForm.setup[field.key] ?? "").trim());
+    if (missing) {
+      toast.error(`请填写${missing.label || missing.key}`);
+      return null;
     }
     const config = parseJsonRecord(accountForm.configText, "账号配置");
     if (!config) {
-      return;
+      return null;
     }
-    updateAccountMutation.mutate({
+    if (selectedCreateModelDrafts.length === 0) {
+      toast.error("请至少保留一个模型");
+      return null;
+    }
+    const setup = setupFields.reduce<Record<string, JsonValue>>((acc, field) => {
+      const defaultValue = field.defaultValue ?? selectedCatalogEntry.setupSchema?.defaultConfig?.[field.key] ?? "";
+      acc[field.key] = accountForm.setup[field.key] || String(defaultValue ?? "");
+      return acc;
+    }, {});
+    return {
+      providerKey: selectedCatalogEntry.providerKey,
+      body: {
+        name: accountForm.name.trim(),
+        baseUrl: accountForm.baseUrl.trim() || selectedCatalogEntry.defaultBaseUrl || "",
+        authType: accountForm.authType || selectedCatalogEntry.defaultAuthType || "bearer",
+        apiKey: accountForm.apiKey.trim(),
+        setup,
+        config,
+        models: selectedCreateModelDrafts.map(catalogInstallModelBody),
+      } satisfies JsonRecord,
+    };
+  }
+
+  function buildUpdateAccountPayload() {
+    if (!editingAccount) {
+      toast.error("请选择要编辑的供应商账号");
+      return null;
+    }
+    if (!accountForm.name.trim()) {
+      toast.error("请填写账号名称");
+      return null;
+    }
+    const config = parseJsonRecord(accountForm.configText, "账号配置");
+    if (!config) {
+      return null;
+    }
+    return {
       accountId: editingAccount.id,
       body: {
         name: accountForm.name.trim(),
@@ -381,7 +479,156 @@ export function ProvidersPage() {
         config,
       },
       apiKey: accountForm.apiKey,
-    });
+    };
+  }
+
+  async function createAccountFromDialog() {
+    const payload = buildCreateAccountPayload();
+    if (!payload) {
+      return null;
+    }
+    try {
+      const result = await createAccountMutation.mutateAsync(payload);
+      setAccountDialogMode("edit");
+      setEditingAccount(result.account);
+      setSelectedAccountId(result.account.id);
+      setSelectedCatalogKey(result.account.connectorKey || payload.providerKey);
+      setAccountForm((current) => ({
+        ...current,
+        name: result.account.name || current.name,
+        baseUrl: result.account.baseUrl || current.baseUrl,
+        authType: result.account.authType || current.authType,
+        status: result.account.status || "active",
+        apiKey: "",
+        setup: {},
+        configText: jsonText(result.account.config || {}),
+      }));
+      setSelectedTemplateModelKeys([]);
+      setPendingCustomModels([]);
+      return result.account;
+    } catch {
+      return null;
+    }
+  }
+
+  async function ensureDialogAccount() {
+    if (accountDialogMode === "edit" && editingAccount) {
+      return editingAccount;
+    }
+    return createAccountFromDialog();
+  }
+
+  async function handleSaveAccount() {
+    if (accountDialogMode === "create") {
+      const account = await createAccountFromDialog();
+      if (account) {
+        closeAccountDialog();
+      }
+      return;
+    }
+
+    const payload = buildUpdateAccountPayload();
+    if (!payload) {
+      return;
+    }
+    try {
+      await updateAccountMutation.mutateAsync(payload);
+      closeAccountDialog();
+    } catch {
+      return;
+    }
+  }
+
+  async function handleDiscoverModelsInAccountDialog() {
+    const account = await ensureDialogAccount();
+    if (!account) {
+      return;
+    }
+    setSelectedAccountId(account.id);
+    try {
+      await discoverModelsMutation.mutateAsync(account.id);
+    } catch {
+      return;
+    }
+  }
+
+  async function handleFillTemplateModels() {
+    if (dialogModelTemplates.length === 0) {
+      toast.error("当前供应商没有预设模型");
+      return;
+    }
+    if (accountDialogMode === "create") {
+      setSelectedTemplateModelKeys(dialogModelTemplates.map((template) => template.modelKey));
+      toast.success("已填入预设模型");
+      return;
+    }
+    if (!selectedAccountId) {
+      toast.error("请选择供应商账号");
+      return;
+    }
+    const existingKeys = new Set(models.map((model) => model.modelKey));
+    const missingTemplates = dialogModelTemplates.filter((template) => !existingKeys.has(template.modelKey));
+    if (missingTemplates.length === 0) {
+      toast.success("预设模型已存在");
+      return;
+    }
+    try {
+      for (const template of missingTemplates) {
+        await quickCreateModelMutation.mutateAsync({ accountId: selectedAccountId, model: template });
+      }
+      toast.success(`已添加 ${missingTemplates.length} 个预设模型`);
+    } catch {
+      return;
+    }
+  }
+
+  async function handleAddCustomModel() {
+    const modelKey = customModelName.trim();
+    if (!modelKey) {
+      toast.error("请填写自定义模型名称");
+      return;
+    }
+    const model = customModelDraft(modelKey, customModelModality);
+    if (accountDialogMode === "create") {
+      const duplicate = selectedCreateModelDrafts.some((item) => item.modelKey === model.modelKey);
+      if (duplicate) {
+        toast.error("模型已存在");
+        return;
+      }
+      setPendingCustomModels((current) => [...current, model]);
+      setCustomModelName("");
+      toast.success("模型已填入");
+      return;
+    }
+    if (!selectedAccountId) {
+      toast.error("请选择供应商账号");
+      return;
+    }
+    if (models.some((item) => item.modelKey === model.modelKey)) {
+      toast.error("模型已存在");
+      return;
+    }
+    try {
+      await quickCreateModelMutation.mutateAsync({ accountId: selectedAccountId, model });
+      setCustomModelName("");
+      toast.success("模型已添加");
+    } catch {
+      return;
+    }
+  }
+
+  function handleRemoveCreateModel(modelKey: string) {
+    setSelectedTemplateModelKeys((current) => current.filter((key) => key !== modelKey));
+    setPendingCustomModels((current) => current.filter((model) => model.modelKey !== modelKey));
+  }
+
+  function openDetailedModelsFromAccountDialog() {
+    const account = editingAccount;
+    if (!account) {
+      return;
+    }
+    closeAccountDialog();
+    openModelsDialog(account);
   }
 
   function openModelsDialog(account: ProviderAccount) {
@@ -438,12 +685,17 @@ export function ProvidersPage() {
           inputLimits,
           outputLimits,
           qualityTiers,
-          providerOptionsSchema,
+          providerOptionsSchema: withSupportsAsyncTask(providerOptionsSchema, modelForm.supportsAsyncTask),
           pricingPolicy,
         },
       },
     });
   }
+
+  const accountDialogSaving = createAccountMutation.isPending || updateAccountMutation.isPending;
+  const accountDialogModelActionPending =
+    discoverModelsMutation.isPending || quickCreateModelMutation.isPending || createAccountMutation.isPending;
+  const accountDialogModels = accountDialogMode === "create" ? selectedCreateModelDrafts : models;
 
   return (
     <AppShell active="providers" title="供应商中心" description="管理 AI 供应商账号与模型配置">
@@ -569,16 +821,16 @@ export function ProvidersPage() {
               </div>
             )}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {profiles.map((profile: any) => (
+              {profiles.map((profile) => (
                 <div key={profile.id} className="rounded-lg border p-4">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="font-medium">{profile.name}</div>
+                      <div className="font-medium">{profile.profileKey}</div>
                       <div className="truncate text-xs text-muted-foreground">{profile.profileKey}</div>
                     </div>
                     <Badge variant="outline">{profile.purpose}</Badge>
                   </div>
-                  <div className="mt-3 text-xs text-muted-foreground">路由策略: {profile.routingStrategy || "priority"}</div>
+                  <div className="mt-3 text-xs text-muted-foreground">绑定: {profile.bindings?.length ?? 0}</div>
                 </div>
               ))}
             </div>
@@ -586,8 +838,12 @@ export function ProvidersPage() {
         </Tabs>
       </Surface>
 
-      <Dialog open={accountDialogOpen} onOpenChange={(open) => (open ? setAccountDialogOpen(open) : closeAccountDialog())}>
-        <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl">
+      <Dialog open={accountDialogOpen} onOpenChange={handleAccountDialogOpenChange} modal={true}>
+        <DialogContent
+          className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-3xl"
+          onInteractOutside={preventDialogCloseFromPortaledControl}
+          onPointerDownCapture={markDialogInnerPointerDown}
+        >
           <DialogHeader>
             <DialogTitle>{accountDialogMode === "create" ? "添加供应商" : "编辑供应商"}</DialogTitle>
             <DialogDescription>
@@ -598,7 +854,7 @@ export function ProvidersPage() {
             {accountDialogMode === "create" && (
               <div className="space-y-1.5">
                 <Label>供应商类型</Label>
-                <Select value={selectedCatalogKey || ""} onValueChange={handleCatalogChange}>
+                <Select value={selectedCatalogKey || ""} onValueChange={handleCatalogChange} onOpenChange={trackPortaledControlOpen}>
                   <SelectTrigger>
                     <SelectValue placeholder="选择供应商类型" />
                   </SelectTrigger>
@@ -624,7 +880,11 @@ export function ProvidersPage() {
               </div>
               <div className="space-y-1.5">
                 <Label>认证类型</Label>
-                <Select value={accountForm.authType} onValueChange={(value) => setAccountForm({ ...accountForm, authType: value })}>
+                <Select
+                  value={accountForm.authType}
+                  onValueChange={(value) => setAccountForm({ ...accountForm, authType: value })}
+                  onOpenChange={trackPortaledControlOpen}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -659,7 +919,11 @@ export function ProvidersPage() {
               {accountDialogMode === "edit" && (
                 <div className="space-y-1.5">
                   <Label>状态</Label>
-                  <Select value={accountForm.status} onValueChange={(value) => setAccountForm({ ...accountForm, status: value })}>
+                  <Select
+                    value={accountForm.status}
+                    onValueChange={(value) => setAccountForm({ ...accountForm, status: value })}
+                    onOpenChange={trackPortaledControlOpen}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -693,6 +957,114 @@ export function ProvidersPage() {
               </div>
             )}
 
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <Label>模型</Label>
+                <Badge variant="secondary">{accountDialogModels.length}</Badge>
+              </div>
+              <div className="min-h-20 rounded-lg bg-muted/70 p-2">
+                {accountDialogMode === "edit" && modelsLoading ? (
+                  <Skeleton className="h-14" />
+                ) : accountDialogModels.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {accountDialogMode === "create"
+                      ? selectedCreateModelDrafts.map((model) => (
+                          <span
+                            key={model.modelKey}
+                            className="inline-flex h-7 max-w-full items-center gap-1 rounded-full border bg-background px-2 text-xs"
+                          >
+                            <span className="truncate">{model.displayName || model.modelKey}</span>
+                            <span className="text-muted-foreground">{modalityLabel(model.modality)}</span>
+                            <button
+                              type="button"
+                              className="rounded-full text-muted-foreground transition hover:text-destructive"
+                              aria-label={`删除 ${model.displayName || model.modelKey}`}
+                              onClick={() => handleRemoveCreateModel(model.modelKey)}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        ))
+                      : models.map((model) => (
+                          <span
+                            key={model.id}
+                            className="inline-flex h-7 max-w-full items-center gap-1 rounded-full border bg-background px-2 text-xs"
+                          >
+                            <span className="truncate">{model.displayName || model.modelKey}</span>
+                            <span className="text-muted-foreground">{modalityLabel(model.modality)}</span>
+                            <button
+                              type="button"
+                              className="rounded-full text-muted-foreground transition hover:text-destructive"
+                              aria-label={`删除 ${model.displayName || model.modelKey}`}
+                              onClick={() => setModelToDelete(model)}
+                              disabled={deleteModelMutation.isPending}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        ))}
+                  </div>
+                ) : (
+                  <div className="flex min-h-14 items-center justify-center text-sm text-muted-foreground">暂无模型</div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={handleFillTemplateModels}
+                  disabled={accountDialogModelActionPending || dialogModelTemplates.length === 0}
+                >
+                  <Plus className="h-3 w-3" />
+                  填入相关模型
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  data-testid="provider-account-dialog-discover"
+                  onClick={handleDiscoverModelsInAccountDialog}
+                  disabled={accountDialogModelActionPending || accountDialogSaving}
+                >
+                  <RefreshCw className={cn("h-3 w-3", discoverModelsMutation.isPending && "animate-spin")} />
+                  获取模型列表
+                </Button>
+                {accountDialogMode === "edit" && (
+                  <Button size="xs" variant="outline" onClick={openDetailedModelsFromAccountDialog}>
+                    <Layers3 className="h-3 w-3" />
+                    更多
+                  </Button>
+                )}
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_9rem_auto]">
+                <Input
+                  value={customModelName}
+                  onChange={(event) => setCustomModelName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void handleAddCustomModel();
+                    }
+                  }}
+                  placeholder="输入自定义模型名称"
+                />
+                <Select value={customModelModality} onValueChange={setCustomModelModality} onOpenChange={trackPortaledControlOpen}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modalityOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button onClick={handleAddCustomModel} disabled={quickCreateModelMutation.isPending}>
+                  填入
+                </Button>
+              </div>
+            </div>
+
             <div className="space-y-1.5">
               <Label>账号配置 JSON</Label>
               <Textarea
@@ -705,15 +1077,19 @@ export function ProvidersPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={closeAccountDialog}>取消</Button>
-            <Button onClick={handleSaveAccount} disabled={createAccountMutation.isPending || updateAccountMutation.isPending}>
+            <Button onClick={handleSaveAccount} disabled={accountDialogSaving}>
               保存
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={modelsDialogOpen} onOpenChange={setModelsDialogOpen}>
-        <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-4xl">
+      <Dialog open={modelsDialogOpen} onOpenChange={handleModelsDialogOpenChange}>
+        <DialogContent
+          className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-4xl"
+          onInteractOutside={preventDialogCloseFromPortaledControl}
+          onPointerDownCapture={markDialogInnerPointerDown}
+        >
           <DialogHeader>
             <DialogTitle>{selectedAccount?.name || "账号模型"}</DialogTitle>
             <DialogDescription>管理当前供应商账号下的可用模型</DialogDescription>
@@ -788,6 +1164,15 @@ export function ProvidersPage() {
                               </span>
                             ))}
                           </div>
+                          {modelCapabilityLabels(model).length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {modelCapabilityLabels(model).map((label) => (
+                                <span key={label} className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div className="flex flex-wrap gap-2">
                           {model.modality === "text" && (
@@ -835,8 +1220,12 @@ export function ProvidersPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={modelDialogOpen} onOpenChange={setModelDialogOpen}>
-        <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl">
+      <Dialog open={modelDialogOpen} onOpenChange={handleModelDialogOpenChange}>
+        <DialogContent
+          className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl"
+          onInteractOutside={preventDialogCloseFromPortaledControl}
+          onPointerDownCapture={markDialogInnerPointerDown}
+        >
           <DialogHeader>
             <DialogTitle>{modelDialogMode === "edit" ? "编辑模型" : "添加模型"}</DialogTitle>
             <DialogDescription>配置模型 ID、类型、任务能力和计费元数据</DialogDescription>
@@ -857,10 +1246,12 @@ export function ProvidersPage() {
                 <Label>模型类型</Label>
                 <Select
                   value={modelForm.modality}
+                  onOpenChange={trackPortaledControlOpen}
                   onValueChange={(value) =>
                     setModelForm({
                       ...modelForm,
                       modality: value,
+                      supportsAsyncTask: defaultSupportsAsyncTask(value),
                       taskTypesText: defaultTaskTypesByModality[value]?.join("\n") || modelForm.taskTypesText,
                     })
                   }
@@ -877,7 +1268,11 @@ export function ProvidersPage() {
               </div>
               <div className="space-y-1.5">
                 <Label>状态</Label>
-                <Select value={modelForm.status} onValueChange={(value) => setModelForm({ ...modelForm, status: value })}>
+                <Select
+                  value={modelForm.status}
+                  onValueChange={(value) => setModelForm({ ...modelForm, status: value })}
+                  onOpenChange={trackPortaledControlOpen}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -896,6 +1291,14 @@ export function ProvidersPage() {
                 spellCheck={false}
                 value={modelForm.taskTypesText}
                 onChange={(event) => setModelForm({ ...modelForm, taskTypesText: event.target.value })}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+              <Label htmlFor="provider-model-supports-async-task">支持异步任务</Label>
+              <Switch
+                id="provider-model-supports-async-task"
+                checked={modelForm.supportsAsyncTask}
+                onCheckedChange={(checked) => setModelForm({ ...modelForm, supportsAsyncTask: checked })}
               />
             </div>
             <div className="grid gap-3 md:grid-cols-2">
@@ -1000,6 +1403,7 @@ function emptyModelForm(modality: string): ModelForm {
     displayName: "",
     modality,
     status: "active",
+    supportsAsyncTask: defaultSupportsAsyncTask(modality),
     taskTypesText: (defaultTaskTypesByModality[modality] || []).join("\n"),
     inputLimitsText: "{}",
     outputLimitsText: "{}",
@@ -1009,12 +1413,65 @@ function emptyModelForm(modality: string): ModelForm {
   };
 }
 
+function customModelDraft(modelKey: string, modality: string): ModelDraft {
+  const normalizedModality = modality || inferModelModality(modelKey);
+  return {
+    source: "custom",
+    modelKey,
+    displayName: modelKey,
+    modality: normalizedModality,
+    taskTypes: defaultTaskTypesByModality[normalizedModality] || [],
+    inputLimits: {},
+    outputLimits: {},
+    qualityTiers: [],
+    providerOptionsSchema: {},
+    pricingPolicy: {},
+  };
+}
+
+function catalogInstallModelBody(model: ProviderCatalogModelTemplate | ModelDraft): JsonRecord {
+  const modality = model.modality || inferModelModality(model.modelKey);
+  return {
+    modelKey: model.modelKey,
+    displayName: model.displayName || model.modelKey,
+    modality,
+    taskTypes: model.taskTypes?.length ? model.taskTypes : defaultTaskTypesByModality[modality] || [],
+    inputLimits: model.inputLimits || {},
+    outputLimits: model.outputLimits || {},
+    qualityTiers: model.qualityTiers || [],
+    providerOptionsSchema: model.providerOptionsSchema || {},
+    pricingPolicy: model.pricingPolicy || {},
+  };
+}
+
+function modelCreateBody(model: ProviderCatalogModelTemplate | ModelDraft): JsonRecord {
+  const installBody = catalogInstallModelBody(model);
+  return {
+    modelKey: String(installBody.modelKey),
+    displayName: String(installBody.displayName),
+    modality: String(installBody.modality),
+    status: "active",
+  };
+}
+
+function inferModelModality(modelKey: string) {
+  const normalized = modelKey.toLowerCase();
+  if (normalized.includes("video") || normalized.includes("seedance") || normalized.includes("kling")) {
+    return "video";
+  }
+  if (normalized.includes("image") || normalized.includes("imagine") || normalized.includes("seedream")) {
+    return "image";
+  }
+  return "text";
+}
+
 function modelFormFromTemplate(template: ProviderCatalogModelTemplate): ModelForm {
   return {
     modelKey: template.modelKey,
     displayName: template.displayName,
     modality: template.modality,
     status: "active",
+    supportsAsyncTask: readSupportsAsyncTask(template.providerOptionsSchema, template.taskTypes, template.modality),
     taskTypesText: template.taskTypes.join("\n"),
     inputLimitsText: jsonText(template.inputLimits || {}),
     outputLimitsText: jsonText(template.outputLimits || {}),
@@ -1026,12 +1483,14 @@ function modelFormFromTemplate(template: ProviderCatalogModelTemplate): ModelFor
 
 function modelFormFromModel(model: ProviderModel): ModelForm {
   const capability = model.capabilities?.[0];
+  const taskTypes = modelTaskTypes(model);
   return {
     modelKey: model.modelKey,
     displayName: model.displayName,
     modality: model.modality,
     status: model.status,
-    taskTypesText: modelTaskTypes(model).join("\n"),
+    supportsAsyncTask: readSupportsAsyncTask(capability?.providerOptionsSchema, taskTypes, model.modality),
+    taskTypesText: taskTypes.join("\n"),
     inputLimitsText: jsonText(capability?.inputLimits || {}),
     outputLimitsText: jsonText(capability?.outputLimits || {}),
     qualityTiersText: jsonText(capability?.qualityTiers || []),
@@ -1088,6 +1547,66 @@ function taskTypesFromText(text: string) {
     .filter(Boolean);
 }
 
+function defaultSupportsAsyncTask(modality: string) {
+  return inferSupportsAsyncTask(defaultTaskTypesByModality[modality] || [], {});
+}
+
+function readSupportsAsyncTask(providerOptionsSchema: JsonRecord | undefined, taskTypes: string[], modality: string) {
+  const xCapabilities = isPlainRecord(providerOptionsSchema?.xCapabilities) ? providerOptionsSchema.xCapabilities : {};
+  if (typeof xCapabilities.supportsAsyncTask === "boolean") {
+    return xCapabilities.supportsAsyncTask;
+  }
+  return inferSupportsAsyncTask(taskTypes.length > 0 ? taskTypes : defaultTaskTypesByModality[modality] || [], xCapabilities);
+}
+
+function inferSupportsAsyncTask(taskTypes: string[], xCapabilities: JsonRecord) {
+  if (taskTypes.some((taskType) => /\.(create_task|poll_task|cancel_task)$/.test(taskType.trim()))) {
+    return true;
+  }
+  const requestModes = Array.isArray(xCapabilities.requestModes) ? xCapabilities.requestModes.map(String) : [];
+  return requestModes.some((mode) => {
+    const normalized = mode.trim().toLowerCase();
+    return normalized.includes("async") || normalized === "poll" || normalized === "async_poll";
+  });
+}
+
+function withSupportsAsyncTask(providerOptionsSchema: JsonRecord, supportsAsyncTask: boolean): JsonRecord {
+  const xCapabilities = isPlainRecord(providerOptionsSchema.xCapabilities) ? providerOptionsSchema.xCapabilities : {};
+  return {
+    ...providerOptionsSchema,
+    xCapabilities: {
+      ...xCapabilities,
+      supportsAsyncTask,
+    },
+  };
+}
+
+const portaledControlSelectors = [
+  "[role='listbox']",
+  "[data-radix-select-viewport]",
+  "[data-radix-popper-content-wrapper]",
+  "[data-radix-select-content]",
+  "[data-slot='dialog-content']",
+];
+
+function preventDialogCloseFromPortaledControl(event: Event) {
+  const sourceEvent = (event as Event & { detail?: { originalEvent?: Event } }).detail?.originalEvent;
+  if (eventMatchesAnySelector(event, portaledControlSelectors) || (sourceEvent && eventMatchesAnySelector(sourceEvent, portaledControlSelectors))) {
+    event.preventDefault();
+  }
+}
+
+function eventMatchesAnySelector(event: Event, selectors: string[]) {
+  const target = event.target;
+  if (target instanceof Element && selectors.some((selector) => target.closest(selector))) {
+    return true;
+  }
+  if (typeof event.composedPath !== "function") {
+    return false;
+  }
+  return event.composedPath().some((item) => item instanceof Element && selectors.some((selector) => item.matches(selector) || item.closest(selector)));
+}
+
 function modelTaskTypes(model: ProviderModel) {
   const capability = model.capabilities?.[0] as ProviderModelCapability | undefined;
   const value = capability?.taskTypes;
@@ -1098,6 +1617,46 @@ function modelTaskTypes(model: ProviderModel) {
     return taskTypesFromText(value);
   }
   return defaultTaskTypesByModality[model.modality] || [];
+}
+
+function modelCapabilityLabels(model: ProviderModel) {
+  const capability = model.capabilities?.[0] as ProviderModelCapability | undefined;
+  const options = capability?.providerOptionsSchema;
+  const xCapabilities = isPlainRecord(options?.xCapabilities) ? options.xCapabilities : {};
+  const labels: string[] = [];
+  if (xCapabilities.supportsStreaming === true) {
+    labels.push("流式");
+  }
+  if (xCapabilities.supportsReasoning === true) {
+    const levels = Array.isArray(xCapabilities.reasoningLevels) ? xCapabilities.reasoningLevels.map(String).join("/") : "";
+    labels.push(levels ? `思考 ${levels}` : "思考");
+  }
+  if (xCapabilities.supportsMultimodalInput === true) {
+    labels.push("多模态输入");
+  }
+  if (xCapabilities.supportsAsyncTask === true) {
+    labels.push("异步任务");
+  }
+  if (xCapabilities.supportsReferences === true || xCapabilities.supportsReferenceImages === true) {
+    labels.push("参考图");
+  }
+  if (xCapabilities.supportsFirstFrame === true) {
+    labels.push("首帧");
+  }
+  if (xCapabilities.supportsLastFrame === true) {
+    labels.push("尾帧");
+  }
+  if (xCapabilities.supportsVideoReference === true) {
+    labels.push("视频参考");
+  }
+  if (Array.isArray(xCapabilities.requestModes) && xCapabilities.requestModes.length > 0) {
+    labels.push(`请求 ${xCapabilities.requestModes.map(String).join("/")}`);
+  }
+  return labels;
+}
+
+function isPlainRecord(value: JsonValue | undefined): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function groupModelsByModality(models: ProviderModel[]) {

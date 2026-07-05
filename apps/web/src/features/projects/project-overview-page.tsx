@@ -14,6 +14,13 @@ import { ChevronDown, ChevronRight, Play, AlertCircle, CheckCircle2, Clock } fro
 import { useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { nextProductionAction, productionActionLabel, productionRefreshKeys, runProductionAction } from "@/features/production/production-actions";
+
+type StageRow = {
+  stage: string;
+  label: string;
+  status?: string;
+} & Record<string, unknown>;
 
 export function ProjectOverviewPage({ projectId }: { projectId: string }) {
   const invalidate = useInvalidateKeys();
@@ -48,10 +55,10 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
   // 执行下一步操作
   const nextActionMutation = useApiMutation({
     mutationFn: (session, action: string) =>
-      studioApi.runProductionAction(session, projectId, { action }),
-    onSuccess: () => {
-      toast.success("操作已启动");
-      invalidate([qk.productionStatus(projectId)]);
+      runProductionAction(session, projectId, action),
+    onSuccess: (response) => {
+      toast.success(response.note || `${productionActionLabel(response.action)}已启动`);
+      invalidate(productionRefreshKeys(projectId));
     },
     onError: (error) => {
       toast.error("操作失败：" + error.message);
@@ -72,7 +79,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
   }
 
   // 将stages对象转为数组用于渲染
-  const stagesArray = productionStatus?.stages ? [
+  const stagesArray: StageRow[] = productionStatus?.stages ? [
     { stage: "source", label: "原文与事件", ...productionStatus.stages.source },
     { stage: "assets", label: "资产管理", ...productionStatus.stages.assets },
     { stage: "storyboard", label: "分镜设计", ...productionStatus.stages.storyboard },
@@ -83,6 +90,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
   ] : [];
 
   const overallProgress = productionStatus?.overall?.progress || 0;
+  const nextAction = productionStatus ? nextProductionAction(productionStatus) : "";
 
   return (
     <div className="grid gap-5">
@@ -116,10 +124,11 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
         <Button
           size="lg"
           className="h-14 gap-3 px-8 text-base font-semibold"
-          onClick={() => toast.info("点击生产流水线的各个阶段执行具体操作")}
+          onClick={() => nextAction && nextActionMutation.mutate(nextAction)}
+          disabled={!nextAction || nextActionMutation.isPending}
         >
           <Play className="h-5 w-5" />
-          开始制作
+          {nextAction ? productionActionLabel(nextAction) : "开始制作"}
         </Button>
       </div>
 
@@ -138,7 +147,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
 
           {/* 阶段列表 */}
           <div className="space-y-2">
-            {stagesArray.map((stage: any, index: number) => (
+            {stagesArray.map((stage, index) => (
               <Collapsible
                 key={stage.stage || index}
                 open={expandedStage === stage.stage}
@@ -156,7 +165,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
                     ) : (
                       <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                     )}
-                    <StageIcon status={stage.status} />
+                    <StageIcon status={stage.status || "pending"} />
                     <div className="flex-1">
                       <div className="font-medium">{stage.label}</div>
                       <div className="text-xs text-muted-foreground">
@@ -193,7 +202,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
             description={`${reviewItems.length} 个审查项需要处理`}
           />
           <div className="divide-y">
-            {reviewItems.slice(0, 5).map((item: any) => (
+            {reviewItems.slice(0, 5).map((item) => (
               <div key={item.id} className="flex items-start gap-3 p-4 hover:bg-muted/50">
                 <AlertCircle className="h-5 w-5 shrink-0 text-amber-500" />
                 <div className="flex-1">

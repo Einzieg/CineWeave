@@ -10,10 +10,6 @@ import { studioApi } from "@/lib/api-client";
 import { useStudioSession } from "@/lib/session";
 import type { GlobalSection } from "@/lib/routes";
 
-/**
- * 全局应用外壳。保持与旧 AppShell 的 props 接口兼容,
- * studio-pages.tsx 中的旧页面包装可继续工作。
- */
 export function AppShell({
   active,
   title,
@@ -72,12 +68,10 @@ function AppShellContent({
   );
 }
 
-/** 旧版 Surface 组件,保持接口兼容 */
 export function Surface({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <section className={`rounded-lg border bg-card shadow-sm ${className}`}>{children}</section>;
 }
 
-/** 旧版 SectionTitle 组件,保持接口兼容 */
 export function SectionTitle({ title, description }: { title: string; description?: string }) {
   return (
     <div className="border-b px-4 py-3">

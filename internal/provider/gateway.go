@@ -125,7 +125,7 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	}
 
 	if strings.TrimSpace(req.ProviderModelID) != "" {
-		selection, err := s.selectGatewayTextModel(ctx, req)
+		selection, err := s.selectGatewayTextModel(ctx, req, taskType)
 		if err != nil {
 			return GatewayTextResponse{}, err
 		}
@@ -349,7 +349,7 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 	}, attempt, nil
 }
 
-func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextRequest) (gatewayModelSelection, error) {
+func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextRequest, taskType string) (gatewayModelSelection, error) {
 	if strings.TrimSpace(req.ProviderModelID) != "" {
 		model, err := s.GetModel(ctx, req.OrganizationID, req.ProviderModelID)
 		if err != nil {
@@ -357,6 +357,12 @@ func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextReq
 		}
 		if model.Status != "active" {
 			return gatewayModelSelection{}, fmt.Errorf("%w: provider model is not active", ErrValidation)
+		}
+		if model.Modality != "text" && model.Modality != "multimodal" {
+			return gatewayModelSelection{}, fmt.Errorf("%w: provider model does not support text generation", ErrValidation)
+		}
+		if !modelSupportsTaskType(model, taskType) {
+			return gatewayModelSelection{}, fmt.Errorf("%w: provider model does not support %s", ErrValidation, taskType)
 		}
 		account, err := s.GetAccount(ctx, req.OrganizationID, model.ProviderAccountID)
 		if err != nil {
@@ -372,7 +378,7 @@ func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextReq
 	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
 		OrganizationID:  req.OrganizationID,
 		ModelProfileKey: profileKey,
-		TaskType:        TaskTypeTextGenerate,
+		TaskType:        taskType,
 		Modality:        "text",
 	})
 	if err != nil {

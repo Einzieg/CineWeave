@@ -103,7 +103,7 @@ services:
       CINEWEAVE_API_ADDR: ":8080"
       CINEWEAVE_CREDENTIAL_MASTER_KEY: ${CINEWEAVE_CREDENTIAL_MASTER_KEY:-}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
-      CINEWEAVE_CORS_ORIGINS: ${CINEWEAVE_CORS_ORIGINS:-http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001}
+      CINEWEAVE_CORS_ORIGINS: ${CINEWEAVE_CORS_ORIGINS:-http://localhost:8085,http://127.0.0.1:8085}
       PROVIDER_GATEWAY_URL: http://provider-gateway:8082
       CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK: "false"
       CINEWEAVE_ALLOW_PUBLIC_REGISTRATION: ${CINEWEAVE_ALLOW_PUBLIC_REGISTRATION:-false}
@@ -117,7 +117,7 @@ services:
       S3_SECRET_ACCESS_KEY: minio123
       S3_USE_PATH_STYLE: "true"
     ports:
-      - "${CINEWEAVE_API_HOST_PORT:-8080}:8080"
+      - "${CINEWEAVE_API_HOST_PORT:-8088}:8080"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -250,15 +250,15 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8088}
         NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:8081/api/realtime/events}
         S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8088}
       NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:8081/api/realtime/events}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
     ports:
-      - "${CINEWEAVE_WEB_HOST_PORT:-3000}:3000"
+      - "${CINEWEAVE_WEB_HOST_PORT:-8085}:3000"
 
 volumes:
   postgres-data:

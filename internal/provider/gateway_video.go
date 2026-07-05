@@ -651,6 +651,9 @@ func (s *Service) selectGatewayVideoModel(ctx context.Context, organizationID, p
 		if model.Modality != "video" && model.Modality != "multimodal" {
 			return gatewayModelSelection{}, fmt.Errorf("%w: provider model does not support video generation", ErrValidation)
 		}
+		if !modelSupportsTaskType(model, TaskTypeVideoCreateTask) {
+			return gatewayModelSelection{}, fmt.Errorf("%w: provider model does not support %s", ErrValidation, TaskTypeVideoCreateTask)
+		}
 		account, err := s.GetAccount(ctx, organizationID, model.ProviderAccountID)
 		if err != nil {
 			return gatewayModelSelection{}, err

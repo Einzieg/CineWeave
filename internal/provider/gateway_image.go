@@ -333,6 +333,9 @@ func (s *Service) selectGatewayImageModel(ctx context.Context, req GatewayImageR
 		if model.Modality != "image" && model.Modality != "multimodal" {
 			return gatewayModelSelection{}, fmt.Errorf("%w: provider model does not support image generation", ErrValidation)
 		}
+		if !modelSupportsTaskType(model, TaskTypeImageGenerate) {
+			return gatewayModelSelection{}, fmt.Errorf("%w: provider model does not support %s", ErrValidation, TaskTypeImageGenerate)
+		}
 		account, err := s.GetAccount(ctx, req.OrganizationID, model.ProviderAccountID)
 		if err != nil {
 			return gatewayModelSelection{}, err

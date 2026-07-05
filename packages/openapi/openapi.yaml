@@ -3240,8 +3240,14 @@ paths:
         - $ref: "#/components/parameters/OrganizationHeader"
         - name: filter[status]
           in: query
+          description: Provider account status filter. Defaults to active; use all to include disabled accounts.
           schema:
             type: string
+            enum:
+              - active
+              - disabled
+              - all
+            default: active
         - name: limit
           in: query
           schema:
@@ -3280,6 +3286,16 @@ paths:
       parameters:
         - $ref: "#/components/parameters/OrganizationHeader"
         - $ref: "#/components/parameters/AccountId"
+        - name: filter[status]
+          in: query
+          description: Provider model status filter. Defaults to active; use all to include disabled models.
+          schema:
+            type: string
+            enum:
+              - active
+              - disabled
+              - all
+            default: active
       responses:
         "200":
           description: Provider account
@@ -8294,8 +8310,7 @@ components:
           type: array
           items: {}
         providerOptionsSchema:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/ProviderModelCapabilityOptions"
         pricingPolicy:
           type: object
           additionalProperties: true
@@ -8569,6 +8584,37 @@ components:
         credential:
           type: object
           additionalProperties: true
+    ProviderModelCapabilityOptions:
+      type: object
+      additionalProperties: true
+      properties:
+        xCapabilities:
+          $ref: "#/components/schemas/ProviderModelXCapabilities"
+    ProviderModelXCapabilities:
+      type: object
+      additionalProperties: true
+      properties:
+        supportsAsyncTask:
+          type: boolean
+          description: Whether the model supports provider-side asynchronous create/poll/cancel task execution.
+        supportsStreaming:
+          type: boolean
+        supportsReasoning:
+          type: boolean
+        supportsReasoningLevels:
+          type: boolean
+        supportsMultimodalInput:
+          type: boolean
+        supportsReferences:
+          type: boolean
+        supportsReferenceImages:
+          type: boolean
+        supportsFirstFrame:
+          type: boolean
+        supportsLastFrame:
+          type: boolean
+        supportsVideoReference:
+          type: boolean
     ProviderCapability:
       type: object
       required: [id, providerModelId, taskTypes, inputLimits, outputLimits, qualityTiers, providerOptionsSchema, pricingPolicy, createdAt]
@@ -8593,8 +8639,7 @@ components:
           type: array
           items: {}
         providerOptionsSchema:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/ProviderModelCapabilityOptions"
         pricingPolicy:
           type: object
           additionalProperties: true
@@ -8646,8 +8691,7 @@ components:
           type: array
           items: {}
         providerOptionsSchema:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/ProviderModelCapabilityOptions"
         pricingPolicy:
           type: object
           additionalProperties: true

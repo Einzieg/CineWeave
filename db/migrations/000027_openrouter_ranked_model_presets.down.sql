@@ -1,0 +1,35 @@
+DELETE FROM provider_model_capability_presets
+WHERE preset_key IN (
+  'deepseek/deepseek-v4-flash',
+  'xiaomi/mimo-v2.5',
+  'minimax/minimax-m3',
+  'tencent/hy3-preview',
+  'z-ai/glm-5.2',
+  'deepseek/deepseek-v4-pro',
+  'anthropic/claude-opus-4.8',
+  'anthropic/claude-opus-4.7',
+  'stepfun/step-3.7-flash',
+  'anthropic/claude-sonnet-4.6',
+  'google/gemini-2.5-flash-image',
+  'google/gemini-3.1-flash-image-preview',
+  'google/gemini-3.1-flash-image',
+  'google/gemini-3-pro-image-preview',
+  'x-ai/grok-imagine-image-quality',
+  'google/gemini-3-pro-image',
+  'bytedance-seed/seedream-4.5',
+  'openai/gpt-5.4-image-2',
+  'google/gemini-3.1-flash-lite-image',
+  'black-forest-labs/flux.2-klein-4b',
+  'google/veo-3.1-fast',
+  'google/veo-3.1',
+  'bytedance/seedance-2.0',
+  'google/veo-3.1-lite',
+  'x-ai/grok-imagine-video',
+  'bytedance/seedance-2.0-fast',
+  'bytedance/seedance-1-5-pro',
+  'kwaivgi/kling-v3.0-pro',
+  'kwaivgi/kling-v3.0-std',
+  'alibaba/happyhorse-1.1'
+);
+
+DELETE FROM schema_migrations WHERE version = '000027_openrouter_ranked_model_presets';

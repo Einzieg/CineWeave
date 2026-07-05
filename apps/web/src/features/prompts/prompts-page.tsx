@@ -25,7 +25,7 @@ export function PromptsPage() {
   // 根据分类筛选
   const filteredTemplates = selectedCategory === "all"
     ? templates
-    : templates.filter((t: any) => t.category === selectedCategory);
+    : templates.filter((template) => promptTemplateCategory(template) === selectedCategory);
 
   const categories = [
     { value: "all", label: "全部" },
@@ -62,7 +62,7 @@ export function PromptsPage() {
               )}
 
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {filteredTemplates.map((template: any) => (
+                {filteredTemplates.map((template) => (
                   <div
                     key={template.id}
                     className="group relative overflow-hidden rounded-lg border bg-card transition hover:shadow-md"
@@ -72,28 +72,26 @@ export function PromptsPage() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <FileText className="h-4 w-4 text-muted-foreground" />
-                          <Badge variant="outline">{template.category}</Badge>
+                          <Badge variant="outline">{promptTemplateCategory(template)}</Badge>
                         </div>
-                        {template.isSystem && (
-                          <Badge variant="secondary" className="text-xs">系统</Badge>
-                        )}
+                        <Badge variant="secondary" className="text-xs">{template.status}</Badge>
                       </div>
 
                       {/* 标题和描述 */}
                       <div>
                         <h3 className="font-medium leading-tight">{template.name}</h3>
-                        {template.description && (
+                        {template.taskType && (
                           <p className="mt-1.5 text-sm text-muted-foreground line-clamp-2">
-                            {template.description}
+                            {template.taskType}
                           </p>
                         )}
                       </div>
 
                       {/* 元信息 */}
                       <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                        <span>版本: {template.currentVersion || "1.0"}</span>
-                        {template.modelOverride && (
-                          <span>· {template.modelOverride}</span>
+                        <span>版本: {template.activeVersionId?.slice(0, 8) || "未激活"}</span>
+                        {template.modality && (
+                          <span>· {template.modality}</span>
                         )}
                       </div>
 
@@ -119,4 +117,8 @@ export function PromptsPage() {
       </Surface>
     </AppShell>
   );
+}
+
+function promptTemplateCategory(template: { purpose?: string; modality?: string; taskType?: string }) {
+  return template.purpose || template.modality || template.taskType || "prompt";
 }
