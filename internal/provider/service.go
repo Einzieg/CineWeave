@@ -461,6 +461,42 @@ func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID strin
 	return s.GetModel(ctx, organizationID, modelID)
 }
 
+func (s *Service) DeleteModel(ctx context.Context, organizationID, modelID string) error {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return fmt.Errorf("%w: modelId is required", ErrValidation)
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE provider_models m
+		SET status = 'disabled'
+		FROM provider_accounts a
+		WHERE a.id = m.provider_account_id
+		  AND a.organization_id = $1
+		  AND m.id = $2
+	`, organizationID, modelID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE model_profile_bindings
+		SET enabled = false
+		WHERE provider_model_id = $1
+	`, modelID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Service) ListModelProfiles(ctx context.Context, organizationID string) ([]ModelProfile, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, organization_id, profile_key, name, purpose, routing_strategy, fallback_strategy, created_at, updated_at
@@ -649,10 +685,14 @@ func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID 
 		if isProviderFailureStatus(response.Status) {
 			return ModelDiscoveryResult{}, errorFromGatewayStandard(response.Error)
 		}
-		return ModelDiscoveryResult{
+		result := ModelDiscoveryResult{
 			Models:      response.Models,
 			Unsupported: response.Unsupported,
-		}, nil
+		}
+		if err := s.syncDiscoveredModels(ctx, organizationID, accountID, result.Models); err != nil {
+			return ModelDiscoveryResult{}, err
+		}
+		return result, nil
 	}
 	if err := s.requireGatewayOrDirectFallback(); err != nil {
 		return ModelDiscoveryResult{}, err
@@ -671,7 +711,127 @@ func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID 
 	}
 	cfg := parseOpenAICompatibleConfig(account.Config)
 	client := newOpenAICompatibleClient(time.Duration(cfg.TimeoutMS) * time.Millisecond)
-	return client.discoverModels(ctx, account, apiKey, cfg)
+	result, err := client.discoverModels(ctx, account, apiKey, cfg)
+	if err != nil {
+		return ModelDiscoveryResult{}, err
+	}
+	if err := s.syncDiscoveredModels(ctx, organizationID, accountID, result.Models); err != nil {
+		return ModelDiscoveryResult{}, err
+	}
+	return result, nil
+}
+
+func (s *Service) syncDiscoveredModels(ctx context.Context, organizationID, accountID string, models []DiscoveredModel) error {
+	if len(models) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var accountExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM provider_accounts
+			WHERE organization_id = $1
+			  AND id = $2
+		)
+	`, organizationID, accountID).Scan(&accountExists); err != nil {
+		return err
+	}
+	if !accountExists {
+		return pgx.ErrNoRows
+	}
+
+	seen := map[string]struct{}{}
+	for _, discovered := range models {
+		modelKey := strings.TrimSpace(discovered.ModelKey)
+		if modelKey == "" {
+			continue
+		}
+		if _, ok := seen[modelKey]; ok {
+			continue
+		}
+		seen[modelKey] = struct{}{}
+
+		displayName := strings.TrimSpace(discovered.DisplayName)
+		if displayName == "" {
+			displayName = modelKey
+		}
+		modality := normalizeDiscoveredModality(discovered.Modality)
+		status := normalizeDiscoveredStatus(discovered.Status)
+		if status == "" {
+			status = "active"
+		}
+
+		var modelID string
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO provider_models(provider_account_id, model_key, display_name, modality, status)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (provider_account_id, model_key) DO UPDATE SET
+				status = CASE
+					WHEN provider_models.status IN ('disabled', 'deprecated', 'error') THEN 'active'
+					ELSE provider_models.status
+				END,
+				updated_at = CASE
+					WHEN provider_models.status IN ('disabled', 'deprecated', 'error') THEN now()
+					ELSE provider_models.updated_at
+				END
+			RETURNING id
+		`, accountID, modelKey, displayName, modality, status).Scan(&modelID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO provider_model_capabilities(
+				provider_model_id, task_types, input_limits, output_limits, quality_tiers, provider_options_schema, pricing_policy
+			)
+			SELECT $1, $2, '{}', '{}', '[]', '{}', '{}'
+			WHERE NOT EXISTS (
+				SELECT 1 FROM provider_model_capabilities WHERE provider_model_id = $1
+			)
+		`, modelID, mustJSON(discoveredTaskTypes(modality))); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+func normalizeDiscoveredModality(value string) string {
+	switch strings.TrimSpace(value) {
+	case "image", "video", "audio", "embedding", "multimodal":
+		return strings.TrimSpace(value)
+	default:
+		return "text"
+	}
+}
+
+func normalizeDiscoveredStatus(value string) string {
+	switch strings.TrimSpace(value) {
+	case "active", "disabled", "deprecated", "error":
+		return strings.TrimSpace(value)
+	default:
+		return "active"
+	}
+}
+
+func discoveredTaskTypes(modality string) []string {
+	switch modality {
+	case "image":
+		return []string{TaskTypeImageGenerate}
+	case "video":
+		return []string{"video.text_to_video", "video.image_to_video", TaskTypeVideoCreateTask, TaskTypeVideoPollTask, TaskTypeVideoCancelTask}
+	case "embedding":
+		return []string{"embedding.create"}
+	case "multimodal":
+		return []string{TaskTypeTextGenerate, TaskTypeTextStream, TaskTypeImageGenerate, TaskTypeVideoCreateTask, TaskTypeVideoPollTask}
+	default:
+		return []string{TaskTypeTextGenerate, TaskTypeTextStream}
+	}
 }
 
 func (s *Service) RecordProviderModelTest(ctx context.Context, organizationID, userID, modelID string, req TestProviderModelRequest) (ProviderTestResult, error) {

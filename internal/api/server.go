@@ -244,6 +244,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/providers/accounts/{accountId}/models", s.withAuth(s.listProviderModels))
 	mux.HandleFunc("POST /api/providers/accounts/{accountId}/models", s.withAuth(s.createProviderModel))
 	mux.HandleFunc("PATCH /api/providers/models/{modelId}", s.withAuth(s.updateProviderModel))
+	mux.HandleFunc("DELETE /api/providers/models/{modelId}", s.withAuth(s.deleteProviderModel))
 	mux.HandleFunc("POST /api/providers/models/{modelId}/test", s.withAuth(s.testProviderModel))
 	mux.HandleFunc("POST /api/providers/manifests/validate", s.withAuth(s.validateProviderManifest))
 	mux.HandleFunc("POST /api/providers/manifests/test-run", s.withAuth(s.runProviderManifestTest))

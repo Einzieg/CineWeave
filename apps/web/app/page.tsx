@@ -39,9 +39,9 @@ export default function Home() {
   }, [hydrated, ready, router]);
 
   return (
-    <main className="grid min-h-svh place-items-center bg-slate-50 text-sm text-slate-500">
+    <main className="grid min-h-svh place-items-center bg-background text-sm text-muted-foreground">
       <span className="inline-flex items-center gap-2">
-        <Loader2 className="animate-spin" size={16} />
+        <Loader2 className="h-4 w-4 animate-spin" />
         正在进入影织
       </span>
     </main>

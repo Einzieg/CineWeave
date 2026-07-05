@@ -1,5 +1,3 @@
-import { ProvidersPage } from "@/components/studio-pages";
+import { ProvidersPage } from "@/features/providers/providers-page";
 
-export default function Page() {
-  return <ProvidersPage />;
-}
+export default ProvidersPage;

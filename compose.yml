@@ -103,6 +103,7 @@ services:
       CINEWEAVE_API_ADDR: ":8080"
       CINEWEAVE_CREDENTIAL_MASTER_KEY: ${CINEWEAVE_CREDENTIAL_MASTER_KEY:-}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
+      CINEWEAVE_CORS_ORIGINS: ${CINEWEAVE_CORS_ORIGINS:-http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001}
       PROVIDER_GATEWAY_URL: http://provider-gateway:8082
       CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK: "false"
       CINEWEAVE_ALLOW_PUBLIC_REGISTRATION: ${CINEWEAVE_ALLOW_PUBLIC_REGISTRATION:-false}
@@ -248,10 +249,14 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
+        NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:8081/api/realtime/events}
+        S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
-      NEXT_PUBLIC_REALTIME_URL: http://localhost:8081/api/realtime/events
-      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
+      NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:8081/api/realtime/events}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
     ports:
       - "${CINEWEAVE_WEB_HOST_PORT:-3000}:3000"
 

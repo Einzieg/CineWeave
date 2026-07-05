@@ -910,6 +910,7 @@ export type ProviderAccount = {
   baseUrl?: string | null;
   authType?: string;
   providerType?: string;
+  config?: JsonRecord;
   credentialPreview?: string | null;
   status: string;
   createdAt?: string;
@@ -957,6 +958,9 @@ export type ProviderCatalogModelTemplate = {
   displayName: string;
   modality: string;
   taskTypes: string[];
+  inputLimits?: JsonRecord;
+  outputLimits?: JsonRecord;
+  qualityTiers?: JsonValue;
   providerOptionsSchema?: JsonRecord;
   pricingPolicy?: JsonRecord;
 };

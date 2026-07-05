@@ -1,5 +1,3 @@
-import { PromptsPage } from "@/components/studio-pages";
+import { PromptsPage } from "@/features/prompts/prompts-page";
 
-export default function Page() {
-  return <PromptsPage />;
-}
+export default PromptsPage;

@@ -1,6 +1,7 @@
-import { WorkflowsPage } from "@/components/studio-pages";
+import { use } from "react";
+import { WorkflowsPage } from "@/features/workflows/workflows-page";
 
-export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
-  const { projectId } = await params;
+export default function Page({ params }: { params: Promise<{ projectId: string }> }) {
+  const { projectId } = use(params);
   return <WorkflowsPage projectId={projectId} />;
 }

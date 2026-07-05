@@ -1,0 +1,48 @@
+/**
+ * Query key 工厂。所有 key 不含组织前缀,由 useApiQuery / useInvalidateKeys
+ * 统一追加 ["org", organizationId] 前缀,避免切换组织后缓存串号。
+ */
+
+export const qk = {
+  // 全局
+  setupState: () => ["setup-state"] as const,
+  organizations: () => ["organizations"] as const,
+  workspaces: () => ["workspaces"] as const,
+  teams: () => ["teams"] as const,
+  roles: () => ["roles"] as const,
+  permissions: () => ["permissions"] as const,
+  projects: () => ["projects"] as const,
+  providerAccounts: () => ["provider-accounts"] as const,
+  providerCatalog: () => ["provider-catalog"] as const,
+  providerModels: (accountId: string) => ["provider-models", accountId] as const,
+  modelProfiles: () => ["model-profiles"] as const,
+  promptTemplates: () => ["prompt-templates"] as const,
+  artifacts: (projectId?: string) => ["artifacts", projectId ?? "all"] as const,
+  workflowRuns: (projectId?: string) => ["workflow-runs", projectId ?? "all"] as const,
+  workflowNodes: (workflowRunId: string) => ["workflow-nodes", workflowRunId] as const,
+
+  // 项目域
+  project: (projectId: string) => ["project", projectId] as const,
+  productionStatus: (projectId: string) => ["project", projectId, "production-status"] as const,
+  sources: (projectId: string) => ["project", projectId, "sources"] as const,
+  sourceEvents: (projectId: string, sourceId: string) => ["project", projectId, "source-events", sourceId] as const,
+  adaptationPlans: (projectId: string, sourceId?: string) => ["project", projectId, "adaptation-plans", sourceId ?? "all"] as const,
+  scripts: (projectId: string) => ["project", projectId, "scripts"] as const,
+  scriptVersions: (projectId: string, scriptId: string) => ["project", projectId, "script-versions", scriptId] as const,
+  scriptScenes: (projectId: string, scriptId: string) => ["project", projectId, "script-scenes", scriptId] as const,
+  agentSessions: (projectId: string) => ["project", projectId, "agent-sessions"] as const,
+  agentMessages: (projectId: string, sessionId: string) => ["project", projectId, "agent-messages", sessionId] as const,
+  assets: (projectId: string) => ["project", projectId, "assets"] as const,
+  assetReferences: (projectId: string, assetId: string) => ["project", projectId, "asset-references", assetId] as const,
+  requirements: (projectId: string) => ["project", projectId, "shot-asset-requirements"] as const,
+  shotProduction: (projectId: string) => ["project", projectId, "shot-production"] as const,
+  shotDetail: (projectId: string, shotId: string) => ["project", projectId, "shot-detail", shotId] as const,
+  timelines: (projectId: string) => ["project", projectId, "timelines"] as const,
+  timelineDetail: (projectId: string, timelineId: string) => ["project", projectId, "timeline-detail", timelineId] as const,
+  finalVideos: (projectId: string) => ["project", projectId, "final-videos"] as const,
+  exports: (projectId: string) => ["project", projectId, "exports"] as const,
+  reviewRuns: (projectId: string) => ["project", projectId, "review-runs"] as const,
+  reviewItems: (projectId: string, filter?: Record<string, string>) => ["project", projectId, "review-items", filter ?? {}] as const,
+  reviewItemsPrefix: (projectId: string) => ["project", projectId, "review-items"] as const,
+  reviewFixes: (projectId: string, itemId: string) => ["project", projectId, "review-fixes", itemId] as const,
+};

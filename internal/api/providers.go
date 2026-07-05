@@ -238,6 +238,18 @@ func (s *Server) updateProviderModel(w http.ResponseWriter, r *http.Request, pri
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
+func (s *Server) deleteProviderModel(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	if err := s.providers.DeleteModel(r.Context(), orgID, r.PathValue("modelId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]bool{"deleted": true}, nil)
+}
+
 func (s *Server) testProviderModel(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	var req provider.TestProviderModelRequest
 	if !decode(w, r, &req) {

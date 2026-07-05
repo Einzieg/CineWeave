@@ -364,11 +364,25 @@ export const studioApi = {
 
   listProviderAccounts: (session: StudioSession) => apiRequest<ListEnvelope<ProviderAccount>>("/api/providers/accounts", { session }),
   createProviderAccount: (session: StudioSession, body: JsonRecord) => apiRequest<ProviderAccount>("/api/providers/accounts", { method: "POST", session, body }),
+  updateProviderAccount: (session: StudioSession, accountId: string, body: JsonRecord) =>
+    apiRequest<ProviderAccount>(`/api/providers/accounts/${accountId}`, { method: "PATCH", session, body }),
+  deleteProviderAccount: (session: StudioSession, accountId: string) =>
+    apiRequest<{ deleted: boolean }>(`/api/providers/accounts/${accountId}`, { method: "DELETE", session }),
+  rotateProviderCredential: (session: StudioSession, accountId: string, body: JsonRecord) =>
+    apiRequest<ProviderAccount>(`/api/providers/accounts/${accountId}/credentials/rotate`, { method: "POST", session, body }),
+  discoverProviderModels: (session: StudioSession, accountId: string, body: JsonRecord) =>
+    apiRequest<{ models: ProviderModel[] }>(`/api/providers/accounts/${accountId}/discover-models`, { method: "POST", session, body }),
   listProviderCatalog: (session: StudioSession) => apiRequest<ListEnvelope<ProviderCatalogEntry>>("/api/provider-catalog", { session }),
   getProviderCatalogEntry: (session: StudioSession, providerKey: string) => apiRequest<ProviderCatalogEntry>(`/api/provider-catalog/${providerKey}`, { session }),
   installProviderCatalogEntry: (session: StudioSession, providerKey: string, body: JsonRecord) =>
     apiRequest<ProviderCatalogInstallResponse>(`/api/provider-catalog/${providerKey}/install`, { method: "POST", session, body }),
   listProviderModels: (session: StudioSession, accountId: string) => apiRequest<ListEnvelope<ProviderModel>>(`/api/providers/accounts/${accountId}/models`, { session }),
+  createProviderModel: (session: StudioSession, accountId: string, body: JsonRecord) =>
+    apiRequest<ProviderModel>(`/api/providers/accounts/${accountId}/models`, { method: "POST", session, body }),
+  updateProviderModel: (session: StudioSession, modelId: string, body: JsonRecord) =>
+    apiRequest<ProviderModel>(`/api/providers/models/${modelId}`, { method: "PATCH", session, body }),
+  deleteProviderModel: (session: StudioSession, modelId: string) =>
+    apiRequest<{ deleted: boolean }>(`/api/providers/models/${modelId}`, { method: "DELETE", session }),
   testProviderModel: (session: StudioSession, modelId: string, body: JsonRecord) =>
     apiRequest<ProviderTestResult>(`/api/providers/models/${modelId}/test`, { method: "POST", session, body }),
   listModelProfiles: (session: StudioSession) => apiRequest<ListEnvelope<ModelProfile>>("/api/model-profiles", { session }),

@@ -1,5 +1,3 @@
-import { GlobalSettingsPage } from "@/components/studio-pages";
+import { GlobalSettingsPage } from "@/features/settings/settings-page";
 
-export default function Page() {
-  return <GlobalSettingsPage />;
-}
+export default GlobalSettingsPage;

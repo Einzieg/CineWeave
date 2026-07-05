@@ -1,6 +1,6 @@
-import { ProjectReviewPage } from "@/components/studio-pages";
+import { ReviewPage } from "@/features/review/review-page";
 
 export default async function Page({ params, searchParams }: { params: Promise<{ projectId: string }>; searchParams: Promise<{ category?: string }> }) {
-  const [{ projectId }, query] = await Promise.all([params, searchParams]);
-  return <ProjectReviewPage initialCategory={query.category ?? "all"} projectId={projectId} />;
+  const [{ projectId }] = await Promise.all([params, searchParams]);
+  return <ReviewPage projectId={projectId} />;
 }

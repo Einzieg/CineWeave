@@ -1,5 +1,3 @@
-import { NewProjectPage } from "@/components/studio-pages";
+import { NewProjectPage } from "@/features/projects/new-project-page";
 
-export default function Page() {
-  return <NewProjectPage />;
-}
+export default NewProjectPage;

@@ -1,6 +1,7 @@
-import { ProjectExportPage } from "@/components/studio-pages";
+import { use } from "react";
+import { ExportPage } from "@/features/export/export-page";
 
-export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
-  const { projectId } = await params;
-  return <ProjectExportPage projectId={projectId} />;
+export default function Page({ params }: { params: Promise<{ projectId: string }> }) {
+  const { projectId } = use(params);
+  return <ExportPage projectId={projectId} />;
 }

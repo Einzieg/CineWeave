@@ -1,4 +1,4 @@
-import { SourcesPage } from "@/components/studio-pages";
+import { SourcesPage } from "@/features/sources/sources-page";
 
 export default async function Page({ params, searchParams }: { params: Promise<{ projectId: string }>; searchParams: Promise<{ sceneId?: string }> }) {
   const [{ projectId }, query] = await Promise.all([params, searchParams]);

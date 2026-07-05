@@ -1,4 +1,4 @@
-import { AssetsPage } from "@/components/studio-pages";
+import { AssetsPage } from "@/features/assets/assets-page";
 
 export default async function Page({ params, searchParams }: { params: Promise<{ projectId: string }>; searchParams: Promise<{ assetId?: string }> }) {
   const [{ projectId }, query] = await Promise.all([params, searchParams]);

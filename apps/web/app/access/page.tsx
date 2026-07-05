@@ -1,5 +1,3 @@
-import { AccessPage } from "@/components/studio-pages";
+import { AccessPage } from "@/features/access/access-page";
 
-export default function Page() {
-  return <AccessPage />;
-}
+export default AccessPage;
