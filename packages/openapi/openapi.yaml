@@ -1002,6 +1002,12 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/FinalVideoVersionId"
+        - name: confirmActive
+          in: query
+          description: Required when deleting the active final video version.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Deleted final video version
@@ -1012,6 +1018,8 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/final-videos/{versionId}/activate:
     post:
@@ -3080,6 +3088,33 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/media/unlink:
+    post:
+      operationId: unlinkStoryboardShotMedia
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UnlinkStoryboardShotMediaRequest"
+      responses:
+        "200":
+          description: Unlinked storyboard shot media without deleting stored artifacts or media files.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardShotEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/storyboard-shots/{shotId}/review:
     post:
@@ -11986,6 +12021,13 @@ components:
           type: string
         videoPrompt:
           type: string
+    UnlinkStoryboardShotMediaRequest:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [image, video]
     CreateWorkflowRunRequest:
       type: object
       required: [projectId]

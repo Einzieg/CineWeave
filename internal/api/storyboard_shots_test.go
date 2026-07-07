@@ -97,6 +97,31 @@ func TestStoryboardWorkbenchAPIs(t *testing.T) {
 		t.Fatalf("detail requirements = %+v", detail.Requirements)
 	}
 
+	var unlinkedVideo StoryboardShot
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/storyboard-shots/"+second.ID+"/media/unlink", seed.ownerToken, seed.organizationID, map[string]any{
+		"kind": "video",
+	}, &unlinkedVideo)
+	if unlinkedVideo.VideoArtifactID != nil || unlinkedVideo.VideoMediaFileID != nil || unlinkedVideo.VideoStorageKey != nil || unlinkedVideo.VideoStatus != "not_started" || unlinkedVideo.StaleState != "needs_regeneration" {
+		t.Fatalf("unlinked video shot = %+v", unlinkedVideo)
+	}
+	assertArtifactStillExists(t, seed, videoArtifactID)
+
+	var unlinkedImage StoryboardShot
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/storyboard-shots/"+second.ID+"/media/unlink", seed.ownerToken, seed.organizationID, map[string]any{
+		"kind": "image",
+	}, &unlinkedImage)
+	if unlinkedImage.ImageArtifactID != nil || unlinkedImage.ImageMediaFileID != nil || unlinkedImage.ImageStorageKey != nil || unlinkedImage.ImageStatus != "not_started" || unlinkedImage.StaleState != "needs_regeneration" {
+		t.Fatalf("unlinked image shot = %+v", unlinkedImage)
+	}
+	assertArtifactStillExists(t, seed, imageArtifactID)
+
+	var skipped ShotAssetRequirement
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/shot-asset-requirements/"+requirementID+"/skip", seed.ownerToken, seed.organizationID, nil, &skipped)
+	if skipped.Status != "skipped" || skipped.ReviewStatus != "approved" || !skipped.ManualOverride || skipped.StaleState != "fresh" {
+		t.Fatalf("skipped requirement = %+v", skipped)
+	}
+	assertShotAssetRequirementState(t, seed, requirementID, "skipped", "approved", "fresh", true)
+
 	var updated StoryboardShot
 	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/storyboard-shots/"+second.ID, seed.ownerToken, seed.organizationID, map[string]any{
 		"visual": "Edited second shot",
@@ -114,6 +139,33 @@ func TestStoryboardWorkbenchAPIs(t *testing.T) {
 		if item.ID == second.ID {
 			t.Fatalf("deleted shot returned in list: %+v", listed.Items)
 		}
+	}
+}
+
+func assertArtifactStillExists(t *testing.T, seed *artifactPreviewSeed, artifactID string) {
+	t.Helper()
+	var count int
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT COUNT(*) FROM artifacts WHERE id = $1 AND project_id = $2`, artifactID, seed.projectID).Scan(&count); err != nil {
+		t.Fatalf("count artifact: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("artifact count = %d, want 1", count)
+	}
+}
+
+func assertShotAssetRequirementState(t *testing.T, seed *artifactPreviewSeed, requirementID, wantStatus, wantReviewStatus, wantStaleState string, wantManualOverride bool) {
+	t.Helper()
+	var gotStatus, gotReviewStatus, gotStaleState string
+	var gotManualOverride bool
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT COALESCE(status, ''), COALESCE(review_status, ''), COALESCE(stale_state, ''), COALESCE(manual_override, false)
+		FROM shot_asset_requirements
+		WHERE id = $1 AND project_id = $2
+	`, requirementID, seed.projectID).Scan(&gotStatus, &gotReviewStatus, &gotStaleState, &gotManualOverride); err != nil {
+		t.Fatalf("read shot asset requirement state: %v", err)
+	}
+	if gotStatus != wantStatus || gotReviewStatus != wantReviewStatus || gotStaleState != wantStaleState || gotManualOverride != wantManualOverride {
+		t.Fatalf("requirement state = (%s,%s,%s,%v), want (%s,%s,%s,%v)", gotStatus, gotReviewStatus, gotStaleState, gotManualOverride, wantStatus, wantReviewStatus, wantStaleState, wantManualOverride)
 	}
 }
 

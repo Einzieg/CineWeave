@@ -11,7 +11,10 @@ func TestNormalizeScriptAssetExtraction(t *testing.T) {
 	    {"assetType":"role","name":"林初","description":"摄影师","visualTraits":{"coat":"light"}},
 	    {"assetType":"scene","name":"清晨火车站","description":"薄雾站台"},
 	    {"assetType":"tool","name":"旧相机","description":"银黑色相机"},
-	    {"assetType":"character","name":"林初","description":"duplicate"}
+	    {"assetType":"character","name":"林初","description":"duplicate"},
+	    {"assetType":"character","name":"林初（红衣）","description":"服装状态不应成为新主角色"},
+	    {"assetType":"character","name":"少年林初","description":"阶段不应成为新主角色"},
+	    {"assetType":"character","name":"战损姿态","description":"纯状态不应成为主角色"}
 	  ]
 	}`)
 	if err != nil {
@@ -22,6 +25,15 @@ func TestNormalizeScriptAssetExtraction(t *testing.T) {
 	}
 	if assets[0].AssetType != "character" || assets[2].AssetType != "prop" {
 		t.Fatalf("asset types = %+v", assets)
+	}
+	characterNames := map[string]int{}
+	for _, asset := range assets {
+		if asset.AssetType == "character" {
+			characterNames[asset.Name]++
+		}
+	}
+	if len(characterNames) != 1 || characterNames["林初"] != 1 {
+		t.Fatalf("character names = %+v, assets = %+v", characterNames, assets)
 	}
 	if !json.Valid(assets[0].VisualTraits) {
 		t.Fatalf("visual traits not JSON: %s", assets[0].VisualTraits)

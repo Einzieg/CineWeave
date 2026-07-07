@@ -242,6 +242,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{projectId}/storyboard-shots/{shotId}/detail", s.withAuth(s.getStoryboardShotDetail))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/storyboard-shots/{shotId}", s.withAuth(s.updateStoryboardShot))
 	mux.HandleFunc("DELETE /api/projects/{projectId}/storyboard-shots/{shotId}", s.withAuth(s.deleteStoryboardShot))
+	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/media/unlink", s.withAuth(s.unlinkStoryboardShotMedia))
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/review", s.withAuth(s.reviewStoryboardShot))
 
 	mux.HandleFunc("GET /api/provider-catalog", s.withAuth(s.listProviderCatalog))

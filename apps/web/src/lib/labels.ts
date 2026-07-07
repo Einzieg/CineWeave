@@ -50,8 +50,12 @@ export function statusLabel(status?: string) {
       return "需修改";
     case "needs_regeneration":
       return "需重生成";
+    case "stale":
+      return "已过期";
     case "upstream_changed":
       return "上游已变更";
+    case "skipped":
+      return "已跳过";
     case "approved":
       return "已确认";
     case "fresh":

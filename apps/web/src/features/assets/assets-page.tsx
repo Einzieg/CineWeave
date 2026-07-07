@@ -18,7 +18,7 @@ import { Check, ExternalLink, Image as ImageIcon, MapPin, Package, RefreshCw, Sa
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { artifactTypeLabel, assetReferenceTypeLabel, assetTypeLabel, requirementTypeLabel, statusLabel } from "@/lib/labels";
-import type { Artifact, AssetReference, CanonicalAsset, Script, ShotAssetRequirement } from "@/lib/types";
+import type { Artifact, AssetReference, CanonicalAsset, Script, ShotAssetRequirement, WorkflowRun } from "@/lib/types";
 
 type AssetDraft = {
   name: string;
@@ -56,6 +56,10 @@ export function AssetsPage({
     key: qk.scripts(projectId),
     queryFn: (session) => studioApi.listScripts(session, projectId).then((response) => response.items || []),
   });
+  const { data: workflowRuns = [] } = useApiQuery({
+    key: qk.workflowRuns(projectId),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId).then((response) => response.items || []),
+  });
   const { data: assets = [], isLoading } = useApiQuery({
     key: qk.assets(projectId),
     queryFn: (session) => studioApi.listCanonicalAssets(session, projectId).then((response) => response.items || []),
@@ -80,6 +84,10 @@ export function AssetsPage({
     return draftFromAsset(selectedAsset);
   }, [assetDraftState, selectedAsset]);
   const selectedScript = useMemo(() => resolveSelectedScript(scripts, selectedScriptId), [scripts, selectedScriptId]);
+  const latestAssetExtractionError = useMemo(
+    () => workflowRuns.find((run) => workflowRunType(run) === "script_to_assets" && run.status === "failed" && (run.errorCode || run.errorMessage)) ?? null,
+    [workflowRuns],
+  );
   const { data: selectedReferences = [] } = useApiQuery({
     key: qk.assetReferences(projectId, selectedAsset?.id ?? ""),
     queryFn: (session) => studioApi.listAssetReferences(session, projectId, selectedAsset!.id, true).then((response) => response.items || []),
@@ -255,6 +263,15 @@ export function AssetsPage({
           提取资产
         </Button>
       </div>
+      {latestAssetExtractionError ? (
+        <div className="mx-4 mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="destructive">提取失败</Badge>
+            <span className="text-sm font-medium">{latestAssetExtractionError.errorCode || "ASSET_EXTRACTION_FAILED"}</span>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">{latestAssetExtractionError.errorMessage || "资产提取未完成，请重新提取或检查供应商调用日志。"}</p>
+        </div>
+      ) : null}
 
       <Tabs defaultValue="assets" className="p-4">
         <TabsList>
@@ -707,6 +724,11 @@ function resolveSelectedScript(scripts: Script[], selectedScriptId: string) {
     ?? scripts.find((script) => script.status === "active")
     ?? scripts[0]
     ?? null;
+}
+
+function workflowRunType(run: WorkflowRun) {
+  const value = run.input?.workflowType;
+  return typeof value === "string" ? value : "";
 }
 
 function draftFromAsset(asset: CanonicalAsset): AssetDraft {

@@ -768,6 +768,13 @@ func NormalizeScriptAssetExtraction(text string) ([]ScriptAssetCandidate, error)
 		if asset.AssetType == "" || asset.Name == "" || asset.Description == "" {
 			continue
 		}
+		if asset.AssetType == "character" {
+			name, ok := normalizeCharacterAssetName(asset.Name)
+			if !ok {
+				continue
+			}
+			asset.Name = name
+		}
 		key := asset.AssetType + "\x00" + strings.ToLower(asset.Name)
 		if seen[key] {
 			continue
@@ -776,6 +783,94 @@ func NormalizeScriptAssetExtraction(text string) ([]ScriptAssetCandidate, error)
 		out = append(out, asset)
 	}
 	return out, nil
+}
+
+func normalizeCharacterAssetName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", false
+	}
+	for _, pair := range [][2]string{{"（", "）"}, {"(", ")"}, {"【", "】"}, {"[", "]"}} {
+		name = trimVariantBracket(name, pair[0], pair[1])
+	}
+	for _, separator := range []string{" - ", "-", "—", "：", ":", "/", "／"} {
+		parts := strings.Split(name, separator)
+		if len(parts) != 2 {
+			continue
+		}
+		left := strings.TrimSpace(parts[0])
+		right := strings.TrimSpace(parts[1])
+		switch {
+		case left != "" && looksLikeCharacterVariant(right):
+			name = left
+		case right != "" && looksLikeCharacterVariant(left):
+			name = right
+		}
+	}
+	name = trimCharacterVariantAffixes(strings.TrimSpace(name))
+	if name == "" || looksLikeCharacterVariant(name) {
+		return "", false
+	}
+	return name, true
+}
+
+func trimVariantBracket(value, open, close string) string {
+	start := strings.LastIndex(value, open)
+	end := strings.LastIndex(value, close)
+	if start < 0 || end <= start {
+		return value
+	}
+	inside := strings.TrimSpace(value[start+len(open) : end])
+	if !looksLikeCharacterVariant(inside) {
+		return value
+	}
+	return strings.TrimSpace(value[:start] + value[end+len(close):])
+}
+
+func trimCharacterVariantAffixes(value string) string {
+	for {
+		next := value
+		for _, prefix := range characterVariantAffixes() {
+			next = strings.TrimPrefix(next, prefix)
+		}
+		for _, suffix := range characterVariantAffixes() {
+			next = strings.TrimSuffix(next, suffix)
+		}
+		next = strings.TrimSpace(next)
+		if next == value {
+			return value
+		}
+		value = next
+	}
+}
+
+func looksLikeCharacterVariant(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	for _, marker := range characterVariantMarkers() {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func characterVariantMarkers() []string {
+	return []string{
+		"服装", "衣", "袍", "披风", "盔甲", "铠甲", "战损", "受伤", "伤痕", "血迹",
+		"姿态", "站姿", "坐姿", "侧身", "背影", "特写", "表情", "微笑", "愤怒",
+		"阶段", "时期", "版本", "形态", "造型", "状态", "幼年", "少年", "青年", "成年", "老年",
+		"costume", "outfit", "pose", "expression", "stage", "phase", "variant", "version", "wounded", "injured",
+	}
+}
+
+func characterVariantAffixes() []string {
+	return []string{
+		"幼年", "少年", "青年", "成年", "老年", "红衣", "黑衣", "白衣", "便装", "战损", "受伤",
+		"幼年版", "少年版", "青年版", "成年版", "老年版", "战损版",
+	}
 }
 
 func NormalizeShotAssetRequirements(storyboard json.RawMessage) []ShotAssetRequirementRecord {

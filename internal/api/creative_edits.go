@@ -150,6 +150,96 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
+func (s *Server) unlinkStoryboardShotMedia(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
+	if !ok {
+		return
+	}
+	current, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var req struct {
+		Kind string `json:"kind"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	kind := strings.TrimSpace(req.Kind)
+	if kind != "image" && kind != "video" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "kind must be image or video", nil, false)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	if kind == "image" {
+		_, err = tx.Exec(r.Context(), `
+			UPDATE storyboard_shots
+			SET image_artifact_id = NULL,
+			    image_media_file_id = NULL,
+			    image_storage_key = NULL,
+			    image_status = 'not_started',
+			    image_error_code = NULL,
+			    image_error_message = NULL,
+			    video_status = CASE
+			      WHEN video_artifact_id IS NOT NULL OR video_media_file_id IS NOT NULL OR COALESCE(video_storage_key, '') <> '' THEN 'stale'
+			      ELSE video_status
+			    END,
+			    stale_state = 'needs_regeneration',
+			    updated_at = now()
+			WHERE project_id = $1 AND id = $2
+		`, project.ID, current.ID)
+	} else {
+		_, err = tx.Exec(r.Context(), `
+			UPDATE storyboard_shots
+			SET video_artifact_id = NULL,
+			    video_media_file_id = NULL,
+			    video_storage_key = NULL,
+			    video_provider_async_task_id = NULL,
+			    video_external_task_id = NULL,
+			    video_status = 'not_started',
+			    video_error_code = NULL,
+			    video_error_message = NULL,
+			    stale_state = 'needs_regeneration',
+			    updated_at = now()
+			WHERE project_id = $1 AND id = $2
+		`, project.ID, current.ID)
+	}
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	item, err := scanStoryboardShot(tx.QueryRow(r.Context(), storyboardShotSelectSQL(`
+		WHERE s.project_id = $1 AND s.id = $2
+	`), project.ID, current.ID))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, current.WorkflowRunID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shot.media.unlinked", "storyboard_shot", item.ID, mustRawJSON(map[string]any{
+		"shotId": item.ID,
+		"kind":   kind,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
 func (s *Server) updateShotAssetRequirement(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
 	if !ok {
@@ -258,13 +348,6 @@ func (s *Server) skipShotAssetRequirement(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer tx.Rollback(r.Context())
-	item, err := scanShotAssetRequirement(tx.QueryRow(r.Context(), shotAssetRequirementSelectSQL(`
-		WHERE r.project_id = $1 AND r.id = $2
-	`), project.ID, current.ID))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE shot_asset_requirements
 		SET status = 'skipped',
@@ -279,7 +362,7 @@ func (s *Server) skipShotAssetRequirement(w http.ResponseWriter, r *http.Request
 		s.writeError(w, r, err)
 		return
 	}
-	item, err = scanShotAssetRequirement(tx.QueryRow(r.Context(), shotAssetRequirementSelectSQL(`
+	item, err := scanShotAssetRequirement(tx.QueryRow(r.Context(), shotAssetRequirementSelectSQL(`
 		WHERE r.project_id = $1 AND r.id = $2
 	`), project.ID, current.ID))
 	if err != nil {

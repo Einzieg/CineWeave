@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"net/http"
 	"testing"
 )
@@ -78,6 +79,29 @@ func TestTimelineAccessAndFinalVideoActivation(t *testing.T) {
 	if firstStatus != "ready" || secondStatus != "active" || activeProjectID != second {
 		t.Fatalf("statuses first=%s second=%s active=%s", firstStatus, secondStatus, activeProjectID)
 	}
+
+	assertAPIErrorCode(t, server, http.MethodDelete, "/api/projects/"+seed.projectID+"/final-videos/"+second, seed.ownerToken, seed.organizationID, nil, http.StatusUnprocessableEntity, "ACTIVE_FINAL_VIDEO_REQUIRES_CONFIRMATION")
+	doAPISuccess(t, server, http.MethodDelete, "/api/projects/"+seed.projectID+"/final-videos/"+second+"?confirmActive=true", seed.ownerToken, seed.organizationID, nil, &struct{}{})
+	var activeAfterDelete sql.NullString
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT active_final_video_version_id::text FROM projects WHERE id = $1`, seed.projectID).Scan(&activeAfterDelete); err != nil {
+		t.Fatalf("select active project version after delete: %v", err)
+	}
+	if activeAfterDelete.Valid {
+		t.Fatalf("active version after confirmed delete = %v, want nil", activeAfterDelete.String)
+	}
+}
+
+func TestComposeTimelineRequiresCompletedShotVideos(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	workflowRunID := seed.insertWorkflowRun(t, "succeeded")
+	timelineID := insertProjectTimeline(t, seed)
+	insertTimelineStoryboardShotWithoutVideo(t, seed, workflowRunID)
+
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/timelines/"+timelineID+"/compose", seed.ownerToken, seed.organizationID, map[string]any{
+		"title": "blocked",
+	}, http.StatusUnprocessableEntity, "SHOT_VIDEOS_REQUIRED")
 }
 
 func insertTimelineStoryboardShot(t *testing.T, seed *artifactPreviewSeed, workflowRunID string, shotIndex int, videoArtifactID string) string {
@@ -94,6 +118,24 @@ func insertTimelineStoryboardShot(t *testing.T, seed *artifactPreviewSeed, workf
 		RETURNING id
 	`, seed.organizationID, seed.projectID, workflowRunID, shotIndex, shotIndex+1, "Shot visual", videoArtifactID).Scan(&id); err != nil {
 		t.Fatalf("insert timeline storyboard shot: %v", err)
+	}
+	return id
+}
+
+func insertTimelineStoryboardShotWithoutVideo(t *testing.T, seed *artifactPreviewSeed, workflowRunID string) string {
+	t.Helper()
+	var id string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		INSERT INTO storyboard_shots(
+			organization_id, project_id, workflow_run_id, shot_index, shot_no,
+			duration_seconds, visual, camera, motion, mood, image_prompt, video_prompt,
+			status, video_status, review_status, metadata
+		)
+		VALUES ($1, $2, $3, 0, 1, 5, 'Shot without video', 'slow push', 'mist drifting', 'hopeful',
+		        'image prompt', 'video prompt', 'storyboard_ready', 'not_started', 'approved', '{}')
+		RETURNING id
+	`, seed.organizationID, seed.projectID, workflowRunID).Scan(&id); err != nil {
+		t.Fatalf("insert timeline storyboard shot without video: %v", err)
 	}
 	return id
 }

@@ -231,8 +231,12 @@ export const studioApi = {
     apiRequest<FinalVideoVersion>(`/api/projects/${projectId}/final-videos/${versionId}/activate`, { method: "POST", session, body: {} }),
   createFinalVideoDownloadUrl: (session: StudioSession, projectId: string, versionId: string, body: JsonRecord) =>
     apiRequest<DownloadUrlResponse>(`/api/projects/${projectId}/final-videos/${versionId}/download-url`, { method: "POST", session, body }),
-  deleteFinalVideo: (session: StudioSession, projectId: string, versionId: string) =>
-    apiRequest<{ deleted: boolean; versionId: string }>(`/api/projects/${projectId}/final-videos/${versionId}`, { method: "DELETE", session }),
+  deleteFinalVideo: (session: StudioSession, projectId: string, versionId: string, confirmActive = false) =>
+    apiRequest<{ deleted: boolean; versionId: string }>(`/api/projects/${projectId}/final-videos/${versionId}`, {
+      method: "DELETE",
+      session,
+      query: confirmActive ? { confirmActive: true } : undefined,
+    }),
 
   listSources: (session: StudioSession, projectId: string) => apiRequest<ListEnvelope<ProjectSource>>(`/api/projects/${projectId}/sources`, { session }),
   getSource: (session: StudioSession, projectId: string, sourceId: string) =>
@@ -410,6 +414,8 @@ export const studioApi = {
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/review`, { method: "POST", session, body }),
   updateStoryboardShot: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord) =>
     apiRequest<StoryboardShot>(`/api/projects/${projectId}/storyboard-shots/${shotId}`, { method: "PATCH", session, body }),
+  unlinkStoryboardShotMedia: (session: StudioSession, projectId: string, shotId: string, kind: "image" | "video") =>
+    apiRequest<StoryboardShot>(`/api/projects/${projectId}/storyboard-shots/${shotId}/media/unlink`, { method: "POST", session, body: { kind } }),
 
   listArtifacts: (session: StudioSession, projectId?: string) =>
     apiRequest<ListEnvelope<Artifact>>("/api/artifacts", {

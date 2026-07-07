@@ -537,6 +537,13 @@ func (s *Server) composeTimeline(w http.ResponseWriter, r *http.Request, princip
 		s.writeError(w, r, err)
 		return
 	}
+	if ok, err := s.projectShotVideosReady(r, project.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	} else if !ok {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SHOT_VIDEOS_REQUIRED", "all storyboard shots must have completed video before composing final video", nil, false)
+		return
+	}
 	var req struct {
 		Title       string `json:"title"`
 		Resolution  string `json:"resolution"`
@@ -565,6 +572,21 @@ func (s *Server) composeTimeline(w http.ResponseWriter, r *http.Request, princip
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusAccepted, ComposeTimelineResponse{WorkflowRunID: run.ID, TimelineID: timeline.ID, Status: run.Status}, nil)
+}
+
+func (s *Server) projectShotVideosReady(r *http.Request, projectID string) (bool, error) {
+	var missing int
+	err := s.db.QueryRow(r.Context(), `
+		SELECT COUNT(*)
+		FROM storyboard_shots
+		WHERE project_id = $1
+		  AND deleted_at IS NULL
+		  AND NOT (
+		    (COALESCE(video_status, '') = 'succeeded' OR COALESCE(status, '') = 'video_succeeded')
+		    AND (video_artifact_id IS NOT NULL OR video_media_file_id IS NOT NULL OR COALESCE(video_storage_key, '') <> '')
+		  )
+	`, projectID).Scan(&missing)
+	return missing == 0, err
 }
 
 func (s *Server) listFinalVideos(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -636,6 +658,15 @@ func (s *Server) activateFinalVideo(w http.ResponseWriter, r *http.Request, prin
 func (s *Server) deleteFinalVideo(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
 	if !ok {
+		return
+	}
+	current, err := s.finalVideoVersionByID(r, project.ID, r.PathValue("versionId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if current.Status == "active" && !strings.EqualFold(r.URL.Query().Get("confirmActive"), "true") {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "ACTIVE_FINAL_VIDEO_REQUIRES_CONFIRMATION", "active final video deletion requires confirmActive=true", nil, false)
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
