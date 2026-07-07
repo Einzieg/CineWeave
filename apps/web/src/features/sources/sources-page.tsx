@@ -27,13 +27,14 @@ import {
   ListChecks,
   Save,
   CheckCircle2,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { contentFormatLabel, sourceTypeLabel, statusLabel, targetFormatLabel } from "@/lib/labels";
 import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
 import { useUiStore } from "@/lib/stores/ui-store";
-import type { AdaptationPlan, JsonRecord, NovelChapterSummary, ProjectSource, Script, ScriptVersion } from "@/lib/types";
+import type { AdaptationPlan, JsonRecord, NovelChapterSummary, ProjectSource, Script, ScriptScene, ScriptVersion } from "@/lib/types";
 
 type ImportSourceType = "novel" | "script" | "brief";
 type SourcesTab = "sources" | "events" | "plans" | "scripts";
@@ -62,6 +63,24 @@ type ScriptEditForm = {
   content: string;
 };
 
+type ScriptSceneEditForm = {
+  title: string;
+  summary: string;
+  location: string;
+  timeOfDay: string;
+  atmosphere: string;
+  characters: string;
+  scenes: string;
+  props: string;
+  action: string;
+  dialogue: string;
+  visualGoal: string;
+  emotionalTone: string;
+  conflict: string;
+  outcome: string;
+  content: string;
+};
+
 export function SourcesPage({
   projectId,
   initialTab = "sources",
@@ -77,6 +96,7 @@ export function SourcesPage({
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
   const [selectedScriptVersionId, setSelectedScriptVersionId] = useState<string | null>(null);
+  const [selectedScriptSceneId, setSelectedScriptSceneId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importTitle, setImportTitle] = useState("");
@@ -90,6 +110,7 @@ export function SourcesPage({
   const [sourceToDelete, setSourceToDelete] = useState<ProjectSource | null>(null);
   const [planEditDraft, setPlanEditDraft] = useState<{ planId: string; form: AdaptationPlanEditForm } | null>(null);
   const [scriptEditDraft, setScriptEditDraft] = useState<{ key: string; form: ScriptEditForm } | null>(null);
+  const [scriptSceneEditDraft, setScriptSceneEditDraft] = useState<{ sceneId: string; form: ScriptSceneEditForm } | null>(null);
   const invalidate = useInvalidateKeys();
   const { open: openAgent, setContext } = useAgentDrawerStore();
   const setActivityOpen = useUiStore((state) => state.setActivityOpen);
@@ -199,6 +220,19 @@ export function SourcesPage({
       null,
     [scriptVersions, selectedScript?.currentVersion, selectedScript?.currentVersionId, selectedScriptVersionId],
   );
+  const effectiveScriptVersionId = selectedScriptVersion?.id ?? "";
+  const { data: scriptScenes = [], isLoading: scriptScenesLoading } = useApiQuery({
+    key: qk.scriptScenes(projectId, effectiveScriptId, effectiveScriptVersionId),
+    queryFn: (session) =>
+      studioApi
+        .listScriptScenes(session, projectId, effectiveScriptId, effectiveScriptVersionId ? { scriptVersionId: effectiveScriptVersionId } : undefined)
+        .then((response) => response.items || []),
+    enabled: !!effectiveScriptId && !!effectiveScriptVersionId,
+  });
+  const selectedScriptScene = useMemo(
+    () => scriptScenes.find((scene) => scene.id === selectedScriptSceneId) ?? scriptScenes[0] ?? null,
+    [scriptScenes, selectedScriptSceneId],
+  );
 
   const planEditForm = useMemo(() => {
     if (!selectedPlan) {
@@ -235,6 +269,24 @@ export function SourcesPage({
       return;
     }
     setScriptEditDraft({ key: scriptEditKey, form });
+  };
+
+  const scriptSceneEditForm = useMemo(() => {
+    if (!selectedScriptScene) {
+      return emptyScriptSceneEditForm();
+    }
+    if (scriptSceneEditDraft?.sceneId === selectedScriptScene.id) {
+      return scriptSceneEditDraft.form;
+    }
+    return scriptSceneToForm(selectedScriptScene);
+  }, [scriptSceneEditDraft, selectedScriptScene]);
+
+  const setScriptSceneEditForm = (form: ScriptSceneEditForm) => {
+    if (!selectedScriptScene) {
+      setScriptSceneEditDraft(null);
+      return;
+    }
+    setScriptSceneEditDraft({ sceneId: selectedScriptScene.id, form });
   };
 
   // 提取事件
@@ -444,6 +496,87 @@ export function SourcesPage({
     },
     onError: (error) => {
       toast.error("激活失败：" + error.message);
+    },
+  });
+
+  const deleteScriptVersionMutation = useApiMutation({
+    mutationFn: (session, data: { scriptId: string; versionId: string }) =>
+      studioApi.deleteScriptVersion(session, projectId, data.scriptId, data.versionId),
+    onSuccess: (_result, data) => {
+      toast.success("剧本版本已归档");
+      if (selectedScriptVersionId === data.versionId) {
+        setSelectedScriptVersionId(null);
+      }
+      setSelectedScriptSceneId(null);
+      setScriptSceneEditDraft(null);
+      invalidate([
+        qk.scripts(projectId),
+        qk.script(projectId, data.scriptId),
+        qk.scriptVersions(projectId, data.scriptId),
+        qk.scriptScenes(projectId, data.scriptId),
+        qk.productionStatus(projectId),
+        qk.project(projectId),
+      ]);
+    },
+    onError: (error) => {
+      toast.error("归档失败：" + error.message);
+    },
+  });
+
+  const parseScriptScenesMutation = useApiMutation({
+    mutationFn: (session, data: { scriptId: string; versionId: string; force?: boolean }) =>
+      studioApi.parseScriptScenes(session, projectId, data.scriptId, data.versionId, { force: data.force === true }),
+    onSuccess: (result) => {
+      toast.success(`已解析 ${result.sceneCount} 个场景`);
+      setSelectedScriptSceneId(result.scenes[0]?.id ?? null);
+      setScriptSceneEditDraft(null);
+      invalidate([
+        qk.scriptScenes(projectId, result.scriptId, result.versionId),
+        qk.scripts(projectId),
+        qk.script(projectId, result.scriptId),
+        qk.productionStatus(projectId),
+        qk.project(projectId),
+      ]);
+    },
+    onError: (error) => {
+      toast.error("解析失败：" + error.message);
+    },
+  });
+
+  const updateScriptSceneMutation = useApiMutation({
+    mutationFn: (session, data: { sceneId: string; body: JsonRecord }) =>
+      studioApi.updateScriptScene(session, projectId, data.sceneId, data.body),
+    onSuccess: (scene) => {
+      toast.success("场景已保存");
+      setSelectedScriptSceneId(scene.id);
+      setScriptSceneEditDraft({ sceneId: scene.id, form: scriptSceneToForm(scene) });
+      invalidate([
+        qk.scriptScenes(projectId, scene.scriptId, scene.scriptVersionId),
+        qk.productionStatus(projectId),
+        qk.project(projectId),
+      ]);
+    },
+    onError: (error) => {
+      toast.error("保存场景失败：" + error.message);
+    },
+  });
+
+  const deleteScriptSceneMutation = useApiMutation({
+    mutationFn: (session, scene: ScriptScene) => studioApi.deleteScriptScene(session, projectId, scene.id).then((result) => ({ result, scene })),
+    onSuccess: ({ scene }) => {
+      toast.success("场景已归档");
+      if (selectedScriptSceneId === scene.id) {
+        setSelectedScriptSceneId(null);
+      }
+      setScriptSceneEditDraft(null);
+      invalidate([
+        qk.scriptScenes(projectId, scene.scriptId, scene.scriptVersionId),
+        qk.productionStatus(projectId),
+        qk.project(projectId),
+      ]);
+    },
+    onError: (error) => {
+      toast.error("归档场景失败：" + error.message);
     },
   });
 
@@ -664,10 +797,14 @@ export function SourcesPage({
   const handleSelectScript = (script: Script) => {
     setSelectedScriptId(script.id);
     setSelectedScriptVersionId(null);
+    setSelectedScriptSceneId(null);
+    setScriptSceneEditDraft(null);
   };
 
   const handleSelectScriptVersion = (version: ScriptVersion) => {
     setSelectedScriptVersionId(version.id);
+    setSelectedScriptSceneId(null);
+    setScriptSceneEditDraft(null);
     if (selectedScript) {
       setScriptEditDraft({
         key: `${selectedScript.id}:${version.id}`,
@@ -711,6 +848,63 @@ export function SourcesPage({
       return;
     }
     activateScriptVersionMutation.mutate({ scriptId: selectedScript.id, versionId: version.id });
+  };
+
+  const handleDeleteScriptVersion = (version: ScriptVersion) => {
+    if (!selectedScript) {
+      toast.error("请先选择剧本");
+      return;
+    }
+    if (version.id === selectedScript.currentVersionId) {
+      toast.error("当前版本不能归档");
+      return;
+    }
+    deleteScriptVersionMutation.mutate({ scriptId: selectedScript.id, versionId: version.id });
+  };
+
+  const handleParseScriptScenes = (force: boolean) => {
+    if (!selectedScript || !selectedScriptVersion) {
+      toast.error("请先选择剧本版本");
+      return;
+    }
+    parseScriptScenesMutation.mutate({ scriptId: selectedScript.id, versionId: selectedScriptVersion.id, force });
+  };
+
+  const handleSelectScriptScene = (scene: ScriptScene) => {
+    setSelectedScriptSceneId(scene.id);
+    setScriptSceneEditDraft({ sceneId: scene.id, form: scriptSceneToForm(scene) });
+  };
+
+  const handleSaveScriptScene = () => {
+    if (!selectedScriptScene) {
+      toast.error("请先选择场景");
+      return;
+    }
+    const title = scriptSceneEditForm.title.trim();
+    if (!title) {
+      toast.error("请填写场景标题");
+      return;
+    }
+    updateScriptSceneMutation.mutate({
+      sceneId: selectedScriptScene.id,
+      body: {
+        title,
+        summary: scriptSceneEditForm.summary,
+        location: scriptSceneEditForm.location,
+        timeOfDay: scriptSceneEditForm.timeOfDay,
+        atmosphere: scriptSceneEditForm.atmosphere,
+        characters: listFromTextarea(scriptSceneEditForm.characters),
+        scenes: listFromTextarea(scriptSceneEditForm.scenes),
+        props: listFromTextarea(scriptSceneEditForm.props),
+        action: scriptSceneEditForm.action,
+        dialogue: scriptSceneEditForm.dialogue,
+        visualGoal: scriptSceneEditForm.visualGoal,
+        emotionalTone: scriptSceneEditForm.emotionalTone,
+        conflict: scriptSceneEditForm.conflict,
+        outcome: scriptSceneEditForm.outcome,
+        content: scriptSceneEditForm.content,
+      },
+    });
   };
 
   const handleUseAgent = () => {
@@ -1568,11 +1762,201 @@ export function SourcesPage({
                                 >
                                   设为当前
                                 </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => handleDeleteScriptVersion(version)}
+                                  disabled={active || deleteScriptVersionMutation.isPending}
+                                >
+                                  归档
+                                </Button>
                               </div>
                             </div>
                           );
                         })}
                       </div>
+                    </div>
+
+                    <div className="grid gap-3 border-t pt-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium">场景结构</div>
+                          <div className="text-xs text-muted-foreground">
+                            {selectedScriptVersion ? `版本 ${selectedScriptVersion.version}` : "未选择版本"}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleParseScriptScenes(false)}
+                            disabled={!selectedScriptVersion || parseScriptScenesMutation.isPending}
+                          >
+                            <ListChecks className="h-4 w-4" />
+                            解析场景
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleParseScriptScenes(true)}
+                            disabled={!selectedScriptVersion || parseScriptScenesMutation.isPending}
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                            重新解析
+                          </Button>
+                        </div>
+                      </div>
+
+                      {scriptScenesLoading ? <Skeleton className="h-24" /> : null}
+                      {!scriptScenesLoading && scriptScenes.length === 0 ? (
+                        <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">暂无场景</div>
+                      ) : null}
+
+                      {scriptScenes.length > 0 ? (
+                        <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+                          <div className="grid content-start gap-2">
+                            {scriptScenes.map((scene) => (
+                              <button
+                                key={scene.id}
+                                type="button"
+                                onClick={() => handleSelectScriptScene(scene)}
+                                className={cn(
+                                  "rounded-lg border p-3 text-left transition hover:bg-muted/50",
+                                  selectedScriptScene?.id === scene.id && "bg-muted/50 ring-1 ring-primary",
+                                )}
+                              >
+                                <div className="font-medium">场景 {scene.sceneNo}</div>
+                                <div className="mt-1 line-clamp-2 text-sm">{scene.title}</div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  <StatusBadge status={scene.reviewStatus} />
+                                  {scene.staleState ? <Badge variant="outline">{statusLabel(scene.staleState)}</Badge> : null}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+
+                          {selectedScriptScene ? (
+                            <div className="grid gap-3 rounded-lg border p-4">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm text-muted-foreground">场景 {selectedScriptScene.sceneNo}</div>
+                                  <div className="font-medium">{selectedScriptScene.title}</div>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => deleteScriptSceneMutation.mutate(selectedScriptScene)}
+                                  disabled={deleteScriptSceneMutation.isPending}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                  归档
+                                </Button>
+                              </div>
+
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <div className="grid gap-2 md:col-span-2">
+                                  <Label>标题</Label>
+                                  <Input
+                                    value={scriptSceneEditForm.title}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, title: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2 md:col-span-2">
+                                  <Label>摘要</Label>
+                                  <Textarea
+                                    className="min-h-20"
+                                    value={scriptSceneEditForm.summary}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, summary: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2">
+                                  <Label>地点</Label>
+                                  <Input
+                                    value={scriptSceneEditForm.location}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, location: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2">
+                                  <Label>时间</Label>
+                                  <Input
+                                    value={scriptSceneEditForm.timeOfDay}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, timeOfDay: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2">
+                                  <Label>人物</Label>
+                                  <Textarea
+                                    className="min-h-20"
+                                    value={scriptSceneEditForm.characters}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, characters: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2">
+                                  <Label>场景资产</Label>
+                                  <Textarea
+                                    className="min-h-20"
+                                    value={scriptSceneEditForm.scenes}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, scenes: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2">
+                                  <Label>道具</Label>
+                                  <Textarea
+                                    className="min-h-20"
+                                    value={scriptSceneEditForm.props}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, props: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2">
+                                  <Label>氛围</Label>
+                                  <Input
+                                    value={scriptSceneEditForm.atmosphere}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, atmosphere: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2 md:col-span-2">
+                                  <Label>动作</Label>
+                                  <Textarea
+                                    className="min-h-24"
+                                    value={scriptSceneEditForm.action}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, action: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2 md:col-span-2">
+                                  <Label>对白</Label>
+                                  <Textarea
+                                    className="min-h-24"
+                                    value={scriptSceneEditForm.dialogue}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, dialogue: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2 md:col-span-2">
+                                  <Label>视觉目标</Label>
+                                  <Textarea
+                                    className="min-h-20"
+                                    value={scriptSceneEditForm.visualGoal}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, visualGoal: event.target.value })}
+                                  />
+                                </div>
+                                <div className="grid gap-2 md:col-span-2">
+                                  <Label>正文</Label>
+                                  <Textarea
+                                    className="min-h-32 font-mono text-sm"
+                                    value={scriptSceneEditForm.content}
+                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, content: event.target.value })}
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex justify-end">
+                                <Button onClick={handleSaveScriptScene} disabled={updateScriptSceneMutation.isPending}>
+                                  <Save className="h-4 w-4" />
+                                  保存场景
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   </>
                 ) : (
@@ -1687,6 +2071,60 @@ function scriptToForm(script: Script, version: ScriptVersion | null): ScriptEdit
     contentFormat: version?.contentFormat || script.currentVersion?.contentFormat || "markdown",
     content: version?.content || script.currentVersion?.content || "",
   };
+}
+
+function emptyScriptSceneEditForm(): ScriptSceneEditForm {
+  return {
+    title: "",
+    summary: "",
+    location: "",
+    timeOfDay: "",
+    atmosphere: "",
+    characters: "",
+    scenes: "",
+    props: "",
+    action: "",
+    dialogue: "",
+    visualGoal: "",
+    emotionalTone: "",
+    conflict: "",
+    outcome: "",
+    content: "",
+  };
+}
+
+function scriptSceneToForm(scene: ScriptScene): ScriptSceneEditForm {
+  return {
+    title: scene.title || "",
+    summary: scene.summary || "",
+    location: scene.location || "",
+    timeOfDay: scene.timeOfDay || "",
+    atmosphere: scene.atmosphere || "",
+    characters: listToTextarea(scene.characters),
+    scenes: listToTextarea(scene.scenes),
+    props: listToTextarea(scene.props),
+    action: scene.action || "",
+    dialogue: scene.dialogue || "",
+    visualGoal: scene.visualGoal || "",
+    emotionalTone: scene.emotionalTone || "",
+    conflict: scene.conflict || "",
+    outcome: scene.outcome || "",
+    content: scene.content || "",
+  };
+}
+
+function listToTextarea(value: unknown) {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").join("\n");
+}
+
+function listFromTextarea(value: string) {
+  return value
+    .split(/\r?\n|[,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function positiveIntegerFromText(value: string) {

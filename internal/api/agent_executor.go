@@ -491,7 +491,7 @@ func (s *Server) verifyAgentToolResult(ctx context.Context, project Project, res
 	case "script.create_version", "script.generate_from_source", "script.rewrite":
 		versionID := stringValueFromAny(result.Data["versionId"])
 		var exists bool
-		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM script_versions WHERE project_id = $1 AND id = $2)`, project.ID, versionID).Scan(&exists); err != nil {
+		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM script_versions WHERE project_id = $1 AND id = $2 AND COALESCE(status, 'active') <> 'archived')`, project.ID, versionID).Scan(&exists); err != nil {
 			return fail("VERIFIER_SCRIPT_VERSION_CHECK_FAILED", err.Error())
 		}
 		if !exists {
@@ -1989,7 +1989,7 @@ func (s *Server) agentToolGenerateScriptFromSource(r *http.Request, principal au
 	if err != nil {
 		return agentToolError("script.generate_from_source", args, err)
 	}
-	if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2 WHERE id = $1`, script.ID, version.ID); err != nil {
+	if _, err := activateScriptVersionTx(r, tx, project, script, version); err != nil {
 		return agentToolError("script.generate_from_source", args, err)
 	}
 	if _, err := tx.Exec(r.Context(), `
@@ -2057,7 +2057,7 @@ func (s *Server) agentToolRewriteScript(r *http.Request, principal auth.Principa
 		activate = value
 	}
 	if activate {
-		if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, newVersion.ID); err != nil {
+		if _, err := activateScriptVersionTx(r, tx, project, script, newVersion); err != nil {
 			return agentToolError("script.rewrite", args, err)
 		}
 	}
@@ -2105,7 +2105,7 @@ func (s *Server) agentToolCreateScriptVersion(r *http.Request, principal auth.Pr
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT id::text
 		FROM script_versions
-		WHERE project_id = $1 AND script_id = $2 AND metadata->>'agentStepId' = $3
+		WHERE project_id = $1 AND script_id = $2 AND metadata->>'agentStepId' = $3 AND COALESCE(status, 'active') <> 'archived'
 		ORDER BY created_at DESC
 		LIMIT 1
 	`, project.ID, script.ID, step.ID).Scan(&existingVersionID); err == nil {
@@ -2118,7 +2118,15 @@ func (s *Server) agentToolCreateScriptVersion(r *http.Request, principal auth.Pr
 			activate = value
 		}
 		if activate && stringValue(script.CurrentVersionID) != version.ID {
-			if _, err := s.db.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {
+			tx, err := s.db.Begin(r.Context())
+			if err != nil {
+				return agentToolError("script.create_version", args, err)
+			}
+			defer tx.Rollback(r.Context())
+			if _, err := activateScriptVersionTx(r, tx, project, script, version); err != nil {
+				return agentToolError("script.create_version", args, err)
+			}
+			if err := tx.Commit(r.Context()); err != nil {
 				return agentToolError("script.create_version", args, err)
 			}
 		}
@@ -2152,7 +2160,7 @@ func (s *Server) agentToolCreateScriptVersion(r *http.Request, principal auth.Pr
 		activate = value
 	}
 	if activate {
-		if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {
+		if _, err := activateScriptVersionTx(r, tx, project, script, version); err != nil {
 			return agentToolError("script.create_version", args, err)
 		}
 	}
@@ -2191,7 +2199,15 @@ func (s *Server) agentToolActivateScriptVersion(r *http.Request, project Project
 			"idempotencyKey": agentStepIdempotencyKey(task, step),
 		})
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		return agentToolError("script.activate_version", args, err)
+	}
+	defer tx.Rollback(r.Context())
+	if _, err := activateScriptVersionTx(r, tx, project, script, version); err != nil {
+		return agentToolError("script.activate_version", args, err)
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		return agentToolError("script.activate_version", args, err)
 	}
 	return agentToolOK("script.activate_version", args, fmt.Sprintf("已激活剧本版本 v%d。", version.Version), map[string]any{

@@ -123,6 +123,7 @@ func (s *Server) listScriptScenes(w http.ResponseWriter, r *http.Request, princi
 		  AND script_id = $2
 		  AND ($3 = '' OR script_version_id = $3::uuid)
 		  AND ($4 = '' OR review_status = $4)
+		  AND deleted_at IS NULL
 		ORDER BY scene_index ASC
 	`), project.ID, script.ID, versionID, reviewStatus)
 	if err != nil {
@@ -360,9 +361,66 @@ func (s *Server) reviewScriptScene(w http.ResponseWriter, r *http.Request, princ
 	httpx.WriteJSON(w, r, http.StatusOK, resp, nil)
 }
 
+func (s *Server) deleteScriptScene(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionScriptWrite)
+	if !ok {
+		return
+	}
+	current, err := s.scriptScene(r, project.ID, r.PathValue("sceneId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if err := markScriptSceneDownstreamStale(r, tx, project.ID, current.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	tag, err := tx.Exec(r.Context(), `
+		UPDATE script_scenes
+		SET deleted_at = now(),
+		    stale_state = 'needs_regeneration',
+		    manual_override = true,
+		    edited_by = $3,
+		    edited_at = now(),
+		    updated_at = now()
+		WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
+	`, project.ID, current.ID, principal.UserID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		httpx.WriteError(w, r, http.StatusNotFound, "NOT_FOUND", "script scene not found", nil, false)
+		return
+	}
+	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "script.scene.archived", "script_scene", current.ID, mustRawJSON(map[string]any{
+		"scriptSceneId": current.ID,
+		"scriptId":      current.ScriptID,
+		"versionId":     current.ScriptVersionID,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"deleted": true, "mode": "archive", "sceneId": current.ID}, nil)
+}
+
 func (s *Server) scriptScene(r *http.Request, projectID, sceneID string) (workflows.ScriptSceneRecord, error) {
 	return workflows.ScanScriptSceneRecord(s.db.QueryRow(r.Context(), workflows.ScriptSceneSelectSQL(`
-		WHERE project_id = $1 AND id = $2
+		WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
 	`), projectID, sceneID))
 }
 

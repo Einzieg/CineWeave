@@ -221,6 +221,7 @@ export type ScriptVersion = {
   version: number;
   content: string;
   contentFormat: string;
+  status: string;
   sourceType?: string;
   promptVersionId?: string;
   promptHash?: string;

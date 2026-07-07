@@ -693,6 +693,71 @@ func (s *Server) setPrimaryAssetReference(w http.ResponseWriter, r *http.Request
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"assetId": asset.ID, "reference": reference}, nil)
 }
 
+func (s *Server) deleteAssetReference(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
+	if !ok {
+		return
+	}
+	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	referenceID := r.PathValue("referenceId")
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	reference, err := scanAssetReference(tx.QueryRow(r.Context(), `
+		UPDATE asset_references
+		SET status = 'archived',
+		    is_primary = false,
+		    updated_at = now()
+		WHERE project_id = $1 AND asset_id = $2 AND id = $3 AND status = 'ready'
+		RETURNING id, organization_id, project_id, asset_id, reference_type, title, description,
+		          artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
+		          is_primary, status, metadata, created_by, created_at, updated_at
+	`, project.ID, asset.ID, referenceID))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := clearCanonicalAssetReferenceTx(r.Context(), tx, project.ID, asset.ID, reference); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := production.MarkAssetDownstreamStale(r.Context(), tx, project.ID, asset.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.reference.archived", "asset_reference", reference.ID, mustRawJSON(map[string]any{
+		"assetId":         asset.ID,
+		"referenceId":     reference.ID,
+		"artifactDeleted": false,
+		"mediaDeleted":    false,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"deleted":         true,
+		"mode":            "archive",
+		"referenceId":     reference.ID,
+		"artifactDeleted": false,
+		"mediaDeleted":    false,
+	}, nil)
+}
+
 func (s *Server) listShotAssetRequirements(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetRead)
 	if !ok {
@@ -1135,7 +1200,7 @@ func (s *Server) assetReferences(r *http.Request, projectID, assetID string, inc
 		       artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
 		       is_primary, status, metadata, created_by, created_at, updated_at
 		FROM asset_references
-		WHERE project_id = $1 AND asset_id = $2
+		WHERE project_id = $1 AND asset_id = $2 AND status = 'ready'
 		ORDER BY is_primary DESC, created_at DESC
 	`, projectID, assetID)
 	if err != nil {
@@ -1171,7 +1236,7 @@ func (s *Server) attachCanonicalAssetReferences(r *http.Request, projectID strin
 		       artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
 		       is_primary, status, metadata, created_by, created_at, updated_at
 		FROM asset_references
-		WHERE project_id = $1
+		WHERE project_id = $1 AND status = 'ready'
 		ORDER BY asset_id, is_primary DESC, created_at DESC
 	`, projectID)
 	if err != nil {
@@ -1234,14 +1299,14 @@ func (s *Server) setPrimaryAssetReferenceTx(ctx context.Context, tx pgx.Tx, proj
 	if _, err := tx.Exec(ctx, `
 		UPDATE asset_references
 		SET is_primary = false, updated_at = now()
-		WHERE project_id = $1 AND asset_id = $2 AND id <> $3
+		WHERE project_id = $1 AND asset_id = $2 AND id <> $3 AND status = 'ready'
 	`, projectID, assetID, referenceID); err != nil {
 		return AssetReference{}, err
 	}
 	ref, err := scanAssetReference(tx.QueryRow(ctx, `
 		UPDATE asset_references
 		SET is_primary = true, status = 'ready', updated_at = now()
-		WHERE project_id = $1 AND asset_id = $2 AND id = $3
+		WHERE project_id = $1 AND asset_id = $2 AND id = $3 AND status = 'ready'
 		RETURNING id, organization_id, project_id, asset_id, reference_type, title, description,
 		          artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
 		          is_primary, status, metadata, created_by, created_at, updated_at
@@ -1263,6 +1328,42 @@ func (s *Server) setPrimaryAssetReferenceTx(ctx context.Context, tx pgx.Tx, proj
 		return AssetReference{}, err
 	}
 	return ref, nil
+}
+
+func clearCanonicalAssetReferenceTx(ctx context.Context, tx pgx.Tx, projectID, assetID string, reference AssetReference) error {
+	artifactID := stringValue(reference.ArtifactID)
+	mediaFileID := stringValue(reference.MediaFileID)
+	storageKey := stringValue(reference.StorageKey)
+	_, err := tx.Exec(ctx, `
+		UPDATE canonical_assets
+		SET primary_reference_artifact_id = CASE
+		      WHEN COALESCE(primary_reference_artifact_id::text, '') = $3 THEN NULL
+		      ELSE primary_reference_artifact_id
+		    END,
+		    primary_reference_media_file_id = CASE
+		      WHEN COALESCE(primary_reference_media_file_id::text, '') = $4 THEN NULL
+		      ELSE primary_reference_media_file_id
+		    END,
+		    primary_reference_storage_key = CASE
+		      WHEN COALESCE(primary_reference_storage_key, '') = $5 THEN NULL
+		      ELSE primary_reference_storage_key
+		    END,
+		    reference_artifact_id = CASE
+		      WHEN COALESCE(reference_artifact_id::text, '') = $3 THEN NULL
+		      ELSE reference_artifact_id
+		    END,
+		    reference_media_file_id = CASE
+		      WHEN COALESCE(reference_media_file_id::text, '') = $4 THEN NULL
+		      ELSE reference_media_file_id
+		    END,
+		    reference_storage_key = CASE
+		      WHEN COALESCE(reference_storage_key, '') = $5 THEN NULL
+		      ELSE reference_storage_key
+		    END,
+		    updated_at = now()
+		WHERE project_id = $1 AND id = $2
+	`, projectID, assetID, artifactID, mediaFileID, storageKey)
+	return err
 }
 
 func (s *Server) attachCanonicalAssetSceneLinks(r *http.Request, projectID string, items []CanonicalAsset) error {

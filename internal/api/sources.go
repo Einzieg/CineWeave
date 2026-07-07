@@ -1141,6 +1141,8 @@ func chapterSummaries(chapters []NovelChapter) []NovelChapterSummary {
 			ID:            chapter.ID,
 			SourceID:      chapter.SourceID,
 			ChapterIndex:  chapter.ChapterIndex,
+			VolumeIndex:   chapter.VolumeIndex,
+			SectionIndex:  chapter.SectionIndex,
 			VolumeTitle:   chapter.VolumeTitle,
 			ChapterTitle:  chapter.ChapterTitle,
 			ContentLength: len([]rune(chapter.Content)),

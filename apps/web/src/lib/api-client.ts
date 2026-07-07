@@ -289,12 +289,16 @@ export const studioApi = {
     apiRequest<ScriptVersion>(`/api/projects/${projectId}/scripts/${scriptId}/versions`, { method: "POST", session, body }),
   activateScriptVersion: (session: StudioSession, projectId: string, scriptId: string, versionId: string) =>
     apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}/activate-version`, { method: "POST", session, body: { versionId } }),
+  deleteScriptVersion: (session: StudioSession, projectId: string, scriptId: string, versionId: string) =>
+    apiRequest<{ deleted: boolean; mode?: string; versionId: string }>(`/api/projects/${projectId}/scripts/${scriptId}/versions/${versionId}`, { method: "DELETE", session }),
   parseScriptScenes: (session: StudioSession, projectId: string, scriptId: string, versionId: string, body: JsonRecord) =>
     apiRequest<ParseScriptScenesResponse>(`/api/projects/${projectId}/scripts/${scriptId}/versions/${versionId}/parse-scenes`, { method: "POST", session, body }),
   listScriptScenes: (session: StudioSession, projectId: string, scriptId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
     apiRequest<ListEnvelope<ScriptScene>>(`/api/projects/${projectId}/scripts/${scriptId}/scenes`, { session, query }),
   updateScriptScene: (session: StudioSession, projectId: string, sceneId: string, body: JsonRecord) =>
     apiRequest<ScriptScene>(`/api/projects/${projectId}/script-scenes/${sceneId}`, { method: "PATCH", session, body }),
+  deleteScriptScene: (session: StudioSession, projectId: string, sceneId: string) =>
+    apiRequest<{ deleted: boolean; mode?: string; sceneId: string }>(`/api/projects/${projectId}/script-scenes/${sceneId}`, { method: "DELETE", session }),
   reviewScriptScene: (session: StudioSession, projectId: string, sceneId: string, body: JsonRecord) =>
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/script-scenes/${sceneId}/review`, { method: "POST", session, body }),
 
@@ -355,6 +359,11 @@ export const studioApi = {
     apiRequest<AssetReference>(`/api/projects/${projectId}/canonical-assets/${assetId}/references`, { method: "POST", session, body }),
   setPrimaryAssetReference: (session: StudioSession, projectId: string, assetId: string, referenceId: string) =>
     apiRequest<{ assetId: string; reference: AssetReference }>(`/api/projects/${projectId}/canonical-assets/${assetId}/references/${referenceId}/set-primary`, { method: "POST", session, body: {} }),
+  deleteAssetReference: (session: StudioSession, projectId: string, assetId: string, referenceId: string) =>
+    apiRequest<{ deleted: boolean; mode: string; referenceId: string; artifactDeleted: boolean; mediaDeleted: boolean }>(
+      `/api/projects/${projectId}/canonical-assets/${assetId}/references/${referenceId}`,
+      { method: "DELETE", session },
+    ),
   analyzeScriptAssets: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/scripts/${scriptId}/analyze-assets`, { method: "POST", session, body }),
   generateAssetImage: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord = {}) =>

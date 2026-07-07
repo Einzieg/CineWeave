@@ -548,6 +548,7 @@ func StoreScriptScenes(ctx context.Context, tx pgx.Tx, input ScriptSceneStoreInp
 			record, err := ScanScriptSceneRecord(tx.QueryRow(ctx, `
 				UPDATE script_scenes
 				SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('agentLastSuggestion', $3::jsonb),
+				    deleted_at = NULL,
 				    updated_at = now()
 				WHERE project_id = $1 AND id = $2
 				RETURNING `+ScriptSceneColumns()+`
@@ -582,6 +583,7 @@ func StoreScriptScenes(ctx context.Context, tx pgx.Tx, input ScriptSceneStoreInp
 			    manual_override = false,
 			    stale_state = 'fresh',
 			    metadata = COALESCE(metadata, '{}'::jsonb) || $22::jsonb,
+			    deleted_at = NULL,
 			    edited_by = NULL,
 			    edited_at = NULL,
 			    updated_at = now()
@@ -844,20 +846,20 @@ func (a Activities) scriptForSceneParse(ctx context.Context, projectID, scriptID
 			s.title
 		FROM scripts s
 		JOIN script_versions v ON v.script_id = s.id
-		WHERE s.project_id = $1 AND s.id = $2 AND v.id = $3
+		WHERE s.project_id = $1 AND s.id = $2 AND v.id = $3 AND COALESCE(v.status, 'active') <> 'archived'
 	`, projectID, scriptID, versionID).Scan(&script.ID, &script.VersionID, &script.Version, &script.Content, &script.ContentFormat, &script.Title)
 	return script, err
 }
 
 func (a Activities) scriptSceneByID(ctx context.Context, projectID, sceneID string) (ScriptSceneRecord, error) {
 	return ScanScriptSceneRecord(a.db.QueryRow(ctx, ScriptSceneSelectSQL(`
-		WHERE project_id = $1 AND id = $2
+		WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
 	`), projectID, sceneID))
 }
 
 func (a Activities) scriptScenesForVersion(ctx context.Context, projectID, versionID string) ([]ScriptSceneRecord, error) {
 	return queryScriptScenes(ctx, a.db, `
-		WHERE project_id = $1 AND script_version_id = $2
+		WHERE project_id = $1 AND script_version_id = $2 AND deleted_at IS NULL
 		ORDER BY scene_index ASC
 	`, projectID, versionID)
 }
@@ -871,7 +873,7 @@ func (a Activities) storyboardScenesForScript(ctx context.Context, projectID, ve
 		return []ScriptSceneRecord{scene}, nil
 	}
 	approved, err := queryScriptScenes(ctx, a.db, `
-		WHERE project_id = $1 AND script_version_id = $2 AND review_status = 'approved'
+		WHERE project_id = $1 AND script_version_id = $2 AND review_status = 'approved' AND deleted_at IS NULL
 		ORDER BY scene_index ASC
 	`, projectID, versionID)
 	if err != nil {

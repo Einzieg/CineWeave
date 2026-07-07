@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -393,6 +394,114 @@ func TestScriptSceneEditAPIReviewsAndMarksDownstreamStale(t *testing.T) {
 	}
 }
 
+func TestScriptVersionArchiveAndActivationMarkDownstreamStale(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	scriptID := seed.insertActiveScript(t)
+	oldVersionID := seed.currentScriptVersionID(t, scriptID)
+	newVersionID := seed.insertScriptVersion(t, scriptID, 2, "new script content")
+	sceneID := seed.insertScriptScene(t, scriptID, oldVersionID, 1, "approved", "fresh")
+	assetID := seed.insertCanonicalAsset(t, "character", "Lin Chu", "approved", "")
+	workflowRunID := seed.insertWorkflowRun(t, "succeeded")
+	shotID := seed.insertProductionShot(t, workflowRunID, "", "", "approved", "video_succeeded")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		INSERT INTO scene_asset_links(organization_id, project_id, script_scene_id, asset_id, asset_role, metadata)
+		VALUES ($1, $2, $3, $4, 'main_character', '{}')
+	`, seed.organizationID, seed.projectID, sceneID, assetID); err != nil {
+		t.Fatalf("insert scene asset link: %v", err)
+	}
+	if _, err := seed.pool.Exec(seed.ctx, `UPDATE storyboard_shots SET script_scene_id = $2 WHERE id = $1`, shotID, sceneID); err != nil {
+		t.Fatalf("link shot scene: %v", err)
+	}
+
+	var activated Script
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/scripts/"+scriptID+"/activate-version", seed.ownerToken, seed.organizationID, map[string]any{
+		"versionId": newVersionID,
+	}, &activated)
+	if activated.CurrentVersionID == nil || *activated.CurrentVersionID != newVersionID {
+		t.Fatalf("activated script = %+v", activated)
+	}
+	assertStaleState(t, seed, "canonical_assets", assetID, "upstream_changed")
+	assertStaleState(t, seed, "storyboard_shots", shotID, "needs_regeneration")
+
+	assertAPIErrorCode(t, server, http.MethodDelete, "/api/projects/"+seed.projectID+"/scripts/"+scriptID+"/versions/"+newVersionID, seed.ownerToken, seed.organizationID, nil, http.StatusConflict, "CURRENT_SCRIPT_VERSION")
+
+	var archived struct {
+		Deleted   bool   `json:"deleted"`
+		Mode      string `json:"mode"`
+		VersionID string `json:"versionId"`
+	}
+	doAPISuccess(t, server, http.MethodDelete, "/api/projects/"+seed.projectID+"/scripts/"+scriptID+"/versions/"+oldVersionID, seed.ownerToken, seed.organizationID, nil, &archived)
+	if !archived.Deleted || archived.Mode != "archive" || archived.VersionID != oldVersionID {
+		t.Fatalf("archived version = %+v", archived)
+	}
+	var status string
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT status FROM script_versions WHERE id = $1`, oldVersionID).Scan(&status); err != nil {
+		t.Fatalf("read archived version status: %v", err)
+	}
+	if status != "archived" {
+		t.Fatalf("version status = %s, want archived", status)
+	}
+	var versions struct {
+		Items []ScriptVersion `json:"items"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/scripts/"+scriptID+"/versions", seed.ownerToken, seed.organizationID, nil, &versions)
+	for _, version := range versions.Items {
+		if version.ID == oldVersionID {
+			t.Fatalf("archived version appeared in default list: %+v", versions.Items)
+		}
+	}
+}
+
+func TestScriptSceneArchiveHidesSceneAndMarksDownstreamStale(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	scriptID := seed.insertActiveScript(t)
+	versionID := seed.currentScriptVersionID(t, scriptID)
+	sceneID := seed.insertScriptScene(t, scriptID, versionID, 1, "approved", "fresh")
+	assetID := seed.insertCanonicalAsset(t, "character", "Lin Chu", "approved", "")
+	workflowRunID := seed.insertWorkflowRun(t, "succeeded")
+	shotID := seed.insertProductionShot(t, workflowRunID, "", "", "approved", "video_succeeded")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		INSERT INTO scene_asset_links(organization_id, project_id, script_scene_id, asset_id, asset_role, metadata)
+		VALUES ($1, $2, $3, $4, 'main_character', '{}')
+	`, seed.organizationID, seed.projectID, sceneID, assetID); err != nil {
+		t.Fatalf("insert scene asset link: %v", err)
+	}
+	if _, err := seed.pool.Exec(seed.ctx, `UPDATE storyboard_shots SET script_scene_id = $2 WHERE id = $1`, shotID, sceneID); err != nil {
+		t.Fatalf("link shot scene: %v", err)
+	}
+
+	var archived struct {
+		Deleted bool   `json:"deleted"`
+		Mode    string `json:"mode"`
+		SceneID string `json:"sceneId"`
+	}
+	doAPISuccess(t, server, http.MethodDelete, "/api/projects/"+seed.projectID+"/script-scenes/"+sceneID, seed.ownerToken, seed.organizationID, nil, &archived)
+	if !archived.Deleted || archived.Mode != "archive" || archived.SceneID != sceneID {
+		t.Fatalf("archived scene = %+v", archived)
+	}
+	assertStaleState(t, seed, "canonical_assets", assetID, "upstream_changed")
+	assertStaleState(t, seed, "storyboard_shots", shotID, "needs_regeneration")
+
+	var deletedAt sql.NullTime
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT deleted_at FROM script_scenes WHERE id = $1`, sceneID).Scan(&deletedAt); err != nil {
+		t.Fatalf("read deleted_at: %v", err)
+	}
+	if !deletedAt.Valid {
+		t.Fatalf("deleted_at was not set")
+	}
+	var scenes struct {
+		Items []workflows.ScriptSceneRecord `json:"items"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/scripts/"+scriptID+"/scenes?scriptVersionId="+versionID, seed.ownerToken, seed.organizationID, nil, &scenes)
+	if len(scenes.Items) != 0 {
+		t.Fatalf("archived scene appeared in default list: %+v", scenes.Items)
+	}
+}
+
 func assertStaleState(t *testing.T, seed *artifactPreviewSeed, table, id, want string) {
 	t.Helper()
 	queryByTable := map[string]string{
@@ -458,6 +567,19 @@ func (s *artifactPreviewSeed) currentScriptVersionID(t *testing.T, scriptID stri
 		WHERE id = $1 AND project_id = $2
 	`, scriptID, s.projectID).Scan(&versionID); err != nil {
 		t.Fatalf("read current script version: %v", err)
+	}
+	return versionID
+}
+
+func (s *artifactPreviewSeed) insertScriptVersion(t *testing.T, scriptID string, version int, content string) string {
+	t.Helper()
+	var versionID string
+	if err := s.pool.QueryRow(s.ctx, `
+		INSERT INTO script_versions(organization_id, project_id, script_id, version_no, version, content, content_format, status, metadata, created_by)
+		VALUES ($1, $2, $3, $4, $4, $5, 'markdown', 'active', '{}', $6)
+		RETURNING id
+	`, s.organizationID, s.projectID, scriptID, version, content, s.ownerUserID).Scan(&versionID); err != nil {
+		t.Fatalf("insert script version: %v", err)
 	}
 	return versionID
 }

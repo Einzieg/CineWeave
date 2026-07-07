@@ -6,6 +6,7 @@ import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
 import { Surface, SectionTitle } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,7 +14,7 @@ import { Check, ExternalLink, Image as ImageIcon, MapPin, Package, RefreshCw, Us
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { artifactTypeLabel, assetTypeLabel, requirementTypeLabel, statusLabel } from "@/lib/labels";
-import type { Artifact, CanonicalAsset, ShotAssetRequirement } from "@/lib/types";
+import type { Artifact, CanonicalAsset, Script, ShotAssetRequirement } from "@/lib/types";
 
 export function AssetsPage({
   projectId,
@@ -23,8 +24,13 @@ export function AssetsPage({
   initialAssetId?: string;
 }) {
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(initialAssetId || null);
+  const [selectedScriptId, setSelectedScriptId] = useState<string>("");
   const invalidate = useInvalidateKeys();
 
+  const { data: scripts = [] } = useApiQuery({
+    key: qk.scripts(projectId),
+    queryFn: (session) => studioApi.listScripts(session, projectId).then((response) => response.items || []),
+  });
   const { data: assets = [], isLoading } = useApiQuery({
     key: qk.assets(projectId),
     queryFn: (session) => studioApi.listCanonicalAssets(session, projectId).then((response) => response.items || []),
@@ -39,6 +45,7 @@ export function AssetsPage({
   });
 
   const selectedAsset = useMemo(() => assets.find((asset) => asset.id === selectedAssetId) ?? assets[0] ?? null, [assets, selectedAssetId]);
+  const selectedScript = useMemo(() => resolveSelectedScript(scripts, selectedScriptId), [scripts, selectedScriptId]);
   const { data: selectedReferences = [] } = useApiQuery({
     key: qk.assetReferences(projectId, selectedAsset?.id ?? ""),
     queryFn: (session) => studioApi.listAssetReferences(session, projectId, selectedAsset!.id, true).then((response) => response.items || []),
@@ -54,6 +61,16 @@ export function AssetsPage({
     }
     return previews;
   }, [artifacts]);
+
+  const analyzeAssetsMutation = useApiMutation({
+    mutationFn: (session, scriptId: string) =>
+      studioApi.analyzeScriptAssets(session, projectId, scriptId, { mergeExisting: true, generateImages: false }),
+    onSuccess: () => {
+      toast.success("资产提取工作流已启动");
+      invalidate([qk.assets(projectId), qk.workflowRuns(projectId), qk.productionStatus(projectId)]);
+    },
+    onError: (error) => toast.error("提取失败：" + error.message),
+  });
 
   const generateCardMutation = useApiMutation({
     mutationFn: (session, assetId: string) => studioApi.generateAssetCard(session, projectId, assetId, {}),
@@ -107,6 +124,31 @@ export function AssetsPage({
   return (
     <Surface>
       <SectionTitle title="资产管理" description="管理角色、场景、道具和镜头派生素材" />
+
+      <div className="flex flex-wrap items-end gap-3 border-b p-4">
+        <div className="min-w-64 flex-1">
+          <div className="mb-2 text-sm font-medium">剧本来源</div>
+          <Select value={selectedScript?.id ?? ""} onValueChange={setSelectedScriptId}>
+            <SelectTrigger>
+              <SelectValue placeholder="选择剧本" />
+            </SelectTrigger>
+            <SelectContent>
+              {scripts.map((script) => (
+                <SelectItem key={script.id} value={script.id}>
+                  {script.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button
+          onClick={() => selectedScript && analyzeAssetsMutation.mutate(selectedScript.id)}
+          disabled={!selectedScript || analyzeAssetsMutation.isPending}
+        >
+          <Wand2 className="h-4 w-4" />
+          提取资产
+        </Button>
+      </div>
 
       <Tabs defaultValue="assets" className="p-4">
         <TabsList>
@@ -290,6 +332,13 @@ function ArtifactGrid({ artifacts }: { artifacts: Artifact[] }) {
       ))}
     </div>
   );
+}
+
+function resolveSelectedScript(scripts: Script[], selectedScriptId: string) {
+  return scripts.find((script) => script.id === selectedScriptId)
+    ?? scripts.find((script) => script.status === "active")
+    ?? scripts[0]
+    ?? null;
 }
 
 function ArtifactPreview({ artifact }: { artifact: Artifact }) {

@@ -1960,6 +1960,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScriptEnvelope"
+  /api/projects/{projectId}/scripts/{scriptId}/versions/{versionId}:
+    delete:
+      operationId: deleteScriptVersion
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Archived non-current script version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteScriptVersionResponseEnvelope"
   /api/projects/{projectId}/scripts/{scriptId}/versions/{versionId}/parse-scenes:
     post:
       operationId: parseScriptScenes
@@ -2056,6 +2077,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScriptSceneEnvelope"
+    delete:
+      operationId: deleteScriptScene
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: sceneId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Archived structured script scene
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteScriptSceneResponseEnvelope"
   /api/projects/{projectId}/script-scenes/{sceneId}/review:
     post:
       operationId: reviewScriptScene
@@ -2704,6 +2744,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AssetReferenceUploadUrlEnvelope"
+  /api/projects/{projectId}/canonical-assets/{assetId}/references/{referenceId}:
+    delete:
+      operationId: deleteAssetReference
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+        - name: referenceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Archived asset reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteAssetReferenceResponseEnvelope"
   /api/projects/{projectId}/canonical-assets/{assetId}/references/{referenceId}/set-primary:
     post:
       operationId: setPrimaryAssetReference
@@ -5135,7 +5196,7 @@ components:
           format: date-time
     ScriptVersion:
       type: object
-      required: [id, organizationId, projectId, scriptId, version, content, contentFormat, metadata, createdAt]
+      required: [id, organizationId, projectId, scriptId, version, content, contentFormat, status, metadata, createdAt]
       properties:
         id:
           type: string
@@ -5156,6 +5217,9 @@ components:
         contentFormat:
           type: string
           enum: [plain_text, markdown]
+        status:
+          type: string
+          enum: [active, archived]
         sourceType:
           type: string
         promptVersionId:
@@ -8520,6 +8584,21 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/ScriptVersion"
+    DeleteScriptVersionResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                deleted:
+                  type: boolean
+                mode:
+                  type: string
+                versionId:
+                  type: string
+                  format: uuid
     ScriptSceneEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -8539,6 +8618,21 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/ScriptScene"
+    DeleteScriptSceneResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                deleted:
+                  type: boolean
+                mode:
+                  type: string
+                sceneId:
+                  type: string
+                  format: uuid
     ParseScriptScenesResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -8688,6 +8782,13 @@ components:
                 expiresAt:
                   type: string
                   format: date-time
+    DeleteAssetReferenceResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/DeleteAssetReferenceResponse"
     SetPrimaryAssetReferenceResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -11748,6 +11849,22 @@ components:
         metadata:
           type: object
           additionalProperties: true
+    DeleteAssetReferenceResponse:
+      type: object
+      required: [deleted, mode, referenceId, artifactDeleted, mediaDeleted]
+      properties:
+        deleted:
+          type: boolean
+        mode:
+          type: string
+          enum: [archive]
+        referenceId:
+          type: string
+          format: uuid
+        artifactDeleted:
+          type: boolean
+        mediaDeleted:
+          type: boolean
     SetPrimaryAssetReferenceResponse:
       type: object
       required: [assetId, reference]

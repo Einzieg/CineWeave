@@ -11,6 +11,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/production"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/jackc/pgx/v5"
@@ -38,6 +39,7 @@ type ScriptVersion struct {
 	Version         int             `json:"version"`
 	Content         string          `json:"content"`
 	ContentFormat   string          `json:"contentFormat"`
+	Status          string          `json:"status"`
 	SourceType      *string         `json:"sourceType,omitempty"`
 	PromptVersionID *string         `json:"promptVersionId,omitempty"`
 	PromptHash      *string         `json:"promptHash,omitempty"`
@@ -259,10 +261,10 @@ func (s *Server) listScriptVersions(w http.ResponseWriter, r *http.Request, prin
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, script_id, version, content, content_format,
+		SELECT id, organization_id, project_id, script_id, version, content, content_format, COALESCE(status, 'active'),
 		       source_type, prompt_version_id, prompt_hash, metadata, created_by, created_at
 		FROM script_versions
-		WHERE project_id = $1 AND script_id = $2
+		WHERE project_id = $1 AND script_id = $2 AND COALESCE(status, 'active') <> 'archived'
 		ORDER BY version DESC
 	`, project.ID, r.PathValue("scriptId"))
 	if err != nil {
@@ -336,7 +338,7 @@ func (s *Server) createScriptVersion(w http.ResponseWriter, r *http.Request, pri
 		return
 	}
 	if req.Activate {
-		if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {
+		if _, err := activateScriptVersionTx(r, tx, project, script, version); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
@@ -374,7 +376,26 @@ func (s *Server) activateScriptVersion(w http.ResponseWriter, r *http.Request, p
 		s.writeError(w, r, err)
 		return
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	previousVersionID, err := activateScriptVersionTx(r, tx, project, script, version)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "script.version.activated", "script_version", version.ID, mustRawJSON(map[string]any{
+		"scriptId":          script.ID,
+		"scriptVersionId":   version.ID,
+		"previousVersionId": previousVersionID,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -385,6 +406,75 @@ func (s *Server) activateScriptVersion(w http.ResponseWriter, r *http.Request, p
 	}
 	item.CurrentVersion = &version
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) deleteScriptVersion(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionScriptWrite)
+	if !ok {
+		return
+	}
+	script, err := s.script(r, project.ID, r.PathValue("scriptId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	version, err := s.scriptVersion(r, project.ID, script.ID, r.PathValue("versionId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if script.CurrentVersionID != nil && *script.CurrentVersionID == version.ID {
+		httpx.WriteError(w, r, http.StatusConflict, "CURRENT_SCRIPT_VERSION", "current script version cannot be archived", nil, false)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if err := markScriptVersionDownstreamStale(r, tx, project.ID, version.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE script_scenes
+		SET deleted_at = now(), stale_state = 'needs_regeneration', updated_at = now()
+		WHERE project_id = $1 AND script_version_id = $2 AND deleted_at IS NULL
+	`, project.ID, version.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	tag, err := tx.Exec(r.Context(), `
+		UPDATE script_versions
+		SET status = 'archived'
+		WHERE project_id = $1 AND script_id = $2 AND id = $3 AND COALESCE(status, 'active') <> 'archived'
+	`, project.ID, script.ID, version.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		httpx.WriteError(w, r, http.StatusNotFound, "NOT_FOUND", "script version not found", nil, false)
+		return
+	}
+	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "script.version.archived", "script_version", version.ID, mustRawJSON(map[string]any{
+		"scriptId":        script.ID,
+		"scriptVersionId": version.ID,
+		"version":         version.Version,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"deleted": true, "mode": "archive", "versionId": version.ID}, nil)
 }
 
 func (s *Server) createScriptAgentSession(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -946,10 +1036,10 @@ func (s *Server) script(r *http.Request, projectID, scriptID string) (Script, er
 
 func (s *Server) scriptVersion(r *http.Request, projectID, scriptID, versionID string) (ScriptVersion, error) {
 	return scanScriptVersion(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, script_id, version, content, content_format,
+		SELECT id, organization_id, project_id, script_id, version, content, content_format, COALESCE(status, 'active'),
 		       source_type, prompt_version_id, prompt_hash, metadata, created_by, created_at
 		FROM script_versions
-		WHERE project_id = $1 AND script_id = $2 AND id = $3
+		WHERE project_id = $1 AND script_id = $2 AND id = $3 AND COALESCE(status, 'active') <> 'archived'
 	`, projectID, scriptID, versionID))
 }
 
@@ -973,10 +1063,10 @@ func insertScriptVersionTx(r *http.Request, tx pgx.Tx, project Project, scriptID
 	return scanScriptVersion(tx.QueryRow(r.Context(), `
 		INSERT INTO script_versions(
 			organization_id, project_id, script_id, version_no, version, content,
-			content_format, source_type, prompt_version_id, prompt_hash, metadata, created_by
+			content_format, status, source_type, prompt_version_id, prompt_hash, metadata, created_by
 		)
-		VALUES ($1, $2, $3, $4, $4, $5, $6, $7, NULLIF($8, '')::uuid, NULLIF($9, ''), $10, $11)
-		RETURNING id, organization_id, project_id, script_id, version, content, content_format,
+		VALUES ($1, $2, $3, $4, $4, $5, $6, 'active', $7, NULLIF($8, '')::uuid, NULLIF($9, ''), $10, $11)
+		RETURNING id, organization_id, project_id, script_id, version, content, content_format, COALESCE(status, 'active'),
 		          source_type, prompt_version_id, prompt_hash, metadata, created_by, created_at
 	`, project.OrganizationID, project.ID, scriptID, version, content, contentFormat, sourceType, promptVersionID, promptHash, metadata, createdBy))
 }
@@ -985,6 +1075,54 @@ func nextScriptVersion(r *http.Request, tx pgx.Tx, scriptID string) (int, error)
 	var next int
 	err := tx.QueryRow(r.Context(), `SELECT COALESCE(MAX(version), 0) + 1 FROM script_versions WHERE script_id = $1`, scriptID).Scan(&next)
 	return next, err
+}
+
+func markScriptVersionDownstreamStale(r *http.Request, tx pgx.Tx, projectID, versionID string) error {
+	rows, err := tx.Query(r.Context(), `
+		SELECT id::text
+		FROM script_scenes
+		WHERE project_id = $1 AND script_version_id = $2 AND deleted_at IS NULL
+	`, projectID, versionID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	sceneIDs := make([]string, 0)
+	for rows.Next() {
+		var sceneID string
+		if err := rows.Scan(&sceneID); err != nil {
+			return err
+		}
+		sceneIDs = append(sceneIDs, sceneID)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, sceneID := range sceneIDs {
+		if err := markScriptSceneDownstreamStale(r, tx, projectID, sceneID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func activateScriptVersionTx(r *http.Request, tx pgx.Tx, project Project, script Script, version ScriptVersion) (string, error) {
+	previousVersionID := ""
+	if script.CurrentVersionID != nil {
+		previousVersionID = *script.CurrentVersionID
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {
+		return "", err
+	}
+	if previousVersionID != "" && previousVersionID != version.ID {
+		if err := markScriptVersionDownstreamStale(r, tx, project.ID, previousVersionID); err != nil {
+			return "", err
+		}
+		if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
+			return "", err
+		}
+	}
+	return previousVersionID, nil
 }
 
 func scanScript(row rowScan) (Script, error) {
@@ -1020,6 +1158,7 @@ func scanScriptVersion(row rowScan) (ScriptVersion, error) {
 		&item.Version,
 		&item.Content,
 		&item.ContentFormat,
+		&item.Status,
 		&sourceType,
 		&promptVersionID,
 		&promptHash,

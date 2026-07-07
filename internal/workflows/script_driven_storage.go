@@ -26,6 +26,7 @@ func (a Activities) activeScript(ctx context.Context, projectID, scriptID string
 			SELECT sv.*
 			FROM script_versions sv
 			WHERE sv.script_id = s.id
+			  AND COALESCE(sv.status, 'active') <> 'archived'
 			  AND (s.current_version_id IS NULL OR sv.id = s.current_version_id)
 			ORDER BY CASE WHEN sv.id = s.current_version_id THEN 0 ELSE 1 END,
 			         COALESCE(sv.version, sv.version_no) DESC

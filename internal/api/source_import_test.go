@@ -66,6 +66,64 @@ func TestNovelImportGeneratesChapters(t *testing.T) {
 	}
 }
 
+func TestNovelImportPersistsVolumeAndSectionOrdinals(t *testing.T) {
+	server, seed := setupSourceImportTest(t)
+	defer seed.Close()
+
+	var imported ImportProjectSourceResponse
+	doMultipartAPISuccess(t, server, "/api/projects/"+seed.projectID+"/sources/import", seed.ownerToken, seed.organizationID, map[string]string{
+		"sourceType": "novel",
+		"title":      "蛊真人第一卷",
+	}, "novel.txt", "第一卷：魔性不改\n第一节：纵身亡魔心仍不悔\nA\n第二节：逆光阴五百年觉悟\nB", &imported)
+	if len(imported.Chapters) != 2 {
+		t.Fatalf("chapters len = %d, want 2; response=%+v", len(imported.Chapters), imported.Chapters)
+	}
+	if intValue(imported.Chapters[0].VolumeIndex) != 1 || intValue(imported.Chapters[0].SectionIndex) != 1 {
+		t.Fatalf("first chapter ordinals = %+v", imported.Chapters[0])
+	}
+	if intValue(imported.Chapters[1].VolumeIndex) != 1 || intValue(imported.Chapters[1].SectionIndex) != 2 {
+		t.Fatalf("second chapter ordinals = %+v", imported.Chapters[1])
+	}
+
+	var volumeIndex, sectionIndex int
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT COALESCE(volume_index, 0), COALESCE(section_index, 0)
+		FROM novel_chapters
+		WHERE project_id = $1 AND source_id = $2
+		ORDER BY chapter_index ASC
+		LIMIT 1
+	`, seed.projectID, imported.Source.ID).Scan(&volumeIndex, &sectionIndex); err != nil {
+		t.Fatalf("read persisted ordinals: %v", err)
+	}
+	if volumeIndex != 1 || sectionIndex != 1 {
+		t.Fatalf("persisted ordinals = %d/%d, want 1/1", volumeIndex, sectionIndex)
+	}
+}
+
+func TestChapterSummariesPreserveVolumeAndSectionOrdinals(t *testing.T) {
+	volumeIndex := 1
+	sectionIndex := 2
+	volumeTitle := "第一卷：魔性不改"
+	chapterTitle := "第二节：逆光阴五百年觉悟"
+	summaries := chapterSummaries([]NovelChapter{{
+		ID:           "chapter-1",
+		SourceID:     "source-1",
+		ChapterIndex: 2,
+		VolumeIndex:  &volumeIndex,
+		SectionIndex: &sectionIndex,
+		VolumeTitle:  &volumeTitle,
+		ChapterTitle: &chapterTitle,
+		Content:      "B",
+		EventState:   "pending",
+	}})
+	if len(summaries) != 1 {
+		t.Fatalf("summaries len = %d, want 1", len(summaries))
+	}
+	if intValue(summaries[0].VolumeIndex) != 1 || intValue(summaries[0].SectionIndex) != 2 {
+		t.Fatalf("summary ordinals = %+v", summaries[0])
+	}
+}
+
 func TestScriptImportCreatesScriptAndVersion(t *testing.T) {
 	server, seed := setupSourceImportTest(t)
 	defer seed.Close()
@@ -264,4 +322,11 @@ func doMultipartAPIRequest(t *testing.T, handler http.Handler, path, token, orgI
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	return recorder
+}
+
+func intValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
