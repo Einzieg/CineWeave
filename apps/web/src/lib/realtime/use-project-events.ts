@@ -6,8 +6,9 @@ import { toast } from "sonner";
 import { keysForProjectEvent, projectEventNames, toastForProjectEvent } from "@/lib/realtime/event-map";
 import { orgScopedKey } from "@/lib/query/use-api";
 import { useStudioSession } from "@/lib/session";
+import { useActivityStore } from "@/lib/stores/activity-store";
 
-const realtimeBase = process.env.NEXT_PUBLIC_REALTIME_URL ?? "http://localhost:8081/api/realtime/events";
+const realtimeBase = process.env.NEXT_PUBLIC_REALTIME_URL ?? "http://localhost:19281/api/realtime/events";
 
 /**
  * 订阅项目级 SSE 事件,按 event-map 失效对应 query 并弹完成/失败 toast。
@@ -20,12 +21,15 @@ export function useProjectEvents(projectId: string) {
   const queryClient = useQueryClient();
   const { session, ready } = useStudioSession();
   const organizationId = session.organizationId;
+  const recordActivityEvent = useActivityStore((state) => state.recordEvent);
+  const setConnectionStatus = useActivityStore((state) => state.setConnectionStatus);
 
   useEffect(() => {
     if (!ready || !projectId) {
       return;
     }
     const source = new EventSource(`${realtimeBase}?projectId=${encodeURIComponent(projectId)}`);
+    setConnectionStatus(projectId, "reconnecting");
     const toastArmedAt = Date.now() + 3000;
     const pending = new Set<string>();
     let flushTimer: number | null = null;
@@ -39,6 +43,18 @@ export function useProjectEvents(projectId: string) {
       pending.clear();
     };
 
+    source.onopen = () => {
+      if (!closed) {
+        setConnectionStatus(projectId, "connected");
+      }
+    };
+
+    source.onerror = () => {
+      if (!closed) {
+        setConnectionStatus(projectId, "reconnecting");
+      }
+    };
+
     const listeners = projectEventNames.map((eventName) => {
       const listener = (event: MessageEvent) => {
         if (closed) {
@@ -50,7 +66,8 @@ export function useProjectEvents(projectId: string) {
         } catch {
           payload = {};
         }
-        for (const key of keysForProjectEvent(eventName, projectId)) {
+        recordActivityEvent(projectId, eventName, payload, event.lastEventId || undefined);
+        for (const key of keysForProjectEvent(eventName, projectId, payload)) {
           pending.add(JSON.stringify(orgScopedKey(organizationId, key)));
         }
         if (flushTimer === null && pending.size > 0) {
@@ -73,6 +90,7 @@ export function useProjectEvents(projectId: string) {
 
     return () => {
       closed = true;
+      setConnectionStatus(projectId, "disconnected");
       for (const [eventName, listener] of listeners) {
         source.removeEventListener(eventName, listener);
       }
@@ -81,5 +99,5 @@ export function useProjectEvents(projectId: string) {
         window.clearTimeout(flushTimer);
       }
     };
-  }, [organizationId, projectId, queryClient, ready]);
+  }, [organizationId, projectId, queryClient, ready, recordActivityEvent, setConnectionStatus]);
 }

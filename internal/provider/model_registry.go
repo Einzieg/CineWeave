@@ -99,17 +99,91 @@ func defaultCapabilityInput(modality string) CapabilityInput {
 }
 
 func normalizeProviderOptionsSchemaAsyncTask(providerOptionsSchema, taskTypes json.RawMessage) json.RawMessage {
+	return normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, nil, nil, nil)
+}
+
+func normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimits, outputLimits, qualityTiers json.RawMessage) json.RawMessage {
 	var schema map[string]any
 	if err := json.Unmarshal(providerOptionsSchema, &schema); err != nil {
 		return providerOptionsSchema
+	}
+	if schema == nil {
+		schema = map[string]any{}
 	}
 	xCapabilities, ok := schema["xCapabilities"].(map[string]any)
 	if !ok {
 		xCapabilities = map[string]any{}
 		schema["xCapabilities"] = xCapabilities
 	}
+	taskTypeValues := stringsFromRawJSON(taskTypes)
+	inputTypes := uniqueStrings(append(stringsFromJSONField(inputLimits, "inputTypes"), stringsFromAny(xCapabilities["supportedInputTypes"])...))
+	outputTypes := uniqueStrings(append(stringsFromJSONField(outputLimits, "outputTypes"), stringsFromAny(xCapabilities["supportedOutputTypes"])...))
+	referenceTypes := uniqueStrings(stringsFromAny(xCapabilities["referenceTypes"]))
+
 	if _, ok := xCapabilities["supportsAsyncTask"].(bool); !ok {
 		xCapabilities["supportsAsyncTask"] = inferSupportsAsyncTask(taskTypes, xCapabilities)
+	}
+	if _, ok := xCapabilities["supportsStreaming"].(bool); !ok {
+		xCapabilities["supportsStreaming"] = containsNormalizedString(taskTypeValues, TaskTypeTextStream)
+	}
+	if _, ok := xCapabilities["supportsReasoning"].(bool); !ok {
+		xCapabilities["supportsReasoning"] = false
+	}
+	if _, ok := xCapabilities["supportsReasoningLevels"].(bool); !ok {
+		xCapabilities["supportsReasoningLevels"] = len(stringsFromAny(xCapabilities["reasoningLevels"])) > 0
+	}
+	if _, ok := xCapabilities["supportedInputTypes"]; !ok && len(inputTypes) > 0 {
+		xCapabilities["supportedInputTypes"] = inputTypes
+	}
+	if _, ok := xCapabilities["supportedOutputTypes"]; !ok && len(outputTypes) > 0 {
+		xCapabilities["supportedOutputTypes"] = outputTypes
+	}
+	if _, ok := xCapabilities["requestModes"]; !ok {
+		xCapabilities["requestModes"] = defaultRequestModes(taskTypeValues)
+	}
+	supportsText := containsNormalizedString(taskTypeValues, TaskTypeTextGenerate) || containsNormalizedString(taskTypeValues, TaskTypeTextStream)
+	supportsImage := containsNormalizedString(taskTypeValues, TaskTypeImageGenerate)
+	supportsVideo := containsNormalizedString(taskTypeValues, TaskTypeVideoCreateTask) || containsNormalizedString(taskTypeValues, "video.text_to_video") || containsNormalizedString(taskTypeValues, "video.image_to_video")
+	if _, ok := xCapabilities["supportsMultimodalInput"].(bool); !ok {
+		xCapabilities["supportsMultimodalInput"] = supportsText && hasNonTextInput(inputTypes)
+	}
+	if supportsImage {
+		if _, ok := xCapabilities["supportsReferences"].(bool); !ok {
+			xCapabilities["supportsReferences"] = containsNormalizedString(inputTypes, "image")
+		}
+		if _, ok := xCapabilities["supportsReferenceImages"].(bool); !ok {
+			xCapabilities["supportsReferenceImages"] = containsNormalizedString(inputTypes, "image")
+		}
+		if _, ok := xCapabilities["maxReferenceImages"]; !ok && truthyBool(xCapabilities["supportsReferenceImages"]) {
+			xCapabilities["maxReferenceImages"] = 1
+		}
+	}
+	if supportsVideo {
+		if _, ok := xCapabilities["supportsReferenceImages"].(bool); !ok {
+			xCapabilities["supportsReferenceImages"] = containsNormalizedString(inputTypes, "image") || containsNormalizedString(referenceTypes, "image")
+		}
+		if _, ok := xCapabilities["supportsFirstFrame"].(bool); !ok {
+			xCapabilities["supportsFirstFrame"] = containsNormalizedString(referenceTypes, "first_frame")
+		}
+		if _, ok := xCapabilities["supportsLastFrame"].(bool); !ok {
+			xCapabilities["supportsLastFrame"] = containsNormalizedString(referenceTypes, "last_frame")
+		}
+		if _, ok := xCapabilities["supportsVideoReference"].(bool); !ok {
+			xCapabilities["supportsVideoReference"] = containsNormalizedString(inputTypes, "video") || containsNormalizedString(referenceTypes, "video")
+		}
+		if _, ok := xCapabilities["maxReferenceImages"]; !ok && truthyBool(xCapabilities["supportsReferenceImages"]) {
+			xCapabilities["maxReferenceImages"] = 1
+		}
+	}
+	if _, ok := xCapabilities["responseFormats"]; !ok {
+		if values := stringsFromJSONField(outputLimits, "responseFormats"); len(values) > 0 {
+			xCapabilities["responseFormats"] = values
+		}
+	}
+	if _, ok := xCapabilities["supportedResolutions"]; !ok {
+		if values := stringsFromRawJSON(qualityTiers); len(values) > 0 && (supportsImage || supportsVideo) {
+			xCapabilities["supportedResolutions"] = values
+		}
 	}
 	raw, err := json.Marshal(schema)
 	if err != nil {
@@ -293,6 +367,87 @@ func stringsFromAny(value any) []string {
 		}
 	}
 	return result
+}
+
+func stringsFromJSONField(raw json.RawMessage, key string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil
+	}
+	return stringsFromAny(decoded[key])
+}
+
+func containsNormalizedString(values []string, expected string) bool {
+	expected = strings.TrimSpace(strings.ToLower(expected))
+	for _, value := range values {
+		if strings.TrimSpace(strings.ToLower(value)) == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNonTextInput(values []string) bool {
+	for _, value := range values {
+		switch strings.TrimSpace(strings.ToLower(value)) {
+		case "", "text":
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func truthyBool(value any) bool {
+	typed, ok := value.(bool)
+	return ok && typed
+}
+
+func defaultRequestModes(taskTypes []string) []string {
+	modes := make([]string, 0, 4)
+	add := func(mode string) {
+		if mode == "" || containsNormalizedString(modes, mode) {
+			return
+		}
+		modes = append(modes, mode)
+	}
+	if containsNormalizedString(taskTypes, TaskTypeTextGenerate) || containsNormalizedString(taskTypes, TaskTypeTextStream) {
+		add("chat_completions")
+	}
+	if containsNormalizedString(taskTypes, TaskTypeImageGenerate) {
+		add("images.generate")
+	}
+	if containsNormalizedString(taskTypes, TaskTypeVideoCreateTask) {
+		add("async_create")
+	}
+	if containsNormalizedString(taskTypes, TaskTypeVideoPollTask) {
+		add("poll")
+	}
+	if containsNormalizedString(taskTypes, TaskTypeVideoCancelTask) {
+		add("cancel")
+	}
+	return modes
 }
 
 func modelSupportsTaskType(model Model, taskType string) bool {

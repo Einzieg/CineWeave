@@ -91,6 +91,14 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	return &Client{s3: client, presignS3: presignClient, bucket: cfg.Bucket}, nil
 }
 
+func (c *Client) Ping(ctx context.Context) error {
+	if c == nil || c.s3 == nil || c.bucket == "" {
+		return fmt.Errorf("storage client is not initialized")
+	}
+	_, err := c.s3.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(c.bucket)})
+	return err
+}
+
 func (c *Client) PutJSON(ctx context.Context, key string, value any) (PutResult, error) {
 	body, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {

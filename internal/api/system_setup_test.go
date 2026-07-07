@@ -25,6 +25,16 @@ func TestPublicRegistrationDisabledByDefault(t *testing.T) {
 	}, http.StatusForbidden, "PUBLIC_REGISTRATION_DISABLED")
 }
 
+func TestReadyzFailsWhenDependenciesMissing(t *testing.T) {
+	server := (&Server{}).Handler()
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz status = %d, want %d; body=%s", recorder.Code, http.StatusServiceUnavailable, recorder.Body.String())
+	}
+}
+
 func TestSystemSetupFlow(t *testing.T) {
 	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
 		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run system setup API tests")

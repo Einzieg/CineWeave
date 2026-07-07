@@ -55,12 +55,12 @@ function AppShellContent({
   }
 
   return (
-    <div className="flex min-h-screen bg-background">
+    <div className="flex h-dvh overflow-hidden bg-background">
       <MainSidebar active={active} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <TopBar title={title} description={description} session={session} onLogout={logout} hideProjectActions />
         <MobileGlobalNav active={active} />
-        <main className="flex-1">
+        <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-screen-2xl p-4 md:p-6">{children}</div>
         </main>
       </div>

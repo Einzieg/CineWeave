@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Einzieg/cineweave/internal/config"
 	"github.com/Einzieg/cineweave/internal/db"
@@ -39,12 +40,26 @@ func main() {
 		log.Fatal(err)
 	}
 	providerService.SetStorage(storageClient)
-	serviceToken := config.Get("CINEWEAVE_SERVICE_TOKEN", "dev-service-token")
+	serviceToken := config.Get("CINEWEAVE_SERVICE_TOKEN", config.DefaultServiceToken)
+	if err := config.ValidateProductionSecret(cfg.Env, "CINEWEAVE_SERVICE_TOKEN", serviceToken, config.DefaultServiceToken); err != nil {
+		log.Fatal(err)
+	}
 	handler := gatewayHandler{providers: providerService, serviceToken: serviceToken}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", httpx.HealthHandler("provider-gateway"))
-	mux.HandleFunc("/readyz", httpx.HealthHandler("provider-gateway"))
+	mux.HandleFunc("/readyz", httpx.ReadyHandler("provider-gateway", map[string]httpx.ReadinessCheck{
+		"database": func(checkCtx context.Context) error {
+			pingCtx, cancel := context.WithTimeout(checkCtx, 2*time.Second)
+			defer cancel()
+			return pool.Ping(pingCtx)
+		},
+		"storage": func(checkCtx context.Context) error {
+			pingCtx, cancel := context.WithTimeout(checkCtx, 2*time.Second)
+			defer cancel()
+			return storageClient.Ping(pingCtx)
+		},
+	}))
 	mux.HandleFunc("/internal/provider/models/discover", handler.withServiceAuth(handler.discoverModels))
 	mux.HandleFunc("/internal/provider/text/generate", handler.withServiceAuth(handler.generateText))
 	mux.HandleFunc("/internal/provider/text/stream", handler.withServiceAuth(handler.streamText))
@@ -258,6 +273,10 @@ func writeSSE(w http.ResponseWriter, event string, data any) error {
 func writeGatewayError(w http.ResponseWriter, r *http.Request, err error) {
 	standard := standardGatewayError(err)
 	status := http.StatusInternalServerError
+	if standardErr, ok := provider.StandardErrorFromError(err); ok {
+		standard = *standardErr
+		status = provider.HTTPStatusForStandardError(standardErr)
+	}
 	if _, ok := provider.StandardErrorFromGuard(err); ok {
 		status = http.StatusTooManyRequests
 		if standard.Code == provider.CodeProviderDailyQuotaExceeded || standard.Code == provider.CodeProviderMonthlyBudgetExceeded {
@@ -280,6 +299,9 @@ func writeGatewayError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func standardGatewayError(err error) provider.StandardError {
+	if standard, ok := provider.StandardErrorFromError(err); ok {
+		return *standard
+	}
 	if standard, ok := provider.StandardErrorFromGuard(err); ok {
 		return *standard
 	}

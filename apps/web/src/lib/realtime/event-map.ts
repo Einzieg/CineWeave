@@ -8,6 +8,13 @@ import { workflowLabel } from "@/lib/routes";
  */
 export const projectEventNames = [
   "artifact.created",
+  "agent.step.blocked",
+  "agent.step.completed",
+  "agent.step.failed",
+  "agent.step.started",
+  "agent.task.blocked",
+  "agent.task.continued",
+  "agent.task.waiting_workflow",
   "asset.card.generated",
   "asset.card.updated",
   "asset.reference.created",
@@ -47,14 +54,34 @@ export const projectEventNames = [
   "workflow.run.cancel_warning",
   "workflow.run.completed",
   "workflow.run.failed",
+  "workflow.run.queued",
 ] as const;
 
 export type ProjectEventName = (typeof projectEventNames)[number];
 
 /** 事件到期望失效的 query key(不含组织前缀)。 */
-export function keysForProjectEvent(eventType: string, projectId: string): QueryKey[] {
+export function keysForProjectEvent(eventType: string, projectId: string, payload: Record<string, unknown> = {}): QueryKey[] {
+  if (eventType.startsWith("agent.")) {
+    const taskId = typeof payload.agentTaskId === "string" ? payload.agentTaskId : "";
+    const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : "";
+    return [
+      qk.agentTasks(projectId),
+      ...(sessionId ? [qk.agentTasks(projectId, sessionId)] : []),
+      qk.workflowRuns(projectId),
+      qk.productionStatus(projectId),
+      qk.shotProduction(projectId),
+      qk.artifacts(projectId),
+      ...(taskId ? [qk.agentTask(projectId, taskId)] : []),
+    ];
+  }
   if (eventType.startsWith("workflow.run.") || eventType.startsWith("workflow.node.")) {
-    return [qk.workflowRuns(projectId), qk.productionStatus(projectId), qk.shotProduction(projectId)];
+    const workflowRunId = typeof payload.workflowRunId === "string" ? payload.workflowRunId : "";
+    return [
+      qk.workflowRuns(projectId),
+      qk.productionStatus(projectId),
+      qk.shotProduction(projectId),
+      ...(workflowRunId ? [qk.workflowNodes(workflowRunId)] : []),
+    ];
   }
   if (eventType.startsWith("storyboard.shot")) {
     return [qk.shotProduction(projectId), qk.productionStatus(projectId), qk.artifacts(projectId)];

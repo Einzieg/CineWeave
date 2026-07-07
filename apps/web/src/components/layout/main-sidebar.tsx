@@ -9,7 +9,7 @@ import type { GlobalSection } from "@/lib/routes";
 
 export function MainSidebar({ active }: { active: GlobalSection }) {
   return (
-    <aside className="hidden w-16 shrink-0 border-r bg-sidebar lg:flex lg:flex-col">
+    <aside className="hidden h-full w-16 shrink-0 border-r bg-sidebar lg:flex lg:flex-col">
       {/* Logo */}
       <Link href="/projects" className="flex h-14 items-center justify-center border-b">
         <div className="grid h-9 w-9 place-items-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
@@ -49,7 +49,7 @@ export function MainSidebar({ active }: { active: GlobalSection }) {
 
 export function MobileGlobalNav({ active }: { active: GlobalSection }) {
   return (
-    <nav className="flex gap-1 overflow-x-auto border-b bg-sidebar px-2 py-2 lg:hidden" aria-label="全局导航">
+    <nav className="flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar px-2 py-2 lg:hidden" aria-label="全局导航">
       {globalNavItems.map((item) => {
         const Icon = item.icon;
         const isActive = active === item.section;

@@ -14,6 +14,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/Einzieg/cineweave/internal/config"
 )
 
 const (
@@ -26,7 +28,11 @@ type Vault struct {
 }
 
 func NewVaultFromEnv() (*Vault, error) {
-	return NewVault(os.Getenv("CINEWEAVE_CREDENTIAL_MASTER_KEY"))
+	rawKey := os.Getenv("CINEWEAVE_CREDENTIAL_MASTER_KEY")
+	if err := config.ValidateProductionSecret(os.Getenv("CINEWEAVE_ENV"), "CINEWEAVE_CREDENTIAL_MASTER_KEY", rawKey); err != nil {
+		return nil, err
+	}
+	return NewVault(rawKey)
 }
 
 func NewVault(rawKey string) (*Vault, error) {

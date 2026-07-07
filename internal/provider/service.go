@@ -298,9 +298,28 @@ func (s *Service) DeleteAccount(ctx context.Context, organizationID, accountID s
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE model_profile_bindings b
-		SET enabled = false
-		FROM provider_models m
+		UPDATE provider_call_logs c
+		SET model_profile_binding_id = NULL
+		FROM model_profile_bindings b
+		JOIN provider_models m ON m.id = b.provider_model_id
+		WHERE c.model_profile_binding_id = b.id
+		  AND m.provider_account_id = $1
+	`, accountID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE provider_async_tasks t
+		SET model_profile_binding_id = NULL
+		FROM model_profile_bindings b
+		JOIN provider_models m ON m.id = b.provider_model_id
+		WHERE t.model_profile_binding_id = b.id
+		  AND m.provider_account_id = $1
+	`, accountID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM model_profile_bindings b
+		USING provider_models m
 		WHERE b.provider_model_id = m.id
 		  AND m.provider_account_id = $1
 	`, accountID); err != nil {
@@ -372,6 +391,11 @@ func (s *Service) ListModels(ctx context.Context, organizationID, accountID, sta
 		if err != nil {
 			return nil, err
 		}
+		if item.Status == "active" {
+			if err := s.ensureDefaultCapabilityForModel(ctx, s.db, item.ID, item.Modality); err != nil {
+				return nil, err
+			}
+		}
 		item.Capabilities, err = s.listCapabilities(ctx, item.ID)
 		if err != nil {
 			return nil, err
@@ -394,6 +418,11 @@ func (s *Service) CreateModel(ctx context.Context, organizationID, accountID str
 	status := strings.TrimSpace(req.Status)
 	if status == "" {
 		status = "active"
+	}
+	var err error
+	status, err = normalizeModelStatus(status)
+	if err != nil {
+		return Model{}, err
 	}
 	capability := req.Capabilities
 	if preset, ok, err := s.lookupModelCapabilityPreset(ctx, s.db, modelKey); err != nil {
@@ -420,11 +449,19 @@ func (s *Service) CreateModel(ctx context.Context, organizationID, accountID str
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO provider_models(provider_account_id, model_key, display_name, modality, status)
 		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (provider_account_id, model_key) DO UPDATE
+		SET display_name = EXCLUDED.display_name,
+		    modality = EXCLUDED.modality,
+		    status = EXCLUDED.status,
+		    updated_at = now()
 		RETURNING id
 	`, accountID, modelKey, displayName, modality, status).Scan(&modelID); err != nil {
 		return Model{}, err
 	}
 	if capability != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM provider_model_capabilities WHERE provider_model_id = $1`, modelID); err != nil {
+			return Model{}, err
+		}
 		if _, err := insertCapability(ctx, tx, modelID, *capability); err != nil {
 			return Model{}, err
 		}
@@ -445,6 +482,11 @@ func (s *Service) GetModel(ctx context.Context, organizationID, modelID string) 
 	item, err := scanModel(row)
 	if err != nil {
 		return Model{}, err
+	}
+	if item.Status == "active" {
+		if err := s.ensureDefaultCapabilityForModel(ctx, s.db, item.ID, item.Modality); err != nil {
+			return Model{}, err
+		}
 	}
 	item.Capabilities, err = s.listCapabilities(ctx, item.ID)
 	if err != nil {
@@ -474,6 +516,10 @@ func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID strin
 	if req.Status != nil {
 		status = strings.TrimSpace(*req.Status)
 	}
+	status, err = normalizeModelStatus(status)
+	if err != nil {
+		return Model{}, err
+	}
 	if modelKey == "" || displayName == "" || modality == "" {
 		return Model{}, fmt.Errorf("%w: modelKey, displayName, and modality are required", ErrValidation)
 	}
@@ -502,6 +548,9 @@ func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID strin
 		SET model_key = $2, display_name = $3, modality = $4, status = $5
 		WHERE id = $1
 	`, modelID, modelKey, displayName, modality, status); err != nil {
+		if isUniqueViolation(err) {
+			return Model{}, fmt.Errorf("%w: provider model already exists", ErrConflict)
+		}
 		return Model{}, err
 	}
 	if capability != nil {
@@ -509,6 +558,10 @@ func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID strin
 			return Model{}, err
 		}
 		if _, err := insertCapability(ctx, tx, modelID, *capability); err != nil {
+			return Model{}, err
+		}
+	} else if status == "active" {
+		if err := s.ensureDefaultCapabilityForModel(ctx, tx, modelID, modality); err != nil {
 			return Model{}, err
 		}
 	}
@@ -545,8 +598,25 @@ func (s *Service) DeleteModel(ctx context.Context, organizationID, modelID strin
 		return pgx.ErrNoRows
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE model_profile_bindings
-		SET enabled = false
+		UPDATE provider_call_logs c
+		SET model_profile_binding_id = NULL
+		FROM model_profile_bindings b
+		WHERE c.model_profile_binding_id = b.id
+		  AND b.provider_model_id = $1
+	`, modelID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE provider_async_tasks t
+		SET model_profile_binding_id = NULL
+		FROM model_profile_bindings b
+		WHERE t.model_profile_binding_id = b.id
+		  AND b.provider_model_id = $1
+	`, modelID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM model_profile_bindings
 		WHERE provider_model_id = $1
 	`, modelID); err != nil {
 		return err
@@ -678,7 +748,14 @@ func (s *Service) CreateModelProfileBinding(ctx context.Context, organizationID,
 	if strings.TrimSpace(req.ProviderModelID) == "" {
 		return ModelProfile{}, fmt.Errorf("%w: providerModelId is required", ErrValidation)
 	}
-	if _, err := s.GetModel(ctx, organizationID, req.ProviderModelID); err != nil {
+	model, err := s.GetModel(ctx, organizationID, req.ProviderModelID)
+	if err != nil {
+		return ModelProfile{}, err
+	}
+	if model.Status != "active" {
+		return ModelProfile{}, fmt.Errorf("%w: provider model is not active", ErrValidation)
+	}
+	if err := s.ensureDefaultCapabilityForModel(ctx, s.db, model.ID, model.Modality); err != nil {
 		return ModelProfile{}, err
 	}
 	priority := 100
@@ -713,7 +790,27 @@ func (s *Service) CreateModelProfileBinding(ctx context.Context, organizationID,
 }
 
 func (s *Service) DeleteModelProfileBinding(ctx context.Context, organizationID, profileID, bindingID string) error {
-	tag, err := s.db.Exec(ctx, `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE provider_call_logs
+		SET model_profile_binding_id = NULL
+		WHERE model_profile_binding_id = $1
+	`, bindingID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE provider_async_tasks
+		SET model_profile_binding_id = NULL
+		WHERE model_profile_binding_id = $1
+	`, bindingID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
 		DELETE FROM model_profile_bindings b
 		USING model_profiles p
 		WHERE b.model_profile_id = p.id
@@ -727,7 +824,7 @@ func (s *Service) DeleteModelProfileBinding(ctx context.Context, organizationID,
 	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID string) (ModelDiscoveryResult, error) {
@@ -832,6 +929,10 @@ func (s *Service) syncDiscoveredModels(ctx context.Context, organizationID, acco
 			capability = preset.capabilityInput()
 			presetMatched = true
 		}
+		capability, err = normalizeCapabilityInput(capability)
+		if err != nil {
+			return err
+		}
 		status := "active"
 
 		var modelID string
@@ -916,6 +1017,19 @@ func normalizeListStatusFilter(value string) (string, error) {
 		return status, nil
 	default:
 		return "", fmt.Errorf("%w: invalid status filter", ErrValidation)
+	}
+}
+
+func normalizeModelStatus(value string) (string, error) {
+	status := strings.TrimSpace(value)
+	if status == "" {
+		return "active", nil
+	}
+	switch status {
+	case "active", "disabled", "deprecated", "error":
+		return status, nil
+	default:
+		return "", fmt.Errorf("%w: model status is invalid", ErrValidation)
 	}
 }
 
@@ -1676,14 +1790,7 @@ func errorFromGatewayStandard(standard *StandardError) error {
 	if standard == nil {
 		return fmt.Errorf("%w: provider gateway request failed", ErrValidation)
 	}
-	if standard.UpstreamStatus > 0 {
-		return &UpstreamError{
-			Status: standard.UpstreamStatus,
-			Code:   standard.UpstreamCode,
-			Body:   string(mustJSON(standard)),
-		}
-	}
-	return fmt.Errorf("%w: %s", ErrValidation, standard.Message)
+	return &StandardErrorError{Standard: *standard}
 }
 
 func gatewayErrorFields(standard *StandardError) (string, string) {
@@ -1691,6 +1798,11 @@ func gatewayErrorFields(standard *StandardError) (string, string) {
 		return CodeUnknownError, "provider gateway request failed"
 	}
 	return standard.Code, standard.Message
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func (s *Service) insertCredential(ctx context.Context, tx pgx.Tx, organizationID, accountID, userID, credentialKey, credentialType string, payload map[string]any) (string, error) {
@@ -1907,30 +2019,9 @@ type capabilityWriter interface {
 }
 
 func insertCapability(ctx context.Context, tx capabilityWriter, modelID string, input CapabilityInput) (string, error) {
-	taskTypes, err := normalizeJSON(input.TaskTypes, "[]")
+	capability, err := normalizeCapabilityInput(input)
 	if err != nil {
-		return "", fmt.Errorf("%w: taskTypes must be valid JSON", ErrValidation)
-	}
-	inputLimits, err := normalizeJSON(input.InputLimits, "{}")
-	if err != nil {
-		return "", fmt.Errorf("%w: inputLimits must be valid JSON", ErrValidation)
-	}
-	outputLimits, err := normalizeJSON(input.OutputLimits, "{}")
-	if err != nil {
-		return "", fmt.Errorf("%w: outputLimits must be valid JSON", ErrValidation)
-	}
-	qualityTiers, err := normalizeJSON(input.QualityTiers, "[]")
-	if err != nil {
-		return "", fmt.Errorf("%w: qualityTiers must be valid JSON", ErrValidation)
-	}
-	providerOptionsSchema, err := normalizeJSON(input.ProviderOptionsSchema, "{}")
-	if err != nil {
-		return "", fmt.Errorf("%w: providerOptionsSchema must be valid JSON", ErrValidation)
-	}
-	providerOptionsSchema = normalizeProviderOptionsSchemaAsyncTask(providerOptionsSchema, taskTypes)
-	pricingPolicy, err := normalizeJSON(input.PricingPolicy, "{}")
-	if err != nil {
-		return "", fmt.Errorf("%w: pricingPolicy must be valid JSON", ErrValidation)
+		return "", err
 	}
 	var capabilityID string
 	err = tx.QueryRow(ctx, `
@@ -1940,8 +2031,86 @@ func insertCapability(ctx context.Context, tx capabilityWriter, modelID string, 
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
-	`, modelID, taskTypes, inputLimits, outputLimits, qualityTiers, providerOptionsSchema, pricingPolicy).Scan(&capabilityID)
+	`, modelID, capability.TaskTypes, capability.InputLimits, capability.OutputLimits, capability.QualityTiers, capability.ProviderOptionsSchema, capability.PricingPolicy).Scan(&capabilityID)
 	return capabilityID, err
+}
+
+type capabilityEnsurer interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func (s *Service) ensureDefaultCapabilityForModel(ctx context.Context, exec capabilityEnsurer, modelID, modality string) error {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return nil
+	}
+	capability, err := normalizeCapabilityInput(defaultCapabilityInput(modality))
+	if err != nil {
+		return err
+	}
+	if _, err := exec.Exec(ctx, `
+		INSERT INTO provider_model_capabilities(
+			provider_model_id, task_types, input_limits, output_limits,
+			quality_tiers, provider_options_schema, pricing_policy
+		)
+		SELECT $1, $2, $3, $4, $5, $6, $7
+		WHERE NOT EXISTS (
+			SELECT 1 FROM provider_model_capabilities WHERE provider_model_id = $1
+		)
+	`, modelID, capability.TaskTypes, capability.InputLimits, capability.OutputLimits, capability.QualityTiers, capability.ProviderOptionsSchema, capability.PricingPolicy); err != nil {
+		return err
+	}
+	_, err = exec.Exec(ctx, `
+		UPDATE provider_model_capabilities
+		SET task_types = $2,
+		    provider_options_schema = CASE
+		      WHEN provider_options_schema IS NULL OR provider_options_schema = '{}'::jsonb THEN $3
+		      ELSE provider_options_schema
+		    END
+		WHERE provider_model_id = $1
+		  AND (
+		    task_types IS NULL
+		    OR task_types = '[]'::jsonb
+		    OR task_types = '{}'::jsonb
+		  )
+	`, modelID, capability.TaskTypes, capability.ProviderOptionsSchema)
+	return err
+}
+
+func normalizeCapabilityInput(input CapabilityInput) (CapabilityInput, error) {
+	taskTypes, err := normalizeJSON(input.TaskTypes, "[]")
+	if err != nil {
+		return CapabilityInput{}, fmt.Errorf("%w: taskTypes must be valid JSON", ErrValidation)
+	}
+	inputLimits, err := normalizeJSON(input.InputLimits, "{}")
+	if err != nil {
+		return CapabilityInput{}, fmt.Errorf("%w: inputLimits must be valid JSON", ErrValidation)
+	}
+	outputLimits, err := normalizeJSON(input.OutputLimits, "{}")
+	if err != nil {
+		return CapabilityInput{}, fmt.Errorf("%w: outputLimits must be valid JSON", ErrValidation)
+	}
+	qualityTiers, err := normalizeJSON(input.QualityTiers, "[]")
+	if err != nil {
+		return CapabilityInput{}, fmt.Errorf("%w: qualityTiers must be valid JSON", ErrValidation)
+	}
+	providerOptionsSchema, err := normalizeJSON(input.ProviderOptionsSchema, "{}")
+	if err != nil {
+		return CapabilityInput{}, fmt.Errorf("%w: providerOptionsSchema must be valid JSON", ErrValidation)
+	}
+	pricingPolicy, err := normalizeJSON(input.PricingPolicy, "{}")
+	if err != nil {
+		return CapabilityInput{}, fmt.Errorf("%w: pricingPolicy must be valid JSON", ErrValidation)
+	}
+	providerOptionsSchema = normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimits, outputLimits, qualityTiers)
+	return CapabilityInput{
+		TaskTypes:             taskTypes,
+		InputLimits:           inputLimits,
+		OutputLimits:          outputLimits,
+		QualityTiers:          qualityTiers,
+		ProviderOptionsSchema: providerOptionsSchema,
+		PricingPolicy:         pricingPolicy,
+	}, nil
 }
 
 func scanModelProfile(row rowScanner) (ModelProfile, error) {

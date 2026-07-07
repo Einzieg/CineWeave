@@ -157,7 +157,7 @@ type ShotAssetRequirementRecord struct {
 
 func ScriptToAssetsWorkflow(ctx workflow.Context, input TextToStoryboardInput) (ScriptAssetsOutput, error) {
 	options := resolveScriptProductionOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 	var output ScriptAssetsOutput
 	if err := workflow.ExecuteActivity(ctx, "AnalyzeScriptAssets", AnalyzeScriptAssetsInput{
 		OrganizationID: input.OrganizationID,
@@ -194,7 +194,7 @@ func ScriptToAssetsWorkflow(ctx workflow.Context, input TextToStoryboardInput) (
 
 func ScriptToStoryboardWorkflow(ctx workflow.Context, input TextToStoryboardInput) (ScriptStoryboardOutput, error) {
 	options := resolveScriptProductionOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 	var assets ScriptAssetsOutput
 	if err := workflow.ExecuteActivity(ctx, "AnalyzeScriptAssets", AnalyzeScriptAssetsInput{
 		OrganizationID: input.OrganizationID,
@@ -240,7 +240,7 @@ func ScriptToStoryboardWorkflow(ctx workflow.Context, input TextToStoryboardInpu
 }
 
 func ScriptDrivenVideoProduction(ctx workflow.Context, input TextToStoryboardInput, options videoProductionOptions, scriptOptions ScriptProductionOptions) (VideoProductionOutput, error) {
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 	var assets ScriptAssetsOutput
 	if err := workflow.ExecuteActivity(ctx, "AnalyzeScriptAssets", AnalyzeScriptAssetsInput{
 		OrganizationID: input.OrganizationID,
@@ -513,7 +513,7 @@ func (a Activities) AnalyzeScriptAssets(ctx context.Context, input AnalyzeScript
 	if a.gateway == nil {
 		return ScriptAssetsOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
-	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+	gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -524,6 +524,7 @@ func (a Activities) AnalyzeScriptAssets(ctx context.Context, input AnalyzeScript
 		PromptHash:        rendered.RenderedHash,
 		PromptSource:      rendered.Source,
 		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText, "responseFormat": "json"}),
+		Options:           providerTextGatewayOptions(),
 	})
 	if err != nil {
 		return ScriptAssetsOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))
@@ -635,7 +636,7 @@ func (a Activities) GenerateStoryboardFromScript(ctx context.Context, input Gene
 	if a.gateway == nil {
 		return ScriptStoryboardOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
-	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+	gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -646,6 +647,7 @@ func (a Activities) GenerateStoryboardFromScript(ctx context.Context, input Gene
 		PromptHash:        rendered.RenderedHash,
 		PromptSource:      rendered.Source,
 		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText, "responseFormat": "json"}),
+		Options:           providerTextGatewayOptions(),
 	})
 	if err != nil {
 		return ScriptStoryboardOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))

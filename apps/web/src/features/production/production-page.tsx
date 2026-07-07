@@ -4,10 +4,11 @@ import { useApiQuery } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
 import { Surface, SectionTitle } from "@/components/layout/app-shell";
+import { StatusBadge } from "@/components/shared/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
 import { Activity, CheckCircle2, Clock, XCircle, type LucideIcon } from "lucide-react";
+import { productionFieldLabel, productionStageLabel } from "@/lib/labels";
 import type { ProductionStatus } from "@/lib/types";
 
 type ProductionStage = ProductionStatus["stages"][keyof ProductionStatus["stages"]];
@@ -42,12 +43,10 @@ export function ProductionPage({ projectId }: { projectId: string }) {
             <div>
               <h3 className="text-lg font-semibold">整体进度</h3>
               <p className="text-sm text-muted-foreground">
-                当前阶段: {overall?.stage || "未开始"}
+                当前阶段: {productionStageLabel(overall?.stage || "not_started")}
               </p>
             </div>
-            <Badge variant={overall?.status === "completed" ? "default" : "secondary"}>
-              {overall?.status || "pending"}
-            </Badge>
+            <StatusBadge status={overall?.status || "pending"} />
           </div>
           <Progress value={overall?.progress || 0} className="h-3" />
           <div className="mt-2 text-sm text-muted-foreground text-right">
@@ -99,7 +98,7 @@ function StageCard({ title, icon: Icon, stage }: { title: string; icon: LucideIc
           .slice(0, 3)
           .map(([key, value]) => (
             <div key={key} className="flex justify-between">
-              <span>{key}</span>
+              <span>{productionFieldLabel(key)}</span>
               <span className="font-medium text-foreground">{String(value)}</span>
             </div>
           ))}

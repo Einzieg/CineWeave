@@ -190,6 +190,8 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 	cfg := parseOpenAICompatibleConfig(selection.Account.Config)
 	if req.Options.TimeoutMS > 0 {
 		cfg.TimeoutMS = req.Options.TimeoutMS
+	} else if !openAICompatibleConfigHasTimeout(selection.Account.Config) {
+		cfg.TimeoutMS = gatewayTextTimeoutMSFromEnv()
 	}
 	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
 	callCtx, cancel := context.WithTimeout(ctx, timeout)

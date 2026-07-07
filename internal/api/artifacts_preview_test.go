@@ -53,6 +53,7 @@ func TestArtifactPreviewSecurity(t *testing.T) {
 type artifactPreviewSeed struct {
 	ctx                 context.Context
 	pool                *pgxpool.Pool
+	apiServer           *Server
 	server              http.Handler
 	authService         *auth.Service
 	organizationID      string
@@ -90,7 +91,8 @@ func setupArtifactPreviewTest(t *testing.T) (http.Handler, *artifactPreviewSeed)
 	if err != nil {
 		t.Fatalf("create storage client: %v", err)
 	}
-	server := New(pool, authService, nil, storageClient, nil).Handler()
+	apiServer := New(pool, authService, nil, storageClient, nil)
+	server := apiServer.Handler()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	ownerResp, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "preview-owner-" + suffix + "@example.test",
@@ -113,6 +115,7 @@ func setupArtifactPreviewTest(t *testing.T) (http.Handler, *artifactPreviewSeed)
 	seed := &artifactPreviewSeed{
 		ctx:                 ctx,
 		pool:                pool,
+		apiServer:           apiServer,
 		server:              server,
 		authService:         authService,
 		organizationID:      ownerResp.OrganizationID,

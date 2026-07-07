@@ -50,3 +50,22 @@ func TestProviderDirectFallbackRequiresDevelopmentOrTest(t *testing.T) {
 		t.Fatal("fallback was allowed when flag is false")
 	}
 }
+
+func TestGatewayStandardErrorPreservesCode(t *testing.T) {
+	err := errorFromGatewayStandard(&StandardError{
+		Code:      CodeUpstreamTimeout,
+		Message:   "provider request timed out",
+		Retryable: true,
+	})
+
+	standard, ok := StandardErrorFromError(err)
+	if !ok {
+		t.Fatalf("StandardErrorFromError(%T) ok = false", err)
+	}
+	if standard.Code != CodeUpstreamTimeout || standard.Message != "provider request timed out" || !standard.Retryable {
+		t.Fatalf("standard = %#v, want upstream timeout retryable", standard)
+	}
+	if got := HTTPStatusForStandardError(standard); got != 504 {
+		t.Fatalf("HTTPStatusForStandardError = %d, want 504", got)
+	}
+}

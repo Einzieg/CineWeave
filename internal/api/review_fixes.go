@@ -71,52 +71,63 @@ type reviewFixDraft struct {
 	ProviderCallID    string
 }
 
+type generateReviewFixRequest struct {
+	Mode        string `json:"mode"`
+	Instruction string `json:"instruction"`
+}
+
+type applyReviewFixRequest struct {
+	ResolveReviewItem   bool `json:"resolveReviewItem"`
+	TriggerRegeneration bool `json:"triggerRegeneration"`
+}
+
 func (s *Server) generateReviewFix(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
 	if !ok {
 		return
 	}
-	item, ok := s.reviewItemForFix(w, r, project.ID, r.PathValue("itemId"))
-	if !ok {
-		return
-	}
-	if item.EntityID == nil || strings.TrimSpace(*item.EntityID) == "" || !reviewpkg.SupportedFixTarget(item.EntityType) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "REVIEW_FIX_UNSUPPORTED", "current review item does not support automatic fixes", nil, false)
-		return
-	}
-	var req struct {
-		Mode        string `json:"mode"`
-		Instruction string `json:"instruction"`
-	}
+	var req generateReviewFixRequest
 	if !decode(w, r, &req) {
 		return
+	}
+	fix, err := s.generateReviewFixCore(r.Context(), principal, project, r.PathValue("itemId"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, fix, nil)
+}
+
+func (s *Server) generateReviewFixCore(ctx context.Context, principal auth.Principal, project Project, itemID string, req generateReviewFixRequest) (ReviewFix, error) {
+	item, err := s.reviewItemForFixCore(ctx, project.ID, itemID)
+	if err != nil {
+		return ReviewFix{}, err
+	}
+	if item.EntityID == nil || strings.TrimSpace(*item.EntityID) == "" || !reviewpkg.SupportedFixTarget(item.EntityType) {
+		return ReviewFix{}, newAPIError(http.StatusUnprocessableEntity, "REVIEW_FIX_UNSUPPORTED", "current review item does not support automatic fixes")
 	}
 	mode := strings.TrimSpace(req.Mode)
 	if mode == "" {
 		mode = "deterministic"
 	}
-	target, err := reviewpkg.LoadReviewFixTarget(r.Context(), s.db, project.ID, item.EntityType, *item.EntityID)
+	target, err := reviewpkg.LoadReviewFixTarget(ctx, s.db, project.ID, item.EntityType, *item.EntityID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ReviewFix{}, err
 	}
 	var draft reviewFixDraft
 	switch mode {
 	case "agent":
-		draft, err = s.generateAgentReviewFix(r.Context(), project, item, target, strings.TrimSpace(req.Instruction))
+		draft, err = s.generateAgentReviewFix(ctx, project, item, target, strings.TrimSpace(req.Instruction))
 	case "deterministic":
 		draft, err = deterministicReviewFix(item, target)
 	default:
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "mode is invalid", nil, false)
-		return
+		return ReviewFix{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "mode is invalid")
 	}
 	if err != nil {
 		if errors.Is(err, reviewpkg.ErrUnsupportedFixTarget) {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "REVIEW_FIX_UNSUPPORTED", "current review item does not support automatic fixes", nil, false)
-			return
+			return ReviewFix{}, newAPIError(http.StatusUnprocessableEntity, "REVIEW_FIX_UNSUPPORTED", "current review item does not support automatic fixes")
 		}
-		s.writeError(w, r, err)
-		return
+		return ReviewFix{}, err
 	}
 	if draft.FixType == "" {
 		draft.FixType = "patch"
@@ -126,12 +137,11 @@ func (s *Server) generateReviewFix(w http.ResponseWriter, r *http.Request, princ
 	}
 	if draft.FixType != "note" {
 		if err := reviewpkg.ValidateReviewPatch(target.EntityType, draft.Patch); err != nil {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error(), nil, false)
-			return
+			return ReviewFix{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error())
 		}
 	}
 	afterPreview := reviewpkg.ApplyReviewPatchPreview(target.Snapshot, draft.Patch)
-	fix, err := scanReviewFix(s.db.QueryRow(r.Context(), `
+	fix, err := scanReviewFix(s.db.QueryRow(ctx, `
 		INSERT INTO review_fixes(
 			organization_id, project_id, review_item_id, target_entity_type, target_entity_id, status, fix_type,
 			title, explanation, before_snapshot, patch, after_preview, regenerate_request,
@@ -144,10 +154,9 @@ func (s *Server) generateReviewFix(w http.ResponseWriter, r *http.Request, princ
 		mustRawJSON(target.Snapshot), mustRawJSON(draft.Patch), mustRawJSON(afterPreview), rawNullableObject(draft.RegenerateRequest),
 		draft.PromptVersionID, draft.PromptHash, draft.ProviderCallID, principal.UserID))
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ReviewFix{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, fix, nil)
+	return fix, nil
 }
 
 func (s *Server) listReviewFixes(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -207,109 +216,100 @@ func (s *Server) applyReviewFix(w http.ResponseWriter, r *http.Request, principa
 	if !ok {
 		return
 	}
-	var req struct {
-		ResolveReviewItem   bool `json:"resolveReviewItem"`
-		TriggerRegeneration bool `json:"triggerRegeneration"`
-	}
+	var req applyReviewFixRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	fix, err := scanReviewFix(s.db.QueryRow(r.Context(), `
+	response, regenerateRequest, err := s.applyReviewFixCore(r.Context(), principal, project, r.PathValue("fixId"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if req.TriggerRegeneration && len(regenerateRequest) > 0 && string(regenerateRequest) != "null" {
+		runID, ok := s.startReviewFixRegeneration(w, r, principal, project, regenerateRequest)
+		if !ok {
+			return
+		}
+		response.WorkflowRunID = &runID
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (s *Server) applyReviewFixCore(ctx context.Context, principal auth.Principal, project Project, fixID string, req applyReviewFixRequest) (ApplyReviewFixResponse, json.RawMessage, error) {
+	fix, err := scanReviewFix(s.db.QueryRow(ctx, `
 		SELECT `+reviewFixColumns()+`
 		FROM review_fixes
 		WHERE project_id = $1 AND id = $2
-	`, project.ID, r.PathValue("fixId")))
+	`, project.ID, fixID))
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ApplyReviewFixResponse{}, nil, err
 	}
 	if fix.Status != "draft" {
-		httpx.WriteError(w, r, http.StatusConflict, "REVIEW_FIX_NOT_DRAFT", "review fix is not a draft", nil, false)
-		return
+		return ApplyReviewFixResponse{}, nil, newAPIError(http.StatusConflict, "REVIEW_FIX_NOT_DRAFT", "review fix is not a draft")
 	}
 	if fix.TargetEntityID == nil || !reviewpkg.SupportedFixTarget(fix.TargetEntityType) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "REVIEW_FIX_UNSUPPORTED", "current review fix cannot be applied automatically", nil, false)
-		return
+		return ApplyReviewFixResponse{}, nil, newAPIError(http.StatusUnprocessableEntity, "REVIEW_FIX_UNSUPPORTED", "current review fix cannot be applied automatically")
 	}
-	current, err := reviewpkg.LoadReviewFixTarget(r.Context(), s.db, project.ID, fix.TargetEntityType, *fix.TargetEntityID)
+	current, err := reviewpkg.LoadReviewFixTarget(ctx, s.db, project.ID, fix.TargetEntityType, *fix.TargetEntityID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ApplyReviewFixResponse{}, nil, err
 	}
 	before := rawObject(fix.BeforeSnapshot)
 	if !reviewpkg.SnapshotsEqual(current.Snapshot, before) {
-		httpx.WriteError(w, r, http.StatusConflict, "TARGET_CHANGED", "target entity changed after the fix was generated", nil, false)
-		return
+		return ApplyReviewFixResponse{}, nil, newAPIError(http.StatusConflict, "TARGET_CHANGED", "target entity changed after the fix was generated")
 	}
 	patch := rawObject(fix.Patch)
 	if fix.FixType != "note" {
 		if err := reviewpkg.ValidateReviewPatch(fix.TargetEntityType, patch); err != nil {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error(), nil, false)
-			return
+			return ApplyReviewFixResponse{}, nil, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error())
 		}
 	}
 	after := reviewpkg.ApplyReviewPatchPreview(current.Snapshot, patch)
-	tx, err := s.db.Begin(r.Context())
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ApplyReviewFixResponse{}, nil, err
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback(ctx)
 	if fix.FixType != "note" {
-		if err := s.applyReviewPatchToTarget(r.Context(), tx, project, fix.TargetEntityType, *fix.TargetEntityID, after, principal.UserID); err != nil {
-			s.writeError(w, r, err)
-			return
+		if err := s.applyReviewPatchToTarget(ctx, tx, project, fix.TargetEntityType, *fix.TargetEntityID, after, principal.UserID); err != nil {
+			return ApplyReviewFixResponse{}, nil, err
 		}
 	}
 	reviewItemStatus := (*string)(nil)
 	if req.ResolveReviewItem {
 		status := "resolved"
 		reviewItemStatus = &status
-		if _, err := tx.Exec(r.Context(), `
+		if _, err := tx.Exec(ctx, `
 			UPDATE review_items
 			SET status = 'resolved', resolved_by = $3, resolved_at = now(), resolution_note = 'review fix applied'
 			WHERE project_id = $1 AND id = $2
 		`, project.ID, fix.ReviewItemID, principal.UserID); err != nil {
-			s.writeError(w, r, err)
-			return
+			return ApplyReviewFixResponse{}, nil, err
 		}
 	}
-	if _, err := tx.Exec(r.Context(), `
+	if _, err := tx.Exec(ctx, `
 		UPDATE review_fixes
 		SET status = 'applied', applied_by = $3, applied_at = now(), after_preview = $4
 		WHERE project_id = $1 AND id = $2
 	`, project.ID, fix.ID, principal.UserID, mustRawJSON(after)); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ApplyReviewFixResponse{}, nil, err
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "review.fix.applied", "review_fix", fix.ID, mustRawJSON(map[string]any{
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "review.fix.applied", "review_fix", fix.ID, mustRawJSON(map[string]any{
 		"reviewFixId":      fix.ID,
 		"reviewItemId":     fix.ReviewItemID,
 		"targetEntityType": fix.TargetEntityType,
 		"targetEntityId":   stringPtrValue(fix.TargetEntityID),
 	})); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ApplyReviewFixResponse{}, nil, err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := tx.Commit(ctx); err != nil {
+		return ApplyReviewFixResponse{}, nil, err
 	}
-
-	var workflowRunID *string
-	if req.TriggerRegeneration && len(fix.RegenerateRequest) > 0 && string(fix.RegenerateRequest) != "null" {
-		runID, ok := s.startReviewFixRegeneration(w, r, principal, project, fix.RegenerateRequest)
-		if !ok {
-			return
-		}
-		workflowRunID = &runID
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, ApplyReviewFixResponse{
+	return ApplyReviewFixResponse{
 		FixID:            fix.ID,
 		Status:           "applied",
 		ReviewItemStatus: reviewItemStatus,
-		WorkflowRunID:    workflowRunID,
-	}, nil)
+	}, fix.RegenerateRequest, nil
 }
 
 func (s *Server) dismissReviewFix(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -317,29 +317,40 @@ func (s *Server) dismissReviewFix(w http.ResponseWriter, r *http.Request, princi
 	if !ok {
 		return
 	}
-	tag, err := s.db.Exec(r.Context(), `
-		UPDATE review_fixes
-		SET status = 'dismissed'
-		WHERE project_id = $1 AND id = $2 AND status = 'draft'
-	`, project.ID, r.PathValue("fixId"))
+	response, err := s.dismissReviewFixCore(r.Context(), project, r.PathValue("fixId"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		httpx.WriteError(w, r, http.StatusConflict, "REVIEW_FIX_NOT_DRAFT", "review fix is not a draft", nil, false)
-		return
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (s *Server) dismissReviewFixCore(ctx context.Context, project Project, fixID string) (DismissReviewFixResponse, error) {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE review_fixes
+		SET status = 'dismissed'
+		WHERE project_id = $1 AND id = $2 AND status = 'draft'
+	`, project.ID, fixID)
+	if err != nil {
+		return DismissReviewFixResponse{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, DismissReviewFixResponse{FixID: r.PathValue("fixId"), Status: "dismissed"}, nil)
+	if tag.RowsAffected() == 0 {
+		return DismissReviewFixResponse{}, newAPIError(http.StatusConflict, "REVIEW_FIX_NOT_DRAFT", "review fix is not a draft")
+	}
+	return DismissReviewFixResponse{FixID: fixID, Status: "dismissed"}, nil
 }
 
 func (s *Server) reviewItemForFix(w http.ResponseWriter, r *http.Request, projectID, itemID string) (ReviewItem, bool) {
-	item, err := scanReviewItem(s.db.QueryRow(r.Context(), reviewItemSelectSQL(`WHERE project_id = $1 AND id = $2`), projectID, itemID))
+	item, err := s.reviewItemForFixCore(r.Context(), projectID, itemID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return ReviewItem{}, false
 	}
 	return item, true
+}
+
+func (s *Server) reviewItemForFixCore(ctx context.Context, projectID, itemID string) (ReviewItem, error) {
+	return scanReviewItem(s.db.QueryRow(ctx, reviewItemSelectSQL(`WHERE project_id = $1 AND id = $2`), projectID, itemID))
 }
 
 func deterministicReviewFix(item ReviewItem, target reviewpkg.ReviewFixTarget) (reviewFixDraft, error) {

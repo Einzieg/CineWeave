@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { AlertCircle, Check, RefreshCw, Wand2, X } from "lucide-react";
 import { toast } from "sonner";
+import { reviewCategoryLabel, reviewSeverityLabel, statusLabel } from "@/lib/labels";
 import type { ReviewFix, ReviewItem } from "@/lib/types";
 
 export function ReviewPage({ projectId }: { projectId: string }) {
@@ -127,12 +128,12 @@ export function ReviewPage({ projectId }: { projectId: string }) {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="font-medium">{item.title}</div>
-                    <Badge variant={item.severity === "critical" || item.severity === "high" ? "destructive" : "outline"}>{item.severity}</Badge>
+                    <Badge variant={item.severity === "critical" || item.severity === "high" ? "destructive" : "outline"}>{reviewSeverityLabel(item.severity)}</Badge>
                   </div>
                   <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{item.description}</p>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <Badge variant="secondary">{item.status}</Badge>
-                    <Badge variant="outline">{item.category}</Badge>
+                    <Badge variant="secondary">{statusLabel(item.status)}</Badge>
+                    <Badge variant="outline">{reviewCategoryLabel(item.category)}</Badge>
                   </div>
                 </button>
               ))}
@@ -146,7 +147,7 @@ export function ReviewPage({ projectId }: { projectId: string }) {
                       <h3 className="text-lg font-semibold">{selectedItem.title}</h3>
                       <p className="mt-2 text-sm text-muted-foreground">{selectedItem.description}</p>
                     </div>
-                    <Badge>{selectedItem.status}</Badge>
+                    <Badge>{statusLabel(selectedItem.status)}</Badge>
                   </div>
                   {selectedItem.suggestion ? <p className="mt-3 text-sm">{selectedItem.suggestion}</p> : null}
                   <Textarea className="mt-4" placeholder="处理备注" value={resolutionNote} onChange={(event) => setResolutionNote(event.target.value)} />
@@ -180,7 +181,7 @@ export function ReviewPage({ projectId }: { projectId: string }) {
                           <div className="font-medium">{fix.title}</div>
                           <p className="mt-1 text-sm text-muted-foreground">{fix.explanation}</p>
                         </div>
-                        <Badge variant="outline">{fix.status}</Badge>
+                        <Badge variant="outline">{statusLabel(fix.status)}</Badge>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Button size="sm" onClick={() => applyFixMutation.mutate({ fix, triggerRegeneration: false })} disabled={applyFixMutation.isPending || fix.status !== "draft"}>

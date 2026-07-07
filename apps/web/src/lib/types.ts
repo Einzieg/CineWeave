@@ -78,12 +78,14 @@ export type ProjectSource = {
   projectId: string;
   sourceType: "novel" | "script" | string;
   title: string;
-  content: string;
+  content?: string;
   contentFormat: "plain_text" | "markdown" | string;
   originalFileName?: string;
   storageKey?: string;
   status: string;
   metadata?: JsonRecord;
+  chapterCount?: number;
+  firstVolumeIndex?: number;
   chapters?: NovelChapter[];
   createdAt?: string;
   updatedAt?: string;
@@ -93,6 +95,8 @@ export type NovelChapter = {
   id: string;
   sourceId: string;
   chapterIndex: number;
+  volumeIndex?: number;
+  sectionIndex?: number;
   volumeTitle?: string;
   chapterTitle?: string;
   content: string;
@@ -105,10 +109,21 @@ export type NovelChapter = {
 
 export type NovelChapterSummary = {
   id: string;
+  sourceId: string;
   chapterIndex: number;
+  volumeIndex?: number;
+  sectionIndex?: number;
   volumeTitle?: string;
   chapterTitle?: string;
   contentLength: number;
+  eventState: string;
+  eventSummary?: JsonValue;
+  errorMessage?: string;
+  eventCount: number;
+  approvedEventCount: number;
+  pendingEventReviewCount: number;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type NovelEvent = {
@@ -268,7 +283,83 @@ export type AgentMessage = {
   sessionId: string;
   role: "user" | "assistant" | "system" | "tool" | string;
   content: string;
+  metadata?: JsonRecord;
   createdAt?: string;
+};
+
+export type AgentToolRisk = "read" | "draft" | "write" | "workflow" | "costed" | "destructive" | "admin" | string;
+
+export type AgentPermissionMode = "require_approval" | "auto_approve" | "full_access";
+
+export type AgentToolDescriptor = {
+  name: string;
+  label: string;
+  description: string;
+  risk: AgentToolRisk;
+  permission?: string;
+  inputSchema: JsonRecord;
+  requiresApproval: boolean;
+};
+
+export type AgentStep = {
+  id: string;
+  taskId: string;
+  stepIndex: number;
+  toolName: string;
+  risk: AgentToolRisk;
+  permission?: string;
+  status: string;
+  requiresApproval: boolean;
+  input: JsonRecord;
+  dryRunOutput: JsonRecord;
+  supervisorDecision: JsonRecord;
+  output: JsonRecord;
+  verifierOutput: JsonRecord;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type AgentApproval = {
+  id: string;
+  taskId: string;
+  stepId?: string;
+  approvalType: string;
+  status: string;
+  requestedPayload: JsonRecord;
+  decisionPayload: JsonRecord;
+  decidedBy?: string;
+  decidedAt?: string;
+  expiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AgentTask = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  sessionId?: string;
+  agentType: string;
+  userGoal: string;
+  mode: "plan_only" | "supervised" | "auto_low_risk" | string;
+  status: string;
+  temporalWorkflowId?: string;
+  constraints: JsonRecord;
+  plan: JsonRecord;
+  summary: JsonRecord;
+  errorCode?: string;
+  errorMessage?: string;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  steps?: AgentStep[];
+  approvals?: AgentApproval[];
 };
 
 export type CanonicalAsset = {
@@ -913,8 +1004,20 @@ export type ProviderAccount = {
   config?: JsonRecord;
   credentialPreview?: string | null;
   status: string;
+  createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type ProviderConnector = {
+  id: string;
+  connectorKey: string;
+  name: string;
+  type: string;
+  isOfficial: boolean;
+  manifest?: JsonRecord;
+  version: string;
+  createdAt: string;
 };
 
 export type ProviderModelCapability = {
@@ -943,6 +1046,19 @@ export type ProviderModelXCapabilities = JsonRecord & {
   supportsFirstFrame?: boolean;
   supportsLastFrame?: boolean;
   supportsVideoReference?: boolean;
+  supportedInputTypes?: string[];
+  supportedOutputTypes?: string[];
+  requestModes?: string[];
+  reasoningLevels?: string[];
+  referenceTypes?: string[];
+  maxReferenceImages?: number;
+  maxReferenceVideos?: number;
+  responseFormats?: string[];
+  supportedAspectRatios?: string[];
+  supportedResolutions?: string[];
+  durations?: number[];
+  minDurationSeconds?: number;
+  maxDurationSeconds?: number;
 };
 
 export type ProviderModel = {
@@ -1007,9 +1123,22 @@ export type ProviderCatalogEntry = {
 
 export type ProviderCatalogInstallResponse = {
   providerKey: string;
+  connector?: ProviderConnector;
   account: ProviderAccount;
   models: ProviderModel[];
   bindings: { profileId: string; profileKey: string; modelId: string; bindingId: string }[];
+};
+
+export type ProviderGatewayAttempt = {
+  providerCallId?: string;
+  providerModelId?: string;
+  providerAccountId?: string;
+  modelProfileBindingId?: string;
+  status: string;
+  errorCode?: string;
+  errorMessage?: string;
+  retryable: boolean;
+  latencyMs?: number;
 };
 
 export type ProviderTestResult = {
@@ -1020,15 +1149,160 @@ export type ProviderTestResult = {
   errorCode?: string | null;
   errorMessage?: string | null;
   normalizedOutput?: JsonValue;
-  attempts?: JsonValue[];
+  attempts?: ProviderGatewayAttempt[];
+};
+
+export type ProviderManifestValidationIssue = {
+  path: string;
+  message: string;
+};
+
+export type ProviderManifestValidationResult = {
+  valid: boolean;
+  errors: ProviderManifestValidationIssue[];
+};
+
+export type ProviderManifestTestRunResult = {
+  testRunId: string;
+  providerCallId: string;
+  endpointKey: string;
+  status: string;
+  latencyMs: number;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  normalizedOutput?: JsonValue;
+};
+
+export type DiscoveredProviderModel = {
+  modelKey: string;
+  displayName: string;
+  modality: string;
+  status: string;
+};
+
+export type ProviderModelDiscoveryResult = {
+  models: DiscoveredProviderModel[];
+  unsupported: JsonValue[];
+};
+
+export type ModelProfileBinding = {
+  id: string;
+  modelProfileId: string;
+  providerModelId: string;
+  priority: number;
+  weight: number;
+  enabled: boolean;
+  createdAt: string;
+};
+
+export type ProviderFallbackStrategy = {
+  enabled?: boolean;
+  maxAttempts?: number;
+  fallbackOn?: string[];
+  stopOn?: string[];
 };
 
 export type ModelProfile = {
   id: string;
+  organizationId?: string;
   profileKey: string;
+  name?: string;
   purpose?: string;
+  routingStrategy?: "priority" | "priority_with_fallback" | "weighted" | "cost_optimized" | "latency_optimized" | string;
+  fallbackStrategy?: ProviderFallbackStrategy | JsonRecord;
   status?: string;
-  bindings?: { id: string; enabled: boolean; providerModelId?: string }[];
+  bindings?: ModelProfileBinding[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ProviderCallLog = {
+  id: string;
+  organizationId: string;
+  projectId?: string | null;
+  workflowRunId?: string | null;
+  nodeRunId?: string | null;
+  providerAccountId: string;
+  providerModelId?: string | null;
+  credentialId?: string | null;
+  modelProfileId?: string | null;
+  modelProfileBindingId?: string | null;
+  modelProfileKey?: string | null;
+  taskType: string;
+  executionMode: string;
+  status: string;
+  latencyMs?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  estimatedCost?: string | null;
+  currency?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  upstreamStatus?: number | null;
+  upstreamErrorCode?: string | null;
+  requestSnapshot?: JsonRecord;
+  responseSnapshot?: JsonRecord;
+  normalizedOutput?: JsonRecord;
+  artifactIds?: string[] | JsonValue;
+  mediaFileIds?: string[] | JsonValue;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
+export type ProviderUsageSummary = {
+  totalCalls: number;
+  failedCalls: number;
+  totalCost: string;
+  currency: string;
+};
+
+export type ProviderTaskType =
+  | "any"
+  | "text.generate"
+  | "text.stream"
+  | "image.generate"
+  | "video.create_task"
+  | "video.poll_task"
+  | "video.cancel_task"
+  | string;
+
+export type ProviderLimitPolicy = {
+  id: string;
+  organizationId: string;
+  providerAccountId?: string | null;
+  providerModelId?: string | null;
+  taskType: ProviderTaskType;
+  maxConcurrency?: number | null;
+  requestsPerMinute?: number | null;
+  requestsPerDay?: number | null;
+  dailyBudget?: string | null;
+  monthlyBudget?: string | null;
+  currency: string;
+  failureThreshold?: number | null;
+  failureWindowSeconds?: number | null;
+  circuitCooldownSeconds?: number | null;
+  enabled: boolean;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProviderCircuitState = {
+  id: string;
+  organizationId: string;
+  providerAccountId: string;
+  providerModelId?: string | null;
+  taskType: string;
+  state: "closed" | "open" | "half_open" | string;
+  failureCount: number;
+  successCount: number;
+  openedAt?: string | null;
+  halfOpenAt?: string | null;
+  nextAttemptAt?: string | null;
+  lastErrorCode?: string | null;
+  lastErrorMessage?: string | null;
+  updatedAt: string;
 };
 
 export type PromptTemplate = {

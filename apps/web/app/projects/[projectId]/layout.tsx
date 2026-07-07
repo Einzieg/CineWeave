@@ -13,6 +13,7 @@ import { studioApi } from "@/lib/api-client";
 import { useStudioSession, useBindCurrentProject } from "@/lib/session";
 import { projectNavItems, projectHref } from "@/lib/routes";
 import { useProjectEvents } from "@/lib/realtime/use-project-events";
+import { ActivityDrawer } from "@/features/activity/activity-drawer";
 import { AgentDrawer } from "@/features/assistant/agent-drawer";
 
 export default function ProjectLayout({
@@ -52,14 +53,14 @@ function ProjectShellContent({ projectId, children }: { projectId: string; child
   const currentSegment = segments.length > 2 ? segments[2] : "";
 
   return (
-    <div className="flex min-h-screen bg-background">
+    <div className="flex h-dvh overflow-hidden bg-background">
       <MainSidebar active="projects" />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar title="项目工作台" session={session} onLogout={logout} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <TopBar title="项目工作台" session={session} projectId={projectId} onLogout={logout} />
         <MobileGlobalNav active="projects" />
 
         {/* 项目内导航 */}
-        <nav className="flex gap-1 overflow-x-auto border-b px-4 pt-3" aria-label="项目内部导航">
+        <nav className="shrink-0 flex gap-1 overflow-x-auto border-b px-4 pt-3" aria-label="项目内部导航">
           {projectNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentSegment === item.segment;
@@ -81,13 +82,14 @@ function ProjectShellContent({ projectId, children }: { projectId: string; child
           })}
         </nav>
 
-        <main className="flex-1">
+        <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-screen-2xl p-4 md:p-6">{children}</div>
         </main>
       </div>
 
-      {/* Agent对话抽屉 */}
+      {/* AI助手常驻面板 */}
       <AgentDrawer projectId={projectId} />
+      <ActivityDrawer projectId={projectId} />
     </div>
   );
 }

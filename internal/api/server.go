@@ -84,7 +84,7 @@ func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provide
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", httpx.HealthHandler("api"))
-	mux.HandleFunc("GET /readyz", httpx.HealthHandler("api"))
+	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /api/system/status", s.systemStatus)
 	mux.HandleFunc("GET /api/system/setup-state", s.systemSetupState)
 	mux.HandleFunc("POST /api/system/setup", s.systemSetup)
@@ -165,6 +165,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.getProjectSource))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.updateProjectSource))
 	mux.HandleFunc("DELETE /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.deleteProjectSource))
+	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}/chapters", s.withAuth(s.listSourceChapters))
+	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}/chapters/{chapterId}", s.withAuth(s.getSourceChapter))
 	mux.HandleFunc("POST /api/projects/{projectId}/sources/{sourceId}/extract-events", s.withAuth(s.extractNovelEvents))
 	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}/events", s.withAuth(s.listSourceNovelEvents))
 	mux.HandleFunc("POST /api/projects/{projectId}/sources/{sourceId}/generate-adaptation-plan", s.withAuth(s.generateAdaptationPlan))
@@ -198,6 +200,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/sessions/{sessionId}/messages", s.withAuth(s.createScriptAgentMessage))
 	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/generate-script", s.withAuth(s.generateScriptFromAgent))
 	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/rewrite-script", s.withAuth(s.rewriteScriptFromAgent))
+	mux.HandleFunc("GET /api/projects/{projectId}/agent/tools", s.withAuth(s.listAgentTools))
+	mux.HandleFunc("POST /api/projects/{projectId}/agent/tasks", s.withAuth(s.createAgentTask))
+	mux.HandleFunc("GET /api/projects/{projectId}/agent/tasks", s.withAuth(s.listAgentTasks))
+	mux.HandleFunc("GET /api/projects/{projectId}/agent/tasks/{taskId}", s.withAuth(s.getAgentTask))
+	mux.HandleFunc("POST /api/projects/{projectId}/agent/tasks/{taskId}/cancel", s.withAuth(s.cancelAgentTask))
+	mux.HandleFunc("POST /api/projects/{projectId}/agent/tasks/{taskId}/steps/{stepId}/approve", s.withAuth(s.approveAgentStep))
+	mux.HandleFunc("POST /api/projects/{projectId}/agent/tasks/{taskId}/steps/{stepId}/reject", s.withAuth(s.rejectAgentStep))
+	mux.HandleFunc("POST /api/projects/{projectId}/agent/tasks/{taskId}/resume", s.withAuth(s.resumeAgentTask))
 	mux.HandleFunc("GET /api/projects/{projectId}/canonical-assets", s.withAuth(s.listCanonicalAssets))
 	mux.HandleFunc("GET /api/projects/{projectId}/canonical-assets/{assetId}", s.withAuth(s.getCanonicalAsset))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/canonical-assets/{assetId}", s.withAuth(s.updateCanonicalAsset))
@@ -945,7 +955,11 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var upstreamErr *provider.UpstreamError
 	var accessErr authz.AccessError
 	var catalogErr provider.CatalogError
+	var appErr apiError
+	standardErr, hasStandardErr := provider.StandardErrorFromError(err)
 	switch {
+	case errors.As(err, &appErr):
+		httpx.WriteError(w, r, appErr.Status, appErr.Code, appErr.Message, appErr.Details, appErr.Retryable)
 	case errors.As(err, &accessErr):
 		httpx.WriteError(w, r, http.StatusForbidden, "ACCESS_DENIED", "missing permission "+accessErr.Permission, accessDeniedDetails(accessErr), false)
 	case errors.As(err, &catalogErr):
@@ -968,6 +982,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, http.StatusConflict, "SETUP_ALREADY_COMPLETED", "system setup has already been completed", nil, false)
 	case errors.Is(err, auth.ErrPublicRegistrationDisabled):
 		httpx.WriteError(w, r, http.StatusForbidden, "PUBLIC_REGISTRATION_DISABLED", "public registration is disabled", nil, false)
+	case hasStandardErr:
+		httpx.WriteError(w, r, provider.HTTPStatusForStandardError(standardErr), standardErr.Code, standardErr.Message, standardErr, standardErr.Retryable)
 	case errors.Is(err, provider.ErrValidation):
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "request is invalid", fmt.Sprintf("%v", err), false)
 	case errors.Is(err, provider.ErrConflict):

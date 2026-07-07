@@ -73,26 +73,36 @@ type RunProjectReviewResponse struct {
 	ItemCount   int             `json:"itemCount"`
 }
 
+type runProjectReviewRequest struct {
+	ReviewType                 string `json:"reviewType"`
+	UseAgent                   bool   `json:"useAgent"`
+	IncludeDeterministicChecks *bool  `json:"includeDeterministicChecks"`
+}
+
 func (s *Server) runProjectReview(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccessAny(w, r, principal, r.PathValue("projectId"), []string{authz.PermissionProjectWrite, authz.PermissionProjectRead})
 	if !ok {
 		return
 	}
-	var req struct {
-		ReviewType                 string `json:"reviewType"`
-		UseAgent                   bool   `json:"useAgent"`
-		IncludeDeterministicChecks *bool  `json:"includeDeterministicChecks"`
-	}
+	var req runProjectReviewRequest
 	if !decode(w, r, &req) {
 		return
 	}
+	response, err := s.runProjectReviewCore(r.Context(), principal, project, req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (s *Server) runProjectReviewCore(ctx context.Context, principal auth.Principal, project Project, req runProjectReviewRequest) (RunProjectReviewResponse, error) {
 	reviewType := strings.TrimSpace(req.ReviewType)
 	if reviewType == "" {
 		reviewType = "project"
 	}
 	if !validReviewType(reviewType) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "reviewType is invalid", nil, false)
-		return
+		return RunProjectReviewResponse{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "reviewType is invalid")
 	}
 	includeDeterministic := true
 	if req.IncludeDeterministicChecks != nil {
@@ -104,31 +114,28 @@ func (s *Server) runProjectReview(w http.ResponseWriter, r *http.Request, princi
 		"includeDeterministicChecks": includeDeterministic,
 	}
 	var runID string
-	if err := s.db.QueryRow(r.Context(), `
+	if err := s.db.QueryRow(ctx, `
 		INSERT INTO review_runs(organization_id, project_id, review_type, status, input, output, created_by)
 		VALUES ($1, $2, $3, 'running', $4, '{}', $5)
 		RETURNING id::text
 	`, project.OrganizationID, project.ID, reviewType, mustMarshal(input), principal.UserID).Scan(&runID); err != nil {
-		s.writeError(w, r, err)
-		return
+		return RunProjectReviewResponse{}, err
 	}
 	items := []reviewpkg.ReviewItemDraft{}
 	if includeDeterministic {
-		deterministic, err := reviewpkg.RunDeterministicProjectChecks(r.Context(), s.db, project.ID)
+		deterministic, err := reviewpkg.RunDeterministicProjectChecks(ctx, s.db, project.ID)
 		if err != nil {
-			s.failReviewRun(r.Context(), runID, "DETERMINISTIC_REVIEW_FAILED", err.Error())
-			s.writeError(w, r, err)
-			return
+			s.failReviewRun(ctx, runID, "DETERMINISTIC_REVIEW_FAILED", err.Error())
+			return RunProjectReviewResponse{}, err
 		}
 		items = append(items, deterministic...)
 	}
 	var providerCallID, promptVersionID, promptHash string
 	if req.UseAgent {
-		agentItems, callID, versionID, hash, err := s.runProjectReviewAgent(r.Context(), project, items)
+		agentItems, callID, versionID, hash, err := s.runProjectReviewAgent(ctx, project, items)
 		if err != nil {
-			s.failReviewRun(r.Context(), runID, "PROJECT_REVIEW_AGENT_FAILED", err.Error())
-			s.writeError(w, r, err)
-			return
+			s.failReviewRun(ctx, runID, "PROJECT_REVIEW_AGENT_FAILED", err.Error())
+			return RunProjectReviewResponse{}, err
 		}
 		providerCallID = callID
 		promptVersionID = versionID
@@ -140,13 +147,12 @@ func (s *Server) runProjectReview(w http.ResponseWriter, r *http.Request, princi
 		"summary":   summary,
 		"itemCount": len(items),
 	}
-	tx, err := s.db.Begin(r.Context())
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return RunProjectReviewResponse{}, err
 	}
-	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
 		UPDATE review_runs
 		SET status = 'succeeded',
 		    summary = $2,
@@ -158,29 +164,25 @@ func (s *Server) runProjectReview(w http.ResponseWriter, r *http.Request, princi
 		    completed_at = now()
 		WHERE id = $1
 	`, runID, mustRawJSON(summary), mustRawJSON(output), providerCallID, promptVersionID, promptHash); err != nil {
-		s.writeError(w, r, err)
-		return
+		return RunProjectReviewResponse{}, err
 	}
 	for _, item := range items {
-		if err := insertReviewItem(r.Context(), tx, project.OrganizationID, project.ID, runID, item, principal.UserID); err != nil {
-			s.writeError(w, r, err)
-			return
+		if err := insertReviewItem(ctx, tx, project.OrganizationID, project.ID, runID, item, principal.UserID); err != nil {
+			return RunProjectReviewResponse{}, err
 		}
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "project.review.completed", "review_run", runID, mustRawJSON(output)); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "project.review.completed", "review_run", runID, mustRawJSON(output)); err != nil {
+		return RunProjectReviewResponse{}, err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := tx.Commit(ctx); err != nil {
+		return RunProjectReviewResponse{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, RunProjectReviewResponse{
+	return RunProjectReviewResponse{
 		ReviewRunID: runID,
 		Status:      "succeeded",
 		Summary:     mustRawJSON(summary),
 		ItemCount:   len(items),
-	}, nil)
+	}, nil
 }
 
 func (s *Server) runProjectReviewAgent(ctx context.Context, project Project, deterministic []reviewpkg.ReviewItemDraft) ([]reviewpkg.ReviewItemDraft, string, string, string, error) {

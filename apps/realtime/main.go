@@ -29,7 +29,13 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", httpx.HealthHandler("realtime"))
-	mux.HandleFunc("/readyz", httpx.HealthHandler("realtime"))
+	mux.HandleFunc("/readyz", httpx.ReadyHandler("realtime", map[string]httpx.ReadinessCheck{
+		"database": func(checkCtx context.Context) error {
+			pingCtx, cancel := context.WithTimeout(checkCtx, 2*time.Second)
+			defer cancel()
+			return pool.Ping(pingCtx)
+		},
+	}))
 	mux.HandleFunc("/api/realtime/events", events(pool))
 
 	if err := service.Serve(ctx, cfg, httpx.WithCORS(httpx.WithRequestID(mux)), logger); err != nil {
@@ -90,11 +96,15 @@ func streamProjectEvents(ctx context.Context, w http.ResponseWriter, flusher htt
 
 func writeProjectEvents(ctx context.Context, w http.ResponseWriter, pool *pgxpool.Pool, projectID string, seen map[string]struct{}) int {
 	rows, err := pool.Query(ctx, `
-		SELECT id, event_type, payload
-		FROM event_outbox
-		WHERE project_id = $1
+		SELECT id, event_type, aggregate_type, aggregate_id, payload
+		FROM (
+			SELECT id, event_type, aggregate_type, aggregate_id, payload, created_at
+			FROM event_outbox
+			WHERE project_id = $1
+			ORDER BY created_at DESC, id DESC
+			LIMIT 200
+		) recent
 		ORDER BY created_at ASC, id ASC
-		LIMIT 50
 	`, projectID)
 	if err != nil {
 		return 0
@@ -104,20 +114,53 @@ func writeProjectEvents(ctx context.Context, w http.ResponseWriter, pool *pgxpoo
 	for rows.Next() {
 		var id string
 		var eventType string
+		var aggregateType string
+		var aggregateID string
 		var payload json.RawMessage
-		if err := rows.Scan(&id, &eventType, &payload); err != nil {
+		if err := rows.Scan(&id, &eventType, &aggregateType, &aggregateID, &payload); err != nil {
 			return count
 		}
 		if _, ok := seen[id]; ok {
 			continue
 		}
 		seen[id] = struct{}{}
+		payload = enrichEventPayload(payload, aggregateType, aggregateID)
 		fmt.Fprintf(w, "id: %s\n", id)
 		fmt.Fprintf(w, "event: %s\n", eventType)
 		fmt.Fprintf(w, "data: %s\n\n", string(payload))
 		count++
 	}
 	return count
+}
+
+func enrichEventPayload(payload json.RawMessage, aggregateType, aggregateID string) json.RawMessage {
+	body := map[string]any{}
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &body); err != nil {
+			return payload
+		}
+	}
+	if _, ok := body["aggregateId"]; !ok {
+		body["aggregateId"] = aggregateID
+	}
+	if _, ok := body["aggregateType"]; !ok {
+		body["aggregateType"] = aggregateType
+	}
+	switch aggregateType {
+	case "workflow_run":
+		if _, ok := body["workflowRunId"]; !ok {
+			body["workflowRunId"] = aggregateID
+		}
+	case "workflow_node_run":
+		if _, ok := body["nodeRunId"]; !ok {
+			body["nodeRunId"] = aggregateID
+		}
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return payload
+	}
+	return raw
 }
 
 func waitForDisconnect(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) {

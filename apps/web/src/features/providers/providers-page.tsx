@@ -13,6 +13,8 @@ import type {
   ProviderCatalogModelTemplate,
   ProviderModel,
   ProviderModelCapability,
+  ModelProfile,
+  ModelProfileBinding,
 } from "@/lib/types";
 import { AppShell, SectionTitle, Surface } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
@@ -58,10 +60,33 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { providerKeyLabel, taskTypeLabel } from "@/lib/labels";
 
 type AccountDialogMode = "create" | "edit";
 type ModelDialogMode = "create" | "edit";
 type ModelDraft = ProviderCatalogModelTemplate & { source: "catalog" | "custom" };
+
+type ProviderModelWithAccount = ProviderModel & {
+  accountId: string;
+  accountName: string;
+  providerLabel: string;
+};
+
+type BusinessProfileSlot = {
+  profileKey: string;
+  name: string;
+  purpose: string;
+  description: string;
+  modalities: string[];
+  taskTypes: string[];
+};
+
+type BusinessModelBindingDraft = {
+  modelId: string;
+  priority: string;
+  weight: string;
+  enabled: boolean;
+};
 
 type AccountForm = {
   name: string;
@@ -79,6 +104,33 @@ type ModelForm = {
   modality: string;
   status: string;
   supportsAsyncTask: boolean;
+  supportsStreaming: boolean;
+  supportsReasoning: boolean;
+  supportsReasoningLevels: boolean;
+  supportsMultimodalInput: boolean;
+  maxInputTokens: string;
+  maxOutputTokens: string;
+  supportedInputTypesText: string;
+  supportedOutputTypesText: string;
+  promptMaxLength: string;
+  supportsReferenceImages: boolean;
+  supportsImageEdit: boolean;
+  maxReferenceImages: string;
+  imageRequestModesText: string;
+  imageAspectRatiosText: string;
+  imageResolutionsText: string;
+  imageResponseFormatsText: string;
+  minDurationSeconds: string;
+  maxDurationSeconds: string;
+  durationsText: string;
+  supportsFirstFrame: boolean;
+  supportsLastFrame: boolean;
+  supportsVideoReference: boolean;
+  maxReferenceVideos: string;
+  videoRequestModesText: string;
+  videoAspectRatiosText: string;
+  videoResolutionsText: string;
+  videoOutputFormatsText: string;
   taskTypesText: string;
   inputLimitsText: string;
   outputLimitsText: string;
@@ -104,6 +156,41 @@ const defaultTaskTypesByModality: Record<string, string[]> = {
   multimodal: ["text.generate", "text.stream", "image.generate", "video.create_task", "video.poll_task"],
 };
 
+const businessProfileSlots: BusinessProfileSlot[] = [
+  {
+    profileKey: "script_agent_default",
+    name: "脚本/事件 Agent 默认模型",
+    purpose: "script",
+    description: "用于原文事件提取、改编计划、剧本生成、分场解析和审阅修复。",
+    modalities: ["text", "multimodal"],
+    taskTypes: ["text.generate", "text.stream"],
+  },
+  {
+    profileKey: "image_generation_default",
+    name: "图片生成默认模型",
+    purpose: "image",
+    description: "用于资产卡片、镜头参考图和分镜图片生成。",
+    modalities: ["image", "multimodal"],
+    taskTypes: ["image.generate"],
+  },
+  {
+    profileKey: "video_generation_default",
+    name: "视频生成默认模型",
+    purpose: "video",
+    description: "用于镜头视频任务创建、轮询、取消和最终视频生产链路。",
+    modalities: ["video", "multimodal"],
+    taskTypes: ["video.text_to_video", "video.image_to_video", "video.create_task", "video.poll_task", "video.cancel_task"],
+  },
+];
+
+const routingStrategyOptions = [
+  { value: "priority", label: "按优先级" },
+  { value: "priority_with_fallback", label: "优先级 + 降级" },
+  { value: "weighted", label: "按权重" },
+  { value: "cost_optimized", label: "成本优先" },
+  { value: "latency_optimized", label: "延迟优先" },
+];
+
 const modalityOptions = [
   { value: "text", label: "文本" },
   { value: "image", label: "图片" },
@@ -123,6 +210,27 @@ const authTypeOptions = [
   { value: "none", label: "无认证" },
 ];
 
+const providerCatalogRank: Record<string, number> = {
+  openai_compatible_custom: 0,
+  openrouter: 1,
+  ollama: 2,
+  google_gemini: 3,
+  alibaba_dashscope: 4,
+  zhipu_glm: 5,
+  baidu_qianfan: 6,
+  xunfei_spark: 7,
+  minimax: 8,
+};
+
+function compareProviderCatalogEntries(a: ProviderCatalogEntry, b: ProviderCatalogEntry) {
+  const rankA = providerCatalogRank[a.providerKey] ?? 100;
+  const rankB = providerCatalogRank[b.providerKey] ?? 100;
+  if (rankA !== rankB) {
+    return rankA - rankB;
+  }
+  return a.displayName.localeCompare(b.displayName, "zh-Hans");
+}
+
 export function ProvidersPage() {
   const [selectedCatalogKey, setSelectedCatalogKey] = useState<string | null>(null);
   const [accountDialogMode, setAccountDialogMode] = useState<AccountDialogMode>("create");
@@ -139,8 +247,8 @@ export function ProvidersPage() {
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<ProviderModel | null>(null);
   const [accountToDelete, setAccountToDelete] = useState<ProviderAccount | null>(null);
-  const [modelToDelete, setModelToDelete] = useState<ProviderModel | null>(null);
   const [modelForm, setModelForm] = useState<ModelForm>(emptyModelForm("text"));
+  const [businessBindingDrafts, setBusinessBindingDrafts] = useState<Record<string, BusinessModelBindingDraft>>({});
   const invalidate = useInvalidateKeys();
   const lastDialogInnerPointerDownAtRef = useRef(0);
   const portaledControlOpenUntilRef = useRef(0);
@@ -149,7 +257,7 @@ export function ProvidersPage() {
     key: qk.providerCatalog(),
     queryFn: (session) => studioApi.listProviderCatalog(session),
   });
-  const catalogEntries = (catalogData?.items || []) as ProviderCatalogEntry[];
+  const catalogEntries = useMemo(() => [...((catalogData?.items || []) as ProviderCatalogEntry[])].sort(compareProviderCatalogEntries), [catalogData?.items]);
 
   const { data: accountsData, isLoading: accountsLoading } = useApiQuery({
     key: qk.providerAccounts(),
@@ -168,6 +276,11 @@ export function ProvidersPage() {
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) || null;
   const selectedCatalogEntry = catalogEntries.find((entry) => entry.providerKey === selectedCatalogKey) || null;
   const selectedAccountCatalog = catalogEntries.find((entry) => entry.providerKey === selectedAccount?.connectorKey) || null;
+  const catalogNameByKey = useMemo(
+    () => new Map(catalogEntries.map((entry) => [entry.providerKey, entry.displayName || entry.name || providerKeyLabel(entry.providerKey)])),
+    [catalogEntries],
+  );
+  const accountIdsKey = useMemo(() => accounts.map((account) => account.id).sort().join(","), [accounts]);
   const setupFields = catalogSetupFields(selectedCatalogEntry);
   const dialogModelTemplates = selectedCatalogEntry?.modelTemplates || [];
   const selectedCreateModelDrafts = [
@@ -189,12 +302,39 @@ export function ProvidersPage() {
   );
   const groupedModels = useMemo(() => groupModelsByModality(models), [models]);
 
+  const { data: allProviderModels = [], isLoading: allProviderModelsLoading } = useApiQuery({
+    key: qk.providerModelsAll(accountIdsKey || "none"),
+    queryFn: async (session) => {
+      const batches = await Promise.all(
+        accounts.map(async (account) => {
+          const response = await studioApi.listProviderModels(session, account.id);
+          const providerLabel = catalogNameByKey.get(account.connectorKey || "") || providerKeyLabel(account.connectorKey || account.connectorId);
+          return (response.items || []).map((model) => ({
+            ...model,
+            accountId: account.id,
+            accountName: account.name,
+            providerLabel,
+          }));
+        }),
+      );
+      return batches.flat() as ProviderModelWithAccount[];
+    },
+    enabled: accounts.length > 0,
+  });
+
+  const activeProviderModels = useMemo(
+    () => allProviderModels.filter((model) => model.status !== "disabled"),
+    [allProviderModels],
+  );
+  const modelById = useMemo(() => new Map(activeProviderModels.map((model) => [model.id, model])), [activeProviderModels]);
+  const profileByKey = useMemo(() => new Map(profiles.map((profile) => [profile.profileKey, profile])), [profiles]);
+
   const createAccountMutation = useApiMutation({
     mutationFn: (session, data: { providerKey: string; body: JsonRecord }) =>
       studioApi.installProviderCatalogEntry(session, data.providerKey, data.body),
     onSuccess: (result) => {
       toast.success("供应商账号已创建");
-      invalidate([qk.providerAccounts(), qk.providerCatalog(), qk.modelProfiles(), qk.providerModels(result.account.id)]);
+      invalidate([qk.providerAccounts(), qk.providerCatalog(), qk.modelProfiles(), qk.providerModels(result.account.id), qk.providerModelsAll(accountIdsKey || "none")]);
     },
     onError: (error) => toast.error("创建失败：" + error.message),
   });
@@ -212,16 +352,92 @@ export function ProvidersPage() {
     },
     onSuccess: () => {
       toast.success("供应商账号已保存");
-      invalidate([qk.providerAccounts(), qk.providerCatalog(), qk.modelProfiles()]);
+      invalidate([qk.providerAccounts(), qk.providerCatalog(), qk.modelProfiles(), qk.providerModelsAll(accountIdsKey || "none")]);
     },
     onError: (error) => toast.error("保存失败：" + error.message),
+  });
+
+  const createProfileMutation = useApiMutation({
+    mutationFn: (session, data: { slot: BusinessProfileSlot }) =>
+      studioApi.createModelProfile(session, {
+        profileKey: data.slot.profileKey,
+        name: data.slot.name,
+        purpose: data.slot.purpose,
+        routingStrategy: "priority_with_fallback",
+        fallbackStrategy: defaultFallbackStrategy(),
+      }),
+    onSuccess: () => {
+      toast.success("业务模型配置已创建");
+      invalidate([qk.modelProfiles()]);
+    },
+    onError: (error) => toast.error("创建业务模型配置失败：" + error.message),
+  });
+
+  const updateProfileMutation = useApiMutation({
+    mutationFn: (session, data: { profile: ModelProfile; body: JsonRecord }) =>
+      studioApi.updateModelProfile(session, data.profile.id, data.body),
+    onSuccess: () => {
+      toast.success("业务模型配置已更新");
+      invalidate([qk.modelProfiles()]);
+    },
+    onError: (error) => toast.error("更新业务模型配置失败：" + error.message),
+  });
+
+  const createProfileBindingMutation = useApiMutation({
+    mutationFn: async (
+      session,
+      data: {
+        slot: BusinessProfileSlot;
+        profile?: ModelProfile;
+        providerModelId: string;
+        priority: number;
+        weight: number;
+        enabled: boolean;
+      },
+    ) => {
+      let profile = data.profile;
+      if (!profile) {
+        profile = await studioApi.createModelProfile(session, {
+          profileKey: data.slot.profileKey,
+          name: data.slot.name,
+          purpose: data.slot.purpose,
+          routingStrategy: "priority_with_fallback",
+          fallbackStrategy: defaultFallbackStrategy(),
+        });
+      }
+      return studioApi.createModelProfileBinding(session, profile.id, {
+        providerModelId: data.providerModelId,
+        priority: data.priority,
+        weight: data.weight,
+        enabled: data.enabled,
+      });
+    },
+    onSuccess: (_profile, data) => {
+      toast.success("业务模型绑定已保存");
+      setBusinessBindingDrafts((current) => ({
+        ...current,
+        [data.slot.profileKey]: defaultBusinessBindingDraft(),
+      }));
+      invalidate([qk.modelProfiles()]);
+    },
+    onError: (error) => toast.error("保存业务模型绑定失败：" + error.message),
+  });
+
+  const deleteProfileBindingMutation = useApiMutation({
+    mutationFn: (session, data: { profileId: string; bindingId: string }) =>
+      studioApi.deleteModelProfileBinding(session, data.profileId, data.bindingId),
+    onSuccess: () => {
+      toast.success("业务模型绑定已删除");
+      invalidate([qk.modelProfiles()]);
+    },
+    onError: (error) => toast.error("删除业务模型绑定失败：" + error.message),
   });
 
   const deleteAccountMutation = useApiMutation({
     mutationFn: (session, accountId: string) => studioApi.deleteProviderAccount(session, accountId),
     onSuccess: (_result, accountId) => {
       toast.success("供应商已删除");
-      invalidate([qk.providerAccounts(), qk.modelProfiles()]);
+      invalidate([qk.providerAccounts(), qk.modelProfiles(), qk.providerModelsAll(accountIdsKey || "none")]);
       if (selectedAccountId === accountId) {
         setSelectedAccountId(null);
         setModelsDialogOpen(false);
@@ -236,7 +452,7 @@ export function ProvidersPage() {
     mutationFn: (session, accountId: string) => studioApi.discoverProviderModels(session, accountId, {}),
     onSuccess: (result, accountId) => {
       toast.success(`已同步 ${result.models?.length || 0} 个远程模型`);
-      invalidate([qk.providerModels(accountId), qk.modelProfiles()]);
+      invalidate([qk.providerModels(accountId), qk.providerModelsAll(accountIdsKey || "none"), qk.modelProfiles()]);
     },
     onError: (error) => toast.error("模型发现失败：" + error.message),
   });
@@ -245,7 +461,7 @@ export function ProvidersPage() {
     mutationFn: (session, data: { accountId: string; model: ModelDraft | ProviderCatalogModelTemplate }) =>
       studioApi.createProviderModel(session, data.accountId, modelCreateBody(data.model)),
     onSuccess: (_result, data) => {
-      invalidate([qk.providerModels(data.accountId), qk.modelProfiles()]);
+      invalidate([qk.providerModels(data.accountId), qk.providerModelsAll(accountIdsKey || "none"), qk.modelProfiles()]);
     },
     onError: (error) => toast.error("模型添加失败：" + error.message),
   });
@@ -260,7 +476,7 @@ export function ProvidersPage() {
     onSuccess: () => {
       toast.success(modelDialogMode === "edit" ? "模型已保存" : "模型已添加");
       if (selectedAccountId) {
-        invalidate([qk.providerModels(selectedAccountId)]);
+        invalidate([qk.providerModels(selectedAccountId), qk.providerModelsAll(accountIdsKey || "none")]);
       }
       setModelDialogOpen(false);
       setEditingModel(null);
@@ -273,7 +489,7 @@ export function ProvidersPage() {
     onSuccess: (_result, modelId) => {
       toast.success("模型已删除");
       if (selectedAccountId) {
-        invalidate([qk.providerModels(selectedAccountId), qk.modelProfiles()]);
+        invalidate([qk.providerModels(selectedAccountId), qk.providerModelsAll(accountIdsKey || "none"), qk.modelProfiles()]);
       } else {
         invalidate([qk.modelProfiles()]);
       }
@@ -281,7 +497,6 @@ export function ProvidersPage() {
         setEditingModel(null);
         setModelDialogOpen(false);
       }
-      setModelToDelete(null);
     },
     onError: (error) => toast.error("模型删除失败：" + error.message),
   });
@@ -303,7 +518,7 @@ export function ProvidersPage() {
   });
 
   function openCreateAccountDialog() {
-    const preferred = catalogEntries.find((entry) => entry.providerKey === "volcengine_ark") || catalogEntries[0] || null;
+    const preferred = catalogEntries.find((entry) => entry.providerKey === "openai_compatible_custom") || catalogEntries[0] || null;
     setAccountDialogMode("create");
     setEditingAccount(null);
     setSelectedAccountId(null);
@@ -664,12 +879,8 @@ export function ProvidersPage() {
       toast.error("请至少填写一个任务类型");
       return;
     }
-    const inputLimits = parseJsonRecord(modelForm.inputLimitsText, "输入限制");
-    const outputLimits = parseJsonRecord(modelForm.outputLimitsText, "输出限制");
-    const providerOptionsSchema = parseJsonRecord(modelForm.providerOptionsSchemaText, "供应商选项");
-    const pricingPolicy = parseJsonRecord(modelForm.pricingPolicyText, "计费策略");
-    const qualityTiers = parseJsonValue(modelForm.qualityTiersText, "质量档位");
-    if (!inputLimits || !outputLimits || !providerOptionsSchema || !pricingPolicy || qualityTiers === undefined) {
+    const capability = buildCapabilityFromModelForm(modelForm, taskTypes);
+    if (!capability) {
       return;
     }
     saveModelMutation.mutate({
@@ -680,14 +891,69 @@ export function ProvidersPage() {
         displayName: modelForm.displayName.trim(),
         modality: modelForm.modality,
         status: modelForm.status,
-        capabilities: {
-          taskTypes,
-          inputLimits,
-          outputLimits,
-          qualityTiers,
-          providerOptionsSchema: withSupportsAsyncTask(providerOptionsSchema, modelForm.supportsAsyncTask),
-          pricingPolicy,
-        },
+        capabilities: capability,
+      },
+    });
+  }
+
+  function updateBusinessBindingDraft(profileKey: string, patch: Partial<BusinessModelBindingDraft>) {
+    setBusinessBindingDrafts((current) => ({
+      ...current,
+      [profileKey]: {
+        ...defaultBusinessBindingDraft(),
+        ...(current[profileKey] || {}),
+        ...patch,
+      },
+    }));
+  }
+
+  function handleCreateBusinessProfile(slot: BusinessProfileSlot) {
+    if (profileByKey.has(slot.profileKey)) {
+      toast.success("业务模型配置已存在");
+      return;
+    }
+    createProfileMutation.mutate({ slot });
+  }
+
+  function handleSaveBusinessBinding(slot: BusinessProfileSlot, profile?: ModelProfile) {
+    const draft = businessBindingDrafts[slot.profileKey] || defaultBusinessBindingDraft();
+    if (!draft.modelId) {
+      toast.error("请选择供应商模型");
+      return;
+    }
+    const model = activeProviderModels.find((item) => item.id === draft.modelId);
+    if (!model) {
+      toast.error("选择的模型不可用");
+      return;
+    }
+    if (!modelMatchesBusinessSlot(model, slot)) {
+      toast.error("所选模型类型不匹配当前业务模型");
+      return;
+    }
+    const priority = parseIntegerOrDefault(draft.priority, 100, "优先级");
+    const weight = parseIntegerOrDefault(draft.weight, 100, "权重");
+    if (priority === null || weight === null) {
+      return;
+    }
+    createProfileBindingMutation.mutate({
+      slot,
+      profile,
+      providerModelId: draft.modelId,
+      priority,
+      weight,
+      enabled: draft.enabled,
+    });
+  }
+
+  function handleUpdateBusinessRouting(profile: ModelProfile, routingStrategy: string) {
+    updateProfileMutation.mutate({
+      profile,
+      body: {
+        profileKey: profile.profileKey,
+        name: profile.name || profile.profileKey,
+        purpose: profile.purpose || profile.profileKey,
+        routingStrategy,
+        fallbackStrategy: profile.fallbackStrategy || defaultFallbackStrategy(),
       },
     });
   }
@@ -746,7 +1012,7 @@ export function ProvidersPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <Key className="h-4 w-4 text-muted-foreground" />
                         <span className="font-medium">{account.name}</span>
-                        <Badge variant="outline">{account.connectorKey || account.connectorId}</Badge>
+                        <Badge variant="outline">{catalogNameByKey.get(account.connectorKey || "") || providerKeyLabel(account.connectorKey || account.connectorId)}</Badge>
                         {account.status === "active" ? (
                           <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                         ) : (
@@ -811,28 +1077,161 @@ export function ProvidersPage() {
           </TabsContent>
 
           <TabsContent value="profiles" className="space-y-4">
-            <p className="text-sm text-muted-foreground">配置业务模型档案，支持路由策略、降级和成本优化</p>
-            {profilesLoading && <Skeleton className="h-64" />}
-            {!profilesLoading && profiles.length === 0 && (
-              <div className="rounded-lg border border-dashed p-12 text-center">
-                <Zap className="mx-auto h-12 w-12 text-muted-foreground opacity-50" />
-                <p className="mt-4 text-sm text-muted-foreground">暂无模型配置</p>
-                <p className="mt-1 text-xs text-muted-foreground">模型配置用于业务模块绑定</p>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">把业务链路使用的默认模型槽位绑定到具体供应商模型。</p>
+                <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                  <Badge variant="outline">脚本 Agent</Badge>
+                  <Badge variant="outline">图片生成</Badge>
+                  <Badge variant="outline">视频生成</Badge>
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                可用模型 {activeProviderModels.length}
+              </div>
+            </div>
+
+            {(profilesLoading || allProviderModelsLoading) && <Skeleton className="h-64" />}
+
+            {!profilesLoading && !allProviderModelsLoading && activeProviderModels.length === 0 && (
+              <div className="rounded-lg border border-dashed p-10 text-center">
+                <Zap className="mx-auto h-10 w-10 text-muted-foreground opacity-50" />
+                <p className="mt-3 text-sm text-muted-foreground">还没有可用供应商模型</p>
+                <p className="mt-1 text-xs text-muted-foreground">请先在“供应商账号”中添加供应商、发现模型或手动添加模型。</p>
               </div>
             )}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {profiles.map((profile) => (
-                <div key={profile.id} className="rounded-lg border p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-medium">{profile.profileKey}</div>
-                      <div className="truncate text-xs text-muted-foreground">{profile.profileKey}</div>
+
+            <div className="grid gap-4">
+              {businessProfileSlots.map((slot) => {
+                const profile = profileByKey.get(slot.profileKey);
+                const draft = businessBindingDrafts[slot.profileKey] || defaultBusinessBindingDraft();
+                const compatibleModels = activeProviderModels.filter((model) => modelMatchesBusinessSlot(model, slot));
+                const bindings = profile?.bindings || [];
+                return (
+                  <div key={slot.profileKey} className="rounded-lg border p-4">
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-semibold">{profile?.name || slot.name}</h3>
+                          <Badge variant="outline">{businessProfilePurposeLabel(slot.purpose)}</Badge>
+                          <Badge variant={profile ? "default" : "secondary"}>{profile ? "已创建" : "未创建"}</Badge>
+                        </div>
+                        <div className="font-mono text-xs text-muted-foreground">{slot.profileKey}</div>
+                        <p className="max-w-3xl text-sm text-muted-foreground">{slot.description}</p>
+                        <div className="flex flex-wrap gap-1">
+                          {slot.taskTypes.map((taskType) => (
+                            <span key={taskType} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                              {taskTypeLabel(taskType)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {profile ? (
+                          <Select value={profile.routingStrategy || "priority_with_fallback"} onValueChange={(value) => handleUpdateBusinessRouting(profile, value)}>
+                            <SelectTrigger className="w-44">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {routingStrategyOptions.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Button size="sm" variant="outline" onClick={() => handleCreateBusinessProfile(slot)} disabled={createProfileMutation.isPending}>
+                            <Plus className="h-3.5 w-3.5" />
+                            创建配置
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <Badge variant="outline">{profile.purpose}</Badge>
+
+                    <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+                      <div className="space-y-2">
+                        <div className="text-xs font-medium text-muted-foreground">当前绑定</div>
+                        {bindings.length === 0 ? (
+                          <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">尚未绑定供应商模型</div>
+                        ) : (
+                          <div className="grid gap-2">
+                            {bindings.map((binding) => (
+                              <BusinessBindingRow
+                                key={binding.id}
+                                binding={binding}
+                                model={modelById.get(binding.providerModelId)}
+                                onDelete={() =>
+                                  profile &&
+                                  deleteProfileBindingMutation.mutate({
+                                    profileId: profile.id,
+                                    bindingId: binding.id,
+                                  })
+                                }
+                                deleting={deleteProfileBindingMutation.isPending}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                        <div className="text-xs font-medium text-muted-foreground">添加或更新绑定</div>
+                        <div className="space-y-1.5">
+                          <Label>供应商模型</Label>
+                          <Select
+                            value={draft.modelId}
+                            onValueChange={(value) => updateBusinessBindingDraft(slot.profileKey, { modelId: value })}
+                            onOpenChange={trackPortaledControlOpen}
+                            disabled={compatibleModels.length === 0}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="选择模型" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {compatibleModels.map((model) => (
+                                <SelectItem key={model.id} value={model.id}>
+                                  {model.displayName || model.modelKey} · {model.accountName}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <Label>优先级</Label>
+                            <Input
+                              inputMode="numeric"
+                              value={draft.priority}
+                              onChange={(event) => updateBusinessBindingDraft(slot.profileKey, { priority: event.target.value })}
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label>权重</Label>
+                            <Input
+                              inputMode="numeric"
+                              value={draft.weight}
+                              onChange={(event) => updateBusinessBindingDraft(slot.profileKey, { weight: event.target.value })}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 rounded-md border bg-background p-3">
+                          <Label>启用绑定</Label>
+                          <Switch
+                            checked={draft.enabled}
+                            onCheckedChange={(checked) => updateBusinessBindingDraft(slot.profileKey, { enabled: checked })}
+                          />
+                        </div>
+                        <Button
+                          className="w-full"
+                          onClick={() => handleSaveBusinessBinding(slot, profile)}
+                          disabled={createProfileBindingMutation.isPending || compatibleModels.length === 0}
+                        >
+                          保存绑定
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-3 text-xs text-muted-foreground">绑定: {profile.bindings?.length ?? 0}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </TabsContent>
         </Tabs>
@@ -996,7 +1395,7 @@ export function ProvidersPage() {
                               type="button"
                               className="rounded-full text-muted-foreground transition hover:text-destructive"
                               aria-label={`删除 ${model.displayName || model.modelKey}`}
-                              onClick={() => setModelToDelete(model)}
+                              onClick={() => deleteModelMutation.mutate(model.id)}
                               disabled={deleteModelMutation.isPending}
                             >
                               <X className="h-3 w-3" />
@@ -1160,7 +1559,7 @@ export function ProvidersPage() {
                           <div className="mt-2 flex flex-wrap gap-1">
                             {modelTaskTypes(model).map((taskType) => (
                               <span key={taskType} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                                {taskType}
+                                {taskTypeLabel(taskType)}
                               </span>
                             ))}
                           </div>
@@ -1203,7 +1602,7 @@ export function ProvidersPage() {
                             variant="destructive"
                             data-provider-model-id={model.id}
                             data-testid="provider-model-delete"
-                            onClick={() => setModelToDelete(model)}
+                            onClick={() => deleteModelMutation.mutate(model.id)}
                             disabled={deleteModelMutation.isPending}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -1247,14 +1646,16 @@ export function ProvidersPage() {
                 <Select
                   value={modelForm.modality}
                   onOpenChange={trackPortaledControlOpen}
-                  onValueChange={(value) =>
+                  onValueChange={(value) => {
+                    const taskTypes = defaultTaskTypesByModality[value] || [];
                     setModelForm({
                       ...modelForm,
                       modality: value,
                       supportsAsyncTask: defaultSupportsAsyncTask(value),
-                      taskTypesText: defaultTaskTypesByModality[value]?.join("\n") || modelForm.taskTypesText,
-                    })
-                  }
+                      ...defaultCapabilityFormFields(value, taskTypes),
+                      taskTypesText: taskTypes.join("\n") || modelForm.taskTypesText,
+                    });
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -1301,6 +1702,7 @@ export function ProvidersPage() {
                 onCheckedChange={(checked) => setModelForm({ ...modelForm, supportsAsyncTask: checked })}
               />
             </div>
+            <ModelCapabilityFields modelForm={modelForm} setModelForm={setModelForm} />
             <div className="grid gap-3 md:grid-cols-2">
               <JsonTextarea label="输入限制 JSON" value={modelForm.inputLimitsText} onChange={(value) => setModelForm({ ...modelForm, inputLimitsText: value })} />
               <JsonTextarea label="输出限制 JSON" value={modelForm.outputLimitsText} onChange={(value) => setModelForm({ ...modelForm, outputLimitsText: value })} />
@@ -1344,37 +1746,105 @@ export function ProvidersPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      <AlertDialog open={!!modelToDelete} onOpenChange={(open) => !open && setModelToDelete(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogMedia>
-              <Trash2 className="h-5 w-5 text-destructive" />
-            </AlertDialogMedia>
-            <AlertDialogTitle>删除模型</AlertDialogTitle>
-            <AlertDialogDescription>
-              删除后该模型会从当前供应商移除，并停止用于模型配置路由。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteModelMutation.isPending}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={deleteModelMutation.isPending}
-              onClick={() => modelToDelete && deleteModelMutation.mutate(modelToDelete.id)}
-            >
-              删除
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </AppShell>
+  );
+}
+
+function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelForm; setModelForm: (value: ModelForm) => void }) {
+  const update = (patch: Partial<ModelForm>) => setModelForm({ ...modelForm, ...patch });
+  const isText = modelForm.modality === "text" || modelForm.modality === "multimodal";
+  const isImage = modelForm.modality === "image" || modelForm.modality === "multimodal";
+  const isVideo = modelForm.modality === "video" || modelForm.modality === "multimodal";
+  return (
+    <div className="space-y-4 rounded-lg border p-4">
+      {isText && (
+        <div className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <LabeledInput label="最大输入 Token" value={modelForm.maxInputTokens} onChange={(value) => update({ maxInputTokens: value })} />
+            <LabeledInput label="最大输出 Token" value={modelForm.maxOutputTokens} onChange={(value) => update({ maxOutputTokens: value })} />
+            <LabeledListInput label="支持输入类型" value={modelForm.supportedInputTypesText} onChange={(value) => update({ supportedInputTypesText: value })} />
+            <LabeledListInput label="支持输出类型" value={modelForm.supportedOutputTypesText} onChange={(value) => update({ supportedOutputTypesText: value })} />
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <SwitchField label="支持流式输出" checked={modelForm.supportsStreaming} onChange={(checked) => update({ supportsStreaming: checked })} />
+            <SwitchField label="支持思考" checked={modelForm.supportsReasoning} onChange={(checked) => update({ supportsReasoning: checked })} />
+            <SwitchField label="支持思考等级" checked={modelForm.supportsReasoningLevels} onChange={(checked) => update({ supportsReasoningLevels: checked })} />
+            <SwitchField label="支持多模态输入" checked={modelForm.supportsMultimodalInput} onChange={(checked) => update({ supportsMultimodalInput: checked })} />
+          </div>
+        </div>
+      )}
+
+      {isImage && (
+        <div className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <LabeledInput label="Prompt 最大长度" value={modelForm.promptMaxLength} onChange={(value) => update({ promptMaxLength: value })} />
+            <LabeledInput label="参考图数量上限" value={modelForm.maxReferenceImages} onChange={(value) => update({ maxReferenceImages: value })} />
+            <LabeledListInput label="图片请求方式" value={modelForm.imageRequestModesText} onChange={(value) => update({ imageRequestModesText: value })} />
+            <LabeledListInput label="图片比例" value={modelForm.imageAspectRatiosText} onChange={(value) => update({ imageAspectRatiosText: value })} />
+            <LabeledListInput label="图片清晰度" value={modelForm.imageResolutionsText} onChange={(value) => update({ imageResolutionsText: value })} />
+            <LabeledListInput label="图片输出格式" value={modelForm.imageResponseFormatsText} onChange={(value) => update({ imageResponseFormatsText: value })} />
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <SwitchField label="支持参考图" checked={modelForm.supportsReferenceImages} onChange={(checked) => update({ supportsReferenceImages: checked })} />
+            <SwitchField label="支持图片编辑" checked={modelForm.supportsImageEdit} onChange={(checked) => update({ supportsImageEdit: checked })} />
+          </div>
+        </div>
+      )}
+
+      {isVideo && (
+        <div className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <LabeledInput label="最短秒数" value={modelForm.minDurationSeconds} onChange={(value) => update({ minDurationSeconds: value })} />
+            <LabeledInput label="最长秒数" value={modelForm.maxDurationSeconds} onChange={(value) => update({ maxDurationSeconds: value })} />
+            <LabeledListInput label="可选秒数" value={modelForm.durationsText} onChange={(value) => update({ durationsText: value })} />
+            <LabeledInput label="参考视频数量上限" value={modelForm.maxReferenceVideos} onChange={(value) => update({ maxReferenceVideos: value })} />
+            <LabeledListInput label="视频请求方式" value={modelForm.videoRequestModesText} onChange={(value) => update({ videoRequestModesText: value })} />
+            <LabeledListInput label="视频比例" value={modelForm.videoAspectRatiosText} onChange={(value) => update({ videoAspectRatiosText: value })} />
+            <LabeledListInput label="视频清晰度" value={modelForm.videoResolutionsText} onChange={(value) => update({ videoResolutionsText: value })} />
+            <LabeledListInput label="视频输出格式" value={modelForm.videoOutputFormatsText} onChange={(value) => update({ videoOutputFormatsText: value })} />
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <SwitchField label="支持参考图" checked={modelForm.supportsReferenceImages} onChange={(checked) => update({ supportsReferenceImages: checked })} />
+            <SwitchField label="支持首帧" checked={modelForm.supportsFirstFrame} onChange={(checked) => update({ supportsFirstFrame: checked })} />
+            <SwitchField label="支持尾帧" checked={modelForm.supportsLastFrame} onChange={(checked) => update({ supportsLastFrame: checked })} />
+            <SwitchField label="支持视频参考" checked={modelForm.supportsVideoReference} onChange={(checked) => update({ supportsVideoReference: checked })} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LabeledInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <Input value={value} onChange={(event) => onChange(event.target.value)} />
+    </div>
+  );
+}
+
+function LabeledListInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <Textarea className="min-h-16 text-sm" value={value} onChange={(event) => onChange(event.target.value)} />
+    </div>
+  );
+}
+
+function SwitchField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+      <Label>{label}</Label>
+      <Switch checked={checked} onCheckedChange={onChange} />
+    </div>
   );
 }
 
 function JsonTextarea({ label, value, onChange, large = false }: { label: string; value: string; onChange: (value: string) => void; large?: boolean }) {
   return (
-    <div className="space-y-1.5">
+    <div className="hidden">
       <Label>{label}</Label>
       <Textarea
         className={cn("font-mono text-xs", large ? "min-h-36" : "min-h-24")}
@@ -1382,6 +1852,48 @@ function JsonTextarea({ label, value, onChange, large = false }: { label: string
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
+    </div>
+  );
+}
+
+function BusinessBindingRow({
+  binding,
+  model,
+  onDelete,
+  deleting,
+}: {
+  binding: ModelProfileBinding;
+  model?: ProviderModelWithAccount;
+  onDelete: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <div className="rounded-md border p-3">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium">{model?.displayName || model?.modelKey || "模型不可用"}</span>
+            {model ? <Badge variant="outline">{modalityLabel(model.modality)}</Badge> : <Badge variant="secondary">未找到</Badge>}
+            <Badge variant={binding.enabled ? "default" : "secondary"}>{binding.enabled ? "启用" : "停用"}</Badge>
+          </div>
+          <div className="truncate font-mono text-xs text-muted-foreground">{model?.modelKey || binding.providerModelId}</div>
+          {model ? (
+            <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
+              <span>{model.providerLabel}</span>
+              <span>·</span>
+              <span>{model.accountName}</span>
+              <span>·</span>
+              <span>优先级 {binding.priority}</span>
+              <span>·</span>
+              <span>权重 {binding.weight}</span>
+            </div>
+          ) : null}
+        </div>
+        <Button size="sm" variant="destructive" onClick={onDelete} disabled={deleting}>
+          <Trash2 className="h-3.5 w-3.5" />
+          删除
+        </Button>
+      </div>
     </div>
   );
 }
@@ -1398,12 +1910,14 @@ function accountFormFromCatalog(entry: ProviderCatalogEntry | null): AccountForm
 }
 
 function emptyModelForm(modality: string): ModelForm {
+  const defaults = defaultCapabilityFormFields(modality, defaultTaskTypesByModality[modality] || []);
   return {
     modelKey: "",
     displayName: "",
     modality,
     status: "active",
     supportsAsyncTask: defaultSupportsAsyncTask(modality),
+    ...defaults,
     taskTypesText: (defaultTaskTypesByModality[modality] || []).join("\n"),
     inputLimitsText: "{}",
     outputLimitsText: "{}",
@@ -1429,6 +1943,98 @@ function customModelDraft(modelKey: string, modality: string): ModelDraft {
   };
 }
 
+function defaultCapabilityFormFields(modality: string, taskTypes: string[]) {
+  const isText = modality === "text" || modality === "multimodal";
+  const isImage = modality === "image" || modality === "multimodal";
+  const isVideo = modality === "video" || modality === "multimodal";
+  return {
+    supportsStreaming: taskTypes.includes("text.stream"),
+    supportsReasoning: false,
+    supportsReasoningLevels: false,
+    supportsMultimodalInput: modality === "multimodal",
+    maxInputTokens: "",
+    maxOutputTokens: "",
+    supportedInputTypesText: listText(isText && modality === "multimodal" ? ["text", "image"] : ["text"]),
+    supportedOutputTypesText: listText(isVideo ? ["video"] : isImage ? ["image"] : ["text"]),
+    promptMaxLength: "",
+    supportsReferenceImages: false,
+    supportsImageEdit: false,
+    maxReferenceImages: "",
+    imageRequestModesText: listText(["images.generate"]),
+    imageAspectRatiosText: listText(["1:1", "16:9", "9:16"]),
+    imageResolutionsText: listText(["standard", "hd"]),
+    imageResponseFormatsText: listText(["url", "b64_json"]),
+    minDurationSeconds: "",
+    maxDurationSeconds: "",
+    durationsText: listText(["5", "10"]),
+    supportsFirstFrame: false,
+    supportsLastFrame: false,
+    supportsVideoReference: false,
+    maxReferenceVideos: "",
+    videoRequestModesText: listText(["async_create", "poll", "cancel"]),
+    videoAspectRatiosText: listText(["16:9", "9:16", "1:1"]),
+    videoResolutionsText: listText(["720p", "1080p"]),
+    videoOutputFormatsText: listText(["video"]),
+  };
+}
+
+function capabilityFormFieldsFromValues(
+  modality: string,
+  taskTypes: string[],
+  inputLimits: JsonRecord,
+  outputLimits: JsonRecord,
+  qualityTiers: JsonValue,
+  providerOptionsSchema: JsonRecord,
+) {
+  const defaults = defaultCapabilityFormFields(modality, taskTypes);
+  const xCapabilities = isPlainRecord(providerOptionsSchema.xCapabilities) ? providerOptionsSchema.xCapabilities : {};
+  const supportedInputTypes = arrayFromValue(xCapabilities.supportedInputTypes).length
+    ? arrayFromValue(xCapabilities.supportedInputTypes)
+    : arrayFromValue(inputLimits.inputTypes);
+  const supportedOutputTypes = arrayFromValue(xCapabilities.supportedOutputTypes).length
+    ? arrayFromValue(xCapabilities.supportedOutputTypes)
+    : arrayFromValue(outputLimits.outputTypes);
+  const responseFormats = arrayFromValue(xCapabilities.responseFormats).length
+    ? arrayFromValue(xCapabilities.responseFormats)
+    : arrayFromValue(outputLimits.responseFormats);
+  const supportedResolutions = arrayFromValue(xCapabilities.supportedResolutions).length
+    ? arrayFromValue(xCapabilities.supportedResolutions)
+    : arrayFromValue(qualityTiers);
+  return {
+    ...defaults,
+    supportsStreaming: booleanFromValue(xCapabilities.supportsStreaming, defaults.supportsStreaming),
+    supportsReasoning: booleanFromValue(xCapabilities.supportsReasoning, defaults.supportsReasoning),
+    supportsReasoningLevels: booleanFromValue(xCapabilities.supportsReasoningLevels, defaults.supportsReasoningLevels),
+    supportsMultimodalInput: booleanFromValue(xCapabilities.supportsMultimodalInput, defaults.supportsMultimodalInput),
+    maxInputTokens: textFromValue(inputLimits.maxTokens),
+    maxOutputTokens: textFromValue(outputLimits.maxTokens),
+    supportedInputTypesText: listText(supportedInputTypes.length ? supportedInputTypes : splitList(defaults.supportedInputTypesText)),
+    supportedOutputTypesText: listText(supportedOutputTypes.length ? supportedOutputTypes : splitList(defaults.supportedOutputTypesText)),
+    promptMaxLength: textFromValue(inputLimits.promptMaxLength),
+    supportsReferenceImages: booleanFromValue(
+      xCapabilities.supportsReferenceImages ?? xCapabilities.supportsReferences,
+      defaults.supportsReferenceImages,
+    ),
+    supportsImageEdit: splitList(listText(arrayFromValue(xCapabilities.requestModes))).includes("images.edit"),
+    maxReferenceImages: textFromValue(xCapabilities.maxReferenceImages ?? inputLimits.maxReferenceImages),
+    imageRequestModesText: listText(arrayFromValue(xCapabilities.requestModes).length ? arrayFromValue(xCapabilities.requestModes) : splitList(defaults.imageRequestModesText)),
+    imageAspectRatiosText: listText(arrayFromValue(xCapabilities.supportedAspectRatios).length ? arrayFromValue(xCapabilities.supportedAspectRatios) : splitList(defaults.imageAspectRatiosText)),
+    imageResolutionsText: listText(supportedResolutions.length ? supportedResolutions : splitList(defaults.imageResolutionsText)),
+    imageResponseFormatsText: listText(responseFormats.length ? responseFormats : splitList(defaults.imageResponseFormatsText)),
+    minDurationSeconds: textFromValue(xCapabilities.minDurationSeconds),
+    maxDurationSeconds: textFromValue(xCapabilities.maxDurationSeconds),
+    durationsText: listText(arrayFromValue(xCapabilities.durations).length ? arrayFromValue(xCapabilities.durations) : splitList(defaults.durationsText)),
+    supportsFirstFrame: booleanFromValue(xCapabilities.supportsFirstFrame, defaults.supportsFirstFrame),
+    supportsLastFrame: booleanFromValue(xCapabilities.supportsLastFrame, defaults.supportsLastFrame),
+    supportsVideoReference: booleanFromValue(xCapabilities.supportsVideoReference, defaults.supportsVideoReference),
+    maxReferenceVideos: textFromValue(xCapabilities.maxReferenceVideos),
+    videoRequestModesText: listText(arrayFromValue(xCapabilities.requestModes).length ? arrayFromValue(xCapabilities.requestModes) : splitList(defaults.videoRequestModesText)),
+    videoAspectRatiosText: listText(arrayFromValue(xCapabilities.supportedAspectRatios).length ? arrayFromValue(xCapabilities.supportedAspectRatios) : splitList(defaults.videoAspectRatiosText)),
+    videoResolutionsText: listText(supportedResolutions.length ? supportedResolutions : splitList(defaults.videoResolutionsText)),
+    videoOutputFormatsText: listText(supportedOutputTypes.length ? supportedOutputTypes : splitList(defaults.videoOutputFormatsText)),
+  };
+}
+
 function catalogInstallModelBody(model: ProviderCatalogModelTemplate | ModelDraft): JsonRecord {
   const modality = model.modality || inferModelModality(model.modelKey);
   return {
@@ -1451,6 +2057,14 @@ function modelCreateBody(model: ProviderCatalogModelTemplate | ModelDraft): Json
     displayName: String(installBody.displayName),
     modality: String(installBody.modality),
     status: "active",
+    capabilities: {
+      taskTypes: installBody.taskTypes,
+      inputLimits: installBody.inputLimits,
+      outputLimits: installBody.outputLimits,
+      qualityTiers: installBody.qualityTiers,
+      providerOptionsSchema: installBody.providerOptionsSchema,
+      pricingPolicy: installBody.pricingPolicy,
+    },
   };
 }
 
@@ -1466,13 +2080,23 @@ function inferModelModality(modelKey: string) {
 }
 
 function modelFormFromTemplate(template: ProviderCatalogModelTemplate): ModelForm {
+  const taskTypes = template.taskTypes.length ? template.taskTypes : defaultTaskTypesByModality[template.modality] || [];
+  const capabilityFields = capabilityFormFieldsFromValues(
+    template.modality,
+    taskTypes,
+    template.inputLimits || {},
+    template.outputLimits || {},
+    template.qualityTiers || [],
+    template.providerOptionsSchema || {},
+  );
   return {
     modelKey: template.modelKey,
     displayName: template.displayName,
     modality: template.modality,
     status: "active",
-    supportsAsyncTask: readSupportsAsyncTask(template.providerOptionsSchema, template.taskTypes, template.modality),
-    taskTypesText: template.taskTypes.join("\n"),
+    supportsAsyncTask: readSupportsAsyncTask(template.providerOptionsSchema, taskTypes, template.modality),
+    ...capabilityFields,
+    taskTypesText: taskTypes.join("\n"),
     inputLimitsText: jsonText(template.inputLimits || {}),
     outputLimitsText: jsonText(template.outputLimits || {}),
     qualityTiersText: jsonText(template.qualityTiers || []),
@@ -1484,12 +2108,21 @@ function modelFormFromTemplate(template: ProviderCatalogModelTemplate): ModelFor
 function modelFormFromModel(model: ProviderModel): ModelForm {
   const capability = model.capabilities?.[0];
   const taskTypes = modelTaskTypes(model);
+  const capabilityFields = capabilityFormFieldsFromValues(
+    model.modality,
+    taskTypes,
+    capability?.inputLimits || {},
+    capability?.outputLimits || {},
+    capability?.qualityTiers || [],
+    capability?.providerOptionsSchema || {},
+  );
   return {
     modelKey: model.modelKey,
     displayName: model.displayName,
     modality: model.modality,
     status: model.status,
     supportsAsyncTask: readSupportsAsyncTask(capability?.providerOptionsSchema, taskTypes, model.modality),
+    ...capabilityFields,
     taskTypesText: taskTypes.join("\n"),
     inputLimitsText: jsonText(capability?.inputLimits || {}),
     outputLimitsText: jsonText(capability?.outputLimits || {}),
@@ -1536,6 +2169,160 @@ function parseJsonValue(text: string, label: string): JsonValue | undefined {
   }
 }
 
+function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[]) {
+  const inputLimits = safeJsonRecord(modelForm.inputLimitsText);
+  const outputLimits = safeJsonRecord(modelForm.outputLimitsText);
+  const providerOptionsSchema = safeJsonRecord(modelForm.providerOptionsSchemaText);
+  const pricingPolicy = safeJsonRecord(modelForm.pricingPolicyText);
+  const qualityTiersFromState = safeJsonValue(modelForm.qualityTiersText);
+  if (!inputLimits || !outputLimits || !providerOptionsSchema || !pricingPolicy || qualityTiersFromState === undefined) {
+    toast.error("模型能力配置无效");
+    return null;
+  }
+
+  const xCapabilities = isPlainRecord(providerOptionsSchema.xCapabilities) ? { ...providerOptionsSchema.xCapabilities } : {};
+  const supportedInputTypes = splitList(modelForm.supportedInputTypesText);
+  const supportedOutputTypes = splitList(modelForm.supportedOutputTypesText);
+  const textInputTokens = parseOptionalNumber(modelForm.maxInputTokens, "最大输入 Token");
+  const textOutputTokens = parseOptionalNumber(modelForm.maxOutputTokens, "最大输出 Token");
+  const promptMaxLength = parseOptionalNumber(modelForm.promptMaxLength, "Prompt 最大长度");
+  const maxReferenceImages = parseOptionalNumber(modelForm.maxReferenceImages, "参考图数量上限");
+  const maxReferenceVideos = parseOptionalNumber(modelForm.maxReferenceVideos, "参考视频数量上限");
+  const minDurationSeconds = parseOptionalNumber(modelForm.minDurationSeconds, "最短秒数");
+  const maxDurationSeconds = parseOptionalNumber(modelForm.maxDurationSeconds, "最长秒数");
+  const durations = parseNumberList(modelForm.durationsText, "可选秒数");
+  if (
+    textInputTokens === null ||
+    textOutputTokens === null ||
+    promptMaxLength === null ||
+    maxReferenceImages === null ||
+    maxReferenceVideos === null ||
+    minDurationSeconds === null ||
+    maxDurationSeconds === null ||
+    durations === null
+  ) {
+    return null;
+  }
+
+  if (supportedInputTypes.length > 0) {
+    inputLimits.inputTypes = supportedInputTypes;
+    xCapabilities.supportedInputTypes = supportedInputTypes;
+  }
+  if (supportedOutputTypes.length > 0) {
+    outputLimits.outputTypes = supportedOutputTypes;
+    xCapabilities.supportedOutputTypes = supportedOutputTypes;
+  }
+  if (textInputTokens !== undefined) {
+    inputLimits.maxTokens = textInputTokens;
+  }
+  if (textOutputTokens !== undefined) {
+    outputLimits.maxTokens = textOutputTokens;
+  }
+  if (promptMaxLength !== undefined) {
+    inputLimits.promptMaxLength = promptMaxLength;
+  }
+
+  xCapabilities.supportsAsyncTask = modelForm.supportsAsyncTask;
+  xCapabilities.supportsStreaming = modelForm.supportsStreaming;
+  xCapabilities.supportsReasoning = modelForm.supportsReasoning;
+  xCapabilities.supportsReasoningLevels = modelForm.supportsReasoningLevels;
+  xCapabilities.supportsMultimodalInput = modelForm.supportsMultimodalInput;
+
+  let qualityTiers = Array.isArray(qualityTiersFromState) ? qualityTiersFromState : [];
+  if (modelForm.modality === "image" || modelForm.modality === "multimodal") {
+    const requestModes = splitList(modelForm.imageRequestModesText);
+    if (modelForm.supportsImageEdit && !requestModes.includes("images.edit")) {
+      requestModes.push("images.edit");
+    }
+    const imageAspectRatios = splitList(modelForm.imageAspectRatiosText);
+    const imageResolutions = splitList(modelForm.imageResolutionsText);
+    const imageResponseFormats = splitList(modelForm.imageResponseFormatsText);
+    xCapabilities.supportsReferences = modelForm.supportsReferenceImages;
+    xCapabilities.supportsReferenceImages = modelForm.supportsReferenceImages;
+    xCapabilities.requestModes = requestModes;
+    if (maxReferenceImages !== undefined) {
+      inputLimits.maxReferenceImages = maxReferenceImages;
+      xCapabilities.maxReferenceImages = maxReferenceImages;
+    }
+    if (imageAspectRatios.length > 0) {
+      xCapabilities.supportedAspectRatios = imageAspectRatios;
+    }
+    if (imageResolutions.length > 0) {
+      xCapabilities.supportedResolutions = imageResolutions;
+      qualityTiers = imageResolutions;
+    }
+    if (imageResponseFormats.length > 0) {
+      outputLimits.responseFormats = imageResponseFormats;
+      xCapabilities.responseFormats = imageResponseFormats;
+    }
+  }
+
+  if (modelForm.modality === "video" || modelForm.modality === "multimodal") {
+    const videoRequestModes = splitList(modelForm.videoRequestModesText);
+    const videoAspectRatios = splitList(modelForm.videoAspectRatiosText);
+    const videoResolutions = splitList(modelForm.videoResolutionsText);
+    const videoOutputFormats = splitList(modelForm.videoOutputFormatsText);
+    xCapabilities.requestModes = videoRequestModes;
+    xCapabilities.supportsReferenceImages = modelForm.supportsReferenceImages;
+    xCapabilities.supportsFirstFrame = modelForm.supportsFirstFrame;
+    xCapabilities.supportsLastFrame = modelForm.supportsLastFrame;
+    xCapabilities.supportsVideoReference = modelForm.supportsVideoReference;
+    if (minDurationSeconds !== undefined) {
+      xCapabilities.minDurationSeconds = minDurationSeconds;
+    }
+    if (maxDurationSeconds !== undefined) {
+      xCapabilities.maxDurationSeconds = maxDurationSeconds;
+    }
+    if (durations.length > 0) {
+      xCapabilities.durations = durations;
+    }
+    if (maxReferenceImages !== undefined) {
+      inputLimits.maxReferenceImages = maxReferenceImages;
+      xCapabilities.maxReferenceImages = maxReferenceImages;
+    }
+    if (maxReferenceVideos !== undefined) {
+      inputLimits.maxReferenceVideos = maxReferenceVideos;
+      xCapabilities.maxReferenceVideos = maxReferenceVideos;
+    }
+    if (videoAspectRatios.length > 0) {
+      xCapabilities.supportedAspectRatios = videoAspectRatios;
+    }
+    if (videoResolutions.length > 0) {
+      xCapabilities.supportedResolutions = videoResolutions;
+      qualityTiers = videoResolutions;
+    }
+    if (videoOutputFormats.length > 0) {
+      outputLimits.outputTypes = videoOutputFormats;
+      xCapabilities.supportedOutputTypes = videoOutputFormats;
+    }
+  }
+
+  return {
+    taskTypes,
+    inputLimits,
+    outputLimits,
+    qualityTiers,
+    providerOptionsSchema: {
+      ...providerOptionsSchema,
+      xCapabilities,
+    },
+    pricingPolicy,
+  };
+}
+
+function safeJsonRecord(text: string): JsonRecord | null {
+  const value = safeJsonValue(text);
+  return value !== undefined && isRecord(value) ? value : null;
+}
+
+function safeJsonValue(text: string): JsonValue | undefined {
+  try {
+    return JSON.parse(text.trim() || "{}") as JsonValue;
+  } catch {
+    return undefined;
+  }
+}
+
 function isRecord(value: JsonValue): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1545,6 +2332,122 @@ function taskTypesFromText(text: string) {
     .split(/[\n,]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function splitList(text: string) {
+  return text
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function listText(values: unknown[]) {
+  return values.map((value) => String(value).trim()).filter(Boolean).join("\n");
+}
+
+function arrayFromValue(value: JsonValue | undefined): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map(String).filter(Boolean);
+}
+
+function textFromValue(value: JsonValue | undefined) {
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function booleanFromValue(value: JsonValue | undefined, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function parseOptionalNumber(text: string, label: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const value = Number(trimmed);
+  if (!Number.isFinite(value)) {
+    toast.error(`${label}必须是数字`);
+    return null;
+  }
+  return value;
+}
+
+function parseNumberList(text: string, label: string) {
+  const values = splitList(text);
+  const numbers: number[] = [];
+  for (const value of values) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      toast.error(`${label}必须是数字`);
+      return null;
+    }
+    numbers.push(parsed);
+  }
+  return numbers;
+}
+
+function defaultBusinessBindingDraft(): BusinessModelBindingDraft {
+  return {
+    modelId: "",
+    priority: "100",
+    weight: "100",
+    enabled: true,
+  };
+}
+
+function defaultFallbackStrategy(): JsonRecord {
+  return {
+    enabled: true,
+    maxAttempts: 2,
+    fallbackOn: ["PROVIDER_RATE_LIMITED", "UPSTREAM_TIMEOUT", "UPSTREAM_INTERNAL_ERROR"],
+    stopOn: ["INVALID_REQUEST", "AUTHENTICATION_FAILED"],
+  };
+}
+
+function parseIntegerOrDefault(text: string, fallback: number, label: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const value = Number(trimmed);
+  if (!Number.isInteger(value) || value < 0) {
+    toast.error(`${label}必须是非负整数`);
+    return null;
+  }
+  return value;
+}
+
+function businessProfilePurposeLabel(purpose: string) {
+  switch (purpose) {
+    case "script":
+      return "脚本/事件";
+    case "image":
+      return "图片";
+    case "video":
+      return "视频";
+    default:
+      return purpose;
+  }
+}
+
+function modelMatchesBusinessSlot(model: ProviderModel, slot: BusinessProfileSlot) {
+  if (!slot.modalities.includes(model.modality)) {
+    return false;
+  }
+  const modelTasks = modelTaskTypes(model);
+  if (modelTasks.length === 0) {
+    return true;
+  }
+  const slotTaskFamilies = new Set(slot.taskTypes.map(taskTypeFamily));
+  return (
+    slot.taskTypes.some((taskType) => modelTasks.includes(taskType)) ||
+    modelTasks.some((taskType) => slotTaskFamilies.has(taskTypeFamily(taskType)))
+  );
+}
+
+function taskTypeFamily(taskType: string) {
+  return taskType.split(".")[0] || taskType;
 }
 
 function defaultSupportsAsyncTask(modality: string) {
@@ -1568,17 +2471,6 @@ function inferSupportsAsyncTask(taskTypes: string[], xCapabilities: JsonRecord) 
     const normalized = mode.trim().toLowerCase();
     return normalized.includes("async") || normalized === "poll" || normalized === "async_poll";
   });
-}
-
-function withSupportsAsyncTask(providerOptionsSchema: JsonRecord, supportsAsyncTask: boolean): JsonRecord {
-  const xCapabilities = isPlainRecord(providerOptionsSchema.xCapabilities) ? providerOptionsSchema.xCapabilities : {};
-  return {
-    ...providerOptionsSchema,
-    xCapabilities: {
-      ...xCapabilities,
-      supportsAsyncTask,
-    },
-  };
 }
 
 const portaledControlSelectors = [

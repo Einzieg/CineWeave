@@ -183,23 +183,51 @@ type AdaptationPlanDraft struct {
 type novelChapterRecord struct {
 	ID           string
 	ChapterIndex int
+	VolumeIndex  int
+	SectionIndex int
 	VolumeTitle  string
 	ChapterTitle string
 	Content      string
 }
 
 type adaptationPlanRecord struct {
-	ID               string
-	SourceID         string
-	Title            string
-	Content          string
-	Structure        json.RawMessage
-	SelectedEventIDs []string
+	ID                    string
+	SourceID              string
+	Title                 string
+	Content               string
+	Structure             json.RawMessage
+	SelectedEventIDs      []string
+	TargetDurationSeconds int
+	MaxShots              int
+	Metadata              json.RawMessage
+}
+
+type scriptNovelChapterContext struct {
+	ID           string `json:"id"`
+	ChapterIndex int    `json:"chapterIndex"`
+	VolumeIndex  int    `json:"volumeIndex,omitempty"`
+	SectionIndex int    `json:"sectionIndex,omitempty"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+}
+
+type scriptNovelContext struct {
+	SourceID             string                      `json:"sourceId"`
+	SourceTitle          string                      `json:"sourceTitle"`
+	EpisodeNumber        int                         `json:"episodeNumber"`
+	ShotCount            int                         `json:"shotCount"`
+	StartShotNumber      int                         `json:"startShotNumber"`
+	PreviousSummary      string                      `json:"previousSummary"`
+	CharacterPeriodTable string                      `json:"characterPeriodTable"`
+	ReferenceText        string                      `json:"referenceText"`
+	CurrentText          string                      `json:"currentText"`
+	ChapterIDs           []string                    `json:"chapterIds"`
+	Chapters             []scriptNovelChapterContext `json:"chapters"`
 }
 
 func ExtractNovelEventsWorkflow(ctx workflow.Context, input TextToStoryboardInput) (ExtractNovelEventsOutput, error) {
 	options := resolveExtractNovelEventsOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, longRunningProviderTextActivityOptions())
 	var output ExtractNovelEventsOutput
 	if err := workflow.ExecuteActivity(ctx, "ExtractNovelEvents", ExtractNovelEventsInput{
 		OrganizationID: input.OrganizationID,
@@ -220,7 +248,7 @@ func ExtractNovelEventsWorkflow(ctx workflow.Context, input TextToStoryboardInpu
 
 func GenerateAdaptationPlanWorkflow(ctx workflow.Context, input TextToStoryboardInput) (AdaptationPlanOutput, error) {
 	options := resolveGenerateAdaptationPlanOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 	var output AdaptationPlanOutput
 	if err := workflow.ExecuteActivity(ctx, "GenerateAdaptationPlan", GenerateAdaptationPlanInput{
 		OrganizationID:        input.OrganizationID,
@@ -244,7 +272,7 @@ func GenerateAdaptationPlanWorkflow(ctx workflow.Context, input TextToStoryboard
 
 func AdaptationPlanToScriptWorkflow(ctx workflow.Context, input TextToStoryboardInput) (AdaptationScriptOutput, error) {
 	options := resolveAdaptationPlanToScriptOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 	var output AdaptationScriptOutput
 	if err := workflow.ExecuteActivity(ctx, "GenerateScriptFromAdaptationPlan", GenerateScriptFromPlanInput{
 		OrganizationID: input.OrganizationID,
@@ -298,7 +326,14 @@ func (a Activities) ExtractNovelEvents(ctx context.Context, input ExtractNovelEv
 		rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyNovelEventExtraction, map[string]any{
 			"project": project.asPromptVariables(),
 			"source":  map[string]any{"id": source.ID, "title": source.Title, "sourceType": source.SourceType},
-			"chapter": map[string]any{"id": chapter.ID, "index": chapter.ChapterIndex, "title": chapterTitle(chapter), "content": chapter.Content},
+			"chapter": map[string]any{
+				"id":           chapter.ID,
+				"index":        chapter.ChapterIndex,
+				"volumeIndex":  chapter.VolumeIndex,
+				"sectionIndex": chapter.SectionIndex,
+				"title":        chapterTitle(chapter),
+				"content":      chapter.Content,
+			},
 		})
 		if err != nil {
 			return ExtractNovelEventsOutput{}, a.failActivity(ctx, baseInput, "", err)
@@ -313,6 +348,8 @@ func (a Activities) ExtractNovelEvents(ctx context.Context, input ExtractNovelEv
 				"sourceId":          input.SourceID,
 				"chapterId":         chapter.ID,
 				"chapterIndex":      chapter.ChapterIndex,
+				"volumeIndex":       chapter.VolumeIndex,
+				"sectionIndex":      chapter.SectionIndex,
 				"force":             input.Force,
 				"modelProfileKey":   project.ScriptModelProfileKey,
 				"promptTemplateKey": rendered.TemplateKey,
@@ -324,7 +361,7 @@ func (a Activities) ExtractNovelEvents(ctx context.Context, input ExtractNovelEv
 		if err != nil {
 			return ExtractNovelEventsOutput{}, err
 		}
-		gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+		gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
 			OrganizationID:    input.OrganizationID,
 			ProjectID:         input.ProjectID,
 			WorkflowRunID:     input.WorkflowRunID,
@@ -335,6 +372,7 @@ func (a Activities) ExtractNovelEvents(ctx context.Context, input ExtractNovelEv
 			PromptHash:        rendered.RenderedHash,
 			PromptSource:      rendered.Source,
 			Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText, "responseFormat": "json"}),
+			Options:           providerTextGatewayOptions(),
 		})
 		if err != nil {
 			return ExtractNovelEventsOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))
@@ -419,7 +457,7 @@ func (a Activities) GenerateAdaptationPlan(ctx context.Context, input GenerateAd
 	if a.gateway == nil {
 		return AdaptationPlanOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
-	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+	gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -430,6 +468,7 @@ func (a Activities) GenerateAdaptationPlan(ctx context.Context, input GenerateAd
 		PromptHash:        rendered.RenderedHash,
 		PromptSource:      rendered.Source,
 		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText, "responseFormat": "json"}),
+		Options:           providerTextGatewayOptions(),
 	})
 	if err != nil {
 		return AdaptationPlanOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))
@@ -465,11 +504,16 @@ func (a Activities) GenerateScriptFromAdaptationPlan(ctx context.Context, input 
 	if err != nil {
 		return AdaptationScriptOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
+	novelContext, err := a.scriptNovelContextForPlan(ctx, input.ProjectID, plan, events)
+	if err != nil {
+		return AdaptationScriptOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyScriptFromAdaptationPlan, map[string]any{
 		"project": project.asPromptVariables(),
 		"input":   map[string]any{"instruction": strings.TrimSpace(input.Instruction)},
 		"plan":    map[string]any{"id": plan.ID, "title": plan.Title, "content": plan.Content, "structure": string(plan.Structure)},
 		"events":  map[string]any{"items": string(mustJSON(events))},
+		"novel":   novelContext,
 	})
 	if err != nil {
 		return AdaptationScriptOutput{}, a.failActivity(ctx, baseInput, "", err)
@@ -499,7 +543,7 @@ func (a Activities) GenerateScriptFromAdaptationPlan(ctx context.Context, input 
 	if a.gateway == nil {
 		return AdaptationScriptOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
-	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+	gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -510,6 +554,7 @@ func (a Activities) GenerateScriptFromAdaptationPlan(ctx context.Context, input 
 		PromptHash:        rendered.RenderedHash,
 		PromptSource:      rendered.Source,
 		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText}),
+		Options:           providerTextGatewayOptions(),
 	})
 	if err != nil {
 		return AdaptationScriptOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))
@@ -697,10 +742,10 @@ func validateGenerateAdaptationPlanInput(input GenerateAdaptationPlanInput) erro
 
 func (a Activities) loadNovelChapters(ctx context.Context, projectID, sourceID string, chapterIDs []string) ([]novelChapterRecord, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT id::text, chapter_index, COALESCE(volume_title, ''), COALESCE(chapter_title, ''), content
+		SELECT id::text, chapter_index, volume_index, section_index, COALESCE(volume_title, ''), COALESCE(chapter_title, ''), content
 		FROM novel_chapters
 		WHERE project_id = $1 AND source_id = $2
-		ORDER BY chapter_index ASC
+		ORDER BY COALESCE(volume_index, 0) ASC, COALESCE(section_index, chapter_index) ASC, chapter_index ASC
 	`, projectID, sourceID)
 	if err != nil {
 		return nil, err
@@ -713,8 +758,15 @@ func (a Activities) loadNovelChapters(ctx context.Context, projectID, sourceID s
 	items := make([]novelChapterRecord, 0)
 	for rows.Next() {
 		var item novelChapterRecord
-		if err := rows.Scan(&item.ID, &item.ChapterIndex, &item.VolumeTitle, &item.ChapterTitle, &item.Content); err != nil {
+		var volumeIndex, sectionIndex sql.NullInt32
+		if err := rows.Scan(&item.ID, &item.ChapterIndex, &volumeIndex, &sectionIndex, &item.VolumeTitle, &item.ChapterTitle, &item.Content); err != nil {
 			return nil, err
+		}
+		if volumeIndex.Valid {
+			item.VolumeIndex = int(volumeIndex.Int32)
+		}
+		if sectionIndex.Valid {
+			item.SectionIndex = int(sectionIndex.Int32)
 		}
 		if len(filter) > 0 && !filter[item.ID] {
 			continue
@@ -1036,16 +1088,170 @@ func (a Activities) insertAdaptationPlan(ctx context.Context, input GenerateAdap
 func (a Activities) adaptationPlan(ctx context.Context, projectID, planID string) (adaptationPlanRecord, error) {
 	var item adaptationPlanRecord
 	var sourceID sql.NullString
-	var selected []byte
+	var selected, metadata []byte
 	err := a.db.QueryRow(ctx, `
-		SELECT id::text, COALESCE(source_id::text, ''), title, content, structure, selected_event_ids
+		SELECT id::text, COALESCE(source_id::text, ''), title, content, structure, selected_event_ids,
+		       COALESCE(target_duration_seconds, 0), COALESCE(max_shots, 0), metadata
 		FROM adaptation_plans
 		WHERE project_id = $1 AND id = $2
-	`, projectID, planID).Scan(&item.ID, &sourceID, &item.Title, &item.Content, &item.Structure, &selected)
+	`, projectID, planID).Scan(&item.ID, &sourceID, &item.Title, &item.Content, &item.Structure, &selected, &item.TargetDurationSeconds, &item.MaxShots, &metadata)
 	item.SourceID = sourceID.String
 	item.Structure = jsonOrDefault(item.Structure, `{}`)
+	item.Metadata = jsonOrDefault(metadata, `{}`)
 	_ = json.Unmarshal(jsonOrDefault(selected, `[]`), &item.SelectedEventIDs)
 	return item, err
+}
+
+func (a Activities) scriptNovelContextForPlan(ctx context.Context, projectID string, plan adaptationPlanRecord, events []NovelEventRecord) (scriptNovelContext, error) {
+	context := scriptNovelContext{
+		SourceID:             strings.TrimSpace(plan.SourceID),
+		EpisodeNumber:        1,
+		ShotCount:            shotCountFromAdaptationPlanRecord(plan),
+		StartShotNumber:      1,
+		PreviousSummary:      "无",
+		CharacterPeriodTable: characterPeriodTableFromNovelEventRecords(events),
+		ReferenceText:        "全文较长时不直接注入；请以小说正文为唯一转换范围，并以改编计划和事件摘要理解上下文。",
+	}
+	if context.SourceID == "" {
+		return context, nil
+	}
+	source, err := a.projectSourceRecord(ctx, projectID, context.SourceID)
+	if err != nil {
+		return scriptNovelContext{}, err
+	}
+	context.SourceTitle = source.Title
+	chapterIDs := chapterIDsFromNovelEventRecords(events)
+	chapters, err := a.loadNovelChapters(ctx, projectID, context.SourceID, chapterIDs)
+	if err != nil {
+		return scriptNovelContext{}, err
+	}
+	context.Chapters = workflowScriptNovelChapterContexts(chapters)
+	context.ChapterIDs = make([]string, 0, len(context.Chapters))
+	for _, chapter := range context.Chapters {
+		context.ChapterIDs = append(context.ChapterIDs, chapter.ID)
+	}
+	context.CurrentText = workflowScriptNovelCurrentText(context.Chapters)
+	if context.CurrentText == "" {
+		context.CurrentText = strings.TrimSpace(source.Content)
+	}
+	if len(context.Chapters) > 0 {
+		context.EpisodeNumber = firstPositiveStringInt(context.Chapters[0].SectionIndex, context.Chapters[0].ChapterIndex, 1)
+	}
+	if compactSource := strings.TrimSpace(source.Content); compactSource != "" && len([]rune(compactSource)) <= 20000 {
+		context.ReferenceText = compactSource
+	}
+	return context, nil
+}
+
+func workflowScriptNovelChapterContexts(chapters []novelChapterRecord) []scriptNovelChapterContext {
+	out := make([]scriptNovelChapterContext, 0, len(chapters))
+	for _, chapter := range chapters {
+		out = append(out, scriptNovelChapterContext{
+			ID:           chapter.ID,
+			ChapterIndex: chapter.ChapterIndex,
+			VolumeIndex:  chapter.VolumeIndex,
+			SectionIndex: chapter.SectionIndex,
+			Title:        workflowNovelChapterPromptTitle(chapter),
+			Content:      chapter.Content,
+		})
+	}
+	return out
+}
+
+func workflowScriptNovelCurrentText(chapters []scriptNovelChapterContext) string {
+	var builder strings.Builder
+	for _, chapter := range chapters {
+		content := strings.TrimSpace(chapter.Content)
+		if content == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString("【")
+		builder.WriteString(chapter.Title)
+		builder.WriteString("】\n")
+		builder.WriteString(content)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func chapterIDsFromNovelEventRecords(events []NovelEventRecord) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, event := range events {
+		id := strings.TrimSpace(event.ChapterID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+func characterPeriodTableFromNovelEventRecords(events []NovelEventRecord) string {
+	names := []string{}
+	seen := map[string]bool{}
+	for _, event := range events {
+		var characters []string
+		if err := json.Unmarshal(jsonOrDefault(event.Characters, `[]`), &characters); err != nil {
+			continue
+		}
+		for _, name := range normalizeStringSlice(characters) {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return "未配置人物时期表；按小说正文中的标准名称和时期线索标注，禁止新增人物、改名或使用别名。"
+	}
+	return "未配置正式人物时期表；候选人物：" + strings.Join(names, "、") + "。按小说正文中的标准名称和时期线索标注，禁止新增人物、改名或使用别名。"
+}
+
+func shotCountFromAdaptationPlanRecord(plan adaptationPlanRecord) int {
+	if plan.MaxShots > 0 {
+		return plan.MaxShots
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(jsonOrDefault(plan.Metadata, `{}`), &metadata); err == nil {
+		if value, ok := metadata["estimatedShots"].(float64); ok && value > 0 {
+			return int(value)
+		}
+	}
+	return 8
+}
+
+func workflowNovelChapterPromptTitle(chapter novelChapterRecord) string {
+	parts := []string{}
+	if chapter.VolumeIndex > 0 {
+		parts = append(parts, "第 "+strconv.Itoa(chapter.VolumeIndex)+"卷")
+	}
+	if chapter.SectionIndex > 0 {
+		parts = append(parts, "第 "+strconv.Itoa(chapter.SectionIndex)+"节")
+	}
+	if strings.TrimSpace(chapter.VolumeTitle) != "" {
+		parts = append(parts, strings.TrimSpace(chapter.VolumeTitle))
+	}
+	if strings.TrimSpace(chapter.ChapterTitle) != "" {
+		parts = append(parts, strings.TrimSpace(chapter.ChapterTitle))
+	}
+	if len(parts) == 0 {
+		return "第 " + strconv.Itoa(chapter.ChapterIndex) + " 集"
+	}
+	return strings.Join(parts, " ")
+}
+
+func firstPositiveStringInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func (a Activities) createGeneratedScriptFromPlan(ctx context.Context, input GenerateScriptFromPlanInput, plan adaptationPlanRecord, rendered promptsvc.RenderedPrompt, gatewayResp provider.GatewayTextResponse, content string) (AdaptationScriptOutput, error) {

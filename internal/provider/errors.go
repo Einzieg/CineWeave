@@ -66,6 +66,52 @@ type StandardError struct {
 	UpstreamCode   string `json:"upstreamCode,omitempty"`
 }
 
+type StandardErrorError struct {
+	Standard StandardError
+}
+
+func (e *StandardErrorError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.Standard.Message) != "" {
+		return e.Standard.Message
+	}
+	if strings.TrimSpace(e.Standard.Code) != "" {
+		return e.Standard.Code
+	}
+	return "provider request failed"
+}
+
+func StandardErrorFromError(err error) (*StandardError, bool) {
+	var standardErr *StandardErrorError
+	if errors.As(err, &standardErr) && standardErr != nil {
+		standard := standardErr.Standard
+		return &standard, true
+	}
+	return nil, false
+}
+
+func HTTPStatusForStandardError(standard *StandardError) int {
+	if standard == nil {
+		return http.StatusBadGateway
+	}
+	switch standard.Code {
+	case CodeRateLimited, CodeProviderRateLimited, CodeProviderConcurrencyLimited, CodeProviderCircuitOpen:
+		return http.StatusTooManyRequests
+	case CodeQuotaExceeded, CodeProviderDailyQuotaExceeded, CodeProviderMonthlyBudgetExceeded:
+		return http.StatusPaymentRequired
+	case CodeUpstreamTimeout, CodePollingTimeout:
+		return http.StatusGatewayTimeout
+	case CodeInvalidRequest, CodeUnsupportedCapability, CodeModelNotFound, CodeContentRejected, CodeProviderTaskNotFound, CodeCannotCancelCompletedTask:
+		return http.StatusUnprocessableEntity
+	case CodeProviderGatewayRequired:
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusBadGateway
+	}
+}
+
 type UpstreamError struct {
 	Status int
 	Code   string

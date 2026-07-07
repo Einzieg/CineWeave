@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -15,6 +17,55 @@ type SetupStateResponse struct {
 	NeedsSetup        bool `json:"needsSetup"`
 	UserCount         int  `json:"userCount"`
 	OrganizationCount int  `json:"organizationCount"`
+}
+
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	checks := map[string]httpx.ReadinessCheck{
+		"database": func(ctx context.Context) error {
+			if s.db == nil {
+				return errors.New("database is not configured")
+			}
+			pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			return s.db.Ping(pingCtx)
+		},
+		"storage": func(ctx context.Context) error {
+			if s.storage == nil {
+				return errors.New("storage is not configured")
+			}
+			pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			return s.storage.Ping(pingCtx)
+		},
+		"temporal": func(ctx context.Context) error {
+			if s.temporal == nil {
+				return errors.New("temporal client is not configured")
+			}
+			return nil
+		},
+		"providerGateway": func(ctx context.Context) error {
+			gatewayURL := strings.TrimSpace(os.Getenv("PROVIDER_GATEWAY_URL"))
+			if gatewayURL == "" {
+				return errors.New("PROVIDER_GATEWAY_URL is not configured")
+			}
+			pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(pingCtx, http.MethodGet, strings.TrimRight(gatewayURL, "/")+"/readyz", nil)
+			if err != nil {
+				return err
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return fmt.Errorf("provider gateway readyz returned %d", resp.StatusCode)
+			}
+			return nil
+		},
+	}
+	httpx.ReadyHandler("api", checks)(w, r)
 }
 
 func (s *Server) systemStatus(w http.ResponseWriter, r *http.Request) {

@@ -53,7 +53,7 @@ type SourceToScriptOutput struct {
 
 func SourceToScriptWorkflow(ctx workflow.Context, input TextToStoryboardInput) (SourceToScriptOutput, error) {
 	options := resolveSourceToScriptOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, longRunningProviderTextActivityOptions())
 	var output SourceToScriptOutput
 	if err := workflow.ExecuteActivity(ctx, "GenerateScriptFromSource", GenerateScriptFromSourceInput{
 		OrganizationID: input.OrganizationID,
@@ -133,7 +133,7 @@ func (a Activities) GenerateScriptFromSource(ctx context.Context, input Generate
 		_ = a.failAgentRun(ctx, agentRunID, err.Code, err.Message)
 		return SourceToScriptOutput{}, a.failActivity(ctx, baseInput, nodeRunID, err)
 	}
-	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+	gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -144,6 +144,7 @@ func (a Activities) GenerateScriptFromSource(ctx context.Context, input Generate
 		PromptHash:        rendered.RenderedHash,
 		PromptSource:      rendered.Source,
 		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText}),
+		Options:           providerTextGatewayOptions(),
 	})
 	if err != nil {
 		cause := workflowErrorFromProvider(err, codeActivityFailed)

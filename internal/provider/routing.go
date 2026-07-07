@@ -34,6 +34,9 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 	}
 	modality := routingModality(req)
 	taskType := strings.TrimSpace(req.TaskType)
+	if err := s.ensureDefaultCapabilitiesForRoutingProfile(ctx, req.OrganizationID, req.ModelProfileKey); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			p.id,
@@ -148,6 +151,47 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 		})
 	}
 	return candidates, nil
+}
+
+func (s *Service) ensureDefaultCapabilitiesForRoutingProfile(ctx context.Context, organizationID, profileKey string) error {
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT m.id, m.modality
+		FROM model_profiles p
+		JOIN model_profile_bindings b ON b.model_profile_id = p.id
+		JOIN provider_models m ON m.id = b.provider_model_id
+		JOIN provider_accounts a ON a.id = m.provider_account_id
+		WHERE p.organization_id = $1
+		  AND p.profile_key = $2
+		  AND b.enabled = true
+		  AND m.status = 'active'
+		  AND a.status = 'active'
+	`, organizationID, strings.TrimSpace(profileKey))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type modelRef struct {
+		id       string
+		modality string
+	}
+	models := make([]modelRef, 0)
+	for rows.Next() {
+		var model modelRef
+		if err := rows.Scan(&model.id, &model.modality); err != nil {
+			return err
+		}
+		models = append(models, model)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, model := range models {
+		if err := s.ensureDefaultCapabilityForModel(ctx, s.db, model.id, model.modality); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func routingModality(req RoutingRequest) string {

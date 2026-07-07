@@ -35,6 +35,15 @@ func TestVaultEncryptDecryptJSON(t *testing.T) {
 	}
 }
 
+func TestNewVaultFromEnvRequiresProductionMasterKey(t *testing.T) {
+	t.Setenv("CINEWEAVE_ENV", "production")
+	t.Setenv("CINEWEAVE_CREDENTIAL_MASTER_KEY", "")
+
+	if _, err := NewVaultFromEnv(); err == nil {
+		t.Fatal("NewVaultFromEnv() should require CINEWEAVE_CREDENTIAL_MASTER_KEY in production")
+	}
+}
+
 func TestMaskCredentialPayload(t *testing.T) {
 	masked := MaskCredentialPayload(map[string]any{"apiKey": "sk-1234567890abcd"})
 	if strings.Contains(masked, "1234567890") {

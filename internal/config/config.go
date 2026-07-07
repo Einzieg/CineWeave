@@ -1,9 +1,16 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+)
+
+const (
+	DefaultJWTSecret    = "dev-insecure-cineweave-secret"
+	DefaultServiceToken = "dev-service-token"
 )
 
 type Server struct {
@@ -26,6 +33,26 @@ func Get(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func IsProduction(env string) bool {
+	return strings.EqualFold(strings.TrimSpace(env), "production")
+}
+
+func ValidateProductionSecret(env, key, value string, forbiddenValues ...string) error {
+	if !IsProduction(env) {
+		return nil
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("%s must be set when CINEWEAVE_ENV=production", key)
+	}
+	for _, forbidden := range forbiddenValues {
+		if value == strings.TrimSpace(forbidden) {
+			return fmt.Errorf("%s must not use a development default when CINEWEAVE_ENV=production", key)
+		}
+	}
+	return nil
 }
 
 func Int(key string, fallback int) int {

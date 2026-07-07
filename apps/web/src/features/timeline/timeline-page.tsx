@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, ExternalLink, Film, Play, Plus, Video } from "lucide-react";
 import { toast } from "sonner";
+import { statusLabel } from "@/lib/labels";
 import type { FinalVideoVersion, TimelineClipDetail } from "@/lib/types";
 
 export function TimelinePage({
@@ -104,7 +105,7 @@ export function TimelinePage({
                     <span>{timeline.aspectRatio}</span>
                     <span>{timeline.resolution}</span>
                   </div>
-                  <Badge className="mt-2" variant="outline">{timeline.status}</Badge>
+                  <Badge className="mt-2" variant="outline">{statusLabel(timeline.status)}</Badge>
                 </button>
               ))}
               <Button variant="outline" onClick={() => createTimelineMutation.mutate()} disabled={createTimelineMutation.isPending}>
@@ -173,7 +174,7 @@ function ClipRow({ clip }: { clip: TimelineClipDetail }) {
       <div className="grid content-start gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="font-medium">{clip.title}</div>
-          <Badge variant={clip.enabled ? "outline" : "secondary"}>{clip.enabled ? "enabled" : "disabled"}</Badge>
+          <Badge variant={clip.enabled ? "outline" : "secondary"}>{statusLabel(clip.enabled ? "enabled" : "disabled")}</Badge>
         </div>
         <div className="text-sm text-muted-foreground">
           #{clip.clipIndex + 1} · {clip.targetDurationSeconds ?? clip.sourceDurationSeconds ?? "-"}s
@@ -200,7 +201,7 @@ function FinalVideoCard({ version, active, busy, onActivate }: { version: FinalV
             <div className="font-medium">{version.title}</div>
             <div className="text-xs text-muted-foreground">v{version.version} · {version.resolution} · {version.aspectRatio}</div>
           </div>
-          <Badge variant={active ? "default" : "outline"}>{version.status}</Badge>
+          <Badge variant={active ? "default" : "outline"}>{statusLabel(version.status)}</Badge>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" onClick={onActivate} disabled={busy || active}>

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,12 +26,14 @@ type ProjectSource struct {
 	ProjectID        string          `json:"projectId"`
 	SourceType       string          `json:"sourceType"`
 	Title            string          `json:"title"`
-	Content          string          `json:"content"`
+	Content          string          `json:"content,omitempty"`
 	ContentFormat    string          `json:"contentFormat"`
 	OriginalFileName *string         `json:"originalFileName,omitempty"`
 	StorageKey       *string         `json:"storageKey,omitempty"`
 	Status           string          `json:"status"`
 	Metadata         json.RawMessage `json:"metadata"`
+	ChapterCount     int             `json:"chapterCount,omitempty"`
+	FirstVolumeIndex int             `json:"firstVolumeIndex,omitempty"`
 	CreatedBy        *string         `json:"createdBy,omitempty"`
 	CreatedAt        time.Time       `json:"createdAt"`
 	UpdatedAt        time.Time       `json:"updatedAt"`
@@ -41,6 +44,8 @@ type NovelChapter struct {
 	ID           string          `json:"id"`
 	SourceID     string          `json:"sourceId"`
 	ChapterIndex int             `json:"chapterIndex"`
+	VolumeIndex  *int            `json:"volumeIndex,omitempty"`
+	SectionIndex *int            `json:"sectionIndex,omitempty"`
 	VolumeTitle  *string         `json:"volumeTitle,omitempty"`
 	ChapterTitle *string         `json:"chapterTitle,omitempty"`
 	Content      string          `json:"content"`
@@ -52,11 +57,22 @@ type NovelChapter struct {
 }
 
 type NovelChapterSummary struct {
-	ID            string  `json:"id"`
-	ChapterIndex  int     `json:"chapterIndex"`
-	VolumeTitle   *string `json:"volumeTitle,omitempty"`
-	ChapterTitle  *string `json:"chapterTitle,omitempty"`
-	ContentLength int     `json:"contentLength"`
+	ID                      string          `json:"id"`
+	SourceID                string          `json:"sourceId"`
+	ChapterIndex            int             `json:"chapterIndex"`
+	VolumeIndex             *int            `json:"volumeIndex,omitempty"`
+	SectionIndex            *int            `json:"sectionIndex,omitempty"`
+	VolumeTitle             *string         `json:"volumeTitle,omitempty"`
+	ChapterTitle            *string         `json:"chapterTitle,omitempty"`
+	ContentLength           int             `json:"contentLength"`
+	EventState              string          `json:"eventState"`
+	EventSummary            json.RawMessage `json:"eventSummary,omitempty"`
+	ErrorMessage            *string         `json:"errorMessage,omitempty"`
+	EventCount              int             `json:"eventCount"`
+	ApprovedEventCount      int             `json:"approvedEventCount"`
+	PendingEventReviewCount int             `json:"pendingEventReviewCount"`
+	CreatedAt               time.Time       `json:"createdAt"`
+	UpdatedAt               time.Time       `json:"updatedAt"`
 }
 
 type CreatedScriptSummary struct {
@@ -73,6 +89,8 @@ type ImportProjectSourceResponse struct {
 
 type sourceChapterRequest struct {
 	ChapterIndex *int    `json:"chapterIndex"`
+	VolumeIndex  *int    `json:"volumeIndex"`
+	SectionIndex *int    `json:"sectionIndex"`
 	VolumeTitle  *string `json:"volumeTitle"`
 	ChapterTitle *string `json:"chapterTitle"`
 	Content      string  `json:"content"`
@@ -99,28 +117,49 @@ func (s *Server) listProjectSources(w http.ResponseWriter, r *http.Request, prin
 	if !ok {
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, source_type, title, content, content_format,
-		       original_file_name, storage_key, status, metadata, created_by, created_at, updated_at
-		FROM project_sources
-		WHERE project_id = $1
-		ORDER BY created_at DESC
-	`, project.ID)
+	items, err := s.projectSourceList(r, project.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) projectSourceList(r *http.Request, projectID string) ([]ProjectSource, error) {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT s.id, s.organization_id, s.project_id, s.source_type, s.title, s.content_format,
+		       s.original_file_name, s.storage_key, s.status, s.metadata, s.created_by, s.created_at, s.updated_at,
+		       COALESCE(c.chapter_count, 0),
+		       COALESCE(c.first_volume_index, 0)
+		FROM project_sources s
+		LEFT JOIN (
+			SELECT source_id,
+			       count(*) AS chapter_count,
+			       MIN(volume_index) FILTER (WHERE volume_index > 0) AS first_volume_index
+			FROM novel_chapters
+			WHERE project_id = $1
+			GROUP BY source_id
+		) c ON c.source_id = s.id
+		WHERE s.project_id = $1
+		ORDER BY s.created_at ASC, s.title ASC
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	items := make([]ProjectSource, 0)
 	for rows.Next() {
-		item, err := scanProjectSource(rows)
+		item, err := scanProjectSourceListItem(rows)
 		if err != nil {
-			s.writeError(w, r, err)
-			return
+			return nil, err
 		}
 		items = append(items, item)
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortProjectSources(items)
+	return items, nil
 }
 
 func (s *Server) createProjectSource(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -226,6 +265,8 @@ func (s *Server) importProjectSource(r *http.Request, principal auth.Principal, 
 		for _, draft := range sourceutil.SplitNovelChapters(content) {
 			chapterDrafts = append(chapterDrafts, sourceChapterRequest{
 				ChapterIndex: &draft.Index,
+				VolumeIndex:  intPtrOrNil(draft.VolumeIndex),
+				SectionIndex: intPtrOrNil(draft.SectionIndex),
 				VolumeTitle:  stringPtrOrNil(draft.VolumeTitle),
 				ChapterTitle: stringPtrOrNil(draft.Title),
 				Content:      draft.Content,
@@ -329,6 +370,45 @@ func (s *Server) getProjectSource(w http.ResponseWriter, r *http.Request, princi
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
+func (s *Server) listSourceChapters(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionSourceRead)
+	if !ok {
+		return
+	}
+	source, err := s.projectSource(r, project.ID, r.PathValue("sourceId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if source.SourceType != "novel" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceType must be novel", nil, false)
+		return
+	}
+	items, err := s.sourceChapterSummaries(r, project.ID, source.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) getSourceChapter(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionSourceRead)
+	if !ok {
+		return
+	}
+	if _, err := s.projectSource(r, project.ID, r.PathValue("sourceId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	item, err := s.sourceChapter(r, project.ID, r.PathValue("sourceId"), r.PathValue("chapterId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
 func (s *Server) updateProjectSource(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionSourceWrite)
 	if !ok {
@@ -349,6 +429,7 @@ func (s *Server) updateProjectSource(w http.ResponseWriter, r *http.Request, pri
 		Status           *string                `json:"status"`
 		Metadata         json.RawMessage        `json:"metadata"`
 		Chapters         []sourceChapterRequest `json:"chapters"`
+		SplitChapters    *bool                  `json:"splitChapters"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -416,6 +497,24 @@ func (s *Server) updateProjectSource(w http.ResponseWriter, r *http.Request, pri
 			return
 		}
 		item.Chapters = chapters
+	} else if sourceType == "novel" && req.Content != nil && shouldSplitChapters(sourceType, req.SplitChapters) {
+		chapterDrafts := make([]sourceChapterRequest, 0)
+		for _, draft := range sourceutil.SplitNovelChapters(content) {
+			chapterDrafts = append(chapterDrafts, sourceChapterRequest{
+				ChapterIndex: &draft.Index,
+				VolumeIndex:  intPtrOrNil(draft.VolumeIndex),
+				SectionIndex: intPtrOrNil(draft.SectionIndex),
+				VolumeTitle:  stringPtrOrNil(draft.VolumeTitle),
+				ChapterTitle: stringPtrOrNil(draft.Title),
+				Content:      draft.Content,
+			})
+		}
+		chapters, err := s.replaceSourceChapters(r, tx, project, item.ID, chapterDrafts)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		item.Chapters = chapters
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
@@ -451,11 +550,11 @@ func (s *Server) projectSource(r *http.Request, projectID, sourceID string) (Pro
 
 func (s *Server) sourceChapters(r *http.Request, projectID, sourceID string) ([]NovelChapter, error) {
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, source_id, chapter_index, volume_title, chapter_title, content,
+		SELECT id, source_id, chapter_index, volume_index, section_index, volume_title, chapter_title, content,
 		       event_state, event_summary, error_message, created_at, updated_at
 		FROM novel_chapters
 		WHERE project_id = $1 AND source_id = $2
-		ORDER BY chapter_index ASC
+		ORDER BY COALESCE(volume_index, 0) ASC, COALESCE(section_index, chapter_index) ASC, chapter_index ASC
 	`, projectID, sourceID)
 	if err != nil {
 		return nil, err
@@ -470,6 +569,52 @@ func (s *Server) sourceChapters(r *http.Request, projectID, sourceID string) ([]
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (s *Server) sourceChapterSummaries(r *http.Request, projectID, sourceID string) ([]NovelChapterSummary, error) {
+	rows, err := s.db.Query(r.Context(), `
+		WITH event_counts AS (
+			SELECT chapter_id,
+			       count(*) AS event_count,
+			       count(*) FILTER (WHERE review_status = 'approved') AS approved_event_count,
+			       count(*) FILTER (WHERE review_status <> 'approved') AS pending_event_review_count
+			FROM novel_events
+			WHERE project_id = $1
+			GROUP BY chapter_id
+		)
+		SELECT c.id, c.source_id, c.chapter_index, c.volume_index, c.section_index, c.volume_title, c.chapter_title,
+		       char_length(c.content), c.event_state, c.event_summary, c.error_message,
+		       c.created_at, c.updated_at,
+		       COALESCE(ec.event_count, 0),
+		       COALESCE(ec.approved_event_count, 0),
+		       COALESCE(ec.pending_event_review_count, 0)
+		FROM novel_chapters c
+		LEFT JOIN event_counts ec ON ec.chapter_id = c.id
+		WHERE c.project_id = $1 AND c.source_id = $2
+		ORDER BY COALESCE(c.volume_index, 0) ASC, COALESCE(c.section_index, c.chapter_index) ASC, c.chapter_index ASC
+	`, projectID, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]NovelChapterSummary, 0)
+	for rows.Next() {
+		item, err := scanNovelChapterSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Server) sourceChapter(r *http.Request, projectID, sourceID, chapterID string) (NovelChapter, error) {
+	return scanNovelChapter(s.db.QueryRow(r.Context(), `
+		SELECT id, source_id, chapter_index, volume_index, section_index, volume_title, chapter_title, content,
+		       event_state, event_summary, error_message, created_at, updated_at
+		FROM novel_chapters
+		WHERE project_id = $1 AND source_id = $2 AND id = $3
+	`, projectID, sourceID, chapterID))
 }
 
 func (s *Server) replaceSourceChapters(r *http.Request, tx pgx.Tx, project Project, sourceID string, reqChapters []sourceChapterRequest) ([]NovelChapter, error) {
@@ -488,13 +633,13 @@ func (s *Server) replaceSourceChapters(r *http.Request, tx pgx.Tx, project Proje
 		}
 		item, err := scanNovelChapter(tx.QueryRow(r.Context(), `
 			INSERT INTO novel_chapters(
-				organization_id, project_id, source_id, chapter_index, volume_title,
-				chapter_title, content, event_state
+				organization_id, project_id, source_id, chapter_index, volume_index, section_index,
+				volume_title, chapter_title, content, event_state
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
-			RETURNING id, source_id, chapter_index, volume_title, chapter_title, content,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
+			RETURNING id, source_id, chapter_index, volume_index, section_index, volume_title, chapter_title, content,
 			          event_state, event_summary, error_message, created_at, updated_at
-		`, project.OrganizationID, project.ID, sourceID, index, chapter.VolumeTitle, chapter.ChapterTitle, content))
+		`, project.OrganizationID, project.ID, sourceID, index, chapterVolumeIndex(chapter), chapterSectionIndex(chapter, index), chapter.VolumeTitle, chapter.ChapterTitle, content))
 		if err != nil {
 			return nil, err
 		}
@@ -530,14 +675,45 @@ func scanProjectSource(row rowScan) (ProjectSource, error) {
 	return item, err
 }
 
+func scanProjectSourceListItem(row rowScan) (ProjectSource, error) {
+	var item ProjectSource
+	var originalFileName, storageKey, createdBy sql.NullString
+	var metadata []byte
+	err := row.Scan(
+		&item.ID,
+		&item.OrganizationID,
+		&item.ProjectID,
+		&item.SourceType,
+		&item.Title,
+		&item.ContentFormat,
+		&originalFileName,
+		&storageKey,
+		&item.Status,
+		&metadata,
+		&createdBy,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&item.ChapterCount,
+		&item.FirstVolumeIndex,
+	)
+	item.OriginalFileName = stringPtrFromNull(originalFileName)
+	item.StorageKey = stringPtrFromNull(storageKey)
+	item.CreatedBy = stringPtrFromNull(createdBy)
+	item.Metadata = rawOrDefaultBytes(metadata, "{}")
+	return item, err
+}
+
 func scanNovelChapter(row rowScan) (NovelChapter, error) {
 	var item NovelChapter
 	var volumeTitle, chapterTitle, errorMessage sql.NullString
+	var volumeIndex, sectionIndex sql.NullInt32
 	var eventSummary []byte
 	err := row.Scan(
 		&item.ID,
 		&item.SourceID,
 		&item.ChapterIndex,
+		&volumeIndex,
+		&sectionIndex,
 		&volumeTitle,
 		&chapterTitle,
 		&item.Content,
@@ -547,11 +723,202 @@ func scanNovelChapter(row rowScan) (NovelChapter, error) {
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
+	item.VolumeIndex = intPtrFromNullInt32(volumeIndex)
+	item.SectionIndex = intPtrFromNullInt32(sectionIndex)
 	item.VolumeTitle = stringPtrFromNull(volumeTitle)
 	item.ChapterTitle = stringPtrFromNull(chapterTitle)
 	item.EventSummary = rawOrDefaultBytes(eventSummary, "null")
 	item.ErrorMessage = stringPtrFromNull(errorMessage)
 	return item, err
+}
+
+func scanNovelChapterSummary(row rowScan) (NovelChapterSummary, error) {
+	var item NovelChapterSummary
+	var volumeTitle, chapterTitle, errorMessage sql.NullString
+	var volumeIndex, sectionIndex sql.NullInt32
+	var eventSummary []byte
+	err := row.Scan(
+		&item.ID,
+		&item.SourceID,
+		&item.ChapterIndex,
+		&volumeIndex,
+		&sectionIndex,
+		&volumeTitle,
+		&chapterTitle,
+		&item.ContentLength,
+		&item.EventState,
+		&eventSummary,
+		&errorMessage,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&item.EventCount,
+		&item.ApprovedEventCount,
+		&item.PendingEventReviewCount,
+	)
+	item.VolumeIndex = intPtrFromNullInt32(volumeIndex)
+	item.SectionIndex = intPtrFromNullInt32(sectionIndex)
+	item.VolumeTitle = stringPtrFromNull(volumeTitle)
+	item.ChapterTitle = stringPtrFromNull(chapterTitle)
+	item.EventSummary = rawOrDefaultBytes(eventSummary, "null")
+	item.ErrorMessage = stringPtrFromNull(errorMessage)
+	return item, err
+}
+
+func sortProjectSources(items []ProjectSource) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		if left.SourceType != right.SourceType {
+			return sourceTypeSortWeight(left.SourceType) < sourceTypeSortWeight(right.SourceType)
+		}
+		leftRank := sourceReadOrderRank(left)
+		rightRank := sourceReadOrderRank(right)
+		if leftRank > 0 && rightRank > 0 && leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		if !left.CreatedAt.Equal(right.CreatedAt) {
+			return left.CreatedAt.Before(right.CreatedAt)
+		}
+		return strings.ToLower(left.Title) < strings.ToLower(right.Title)
+	})
+}
+
+func sourceReadOrderRank(source ProjectSource) int {
+	if source.FirstVolumeIndex > 0 {
+		return source.FirstVolumeIndex
+	}
+	return sourceTitleSortRank(source.Title)
+}
+
+func chapterVolumeIndex(chapter sourceChapterRequest) any {
+	if chapter.VolumeIndex != nil && *chapter.VolumeIndex > 0 {
+		return *chapter.VolumeIndex
+	}
+	if chapter.VolumeTitle != nil {
+		if parsed := parseVolumeOrdinalFromText(*chapter.VolumeTitle); parsed > 0 {
+			return parsed
+		}
+	}
+	return nil
+}
+
+func chapterSectionIndex(chapter sourceChapterRequest, fallback int) any {
+	if chapter.SectionIndex != nil && *chapter.SectionIndex > 0 {
+		return *chapter.SectionIndex
+	}
+	if chapter.ChapterTitle != nil {
+		if parsed := parseSectionOrdinalFromText(*chapter.ChapterTitle); parsed > 0 {
+			return parsed
+		}
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return nil
+}
+
+func sourceTypeSortWeight(sourceType string) int {
+	switch sourceType {
+	case "novel":
+		return 0
+	case "script":
+		return 1
+	default:
+		return 2
+	}
+}
+
+func sourceTitleSortRank(title string) int {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return 0
+	}
+	if value := leadingArabicNumber(title); value > 0 {
+		return value
+	}
+	if value := chineseVolumeNumber(title); value > 0 {
+		return value
+	}
+	return 0
+}
+
+func leadingArabicNumber(value string) int {
+	value = strings.TrimSpace(value)
+	digits := strings.Builder{}
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+			continue
+		}
+		if r >= '０' && r <= '９' {
+			digits.WriteRune('0' + (r - '０'))
+			continue
+		}
+		break
+	}
+	if digits.Len() == 0 {
+		return 0
+	}
+	parsed, err := strconv.Atoi(digits.String())
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func chineseVolumeNumber(value string) int {
+	value = strings.TrimSpace(value)
+	start := strings.Index(value, "第")
+	end := strings.Index(value, "卷")
+	if start < 0 || end <= start {
+		return 0
+	}
+	return chineseOrdinalNumber(value[start+len("第") : end])
+}
+
+func chineseOrdinalNumber(value string) int {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	digit := map[rune]int{
+		'零': 0, '〇': 0,
+		'一': 1, '壹': 1,
+		'二': 2, '两': 2, '贰': 2,
+		'三': 3, '叁': 3,
+		'四': 4, '肆': 4,
+		'五': 5, '伍': 5,
+		'六': 6, '陆': 6,
+		'七': 7, '柒': 7,
+		'八': 8, '捌': 8,
+		'九': 9, '玖': 9,
+	}
+	total := 0
+	current := 0
+	for _, r := range value {
+		if n, ok := digit[r]; ok {
+			current = n
+			continue
+		}
+		switch r {
+		case '十', '拾':
+			if current == 0 {
+				current = 1
+			}
+			total += current * 10
+			current = 0
+		case '百', '佰':
+			if current == 0 {
+				current = 1
+			}
+			total += current * 100
+			current = 0
+		default:
+			return 0
+		}
+	}
+	total += current
+	return total
 }
 
 func validSourceType(value string) bool {
@@ -628,6 +995,21 @@ func stringPtrOrNil(value string) *string {
 	return &value
 }
 
+func intPtrOrNil(value int) *int {
+	if value <= 0 {
+		return nil
+	}
+	return &value
+}
+
+func intPtrFromNullInt32(value sql.NullInt32) *int {
+	if !value.Valid {
+		return nil
+	}
+	out := int(value.Int32)
+	return &out
+}
+
 func importMethod(value string) string {
 	switch strings.TrimSpace(value) {
 	case "upload":
@@ -681,10 +1063,16 @@ func chapterSummaries(chapters []NovelChapter) []NovelChapterSummary {
 	for _, chapter := range chapters {
 		summaries = append(summaries, NovelChapterSummary{
 			ID:            chapter.ID,
+			SourceID:      chapter.SourceID,
 			ChapterIndex:  chapter.ChapterIndex,
 			VolumeTitle:   chapter.VolumeTitle,
 			ChapterTitle:  chapter.ChapterTitle,
 			ContentLength: len([]rune(chapter.Content)),
+			EventState:    chapter.EventState,
+			EventSummary:  rawOrDefault(chapter.EventSummary, `null`),
+			ErrorMessage:  chapter.ErrorMessage,
+			CreatedAt:     chapter.CreatedAt,
+			UpdatedAt:     chapter.UpdatedAt,
 		})
 	}
 	return summaries

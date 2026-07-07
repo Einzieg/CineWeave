@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Download, ExternalLink, FileArchive, FileText, Package, Video } from "lucide-react";
 import { toast } from "sonner";
+import { statusLabel } from "@/lib/labels";
 import type { FinalVideoVersion, ProjectExport } from "@/lib/types";
 
 export function ExportPage({ projectId }: { projectId: string }) {
@@ -98,7 +99,7 @@ export function ExportPage({ projectId }: { projectId: string }) {
                       <div className="font-medium">{version.title}</div>
                       <div className="text-xs text-muted-foreground">v{version.version} · {version.resolution}</div>
                     </div>
-                    <Badge variant="outline">{version.status}</Badge>
+                    <Badge variant="outline">{statusLabel(version.status)}</Badge>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" onClick={() => finalVideoDownloadMutation.mutate(version)} disabled={finalVideoDownloadMutation.isPending || !version.storageKey}>
@@ -137,7 +138,7 @@ export function ExportPage({ projectId }: { projectId: string }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge variant="outline">{item.status}</Badge>
+                  <Badge variant="outline">{statusLabel(item.status)}</Badge>
                   <Button size="sm" onClick={() => exportDownloadMutation.mutate(item)} disabled={exportDownloadMutation.isPending || item.status !== "succeeded"}>
                     <Download className="mr-1 h-3.5 w-3.5" />
                     下载
@@ -156,13 +157,13 @@ function exportTitle(projectName: string, exportType: string) {
   const name = projectName.trim() || "CineWeave Project";
   switch (exportType) {
     case "final_video":
-      return `${name} final video`;
+      return `${name} 最终成片`;
     case "documents":
-      return `${name} documents`;
+      return `${name} 文档`;
     case "asset_package":
-      return `${name} asset package`;
+      return `${name} 资产包`;
     default:
-      return `${name} export`;
+      return `${name} 导出`;
   }
 }
 

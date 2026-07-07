@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileText, Eye } from "lucide-react";
+import { modalityLabel, promptCategoryLabel, statusLabel, taskTypeLabel } from "@/lib/labels";
 
 export function PromptsPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
@@ -72,9 +73,9 @@ export function PromptsPage() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <FileText className="h-4 w-4 text-muted-foreground" />
-                          <Badge variant="outline">{promptTemplateCategory(template)}</Badge>
+                          <Badge variant="outline">{promptCategoryLabel(promptTemplateCategory(template))}</Badge>
                         </div>
-                        <Badge variant="secondary" className="text-xs">{template.status}</Badge>
+                        <Badge variant="secondary" className="text-xs">{statusLabel(template.status)}</Badge>
                       </div>
 
                       {/* 标题和描述 */}
@@ -82,7 +83,7 @@ export function PromptsPage() {
                         <h3 className="font-medium leading-tight">{template.name}</h3>
                         {template.taskType && (
                           <p className="mt-1.5 text-sm text-muted-foreground line-clamp-2">
-                            {template.taskType}
+                            {taskTypeLabel(template.taskType)}
                           </p>
                         )}
                       </div>
@@ -91,7 +92,7 @@ export function PromptsPage() {
                       <div className="flex items-center gap-3 text-xs text-muted-foreground">
                         <span>版本: {template.activeVersionId?.slice(0, 8) || "未激活"}</span>
                         {template.modality && (
-                          <span>· {template.modality}</span>
+                          <span>· {modalityLabel(template.modality)}</span>
                         )}
                       </div>
 

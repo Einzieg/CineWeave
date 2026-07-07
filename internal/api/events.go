@@ -14,3 +14,15 @@ func insertAPIEvent(ctx context.Context, tx pgx.Tx, organizationID, projectID, e
 	`, organizationID, projectID, eventType, aggregateType, aggregateID, payload)
 	return err
 }
+
+func (s *Server) insertWorkflowQueuedEvent(ctx context.Context, run WorkflowRun, workflowType string) {
+	_, _ = s.db.Exec(ctx, `
+		INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
+		VALUES ($1, $2, 'workflow.run.queued', 'workflow_run', $3, $4)
+	`, run.OrganizationID, run.ProjectID, run.ID, mustMarshal(map[string]any{
+		"workflowRunId": run.ID,
+		"workflowType":  workflowType,
+		"status":        "queued",
+		"createdAt":     run.CreatedAt,
+	}))
+}

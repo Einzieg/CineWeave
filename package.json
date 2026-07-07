@@ -8,7 +8,7 @@
     "build": "pnpm --filter @cineweave/web build",
     "lint": "pnpm --filter @cineweave/web lint",
     "typecheck": "pnpm --filter @cineweave/web typecheck",
-    "test": "pnpm run typecheck && pnpm run lint",
+    "test": "node scripts/test.mjs",
     "compose:infra": "docker compose --profile infra up -d",
     "compose:full": "docker compose --profile full up -d",
     "compose:down": "docker compose down --remove-orphans"

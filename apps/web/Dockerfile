@@ -9,9 +9,9 @@ RUN pnpm install --filter @cineweave/web --frozen-lockfile
 FROM node:24-alpine AS build
 WORKDIR /app
 RUN corepack enable
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8088
-ARG NEXT_PUBLIC_REALTIME_URL=http://localhost:8081/api/realtime/events
-ARG S3_PUBLIC_ENDPOINT=http://localhost:9000
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:19288
+ARG NEXT_PUBLIC_REALTIME_URL=http://localhost:19281/api/realtime/events
+ARG S3_PUBLIC_ENDPOINT=http://localhost:19290
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 ENV S3_PUBLIC_ENDPOINT=$S3_PUBLIC_ENDPOINT
@@ -22,9 +22,9 @@ RUN pnpm --filter @cineweave/web build
 
 FROM node:24-alpine AS runtime
 WORKDIR /app
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8088
-ARG NEXT_PUBLIC_REALTIME_URL=http://localhost:8081/api/realtime/events
-ARG S3_PUBLIC_ENDPOINT=http://localhost:9000
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:19288
+ARG NEXT_PUBLIC_REALTIME_URL=http://localhost:19281/api/realtime/events
+ARG S3_PUBLIC_ENDPOINT=http://localhost:19290
 ENV NODE_ENV=production
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL

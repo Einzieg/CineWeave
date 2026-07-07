@@ -28,9 +28,18 @@ func main() {
 	}
 	defer pool.Close()
 
+	jwtSecret := config.Get("CINEWEAVE_JWT_SECRET", config.DefaultJWTSecret)
+	if err := config.ValidateProductionSecret(cfg.Env, "CINEWEAVE_JWT_SECRET", jwtSecret, config.DefaultJWTSecret); err != nil {
+		log.Fatal(err)
+	}
+	serviceToken := config.Get("CINEWEAVE_SERVICE_TOKEN", config.DefaultServiceToken)
+	if err := config.ValidateProductionSecret(cfg.Env, "CINEWEAVE_SERVICE_TOKEN", serviceToken, config.DefaultServiceToken); err != nil {
+		log.Fatal(err)
+	}
+
 	authService := auth.NewService(
 		pool,
-		config.Get("CINEWEAVE_JWT_SECRET", "dev-insecure-cineweave-secret"),
+		jwtSecret,
 		config.Duration("CINEWEAVE_ACCESS_TOKEN_TTL", 2*time.Hour),
 		config.Duration("CINEWEAVE_REFRESH_TOKEN_TTL", 30*24*time.Hour),
 	)
@@ -41,7 +50,7 @@ func main() {
 	providerService := provider.NewService(pool, credentialVault)
 	providerService.SetGateway(
 		config.Get("PROVIDER_GATEWAY_URL", "http://localhost:8082"),
-		config.Get("CINEWEAVE_SERVICE_TOKEN", "dev-service-token"),
+		serviceToken,
 	)
 	storageClient, err := storage.New(ctx, storage.ConfigFromEnv())
 	if err != nil {

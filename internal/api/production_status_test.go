@@ -72,6 +72,26 @@ func TestProductionStatusEmptyProject(t *testing.T) {
 	}
 }
 
+func TestProductionStatusFinalizesStaleCancellingWorkflow(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	workflowRunID := seed.insertWorkflowRunWithType(t, "extract_novel_events", "cancelling")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE workflow_runs
+		SET created_at = now() - interval '10 minutes',
+		    started_at = now() - interval '10 minutes',
+		    cancelled_at = now() - interval '10 minutes'
+		WHERE id = $1
+	`, workflowRunID); err != nil {
+		t.Fatalf("age cancelling workflow: %v", err)
+	}
+
+	var status ProductionStatus
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/production/status", seed.ownerToken, seed.organizationID, nil, &status)
+	assertWorkflowStatus(t, seed, workflowRunID, "cancelled")
+}
+
 func TestProductionStatusCounts(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()

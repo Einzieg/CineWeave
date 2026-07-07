@@ -14,6 +14,7 @@ import { ChevronDown, ChevronRight, Play, AlertCircle, CheckCircle2, Clock } fro
 import { useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { contentTypeLabel, productionFieldLabel, projectTypeLabel, reviewSeverityLabel, statusLabel } from "@/lib/labels";
 import { nextProductionAction, productionActionLabel, productionRefreshKeys, runProductionAction } from "@/features/production/production-actions";
 
 type StageRow = {
@@ -103,11 +104,11 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
             <div className="mt-4 flex flex-wrap gap-3 text-sm">
               <div className="flex items-center gap-1.5">
                 <span className="text-muted-foreground">类型:</span>
-                <Badge variant="outline">{project.projectType || "未设置"}</Badge>
+                <Badge variant="outline">{projectTypeLabel(project.projectType)}</Badge>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-muted-foreground">内容:</span>
-                <Badge variant="outline">{project.contentType || "未设置"}</Badge>
+                <Badge variant="outline">{contentTypeLabel(project.contentType)}</Badge>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-muted-foreground">画风:</span>
@@ -169,7 +170,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
                     <div className="flex-1">
                       <div className="font-medium">{stage.label}</div>
                       <div className="text-xs text-muted-foreground">
-                        {stage.status || "待开始"}
+                        {statusLabel(stage.status || "pending")}
                       </div>
                     </div>
                     <StatusBadge status={stage.status || "pending"} />
@@ -182,7 +183,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
                       .filter(([key]) => !["stage", "label", "status"].includes(key))
                       .map(([key, value]) => (
                         <div key={key} className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">{key}</span>
+                          <span className="text-muted-foreground">{productionFieldLabel(key)}</span>
                           <span className="font-medium">{String(value)}</span>
                         </div>
                       ))}
@@ -210,7 +211,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
                   <div className="text-sm text-muted-foreground">{item.description}</div>
                 </div>
                 <Badge variant={item.severity === "high" ? "destructive" : "secondary"}>
-                  {item.severity}
+                  {reviewSeverityLabel(item.severity)}
                 </Badge>
               </div>
             ))}

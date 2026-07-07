@@ -1,6 +1,9 @@
 import type {
   AgentMessage,
+  AgentApproval,
   AgentSession,
+  AgentTask,
+  AgentToolDescriptor,
   AdaptationPlan,
   ApiEnvelope,
   Artifact,
@@ -16,6 +19,8 @@ import type {
   ImportProjectSourceResponse,
   ListEnvelope,
   ModelProfile,
+  NovelChapter,
+  NovelChapterSummary,
   NovelEvent,
   NovelEventLink,
   Organization,
@@ -36,10 +41,18 @@ import type {
   RegenerateResponse,
   PromptTemplate,
   ProviderAccount,
+  ProviderCallLog,
   ProviderCatalogEntry,
   ProviderCatalogInstallResponse,
+  ProviderCircuitState,
+  ProviderConnector,
+  ProviderLimitPolicy,
+  ProviderManifestTestRunResult,
+  ProviderManifestValidationResult,
   ProviderModel,
+  ProviderModelDiscoveryResult,
   ProviderTestResult,
+  ProviderUsageSummary,
   ReviewResponse,
   Role,
   Script,
@@ -60,7 +73,7 @@ import type {
   Workspace,
 } from "./types";
 
-const apiBase = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080");
+const apiBase = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:19288");
 
 type ApiRequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
@@ -113,9 +126,11 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
   });
   const envelope = (await response.json().catch(() => ({}))) as ApiEnvelope<TData>;
   if (!response.ok || envelope.error || envelope.data === undefined) {
+    const errorCode = envelope.error?.code ?? "HTTP_ERROR";
+    const errorMessage = errorCode === "UNAUTHENTICATED" ? "登录已过期，请重新登录" : envelope.error?.message ?? `请求失败：HTTP ${response.status}`;
     throw new StudioApiError(
-      envelope.error?.message ?? `请求失败：HTTP ${response.status}`,
-      envelope.error?.code ?? "HTTP_ERROR",
+      errorMessage,
+      errorCode,
       response.status,
       envelope.error?.retryable ?? false,
     );
@@ -229,16 +244,22 @@ export const studioApi = {
     apiRequest<ProjectSource>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "PATCH", session, body }),
   deleteSource: (session: StudioSession, projectId: string, sourceId: string) =>
     apiRequest<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE", session }),
+  listSourceChapters: (session: StudioSession, projectId: string, sourceId: string) =>
+    apiRequest<ListEnvelope<NovelChapterSummary>>(`/api/projects/${projectId}/sources/${sourceId}/chapters`, { session }),
+  getSourceChapter: (session: StudioSession, projectId: string, sourceId: string, chapterId: string) =>
+    apiRequest<NovelChapter>(`/api/projects/${projectId}/sources/${sourceId}/chapters/${chapterId}`, { session }),
   extractNovelEvents: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/sources/${sourceId}/extract-events`, { method: "POST", session, body }),
-  listSourceNovelEvents: (session: StudioSession, projectId: string, sourceId: string) =>
-    apiRequest<{ items: NovelEvent[]; links: NovelEventLink[] }>(`/api/projects/${projectId}/sources/${sourceId}/events`, { session }),
+  listSourceNovelEvents: (session: StudioSession, projectId: string, sourceId: string, query?: { chapterId?: string }) =>
+    apiRequest<{ items: NovelEvent[]; links: NovelEventLink[] }>(`/api/projects/${projectId}/sources/${sourceId}/events`, { session, query }),
   updateNovelEvent: (session: StudioSession, projectId: string, eventId: string, body: JsonRecord) =>
     apiRequest<NovelEvent>(`/api/projects/${projectId}/novel-events/${eventId}`, { method: "PATCH", session, body }),
   reviewNovelEvent: (session: StudioSession, projectId: string, eventId: string, body: JsonRecord) =>
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/novel-events/${eventId}/review`, { method: "POST", session, body }),
   listAdaptationPlans: (session: StudioSession, projectId: string, sourceId?: string) =>
     apiRequest<ListEnvelope<AdaptationPlan>>(`/api/projects/${projectId}/adaptation-plans`, { session, query: sourceId ? { sourceId } : undefined }),
+  getAdaptationPlan: (session: StudioSession, projectId: string, planId: string) =>
+    apiRequest<AdaptationPlan>(`/api/projects/${projectId}/adaptation-plans/${planId}`, { session }),
   generateAdaptationPlan: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
     apiRequest<AdaptationPlan>(`/api/projects/${projectId}/sources/${sourceId}/generate-adaptation-plan`, { method: "POST", session, body }),
   updateAdaptationPlan: (session: StudioSession, projectId: string, planId: string, body: JsonRecord) =>
@@ -257,6 +278,8 @@ export const studioApi = {
   getScript: (session: StudioSession, projectId: string, scriptId: string) => apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}`, { session }),
   createScript: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<Script>(`/api/projects/${projectId}/scripts`, { method: "POST", session, body }),
+  updateScript: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
+    apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}`, { method: "PATCH", session, body }),
   listScriptVersions: (session: StudioSession, projectId: string, scriptId: string) =>
     apiRequest<ListEnvelope<ScriptVersion>>(`/api/projects/${projectId}/scripts/${scriptId}/versions`, { session }),
   createScriptVersion: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
@@ -296,6 +319,22 @@ export const studioApi = {
       session,
       body,
     }),
+  listAgentTools: (session: StudioSession, projectId: string) =>
+    apiRequest<ListEnvelope<AgentToolDescriptor>>(`/api/projects/${projectId}/agent/tools`, { session }),
+  createAgentTask: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<AgentTask>(`/api/projects/${projectId}/agent/tasks`, { method: "POST", session, body }),
+  listAgentTasks: (session: StudioSession, projectId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
+    apiRequest<ListEnvelope<AgentTask>>(`/api/projects/${projectId}/agent/tasks`, { session, query }),
+  getAgentTask: (session: StudioSession, projectId: string, taskId: string) =>
+    apiRequest<AgentTask>(`/api/projects/${projectId}/agent/tasks/${taskId}`, { session }),
+  cancelAgentTask: (session: StudioSession, projectId: string, taskId: string, body: JsonRecord = {}) =>
+    apiRequest<AgentTask>(`/api/projects/${projectId}/agent/tasks/${taskId}/cancel`, { method: "POST", session, body }),
+  approveAgentStep: (session: StudioSession, projectId: string, taskId: string, stepId: string, body: JsonRecord = {}) =>
+    apiRequest<AgentApproval>(`/api/projects/${projectId}/agent/tasks/${taskId}/steps/${stepId}/approve`, { method: "POST", session, body }),
+  rejectAgentStep: (session: StudioSession, projectId: string, taskId: string, stepId: string, body: JsonRecord = {}) =>
+    apiRequest<AgentApproval>(`/api/projects/${projectId}/agent/tasks/${taskId}/steps/${stepId}/reject`, { method: "POST", session, body }),
+  resumeAgentTask: (session: StudioSession, projectId: string, taskId: string) =>
+    apiRequest<AgentTask>(`/api/projects/${projectId}/agent/tasks/${taskId}/resume`, { method: "POST", session, body: {} }),
 
   listCanonicalAssets: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<CanonicalAsset>>(`/api/projects/${projectId}/canonical-assets`, { session }),
@@ -369,15 +408,19 @@ export const studioApi = {
       session,
       query: status ? { "filter[status]": status } : undefined,
     }),
+  listProviderConnectors: (session: StudioSession) => apiRequest<ListEnvelope<ProviderConnector>>("/api/providers/connectors", { session }),
+  importProviderConnector: (session: StudioSession, body: JsonRecord) =>
+    apiRequest<ProviderConnector>("/api/providers/connectors/import", { method: "POST", session, body }),
   createProviderAccount: (session: StudioSession, body: JsonRecord) => apiRequest<ProviderAccount>("/api/providers/accounts", { method: "POST", session, body }),
+  getProviderAccount: (session: StudioSession, accountId: string) => apiRequest<ProviderAccount>(`/api/providers/accounts/${accountId}`, { session }),
   updateProviderAccount: (session: StudioSession, accountId: string, body: JsonRecord) =>
     apiRequest<ProviderAccount>(`/api/providers/accounts/${accountId}`, { method: "PATCH", session, body }),
   deleteProviderAccount: (session: StudioSession, accountId: string) =>
     apiRequest<{ deleted: boolean }>(`/api/providers/accounts/${accountId}`, { method: "DELETE", session }),
   rotateProviderCredential: (session: StudioSession, accountId: string, body: JsonRecord) =>
     apiRequest<ProviderAccount>(`/api/providers/accounts/${accountId}/credentials/rotate`, { method: "POST", session, body }),
-  discoverProviderModels: (session: StudioSession, accountId: string, body: JsonRecord) =>
-    apiRequest<{ models: ProviderModel[] }>(`/api/providers/accounts/${accountId}/discover-models`, { method: "POST", session, body }),
+  discoverProviderModels: (session: StudioSession, accountId: string, body: JsonRecord = {}) =>
+    apiRequest<ProviderModelDiscoveryResult>(`/api/providers/accounts/${accountId}/discover-models`, { method: "POST", session, body }),
   listProviderCatalog: (session: StudioSession) => apiRequest<ListEnvelope<ProviderCatalogEntry>>("/api/provider-catalog", { session }),
   getProviderCatalogEntry: (session: StudioSession, providerKey: string) => apiRequest<ProviderCatalogEntry>(`/api/provider-catalog/${providerKey}`, { session }),
   installProviderCatalogEntry: (session: StudioSession, providerKey: string, body: JsonRecord) =>
@@ -395,8 +438,32 @@ export const studioApi = {
     apiRequest<{ deleted: boolean }>(`/api/providers/models/${modelId}`, { method: "DELETE", session }),
   testProviderModel: (session: StudioSession, modelId: string, body: JsonRecord) =>
     apiRequest<ProviderTestResult>(`/api/providers/models/${modelId}/test`, { method: "POST", session, body }),
+  validateProviderManifest: (session: StudioSession, body: JsonRecord) =>
+    apiRequest<ProviderManifestValidationResult>("/api/providers/manifests/validate", { method: "POST", session, body }),
+  runProviderManifestTest: (session: StudioSession, body: JsonRecord) =>
+    apiRequest<ProviderManifestTestRunResult>("/api/providers/manifests/test-run", { method: "POST", session, body }),
   listModelProfiles: (session: StudioSession) => apiRequest<ListEnvelope<ModelProfile>>("/api/model-profiles", { session }),
   createModelProfile: (session: StudioSession, body: JsonRecord) => apiRequest<ModelProfile>("/api/model-profiles", { method: "POST", session, body }),
+  updateModelProfile: (session: StudioSession, profileId: string, body: JsonRecord) =>
+    apiRequest<ModelProfile>(`/api/model-profiles/${profileId}`, { method: "PATCH", session, body }),
+  createModelProfileBinding: (session: StudioSession, profileId: string, body: JsonRecord) =>
+    apiRequest<ModelProfile>(`/api/model-profiles/${profileId}/bindings`, { method: "POST", session, body }),
+  deleteModelProfileBinding: (session: StudioSession, profileId: string, bindingId: string) =>
+    apiRequest<{ deleted: boolean }>(`/api/model-profiles/${profileId}/bindings/${bindingId}`, { method: "DELETE", session }),
+  listProviderCallLogs: (session: StudioSession, query?: Record<string, string | number | boolean | undefined | null>) =>
+    apiRequest<ListEnvelope<ProviderCallLog>>("/api/provider-call-logs", { session, query }),
+  getProviderUsageSummary: (session: StudioSession) => apiRequest<ProviderUsageSummary>("/api/provider-usage/summary", { session }),
+  listProviderLimitPolicies: (session: StudioSession) => apiRequest<ListEnvelope<ProviderLimitPolicy>>("/api/provider-limit-policies", { session }),
+  createProviderLimitPolicy: (session: StudioSession, body: JsonRecord) =>
+    apiRequest<ProviderLimitPolicy>("/api/provider-limit-policies", { method: "POST", session, body }),
+  getProviderLimitPolicy: (session: StudioSession, policyId: string) => apiRequest<ProviderLimitPolicy>(`/api/provider-limit-policies/${policyId}`, { session }),
+  updateProviderLimitPolicy: (session: StudioSession, policyId: string, body: JsonRecord) =>
+    apiRequest<ProviderLimitPolicy>(`/api/provider-limit-policies/${policyId}`, { method: "PATCH", session, body }),
+  deleteProviderLimitPolicy: (session: StudioSession, policyId: string) =>
+    apiRequest<{ deleted: boolean }>(`/api/provider-limit-policies/${policyId}`, { method: "DELETE", session }),
+  listProviderCircuitStates: (session: StudioSession) => apiRequest<ListEnvelope<ProviderCircuitState>>("/api/provider-circuit-states", { session }),
+  resetProviderCircuitState: (session: StudioSession, stateId: string) =>
+    apiRequest<ProviderCircuitState>(`/api/provider-circuit-states/${stateId}/reset`, { method: "POST", session }),
   listPromptTemplates: (session: StudioSession) => apiRequest<ListEnvelope<PromptTemplate>>("/api/prompt-templates", { session }),
   createPromptTemplate: (session: StudioSession, body: JsonRecord) => apiRequest<PromptTemplate>("/api/prompt-templates", { method: "POST", session, body }),
   createPromptVersion: (session: StudioSession, templateId: string, body: JsonRecord) =>

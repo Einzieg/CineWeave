@@ -200,6 +200,7 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		s.writeError(w, r, err)
 		return
 	}
+	s.insertWorkflowQueuedEvent(r.Context(), run, workflowType)
 	httpx.WriteJSON(w, r, http.StatusCreated, run, nil)
 }
 
@@ -273,33 +274,39 @@ func (s *Server) cancelWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 	if !s.authorize(w, r, principal, authz.PermissionWorkflowCancel, authz.Resource{ProjectID: item.ProjectID}) {
 		return
 	}
-	if isTerminalWorkflowStatus(item.Status) {
-		httpx.WriteJSON(w, r, http.StatusOK, item, nil)
-		return
-	}
 	reason := strings.TrimSpace(req.Reason)
 	if reason == "" {
 		reason = "User requested cancellation"
 	}
-	if err := workflows.MarkWorkflowCancelling(r.Context(), s.db, item.ID, reason); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if s.temporal != nil {
-		if err := s.temporal.CancelWorkflow(r.Context(), item.TemporalWorkflowID, ""); err != nil {
-			_ = s.insertWorkflowCancelWarning(r.Context(), item, reason, err)
-		}
-	}
-	updated, err := scanWorkflowRun(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
-		WHERE id = $1
-	`, item.ID))
+	updated, err := s.cancelWorkflowRunItem(r.Context(), item, reason)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, updated, nil)
+}
+
+func (s *Server) cancelWorkflowRunItem(ctx context.Context, item WorkflowRun, reason string) (WorkflowRun, error) {
+	if isTerminalWorkflowStatus(item.Status) {
+		return item, nil
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "User requested cancellation"
+	}
+	if err := workflows.MarkWorkflowCancelling(ctx, s.db, item.ID, reason); err != nil {
+		return WorkflowRun{}, err
+	}
+	if s.temporal != nil {
+		if err := s.temporal.CancelWorkflow(ctx, item.TemporalWorkflowID, ""); err != nil {
+			_ = s.insertWorkflowCancelWarning(ctx, item, reason, err)
+		}
+	}
+	return scanWorkflowRun(s.db.QueryRow(ctx, `
+		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
+		FROM workflow_runs
+		WHERE id = $1
+	`, item.ID))
 }
 
 func (s *Server) listWorkflowNodeRuns(w http.ResponseWriter, r *http.Request, principal auth.Principal) {

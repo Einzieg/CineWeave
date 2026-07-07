@@ -13,7 +13,18 @@ import (
 func (s *Service) ListCatalogEntries(ctx context.Context, organizationID string) ([]CatalogEntry, error) {
 	rows, err := s.db.Query(ctx, catalogEntrySelect(`
 		WHERE e.enabled = true
-		ORDER BY e.is_official DESC, e.category ASC, e.display_name ASC
+		ORDER BY CASE e.provider_key
+			WHEN 'openai_compatible_custom' THEN 0
+			WHEN 'openrouter' THEN 1
+			WHEN 'ollama' THEN 2
+			WHEN 'google_gemini' THEN 3
+			WHEN 'alibaba_dashscope' THEN 4
+			WHEN 'zhipu_glm' THEN 5
+			WHEN 'baidu_qianfan' THEN 6
+			WHEN 'xunfei_spark' THEN 7
+			WHEN 'minimax' THEN 8
+			ELSE 100
+		END, e.is_official DESC, e.category ASC, e.display_name ASC
 	`), strings.TrimSpace(organizationID))
 	if err != nil {
 		return nil, err

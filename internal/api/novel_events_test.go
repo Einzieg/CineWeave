@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Einzieg/cineweave/internal/provider"
@@ -128,6 +129,73 @@ func TestGenerateAdaptationPlanWritesPlan(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("adaptation plan count = %d, want 1", count)
+	}
+}
+
+func TestGenerateScriptFromAdaptationPlanUsesNovelChapterText(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/provider/text/generate" {
+			http.NotFound(w, r)
+			return
+		}
+		var req provider.GatewayTextRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode gateway request: %v", err)
+		}
+		if req.PromptTemplateKey != "script_from_adaptation_plan" {
+			t.Fatalf("prompt template = %q", req.PromptTemplateKey)
+		}
+		var input struct {
+			Prompt string `json:"prompt"`
+		}
+		if err := json.Unmarshal(req.Input, &input); err != nil {
+			t.Fatalf("decode gateway input: %v", err)
+		}
+		if !strings.Contains(input.Prompt, "小说正文：") || !strings.Contains(input.Prompt, "chapter content") {
+			t.Fatalf("rendered prompt missing chapter text: %s", input.Prompt)
+		}
+		if !strings.Contains(input.Prompt, "台词零捏造") {
+			t.Fatalf("rendered prompt missing faithful dialogue rule: %s", input.Prompt)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"data": provider.GatewayTextResponse{
+			ProviderCallID: uuid.NewString(),
+			ModelID:        "model-test",
+			Status:         "succeeded",
+			Output:         provider.GatewayTextOutput{Text: "分镜1.1\n时间：夜\n场景：山寨\n人物：少年时期的方源\n道具：无\n预估时长：6秒\n\n△雨声压住窗棂。"},
+			Usage:          provider.GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
+			LatencyMS:      10,
+		}}); err != nil {
+			t.Fatalf("encode gateway response: %v", err)
+		}
+	}))
+	defer gateway.Close()
+	t.Setenv("PROVIDER_GATEWAY_URL", gateway.URL)
+	t.Setenv("CINEWEAVE_SERVICE_TOKEN", "novel-script-test-token")
+
+	sourceID := seed.insertProjectSource(t, "novel", "Novel Source")
+	chapterID := seed.insertNovelChapter(t, sourceID)
+	eventID := seed.insertNovelEvent(t, sourceID, chapterID, 1, "Station clue", "A clue appears at the station.", "pending")
+	var planID string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		INSERT INTO adaptation_plans(organization_id, project_id, source_id, title, selected_event_ids, structure, content, max_shots, created_by)
+		VALUES ($1, $2, $3, 'Faithful Plan', $4, '{}', '{"title":"Faithful Plan"}', 6, $5)
+		RETURNING id
+	`, seed.organizationID, seed.projectID, sourceID, json.RawMessage(mustMarshal([]string{eventID})), seed.ownerUserID).Scan(&planID); err != nil {
+		t.Fatalf("insert adaptation plan: %v", err)
+	}
+
+	var response struct {
+		ScriptID  string `json:"scriptId"`
+		VersionID string `json:"versionId"`
+		Content   string `json:"content"`
+	}
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/adaptation-plans/"+planID+"/generate-script", seed.ownerToken, seed.organizationID, map[string]any{}, &response)
+	if response.ScriptID == "" || response.VersionID == "" || !strings.Contains(response.Content, "分镜1.1") {
+		t.Fatalf("response = %+v", response)
 	}
 }
 

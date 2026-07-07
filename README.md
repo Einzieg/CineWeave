@@ -11,7 +11,14 @@ pnpm install
 docker compose -f compose.yml --profile app up -d --build
 ```
 
-The local Docker Compose environment exposes the web container at `http://localhost:8085` and the API at `http://localhost:8088`. On a fresh database, open `http://localhost:8085/setup` to create the first administrator, organization, and workspace. Public registration is disabled by default with `CINEWEAVE_ALLOW_PUBLIC_REGISTRATION=false`; keep it disabled for server deployments unless you intentionally want open signup.
+The local Docker Compose environment exposes only browser-facing services by default:
+
+- Web: `http://localhost:19285`
+- API: `http://localhost:19288`
+- Realtime events: `http://localhost:19281/api/realtime/events`
+- MinIO object preview endpoint: `http://localhost:19290`
+
+PostgreSQL, Redis, NATS, Temporal, Provider Gateway, and the MinIO console stay on the Docker network and are not mapped to host ports by default. On a fresh database, open `http://localhost:19285/setup` to create the first administrator, organization, and workspace. Public registration is disabled by default with `CINEWEAVE_ALLOW_PUBLIC_REGISTRATION=false`; keep it disabled for server deployments unless you intentionally want open signup.
 
 After setup, use `/login` with the administrator account. The web app stores the login session locally and sends the access token plus organization context automatically; users do not manually enter tokens, organization IDs, or workspace IDs.
 
@@ -25,11 +32,15 @@ docker compose config
 docker compose -f compose.yml build api provider-gateway script-worker media-worker web
 ```
 
+Compose pins external runtime images with tag+digest for repeatable server deployments. To upgrade a base service image, update the tag and digest in `compose.yml`, run `docker compose -f compose.yml pull <service>`, verify `docker compose -f compose.yml config --quiet`, rebuild the app profile, and confirm `docker compose -f compose.yml --profile app ps` shows the expected services healthy.
+
 The current MVP is silent video. TTS, generated audio artifacts, audio mix, subtitles, and BGM are intentionally deferred.
 
 ## Provider Gateway Boundary
 
 Provider Gateway is required by default for upstream model access. API and worker services should call `PROVIDER_GATEWAY_URL` with `CINEWEAVE_SERVICE_TOKEN`; production must not enable direct provider fallback. `CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK=true` is only for local development or test troubleshooting.
+
+For server deployments, set `CINEWEAVE_ENV=production` and replace all development secrets before starting app services. API startup fails if `CINEWEAVE_JWT_SECRET` is empty or still `dev-insecure-cineweave-secret`; API and Provider Gateway startup fail if `CINEWEAVE_SERVICE_TOKEN` is empty or still `dev-service-token`; Provider Gateway credential vault startup fails if `CINEWEAVE_CREDENTIAL_MASTER_KEY` is empty.
 
 Provider Gateway now owns `text.generate`, `text.stream`, and `image.generate` runtime calls. The image runtime targets OpenAI-compatible `/v1/images/generations`, accepts URL or `b64_json` upstream responses, downloads or decodes the media inside the Gateway, stores it in S3 / MinIO, and writes `media_files`, `artifacts`, `provider_call_logs`, and `cost_records`. Private or localhost upstream media URLs are blocked unless `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=true` is explicitly set for development.
 
@@ -63,7 +74,7 @@ Shot results are available through `GET /api/workflow-runs/{id}/shots?includePre
 
 Video workflow cancellation is exposed through `POST /api/workflow-runs/{id}/cancel`. Running, queued, or already-cancelling runs are marked `cancelling` and API requests Temporal cancellation; terminal runs return their current state for repeated cancel calls. If the current shot has a running Provider Gateway video async task, workflow cleanup calls `/internal/provider/video/cancel-task`; completed shots stay succeeded and not-yet-started shots are marked cancelled.
 
-The Vault preview path uses authenticated API endpoints to create short-lived signed GET URLs for `artifacts` and `media_files`; S3 / MinIO buckets do not need public read access. In local Docker Compose, server components use `S3_ENDPOINT=http://minio:9000`, while browser preview URLs are signed with `S3_PUBLIC_ENDPOINT=http://localhost:9000`.
+The Vault preview path uses authenticated API endpoints to create short-lived signed GET URLs for `artifacts` and `media_files`; S3 / MinIO buckets do not need public read access. In local Docker Compose, server components use `S3_ENDPOINT=http://minio:9000`, while browser preview URLs are signed with `S3_PUBLIC_ENDPOINT=http://localhost:19290`.
 
 For Docker Compose deployments, configure provider accounts and bind active models to `script_agent_default`, `image_generation_default`, and `video_generation_default` before running `video_production`. Missing bindings fail the workflow with `MODEL_PROFILE_NOT_CONFIGURED`.
 

@@ -2,13 +2,11 @@ name: cineweave
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16@sha256:5a65324fe84dc41709ff914e90b07f3e2f577073ed27bf917d4873aca0c9ec51
     environment:
       POSTGRES_DB: cineweave
       POSTGRES_USER: cineweave
       POSTGRES_PASSWORD: cineweave_dev_password
-    ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -18,9 +16,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
-    ports:
-      - "${REDIS_HOST_PORT:-6379}:6379"
+    image: redis:7-alpine@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -28,14 +24,13 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio123
     ports:
-      - "${MINIO_API_HOST_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+      - "${MINIO_API_HOST_PORT:-19290}:9000"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -45,7 +40,7 @@ services:
       retries: 5
 
   minio-create-bucket:
-    image: minio/mc
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     depends_on:
       minio:
         condition: service_healthy
@@ -56,7 +51,7 @@ services:
 
   migrate:
     profiles: ["app", "full"]
-    image: postgres:16
+    image: postgres:16@sha256:5a65324fe84dc41709ff914e90b07f3e2f577073ed27bf917d4873aca0c9ec51
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,14 +67,11 @@ services:
       done"
 
   nats:
-    image: nats:2
+    image: nats:2@sha256:bbfbb6c4cdaeb8a2e3ca57d3de30463a66a6c5181f324f3b680bcf858833d377
     command: ["-js", "-m", "8222"]
-    ports:
-      - "${NATS_HOST_PORT:-4222}:4222"
-      - "${NATS_MONITOR_HOST_PORT:-8222}:8222"
 
   temporal:
-    image: temporalio/auto-setup:1.28
+    image: temporalio/auto-setup:1.28@sha256:d4cdc015d667ab5ccc3c6d1221a8792f4603c62378313db9391e47f0cb367305
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,45 +81,56 @@ services:
       POSTGRES_USER: cineweave
       POSTGRES_PWD: cineweave_dev_password
       POSTGRES_SEEDS: postgres
-    ports:
-      - "${TEMPORAL_HOST_PORT:-7233}:7233"
 
   api:
     profiles: ["app", "full"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: deploy/docker-compose/Dockerfile-go
       args:
         SERVICE_PATH: apps/api
     environment:
+      CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
       CINEWEAVE_API_ADDR: ":8080"
       CINEWEAVE_CREDENTIAL_MASTER_KEY: ${CINEWEAVE_CREDENTIAL_MASTER_KEY:-}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
-      CINEWEAVE_CORS_ORIGINS: ${CINEWEAVE_CORS_ORIGINS:-http://localhost:8085,http://127.0.0.1:8085}
+      CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS:-660000}
+      CINEWEAVE_JWT_SECRET: ${CINEWEAVE_JWT_SECRET:-dev-insecure-cineweave-secret}
+      CINEWEAVE_CORS_ORIGINS: ${CINEWEAVE_CORS_ORIGINS:-http://localhost:19285,http://127.0.0.1:19285}
       PROVIDER_GATEWAY_URL: http://provider-gateway:8082
       CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK: "false"
       CINEWEAVE_ALLOW_PUBLIC_REGISTRATION: ${CINEWEAVE_ALLOW_PUBLIC_REGISTRATION:-false}
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
       S3_ENDPOINT: http://minio:9000
-      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
       S3_REGION: us-east-1
       S3_BUCKET: cineweave
       S3_ACCESS_KEY_ID: minio
       S3_SECRET_ACCESS_KEY: minio123
       S3_USE_PATH_STYLE: "true"
     ports:
-      - "${CINEWEAVE_API_HOST_PORT:-8088}:8080"
+      - "${CINEWEAVE_API_HOST_PORT:-19288}:8080"
     depends_on:
       migrate:
         condition: service_completed_successfully
+      provider-gateway:
+        condition: service_healthy
       temporal:
         condition: service_started
       minio-create-bucket:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/readyz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   realtime:
     profiles: ["app", "full"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: deploy/docker-compose/Dockerfile-go
@@ -138,15 +141,22 @@ services:
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       NATS_URL: nats://nats:4222
     ports:
-      - "${CINEWEAVE_REALTIME_HOST_PORT:-8081}:8081"
+      - "${CINEWEAVE_REALTIME_HOST_PORT:-19281}:8081"
     depends_on:
       migrate:
         condition: service_completed_successfully
       nats:
         condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8081/readyz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
 
   script-worker:
     profiles: ["app", "full"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: deploy/docker-compose/Dockerfile-go
@@ -157,6 +167,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
       PROVIDER_GATEWAY_URL: http://provider-gateway:8082
+      CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS:-660000}
       CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK: "false"
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
@@ -171,9 +182,16 @@ services:
         condition: service_started
       minio-create-bucket:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /proc/1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   media-worker:
     profiles: ["app", "full"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: deploy/docker-compose/Dockerfile-media-worker
@@ -183,7 +201,7 @@ services:
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
       S3_ENDPOINT: http://minio:9000
-      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
       S3_REGION: us-east-1
       S3_BUCKET: cineweave
       S3_ACCESS_KEY_ID: minio
@@ -196,20 +214,29 @@ services:
         condition: service_started
       minio-create-bucket:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /proc/1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   provider-gateway:
     profiles: ["app", "full"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: deploy/docker-compose/Dockerfile-go
       args:
         SERVICE_PATH: services/provider-gateway
     environment:
+      CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
       CINEWEAVE_PROVIDER_GATEWAY_ADDR: ":8082"
       CINEWEAVE_CREDENTIAL_MASTER_KEY: ${CINEWEAVE_CREDENTIAL_MASTER_KEY:-}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
       CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS: ${CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS:-false}
       CINEWEAVE_PROVIDER_GUARD_SERVICE_NAME: ${CINEWEAVE_PROVIDER_GUARD_SERVICE_NAME:-provider-gateway}
+      CINEWEAVE_PROVIDER_TEXT_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_TEXT_TIMEOUT_MS:-600000}
       CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES: ${CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES:-536870912}
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       S3_ENDPOINT: http://minio:9000
@@ -218,16 +245,21 @@ services:
       S3_ACCESS_KEY_ID: minio
       S3_SECRET_ACCESS_KEY: minio123
       S3_USE_PATH_STYLE: "true"
-    ports:
-      - "${CINEWEAVE_PROVIDER_GATEWAY_HOST_PORT:-8082}:8082"
     depends_on:
       migrate:
         condition: service_completed_successfully
       minio-create-bucket:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8082/readyz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   event-publisher:
     profiles: ["app", "full"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: deploy/docker-compose/Dockerfile-go
@@ -243,22 +275,35 @@ services:
         condition: service_completed_successfully
       nats:
         condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /proc/1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   web:
     profiles: ["app", "full"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8088}
-        NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:8081/api/realtime/events}
-        S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:19288}
+        NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:19281/api/realtime/events}
+        S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8088}
-      NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:8081/api/realtime/events}
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:19288}
+      NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:19281/api/realtime/events}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
     ports:
-      - "${CINEWEAVE_WEB_HOST_PORT:-8085}:3000"
+      - "${CINEWEAVE_WEB_HOST_PORT:-19285}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
 volumes:
   postgres-data:

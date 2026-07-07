@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Film, Image as ImageIcon, Save, Trash2, Video } from "lucide-react";
 import { toast } from "sonner";
+import { statusLabel } from "@/lib/labels";
 import type { ShotProductionShot, StoryboardShot } from "@/lib/types";
 
 type ShotRow = {
@@ -123,9 +124,9 @@ export function StoryboardPage({
                       <p className="text-xs text-muted-foreground">{shot.workflowRunId}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Badge variant="outline">图像 {shot.imageStatus || "unknown"}</Badge>
-                      <Badge variant="outline">视频 {shot.videoStatus || "unknown"}</Badge>
-                      {shot.staleState && shot.staleState !== "fresh" ? <Badge variant="secondary">{shot.staleState}</Badge> : null}
+                      <Badge variant="outline">图像 {statusLabel(shot.imageStatus || "pending")}</Badge>
+                      <Badge variant="outline">视频 {statusLabel(shot.videoStatus || "pending")}</Badge>
+                      {shot.staleState && shot.staleState !== "fresh" ? <Badge variant="secondary">{statusLabel(shot.staleState)}</Badge> : null}
                     </div>
                   </div>
                   {editing ? (

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,6 +108,29 @@ type generateScriptFromAdaptationPlanRequest struct {
 	Instruction string `json:"instruction"`
 }
 
+type scriptNovelChapterContext struct {
+	ID           string `json:"id"`
+	ChapterIndex int    `json:"chapterIndex"`
+	VolumeIndex  int    `json:"volumeIndex,omitempty"`
+	SectionIndex int    `json:"sectionIndex,omitempty"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+}
+
+type scriptNovelContext struct {
+	SourceID             string                      `json:"sourceId"`
+	SourceTitle          string                      `json:"sourceTitle"`
+	EpisodeNumber        int                         `json:"episodeNumber"`
+	ShotCount            int                         `json:"shotCount"`
+	StartShotNumber      int                         `json:"startShotNumber"`
+	PreviousSummary      string                      `json:"previousSummary"`
+	CharacterPeriodTable string                      `json:"characterPeriodTable"`
+	ReferenceText        string                      `json:"referenceText"`
+	CurrentText          string                      `json:"currentText"`
+	ChapterIDs           []string                    `json:"chapterIds"`
+	Chapters             []scriptNovelChapterContext `json:"chapters"`
+}
+
 func (s *Server) extractNovelEvents(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	var req extractNovelEventsRequest
 	if !decode(w, r, &req) {
@@ -127,6 +151,15 @@ func (s *Server) extractNovelEvents(w http.ResponseWriter, r *http.Request, prin
 	}
 	if source.SourceType != "novel" {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceType must be novel", nil, false)
+		return
+	}
+	chapters, err := s.sourceChapters(r, project.ID, source.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if len(chapters) == 0 {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "原文尚未完成分集/章节切分，请重新导入，或编辑保存时开启重新切分。", nil, false)
 		return
 	}
 	input := map[string]any{
@@ -157,12 +190,13 @@ func (s *Server) listSourceNovelEvents(w http.ResponseWriter, r *http.Request, p
 		s.writeError(w, r, err)
 		return
 	}
-	events, err := s.novelEventsBySource(r, project.ID, source.ID)
+	chapterID := strings.TrimSpace(r.URL.Query().Get("chapterId"))
+	events, err := s.novelEventsBySource(r, project.ID, source.ID, chapterID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	links, err := s.novelEventLinksBySource(r, project.ID, source.ID)
+	links, err := s.novelEventLinksBySource(r, project.ID, source.ID, chapterID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -639,11 +673,17 @@ func (s *Server) generateScriptFromAdaptationPlan(w http.ResponseWriter, r *http
 		s.writeError(w, r, err)
 		return
 	}
+	novelContext, err := s.scriptNovelContextForPlan(r, project.ID, plan, events)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "script_from_adaptation_plan", map[string]any{
 		"project": projectPromptVariables(project),
 		"input":   map[string]any{"instruction": strings.TrimSpace(req.Instruction)},
 		"plan":    map[string]any{"id": plan.ID, "title": plan.Title, "content": plan.Content, "structure": string(plan.Structure)},
 		"events":  map[string]any{"items": string(mustMarshal(events))},
+		"novel":   novelContext,
 	}, false)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -712,6 +752,180 @@ func (s *Server) runTextGatewayPrompt(r *http.Request, project Project, template
 		Input:             json.RawMessage(mustMarshal(input)),
 	})
 	return rendered, resp, err
+}
+
+func (s *Server) scriptNovelContextForPlan(r *http.Request, projectID string, plan AdaptationPlan, events []NovelEvent) (scriptNovelContext, error) {
+	context := scriptNovelContext{
+		SourceID:             optionalStringPtrValue(plan.SourceID),
+		EpisodeNumber:        1,
+		ShotCount:            shotCountFromAdaptationPlan(plan),
+		StartShotNumber:      1,
+		PreviousSummary:      "无",
+		CharacterPeriodTable: characterPeriodTableFromNovelEvents(events),
+		ReferenceText:        "全文较长时不直接注入；请以小说正文为唯一转换范围，并以改编计划和事件摘要理解上下文。",
+	}
+	if context.SourceID == "" {
+		return context, nil
+	}
+	source, err := s.projectSource(r, projectID, context.SourceID)
+	if err != nil {
+		return scriptNovelContext{}, err
+	}
+	context.SourceTitle = source.Title
+	chapterIDs := chapterIDsFromNovelEvents(events)
+	chapters, err := s.scriptNovelChapters(r, projectID, context.SourceID, chapterIDs)
+	if err != nil {
+		return scriptNovelContext{}, err
+	}
+	context.Chapters = scriptNovelChapterContexts(chapters)
+	context.ChapterIDs = make([]string, 0, len(context.Chapters))
+	for _, chapter := range context.Chapters {
+		context.ChapterIDs = append(context.ChapterIDs, chapter.ID)
+	}
+	context.CurrentText = scriptNovelCurrentText(context.Chapters)
+	if context.CurrentText == "" {
+		context.CurrentText = strings.TrimSpace(source.Content)
+	}
+	if len(context.Chapters) > 0 {
+		context.EpisodeNumber = firstPositiveInt(context.Chapters[0].SectionIndex, context.Chapters[0].ChapterIndex, 1)
+	}
+	if compactSource := strings.TrimSpace(source.Content); compactSource != "" && len([]rune(compactSource)) <= 20000 {
+		context.ReferenceText = compactSource
+	}
+	return context, nil
+}
+
+func (s *Server) scriptNovelChapters(r *http.Request, projectID, sourceID string, chapterIDs []string) ([]NovelChapter, error) {
+	all, err := s.sourceChapters(r, projectID, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	if len(chapterIDs) == 0 {
+		return all, nil
+	}
+	wanted := map[string]bool{}
+	for _, id := range chapterIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			wanted[id] = true
+		}
+	}
+	items := make([]NovelChapter, 0, len(wanted))
+	for _, chapter := range all {
+		if wanted[chapter.ID] {
+			items = append(items, chapter)
+		}
+	}
+	return items, nil
+}
+
+func scriptNovelChapterContexts(chapters []NovelChapter) []scriptNovelChapterContext {
+	out := make([]scriptNovelChapterContext, 0, len(chapters))
+	for _, chapter := range chapters {
+		out = append(out, scriptNovelChapterContext{
+			ID:           chapter.ID,
+			ChapterIndex: chapter.ChapterIndex,
+			VolumeIndex:  optionalIntValue(chapter.VolumeIndex),
+			SectionIndex: optionalIntValue(chapter.SectionIndex),
+			Title:        novelChapterPromptTitle(chapter),
+			Content:      chapter.Content,
+		})
+	}
+	return out
+}
+
+func scriptNovelCurrentText(chapters []scriptNovelChapterContext) string {
+	var builder strings.Builder
+	for _, chapter := range chapters {
+		content := strings.TrimSpace(chapter.Content)
+		if content == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString("【")
+		builder.WriteString(chapter.Title)
+		builder.WriteString("】\n")
+		builder.WriteString(content)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func chapterIDsFromNovelEvents(events []NovelEvent) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, event := range events {
+		id := optionalStringPtrValue(event.ChapterID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+func characterPeriodTableFromNovelEvents(events []NovelEvent) string {
+	names := []string{}
+	seen := map[string]bool{}
+	for _, event := range events {
+		var characters []string
+		if err := json.Unmarshal(rawOrDefault(event.Characters, `[]`), &characters); err != nil {
+			continue
+		}
+		for _, name := range normalizeStringSlice(characters) {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return "未配置人物时期表；按小说正文中的标准名称和时期线索标注，禁止新增人物、改名或使用别名。"
+	}
+	return "未配置正式人物时期表；候选人物：" + strings.Join(names, "、") + "。按小说正文中的标准名称和时期线索标注，禁止新增人物、改名或使用别名。"
+}
+
+func shotCountFromAdaptationPlan(plan AdaptationPlan) int {
+	if plan.MaxShots != nil && *plan.MaxShots > 0 {
+		return *plan.MaxShots
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(rawOrDefault(plan.Metadata, `{}`), &metadata); err == nil {
+		switch value := metadata["estimatedShots"].(type) {
+		case float64:
+			if value > 0 {
+				return int(value)
+			}
+		case int:
+			if value > 0 {
+				return value
+			}
+		}
+	}
+	return 8
+}
+
+func novelChapterPromptTitle(chapter NovelChapter) string {
+	parts := []string{}
+	if chapter.VolumeIndex != nil && *chapter.VolumeIndex > 0 {
+		parts = append(parts, "第 "+strconv.Itoa(*chapter.VolumeIndex)+"卷")
+	}
+	if chapter.SectionIndex != nil && *chapter.SectionIndex > 0 {
+		parts = append(parts, "第 "+strconv.Itoa(*chapter.SectionIndex)+"节")
+	}
+	if chapter.VolumeTitle != nil && strings.TrimSpace(*chapter.VolumeTitle) != "" {
+		parts = append(parts, strings.TrimSpace(*chapter.VolumeTitle))
+	}
+	if chapter.ChapterTitle != nil && strings.TrimSpace(*chapter.ChapterTitle) != "" {
+		parts = append(parts, strings.TrimSpace(*chapter.ChapterTitle))
+	}
+	if len(parts) == 0 {
+		return "第 " + strconv.Itoa(chapter.ChapterIndex) + " 集"
+	}
+	return strings.Join(parts, " ")
 }
 
 func (s *Server) insertGeneratedAdaptationPlan(r *http.Request, project Project, sourceID string, req generateAdaptationPlanRequest, rendered promptsvc.RenderedPrompt, gatewayResp provider.GatewayTextResponse, draft workflows.AdaptationPlanDraft, warning, userID string) (AdaptationPlan, error) {
@@ -865,11 +1079,12 @@ func (s *Server) novelEvent(r *http.Request, projectID, eventID string) (NovelEv
 	`), projectID, eventID))
 }
 
-func (s *Server) novelEventsBySource(r *http.Request, projectID, sourceID string) ([]NovelEvent, error) {
+func (s *Server) novelEventsBySource(r *http.Request, projectID, sourceID string, chapterID string) ([]NovelEvent, error) {
 	rows, err := s.db.Query(r.Context(), novelEventSelectSQL(`
 		WHERE e.project_id = $1 AND e.source_id = $2
+		  AND ($3 = '' OR e.chapter_id = $3::uuid)
 		ORDER BY e.sequence_no ASC
-	`), projectID, sourceID)
+	`), projectID, sourceID, strings.TrimSpace(chapterID))
 	if err != nil {
 		return nil, err
 	}
@@ -879,7 +1094,7 @@ func (s *Server) novelEventsBySource(r *http.Request, projectID, sourceID string
 
 func (s *Server) novelEventsByIDs(r *http.Request, projectID, sourceID string, eventIDs []string) ([]NovelEvent, error) {
 	if len(eventIDs) == 0 && sourceID != "" {
-		return s.novelEventsBySource(r, projectID, sourceID)
+		return s.novelEventsBySource(r, projectID, sourceID, "")
 	}
 	rows, err := s.db.Query(r.Context(), novelEventSelectSQL(`
 		WHERE e.project_id = $1
@@ -944,15 +1159,17 @@ func (s *Server) novelEventsByReviewStatus(r *http.Request, projectID, sourceID,
 	return scanNovelEvents(rows)
 }
 
-func (s *Server) novelEventLinksBySource(r *http.Request, projectID, sourceID string) ([]NovelEventLink, error) {
+func (s *Server) novelEventLinksBySource(r *http.Request, projectID, sourceID string, chapterID string) ([]NovelEventLink, error) {
 	rows, err := s.db.Query(r.Context(), `
 		SELECT l.id, l.organization_id, l.project_id, l.source_event_id, l.target_event_id,
 		       l.link_type, l.description, l.metadata, l.created_at
 		FROM novel_event_links l
 		JOIN novel_events e ON e.id = l.source_event_id
+		JOIN novel_events target ON target.id = l.target_event_id
 		WHERE l.project_id = $1 AND e.source_id = $2
+		  AND ($3 = '' OR (e.chapter_id = $3::uuid AND target.chapter_id = $3::uuid))
 		ORDER BY e.sequence_no ASC, l.created_at ASC
-	`, projectID, sourceID)
+	`, projectID, sourceID, strings.TrimSpace(chapterID))
 	if err != nil {
 		return nil, err
 	}
@@ -1218,6 +1435,13 @@ func optionalStringPtrValue(value *string) string {
 func optionalIntPtrValue(value *int) any {
 	if value == nil || *value <= 0 {
 		return nil
+	}
+	return *value
+}
+
+func optionalIntValue(value *int) int {
+	if value == nil {
+		return 0
 	}
 	return *value
 }

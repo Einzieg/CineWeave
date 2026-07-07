@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useApiQuery, useApiMutation, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
@@ -24,40 +25,52 @@ interface SessionSelectorProps {
 export function SessionSelector({
   projectId,
   currentSessionId,
-  agentType,
   onSessionChange,
 }: SessionSelectorProps) {
   const invalidate = useInvalidateKeys();
+  const autoHandledRef = useRef("");
+  const agentLabel = "项目控制助手";
 
-  // 获取会话列表
-  const { data: sessions = [] } = useApiQuery({
+  const { data: sessions = [], isLoading } = useApiQuery({
     key: qk.agentSessions(projectId),
-    queryFn: (session) => studioApi.listAgentSessions(session, projectId).then(r => r.items || []),
+    queryFn: (session) => studioApi.listAgentSessions(session, projectId).then((r) => r.items || []),
     enabled: !!projectId,
   });
 
-  // 创建新会话
-  const createMutation = useApiMutation({
-    mutationFn: (session, title: string) =>
-      studioApi.createAgentSession(session, projectId, title || "新对话"),
-    onSuccess: (result) => {
+  const { mutate: createSession, isPending: isCreatingSession } = useApiMutation({
+    mutationFn: (session, input: { title: string; silent?: boolean }) =>
+      studioApi.createAgentSession(session, projectId, input.title || "新对话"),
+    onSuccess: (result, input) => {
       invalidate([qk.agentSessions(projectId)]);
       onSessionChange(result.id);
-      toast.success("创建会话成功");
+      if (!input.silent) {
+        toast.success("创建会话成功");
+      }
     },
     onError: (error) => {
       toast.error("创建会话失败：" + error.message);
-    }
+    },
   });
 
   const handleCreateSession = () => {
-    const agentLabel = agentType === "script_agent" ? "剧本助手"
-      : agentType === "asset_agent" ? "资产助手"
-      : agentType === "storyboard_agent" ? "分镜助手"
-      : "AI助手";
-
-    createMutation.mutate(`${agentLabel} - ${new Date().toLocaleString()}`);
+    createSession({ title: `${agentLabel} - ${new Date().toLocaleString()}` });
   };
+
+  useEffect(() => {
+    if (!projectId || currentSessionId || isLoading || isCreatingSession) {
+      return;
+    }
+    if (sessions.length > 0) {
+      autoHandledRef.current = projectId;
+      onSessionChange(sessions[0].id);
+      return;
+    }
+    if (autoHandledRef.current === projectId) {
+      return;
+    }
+    autoHandledRef.current = projectId;
+    createSession({ title: `${agentLabel} - ${new Date().toLocaleString()}`, silent: true });
+  }, [agentLabel, createSession, currentSessionId, isCreatingSession, isLoading, onSessionChange, projectId, sessions]);
 
   return (
     <div className="flex gap-2">
@@ -82,7 +95,8 @@ export function SessionSelector({
         size="icon"
         variant="outline"
         onClick={handleCreateSession}
-        disabled={createMutation.isPending}
+        disabled={isCreatingSession}
+        aria-label="新建会话"
       >
         <Plus className="h-4 w-4" />
       </Button>

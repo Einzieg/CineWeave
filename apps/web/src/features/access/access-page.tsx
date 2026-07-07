@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useApiQuery, useApiMutation, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi, StudioApiError } from "@/lib/api-client";
+import { permissionKeyLabel, roleKeyLabel } from "@/lib/labels";
 import type { JsonRecord } from "@/lib/types";
 
 export function AccessPage() {
@@ -128,7 +129,7 @@ function AccessContent() {
                 <SimpleRow key={item.id} title={item.name} detail="团队" status={item.status} />
               ))}
               {roles.map((item) => (
-                <SimpleRow key={item.id} title={item.name || item.roleKey} detail={item.roleKey} status="active" />
+                <SimpleRow key={item.id} title={roleKeyLabel(item.roleKey)} detail={`角色：${roleKeyLabel(item.roleKey)}`} status="active" />
               ))}
             </>
           )}
@@ -147,8 +148,8 @@ function AccessContent() {
           ) : (
             permissions.map((item) => (
               <Card key={item.permissionKey} className="p-3">
-                <p className="text-sm font-medium">{item.name || item.permissionKey}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{item.description || item.permissionKey}</p>
+                <p className="text-sm font-medium">{permissionKeyLabel(item.permissionKey)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{permissionKeyLabel(item.permissionKey)}</p>
               </Card>
             ))
           )}

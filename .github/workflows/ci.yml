@@ -26,29 +26,14 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - name: Go tests
-        run: go test ./...
-
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Web typecheck
-        run: pnpm --filter @cineweave/web typecheck
+      - name: Install Python validation dependencies
+        run: python -m pip install --disable-pip-version-check pyyaml
 
-      - name: Web lint
-        run: pnpm --filter @cineweave/web lint
-
-      - name: OpenAPI YAML parse
-        run: |
-          python -m pip install --disable-pip-version-check pyyaml
-          python - <<'PY'
-          import pathlib
-          import yaml
-          yaml.safe_load(pathlib.Path("packages/openapi/openapi.yaml").read_text(encoding="utf-8"))
-          PY
-
-      - name: Compose config
-        run: docker compose -f compose.yml config --quiet
+      - name: Validate
+        run: pnpm run test
 
       - name: Compose build
-        run: docker compose -f compose.yml build api provider-gateway script-worker media-worker web mock-provider
+        run: docker compose -f compose.yml build api provider-gateway script-worker media-worker web

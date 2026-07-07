@@ -3,7 +3,11 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
+	"github.com/Einzieg/cineweave/internal/api"
+	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/config"
 	"github.com/Einzieg/cineweave/internal/db"
 	"github.com/Einzieg/cineweave/internal/provider"
@@ -38,7 +42,25 @@ func main() {
 	temporalWorker := worker.New(temporalClient, workflows.ScriptTaskQueue, worker.Options{})
 	gatewayClient := provider.NewGatewayClientFromEnv()
 	activities := workflows.NewActivities(pool, storageClient, gatewayClient)
+	credentialVault, err := provider.NewVaultFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	providerService := provider.NewService(pool, credentialVault)
+	providerService.SetGateway(
+		config.Get("PROVIDER_GATEWAY_URL", "http://localhost:8082"),
+		config.Get("CINEWEAVE_SERVICE_TOKEN", config.DefaultServiceToken),
+	)
+	authService := auth.NewService(
+		pool,
+		config.Get("CINEWEAVE_JWT_SECRET", config.DefaultJWTSecret),
+		config.Duration("CINEWEAVE_ACCESS_TOKEN_TTL", 2*time.Hour),
+		config.Duration("CINEWEAVE_REFRESH_TOKEN_TTL", 30*24*time.Hour),
+	)
+	apiServer := api.New(pool, authService, providerService, storageClient, temporalClient, authz.New(pool))
+	projectAgentActivities := api.NewProjectAgentActivities(apiServer)
 	temporalWorker.RegisterWorkflow(workflows.TextToStoryboardWorkflow)
+	temporalWorker.RegisterWorkflow(workflows.ProjectAgentWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.ExtractNovelEventsWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.GenerateAdaptationPlanWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.AdaptationPlanToScriptWorkflow)
@@ -101,6 +123,12 @@ func main() {
 	temporalWorker.RegisterActivityWithOptions(activities.GenerateStoryboardVideos, workflowActivityOptions("GenerateStoryboardVideos"))
 	temporalWorker.RegisterActivityWithOptions(activities.ComposeTimeline, workflowActivityOptions("ComposeTimeline"))
 	temporalWorker.RegisterActivityWithOptions(activities.QualityCheck, workflowActivityOptions("QualityCheck"))
+	temporalWorker.RegisterActivityWithOptions(projectAgentActivities.PlanTask, workflowActivityOptions("ProjectAgentPlanTask"))
+	temporalWorker.RegisterActivityWithOptions(projectAgentActivities.ExecuteReadySteps, workflowActivityOptions("ProjectAgentExecuteReadySteps"))
+	temporalWorker.RegisterActivityWithOptions(projectAgentActivities.ApproveStep, workflowActivityOptions("ProjectAgentApproveStep"))
+	temporalWorker.RegisterActivityWithOptions(projectAgentActivities.RejectStep, workflowActivityOptions("ProjectAgentRejectStep"))
+	temporalWorker.RegisterActivityWithOptions(projectAgentActivities.CancelTask, workflowActivityOptions("ProjectAgentCancelTask"))
+	temporalWorker.RegisterActivityWithOptions(projectAgentActivities.ModifyConstraints, workflowActivityOptions("ProjectAgentModifyConstraints"))
 
 	if err := temporalWorker.Run(worker.InterruptCh()); err != nil {
 		log.Fatal(err)

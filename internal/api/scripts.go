@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -377,7 +378,13 @@ func (s *Server) activateScriptVersion(w http.ResponseWriter, r *http.Request, p
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"scriptId": script.ID, "versionId": version.ID, "active": true}, nil)
+	item, err := s.script(r, project.ID, script.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	item.CurrentVersion = &version
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
 func (s *Server) createScriptAgentSession(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -495,16 +502,211 @@ func (s *Server) createScriptAgentMessage(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	item, err := scanAgentMessage(s.db.QueryRow(r.Context(), `
-		INSERT INTO agent_messages(organization_id, project_id, session_id, role, content, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, organization_id, project_id, session_id, role, content, metadata, created_at
-	`, project.OrganizationID, project.ID, sessionID, role, content, metadata))
+	item, err := s.insertAgentMessage(r, project, sessionID, role, content, metadata)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+	if role != "user" {
+		httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+		return
+	}
+	assistant, err := s.replyToScriptAgentMessage(r, principal, project, sessionID, item)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusCreated, assistant, nil)
+}
+
+func (s *Server) insertAgentMessage(r *http.Request, project Project, sessionID, role, content string, metadata json.RawMessage) (AgentMessage, error) {
+	return scanAgentMessage(s.db.QueryRow(r.Context(), `
+		INSERT INTO agent_messages(organization_id, project_id, session_id, role, content, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, organization_id, project_id, session_id, role, content, metadata, created_at
+	`, project.OrganizationID, project.ID, sessionID, role, content, metadata))
+}
+
+func (s *Server) replyToScriptAgentMessage(r *http.Request, principal auth.Principal, project Project, sessionID string, userMessage AgentMessage) (AgentMessage, error) {
+	history, err := s.recentAgentMessages(r, project.ID, sessionID, 24)
+	if err != nil {
+		return AgentMessage{}, err
+	}
+	planPrompt := buildScriptAgentToolPrompt(project, history)
+	planPromptHash := promptsvc.HashText(planPrompt)
+	var runID string
+	if err := s.db.QueryRow(r.Context(), `
+		INSERT INTO agent_runs(
+			organization_id, project_id, session_id, agent_type, task_type, status,
+			input, prompt_hash, created_by, started_at
+		)
+		VALUES ($1, $2, $3, 'script_agent', 'chat', 'running', $4, $5, $6, now())
+		RETURNING id
+	`, project.OrganizationID, project.ID, sessionID, mustMarshal(map[string]any{
+		"messageId": userMessage.ID,
+		"content":   userMessage.Content,
+	}), planPromptHash, principal.UserID).Scan(&runID); err != nil {
+		return AgentMessage{}, err
+	}
+
+	planText, planGatewayResp, err := streamScriptAgentText(r, project, planPrompt, "script_agent_tool_plan", planPromptHash, "script-agent-plan:"+userMessage.ID, true)
+	if err != nil {
+		_, _ = s.db.Exec(r.Context(), `
+			UPDATE agent_runs
+			SET status = 'failed', error_code = 'PROVIDER_GATEWAY_ERROR', error_message = $2, completed_at = now()
+			WHERE id = $1
+		`, runID, err.Error())
+		return AgentMessage{}, err
+	}
+
+	plan, planErr := parseScriptAgentPlan(planText)
+	if planErr != nil {
+		plan = scriptAgentPlan{Message: strings.TrimSpace(planText)}
+	}
+	toolResults := make([]agentToolResult, 0, len(plan.ToolCalls))
+	if planErr == nil && len(plan.ToolCalls) > 0 {
+		allowMutations := scriptAgentAllowsMutation(userMessage.Content)
+		for _, call := range plan.ToolCalls {
+			result := s.executeScriptAgentTool(r, principal, project, userMessage, allowMutations, call)
+			toolResults = append(toolResults, result)
+			if _, err := s.insertAgentMessage(r, project, sessionID, "tool", result.Summary, mustMarshal(map[string]any{
+				"agentRunId": runID,
+				"toolName":   result.Name,
+				"toolLabel":  result.Label,
+				"arguments":  result.Arguments,
+				"result":     result,
+			})); err != nil {
+				_, _ = s.db.Exec(r.Context(), `
+					UPDATE agent_runs
+					SET status = 'failed', error_code = 'AGENT_TOOL_MESSAGE_FAILED', error_message = $2, completed_at = now()
+					WHERE id = $1
+				`, runID, err.Error())
+				return AgentMessage{}, err
+			}
+		}
+	}
+
+	reply := strings.TrimSpace(plan.Message)
+	finalPromptHash := planPromptHash
+	finalGatewayResp := planGatewayResp
+	if len(toolResults) > 0 {
+		finalPrompt := buildScriptAgentFinalPrompt(project, history, plan, toolResults)
+		finalPromptHash = promptsvc.HashText(finalPrompt)
+		reply, finalGatewayResp, err = streamScriptAgentText(r, project, finalPrompt, "script_agent_chat", finalPromptHash, "script-agent-final:"+userMessage.ID, false)
+		if err != nil {
+			_, _ = s.db.Exec(r.Context(), `
+				UPDATE agent_runs
+				SET status = 'failed', error_code = 'PROVIDER_GATEWAY_ERROR', error_message = $2, completed_at = now()
+				WHERE id = $1
+			`, runID, err.Error())
+			return AgentMessage{}, err
+		}
+	}
+	if reply == "" {
+		reply = strings.TrimSpace(planText)
+	}
+	if reply == "" {
+		reply = "我没有生成有效回复。"
+	}
+	assistant, err := s.insertAgentMessage(r, project, sessionID, "assistant", reply, mustMarshal(map[string]any{
+		"agentRunId":            runID,
+		"providerCallId":        finalGatewayResp.ProviderCallID,
+		"providerCallIds":       scriptAgentProviderCallIDs(planGatewayResp, finalGatewayResp),
+		"plannerProviderCallId": planGatewayResp.ProviderCallID,
+		"modelId":               finalGatewayResp.ModelID,
+		"latencyMs":             finalGatewayResp.LatencyMS,
+		"promptHash":            finalPromptHash,
+		"planningPromptHash":    planPromptHash,
+		"sourceMessageId":       userMessage.ID,
+		"toolResults":           scriptAgentToolResultsSummary(toolResults),
+		"planningError":         errorStringOrEmpty(planErr),
+	}))
+	if err != nil {
+		return AgentMessage{}, err
+	}
+	if _, err := s.db.Exec(r.Context(), `
+		UPDATE agent_runs
+		SET status = 'succeeded', output = $2, provider_call_id = NULLIF($3, '')::uuid, prompt_hash = $4, completed_at = now()
+		WHERE id = $1
+	`, runID, mustMarshal(map[string]any{
+		"messageId":   assistant.ID,
+		"content":     assistant.Content,
+		"toolResults": toolResults,
+	}), finalGatewayResp.ProviderCallID, finalPromptHash); err != nil {
+		return AgentMessage{}, err
+	}
+	return assistant, nil
+}
+
+func (s *Server) recentAgentMessages(r *http.Request, projectID, sessionID string, limit int) ([]AgentMessage, error) {
+	if limit <= 0 {
+		limit = 24
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id, organization_id, project_id, session_id, role, content, metadata, created_at
+		FROM (
+			SELECT id, organization_id, project_id, session_id, role, content, metadata, created_at
+			FROM agent_messages
+			WHERE project_id = $1 AND session_id = $2
+			ORDER BY created_at DESC
+			LIMIT $3
+		) recent
+		ORDER BY created_at ASC
+	`, projectID, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]AgentMessage, 0)
+	for rows.Next() {
+		item, err := scanAgentMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func buildScriptAgentChatPrompt(project Project, messages []AgentMessage) string {
+	var builder strings.Builder
+	builder.WriteString("你是 CineWeave 项目工作台里的 AI 助手，负责帮助用户推进小说、剧本、分镜、资产、时间线、审阅和导出工作。\n")
+	builder.WriteString("回答必须使用中文，直接给出可执行建议；如果用户要求操作，但当前聊天不能直接执行，就明确说明需要到哪个页面或按钮继续。\n\n")
+	builder.WriteString("项目上下文：\n")
+	builder.WriteString(fmt.Sprintf("- 项目名称：%s\n", project.Name))
+	builder.WriteString(fmt.Sprintf("- 内容类型：%s\n", stringValue(project.ContentType)))
+	builder.WriteString(fmt.Sprintf("- 视频比例：%s\n", project.VideoRatio))
+	if strings.TrimSpace(project.ArtStyle) != "" {
+		builder.WriteString(fmt.Sprintf("- 美术风格：%s\n", project.ArtStyle))
+	}
+	if strings.TrimSpace(project.DirectorManual) != "" {
+		builder.WriteString(fmt.Sprintf("- 导演手册：%s\n", project.DirectorManual))
+	}
+	if strings.TrimSpace(project.VisualManual) != "" {
+		builder.WriteString(fmt.Sprintf("- 视觉手册：%s\n", project.VisualManual))
+	}
+	builder.WriteString("\n最近对话：\n")
+	for _, message := range messages {
+		role := message.Role
+		switch role {
+		case "assistant":
+			role = "助手"
+		case "user":
+			role = "用户"
+		case "system":
+			role = "系统"
+		case "tool":
+			role = "工具"
+		}
+		content := strings.TrimSpace(message.Content)
+		if len([]rune(content)) > 2000 {
+			runes := []rune(content)
+			content = string(runes[:2000]) + "..."
+		}
+		builder.WriteString(fmt.Sprintf("%s：%s\n", role, content))
+	}
+	builder.WriteString("\n请回复最后一条用户消息。")
+	return builder.String()
 }
 
 func (s *Server) generateScriptFromAgent(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -666,10 +868,22 @@ func (s *Server) rewriteScriptFromAgent(w http.ResponseWriter, r *http.Request, 
 	}, nil)
 }
 
+type scriptAgentPromptOptions struct {
+	AgentType      string
+	TaskID         string
+	StepID         string
+	IdempotencyKey string
+}
+
 func (s *Server) runScriptAgentPrompt(r *http.Request, principal auth.Principal, project Project, sessionID *string, taskType, templateKey string, variables map[string]any) (string, string, promptsvc.RenderedPrompt, provider.GatewayTextResponse, error) {
+	return s.runScriptAgentPromptWithOptions(r, principal, project, sessionID, taskType, templateKey, variables, scriptAgentPromptOptions{})
+}
+
+func (s *Server) runScriptAgentPromptWithOptions(r *http.Request, principal auth.Principal, project Project, sessionID *string, taskType, templateKey string, variables map[string]any, options scriptAgentPromptOptions) (string, string, promptsvc.RenderedPrompt, provider.GatewayTextResponse, error) {
 	if sessionID != nil && strings.TrimSpace(*sessionID) != "" && !s.agentSessionBelongsToProject(r, project.ID, strings.TrimSpace(*sessionID), "script_agent") {
 		return "", "", promptsvc.RenderedPrompt{}, provider.GatewayTextResponse{}, pgx.ErrNoRows
 	}
+	agentType := firstNonEmpty(options.AgentType, "script_agent")
 	resolved, err := promptsvc.NewService(s.db).Resolve(r.Context(), promptsvc.ResolveRequest{
 		OrganizationID: project.OrganizationID,
 		ProjectID:      project.ID,
@@ -686,11 +900,11 @@ func (s *Server) runScriptAgentPrompt(r *http.Request, principal auth.Principal,
 	if err := s.db.QueryRow(r.Context(), `
 		INSERT INTO agent_runs(
 			organization_id, project_id, session_id, agent_type, task_type, status,
-			input, prompt_version_id, prompt_hash, created_by, started_at
+			input, prompt_version_id, prompt_hash, task_id, step_id, created_by, started_at
 		)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, 'script_agent', $4, 'running', $5, $6, $7, $8, now())
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, 'running', $6, $7, $8, NULLIF($9, '')::uuid, NULLIF($10, '')::uuid, $11, now())
 		RETURNING id
-	`, project.OrganizationID, project.ID, optionalStringValue(sessionID), taskType, mustMarshal(variables), rendered.PromptVersionID, rendered.RenderedHash, principal.UserID).Scan(&runID); err != nil {
+	`, project.OrganizationID, project.ID, optionalStringValue(sessionID), agentType, taskType, mustMarshal(variables), rendered.PromptVersionID, rendered.RenderedHash, options.TaskID, options.StepID, principal.UserID).Scan(&runID); err != nil {
 		return "", "", promptsvc.RenderedPrompt{}, provider.GatewayTextResponse{}, err
 	}
 	gatewayClient := provider.NewGatewayClientFromEnv()
@@ -705,6 +919,9 @@ func (s *Server) runScriptAgentPrompt(r *http.Request, principal auth.Principal,
 		Input: mustMarshal(map[string]any{
 			"prompt": rendered.RenderedText,
 		}),
+		Options: provider.GatewayTextOptions{
+			IdempotencyKey: strings.TrimSpace(options.IdempotencyKey),
+		},
 	})
 	if err != nil {
 		_, _ = s.db.Exec(r.Context(), `

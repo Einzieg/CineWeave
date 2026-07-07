@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Check, ExternalLink, Image as ImageIcon, MapPin, Package, RefreshCw, User, Wand2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { artifactTypeLabel, assetTypeLabel, requirementTypeLabel, statusLabel } from "@/lib/labels";
 import type { Artifact, CanonicalAsset, ShotAssetRequirement } from "@/lib/types";
 
 export function AssetsPage({
@@ -223,12 +224,12 @@ export function AssetsPage({
                       <div>
                         <div className="font-medium">{requirement.assetName || requirement.assetId}</div>
                         <div className="text-xs text-muted-foreground">
-                          {assetTypeLabel(requirement.assetType || requirement.asset?.assetType)} · {requirement.requirementType}
+                          {assetTypeLabel(requirement.assetType || requirement.asset?.assetType)} · {requirementTypeLabel(requirement.requirementType)}
                         </div>
                       </div>
                       <div className="flex gap-2">
-                        <Badge variant="outline">{requirement.status}</Badge>
-                        <Badge variant="secondary">{requirement.reviewStatus || "pending"}</Badge>
+                        <Badge variant="outline">{statusLabel(requirement.status)}</Badge>
+                        <Badge variant="secondary">{statusLabel(requirement.reviewStatus || "pending")}</Badge>
                       </div>
                     </div>
                     <p className="line-clamp-2 text-sm text-muted-foreground">{requirement.prompt || requirement.action || requirement.roleInShot || "未设置描述"}</p>
@@ -275,7 +276,7 @@ function ArtifactGrid({ artifacts }: { artifacts: Artifact[] }) {
           <ArtifactPreview artifact={artifact} />
           <div className="grid gap-2 p-3">
             <div className="flex items-center justify-between gap-2">
-              <Badge variant="outline">{artifact.type}</Badge>
+              <Badge variant="outline">{artifactTypeLabel(artifact.type)}</Badge>
               {artifact.previewUrl ? (
                 <a className="inline-flex items-center gap-1 text-sm text-primary" href={artifact.previewUrl} rel="noreferrer" target="_blank">
                   打开
@@ -322,17 +323,4 @@ function requirementPreviewUrl(requirement: ShotAssetRequirement, artifacts: Map
 
 function idPreview(id: string | undefined | null, artifacts: Map<string, string>) {
   return id ? artifacts.get(id) : undefined;
-}
-
-function assetTypeLabel(type?: string) {
-  switch (type) {
-    case "character":
-      return "角色";
-    case "scene":
-      return "场景";
-    case "prop":
-      return "道具";
-    default:
-      return type || "资产";
-  }
 }

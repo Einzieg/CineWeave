@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"strings"
@@ -78,6 +79,43 @@ func HealthHandler(service string) http.HandlerFunc {
 		WriteJSON(w, r, http.StatusOK, map[string]string{
 			"service": service,
 			"status":  "ok",
+		}, nil)
+	}
+}
+
+type ReadinessCheck func(context.Context) error
+
+func ReadyHandler(service string, checks map[string]ReadinessCheck) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+			return
+		}
+		statuses := make(map[string]string, len(checks))
+		ready := true
+		for name, check := range checks {
+			if check == nil {
+				statuses[name] = "not_configured"
+				ready = false
+				continue
+			}
+			if err := check(r.Context()); err != nil {
+				statuses[name] = err.Error()
+				ready = false
+				continue
+			}
+			statuses[name] = "ok"
+		}
+		status := http.StatusOK
+		state := "ready"
+		if !ready {
+			status = http.StatusServiceUnavailable
+			state = "not_ready"
+		}
+		WriteJSON(w, r, status, map[string]any{
+			"service": service,
+			"status":  state,
+			"checks":  statuses,
 		}, nil)
 	}
 }

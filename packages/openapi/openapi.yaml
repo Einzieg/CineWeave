@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   description: API contract seed for the Phase 1 CineWeave control plane.
 servers:
-  - url: http://localhost:8080
+  - url: http://localhost:19288
 paths:
   /healthz:
     get:
@@ -12,6 +12,16 @@ paths:
       responses:
         "200":
           description: Service health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /readyz:
+    get:
+      operationId: getReady
+      responses:
+        "200":
+          description: Service readiness
           content:
             application/json:
               schema:
@@ -26,6 +36,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SystemStatusEnvelope"
+  /api/realtime/events:
+    get:
+      operationId: subscribeRealtimeEvents
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Server-sent project event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
   /api/system/setup-state:
     get:
       operationId: getSystemSetupState
@@ -1620,6 +1646,42 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/sources/{sourceId}/chapters:
+    get:
+      operationId: listSourceChapters
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "200":
+          description: Source chapter summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NovelChapterSummaryListEnvelope"
+  /api/projects/{projectId}/sources/{sourceId}/chapters/{chapterId}:
+    get:
+      operationId: getSourceChapter
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+        - name: chapterId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Source chapter detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NovelChapterEnvelope"
   /api/projects/{projectId}/sources/{sourceId}/extract-events:
     post:
       operationId: extractNovelEvents
@@ -1649,6 +1711,12 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/SourceId"
+        - name: chapterId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
           description: Source novel events and links
@@ -1876,7 +1944,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Envelope"
+                $ref: "#/components/schemas/ScriptEnvelope"
   /api/projects/{projectId}/scripts/{scriptId}/versions/{versionId}/parse-scenes:
     post:
       operationId: parseScriptScenes
@@ -2308,6 +2376,161 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScriptAgentResultEnvelope"
+  /api/projects/{projectId}/agent/tools:
+    get:
+      operationId: listAgentTools
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project agent tools visible to the current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentToolDescriptorListEnvelope"
+  /api/projects/{projectId}/agent/tasks:
+    get:
+      operationId: listAgentTasks
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: filter[sessionId]
+          in: query
+          description: Limit results to one agent session. Omit to list project-wide tasks.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Project agent tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTaskListEnvelope"
+    post:
+      operationId: createAgentTask
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentTaskRequest"
+      responses:
+        "201":
+          description: Created project agent task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTaskEnvelope"
+  /api/projects/{projectId}/agent/tasks/{taskId}:
+    get:
+      operationId: getAgentTask
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AgentTaskId"
+      responses:
+        "200":
+          description: Project agent task detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTaskEnvelope"
+  /api/projects/{projectId}/agent/tasks/{taskId}/cancel:
+    post:
+      operationId: cancelAgentTask
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AgentTaskId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelAgentTaskRequest"
+      responses:
+        "200":
+          description: Cancelled project agent task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTaskEnvelope"
+  /api/projects/{projectId}/agent/tasks/{taskId}/steps/{stepId}/approve:
+    post:
+      operationId: approveAgentStep
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AgentTaskId"
+        - $ref: "#/components/parameters/AgentStepId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideAgentApprovalRequest"
+      responses:
+        "200":
+          description: Approved agent step
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentApprovalEnvelope"
+  /api/projects/{projectId}/agent/tasks/{taskId}/steps/{stepId}/reject:
+    post:
+      operationId: rejectAgentStep
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AgentTaskId"
+        - $ref: "#/components/parameters/AgentStepId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideAgentApprovalRequest"
+      responses:
+        "200":
+          description: Rejected agent step
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentApprovalEnvelope"
+  /api/projects/{projectId}/agent/tasks/{taskId}/resume:
+    post:
+      operationId: resumeAgentTask
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AgentTaskId"
+      responses:
+        "200":
+          description: Resumed project agent task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTaskEnvelope"
   /api/projects/{projectId}/canonical-assets:
     get:
       operationId: listCanonicalAssets
@@ -2508,6 +2731,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReviewResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/assets/{assetId}/generate-image:
+    post:
+      operationId: generateAssetImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                setPrimary:
+                  type: boolean
+      responses:
+        "200":
+          description: Generated asset image
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonicalAssetImageResultEnvelope"
         "403":
           $ref: "#/components/responses/Error"
         "422":
@@ -3286,16 +3537,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/OrganizationHeader"
         - $ref: "#/components/parameters/AccountId"
-        - name: filter[status]
-          in: query
-          description: Provider model status filter. Defaults to active; use all to include disabled models.
-          schema:
-            type: string
-            enum:
-              - active
-              - disabled
-              - all
-            default: active
       responses:
         "200":
           description: Provider account
@@ -3383,6 +3624,16 @@ paths:
       parameters:
         - $ref: "#/components/parameters/OrganizationHeader"
         - $ref: "#/components/parameters/AccountId"
+        - name: filter[status]
+          in: query
+          description: Provider model status filter. Defaults to active; use all to include disabled models.
+          schema:
+            type: string
+            enum:
+              - active
+              - disabled
+              - all
+            default: active
       responses:
         "200":
           description: Provider models
@@ -4241,6 +4492,20 @@ components:
       schema:
         type: string
         format: uuid
+    AgentTaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AgentStepId:
+      name: stepId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     RequirementId:
       name: requirementId
       in: path
@@ -4668,7 +4933,7 @@ components:
           format: date-time
     ProjectSource:
       type: object
-      required: [id, organizationId, projectId, sourceType, title, content, contentFormat, status, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, sourceType, title, contentFormat, status, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -4698,10 +4963,17 @@ components:
         metadata:
           type: object
           additionalProperties: true
+        splitChapters:
+          type: boolean
+          description: Re-split novel chapters from content when chapters is not provided.
         chapters:
           type: array
           items:
             $ref: "#/components/schemas/NovelChapter"
+        chapterCount:
+          type: integer
+        firstVolumeIndex:
+          type: integer
         createdBy:
           type: string
           format: uuid
@@ -4722,6 +4994,10 @@ components:
           type: string
           format: uuid
         chapterIndex:
+          type: integer
+        volumeIndex:
+          type: integer
+        sectionIndex:
           type: integer
         volumeTitle:
           type: string
@@ -4744,12 +5020,19 @@ components:
           format: date-time
     NovelChapterSummary:
       type: object
-      required: [id, chapterIndex, contentLength]
+      required: [id, sourceId, chapterIndex, contentLength, eventState, eventCount, approvedEventCount, pendingEventReviewCount, createdAt, updatedAt]
       properties:
         id:
           type: string
           format: uuid
+        sourceId:
+          type: string
+          format: uuid
         chapterIndex:
+          type: integer
+        volumeIndex:
+          type: integer
+        sectionIndex:
           type: integer
         volumeTitle:
           type: string
@@ -4757,6 +5040,25 @@ components:
           type: string
         contentLength:
           type: integer
+        eventState:
+          type: string
+        eventSummary:
+          type: object
+          additionalProperties: true
+        errorMessage:
+          type: string
+        eventCount:
+          type: integer
+        approvedEventCount:
+          type: integer
+        pendingEventReviewCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     CreatedScriptSummary:
       type: object
       required: [id, currentVersionId, title]
@@ -5000,6 +5302,225 @@ components:
         createdAt:
           type: string
           format: date-time
+    AgentToolDescriptor:
+      type: object
+      required: [name, label, description, risk, inputSchema, requiresApproval]
+      properties:
+        name:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        risk:
+          type: string
+          enum: [read, draft, write, workflow, costed, destructive, admin]
+        permission:
+          type: string
+        inputSchema:
+          type: object
+          additionalProperties: true
+        requiresApproval:
+          type: boolean
+    AgentPermissionMode:
+      type: string
+      enum: [require_approval, auto_approve, full_access]
+    AgentTask:
+      type: object
+      required: [id, organizationId, projectId, agentType, userGoal, mode, status, constraints, plan, summary, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        userGoal:
+          type: string
+        mode:
+          type: string
+          enum: [plan_only, supervised, auto_low_risk]
+        status:
+          type: string
+          enum: [queued, planning, waiting_approval, running, succeeded, failed, blocked, cancelled]
+        temporalWorkflowId:
+          type: string
+        constraints:
+          type: object
+          additionalProperties: true
+          properties:
+            permissionMode:
+              $ref: "#/components/schemas/AgentPermissionMode"
+        plan:
+          type: object
+          additionalProperties: true
+        summary:
+          type: object
+          additionalProperties: true
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentStep"
+        approvals:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentApproval"
+    AgentStep:
+      type: object
+      required: [id, taskId, stepIndex, toolName, risk, status, requiresApproval, input, dryRunOutput, supervisorDecision, output, verifierOutput, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        taskId:
+          type: string
+          format: uuid
+        stepIndex:
+          type: integer
+        toolName:
+          type: string
+        risk:
+          type: string
+          enum: [read, draft, write, workflow, costed, destructive, admin]
+        permission:
+          type: string
+        status:
+          type: string
+          enum: [planned, waiting_approval, approved, running, succeeded, failed, blocked, skipped, cancelled]
+        requiresApproval:
+          type: boolean
+        input:
+          type: object
+          additionalProperties: true
+        dryRunOutput:
+          type: object
+          additionalProperties: true
+        supervisorDecision:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        verifierOutput:
+          type: object
+          additionalProperties: true
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    AgentApproval:
+      type: object
+      required: [id, taskId, approvalType, status, requestedPayload, decisionPayload, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        taskId:
+          type: string
+          format: uuid
+        stepId:
+          type: string
+          format: uuid
+        approvalType:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected, expired, cancelled]
+        requestedPayload:
+          type: object
+          additionalProperties: true
+        decisionPayload:
+          type: object
+          additionalProperties: true
+        decidedBy:
+          type: string
+          format: uuid
+        decidedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateAgentTaskRequest:
+      type: object
+      required: [goal]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        goal:
+          type: string
+        mode:
+          type: string
+          enum: [plan_only, supervised, auto_low_risk]
+          default: supervised
+        constraints:
+          type: object
+          additionalProperties: true
+          properties:
+            permissionMode:
+              $ref: "#/components/schemas/AgentPermissionMode"
+    CancelAgentTaskRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    DecideAgentApprovalRequest:
+      type: object
+      properties:
+        approvalId:
+          type: string
+          format: uuid
+        note:
+          type: string
+        decision:
+          type: object
+          additionalProperties: true
     AssetProfile:
       type: object
       additionalProperties: true
@@ -7866,6 +8387,25 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ProjectSource"
+    NovelChapterEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/NovelChapter"
+    NovelChapterSummaryListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/NovelChapterSummary"
     ImportProjectSourceResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -7987,6 +8527,44 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/AgentMessage"
+    AgentToolDescriptorListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/AgentToolDescriptor"
+    AgentTaskEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AgentTask"
+    AgentTaskListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/AgentTask"
+    AgentApprovalEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AgentApproval"
     CanonicalAssetEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -8481,6 +9059,8 @@ components:
           type: boolean
         manifest:
           type: object
+        manifestText:
+          type: string
         version:
           type: string
         createdAt:
@@ -8615,6 +9195,52 @@ components:
           type: boolean
         supportsVideoReference:
           type: boolean
+        supportedInputTypes:
+          type: array
+          items:
+            type: string
+        supportedOutputTypes:
+          type: array
+          items:
+            type: string
+        requestModes:
+          type: array
+          items:
+            type: string
+        reasoningLevels:
+          type: array
+          items:
+            type: string
+        referenceTypes:
+          type: array
+          items:
+            type: string
+        maxReferenceImages:
+          type: integer
+          minimum: 0
+        maxReferenceVideos:
+          type: integer
+          minimum: 0
+        responseFormats:
+          type: array
+          items:
+            type: string
+        supportedAspectRatios:
+          type: array
+          items:
+            type: string
+        supportedResolutions:
+          type: array
+          items:
+            type: string
+        durations:
+          type: array
+          items:
+            type: number
+        minDurationSeconds:
+          type: number
+        maxDurationSeconds:
+          type: number
     ProviderCapability:
       type: object
       required: [id, providerModelId, taskTypes, inputLimits, outputLimits, qualityTiers, providerOptionsSchema, pricingPolicy, createdAt]
@@ -9859,6 +10485,15 @@ components:
         organizationId:
           type: string
           format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
         providerAccountId:
           type: string
           format: uuid
@@ -9868,6 +10503,14 @@ components:
         credentialId:
           type: string
           format: uuid
+        modelProfileId:
+          type: string
+          format: uuid
+        modelProfileBindingId:
+          type: string
+          format: uuid
+        modelProfileKey:
+          type: string
         taskType:
           type: string
         executionMode:
@@ -9888,6 +10531,10 @@ components:
           type: string
         errorMessage:
           type: string
+        upstreamStatus:
+          type: integer
+        upstreamErrorCode:
+          type: string
         requestSnapshot:
           type: object
           additionalProperties: true
@@ -9906,6 +10553,12 @@ components:
           items:
             type: string
         createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
           type: string
           format: date-time
     ProviderUsageSummary:
@@ -10695,6 +11348,10 @@ components:
             properties:
               chapterIndex:
                 type: integer
+              volumeIndex:
+                type: integer
+              sectionIndex:
+                type: integer
               volumeTitle:
                 type: string
               chapterTitle:
@@ -10748,6 +11405,10 @@ components:
             type: object
             properties:
               chapterIndex:
+                type: integer
+              volumeIndex:
+                type: integer
+              sectionIndex:
                 type: integer
               volumeTitle:
                 type: string

@@ -171,6 +171,8 @@ type productionWorkflowState struct {
 	LatestStatus string
 }
 
+const staleCancellingWorkflowGrace = 5 * time.Minute
+
 func (s *Server) getProductionStatus(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectRead)
 	if !ok {
@@ -765,6 +767,9 @@ func (s *Server) productionFinalVideoStage(r *http.Request, projectID string, wo
 }
 
 func (s *Server) loadProductionWorkflowState(r *http.Request, projectID string) (map[string]productionWorkflowState, error) {
+	if err := s.finalizeStaleCancellingWorkflowRuns(r, projectID); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, status, input
 		FROM workflow_runs
@@ -800,6 +805,43 @@ func (s *Server) loadProductionWorkflowState(r *http.Request, projectID string) 
 		out[workflowType] = state
 	}
 	return out, rows.Err()
+}
+
+func (s *Server) finalizeStaleCancellingWorkflowRuns(r *http.Request, projectID string) error {
+	cutoff := time.Now().Add(-staleCancellingWorkflowGrace)
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id::text
+		FROM workflow_runs
+		WHERE project_id = $1
+		  AND status = 'cancelling'
+		  AND COALESCE(cancelled_at, started_at, created_at) < $2
+		ORDER BY created_at ASC
+		LIMIT 20
+	`, projectID, cutoff)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := workflows.CancelWorkflowRun(r.Context(), s.db, id, mustMarshal(map[string]any{
+			"autoFinalized": true,
+			"reason":        "stale_cancelling_timeout",
+		}), "取消超时自动收尾"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) productionAssetSummary(r *http.Request, projectID string) (map[string][]string, error) {
@@ -874,7 +916,23 @@ func (s *Server) productionRequirementSummary(r *http.Request, projectID string)
 	return out, rows.Err()
 }
 
+type productionWorkflowSpec struct {
+	WorkflowType string
+	Input        map[string]any
+	WorkflowFunc any
+	Note         string
+}
+
 func (s *Server) productionActionWorkflow(w http.ResponseWriter, r *http.Request, project Project, action string, req ProductionActionRequest) (string, map[string]any, any, string, bool) {
+	spec, err := s.productionActionWorkflowCore(r, project, action, req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return "", nil, nil, "", false
+	}
+	return spec.WorkflowType, spec.Input, spec.WorkflowFunc, spec.Note, true
+}
+
+func (s *Server) productionActionWorkflowCore(r *http.Request, project Project, action string, req ProductionActionRequest) (productionWorkflowSpec, error) {
 	options := req.Options
 	maxShots := productionOptionInt(options, "maxShots", 3)
 	if maxShots <= 0 {
@@ -885,167 +943,222 @@ func (s *Server) productionActionWorkflow(w http.ResponseWriter, r *http.Request
 	}
 	switch action {
 	case "extract_events":
-		sourceID, err := s.activeProductionSourceID(r, project.ID, firstNonEmpty(req.SourceID, productionOptionString(options, "sourceId")))
+		explicitSourceID := firstNonEmpty(req.SourceID, productionOptionString(options, "sourceId"))
+		chapterIDs := productionOptionStringSlice(options, "chapterIds")
+		sourceID := explicitSourceID
+		if len(chapterIDs) == 0 {
+			resolvedSourceID, resolvedChapterIDs, matched, err := s.resolveNovelChapterScope(
+				r,
+				project.ID,
+				explicitSourceID,
+				firstNonEmpty(
+					productionOptionString(options, "scope"),
+					productionOptionString(options, "chapterScope"),
+					productionOptionString(options, "instruction"),
+				),
+			)
+			if err != nil {
+				return productionWorkflowSpec{}, err
+			}
+			if matched {
+				sourceID = resolvedSourceID
+				chapterIDs = resolvedChapterIDs
+			}
+		}
+		var err error
+		if len(chapterIDs) > 0 {
+			resolvedSourceID, err := s.sourceIDForNovelChapters(r, project.ID, chapterIDs)
+			if err != nil {
+				return productionWorkflowSpec{}, err
+			}
+			if sourceID == "" {
+				sourceID = resolvedSourceID
+			} else if resolvedSourceID != "" && sourceID != resolvedSourceID {
+				return productionWorkflowSpec{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "chapterIds must belong to the selected source")
+			}
+		}
+		sourceID, err = s.activeProductionSourceID(r, project.ID, sourceID)
 		if err != nil {
-			s.writeError(w, r, err)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, err
 		}
 		if sourceID == "" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source", nil, false)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source")
 		}
-		return "extract_novel_events", map[string]any{
+		input := map[string]any{
 			"sourceId": sourceID,
 			"force":    productionOptionBool(options, "force", false),
-		}, workflows.ExtractNovelEventsWorkflow, "", true
+		}
+		if len(chapterIDs) > 0 {
+			input["chapterIds"] = chapterIDs
+		}
+		return productionWorkflowSpec{
+			WorkflowType: "extract_novel_events",
+			Input:        input,
+			WorkflowFunc: workflows.ExtractNovelEventsWorkflow,
+		}, nil
 	case "generate_adaptation_plan":
 		sourceID, err := s.activeProductionSourceID(r, project.ID, firstNonEmpty(req.SourceID, productionOptionString(options, "sourceId")))
 		if err != nil {
-			s.writeError(w, r, err)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, err
 		}
 		if sourceID == "" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source", nil, false)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source")
 		}
-		return "generate_adaptation_plan", map[string]any{
-			"sourceId":              sourceID,
-			"eventIds":              productionOptionStringSlice(options, "eventIds"),
-			"targetFormat":          firstNonEmpty(productionOptionString(options, "targetFormat"), "short_video"),
-			"targetDurationSeconds": productionOptionInt(options, "targetDurationSeconds", 0),
-			"maxShots":              productionOptionInt(options, "maxShots", 0),
-			"instruction":           productionOptionString(options, "instruction"),
-		}, workflows.GenerateAdaptationPlanWorkflow, "", true
+		return productionWorkflowSpec{
+			WorkflowType: "generate_adaptation_plan",
+			Input: map[string]any{
+				"sourceId":              sourceID,
+				"eventIds":              productionOptionStringSlice(options, "eventIds"),
+				"targetFormat":          firstNonEmpty(productionOptionString(options, "targetFormat"), "short_video"),
+				"targetDurationSeconds": productionOptionInt(options, "targetDurationSeconds", 0),
+				"maxShots":              productionOptionInt(options, "maxShots", 0),
+				"instruction":           productionOptionString(options, "instruction"),
+			},
+			WorkflowFunc: workflows.GenerateAdaptationPlanWorkflow,
+		}, nil
 	case "generate_script_from_plan":
 		planID, _, _, err := s.activeProductionAdaptationPlan(r, project.ID, productionOptionString(options, "planId"))
 		if err != nil {
-			s.writeError(w, r, err)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, err
 		}
 		if planID == "" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "planId is required when the project has no adaptation plan", nil, false)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "planId is required when the project has no adaptation plan")
 		}
-		return "adaptation_plan_to_script", map[string]any{
-			"planId":      planID,
-			"title":       productionOptionString(options, "title"),
-			"instruction": productionOptionString(options, "instruction"),
-		}, workflows.AdaptationPlanToScriptWorkflow, "", true
+		return productionWorkflowSpec{
+			WorkflowType: "adaptation_plan_to_script",
+			Input: map[string]any{
+				"planId":      planID,
+				"title":       productionOptionString(options, "title"),
+				"instruction": productionOptionString(options, "instruction"),
+			},
+			WorkflowFunc: workflows.AdaptationPlanToScriptWorkflow,
+		}, nil
 	case "generate_script":
 		sourceID, err := s.activeProductionSourceID(r, project.ID, firstNonEmpty(req.SourceID, productionOptionString(options, "sourceId")))
 		if err != nil {
-			s.writeError(w, r, err)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, err
 		}
 		if sourceID == "" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source", nil, false)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source")
 		}
-		return "source_to_script", map[string]any{"sourceId": sourceID}, workflows.SourceToScriptWorkflow, "", true
+		return productionWorkflowSpec{WorkflowType: "source_to_script", Input: map[string]any{"sourceId": sourceID}, WorkflowFunc: workflows.SourceToScriptWorkflow}, nil
 	case "parse_script_scenes":
-		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
-		if !ok {
-			return "", nil, nil, "", false
+		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
+		if err != nil {
+			return productionWorkflowSpec{}, err
 		}
 		input := map[string]any{"scriptId": scriptID, "force": productionOptionBool(options, "force", false)}
 		if versionID := productionOptionString(options, "scriptVersionId"); versionID != "" {
 			input["scriptVersionId"] = versionID
 		}
-		return "parse_script_scenes", input, workflows.ParseScriptScenesWorkflow, "", true
+		return productionWorkflowSpec{WorkflowType: "parse_script_scenes", Input: input, WorkflowFunc: workflows.ParseScriptScenesWorkflow}, nil
 	case "analyze_assets":
-		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
-		if !ok {
-			return "", nil, nil, "", false
+		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
+		if err != nil {
+			return productionWorkflowSpec{}, err
 		}
-		return "script_to_assets", map[string]any{"scriptId": scriptID, "mergeExisting": true, "generateImages": false}, workflows.ScriptToAssetsWorkflow, "", true
+		return productionWorkflowSpec{WorkflowType: "script_to_assets", Input: map[string]any{"scriptId": scriptID, "mergeExisting": true, "generateImages": false}, WorkflowFunc: workflows.ScriptToAssetsWorkflow}, nil
 	case "generate_asset_images":
-		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
-		if !ok {
-			return "", nil, nil, "", false
+		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
+		if err != nil {
+			return productionWorkflowSpec{}, err
 		}
-		return "script_to_assets", map[string]any{"scriptId": scriptID, "mergeExisting": true, "generateImages": true}, workflows.ScriptToAssetsWorkflow, "This reuses script_to_assets with generateImages=true for missing canonical references.", true
+		return productionWorkflowSpec{WorkflowType: "script_to_assets", Input: map[string]any{"scriptId": scriptID, "mergeExisting": true, "generateImages": true}, WorkflowFunc: workflows.ScriptToAssetsWorkflow, Note: "This reuses script_to_assets with generateImages=true for missing canonical references."}, nil
 	case "generate_storyboard":
-		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
-		if !ok {
-			return "", nil, nil, "", false
+		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
+		if err != nil {
+			return productionWorkflowSpec{}, err
 		}
-		return "script_to_storyboard", map[string]any{"scriptId": scriptID, "maxShots": maxShots, "generateDerivedAssets": false}, workflows.ScriptToStoryboardWorkflow, "", true
+		return productionWorkflowSpec{WorkflowType: "script_to_storyboard", Input: map[string]any{"scriptId": scriptID, "maxShots": maxShots, "generateDerivedAssets": false}, WorkflowFunc: workflows.ScriptToStoryboardWorkflow}, nil
 	case "analyze_shot_assets":
-		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
-		if !ok {
-			return "", nil, nil, "", false
+		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
+		if err != nil {
+			return productionWorkflowSpec{}, err
 		}
-		return "script_to_storyboard", map[string]any{"scriptId": scriptID, "maxShots": maxShots, "generateDerivedAssets": true}, workflows.ScriptToStoryboardWorkflow, "This reuses script_to_storyboard with derived asset analysis enabled.", true
+		return productionWorkflowSpec{WorkflowType: "script_to_storyboard", Input: map[string]any{"scriptId": scriptID, "maxShots": maxShots, "generateDerivedAssets": true}, WorkflowFunc: workflows.ScriptToStoryboardWorkflow, Note: "This reuses script_to_storyboard with derived asset analysis enabled."}, nil
 	case "generate_derived_asset_images":
-		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
-		if !ok {
-			return "", nil, nil, "", false
+		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
+		if err != nil {
+			return productionWorkflowSpec{}, err
 		}
-		return "script_to_storyboard", map[string]any{"scriptId": scriptID, "maxShots": maxShots, "generateDerivedAssets": true}, workflows.ScriptToStoryboardWorkflow, "This reuses script_to_storyboard because derived image generation is currently part of that workflow.", true
+		return productionWorkflowSpec{WorkflowType: "script_to_storyboard", Input: map[string]any{"scriptId": scriptID, "maxShots": maxShots, "generateDerivedAssets": true}, WorkflowFunc: workflows.ScriptToStoryboardWorkflow, Note: "This reuses script_to_storyboard because derived image generation is currently part of that workflow."}, nil
 	case "generate_shot_images":
-		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
-		if !ok {
-			return "", nil, nil, "", false
+		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
+		if err != nil {
+			return productionWorkflowSpec{}, err
 		}
-		return "script_to_video", scriptVideoInput(scriptID, maxShots, true), workflows.VideoProductionWorkflow, "This reuses script_to_video and skips final composition.", true
+		return productionWorkflowSpec{WorkflowType: "script_to_video", Input: scriptVideoInput(scriptID, maxShots, true), WorkflowFunc: workflows.VideoProductionWorkflow, Note: "This reuses script_to_video and skips final composition."}, nil
 	case "generate_shot_videos":
-		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
-		if !ok {
-			return "", nil, nil, "", false
+		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
+		if err != nil {
+			return productionWorkflowSpec{}, err
 		}
-		return "script_to_video", scriptVideoInput(scriptID, maxShots, true), workflows.VideoProductionWorkflow, "", true
+		return productionWorkflowSpec{WorkflowType: "script_to_video", Input: scriptVideoInput(scriptID, maxShots, true), WorkflowFunc: workflows.VideoProductionWorkflow}, nil
 	case "compose_final_video":
 		if timelineID, timelineTitle, err := s.activeProductionTimeline(r, project.ID, productionOptionString(options, "timelineId")); err != nil {
-			s.writeError(w, r, err)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, err
 		} else if timelineID != "" {
-			return "compose_timeline", map[string]any{
-				"timelineId":  timelineID,
-				"title":       firstNonEmpty(productionOptionString(options, "title"), timelineTitle),
-				"resolution":  firstNonEmpty(productionOptionString(options, "resolution"), "720p"),
-				"aspectRatio": firstNonEmpty(productionOptionString(options, "aspectRatio"), project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
-			}, workflows.ComposeTimelineWorkflow, "", true
+			return productionWorkflowSpec{
+				WorkflowType: "compose_timeline",
+				Input: map[string]any{
+					"timelineId":  timelineID,
+					"title":       firstNonEmpty(productionOptionString(options, "title"), timelineTitle),
+					"resolution":  firstNonEmpty(productionOptionString(options, "resolution"), "720p"),
+					"aspectRatio": firstNonEmpty(productionOptionString(options, "aspectRatio"), project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
+				},
+				WorkflowFunc: workflows.ComposeTimelineWorkflow,
+			}, nil
 		}
-		scriptID, ok := s.requireProductionScript(w, r, project.ID, req.ScriptID)
-		if !ok {
-			return "", nil, nil, "", false
+		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
+		if err != nil {
+			return productionWorkflowSpec{}, err
 		}
-		return "script_to_video", scriptVideoInput(scriptID, maxShots, false), workflows.VideoProductionWorkflow, "This reuses script_to_video until a standalone compose workflow exists.", true
+		return productionWorkflowSpec{WorkflowType: "script_to_video", Input: scriptVideoInput(scriptID, maxShots, false), WorkflowFunc: workflows.VideoProductionWorkflow, Note: "This reuses script_to_video until a standalone compose workflow exists."}, nil
 	case "run_full_production":
 		scriptID, _, err := s.activeProductionScript(r, project.ID, req.ScriptID)
 		if err != nil {
-			s.writeError(w, r, err)
-			return "", nil, nil, "", false
+			return productionWorkflowSpec{}, err
 		}
 		if scriptID == "" {
-			return "video_production", map[string]any{
-				"duration":            productionOptionInt(options, "duration", 5),
-				"aspectRatio":         firstNonEmpty(productionOptionString(options, "aspectRatio"), project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
-				"resolution":          firstNonEmpty(productionOptionString(options, "resolution"), "720p"),
-				"pollIntervalSeconds": productionOptionInt(options, "pollIntervalSeconds", 5),
-				"maxPolls":            productionOptionInt(options, "maxPolls", 120),
-				"maxShots":            maxShots,
-				"skipCompose":         productionOptionBool(options, "skipCompose", false),
-			}, workflows.VideoProductionWorkflow, "No active script was found, so this keeps the existing prompt-only video_production path.", true
+			return productionWorkflowSpec{
+				WorkflowType: "video_production",
+				Input: map[string]any{
+					"duration":            productionOptionInt(options, "duration", 5),
+					"aspectRatio":         firstNonEmpty(productionOptionString(options, "aspectRatio"), project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
+					"resolution":          firstNonEmpty(productionOptionString(options, "resolution"), "720p"),
+					"pollIntervalSeconds": productionOptionInt(options, "pollIntervalSeconds", 5),
+					"maxPolls":            productionOptionInt(options, "maxPolls", 120),
+					"maxShots":            maxShots,
+					"skipCompose":         productionOptionBool(options, "skipCompose", false),
+				},
+				WorkflowFunc: workflows.VideoProductionWorkflow,
+				Note:         "No active script was found, so this keeps the existing prompt-only video_production path.",
+			}, nil
 		}
-		return "full_production", scriptVideoInput(scriptID, maxShots, false), workflows.VideoProductionWorkflow, "", true
+		return productionWorkflowSpec{WorkflowType: "full_production", Input: scriptVideoInput(scriptID, maxShots, false), WorkflowFunc: workflows.VideoProductionWorkflow}, nil
 	default:
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "production action is not supported", nil, false)
-		return "", nil, nil, "", false
+		return productionWorkflowSpec{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "production action is not supported")
 	}
 }
 
 func (s *Server) requireProductionScript(w http.ResponseWriter, r *http.Request, projectID, explicitScriptID string) (string, bool) {
-	scriptID, _, err := s.activeProductionScript(r, projectID, explicitScriptID)
+	scriptID, err := s.requireProductionScriptCore(r, projectID, explicitScriptID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return "", false
 	}
-	if scriptID == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "scriptId is required when the project has no active script", nil, false)
-		return "", false
-	}
 	return scriptID, true
+}
+
+func (s *Server) requireProductionScriptCore(r *http.Request, projectID, explicitScriptID string) (string, error) {
+	scriptID, _, err := s.activeProductionScript(r, projectID, explicitScriptID)
+	if err != nil {
+		return "", err
+	}
+	if scriptID == "" {
+		return "", newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "scriptId is required when the project has no active script")
+	}
+	return scriptID, nil
 }
 
 func (s *Server) activeProductionScript(r *http.Request, projectID, explicitScriptID string) (string, string, error) {
@@ -1083,17 +1196,14 @@ func (s *Server) activeProductionSourceID(r *http.Request, projectID, explicitSo
 		`, projectID, explicitSourceID).Scan(&id)
 		return id, err
 	}
-	err := s.db.QueryRow(r.Context(), `
-		SELECT id
-		FROM project_sources
-		WHERE project_id = $1
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, projectID).Scan(&id)
-	if err == pgx.ErrNoRows {
+	items, err := s.projectSourceList(r, projectID)
+	if err != nil {
+		return "", err
+	}
+	if len(items) == 0 {
 		return "", nil
 	}
-	return id, err
+	return items[0].ID, nil
 }
 
 func (s *Server) activeProductionAdaptationPlan(r *http.Request, projectID, explicitPlanID string) (string, string, string, error) {

@@ -64,9 +64,19 @@ func parseOpenAICompatibleConfig(raw json.RawMessage) openAICompatibleConfig {
 		cfg.ImagesGenerationsEndpoint = "/images/generations"
 	}
 	if cfg.TimeoutMS <= 0 {
-		cfg.TimeoutMS = 30000
+		cfg.TimeoutMS = defaultOpenAICompatibleTimeoutMS
 	}
 	return cfg
+}
+
+func openAICompatibleConfigHasTimeout(raw json.RawMessage) bool {
+	var cfg struct {
+		TimeoutMS *int `json:"timeoutMs"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return false
+	}
+	return cfg.TimeoutMS != nil && *cfg.TimeoutMS > 0
 }
 
 func (c openAICompatibleClient) discoverModels(ctx context.Context, account Account, apiKey string, cfg openAICompatibleConfig) (ModelDiscoveryResult, error) {

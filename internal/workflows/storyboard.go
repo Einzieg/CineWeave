@@ -110,7 +110,7 @@ func NewActivities(db *pgxpool.Pool, storageClient workflowStorage, gatewayClien
 }
 
 func TextToStoryboardWorkflow(ctx workflow.Context, input TextToStoryboardInput) (TextToStoryboardOutput, error) {
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 
 	var storyboard GenerateStoryboardTextOutput
 	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardText", generateStoryboardTextInput(input)).Get(ctx, &storyboard); err != nil {
@@ -190,7 +190,7 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
 
-	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+	gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -204,6 +204,7 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 			"prompt":         rendered.RenderedText,
 			"responseFormat": "json",
 		}),
+		Options: providerTextGatewayOptions(),
 	})
 	if err != nil {
 		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))
@@ -736,6 +737,9 @@ func selectImagePrompt(storyboard json.RawMessage, fallback string) string {
 }
 
 func workflowErrorFromProvider(err error, fallbackCode string) error {
+	if standard, ok := provider.StandardErrorFromError(err); ok {
+		return workflowError{Code: standard.Code, Message: standard.Message}
+	}
 	var upstreamErr *provider.UpstreamError
 	if errors.As(err, &upstreamErr) {
 		standard := provider.NormalizeHTTPError(upstreamErr.Status, upstreamErr.Code)

@@ -135,7 +135,7 @@ type ScriptSceneStoreInput struct {
 
 func ParseScriptScenesWorkflow(ctx workflow.Context, input TextToStoryboardInput) (ParseScriptScenesOutput, error) {
 	options := resolveParseScriptScenesOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 	var output ParseScriptScenesOutput
 	if err := workflow.ExecuteActivity(ctx, "ParseScriptScenes", ParseScriptScenesInput{
 		OrganizationID:  input.OrganizationID,
@@ -157,7 +157,7 @@ func ParseScriptScenesWorkflow(ctx workflow.Context, input TextToStoryboardInput
 
 func RegenerateScriptSceneWorkflow(ctx workflow.Context, input TextToStoryboardInput) (RegenerationOutput, error) {
 	options := resolveRegenerationOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 	var scene ScriptSceneRecord
 	if err := workflow.ExecuteActivity(ctx, "RegenerateScriptScene", RegenerateScriptSceneInput{
 		OrganizationID: input.OrganizationID,
@@ -178,7 +178,7 @@ func RegenerateScriptSceneWorkflow(ctx workflow.Context, input TextToStoryboardI
 
 func RegenerateSceneStoryboardWorkflow(ctx workflow.Context, input TextToStoryboardInput) (RegenerationOutput, error) {
 	options := resolveRegenerationOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 	var storyboard ScriptStoryboardOutput
 	maxShots := options.MaxShots
 	if maxShots <= 0 {
@@ -262,7 +262,7 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 	if a.gateway == nil {
 		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
-	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+	gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -273,6 +273,7 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 		PromptHash:        rendered.RenderedHash,
 		PromptSource:      rendered.Source,
 		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText, "responseFormat": "json"}),
+		Options:           providerTextGatewayOptions(),
 	})
 	if err != nil {
 		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))
@@ -377,7 +378,7 @@ func (a Activities) RegenerateScriptScene(ctx context.Context, input RegenerateS
 	if a.gateway == nil {
 		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
-	gatewayResp, err := a.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+	gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -388,6 +389,7 @@ func (a Activities) RegenerateScriptScene(ctx context.Context, input RegenerateS
 		PromptHash:        rendered.RenderedHash,
 		PromptSource:      rendered.Source,
 		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText, "responseFormat": "json"}),
+		Options:           providerTextGatewayOptions(),
 	})
 	if err != nil {
 		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))

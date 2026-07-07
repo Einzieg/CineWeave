@@ -1005,9 +1005,17 @@ func (s *Server) generateDerivedAssetImage(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) startProjectWorkflow(w http.ResponseWriter, r *http.Request, principal auth.Principal, project Project, workflowType string, input map[string]any, workflowFunc any) (WorkflowRun, bool) {
-	if s.temporal == nil {
-		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEMPORAL_UNAVAILABLE", "Temporal client is not configured", nil, true)
+	run, err := s.startProjectWorkflowCore(r.Context(), principal, project, workflowType, input, workflowFunc)
+	if err != nil {
+		s.writeError(w, r, err)
 		return WorkflowRun{}, false
+	}
+	return run, true
+}
+
+func (s *Server) startProjectWorkflowCore(ctx context.Context, principal auth.Principal, project Project, workflowType string, input map[string]any, workflowFunc any) (WorkflowRun, error) {
+	if s.temporal == nil {
+		return WorkflowRun{}, apiError{Status: http.StatusServiceUnavailable, Code: "TEMPORAL_UNAVAILABLE", Message: "Temporal client is not configured", Retryable: true}
 	}
 	inputJSON := json.RawMessage(mustMarshal(input))
 	runInput := json.RawMessage(mustMarshal(map[string]any{
@@ -1016,7 +1024,7 @@ func (s *Server) startProjectWorkflow(w http.ResponseWriter, r *http.Request, pr
 		"input":        input,
 	}))
 	var run WorkflowRun
-	err := s.db.QueryRow(r.Context(), `
+	err := s.db.QueryRow(ctx, `
 		WITH new_run AS (SELECT gen_random_uuid() AS id)
 		INSERT INTO workflow_runs(id, organization_id, project_id, temporal_workflow_id, status, input, output, created_by)
 		SELECT id, $1, $2, 'workflow-' || id::text, 'queued', $3, '{}', $4
@@ -1040,8 +1048,7 @@ func (s *Server) startProjectWorkflow(w http.ResponseWriter, r *http.Request, pr
 		&run.CancelledAt,
 	)
 	if err != nil {
-		s.writeError(w, r, err)
-		return WorkflowRun{}, false
+		return WorkflowRun{}, err
 	}
 	workflowInput := workflows.TextToStoryboardInput{
 		OrganizationID: project.OrganizationID,
@@ -1051,19 +1058,19 @@ func (s *Server) startProjectWorkflow(w http.ResponseWriter, r *http.Request, pr
 		CreatedBy:      principal.UserID,
 		Input:          inputJSON,
 	}
-	if _, err := s.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+	if _, err := s.temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:        run.TemporalWorkflowID,
 		TaskQueue: workflows.ScriptTaskQueue,
 	}, workflowFunc, workflowInput); err != nil {
-		_, _ = s.db.Exec(r.Context(), `
+		_, _ = s.db.Exec(ctx, `
 			UPDATE workflow_runs
 			SET status = 'failed', error_code = 'TEMPORAL_START_FAILED', error_message = $2, completed_at = now()
 			WHERE id = $1
 		`, run.ID, err.Error())
-		s.writeError(w, r, err)
-		return WorkflowRun{}, false
+		return WorkflowRun{}, err
 	}
-	return run, true
+	s.insertWorkflowQueuedEvent(ctx, run, workflowType)
+	return run, nil
 }
 
 func (s *Server) renderAPIProjectPrompt(r *http.Request, project Project, templateKey string, variables map[string]any) (promptsvc.RenderedPrompt, error) {

@@ -88,12 +88,74 @@ func TestProviderAdminStatusFilteringAndCascadeDelete(t *testing.T) {
 	if len(models) != 1 || models[0].Status != "disabled" {
 		t.Fatalf("all models after account delete = %#v, want one disabled model", models)
 	}
-	var bindingEnabled bool
-	if err := pool.QueryRow(ctx, `SELECT enabled FROM model_profile_bindings WHERE id = $1`, bindingID).Scan(&bindingEnabled); err != nil {
-		t.Fatalf("select binding enabled: %v", err)
+	var bindingCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM model_profile_bindings WHERE id = $1`, bindingID).Scan(&bindingCount); err != nil {
+		t.Fatalf("select binding count: %v", err)
 	}
-	if bindingEnabled {
-		t.Fatal("model profile binding stayed enabled after account delete")
+	if bindingCount != 0 {
+		t.Fatalf("model profile binding count after account delete = %d, want 0", bindingCount)
+	}
+}
+
+func TestDeleteModelRemovesBindingsAndAllowsRebinding(t *testing.T) {
+	ctx, pool, vault := openProviderAdminTestDB(t)
+	orgID, _, modelID := seedGatewayIntegrationData(t, ctx, pool, vault, "http://example.test")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+	})
+
+	var accountID string
+	if err := pool.QueryRow(ctx, `SELECT provider_account_id FROM provider_models WHERE id = $1`, modelID).Scan(&accountID); err != nil {
+		t.Fatalf("select provider account id: %v", err)
+	}
+	var profileID, bindingID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO model_profiles(organization_id, profile_key, name, purpose, routing_strategy, fallback_strategy)
+		VALUES ($1, 'delete-model-binding-test', 'Delete Model Binding Test', 'delete_model_binding_test', 'priority', '{}')
+		RETURNING id
+	`, orgID).Scan(&profileID); err != nil {
+		t.Fatalf("insert model profile: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO model_profile_bindings(model_profile_id, provider_model_id, priority, weight, enabled)
+		VALUES ($1, $2, 10, 100, true)
+		RETURNING id
+	`, profileID, modelID).Scan(&bindingID); err != nil {
+		t.Fatalf("insert model profile binding: %v", err)
+	}
+
+	service := NewService(pool, vault)
+	if err := service.DeleteModel(ctx, orgID, modelID); err != nil {
+		t.Fatalf("delete model: %v", err)
+	}
+	var bindingCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM model_profile_bindings WHERE id = $1`, bindingID).Scan(&bindingCount); err != nil {
+		t.Fatalf("select deleted binding count: %v", err)
+	}
+	if bindingCount != 0 {
+		t.Fatalf("binding count after model delete = %d, want 0", bindingCount)
+	}
+
+	restored, err := service.CreateModel(ctx, orgID, accountID, CreateModelRequest{
+		ModelKey:    "gpt-integration",
+		DisplayName: "GPT Integration Restored",
+		Modality:    "text",
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("restore provider model: %v", err)
+	}
+	if restored.ID != modelID {
+		t.Fatalf("restored model ID = %s, want %s", restored.ID, modelID)
+	}
+	profile, err := service.CreateModelProfileBinding(ctx, orgID, profileID, CreateModelProfileBindingRequest{
+		ProviderModelID: modelID,
+	})
+	if err != nil {
+		t.Fatalf("rebind restored provider model: %v", err)
+	}
+	if len(profile.Bindings) != 1 || profile.Bindings[0].ProviderModelID != modelID {
+		t.Fatalf("profile bindings after rebind = %#v, want one binding for model %s", profile.Bindings, modelID)
 	}
 }
 
@@ -186,6 +248,62 @@ func TestProviderModelDiscoveryDoesNotReviveDisabledModels(t *testing.T) {
 		if model.ID == disabledModelID {
 			t.Fatalf("disabled model %s was returned by default ListModels", disabledModelID)
 		}
+	}
+}
+
+func TestCreateModelUpsertsAndReactivatesExistingModel(t *testing.T) {
+	ctx, pool, vault := openProviderAdminTestDB(t)
+	orgID, _, modelID := seedGatewayIntegrationData(t, ctx, pool, vault, "http://example.test")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+	})
+
+	var accountID string
+	if err := pool.QueryRow(ctx, `SELECT provider_account_id FROM provider_models WHERE id = $1`, modelID).Scan(&accountID); err != nil {
+		t.Fatalf("select provider account id: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE provider_models SET status = 'disabled' WHERE id = $1`, modelID); err != nil {
+		t.Fatalf("disable provider model: %v", err)
+	}
+
+	service := NewService(pool, vault)
+	model, err := service.CreateModel(ctx, orgID, accountID, CreateModelRequest{
+		ModelKey:    "gpt-integration",
+		DisplayName: "GPT Manual Restore",
+		Modality:    "text",
+		Status:      "active",
+		Capabilities: &CapabilityInput{
+			TaskTypes:   json.RawMessage(`["text.generate"]`),
+			InputLimits: json.RawMessage(`{"maxTokens":123}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("create existing provider model: %v", err)
+	}
+	if model.ID != modelID {
+		t.Fatalf("model ID = %s, want existing %s", model.ID, modelID)
+	}
+	if model.DisplayName != "GPT Manual Restore" || model.Status != "active" {
+		t.Fatalf("model = (%q, %q), want restored active manual model", model.DisplayName, model.Status)
+	}
+
+	var capabilityCount int
+	var taskTypesRaw, inputLimitsRaw string
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*), max(task_types::text), max(input_limits::text)
+		FROM provider_model_capabilities
+		WHERE provider_model_id = $1
+	`, modelID).Scan(&capabilityCount, &taskTypesRaw, &inputLimitsRaw); err != nil {
+		t.Fatalf("select provider model capabilities: %v", err)
+	}
+	if capabilityCount != 1 {
+		t.Fatalf("capability count = %d, want 1", capabilityCount)
+	}
+	if !strings.Contains(taskTypesRaw, TaskTypeTextGenerate) || strings.Contains(taskTypesRaw, TaskTypeTextStream) {
+		t.Fatalf("task types = %s, want only text generate", taskTypesRaw)
+	}
+	if !strings.Contains(inputLimitsRaw, "123") {
+		t.Fatalf("input limits = %s, want restored input limits", inputLimitsRaw)
 	}
 }
 

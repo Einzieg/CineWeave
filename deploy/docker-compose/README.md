@@ -22,4 +22,11 @@ The `migrate` service applies all `db/migrations/*.up.sql` files and application
 
 Set a stable `CINEWEAVE_CREDENTIAL_MASTER_KEY` in the deployment environment before creating provider credentials. Rotating or losing this value makes existing encrypted provider credentials unreadable.
 
-Host ports are configurable through environment variables such as `CINEWEAVE_API_HOST_PORT`, `CINEWEAVE_REALTIME_HOST_PORT`, and `CINEWEAVE_WEB_HOST_PORT`.
+Only browser-facing services are mapped to the host by default:
+
+- `CINEWEAVE_WEB_HOST_PORT` defaults to `19285`.
+- `CINEWEAVE_API_HOST_PORT` defaults to `19288`.
+- `CINEWEAVE_REALTIME_HOST_PORT` defaults to `19281`.
+- `MINIO_API_HOST_PORT` defaults to `19290` so local signed preview URLs can load in the browser.
+
+PostgreSQL, Redis, NATS, Temporal, Provider Gateway, and the MinIO console are intentionally reachable only on the Docker network. If you need host access for debugging, add a local Compose override instead of changing the default server deployment file.

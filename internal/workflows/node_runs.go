@@ -221,7 +221,8 @@ func MarkWorkflowCancelling(ctx context.Context, db txBeginner, workflowRunID, r
 		UPDATE workflow_runs
 		SET status = 'cancelling',
 		    error_code = 'USER_CANCEL_REQUESTED',
-		    error_message = $2
+		    error_message = $2,
+		    cancelled_at = COALESCE(cancelled_at, now())
 		WHERE id = $1
 		  AND status IN ('pending', 'queued', 'running', 'cancelling')
 	`, workflowRunID, nullableCancelReason(reason)); err != nil {

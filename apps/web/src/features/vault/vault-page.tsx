@@ -7,6 +7,7 @@ import { Surface, SectionTitle } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ExternalLink, File, Image as ImageIcon } from "lucide-react";
+import { artifactTypeLabel } from "@/lib/labels";
 import type { Artifact } from "@/lib/types";
 
 export function VaultPage({ projectId }: { projectId: string }) {
@@ -32,7 +33,7 @@ export function VaultPage({ projectId }: { projectId: string }) {
               <ArtifactPreview artifact={artifact} />
               <div className="grid gap-2 p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <Badge variant="outline">{artifact.type}</Badge>
+                  <Badge variant="outline">{artifactTypeLabel(artifact.type)}</Badge>
                   {artifact.previewUrl ? (
                     <a className="inline-flex items-center gap-1 text-sm text-primary" href={artifact.previewUrl} rel="noreferrer" target="_blank">
                       打开
@@ -41,7 +42,7 @@ export function VaultPage({ projectId }: { projectId: string }) {
                   ) : null}
                 </div>
                 <div className="grid gap-1 text-xs text-muted-foreground">
-                  <span>{artifact.mimeType || "unknown"}</span>
+                  <span>{artifact.mimeType || "未知类型"}</span>
                   <span className="truncate">{artifact.storageKey || artifact.id}</span>
                 </div>
               </div>
