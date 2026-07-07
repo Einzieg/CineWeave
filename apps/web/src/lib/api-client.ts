@@ -24,6 +24,7 @@ import type {
   NovelEvent,
   NovelEventLink,
   Organization,
+  OutputImpact,
   ParseScriptScenesResponse,
   Permission,
   Project,
@@ -242,8 +243,10 @@ export const studioApi = {
     apiRequest<ImportProjectSourceResponse>(`/api/projects/${projectId}/sources/import`, { method: "POST", session, body }),
   updateSource: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
     apiRequest<ProjectSource>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "PATCH", session, body }),
+  getSourceImpact: (session: StudioSession, projectId: string, sourceId: string) =>
+    apiRequest<OutputImpact>(`/api/projects/${projectId}/sources/${sourceId}/impact`, { session }),
   deleteSource: (session: StudioSession, projectId: string, sourceId: string) =>
-    apiRequest<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE", session }),
+    apiRequest<{ deleted: boolean; mode?: string }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE", session }),
   listSourceChapters: (session: StudioSession, projectId: string, sourceId: string) =>
     apiRequest<ListEnvelope<NovelChapterSummary>>(`/api/projects/${projectId}/sources/${sourceId}/chapters`, { session }),
   getSourceChapter: (session: StudioSession, projectId: string, sourceId: string, chapterId: string) =>

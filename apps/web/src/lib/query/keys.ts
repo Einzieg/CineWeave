@@ -26,6 +26,7 @@ export const qk = {
   project: (projectId: string) => ["project", projectId] as const,
   productionStatus: (projectId: string) => ["project", projectId, "production-status"] as const,
   sources: (projectId: string) => ["project", projectId, "sources"] as const,
+  sourceImpact: (projectId: string, sourceId: string) => ["project", projectId, "source-impact", sourceId] as const,
   sourceChapters: (projectId: string, sourceId: string) => ["project", projectId, "source-chapters", sourceId] as const,
   sourceChapter: (projectId: string, sourceId: string, chapterId: string) => ["project", projectId, "source-chapter", sourceId, chapterId] as const,
   sourceEvents: (projectId: string, sourceId: string, chapterId?: string) => ["project", projectId, "source-events", sourceId, chapterId ?? "all"] as const,

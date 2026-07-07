@@ -9,23 +9,29 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, ChevronRight, Play, AlertCircle, CheckCircle2, Clock } from "lucide-react";
-import { useState } from "react";
+import { AlertCircle, ArrowRight, Boxes, Clapperboard, FileCode2, FileText, Film, Play, Video } from "lucide-react";
+import Link from "next/link";
+import type { Route } from "next";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
-import { contentTypeLabel, productionFieldLabel, projectTypeLabel, reviewSeverityLabel, statusLabel } from "@/lib/labels";
+import { contentTypeLabel, projectTypeLabel, reviewSeverityLabel } from "@/lib/labels";
 import { nextProductionAction, productionActionLabel, productionRefreshKeys, runProductionAction } from "@/features/production/production-actions";
+import { projectHref } from "@/lib/routes";
+import type { ProductionStatus } from "@/lib/types";
 
-type StageRow = {
-  stage: string;
+type FlowStage = {
+  key: string;
   label: string;
-  status?: string;
-} & Record<string, unknown>;
+  href: string;
+  status: string;
+  countLabel: string;
+  summary: string[];
+  buttonLabel: string;
+  action?: string;
+  icon: typeof FileText;
+};
 
 export function ProjectOverviewPage({ projectId }: { projectId: string }) {
   const invalidate = useInvalidateKeys();
-  const [expandedStage, setExpandedStage] = useState<string | null>(null);
 
   // 获取项目信息
   const { data: project, isLoading: projectLoading } = useApiQuery({
@@ -79,19 +85,9 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
     return <div>项目不存在</div>;
   }
 
-  // 将stages对象转为数组用于渲染
-  const stagesArray: StageRow[] = productionStatus?.stages ? [
-    { stage: "source", label: "原文与事件", ...productionStatus.stages.source },
-    { stage: "assets", label: "资产管理", ...productionStatus.stages.assets },
-    { stage: "storyboard", label: "分镜设计", ...productionStatus.stages.storyboard },
-    { stage: "shotAssets", label: "镜头资产", ...productionStatus.stages.shotAssets },
-    { stage: "shotImages", label: "镜头图片", ...productionStatus.stages.shotImages },
-    { stage: "shotVideos", label: "镜头视频", ...productionStatus.stages.shotVideos },
-    { stage: "finalVideo", label: "最终成片", ...productionStatus.stages.finalVideo },
-  ] : [];
-
   const overallProgress = productionStatus?.overall?.progress || 0;
   const nextAction = productionStatus ? nextProductionAction(productionStatus) : "";
+  const flowStages = productionStatus ? buildFlowStages(projectId, productionStatus, nextAction) : [];
 
   return (
     <div className="grid gap-5">
@@ -133,11 +129,10 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
         </Button>
       </div>
 
-      {/* 生产流水线 */}
+      {/* 主流程 */}
       <Surface>
-        <SectionTitle title="生产流水线" description="点击阶段查看详情" />
+        <SectionTitle title="主流程" description="内容、剧本、资产、分镜、视频、成片" />
         <div className="p-5">
-          {/* 总体进度 */}
           <div className="mb-6">
             <div className="mb-2 flex items-center justify-between text-sm">
               <span className="font-medium">整体进度</span>
@@ -146,50 +141,14 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
             <Progress value={overallProgress} className="h-2" />
           </div>
 
-          {/* 阶段列表 */}
-          <div className="space-y-2">
-            {stagesArray.map((stage, index) => (
-              <Collapsible
-                key={stage.stage || index}
-                open={expandedStage === stage.stage}
-                onOpenChange={(open) => setExpandedStage(open ? stage.stage : null)}
-              >
-                <CollapsibleTrigger asChild>
-                  <button
-                    className={cn(
-                      "flex w-full items-center gap-3 rounded-lg border p-4 text-left transition hover:bg-muted/50",
-                      expandedStage === stage.stage && "bg-muted/50"
-                    )}
-                  >
-                    {expandedStage === stage.stage ? (
-                      <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    )}
-                    <StageIcon status={stage.status || "pending"} />
-                    <div className="flex-1">
-                      <div className="font-medium">{stage.label}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {statusLabel(stage.status || "pending")}
-                      </div>
-                    </div>
-                    <StatusBadge status={stage.status || "pending"} />
-                  </button>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <div className="ml-11 mt-2 space-y-2 rounded-lg border bg-muted/20 p-4">
-                    {/* 显示阶段的统计信息 */}
-                    {Object.entries(stage)
-                      .filter(([key]) => !["stage", "label", "status"].includes(key))
-                      .map(([key, value]) => (
-                        <div key={key} className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">{productionFieldLabel(key)}</span>
-                          <span className="font-medium">{String(value)}</span>
-                        </div>
-                      ))}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
+          <div className="grid gap-3 xl:grid-cols-6">
+            {flowStages.map((stage) => (
+              <FlowStageCard
+                busy={nextActionMutation.isPending}
+                key={stage.key}
+                onRun={(action) => nextActionMutation.mutate(action)}
+                stage={stage}
+              />
             ))}
           </div>
         </div>
@@ -222,13 +181,167 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
   );
 }
 
-function StageIcon({ status }: { status: string }) {
-  switch (status) {
-    case "completed":
-      return <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />;
-    case "running":
-      return <Clock className="h-5 w-5 shrink-0 animate-pulse text-cyan-500" />;
-    default:
-      return <div className="h-5 w-5 shrink-0 rounded-full border-2 border-muted-foreground" />;
+function FlowStageCard({
+  stage,
+  busy,
+  onRun,
+}: {
+  stage: FlowStage;
+  busy: boolean;
+  onRun: (action: string) => void;
+}) {
+  const Icon = stage.icon;
+  return (
+    <div className="grid min-h-64 content-between gap-4 rounded-lg border p-4">
+      <div className="grid gap-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="grid h-9 w-9 place-items-center rounded-md bg-muted">
+            <Icon className="h-4 w-4" />
+          </div>
+          <StatusBadge status={stage.status} />
+        </div>
+        <div>
+          <div className="font-semibold">{stage.label}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{stage.countLabel}</div>
+        </div>
+        <div className="grid gap-1.5">
+          {stage.summary.slice(0, 3).map((line) => (
+            <div className="text-xs leading-5 text-muted-foreground" key={line}>
+              {line}
+            </div>
+          ))}
+        </div>
+      </div>
+      {stage.action ? (
+        <Button className="w-full" disabled={busy} onClick={() => onRun(stage.action || "")} size="sm">
+          <Play className="mr-1.5 h-3.5 w-3.5" />
+          {stage.buttonLabel}
+        </Button>
+      ) : (
+        <Button asChild className="w-full" size="sm" variant="outline">
+          <Link href={stage.href as Route}>
+            {stage.buttonLabel}
+            <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+          </Link>
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function buildFlowStages(projectId: string, status: ProductionStatus, nextAction: string): FlowStage[] {
+  const source = status.stages.source;
+  const assets = status.stages.assets;
+  const storyboard = status.stages.storyboard;
+  const shotAssets = status.stages.shotAssets;
+  const shotImages = status.stages.shotImages;
+  const shotVideos = status.stages.shotVideos;
+  const finalVideo = status.stages.finalVideo;
+  const sourceCount = source.novelSourceCount + source.scriptSourceCount + source.briefSourceCount;
+  const videoStatus = mergedMediaStatus(shotImages, shotVideos);
+
+  return [
+    {
+      key: "content",
+      label: "内容",
+      href: projectHref(projectId, "content"),
+      status: sourceCount > 0 ? source.status : "pending",
+      countLabel: `${sourceCount} 个内容 · ${source.chapterCount} 个分集`,
+      summary: summaryOrFallback(source.summary, sourceCount > 0 ? "内容已添加，可继续生成剧本" : "先添加小说原文、剧本或创意文案"),
+      buttonLabel: "管理内容",
+      icon: FileText,
+    },
+    {
+      key: "scripts",
+      label: "剧本",
+      href: projectHref(projectId, "scripts"),
+      status: source.activeScriptId ? "completed" : source.status,
+      countLabel: source.activeScriptId ? `已激活 · ${source.scriptSceneCount ?? 0} 场` : "未激活剧本",
+      summary: [
+        source.activeScriptTitle ? `当前剧本：${source.activeScriptTitle}` : "根据内容生成或导入剧本",
+        source.pendingScriptSceneCount ? `还有 ${source.pendingScriptSceneCount} 个场景待确认` : "剧本场景可查看和编辑",
+      ],
+      buttonLabel: nextAction === "generate_script" || nextAction === "generate_script_from_plan" ? productionActionLabel(nextAction) : "管理剧本",
+      action: nextAction === "generate_script" || nextAction === "generate_script_from_plan" ? nextAction : undefined,
+      icon: FileCode2,
+    },
+    {
+      key: "assets",
+      label: "资产",
+      href: projectHref(projectId, "assets"),
+      status: assets.status,
+      countLabel: `${assets.characterCount} 角色 · ${assets.sceneCount} 场景 · ${assets.propCount} 道具`,
+      summary: [
+        assets.missingAssetCardCount ? `${assets.missingAssetCardCount} 个资产卡待补齐` : "资产卡已归档到项目",
+        assets.missingReferenceImageCount ? `${assets.missingReferenceImageCount} 张主资产图待生成` : "主资产图可查看和重生成",
+      ],
+      buttonLabel: nextAction === "analyze_assets" || nextAction === "generate_asset_images" ? productionActionLabel(nextAction) : "管理资产",
+      action: nextAction === "analyze_assets" || nextAction === "generate_asset_images" ? nextAction : undefined,
+      icon: Boxes,
+    },
+    {
+      key: "storyboard",
+      label: "分镜",
+      href: projectHref(projectId, "storyboard"),
+      status: storyboard.status,
+      countLabel: `${storyboard.shotCount} 个镜头 · ${shotAssets.requirementCount} 个资产需求`,
+      summary: [
+        storyboard.staleShotCount ? `${storyboard.staleShotCount} 个镜头需要重生成` : "分镜表可查看、编辑和删除",
+        shotAssets.missingDerivedImageCount ? `${shotAssets.missingDerivedImageCount} 张衍生资产图待生成` : "镜头资产需求已同步",
+      ],
+      buttonLabel: nextAction === "generate_storyboard" || nextAction === "analyze_shot_assets" || nextAction === "generate_derived_asset_images" ? productionActionLabel(nextAction) : "管理分镜",
+      action: nextAction === "generate_storyboard" || nextAction === "analyze_shot_assets" || nextAction === "generate_derived_asset_images" ? nextAction : undefined,
+      icon: Clapperboard,
+    },
+    {
+      key: "video",
+      label: "视频",
+      href: projectHref(projectId, "video"),
+      status: videoStatus,
+      countLabel: `${shotVideos.succeeded}/${shotVideos.total} 个镜头视频完成`,
+      summary: [
+        shotImages.pending + shotImages.stale ? `${shotImages.pending + shotImages.stale} 个镜头图片待生成` : "镜头图片已满足视频生成条件",
+        shotVideos.failed ? `${shotVideos.failed} 个镜头视频失败，可重试` : "镜头视频可批量生成和查看",
+      ],
+      buttonLabel: nextAction === "generate_shot_images" || nextAction === "generate_shot_videos" ? productionActionLabel(nextAction) : "管理视频",
+      action: nextAction === "generate_shot_images" || nextAction === "generate_shot_videos" ? nextAction : undefined,
+      icon: Video,
+    },
+    {
+      key: "final",
+      label: "成片",
+      href: projectHref(projectId, "final"),
+      status: finalVideo.status,
+      countLabel: `${finalVideo.enabledClipCount ?? 0} 个片段 · ${finalVideo.timelineCount ?? 0} 条时间线`,
+      summary: [
+        finalVideo.finalVideoVersionId ? "已有可用成片版本" : "镜头视频完成后可合成成片",
+        finalVideo.stale ? "成片已过期，需要重新合成" : "可设置当前版本并下载",
+      ],
+      buttonLabel: "管理成片",
+      icon: Film,
+    },
+  ];
+}
+
+function summaryOrFallback(summary: string[] | undefined, fallback: string) {
+  return summary && summary.length > 0 ? summary : [fallback];
+}
+
+function mergedMediaStatus(
+  images: ProductionStatus["stages"]["shotImages"],
+  videos: ProductionStatus["stages"]["shotVideos"],
+) {
+  if (images.running > 0 || videos.running > 0) {
+    return "running";
   }
+  if (images.failed > 0 || videos.failed > 0) {
+    return "failed";
+  }
+  if (videos.total > 0 && videos.succeeded >= videos.total) {
+    return "completed";
+  }
+  if (images.pending > 0 || videos.pending > 0 || images.stale > 0 || videos.stale > 0) {
+    return "pending";
+  }
+  return videos.status || images.status || "pending";
 }

@@ -13,6 +13,7 @@ import {
   Clapperboard,
   FileText,
   Film,
+  PlaySquare,
 } from "lucide-react";
 
 export const globalNavItems = [
@@ -25,23 +26,42 @@ export const globalNavItems = [
 
 export const projectNavItems = [
   { label: "项目概览", segment: "", icon: FolderKanban },
-  { label: "生产看板", segment: "production", icon: ListChecks },
-  { label: "原文与剧本", segment: "sources", icon: FileText },
+  { label: "内容", segment: "content", icon: FileText },
+  { label: "剧本", segment: "scripts", icon: FileCode2 },
   { label: "资产", segment: "assets", icon: Boxes },
-  { label: "分镜镜头", segment: "storyboard", icon: Clapperboard },
-  { label: "时间线", segment: "timeline", icon: Film },
+  { label: "分镜", segment: "storyboard", icon: Clapperboard },
+  { label: "视频", segment: "video", icon: PlaySquare },
+  { label: "成片", segment: "final", icon: Film },
+] as const;
+
+export const projectAdvancedNavItems = [
+  { label: "生产看板", segment: "production", icon: ListChecks },
   { label: "审阅", segment: "review", icon: ClipboardCheck },
   { label: "工作流", segment: "workflows", icon: Workflow },
-  { label: "媒体资产", segment: "vault", icon: Library },
+  { label: "素材库", segment: "vault", icon: Library },
+  { label: "时间线", segment: "timeline", icon: Film },
   { label: "导出", segment: "export", icon: Download },
   { label: "项目设置", segment: "settings", icon: Settings2 },
 ] as const;
 
 export type GlobalSection = "dashboard" | (typeof globalNavItems)[number]["section"];
-export type ProjectSection = (typeof projectNavItems)[number]["segment"];
+export type ProjectSection = (typeof projectNavItems)[number]["segment"] | (typeof projectAdvancedNavItems)[number]["segment"];
 
 export function projectHref(projectId: string, segment = "") {
   return segment ? `/projects/${projectId}/${segment}` : `/projects/${projectId}`;
+}
+
+export function isProjectNavActive(currentSegment: string, itemSegment: ProjectSection) {
+  if (currentSegment === itemSegment) {
+    return true;
+  }
+  if (currentSegment === "sources") {
+    return itemSegment === "content";
+  }
+  if (currentSegment === "timeline" || currentSegment === "export") {
+    return itemSegment === "final";
+  }
+  return false;
 }
 
 export function workflowLabel(value: string) {

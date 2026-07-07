@@ -23,7 +23,7 @@ export function nextProductionAction(status: ProductionStatus) {
       if (status.stages.source.activeAdaptationPlanId && !status.stages.source.activeScriptId) {
         return "generate_script_from_plan";
       }
-      return status.stages.source.novelSourceCount + status.stages.source.scriptSourceCount > 0 ? "generate_script" : "";
+      return status.stages.source.novelSourceCount + status.stages.source.scriptSourceCount + status.stages.source.briefSourceCount > 0 ? "generate_script" : "";
     case "assets":
       return status.stages.assets.missingReferenceImageCount > 0 && status.stages.assets.pendingReviewCount === 0 ? "generate_asset_images" : "analyze_assets";
     case "storyboard":

@@ -76,7 +76,7 @@ export type ProjectSource = {
   id: string;
   organizationId: string;
   projectId: string;
-  sourceType: "novel" | "script" | string;
+  sourceType: "novel" | "script" | "brief" | string;
   title: string;
   content?: string;
   contentFormat: "plain_text" | "markdown" | string;
@@ -198,6 +198,21 @@ export type ImportProjectSourceResponse = {
   source: ProjectSource;
   chapters: NovelChapterSummary[];
   script?: CreatedScriptSummary;
+};
+
+export type OutputImpactAffected = {
+  entityType: string;
+  count: number;
+};
+
+export type OutputImpact = {
+  entityType: string;
+  entityId: string;
+  canDelete: boolean;
+  recommendedMode: string;
+  deleteModes: string[];
+  affected: OutputImpactAffected[];
+  warnings: string[];
 };
 
 export type ScriptVersion = {
@@ -647,6 +662,7 @@ export type ProductionStatus = {
       status: string;
       novelSourceCount: number;
       scriptSourceCount: number;
+      briefSourceCount: number;
       chapterCount: number;
       eventCount: number;
       approvedEventCount: number;

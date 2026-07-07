@@ -105,6 +105,34 @@ func TestScriptImportCreatesScriptAndVersion(t *testing.T) {
 	}
 }
 
+func TestBriefImportCreatesSourceOnly(t *testing.T) {
+	server, seed := setupSourceImportTest(t)
+	defer seed.Close()
+
+	var imported ImportProjectSourceResponse
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/sources", seed.ownerToken, seed.organizationID, map[string]any{
+		"sourceType": "brief",
+		"title":      "创意文案",
+		"content":    "一个关于海边旧灯塔的悬疑短片。",
+	}, &imported)
+	if imported.Source.SourceType != "brief" || imported.Source.Status != "processed" {
+		t.Fatalf("source = %+v", imported.Source)
+	}
+	if imported.Script != nil {
+		t.Fatalf("script summary = %+v, want nil", imported.Script)
+	}
+	var chapterCount, scriptCount int
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT count(*) FROM novel_chapters WHERE project_id = $1 AND source_id = $2`, seed.projectID, imported.Source.ID).Scan(&chapterCount); err != nil {
+		t.Fatalf("count chapters: %v", err)
+	}
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT count(*) FROM scripts WHERE project_id = $1 AND source_id = $2`, seed.projectID, imported.Source.ID).Scan(&scriptCount); err != nil {
+		t.Fatalf("count scripts: %v", err)
+	}
+	if chapterCount != 0 || scriptCount != 0 {
+		t.Fatalf("chapter/script count = %d/%d, want 0/0", chapterCount, scriptCount)
+	}
+}
+
 func TestSourceImportRequiresPermission(t *testing.T) {
 	server, seed := setupSourceImportTest(t)
 	defer seed.Close()

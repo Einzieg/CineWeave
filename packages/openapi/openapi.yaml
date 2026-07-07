@@ -1,4 +1,4 @@
-openapi: 3.1.0
+﻿openapi: 3.1.0
 info:
   title: CineWeave API
   version: 0.1.0
@@ -1646,6 +1646,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/sources/{sourceId}/impact:
+    get:
+      operationId: getProjectSourceImpact
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "200":
+          description: Source delete impact summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutputImpactEnvelope"
   /api/projects/{projectId}/sources/{sourceId}/chapters:
     get:
       operationId: listSourceChapters
@@ -4946,7 +4961,7 @@ components:
           format: uuid
         sourceType:
           type: string
-          enum: [novel, script]
+          enum: [novel, script, brief]
         title:
           type: string
         content:
@@ -7685,13 +7700,15 @@ components:
               $ref: "#/components/schemas/ProductionFinalVideoStage"
     ProductionSourceStage:
       type: object
-      required: [status, novelSourceCount, scriptSourceCount, chapterCount, eventCount, approvedEventCount, pendingEventReviewCount, adaptationPlanCount, summary]
+      required: [status, novelSourceCount, scriptSourceCount, briefSourceCount, chapterCount, eventCount, approvedEventCount, pendingEventReviewCount, adaptationPlanCount, summary]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
         novelSourceCount:
           type: integer
         scriptSourceCount:
+          type: integer
+        briefSourceCount:
           type: integer
         chapterCount:
           type: integer
@@ -8380,6 +8397,46 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ReviewResponse"
+    OutputImpactAffected:
+      type: object
+      properties:
+        entityType:
+          type: string
+        count:
+          type: integer
+      required: [entityType, count]
+    OutputImpact:
+      type: object
+      properties:
+        entityType:
+          type: string
+        entityId:
+          type: string
+          format: uuid
+        canDelete:
+          type: boolean
+        recommendedMode:
+          type: string
+        deleteModes:
+          type: array
+          items:
+            type: string
+        affected:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputImpactAffected"
+        warnings:
+          type: array
+          items:
+            type: string
+      required: [entityType, entityId, canDelete, recommendedMode, deleteModes, affected, warnings]
+    OutputImpactEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/OutputImpact"
     ProjectSourceEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -11319,7 +11376,7 @@ components:
       properties:
         sourceType:
           type: string
-          enum: [novel, script]
+          enum: [novel, script, brief]
         title:
           type: string
         content:
@@ -11364,7 +11421,7 @@ components:
       properties:
         sourceType:
           type: string
-          enum: [novel, script]
+          enum: [novel, script, brief]
         title:
           type: string
         file:
@@ -11384,7 +11441,7 @@ components:
       properties:
         sourceType:
           type: string
-          enum: [novel, script]
+          enum: [novel, script, brief]
         title:
           type: string
         content:

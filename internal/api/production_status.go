@@ -50,6 +50,7 @@ type ProductionSourceStage struct {
 	Status                   string   `json:"status"`
 	NovelSourceCount         int      `json:"novelSourceCount"`
 	ScriptSourceCount        int      `json:"scriptSourceCount"`
+	BriefSourceCount         int      `json:"briefSourceCount"`
 	ChapterCount             int      `json:"chapterCount"`
 	EventCount               int      `json:"eventCount"`
 	ApprovedEventCount       int      `json:"approvedEventCount"`
@@ -314,11 +315,12 @@ func (s *Server) productionStatus(r *http.Request, project Project) (ProductionS
 }
 
 func (s *Server) productionSourceStage(r *http.Request, projectID string) (ProductionSourceStage, error) {
-	var novelCount, scriptSourceCount, chapterCount, eventCount, approvedEventCount, adaptationPlanCount int
+	var novelCount, scriptSourceCount, briefSourceCount, chapterCount, eventCount, approvedEventCount, adaptationPlanCount int
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT
 			COUNT(*) FILTER (WHERE source_type = 'novel'),
 			COUNT(*) FILTER (WHERE source_type = 'script'),
+			COUNT(*) FILTER (WHERE source_type = 'brief'),
 			(
 				SELECT COUNT(*)
 				FROM novel_chapters nc
@@ -341,7 +343,7 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 			)
 		FROM project_sources
 		WHERE project_id = $1
-	`, projectID).Scan(&novelCount, &scriptSourceCount, &chapterCount, &eventCount, &approvedEventCount, &adaptationPlanCount); err != nil {
+	`, projectID).Scan(&novelCount, &scriptSourceCount, &briefSourceCount, &chapterCount, &eventCount, &approvedEventCount, &adaptationPlanCount); err != nil {
 		return ProductionSourceStage{}, err
 	}
 	activeScriptID, activeScriptTitle, err := s.activeProductionScript(r, projectID, "")
@@ -376,7 +378,7 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 		status = "scenes_pending_review"
 	case activeScriptID != "":
 		status = "scenes_ready"
-	case novelCount+scriptSourceCount == 0:
+	case novelCount+scriptSourceCount+briefSourceCount == 0:
 		status = "not_started"
 	case novelCount > 0 && chapterCount > 0 && eventCount == 0:
 		status = "events_pending_extraction"
@@ -389,30 +391,34 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 	}
 	summary := make([]string, 0, 2)
 	if novelCount > 0 {
-		summary = append(summary, "Novel source imported")
+		summary = append(summary, fmt.Sprintf("小说原文：%d", novelCount))
 	}
 	if scriptSourceCount > 0 {
-		summary = append(summary, "Script source imported")
+		summary = append(summary, fmt.Sprintf("剧本原文：%d", scriptSourceCount))
+	}
+	if briefSourceCount > 0 {
+		summary = append(summary, fmt.Sprintf("创意文案：%d", briefSourceCount))
 	}
 	if chapterCount > 0 {
-		summary = append(summary, fmt.Sprintf("Chapters: %d", chapterCount))
+		summary = append(summary, fmt.Sprintf("分集：%d", chapterCount))
 	}
 	if eventCount > 0 {
-		summary = append(summary, fmt.Sprintf("Events: %d, approved: %d", eventCount, approvedEventCount))
+		summary = append(summary, fmt.Sprintf("事件：%d，已确认：%d", eventCount, approvedEventCount))
 	}
 	if activePlanTitle != "" {
-		summary = append(summary, "Active adaptation plan: "+activePlanTitle)
+		summary = append(summary, "当前改编计划："+activePlanTitle)
 	}
 	if activeScriptTitle != "" {
-		summary = append(summary, "Active script: "+activeScriptTitle)
+		summary = append(summary, "当前剧本："+activeScriptTitle)
 	}
 	if scriptSceneCount > 0 {
-		summary = append(summary, fmt.Sprintf("Script scenes: %d, approved: %d", scriptSceneCount, approvedScriptSceneCount))
+		summary = append(summary, fmt.Sprintf("剧本场景：%d，已确认：%d", scriptSceneCount, approvedScriptSceneCount))
 	}
 	return ProductionSourceStage{
 		Status:                   status,
 		NovelSourceCount:         novelCount,
 		ScriptSourceCount:        scriptSourceCount,
+		BriefSourceCount:         briefSourceCount,
 		ChapterCount:             chapterCount,
 		EventCount:               eventCount,
 		ApprovedEventCount:       approvedEventCount,

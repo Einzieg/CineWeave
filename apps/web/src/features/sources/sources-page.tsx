@@ -35,7 +35,8 @@ import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
 import { useUiStore } from "@/lib/stores/ui-store";
 import type { AdaptationPlan, JsonRecord, NovelChapterSummary, ProjectSource, Script, ScriptVersion } from "@/lib/types";
 
-type ImportSourceType = "novel" | "script";
+type ImportSourceType = "novel" | "script" | "brief";
+type SourcesTab = "sources" | "events" | "plans" | "scripts";
 
 type SourceEditForm = {
   title: string;
@@ -63,11 +64,13 @@ type ScriptEditForm = {
 
 export function SourcesPage({
   projectId,
+  initialTab = "sources",
 }: {
   projectId: string;
+  initialTab?: SourcesTab;
   initialSceneId?: string;
 }) {
-  const [activeTab, setActiveTab] = useState("sources");
+  const [activeTab, setActiveTab] = useState<SourcesTab>(initialTab);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [selectedChapterIds, setSelectedChapterIds] = useState<string[]>([]);
@@ -77,6 +80,7 @@ export function SourcesPage({
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importTitle, setImportTitle] = useState("");
+  const [importContent, setImportContent] = useState("");
   const [importSourceType, setImportSourceType] = useState<ImportSourceType>("novel");
   const [splitChapters, setSplitChapters] = useState(true);
   const [createScript, setCreateScript] = useState(false);
@@ -102,6 +106,13 @@ export function SourcesPage({
   );
 
   const effectiveSourceId = selectedSource?.id ?? "";
+  const sourceToDeleteId = sourceToDelete?.id ?? "";
+
+  const { data: sourceDeleteImpact, isLoading: sourceDeleteImpactLoading } = useApiQuery({
+    key: qk.sourceImpact(projectId, sourceToDeleteId),
+    queryFn: (session) => studioApi.getSourceImpact(session, projectId, sourceToDeleteId),
+    enabled: !!sourceToDeleteId,
+  });
 
   // 获取剧本列表
   const { data: scripts = [], isLoading: scriptsLoading } = useApiQuery({
@@ -259,12 +270,12 @@ export function SourcesPage({
     mutationFn: (session, sourceId: string) => studioApi.getSource(session, projectId, sourceId),
     onSuccess: (source) => {
       setEditingSource(source);
-      setSourceEditForm({
-        title: source.title,
-        sourceType: source.sourceType === "script" ? "script" : "novel",
-        contentFormat: source.contentFormat || "plain_text",
-        content: source.content || "",
-        splitChapters: source.sourceType === "novel",
+        setSourceEditForm({
+          title: source.title,
+          sourceType: source.sourceType === "script" ? "script" : source.sourceType === "brief" ? "brief" : "novel",
+          contentFormat: source.contentFormat || "plain_text",
+          content: source.content || "",
+          splitChapters: source.sourceType === "novel",
       });
       setSourceEditOpen(true);
     },
@@ -438,19 +449,33 @@ export function SourcesPage({
 
   const importFileMutation = useApiMutation({
     mutationFn: (session) => {
-      if (!importFile) {
-        throw new Error("请选择文件");
+      const title = importTitle.trim() || importFile?.name.replace(/\.[^.]+$/, "") || "";
+      if (!title) {
+        throw new Error("请填写标题");
       }
-      const form = new FormData();
-      form.append("file", importFile);
-      form.append("sourceType", importSourceType);
-      form.append("title", importTitle.trim() || importFile.name.replace(/\.[^.]+$/, ""));
-      form.append("splitChapters", splitChapters ? "true" : "false");
-      form.append("createScript", createScript ? "true" : "false");
-      return studioApi.importSourceFile(session, projectId, form);
+      if (importFile) {
+        const form = new FormData();
+        form.append("file", importFile);
+        form.append("sourceType", importSourceType);
+        form.append("title", title);
+        form.append("splitChapters", splitChapters ? "true" : "false");
+        form.append("createScript", createScript ? "true" : "false");
+        return studioApi.importSourceFile(session, projectId, form);
+      }
+      if (!importContent.trim()) {
+        throw new Error("请填写正文或选择文件");
+      }
+      return studioApi.createSource(session, projectId, {
+        sourceType: importSourceType,
+        title,
+        content: importContent,
+        contentFormat: "plain_text",
+        splitChapters,
+        createScript,
+      });
     },
     onSuccess: (response) => {
-      toast.success("文件已导入");
+      toast.success("内容已添加");
       setSelectedSourceId(response.source.id);
       setSelectedChapterId(response.chapters[0]?.id ?? null);
       setSelectedChapterIds([]);
@@ -463,6 +488,7 @@ export function SourcesPage({
       setImportOpen(false);
       setImportFile(null);
       setImportTitle("");
+      setImportContent("");
       invalidate([
         qk.sources(projectId),
         qk.sourceChapters(projectId, response.source.id),
@@ -500,7 +526,7 @@ export function SourcesPage({
   const deleteSourceMutation = useApiMutation({
     mutationFn: (session, sourceId: string) => studioApi.deleteSource(session, projectId, sourceId),
     onSuccess: (_result, sourceId) => {
-      toast.success("原文已删除");
+      toast.success("原文已归档");
       if (selectedSourceId === sourceId) {
         setSelectedSourceId(null);
         setSelectedChapterId(null);
@@ -509,6 +535,7 @@ export function SourcesPage({
       setSourceToDelete(null);
       invalidate([
         qk.sources(projectId),
+        qk.sourceImpact(projectId, sourceId),
         qk.sourceEvents(projectId, sourceId),
         qk.scripts(projectId),
         qk.productionStatus(projectId),
@@ -521,7 +548,7 @@ export function SourcesPage({
   });
 
   const updateImportSourceType = (value: string) => {
-    const next = value === "script" ? "script" : "novel";
+    const next: ImportSourceType = value === "script" ? "script" : value === "brief" ? "brief" : "novel";
     setImportSourceType(next);
     setSplitChapters(next === "novel");
     setCreateScript(next === "script");
@@ -698,11 +725,11 @@ export function SourcesPage({
   return (
     <Surface>
       <SectionTitle
-        title="原文与剧本"
-        description="管理小说原文、提取事件、创建改编计划、生成剧本"
+        title={activeTab === "scripts" ? "剧本" : "内容"}
+        description={activeTab === "scripts" ? "查看、编辑、激活剧本版本" : "添加小说原文、剧本或创意文案并管理分集"}
       />
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="p-4">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SourcesTab)} className="p-4">
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="sources">
             原文管理
@@ -727,7 +754,7 @@ export function SourcesPage({
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
               <Upload className="h-4 w-4 mr-2" />
-              导入文件
+              添加内容
             </Button>
             <Button size="sm" onClick={handleUseAgent}>
               <Wand2 className="h-4 w-4 mr-2" />
@@ -738,7 +765,7 @@ export function SourcesPage({
           <Dialog open={importOpen} onOpenChange={setImportOpen}>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
-                <DialogTitle>导入文件</DialogTitle>
+                <DialogTitle>添加内容</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
                 <div className="grid gap-2">
@@ -766,27 +793,43 @@ export function SourcesPage({
                     <SelectTrigger className="w-full">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="novel">小说</SelectItem>
-                      <SelectItem value="script">剧本</SelectItem>
-                    </SelectContent>
+                      <SelectContent>
+                        <SelectItem value="novel">小说</SelectItem>
+                        <SelectItem value="script">剧本</SelectItem>
+                        <SelectItem value="brief">创意文案</SelectItem>
+                      </SelectContent>
                   </Select>
                 </div>
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox checked={splitChapters} onCheckedChange={(checked) => setSplitChapters(checked === true)} />
-                  自动分集/章节
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox checked={createScript} onCheckedChange={(checked) => setCreateScript(checked === true)} />
-                  创建剧本
-                </label>
+                {!importFile && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="source-content">正文</Label>
+                    <Textarea
+                      id="source-content"
+                      className="min-h-48"
+                      value={importContent}
+                      onChange={(event) => setImportContent(event.target.value)}
+                    />
+                  </div>
+                )}
+                {importSourceType === "novel" && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={splitChapters} onCheckedChange={(checked) => setSplitChapters(checked === true)} />
+                    自动分集/章节
+                  </label>
+                )}
+                {importSourceType === "script" && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={createScript} onCheckedChange={(checked) => setCreateScript(checked === true)} />
+                    创建剧本
+                  </label>
+                )}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setImportOpen(false)} type="button">
                   取消
                 </Button>
-                <Button disabled={!importFile || importFileMutation.isPending} onClick={() => importFileMutation.mutate()} type="button">
-                  导入
+                <Button disabled={(!importFile && !importContent.trim()) || importFileMutation.isPending} onClick={() => importFileMutation.mutate()} type="button">
+                  添加
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -814,8 +857,8 @@ export function SourcesPage({
                       onValueChange={(value) =>
                         setSourceEditForm({
                           ...sourceEditForm,
-                          sourceType: value === "script" ? "script" : "novel",
-                          splitChapters: value !== "script",
+                          sourceType: value === "script" ? "script" : value === "brief" ? "brief" : "novel",
+                          splitChapters: value === "novel",
                         })
                       }
                     >
@@ -825,6 +868,7 @@ export function SourcesPage({
                       <SelectContent>
                         <SelectItem value="novel">小说</SelectItem>
                         <SelectItem value="script">剧本</SelectItem>
+                        <SelectItem value="brief">创意文案</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -877,10 +921,39 @@ export function SourcesPage({
           <Dialog open={!!sourceToDelete} onOpenChange={(open) => !open && setSourceToDelete(null)}>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
-                <DialogTitle>删除原文</DialogTitle>
+                <DialogTitle>归档原文</DialogTitle>
               </DialogHeader>
-              <div className="text-sm text-muted-foreground">
-                {sourceToDelete?.title}
+              <div className="grid gap-4 text-sm">
+                <div>
+                  <div className="font-medium">{sourceToDelete?.title}</div>
+                  <div className="mt-1 text-muted-foreground">归档后不会出现在默认列表，也不会再作为后续生产入口。</div>
+                </div>
+                {sourceDeleteImpactLoading ? (
+                  <Skeleton className="h-20" />
+                ) : sourceDeleteImpact ? (
+                  <div className="grid gap-3 rounded-lg border bg-muted/30 p-3">
+                    <div className="font-medium">影响范围</div>
+                    {sourceDeleteImpact.affected.length > 0 ? (
+                      <div className="grid gap-2">
+                        {sourceDeleteImpact.affected.map((item) => (
+                          <div key={item.entityType} className="flex items-center justify-between gap-3">
+                            <span className="text-muted-foreground">{sourceImpactEntityLabel(item.entityType)}</span>
+                            <Badge variant="outline">{item.count}</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-muted-foreground">没有关联产物。</div>
+                    )}
+                    {sourceDeleteImpact.warnings.length > 0 ? (
+                      <div className="grid gap-1 text-xs text-muted-foreground">
+                        {sourceDeleteImpact.warnings.map((warning) => (
+                          <div key={warning}>{warning}</div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setSourceToDelete(null)} type="button">
@@ -892,7 +965,7 @@ export function SourcesPage({
                   onClick={() => sourceToDelete && deleteSourceMutation.mutate(sourceToDelete.id)}
                   type="button"
                 >
-                  删除
+                  归档
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -980,7 +1053,7 @@ export function SourcesPage({
                   </div>
                 ) : selectedSource.sourceType !== "novel" ? (
                   <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-                    当前原文是剧本类型，不需要分集提取事件。
+                    当前内容不需要分集提取事件。
                   </div>
                 ) : (
                   <>
@@ -1626,6 +1699,16 @@ function positiveIntegerFromText(value: string) {
 
 function selectedEventCount(plan: AdaptationPlan) {
   return Array.isArray(plan.selectedEventIds) ? plan.selectedEventIds.length : 0;
+}
+
+function sourceImpactEntityLabel(entityType: string) {
+  const labels: Record<string, string> = {
+    novel_chapters: "分集/章节",
+    novel_events: "事件",
+    adaptation_plans: "改编计划",
+    scripts: "剧本",
+  };
+  return labels[entityType] ?? entityType;
 }
 
 function formatDateTime(value: string) {

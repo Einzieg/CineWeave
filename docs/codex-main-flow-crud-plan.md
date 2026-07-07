@@ -387,7 +387,7 @@ CRUD：
 
 ### 3.1 可直接迁移的内容
 
-从 Toonflow 迁移以下概念和模板内容：
+从 Toonflow(D:\Code\Toonflow) 迁移以下概念和模板内容：
 
 #### 导演手册字段
 

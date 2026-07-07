@@ -14,6 +14,7 @@ import (
 const (
 	nodeGenerateScriptFromSourceKey = "generate_script_from_source"
 	promptKeyScriptAgentGenerate    = "script_agent_generate"
+	promptKeyBriefToScript          = "brief_to_script"
 )
 
 type SourceToScriptOptions struct {
@@ -88,7 +89,11 @@ func (a Activities) GenerateScriptFromSource(ctx context.Context, input Generate
 	if source.SourceType == "novel" {
 		return a.generateScriptFromNovelSource(ctx, input, source)
 	}
-	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyScriptAgentGenerate, map[string]any{
+	promptKey := promptKeyScriptAgentGenerate
+	if source.SourceType == "brief" {
+		promptKey = promptKeyBriefToScript
+	}
+	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKey, map[string]any{
 		"project": project.asPromptVariables(),
 		"source": map[string]any{
 			"id":         source.ID,

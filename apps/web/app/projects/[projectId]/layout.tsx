@@ -11,10 +11,11 @@ import { TopBar } from "@/components/layout/top-bar";
 import { cn } from "@/lib/cn";
 import { studioApi } from "@/lib/api-client";
 import { useStudioSession, useBindCurrentProject } from "@/lib/session";
-import { projectNavItems, projectHref } from "@/lib/routes";
+import { isProjectNavActive, projectAdvancedNavItems, projectNavItems, projectHref } from "@/lib/routes";
 import { useProjectEvents } from "@/lib/realtime/use-project-events";
 import { ActivityDrawer } from "@/features/activity/activity-drawer";
 import { AgentDrawer } from "@/features/assistant/agent-drawer";
+import { MoreHorizontal } from "lucide-react";
 
 export default function ProjectLayout({
   children,
@@ -59,27 +60,53 @@ function ProjectShellContent({ projectId, children }: { projectId: string; child
         <TopBar title="项目工作台" session={session} projectId={projectId} onLogout={logout} />
         <MobileGlobalNav active="projects" />
 
-        {/* 项目内导航 */}
-        <nav className="shrink-0 flex gap-1 overflow-x-auto border-b px-4 pt-3" aria-label="项目内部导航">
-          {projectNavItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = currentSegment === item.segment;
-            return (
-              <Link
-                key={item.segment || "overview"}
-                href={projectHref(projectId, item.segment) as Route}
-                className={cn(
-                  "flex h-10 shrink-0 items-center gap-2 border-b-2 px-3 text-sm transition",
-                  isActive
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </Link>
-            );
-          })}
+        <nav className="shrink-0 border-b" aria-label="项目内部导航">
+          <div className="flex gap-1 overflow-x-auto px-4 pt-3">
+            {projectNavItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = isProjectNavActive(currentSegment, item.segment);
+              return (
+                <Link
+                  key={item.segment || "overview"}
+                  href={projectHref(projectId, item.segment) as Route}
+                  className={cn(
+                    "flex h-10 shrink-0 items-center gap-2 border-b-2 px-3 text-sm transition",
+                    isActive
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+          <div className="flex gap-1 overflow-x-auto px-4 pb-2">
+            <span className="flex h-8 shrink-0 items-center gap-1 px-2 text-xs text-muted-foreground">
+              <MoreHorizontal className="h-3.5 w-3.5" />
+              高级
+            </span>
+            {projectAdvancedNavItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = currentSegment === item.segment;
+              return (
+                <Link
+                  key={item.segment}
+                  href={projectHref(projectId, item.segment) as Route}
+                  className={cn(
+                    "flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs transition",
+                    isActive
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
         </nav>
 
         <main className="min-h-0 flex-1 overflow-y-auto">

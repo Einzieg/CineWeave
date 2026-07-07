@@ -87,6 +87,21 @@ type ImportProjectSourceResponse struct {
 	Script   *CreatedScriptSummary `json:"script,omitempty"`
 }
 
+type OutputImpactAffected struct {
+	EntityType string `json:"entityType"`
+	Count      int    `json:"count"`
+}
+
+type OutputImpact struct {
+	EntityType      string                 `json:"entityType"`
+	EntityID        string                 `json:"entityId"`
+	CanDelete       bool                   `json:"canDelete"`
+	RecommendedMode string                 `json:"recommendedMode"`
+	DeleteModes     []string               `json:"deleteModes"`
+	Affected        []OutputImpactAffected `json:"affected"`
+	Warnings        []string               `json:"warnings"`
+}
+
 type sourceChapterRequest struct {
 	ChapterIndex *int    `json:"chapterIndex"`
 	VolumeIndex  *int    `json:"volumeIndex"`
@@ -140,7 +155,7 @@ func (s *Server) projectSourceList(r *http.Request, projectID string) ([]Project
 			WHERE project_id = $1
 			GROUP BY source_id
 		) c ON c.source_id = s.id
-		WHERE s.project_id = $1
+		WHERE s.project_id = $1 AND s.status <> 'archived'
 		ORDER BY s.created_at ASC, s.title ASC
 	`, projectID)
 	if err != nil {
@@ -532,11 +547,70 @@ func (s *Server) deleteProjectSource(w http.ResponseWriter, r *http.Request, pri
 		s.writeError(w, r, err)
 		return
 	}
-	if _, err := s.db.Exec(r.Context(), `DELETE FROM project_sources WHERE project_id = $1 AND id = $2`, project.ID, r.PathValue("sourceId")); err != nil {
+	if _, err := s.db.Exec(r.Context(), `
+		UPDATE project_sources
+		SET status = 'archived'
+		WHERE project_id = $1 AND id = $2
+	`, project.ID, r.PathValue("sourceId")); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]bool{"deleted": true}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"deleted": true, "mode": "archive"}, nil)
+}
+
+func (s *Server) getProjectSourceImpact(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionSourceRead)
+	if !ok {
+		return
+	}
+	impact, err := s.projectSourceImpact(r, project.ID, r.PathValue("sourceId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, impact, nil)
+}
+
+func (s *Server) projectSourceImpact(r *http.Request, projectID, sourceID string) (OutputImpact, error) {
+	if _, err := s.projectSource(r, projectID, sourceID); err != nil {
+		return OutputImpact{}, err
+	}
+	var chapterCount, eventCount, planCount, scriptCount int
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT
+			(SELECT count(*) FROM novel_chapters WHERE project_id = $1 AND source_id = $2),
+			(SELECT count(*) FROM novel_events WHERE project_id = $1 AND source_id = $2),
+			(SELECT count(*) FROM adaptation_plans WHERE project_id = $1 AND source_id = $2),
+			(SELECT count(*) FROM scripts WHERE project_id = $1 AND source_id = $2)
+	`, projectID, sourceID).Scan(&chapterCount, &eventCount, &planCount, &scriptCount); err != nil {
+		return OutputImpact{}, err
+	}
+	affected := make([]OutputImpactAffected, 0, 4)
+	addAffected := func(entityType string, count int) {
+		if count > 0 {
+			affected = append(affected, OutputImpactAffected{EntityType: entityType, Count: count})
+		}
+	}
+	addAffected("novel_chapter", chapterCount)
+	addAffected("novel_event", eventCount)
+	addAffected("adaptation_plan", planCount)
+	addAffected("script", scriptCount)
+	warnings := []string{"删除会将该内容归档并从默认列表隐藏，历史记录和已生成产物仍保留溯源。"}
+	if scriptCount > 0 {
+		warnings = append(warnings, "该内容已创建剧本，归档后剧本仍可在剧本页查看。")
+	}
+	if eventCount > 0 || planCount > 0 {
+		warnings = append(warnings, "该内容已有事件或改编计划，后续重新生成可能需要重新选择内容。")
+	}
+	return OutputImpact{
+		EntityType:      "source",
+		EntityID:        sourceID,
+		CanDelete:       true,
+		RecommendedMode: "archive",
+		DeleteModes:     []string{"archive"},
+		Affected:        affected,
+		Warnings:        warnings,
+	}, nil
 }
 
 func (s *Server) projectSource(r *http.Request, projectID, sourceID string) (ProjectSource, error) {
@@ -823,8 +897,10 @@ func sourceTypeSortWeight(sourceType string) int {
 		return 0
 	case "script":
 		return 1
-	default:
+	case "brief":
 		return 2
+	default:
+		return 3
 	}
 }
 
@@ -922,7 +998,7 @@ func chineseOrdinalNumber(value string) int {
 }
 
 func validSourceType(value string) bool {
-	return value == "novel" || value == "script"
+	return value == "novel" || value == "script" || value == "brief"
 }
 
 func validContentFormat(value string) bool {
@@ -930,7 +1006,7 @@ func validContentFormat(value string) bool {
 }
 
 func validSourceStatus(value string) bool {
-	return value == "ready" || value == "processing" || value == "processed" || value == "failed"
+	return value == "ready" || value == "processing" || value == "processed" || value == "failed" || value == "archived"
 }
 
 var errInvalidSourceImport = errors.New("invalid source import")

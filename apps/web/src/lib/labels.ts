@@ -92,6 +92,8 @@ export function sourceTypeLabel(value?: string) {
       return "小说";
     case "script":
       return "剧本";
+    case "brief":
+      return "创意文案";
     default:
       return value || "未知";
   }
