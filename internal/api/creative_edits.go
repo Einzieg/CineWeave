@@ -242,6 +242,69 @@ func (s *Server) updateShotAssetRequirement(w http.ResponseWriter, r *http.Reque
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
+func (s *Server) skipShotAssetRequirement(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
+	if !ok {
+		return
+	}
+	current, err := s.shotAssetRequirement(r, project.ID, r.PathValue("requirementId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	item, err := scanShotAssetRequirement(tx.QueryRow(r.Context(), shotAssetRequirementSelectSQL(`
+		WHERE r.project_id = $1 AND r.id = $2
+	`), project.ID, current.ID))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE shot_asset_requirements
+		SET status = 'skipped',
+		    review_status = 'approved',
+		    stale_state = 'fresh',
+		    manual_override = true,
+		    edited_by = $3,
+		    edited_at = now(),
+		    updated_at = now()
+		WHERE project_id = $1 AND id = $2
+	`, project.ID, current.ID, principal.UserID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	item, err = scanShotAssetRequirement(tx.QueryRow(r.Context(), shotAssetRequirementSelectSQL(`
+		WHERE r.project_id = $1 AND r.id = $2
+	`), project.ID, current.ID))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, stringValue(current.WorkflowRunID)); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "shot_asset_requirement.skipped", "shot_asset_requirement", item.ID, mustRawJSON(map[string]any{
+		"requirementId": item.ID,
+		"shotId":        item.StoryboardShotID,
+		"status":        item.Status,
+	})); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
 func trimPtr(value *string) string {
 	if value == nil {
 		return ""

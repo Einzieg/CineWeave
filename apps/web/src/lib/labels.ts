@@ -12,6 +12,8 @@ export function statusLabel(status?: string) {
       return "已导入";
     case "active":
       return "启用";
+    case "archived":
+      return "已归档";
     case "running":
       return "运行中";
     case "processing":
@@ -73,6 +75,8 @@ export function statusLabel(status?: string) {
       return "生成图片中";
     case "image_failed":
       return "图片失败";
+    case "prompt_ready":
+      return "提示词就绪";
     case "storyboard_ready":
       return "分镜就绪";
     case "video_succeeded":
@@ -236,9 +240,29 @@ export function artifactTypeLabel(type?: string) {
     case "final_video":
       return "最终成片";
     case "asset_reference":
+    case "asset_reference_image":
       return "资产参考";
+    case "generated_image":
+      return "生成图片";
+    case "generated_video":
+      return "生成视频";
     default:
       return type || "媒体";
+  }
+}
+
+export function assetReferenceTypeLabel(type?: string) {
+  switch (type) {
+    case "generated":
+      return "生成图";
+    case "uploaded":
+      return "上传图";
+    case "derived":
+      return "派生图";
+    case "selected":
+      return "选用图";
+    default:
+      return type || "参考图";
   }
 }
 

@@ -378,6 +378,8 @@ export const studioApi = {
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}/review`, { method: "POST", session, body }),
   updateShotAssetRequirement: (session: StudioSession, projectId: string, requirementId: string, body: JsonRecord) =>
     apiRequest<ShotAssetRequirement>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}`, { method: "PATCH", session, body }),
+  skipShotAssetRequirement: (session: StudioSession, projectId: string, requirementId: string) =>
+    apiRequest<ShotAssetRequirement>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}/skip`, { method: "POST", session, body: {} }),
 
   generateStoryboard: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/scripts/${scriptId}/generate-storyboard`, { method: "POST", session, body }),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
@@ -10,11 +10,33 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Check, ExternalLink, Image as ImageIcon, MapPin, Package, RefreshCw, User, Wand2, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { Check, ExternalLink, Image as ImageIcon, MapPin, Package, RefreshCw, Save, Star, Trash2, Upload, User, Wand2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { artifactTypeLabel, assetTypeLabel, requirementTypeLabel, statusLabel } from "@/lib/labels";
-import type { Artifact, CanonicalAsset, Script, ShotAssetRequirement } from "@/lib/types";
+import { artifactTypeLabel, assetReferenceTypeLabel, assetTypeLabel, requirementTypeLabel, statusLabel } from "@/lib/labels";
+import type { Artifact, AssetReference, CanonicalAsset, Script, ShotAssetRequirement } from "@/lib/types";
+
+type AssetDraft = {
+  name: string;
+  description: string;
+  basePrompt: string;
+  consistencyPrompt: string;
+  negativePrompt: string;
+  lockReference: boolean;
+};
+
+const emptyAssetDraft: AssetDraft = {
+  name: "",
+  description: "",
+  basePrompt: "",
+  consistencyPrompt: "",
+  negativePrompt: "",
+  lockReference: false,
+};
 
 export function AssetsPage({
   projectId,
@@ -25,6 +47,9 @@ export function AssetsPage({
 }) {
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(initialAssetId || null);
   const [selectedScriptId, setSelectedScriptId] = useState<string>("");
+  const [assetDraftState, setAssetDraftState] = useState<{ assetId: string; draft: AssetDraft } | null>(null);
+  const [referenceUploadFile, setReferenceUploadFile] = useState<File | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const invalidate = useInvalidateKeys();
 
   const { data: scripts = [] } = useApiQuery({
@@ -45,6 +70,15 @@ export function AssetsPage({
   });
 
   const selectedAsset = useMemo(() => assets.find((asset) => asset.id === selectedAssetId) ?? assets[0] ?? null, [assets, selectedAssetId]);
+  const assetDraft = useMemo(() => {
+    if (!selectedAsset) {
+      return emptyAssetDraft;
+    }
+    if (assetDraftState?.assetId === selectedAsset.id) {
+      return assetDraftState.draft;
+    }
+    return draftFromAsset(selectedAsset);
+  }, [assetDraftState, selectedAsset]);
   const selectedScript = useMemo(() => resolveSelectedScript(scripts, selectedScriptId), [scripts, selectedScriptId]);
   const { data: selectedReferences = [] } = useApiQuery({
     key: qk.assetReferences(projectId, selectedAsset?.id ?? ""),
@@ -88,6 +122,78 @@ export function AssetsPage({
       invalidate([qk.assets(projectId), qk.assetReferences(projectId, assetId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
     },
     onError: (error) => toast.error("生成失败：" + error.message),
+  });
+
+  const updateAssetMutation = useApiMutation({
+    mutationFn: (session, payload: { assetId: string; body: AssetDraft }) =>
+      studioApi.updateCanonicalAsset(session, projectId, payload.assetId, {
+        name: payload.body.name,
+        description: payload.body.description,
+        basePrompt: payload.body.basePrompt,
+        consistencyPrompt: payload.body.consistencyPrompt,
+        negativePrompt: payload.body.negativePrompt,
+        lockReference: payload.body.lockReference,
+      }),
+    onSuccess: () => {
+      toast.success("资产已保存");
+      invalidate([qk.assets(projectId), qk.productionStatus(projectId)]);
+    },
+    onError: (error) => toast.error("保存失败：" + error.message),
+  });
+
+  const uploadReferenceMutation = useApiMutation({
+    mutationFn: async (session, payload: { assetId: string; file: File; setPrimary: boolean }) => {
+      const upload = await studioApi.createAssetReferenceUploadUrl(session, projectId, payload.assetId, {
+        fileName: payload.file.name,
+        mimeType: payload.file.type,
+        expiresSeconds: 900,
+      });
+      const headers = normalizeUploadHeaders(upload.headers, payload.file.type);
+      const uploadResponse = await fetch(upload.uploadUrl, {
+        method: upload.method || "PUT",
+        headers,
+        body: payload.file,
+      });
+      if (!uploadResponse.ok) {
+        throw new Error("参考图上传失败");
+      }
+      return studioApi.createAssetReference(session, projectId, payload.assetId, {
+        title: payload.file.name,
+        storageKey: upload.storageKey,
+        mimeType: payload.file.type,
+        referenceType: "uploaded",
+        setPrimary: payload.setPrimary,
+      });
+    },
+    onSuccess: (_response, payload) => {
+      toast.success("参考图已上传");
+      setReferenceUploadFile(null);
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = "";
+      }
+      invalidate([qk.assets(projectId), qk.assetReferences(projectId, payload.assetId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
+    },
+    onError: (error) => toast.error("上传失败：" + error.message),
+  });
+
+  const setPrimaryReferenceMutation = useApiMutation({
+    mutationFn: (session, payload: { assetId: string; referenceId: string }) =>
+      studioApi.setPrimaryAssetReference(session, projectId, payload.assetId, payload.referenceId),
+    onSuccess: (_response, payload) => {
+      toast.success("主图已更新");
+      invalidate([qk.assets(projectId), qk.assetReferences(projectId, payload.assetId), qk.productionStatus(projectId)]);
+    },
+    onError: (error) => toast.error("设置失败：" + error.message),
+  });
+
+  const deleteReferenceMutation = useApiMutation({
+    mutationFn: (session, payload: { assetId: string; referenceId: string }) =>
+      studioApi.deleteAssetReference(session, projectId, payload.assetId, payload.referenceId),
+    onSuccess: (_response, payload) => {
+      toast.success("参考图已解绑");
+      invalidate([qk.assets(projectId), qk.assetReferences(projectId, payload.assetId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
+    },
+    onError: (error) => toast.error("解绑失败：" + error.message),
   });
 
   const generateRequirementMutation = useApiMutation({
@@ -238,6 +344,41 @@ export function AssetsPage({
               );
             })}
           </div>
+
+          {selectedAsset && (
+            <AssetDetailPanel
+              asset={selectedAsset}
+              draft={assetDraft}
+              references={selectedReferences}
+              uploadFile={referenceUploadFile}
+              uploadInputRef={uploadInputRef}
+              onDraftChange={(patch) =>
+                setAssetDraftState((current) => ({
+                  assetId: selectedAsset.id,
+                  draft: { ...(current?.assetId === selectedAsset.id ? current.draft : draftFromAsset(selectedAsset)), ...patch },
+                }))
+              }
+              onFileChange={setReferenceUploadFile}
+              onSave={() => updateAssetMutation.mutate({ assetId: selectedAsset.id, body: assetDraft })}
+              onGenerateCard={() => generateCardMutation.mutate(selectedAsset.id)}
+              onGenerateImage={() => generateImageMutation.mutate(selectedAsset.id)}
+              onUpload={(setPrimary) => {
+                if (!referenceUploadFile) {
+                  toast.error("请选择参考图文件");
+                  return;
+                }
+                uploadReferenceMutation.mutate({ assetId: selectedAsset.id, file: referenceUploadFile, setPrimary });
+              }}
+              onSetPrimary={(referenceId) => setPrimaryReferenceMutation.mutate({ assetId: selectedAsset.id, referenceId })}
+              onDeleteReference={(referenceId) => deleteReferenceMutation.mutate({ assetId: selectedAsset.id, referenceId })}
+              isSaving={updateAssetMutation.isPending}
+              isGeneratingCard={generateCardMutation.isPending}
+              isGeneratingImage={generateImageMutation.isPending}
+              isUploading={uploadReferenceMutation.isPending}
+              isSettingPrimary={setPrimaryReferenceMutation.isPending}
+              isDeletingReference={deleteReferenceMutation.isPending}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="requirements" className="space-y-3">
@@ -334,11 +475,249 @@ function ArtifactGrid({ artifacts }: { artifacts: Artifact[] }) {
   );
 }
 
+function AssetDetailPanel({
+  asset,
+  draft,
+  references,
+  uploadFile,
+  uploadInputRef,
+  onDraftChange,
+  onFileChange,
+  onSave,
+  onGenerateCard,
+  onGenerateImage,
+  onUpload,
+  onSetPrimary,
+  onDeleteReference,
+  isSaving,
+  isGeneratingCard,
+  isGeneratingImage,
+  isUploading,
+  isSettingPrimary,
+  isDeletingReference,
+}: {
+  asset: CanonicalAsset;
+  draft: AssetDraft;
+  references: AssetReference[];
+  uploadFile: File | null;
+  uploadInputRef: { current: HTMLInputElement | null };
+  onDraftChange: (patch: Partial<AssetDraft>) => void;
+  onFileChange: (file: File | null) => void;
+  onSave: () => void;
+  onGenerateCard: () => void;
+  onGenerateImage: () => void;
+  onUpload: (setPrimary: boolean) => void;
+  onSetPrimary: (referenceId: string) => void;
+  onDeleteReference: (referenceId: string) => void;
+  isSaving: boolean;
+  isGeneratingCard: boolean;
+  isGeneratingImage: boolean;
+  isUploading: boolean;
+  isSettingPrimary: boolean;
+  isDeletingReference: boolean;
+}) {
+  const selectedPreview = assetPreviewUrl(asset, references, new Map());
+  const canSave = draft.name.trim() !== "" && draft.description.trim() !== "";
+
+  return (
+    <div className="grid gap-4 rounded-lg border bg-background p-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold">{asset.name}</h2>
+              <Badge variant="outline">{assetTypeLabel(asset.assetType)}</Badge>
+              <Badge variant="secondary">{statusLabel(asset.status)}</Badge>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">出现分场 {asset.sceneCount ?? asset.sceneLinks?.length ?? 0} 个，参考图 {references.length} 张</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={onGenerateCard} disabled={isGeneratingCard}>
+              <Wand2 className="h-4 w-4" />
+              重生成卡片
+            </Button>
+            <Button variant="outline" onClick={onGenerateImage} disabled={isGeneratingImage}>
+              <ImageIcon className="h-4 w-4" />
+              重生成图像
+            </Button>
+            <Button onClick={onSave} disabled={isSaving || !canSave}>
+              <Save className="h-4 w-4" />
+              保存资产
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="asset-name">名称</Label>
+            <Input id="asset-name" value={draft.name} onChange={(event) => onDraftChange({ name: event.target.value })} />
+          </div>
+          <div className="flex items-end gap-3 rounded-lg border p-3">
+            <Switch checked={draft.lockReference} onCheckedChange={(checked) => onDraftChange({ lockReference: checked })} />
+            <div>
+              <div className="text-sm font-medium">锁定当前参考图</div>
+              <div className="text-xs text-muted-foreground">后续重生成时优先保持当前主图身份</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="asset-description">描述</Label>
+          <Textarea id="asset-description" className="min-h-24" value={draft.description} onChange={(event) => onDraftChange({ description: event.target.value })} />
+        </div>
+
+        <div className="grid gap-3">
+          <PromptField
+            id="asset-base-prompt"
+            label="基础提示词"
+            value={draft.basePrompt}
+            onChange={(value) => onDraftChange({ basePrompt: value })}
+          />
+          <PromptField
+            id="asset-consistency-prompt"
+            label="一致性提示词"
+            value={draft.consistencyPrompt}
+            onChange={(value) => onDraftChange({ consistencyPrompt: value })}
+          />
+          <PromptField
+            id="asset-negative-prompt"
+            label="负向提示词"
+            value={draft.negativePrompt}
+            onChange={(value) => onDraftChange({ negativePrompt: value })}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium">来源分场</div>
+          {asset.sceneLinks?.length ? (
+            <div className="grid gap-2">
+              {asset.sceneLinks.map((link) => (
+                <div key={link.scriptSceneId} className="rounded-md border p-3 text-sm">
+                  <div className="font-medium">第 {link.sceneNo} 场 · {link.title}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{link.location || link.usageNote || "已关联剧本场景"}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">暂无场景关联</div>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="overflow-hidden rounded-lg border bg-muted">
+          {selectedPreview ? (
+            <img alt={asset.name} className="aspect-square w-full object-cover" src={selectedPreview} />
+          ) : (
+            <div className="grid aspect-square place-items-center">
+              <ImageIcon className="h-8 w-8 text-muted-foreground" />
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-lg border p-3">
+          <div className="mb-2 text-sm font-medium">上传参考图</div>
+          <div className="grid gap-2">
+            <Input
+              ref={uploadInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+            />
+            <div className="text-xs text-muted-foreground">{uploadFile ? uploadFile.name : "未选择文件"}</div>
+            <div className="flex gap-2">
+              <Button className="flex-1" variant="outline" onClick={() => onUpload(false)} disabled={isUploading || !uploadFile}>
+                <Upload className="h-4 w-4" />
+                上传
+              </Button>
+              <Button className="flex-1" onClick={() => onUpload(true)} disabled={isUploading || !uploadFile}>
+                <Star className="h-4 w-4" />
+                上传并设主图
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium">参考图</div>
+          {references.length === 0 && <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">暂无参考图</div>}
+          <div className="grid gap-2">
+            {references.map((reference) => (
+              <div key={reference.id} className="grid gap-2 rounded-lg border p-2">
+                <div className="flex gap-3">
+                  <div className="h-20 w-20 shrink-0 overflow-hidden rounded-md bg-muted">
+                    {reference.previewUrl ? (
+                      <img alt={reference.title || reference.storageKey || "参考图"} className="h-full w-full object-cover" src={reference.previewUrl} />
+                    ) : (
+                      <div className="grid h-full place-items-center">
+                        <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge variant={reference.isPrimary ? "default" : "outline"}>{reference.isPrimary ? "主图" : assetReferenceTypeLabel(reference.referenceType)}</Badge>
+                      <Badge variant="secondary">{statusLabel(reference.status)}</Badge>
+                    </div>
+                    <div className="mt-1 truncate text-sm font-medium">{reference.title || reference.storageKey || "参考图"}</div>
+                    {reference.prompt && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{reference.prompt}</p>}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    className="flex-1"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onSetPrimary(reference.id)}
+                    disabled={reference.isPrimary || isSettingPrimary}
+                  >
+                    <Star className="h-3.5 w-3.5" />
+                    设为主图
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onDeleteReference(reference.id)}
+                    disabled={isDeletingReference}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    解绑
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PromptField({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Textarea id={id} className="min-h-24" value={value} onChange={(event) => onChange(event.target.value)} />
+    </div>
+  );
+}
+
 function resolveSelectedScript(scripts: Script[], selectedScriptId: string) {
   return scripts.find((script) => script.id === selectedScriptId)
     ?? scripts.find((script) => script.status === "active")
     ?? scripts[0]
     ?? null;
+}
+
+function draftFromAsset(asset: CanonicalAsset): AssetDraft {
+  return {
+    name: asset.name ?? "",
+    description: asset.description ?? "",
+    basePrompt: asset.basePrompt ?? "",
+    consistencyPrompt: asset.consistencyPrompt ?? "",
+    negativePrompt: asset.negativePrompt ?? "",
+    lockReference: Boolean(asset.lockReference),
+  };
 }
 
 function ArtifactPreview({ artifact }: { artifact: Artifact }) {
@@ -372,4 +751,12 @@ function requirementPreviewUrl(requirement: ShotAssetRequirement, artifacts: Map
 
 function idPreview(id: string | undefined | null, artifacts: Map<string, string>) {
   return id ? artifacts.get(id) : undefined;
+}
+
+function normalizeUploadHeaders(headers: Record<string, string | string[]> | undefined, mimeType: string) {
+  const normalized: Record<string, string> = { "Content-Type": mimeType };
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    normalized[key] = Array.isArray(value) ? value.join(",") : value;
+  }
+  return normalized;
 }

@@ -113,6 +113,82 @@ func TestSetPrimaryAssetReferenceClearsOtherPrimaries(t *testing.T) {
 	assertOnlyPrimaryReference(t, seed, assetID, first.ID)
 }
 
+func TestDeleteAssetReferenceArchivesWithoutDeletingMedia(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	assetID := seed.insertCanonicalAsset(t, "character", "Lin Chu", "approved", "")
+	var ref AssetReference
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID+"/references", seed.ownerToken, seed.organizationID, map[string]any{
+		"title":         "front",
+		"storageKey":    "refs/front.png",
+		"mimeType":      "image/png",
+		"referenceType": "uploaded",
+		"setPrimary":    true,
+	}, &ref)
+	if ref.ArtifactID == nil || ref.MediaFileID == nil || ref.StorageKey == nil || !ref.IsPrimary {
+		t.Fatalf("created reference = %+v", ref)
+	}
+
+	var deleted struct {
+		Deleted         bool   `json:"deleted"`
+		Mode            string `json:"mode"`
+		ReferenceID     string `json:"referenceId"`
+		ArtifactDeleted bool   `json:"artifactDeleted"`
+		MediaDeleted    bool   `json:"mediaDeleted"`
+	}
+	doAPISuccess(t, server, http.MethodDelete, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID+"/references/"+ref.ID, seed.ownerToken, seed.organizationID, nil, &deleted)
+	if !deleted.Deleted || deleted.Mode != "archive" || deleted.ReferenceID != ref.ID || deleted.ArtifactDeleted || deleted.MediaDeleted {
+		t.Fatalf("delete response = %+v", deleted)
+	}
+
+	var status string
+	var primary bool
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT status, is_primary
+		FROM asset_references
+		WHERE id = $1 AND project_id = $2
+	`, ref.ID, seed.projectID).Scan(&status, &primary); err != nil {
+		t.Fatalf("read archived reference: %v", err)
+	}
+	if status != "archived" || primary {
+		t.Fatalf("archived reference status=%s primary=%v", status, primary)
+	}
+
+	var artifactCount, mediaCount int
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM artifacts WHERE id = $1),
+			(SELECT COUNT(*) FROM media_files WHERE id = $2)
+	`, *ref.ArtifactID, *ref.MediaFileID).Scan(&artifactCount, &mediaCount); err != nil {
+		t.Fatalf("read artifact/media counts: %v", err)
+	}
+	if artifactCount != 1 || mediaCount != 1 {
+		t.Fatalf("artifactCount=%d mediaCount=%d, want both retained", artifactCount, mediaCount)
+	}
+
+	var primaryArtifactID, referenceArtifactID, primaryStorageKey, referenceStorageKey string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT COALESCE(primary_reference_artifact_id::text, ''), COALESCE(reference_artifact_id::text, ''),
+		       COALESCE(primary_reference_storage_key, ''), COALESCE(reference_storage_key, '')
+		FROM canonical_assets
+		WHERE id = $1 AND project_id = $2
+	`, assetID, seed.projectID).Scan(&primaryArtifactID, &referenceArtifactID, &primaryStorageKey, &referenceStorageKey); err != nil {
+		t.Fatalf("read canonical asset references: %v", err)
+	}
+	if primaryArtifactID != "" || referenceArtifactID != "" || primaryStorageKey != "" || referenceStorageKey != "" {
+		t.Fatalf("canonical asset reference fields not cleared: primary=%s reference=%s primaryStorage=%s referenceStorage=%s", primaryArtifactID, referenceArtifactID, primaryStorageKey, referenceStorageKey)
+	}
+
+	var list struct {
+		Items []AssetReference `json:"items"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID+"/references", seed.ownerToken, seed.organizationID, nil, &list)
+	if len(list.Items) != 0 {
+		t.Fatalf("archived reference appeared in default list: %+v", list.Items)
+	}
+}
+
 func TestGenerateCanonicalAssetImageWritesAssetReference(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()

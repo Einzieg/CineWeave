@@ -2920,6 +2920,27 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/shot-asset-requirements/{requirementId}/skip:
+    post:
+      operationId: skipShotAssetRequirement
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequirementId"
+      responses:
+        "200":
+          description: Skipped shot asset requirement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotAssetRequirementEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/storyboard-shots:
     post:
       operationId: createStoryboardShot

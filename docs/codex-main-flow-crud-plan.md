@@ -972,7 +972,7 @@ docker compose -f compose.yml --profile app ps
 - [x] 剧本导入会创建 script 和 script_version。
 - [x] 剧本导入不会被当作小说章节拆分。
 - [x] 可添加创意文案。
-- [ ] 创意文案可生成剧本。
+- [x] 创意文案可生成剧本。
 - [x] 原始内容可查看。
 - [x] 原始内容可编辑。
 - [x] 原始内容可删除或归档。
@@ -980,9 +980,9 @@ docker compose -f compose.yml --profile app ps
 
 ### 8.3 剧本验收
 
-- [ ] 小说原文可以生成剧本。
-- [ ] 创意文案可以生成剧本。
-- [ ] 已有剧本可以改写为新版本。
+- [x] 小说原文可以生成剧本。
+- [x] 创意文案可以生成剧本。
+- [x] 已有剧本可以改写为新版本。
 - [x] 剧本编辑保存为新版本，不覆盖旧版本。
 - [x] 剧本版本可查看。
 - [x] 剧本版本可激活。
@@ -1007,19 +1007,19 @@ docker compose -f compose.yml --profile app ps
 
 ### 8.5 资产生成验收
 
-- [ ] 角色资产可生成图片。
-- [ ] 场景资产可生成图片。
-- [ ] 道具资产可生成图片。
-- [ ] 主资产和衍生资产使用不同提示词模板。
-- [ ] 资产 prompt 可查看。
-- [ ] 资产 prompt 可编辑。
-- [ ] 资产图片可查看。
-- [ ] 资产图片可删除或解绑。
-- [ ] 资产图片可重生成。
-- [ ] 资产可上传参考图。
-- [ ] 参考图可设为主图。
-- [ ] 参考图可删除。
-- [ ] 图片生成必须经过 Provider Gateway。
+- [x] 角色资产可生成图片。
+- [x] 场景资产可生成图片。
+- [x] 道具资产可生成图片。
+- [x] 主资产和衍生资产使用不同提示词模板。
+- [x] 资产 prompt 可查看。
+- [x] 资产 prompt 可编辑。
+- [x] 资产图片可查看。
+- [x] 资产图片可删除或解绑。
+- [x] 资产图片可重生成。
+- [x] 资产可上传参考图。
+- [x] 参考图可设为主图。
+- [x] 参考图可删除。
+- [x] 图片生成必须经过 Provider Gateway。
 - [ ] provider_call_logs、cost_records、artifacts、media_files 正确写入。
 
 ### 8.6 Toonflow 手册迁移验收
@@ -1101,7 +1101,7 @@ docker compose -f compose.yml --profile app ps
 - [x] Web lint 通过。
 - [x] OpenAPI YAML parse 通过。
 - [x] Docker Compose config 通过。
-- [ ] App profile build 后关键服务 healthy。
+- [x] App profile build 后关键服务 healthy。
 
 ---
 
