@@ -61,6 +61,7 @@ type artifactPreviewSeed struct {
 	ownerUserID         string
 	ownerToken          string
 	otherToken          string
+	workspaceID         string
 	projectID           string
 }
 
@@ -124,15 +125,14 @@ func setupArtifactPreviewTest(t *testing.T) (http.Handler, *artifactPreviewSeed)
 		ownerToken:          ownerResp.AccessToken,
 		otherToken:          otherResp.AccessToken,
 	}
-	var workspaceID string
-	if err := pool.QueryRow(ctx, `INSERT INTO workspaces(organization_id, name) VALUES ($1, 'Preview Workspace') RETURNING id`, seed.organizationID).Scan(&workspaceID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO workspaces(organization_id, name) VALUES ($1, 'Preview Workspace') RETURNING id`, seed.organizationID).Scan(&seed.workspaceID); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO projects(organization_id, workspace_id, name, created_by)
 		VALUES ($1, $2, 'Preview Project', $3)
 		RETURNING id
-	`, seed.organizationID, workspaceID, seed.ownerUserID).Scan(&seed.projectID); err != nil {
+	`, seed.organizationID, seed.workspaceID, seed.ownerUserID).Scan(&seed.projectID); err != nil {
 		t.Fatalf("insert project: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO project_members(project_id, user_id) VALUES ($1, $2)`, seed.projectID, seed.ownerUserID); err != nil {

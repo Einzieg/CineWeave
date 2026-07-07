@@ -122,6 +122,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{projectId}", s.withAuth(s.getProject))
 	mux.HandleFunc("PATCH /api/projects/{projectId}", s.withAuth(s.updateProject))
 	mux.HandleFunc("DELETE /api/projects/{projectId}", s.withAuth(s.deleteProject))
+	mux.HandleFunc("GET /api/project-manual-templates", s.withAuth(s.listProjectManualTemplates))
+	mux.HandleFunc("GET /api/projects/{projectId}/manual-bindings", s.withAuth(s.listProjectManualBindings))
+	mux.HandleFunc("PUT /api/projects/{projectId}/manual-bindings/{manualKind}", s.withAuth(s.bindProjectManual))
 	mux.HandleFunc("GET /api/projects/{projectId}/production/status", s.withAuth(s.getProductionStatus))
 	mux.HandleFunc("POST /api/projects/{projectId}/production/actions", s.withAuth(s.runProductionAction))
 	mux.HandleFunc("POST /api/projects/{projectId}/regenerate", s.withAuth(s.regenerateCreativeObject))
@@ -712,6 +715,23 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 		return
 	}
 
+	if directorManual == "" {
+		defaultManual, err := s.bindDefaultProjectManualTx(r.Context(), tx, orgID, item.ID, "director", principal.UserID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		item.DirectorManual = defaultManual
+	}
+	if visualManual == "" {
+		defaultManual, err := s.bindDefaultProjectManualTx(r.Context(), tx, orgID, item.ID, "visual", principal.UserID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		item.VisualManual = defaultManual
+	}
+
 	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -801,6 +821,12 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal
 	if err != nil {
 		s.writeError(w, r, err)
 		return
+	}
+	if req.DirectorManual != nil || req.VisualManual != nil {
+		if err := s.disableManualBindingsForDirectEdit(r.Context(), item.ID, req.DirectorManual != nil, req.VisualManual != nil); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }

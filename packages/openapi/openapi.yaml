@@ -645,6 +645,67 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/project-manual-templates:
+    get:
+      operationId: listProjectManualTemplates
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - name: filter[kind]
+          in: query
+          schema:
+            type: string
+            enum: [director, visual]
+      responses:
+        "200":
+          description: Versioned director or visual manual templates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptTemplateListEnvelope"
+  /api/projects/{projectId}/manual-bindings:
+    get:
+      operationId: listProjectManualBindings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Active project manual bindings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectManualBindingListEnvelope"
+  /api/projects/{projectId}/manual-bindings/{manualKind}:
+    put:
+      operationId: bindProjectManual
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: manualKind
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [director, visual]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BindProjectManualRequest"
+      responses:
+        "200":
+          description: Bound project manual
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectManualBindingEnvelope"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/production/status:
     get:
       operationId: getProductionStatus
@@ -5063,6 +5124,48 @@ components:
         updatedAt:
           type: string
           format: date-time
+    ProjectManualBinding:
+      type: object
+      required: [id, organizationId, projectId, manualKind, promptVersionId, templateId, templateKey, templateName, version, status, contentHash, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        manualKind:
+          type: string
+          enum: [director, visual]
+        promptVersionId:
+          type: string
+          format: uuid
+        templateId:
+          type: string
+          format: uuid
+        templateKey:
+          type: string
+        templateName:
+          type: string
+        version:
+          type: integer
+        status:
+          type: string
+          enum: [active, disabled]
+        contentHash:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     ProjectSource:
       type: object
       required: [id, organizationId, projectId, sourceType, title, contentFormat, status, metadata, createdAt, updatedAt]
@@ -8274,6 +8377,26 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Project"
+    ProjectManualBindingEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectManualBinding"
+    ProjectManualBindingListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProjectManualBinding"
     ProjectTimelineEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -11527,6 +11650,13 @@ components:
           default: silent_video
         settings:
           type: object
+    BindProjectManualRequest:
+      type: object
+      required: [promptVersionId]
+      properties:
+        promptVersionId:
+          type: string
+          format: uuid
     CreateProjectSourceRequest:
       type: object
       required: [sourceType, title, content]

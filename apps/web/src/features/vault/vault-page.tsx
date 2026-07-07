@@ -43,7 +43,7 @@ export function VaultPage({ projectId }: { projectId: string }) {
                 </div>
                 <div className="grid gap-1 text-xs text-muted-foreground">
                   <span>{artifact.mimeType || "未知类型"}</span>
-                  <span className="truncate">{artifact.storageKey || artifact.id}</span>
+                  <span className="truncate">{formatArtifactSummary(artifact)}</span>
                 </div>
               </div>
             </div>
@@ -59,11 +59,29 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
     return <video className="aspect-video w-full bg-black object-cover" controls src={artifact.previewUrl} />;
   }
   if (artifact.previewUrl) {
-    return <img alt={artifact.storageKey || artifact.id} className="aspect-video w-full bg-muted object-cover" src={artifact.previewUrl} />;
+    return <img alt={artifactTypeLabel(artifact.type)} className="aspect-video w-full bg-muted object-cover" src={artifact.previewUrl} />;
   }
   return (
     <div className="grid aspect-video place-items-center bg-muted">
       <ImageIcon className="h-6 w-6 text-muted-foreground" />
     </div>
   );
+}
+
+function formatArtifactSummary(artifact: Artifact) {
+  if (artifact.createdAt) {
+    return `创建于 ${formatDateTime(artifact.createdAt)}`;
+  }
+  return artifact.previewUrl ? "可预览" : "待生成预览";
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未记录时间";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }

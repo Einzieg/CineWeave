@@ -1,3 +1,5 @@
+DELETE FROM schema_migrations WHERE version = '000037_script_version_scene_archive';
+
 DROP INDEX IF EXISTS idx_script_scenes_project_deleted;
 DROP INDEX IF EXISTS idx_script_versions_project_status;
 

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorPanel } from "@/components/shared/error-panel";
 import { useApiQuery, useApiMutation, useInvalidateKeys } from "@/lib/query/use-api";
@@ -19,6 +20,14 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
   const { data: project, isLoading } = useApiQuery({
     key: qk.project(projectId),
     queryFn: (session) => studioApi.getProject(session, projectId),
+  });
+  const { data: manualTemplates = [] } = useApiQuery({
+    key: qk.projectManualTemplates(),
+    queryFn: (session) => studioApi.listProjectManualTemplates(session).then((response) => response.items),
+  });
+  const { data: manualBindings = [] } = useApiQuery({
+    key: qk.projectManualBindings(projectId),
+    queryFn: (session) => studioApi.listProjectManualBindings(session, projectId).then((response) => response.items),
   });
 
   const [draft, setDraft] = useState<Partial<Project>>({});
@@ -48,10 +57,24 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
       setDraft({});
       setError("");
       toast.success("项目设置已保存");
-      invalidateKeys([qk.project(projectId)]);
+      invalidateKeys([qk.project(projectId), qk.projectManualBindings(projectId)]);
     },
     onError: (err) => {
       setError(err instanceof StudioApiError ? err.message : "保存失败");
+    },
+  });
+
+  const bindManualMutation = useApiMutation({
+    mutationFn: (session, data: { kind: "director" | "visual"; promptVersionId: string }) =>
+      studioApi.bindProjectManual(session, projectId, data.kind, data.promptVersionId),
+    onSuccess: (_, variables) => {
+      setDraft({});
+      setError("");
+      toast.success(variables.kind === "director" ? "导演手册已绑定" : "视觉手册已绑定");
+      invalidateKeys([qk.project(projectId), qk.projectManualBindings(projectId)]);
+    },
+    onError: (err) => {
+      setError(err instanceof StudioApiError ? err.message : "绑定失败");
     },
   });
 
@@ -67,9 +90,14 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
     return <div>项目不存在</div>;
   }
 
+  const directorTemplates = manualTemplates.filter((item) => item.purpose === "director_manual" && item.activeVersion?.id);
+  const visualTemplates = manualTemplates.filter((item) => item.purpose === "visual_manual" && item.activeVersion?.id);
+  const directorBinding = manualBindings.find((item) => item.manualKind === "director");
+  const visualBinding = manualBindings.find((item) => item.manualKind === "visual");
+
   return (
     <Surface>
-      <SectionTitle title="项目设置" description="这些字段会被后续 Workflow 和 Prompt 读取。" />
+      <SectionTitle title="项目设置" description="这些字段会被后续任务和提示词读取。" />
       <div className="grid gap-4 p-5 md:grid-cols-2">
         <div className="space-y-2">
           <Label>项目名称</Label>
@@ -104,11 +132,51 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
           <Textarea rows={3} value={form.description ?? ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
         </div>
         <div className="space-y-2 md:col-span-2">
-          <Label>导演手册</Label>
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_260px] md:items-end">
+            <div>
+              <Label>导演手册</Label>
+            </div>
+            <Select
+              value={directorBinding?.promptVersionId ?? ""}
+              onValueChange={(promptVersionId) => bindManualMutation.mutate({ kind: "director", promptVersionId })}
+              disabled={bindManualMutation.isPending || directorTemplates.length === 0}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="绑定导演手册模板" />
+              </SelectTrigger>
+              <SelectContent>
+                {directorTemplates.map((template) => (
+                  <SelectItem key={template.id} value={template.activeVersion?.id ?? ""}>
+                    {template.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <Textarea rows={4} value={form.directorManual ?? ""} onChange={(e) => setDraft({ ...draft, directorManual: e.target.value })} />
         </div>
         <div className="space-y-2 md:col-span-2">
-          <Label>视觉手册</Label>
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_260px] md:items-end">
+            <div>
+              <Label>视觉手册</Label>
+            </div>
+            <Select
+              value={visualBinding?.promptVersionId ?? ""}
+              onValueChange={(promptVersionId) => bindManualMutation.mutate({ kind: "visual", promptVersionId })}
+              disabled={bindManualMutation.isPending || visualTemplates.length === 0}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="绑定视觉手册模板" />
+              </SelectTrigger>
+              <SelectContent>
+                {visualTemplates.map((template) => (
+                  <SelectItem key={template.id} value={template.activeVersion?.id ?? ""}>
+                    {template.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <Textarea rows={4} value={form.visualManual ?? ""} onChange={(e) => setDraft({ ...draft, visualManual: e.target.value })} />
         </div>
         <div className="md:col-span-2">

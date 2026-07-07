@@ -484,7 +484,7 @@ function ArtifactGrid({ artifacts }: { artifacts: Artifact[] }) {
                 </a>
               ) : null}
             </div>
-            <p className="truncate text-xs text-muted-foreground">{artifact.storageKey || artifact.id}</p>
+            <p className="truncate text-xs text-muted-foreground">{formatArtifactSummary(artifact)}</p>
           </div>
         </div>
       ))}
@@ -664,7 +664,7 @@ function AssetDetailPanel({
                 <div className="flex gap-3">
                   <div className="h-20 w-20 shrink-0 overflow-hidden rounded-md bg-muted">
                     {reference.previewUrl ? (
-                      <img alt={reference.title || reference.storageKey || "参考图"} className="h-full w-full object-cover" src={reference.previewUrl} />
+                      <img alt={reference.title || "参考图"} className="h-full w-full object-cover" src={reference.previewUrl} />
                     ) : (
                       <div className="grid h-full place-items-center">
                         <ImageIcon className="h-5 w-5 text-muted-foreground" />
@@ -676,7 +676,7 @@ function AssetDetailPanel({
                       <Badge variant={reference.isPrimary ? "default" : "outline"}>{reference.isPrimary ? "主图" : assetReferenceTypeLabel(reference.referenceType)}</Badge>
                       <Badge variant="secondary">{statusLabel(reference.status)}</Badge>
                     </div>
-                    <div className="mt-1 truncate text-sm font-medium">{reference.title || reference.storageKey || "参考图"}</div>
+                    <div className="mt-1 truncate text-sm font-medium">{reference.title || "参考图"}</div>
                     {reference.prompt && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{reference.prompt}</p>}
                   </div>
                 </div>
@@ -747,13 +747,32 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
     return <video className="aspect-video w-full bg-black object-cover" controls src={artifact.previewUrl} />;
   }
   if (artifact.previewUrl) {
-    return <img alt={artifact.storageKey || artifact.id} className="aspect-video w-full bg-muted object-cover" src={artifact.previewUrl} />;
+    return <img alt={artifactTypeLabel(artifact.type)} className="aspect-video w-full bg-muted object-cover" src={artifact.previewUrl} />;
   }
   return (
     <div className="grid aspect-video place-items-center bg-muted">
       <ImageIcon className="h-6 w-6 text-muted-foreground" />
     </div>
   );
+}
+
+function formatArtifactSummary(artifact: Artifact) {
+  const mimeType = artifact.mimeType || "媒体文件";
+  if (!artifact.createdAt) {
+    return mimeType;
+  }
+  return `${mimeType} · ${formatDateTime(artifact.createdAt)}`;
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未记录时间";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function assetPreviewUrl(asset: CanonicalAsset, references: CanonicalAsset["references"], artifacts: Map<string, string>) {

@@ -24,6 +24,8 @@ export const qk = {
 
   // 项目域
   project: (projectId: string) => ["project", projectId] as const,
+  projectManualTemplates: (kind?: string) => ["project-manual-templates", kind ?? "all"] as const,
+  projectManualBindings: (projectId: string) => ["project", projectId, "manual-bindings"] as const,
   productionStatus: (projectId: string) => ["project", projectId, "production-status"] as const,
   sources: (projectId: string) => ["project", projectId, "sources"] as const,
   sourceImpact: (projectId: string, sourceId: string) => ["project", projectId, "source-impact", sourceId] as const,

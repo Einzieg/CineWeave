@@ -153,7 +153,7 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium">{workflowLabel(workflowTypeFromRun(run))}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">{shortId(run.id)} · {formatDate(run.createdAt)}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{formatDate(run.createdAt)}</div>
                         </div>
                         <StatusBadge status={run.status} />
                       </div>
@@ -179,12 +179,17 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                           <StatusBadge status={selectedRun.status} />
                         </div>
                         <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
-                          <span>任务 ID：{selectedRun.id}</span>
-                          <span>Temporal：{selectedRun.temporalWorkflowId}</span>
                           <span>创建时间：{formatDate(selectedRun.createdAt)}</span>
                           {selectedRun.startedAt ? <span>开始时间：{formatDate(selectedRun.startedAt)}</span> : null}
                           {selectedRun.completedAt ? <span>完成时间：{formatDate(selectedRun.completedAt)}</span> : null}
                         </div>
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-xs text-muted-foreground">技术信息</summary>
+                          <div className="mt-1 grid gap-1 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+                            <span>任务编号：{shortId(selectedRun.id)}</span>
+                            {selectedRun.temporalWorkflowId ? <span>后台任务：{shortId(selectedRun.temporalWorkflowId)}</span> : null}
+                          </div>
+                        </details>
                       </div>
                       {selectedRunActive ? (
                         <Button
@@ -263,9 +268,7 @@ function NodeRunCard({ node }: { node: WorkflowNodeRun }) {
           <NodeStatusIcon status={node.status} />
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{nodeLabel(node.nodeKey, node.nodeType)}</div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {node.nodeKey} · {formatDate(node.startedAt || node.createdAt)}
-            </div>
+            <div className="mt-1 text-xs text-muted-foreground">{formatDate(node.startedAt || node.createdAt)}</div>
           </div>
         </div>
         <StatusBadge status={node.status} />
@@ -298,7 +301,10 @@ function RealtimeEventRow({ event }: { event: ActivityRealtimeEvent }) {
           <div className="text-sm font-medium">{activityEventLabel(event)}</div>
           <span className="text-xs text-muted-foreground">{formatDate(event.receivedAt)}</span>
         </div>
-        <div className="mt-1 truncate text-xs text-muted-foreground">{event.eventType}</div>
+        <details className="mt-1">
+          <summary className="cursor-pointer text-xs text-muted-foreground">事件详情</summary>
+          <div className="mt-1 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{event.eventType}</div>
+        </details>
         {hasMeaningfulValue(output) ? (
           <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-muted p-2 text-xs leading-relaxed">{jsonPreview(output)}</pre>
         ) : null}
@@ -370,17 +376,17 @@ function workflowInputSummary(run: WorkflowRun) {
   const nestedInput = recordValue(input.input);
   const chapterIds = arrayValue(nestedInput.chapterIds);
   const parts = [
-    stringValue(nestedInput.sourceId) ? `原文 ${shortId(stringValue(nestedInput.sourceId))}` : "",
+    stringValue(nestedInput.sourceId) ? "已选择原文" : "",
     chapterIds.length > 0 ? `分集 ${chapterIds.length}` : "",
-    stringValue(nestedInput.scriptId) ? `剧本 ${shortId(stringValue(nestedInput.scriptId))}` : "",
-    stringValue(nestedInput.timelineId) ? `时间线 ${shortId(stringValue(nestedInput.timelineId))}` : "",
+    stringValue(nestedInput.scriptId) ? "已选择剧本" : "",
+    stringValue(nestedInput.timelineId) ? "已选择时间线" : "",
     numberValue(nestedInput.maxShots) ? `镜头 ${numberValue(nestedInput.maxShots)}` : "",
   ].filter(Boolean);
   return parts.join(" · ") || statusLabel(run.status);
 }
 
 function nodeLabel(nodeKey: string, nodeType: string) {
-  return nodeLabels[nodeKey] ?? nodeLabels[nodeType] ?? nodeKey.replaceAll("_", " ");
+  return nodeLabels[nodeKey] ?? nodeLabels[nodeType] ?? "任务节点";
 }
 
 function activityEventLabel(event: ActivityRealtimeEvent) {
@@ -406,7 +412,7 @@ function activityEventLabel(event: ActivityRealtimeEvent) {
     case "workflow.run.cancelling":
       return "任务取消中";
     default:
-      return event.eventType;
+      return "任务更新";
   }
 }
 
@@ -417,9 +423,8 @@ function nodeOutputSummary(output: unknown) {
     arrayValue(record.events).length > 0 ? `事件 ${arrayValue(record.events).length}` : "",
     numberValue(record.linkCount) ? `关联 ${numberValue(record.linkCount)}` : "",
     numberValue(record.shotCount) ? `镜头 ${numberValue(record.shotCount)}` : "",
-    stringValue(record.scriptId) ? `剧本 ${shortId(stringValue(record.scriptId))}` : "",
-    stringValue(record.artifactId) ? `产物 ${shortId(stringValue(record.artifactId))}` : "",
-    stringValue(record.providerCallId) ? `调用 ${shortId(stringValue(record.providerCallId))}` : "",
+    stringValue(record.scriptId) ? "剧本已生成" : "",
+    stringValue(record.artifactId) ? "产物已生成" : "",
     stringValue(record.status) ? `状态 ${statusLabel(stringValue(record.status))}` : "",
   ].filter(Boolean);
   if (parts.length > 0) {

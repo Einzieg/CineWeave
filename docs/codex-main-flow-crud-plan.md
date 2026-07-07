@@ -956,12 +956,12 @@ docker compose -f compose.yml --profile app ps
 
 ### 8.1 主流程验收
 
-- [ ] 项目首页只展示“内容、剧本、资产、分镜、视频、成片”主流程。
-- [ ] 用户可以从项目首页按顺序完成完整链路。
-- [ ] 普通用户不需要理解 workflow run、provider task、artifact id、prompt hash 才能操作。
+- [x] 项目首页只展示“内容、剧本、资产、分镜、视频、成片”主流程。
+- [x] 用户可以从项目首页按顺序完成完整链路。
+- [x] 普通用户不需要理解 workflow run、provider task、artifact id、prompt hash 才能操作。
 - [x] 每个阶段都有明确主按钮。
 - [x] 每个阶段都有“缺什么、下一步做什么”的提示。
-- [ ] 所有用户可见状态均为中文。
+- [x] 所有用户可见状态均为中文。
 
 ### 8.2 添加内容验收
 
@@ -1020,20 +1020,20 @@ docker compose -f compose.yml --profile app ps
 - [x] 参考图可设为主图。
 - [x] 参考图可删除。
 - [x] 图片生成必须经过 Provider Gateway。
-- [ ] provider_call_logs、cost_records、artifacts、media_files 正确写入。
+- [x] provider_call_logs、cost_records、artifacts、media_files 正确写入。
 
 ### 8.6 Toonflow 手册迁移验收
 
-- [ ] 已 seed 默认导演手册。
-- [ ] 默认导演手册包含 README、导演规划、分镜表设计。
-- [ ] 已 seed 默认视觉手册。
-- [ ] 默认视觉手册包含角色、角色衍生、场景、场景衍生、道具、道具衍生、分镜、分镜视频相关模板。
-- [ ] 手册模板通过 Prompt Registry 版本化。
-- [ ] 项目可绑定导演手册。
-- [ ] 项目可绑定视觉手册。
-- [ ] Prompt 调用记录 promptVersionId 与 promptHash。
-- [ ] 未绕过 Provider Gateway。
-- [ ] 普通用户不会看到本地 skills 目录概念。
+- [x] 已 seed 默认导演手册。
+- [x] 默认导演手册包含 README、导演规划、分镜表设计。
+- [x] 已 seed 默认视觉手册。
+- [x] 默认视觉手册包含角色、角色衍生、场景、场景衍生、道具、道具衍生、分镜、分镜视频相关模板。
+- [x] 手册模板通过 Prompt Registry 版本化。
+- [x] 项目可绑定导演手册。
+- [x] 项目可绑定视觉手册。
+- [x] Prompt 调用记录 promptVersionId 与 promptHash。
+- [x] 未绕过 Provider Gateway。
+- [x] 普通用户不会看到本地 skills 目录概念。
 
 ### 8.7 分镜验收
 
@@ -1073,22 +1073,22 @@ docker compose -f compose.yml --profile app ps
 
 ### 8.9 Agent 验收
 
-- [ ] Agent 工具列表只展示用户有权限的工具。
-- [ ] Agent 默认 require_approval。
-- [ ] Agent 不绕过 RBAC。
-- [ ] Agent 不绕过 supervision。
-- [ ] Agent 不绕过 Provider Gateway。
-- [ ] workflow.start step 成功只表示启动成功，不表示子工作流完成。
-- [ ] Agent 不会在依赖 workflow 未完成时继续执行后续生产步骤。
-- [ ] Agent step 显示 dryRunOutput。
-- [ ] Agent step 显示 supervisorDecision。
-- [ ] Agent step 显示 output。
-- [ ] Agent step 显示 verifierOutput。
-- [ ] Agent step 输出能关联到业务产物卡。
-- [ ] 审批步骤可批准。
-- [ ] 审批步骤可拒绝。
-- [ ] 拒绝后不会执行该 step。
-- [ ] 取消 Agent task 可用。
+- [x] Agent 工具列表只展示用户有权限的工具。
+- [x] Agent 默认 require_approval。
+- [x] Agent 不绕过 RBAC。
+- [x] Agent 不绕过 supervision。
+- [x] Agent 不绕过 Provider Gateway。
+- [x] workflow.start step 成功只表示启动成功，不表示子工作流完成。
+- [x] Agent 不会在依赖 workflow 未完成时继续执行后续生产步骤。
+- [x] Agent step 显示 dryRunOutput。
+- [x] Agent step 显示 supervisorDecision。
+- [x] Agent step 显示 output。
+- [x] Agent step 显示 verifierOutput。
+- [x] Agent step 输出能关联到业务产物卡。
+- [x] 审批步骤可批准。
+- [x] 审批步骤可拒绝。
+- [x] 拒绝后不会执行该 step。
+- [x] 取消 Agent task 可用。
 
 ### 8.10 OpenAPI / CI 验收
 

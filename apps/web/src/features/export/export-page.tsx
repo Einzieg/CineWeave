@@ -133,7 +133,7 @@ export function ExportPage({ projectId }: { projectId: string }) {
                   <div className="min-w-0">
                     <div className="font-medium">{item.title}</div>
                     <div className="truncate text-sm text-muted-foreground">
-                      {exportTypeLabel(item.exportType)} · {item.format} · {item.storageKey || item.id}
+                      {exportTypeLabel(item.exportType)} · {formatExportFormat(item.format)} · {formatDateTime(item.createdAt)}
                     </div>
                   </div>
                 </div>
@@ -165,6 +165,22 @@ function exportTitle(projectName: string, exportType: string) {
     default:
       return `${name} 导出`;
   }
+}
+
+function formatExportFormat(value: string) {
+  return value ? value.toUpperCase() : "默认格式";
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return "未记录时间";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未记录时间";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function exportTypeLabel(value: string) {

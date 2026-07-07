@@ -28,6 +28,7 @@ import type {
   ParseScriptScenesResponse,
   Permission,
   Project,
+  ProjectManualBinding,
   ProjectSource,
   ProductionActionResponse,
   ProjectExport,
@@ -77,7 +78,7 @@ import type {
 const apiBase = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:19288");
 
 type ApiRequestOptions = {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   session?: StudioSession;
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined | null>;
@@ -159,6 +160,19 @@ export const studioApi = {
   createProject: (session: StudioSession, body: JsonRecord) => apiRequest<Project>("/api/projects", { method: "POST", session, body }),
   updateProject: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<Project>(`/api/projects/${projectId}`, { method: "PATCH", session, body }),
+  listProjectManualTemplates: (session: StudioSession, kind?: "director" | "visual") =>
+    apiRequest<ListEnvelope<PromptTemplate>>("/api/project-manual-templates", {
+      session,
+      query: kind ? { "filter[kind]": kind } : undefined,
+    }),
+  listProjectManualBindings: (session: StudioSession, projectId: string) =>
+    apiRequest<ListEnvelope<ProjectManualBinding>>(`/api/projects/${projectId}/manual-bindings`, { session }),
+  bindProjectManual: (session: StudioSession, projectId: string, manualKind: "director" | "visual", promptVersionId: string) =>
+    apiRequest<ProjectManualBinding>(`/api/projects/${projectId}/manual-bindings/${manualKind}`, {
+      method: "PUT",
+      session,
+      body: { promptVersionId },
+    }),
   getProductionStatus: (session: StudioSession, projectId: string) =>
     apiRequest<ProductionStatus>(`/api/projects/${projectId}/production/status`, { session }),
   runProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>

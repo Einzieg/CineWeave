@@ -137,11 +137,7 @@ function ToolMessage({ message }: { message: AgentMessage }) {
           </span>
         </div>
         <div className="mt-1 whitespace-pre-wrap break-words text-sm text-muted-foreground">{summary}</div>
-        {workflowRunId ? (
-          <div className="mt-2 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
-            任务：{workflowRunId}
-          </div>
-        ) : null}
+        {workflowRunId ? <div className="mt-2 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">生产任务已创建</div> : null}
       </div>
     </div>
   );

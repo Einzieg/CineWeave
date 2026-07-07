@@ -472,6 +472,51 @@ func TestProjectAgentWaitsForActiveNodesWhenWorkflowRunLooksComplete(t *testing.
 	}
 }
 
+func TestProjectAgentWaitsForActiveProviderTaskWhenWorkflowRunLooksComplete(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	server := New(seed.pool, seed.authService, nil, nil, nil)
+	project, err := seed.apiServer.project(requestWithContext(seed.ctx), seed.projectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	taskID := seed.insertAgentTaskWithGoal(t, "running", "等待视频任务完成后再列出资产")
+	workflowRunID := seed.insertWorkflowRunWithType(t, "script_to_video", "succeeded")
+	seed.insertProviderAsyncTask(t, workflowRunID, "running")
+	seed.insertAgentStepWithOutput(t, taskID, 1, "workflow.start", "workflow", "succeeded", string(mustMarshal(agentToolResult{
+		Name:   "workflow.start",
+		Status: "succeeded",
+		Data: map[string]any{
+			"workflowRunId": workflowRunID,
+			"workflowType":  "script_to_video",
+			"status":        "succeeded",
+		},
+	})))
+	assetStepID := seed.insertAgentStepWithInputOutput(t, taskID, 2, "asset.list", "read", "planned", `{}`, `{}`)
+
+	updated, err := server.executeAgentTaskReadySteps(requestWithContext(seed.ctx), auth.Principal{UserID: seed.ownerUserID, OrganizationID: seed.organizationID}, project, taskID)
+	if err != nil {
+		t.Fatalf("execute ready steps: %v", err)
+	}
+	if updated.Status != "running" {
+		t.Fatalf("task status = %s, want running", updated.Status)
+	}
+	assertAgentStepStatus(t, seed, assetStepID, "planned")
+	var summary struct {
+		WaitingForWorkflowRuns []agentPendingWorkflowRun `json:"waitingForWorkflowRuns"`
+	}
+	if err := json.Unmarshal(updated.Summary, &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if len(summary.WaitingForWorkflowRuns) != 1 || summary.WaitingForWorkflowRuns[0].ID != workflowRunID {
+		t.Fatalf("waiting runs = %#v, want %s", summary.WaitingForWorkflowRuns, workflowRunID)
+	}
+	if summary.WaitingForWorkflowRuns[0].Status != "succeeded" || summary.WaitingForWorkflowRuns[0].ActiveProviderTasks != 1 {
+		t.Fatalf("waiting run = %#v, want succeeded with one active provider task", summary.WaitingForWorkflowRuns[0])
+	}
+}
+
 func TestProjectAgentAutoContinuationAppendsNextProductionPlan(t *testing.T) {
 	_, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
@@ -1805,6 +1850,49 @@ func (s *artifactPreviewSeed) insertWorkflowNodeRun(t *testing.T, workflowRunID,
 		t.Fatalf("insert workflow node run: %v", err)
 	}
 	return nodeRunID
+}
+
+func (s *artifactPreviewSeed) insertProviderAsyncTask(t *testing.T, workflowRunID, status string) string {
+	t.Helper()
+	connectorKey := "agent-async-test-" + randomStorageSegment()
+	var connectorID string
+	if err := s.pool.QueryRow(s.ctx, `
+		INSERT INTO provider_connectors(connector_key, name, type, is_official, manifest)
+		VALUES ($1, 'Agent Async Test Connector', 'openai_compatible', false, '{}')
+		RETURNING id
+	`, connectorKey).Scan(&connectorID); err != nil {
+		t.Fatalf("insert provider connector: %v", err)
+	}
+	var accountID string
+	if err := s.pool.QueryRow(s.ctx, `
+		INSERT INTO provider_accounts(organization_id, connector_id, name, base_url, auth_type, status, config, created_by)
+		VALUES ($1, $2, 'Agent Async Test Account', 'http://provider.example.test', 'bearer', 'active', '{}', $3)
+		RETURNING id
+	`, s.organizationID, connectorID, s.ownerUserID).Scan(&accountID); err != nil {
+		t.Fatalf("insert provider account: %v", err)
+	}
+	var callID string
+	if err := s.pool.QueryRow(s.ctx, `
+		INSERT INTO provider_call_logs(
+			organization_id, project_id, workflow_run_id, provider_account_id, task_type, execution_mode, status,
+			request_snapshot, response_snapshot, normalized_output
+		)
+		VALUES ($1, $2, $3, $4, 'video.create_task', 'async', 'running', '{}', '{}', '{}')
+		RETURNING id
+	`, s.organizationID, s.projectID, workflowRunID, accountID).Scan(&callID); err != nil {
+		t.Fatalf("insert provider call log: %v", err)
+	}
+	var taskID string
+	if err := s.pool.QueryRow(s.ctx, `
+		INSERT INTO provider_async_tasks(
+			provider_call_id, organization_id, provider_account_id, workflow_run_id, external_task_id, status, raw_status
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, '{}')
+		RETURNING id
+	`, callID, s.organizationID, accountID, workflowRunID, "agent-async-"+randomStorageSegment(), status).Scan(&taskID); err != nil {
+		t.Fatalf("insert provider async task: %v", err)
+	}
+	return taskID
 }
 
 func (s *artifactPreviewSeed) insertReadyProviderProfiles(t *testing.T) {

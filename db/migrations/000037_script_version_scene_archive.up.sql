@@ -21,3 +21,6 @@ ALTER TABLE script_scenes
 
 CREATE INDEX IF NOT EXISTS idx_script_scenes_project_deleted
   ON script_scenes(project_id, deleted_at, script_id, scene_index);
+
+INSERT INTO schema_migrations(version) VALUES ('000037_script_version_scene_archive')
+ON CONFLICT (version) DO NOTHING;

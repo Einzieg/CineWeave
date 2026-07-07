@@ -111,6 +111,7 @@ export function AgentDrawer({ projectId }: AgentDrawerProps) {
           isLoading={isLoading || agentTasks.isCreatingTask}
           activity={
             <AgentTaskPanel
+              projectId={projectId}
               task={agentTasks.task}
               isLoading={agentTasks.isLoading}
               onApproveStep={agentTasks.approveStep}

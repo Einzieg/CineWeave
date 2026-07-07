@@ -72,6 +72,23 @@ export type Project = {
   updatedAt?: string;
 };
 
+export type ProjectManualBinding = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  manualKind: "director" | "visual" | string;
+  promptVersionId: string;
+  templateId: string;
+  templateKey: string;
+  templateName: string;
+  version: number;
+  status: string;
+  contentHash: string;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ProjectSource = {
   id: string;
   organizationId: string;
@@ -1322,16 +1339,32 @@ export type ProviderCircuitState = {
   updatedAt: string;
 };
 
+export type PromptVersionSummary = {
+  id: string;
+  version: number;
+  status: string;
+  title?: string | null;
+  contentHash: string;
+  createdAt?: string;
+  activatedAt?: string;
+};
+
 export type PromptTemplate = {
   id: string;
+  organizationId?: string | null;
   templateKey: string;
   name: string;
-  purpose?: string;
-  modality?: string;
-  taskType?: string;
+  description?: string | null;
+  purpose: string;
+  modality: string;
+  taskType: string;
+  scope: string;
   status: string;
-  activeVersionId?: string;
-  updatedAt?: string;
+  isSystem: boolean;
+  activeVersion?: PromptVersionSummary | null;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt?: string | null;
 };
 
 export type Organization = {

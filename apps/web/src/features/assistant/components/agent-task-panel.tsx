@@ -13,6 +13,9 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentApproval, AgentStep, AgentTask, JsonRecord, JsonValue } from "@/lib/types";
+import { projectHref } from "@/lib/routes";
+import Link from "next/link";
+import type { Route } from "next";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -34,6 +37,7 @@ type StepDecisionPayload = {
 };
 
 type AgentTaskPanelProps = {
+  projectId: string;
   task: AgentTask | null;
   isLoading?: boolean;
   onApproveStep: (payload: StepDecisionPayload) => void;
@@ -48,7 +52,7 @@ type PendingDecision = {
   step: AgentStep;
 };
 
-export function AgentTaskPanel({ task, isLoading, onApproveStep, onRejectStep, onCancelTask, onResumeTask, busy }: AgentTaskPanelProps) {
+export function AgentTaskPanel({ projectId, task, isLoading, onApproveStep, onRejectStep, onCancelTask, onResumeTask, busy }: AgentTaskPanelProps) {
   const [pendingDecision, setPendingDecision] = useState<PendingDecision | null>(null);
   const [note, setNote] = useState("");
   const [constraintText, setConstraintText] = useState("");
@@ -109,6 +113,7 @@ export function AgentTaskPanel({ task, isLoading, onApproveStep, onRejectStep, o
               {(task.steps || []).map((step) => (
                 <ToolCallCard
                   key={step.id}
+                  projectId={projectId}
                   step={step}
                   approval={approvalsByStep.get(step.id)}
                   onApprove={() => setPendingDecision({ kind: "approve", step })}
@@ -206,23 +211,21 @@ function ResultSummary({ task }: { task: AgentTask }) {
         <Badge variant={failed > 0 ? "destructive" : "outline"}>异常 {failed}</Badge>
         <Badge variant="outline">权限 {agentPermissionModeLabel(permissionMode)}</Badge>
       </div>
-      {task.temporalWorkflowId ? (
-        <div className="mt-2 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
-          Agent 工作流：{task.temporalWorkflowId}
-        </div>
-      ) : null}
+      {task.temporalWorkflowId ? <TechnicalDetails items={[["后台任务", shortID(task.temporalWorkflowId)]]} /> : null}
       <div className="mt-2 break-words text-xs text-muted-foreground">{summary || task.errorMessage || "任务已创建。"}</div>
     </div>
   );
 }
 
 function ToolCallCard({
+  projectId,
   step,
   approval,
   onApprove,
   onReject,
   busy,
 }: {
+  projectId: string;
   step: AgentStep;
   approval?: AgentApproval;
   onApprove: () => void;
@@ -242,6 +245,7 @@ function ToolCallCard({
   const output = asRecord(step.output);
   const retryable = Boolean(output?.retryable);
   const nextActions = stepNextActions(step);
+  const businessLinks = stepBusinessLinks(projectId, step);
 
   return (
     <article className="w-full min-w-0 max-w-full overflow-hidden rounded-md border bg-background p-3">
@@ -289,9 +293,16 @@ function ToolCallCard({
           </ul>
         </div>
       ) : null}
-      {stepWorkflowRunId(step) ? (
-        <div className="mt-2 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">工作流：{stepWorkflowRunId(step)}</div>
+      {businessLinks.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {businessLinks.map((link) => (
+            <Button asChild key={`${link.label}-${link.href}`} size="sm" variant="outline" className="h-7 px-2 text-xs">
+              <Link href={link.href as Route}>{link.label}</Link>
+            </Button>
+          ))}
+        </div>
       ) : null}
+      {stepWorkflowRunId(step) ? <TechnicalDetails items={[["任务编号", shortID(stepWorkflowRunId(step))]]} /> : null}
       {verifierStatus && verifierStatus !== "skipped" ? <VerifierLine verifier={verifier} /> : null}
       {step.errorMessage ? <div className="mt-2 text-xs text-destructive">{step.errorMessage}</div> : null}
 
@@ -300,7 +311,9 @@ function ToolCallCard({
         <div className="mt-2 space-y-2">
           <DetailBlock icon={<SquareTerminal className="h-3.5 w-3.5" />} label="输入" value={step.input} />
           <DetailBlock icon={<FileDiff className="h-3.5 w-3.5" />} label="预览" value={step.dryRunOutput} />
+          <DetailBlock icon={<ShieldCheck className="h-3.5 w-3.5" />} label="监督" value={step.supervisorDecision} />
           <DetailBlock icon={<FileDiff className="h-3.5 w-3.5" />} label="输出" value={step.output} />
+          <DetailBlock icon={<CheckCircle2 className="h-3.5 w-3.5" />} label="校验" value={step.verifierOutput} />
         </div>
       </details>
 
@@ -364,6 +377,24 @@ function DetailBlock({ icon, label, value }: { icon: React.ReactNode; label: str
         {prettyJSON(value)}
       </pre>
     </div>
+  );
+}
+
+function TechnicalDetails({ items }: { items: Array<[string, string]> }) {
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <details className="mt-2">
+      <summary className="cursor-pointer text-xs text-muted-foreground">技术信息</summary>
+      <div className="mt-1 grid gap-1 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+        {items.map(([label, value]) => (
+          <div key={label} className="truncate">
+            {label}：{value}
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -611,6 +642,42 @@ function stepNextActions(step: AgentStep) {
       tool: stringValue(item.tool),
     }))
     .filter((item) => item.label);
+}
+
+function stepBusinessLinks(projectId: string, step: AgentStep) {
+  const input = asRecord(step.input) || {};
+  const output = asRecord(step.output) || {};
+  const data = asRecord(output.data) || {};
+  const links: Array<{ label: string; href: string }> = [];
+  addBusinessLink(links, input.sourceId ?? data.sourceId, "查看内容", projectHref(projectId, "content"));
+  addBusinessLink(links, input.scriptId ?? data.scriptId, "查看剧本", projectHref(projectId, "scripts"));
+  addBusinessLink(links, input.assetId ?? data.assetId, "查看资产", projectHref(projectId, "assets"));
+  addBusinessLink(links, input.shotId ?? data.shotId, "查看分镜", projectHref(projectId, "storyboard"));
+  addBusinessLink(links, input.workflowRunId ?? data.workflowRunId ?? asRecord(data.workflowRun)?.id, "查看任务", projectHref(projectId, "video"));
+  addBusinessLink(links, input.finalVideoId ?? data.finalVideoId, "查看成片", projectHref(projectId, "final"));
+  addBusinessLink(links, input.fixId ?? data.fixId, "查看审阅", projectHref(projectId, "review"));
+  if (Array.isArray(data.artifacts) || Array.isArray(data.artifactIds) || stringValue(data.artifactId)) {
+    links.push({ label: "查看产物", href: projectHref(projectId, "assets") });
+  }
+  return dedupeBusinessLinks(links);
+}
+
+function addBusinessLink(links: Array<{ label: string; href: string }>, value: unknown, label: string, href: string) {
+  if (stringValue(value)) {
+    links.push({ label, href });
+  }
+}
+
+function dedupeBusinessLinks(links: Array<{ label: string; href: string }>) {
+  const seen = new Set<string>();
+  return links.filter((link) => {
+    const key = `${link.label}:${link.href}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -310,7 +310,7 @@ export function SourcesPage({
         qk.project(projectId),
       ]);
       if (run.id) {
-        toast.message(`工作流已创建：${run.id.slice(0, 8)}`);
+        toast.message("任务已启动");
       }
     },
     onError: (error) => {

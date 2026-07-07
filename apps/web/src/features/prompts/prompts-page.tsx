@@ -90,7 +90,7 @@ export function PromptsPage() {
 
                       {/* 元信息 */}
                       <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                        <span>版本: {template.activeVersionId?.slice(0, 8) || "未激活"}</span>
+                        <span>版本: {template.activeVersion?.id.slice(0, 8) || "未激活"}</span>
                         {template.modality && (
                           <span>· {modalityLabel(template.modality)}</span>
                         )}

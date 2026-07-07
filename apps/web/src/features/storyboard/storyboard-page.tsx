@@ -299,7 +299,7 @@ export function StoryboardPage({
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
                   <div>
                     <h3 className="text-lg font-semibold">镜头 {selectedShot.shotNo || selectedIndex + 1}</h3>
-                    <p className="mt-1 text-xs text-muted-foreground">{selectedShot.workflowRunId}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">分镜生产任务</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Badge variant="outline">图像 {statusLabel(selectedShot.imageStatus || selectedRow?.imageStatus || "pending")}</Badge>
