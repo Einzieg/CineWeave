@@ -522,12 +522,18 @@ func validateGatewayVideoDialogueSpans(dialogue []GatewayVideoDialogueSpan, targ
 		line.Speaker = strings.TrimSpace(line.Speaker)
 		line.Text = strings.TrimSpace(line.Text)
 		line.Delivery = strings.TrimSpace(line.Delivery)
-		line.Kind = strings.TrimSpace(line.Kind)
-		if line.Speaker == "" || line.Text == "" || line.StartTick < 0 || line.EndTick <= line.StartTick || line.EndTick > targetTicks {
-			return nil, &StandardErrorError{Standard: StandardError{Code: CodeStoryboardReplanRequired, Message: "video dialogue spans must contain exact text and valid shot-relative timing", Retryable: false}}
+		line.Kind = strings.ToLower(strings.TrimSpace(line.Kind))
+		if line.Kind == "" {
+			line.Kind = "dialogue"
+		}
+		if line.Kind != "dialogue" && line.Kind != "voiceover" && line.Kind != "narration" && line.Kind != "system" {
+			return nil, &StandardErrorError{Standard: StandardError{Code: CodeStoryboardReplanRequired, Message: "视频音轨片段包含不支持的类型，需要重新生成分镜计划", Retryable: false}}
+		}
+		if line.Text == "" || (line.Kind == "dialogue" && line.Speaker == "") || line.StartTick < 0 || line.EndTick <= line.StartTick || line.EndTick > targetTicks {
+			return nil, &StandardErrorError{Standard: StandardError{Code: CodeStoryboardReplanRequired, Message: "视频音轨片段必须包含准确文本和有效的镜头内时间范围；角色对白还必须包含说话人", Retryable: false}}
 		}
 		if line.StartTick%frameTick != 0 || line.EndTick%frameTick != 0 {
-			return nil, &StandardErrorError{Standard: StandardError{Code: CodeStoryboardReplanRequired, Message: "video dialogue spans must align to storyboard frame boundaries", Retryable: false}}
+			return nil, &StandardErrorError{Standard: StandardError{Code: CodeStoryboardReplanRequired, Message: "视频音轨片段必须与分镜帧边界对齐，需要重新生成分镜计划", Retryable: false}}
 		}
 	}
 	sort.SliceStable(result, func(left, right int) bool {

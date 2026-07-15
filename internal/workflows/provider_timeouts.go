@@ -35,6 +35,15 @@ func providerImageActivityOptions() workflow.ActivityOptions {
 	// Keep Temporal's activity deadline outside that window so the activity can
 	// persist the terminal provider result before Temporal schedules a retry.
 	options.StartToCloseTimeout = 15 * time.Minute
+	options.HeartbeatTimeout = providerTextHeartbeatTimeout
+	return options
+}
+
+func mediaProcessingActivityOptions() workflow.ActivityOptions {
+	options := defaultActivityOptions()
+	options.TaskQueue = MediaTaskQueue
+	options.StartToCloseTimeout = 30 * time.Minute
+	options.HeartbeatTimeout = providerTextHeartbeatTimeout
 	return options
 }
 
@@ -101,8 +110,15 @@ func (a Activities) generateProviderText(ctx context.Context, execution NodeExec
 }
 
 func startProviderTextHeartbeat(ctx context.Context, nodeRunID string) func() {
+	return startWorkflowActivityHeartbeat(ctx, map[string]any{
+		"nodeRunId": nodeRunID,
+		"phase":     "provider_text_stream",
+	})
+}
+
+func startWorkflowActivityHeartbeat(ctx context.Context, details map[string]any) func() {
 	done := make(chan struct{})
-	recordProviderTextHeartbeat(ctx, nodeRunID)
+	recordWorkflowActivityHeartbeat(ctx, details)
 	go func() {
 		ticker := time.NewTicker(providerTextHeartbeatEvery)
 		defer ticker.Stop()
@@ -113,21 +129,31 @@ func startProviderTextHeartbeat(ctx context.Context, nodeRunID string) func() {
 			case <-done:
 				return
 			case <-ticker.C:
-				recordProviderTextHeartbeat(ctx, nodeRunID)
+				recordWorkflowActivityHeartbeat(ctx, details)
 			}
 		}
 	}()
 	return func() { close(done) }
 }
 
-func recordProviderTextHeartbeat(ctx context.Context, nodeRunID string) {
+func recordWorkflowActivityHeartbeat(ctx context.Context, details map[string]any) {
 	defer func() {
 		_ = recover()
 	}()
-	activity.RecordHeartbeat(ctx, map[string]any{
-		"nodeRunId": nodeRunID,
-		"phase":     "provider_text_stream",
-	})
+	activity.RecordHeartbeat(ctx, details)
+}
+
+func currentActivityAttempt(ctx context.Context) (attempt int32) {
+	defer func() {
+		if recover() != nil {
+			attempt = 1
+		}
+	}()
+	attempt = activity.GetInfo(ctx).Attempt
+	if attempt <= 0 {
+		return 1
+	}
+	return attempt
 }
 
 const (

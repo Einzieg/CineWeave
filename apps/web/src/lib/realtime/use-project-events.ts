@@ -103,10 +103,10 @@ export function useProjectEvents(projectId: string) {
           }
           if (!response.ok) {
             const body = await readRealtimeError(response);
-            throw new Error(body.error?.code || `Realtime request failed with ${response.status}`);
+            throw new Error(body.error?.code || `实时事件连接失败：HTTP ${response.status}`);
           }
           if (!response.headers.get("content-type")?.includes("text/event-stream")) {
-            throw new Error("Realtime response is not an event stream");
+            throw new Error("实时事件服务返回了无效的响应格式");
           }
 
           await consumeServerSentEvents(response, (event) => {
@@ -120,7 +120,7 @@ export function useProjectEvents(projectId: string) {
               return;
             }
             if (event.event === "stream.error") {
-              throw new Error("Realtime stream reported a read failure");
+              throw new Error("实时事件读取失败");
             }
             let payload: Record<string, unknown> = {};
             try {

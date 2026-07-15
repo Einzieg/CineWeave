@@ -29,3 +29,11 @@ func TestDestructiveCommands(t *testing.T) {
 		t.Fatal("up must not be treated as destructive")
 	}
 }
+
+func TestMigrationContentHashIgnoresPlatformLineEndings(t *testing.T) {
+	lf := []byte("-- +goose Up\nSELECT 1;\n-- +goose Down\nSELECT 2;\n")
+	crlf := []byte("-- +goose Up\r\nSELECT 1;\r\n-- +goose Down\r\nSELECT 2;\r\n")
+	if migrationContentHash(lf) != migrationContentHash(crlf) {
+		t.Fatalf("migration hash differs by line ending: lf=%s crlf=%s", migrationContentHash(lf), migrationContentHash(crlf))
+	}
+}

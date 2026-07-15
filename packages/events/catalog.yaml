@@ -84,6 +84,7 @@ events:
   - {name: storyboard.segment.prompt.reviewed, schemaVersion: 1, scopeType: project, aggregateType: video_render_segment, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.segment.prompt.running, schemaVersion: 1, scopeType: project, aggregateType: video_render_segment, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.segment.queued, schemaVersion: 1, scopeType: project, aggregateType: video_render_segment, requiredPayloadFields: [], terminal: false}
+  - {name: storyboard.segment.retry_planned, schemaVersion: 1, scopeType: project, aggregateType: video_render_segment, requiredPayloadFields: [executionPlanId, renderSegmentId, status, workflowRunId], terminal: false}
   - {name: storyboard.segment.running, schemaVersion: 1, scopeType: project, aggregateType: video_render_segment, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.segment.succeeded, schemaVersion: 1, scopeType: project, aggregateType: video_render_segment, requiredPayloadFields: [], terminal: true}
   - {name: storyboard.shot.cancelled, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}

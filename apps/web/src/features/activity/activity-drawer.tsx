@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { studioApi } from "@/lib/api-client";
 import { cn } from "@/lib/cn";
+import { localizePlatformError } from "@/lib/error-localization";
 import { statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
@@ -64,7 +65,7 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     queryFn: (session) => studioApi.listWorkflowRuns(session, projectId).then((response) => response.items),
     enabled: activityOpen,
     refetchInterval: (query) =>
-      activityOpen && query.state.data?.some(isActiveWorkflow) ? 5000 : false,
+      activityOpen && connectionStatus !== "connected" && query.state.data?.some(isActiveWorkflow) ? 5000 : false,
   });
 
   const activeWorkflowCount = useMemo(() => workflowRuns.filter(isActiveWorkflow).length, [workflowRuns]);
@@ -90,7 +91,7 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     key: qk.workflowNodes(selectedWorkflowRunId || "none"),
     queryFn: (session) => studioApi.listWorkflowNodes(session, selectedWorkflowRunId).then((response) => response.items),
     enabled: activityOpen && !!selectedWorkflowRunId,
-    refetchInterval: activityOpen && selectedRunActive ? 3000 : false,
+    refetchInterval: activityOpen && connectionStatus !== "connected" && selectedRunActive ? 3000 : false,
   });
 
   const selectedLiveEvents = useMemo(() => {
@@ -279,7 +280,7 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                     ) : null}
                     {selectedRun.errorMessage ? (
                       <div className="mt-4 rounded-md border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
-                        {selectedRun.errorCode ? `${selectedRun.errorCode}：` : ""}{selectedRun.errorMessage}
+                        {localizePlatformError(selectedRun.errorMessage, selectedRun.errorCode)}
                       </div>
                     ) : null}
                   </section>
@@ -356,7 +357,7 @@ function NodeRunCard({ node }: { node: WorkflowNodeRun }) {
       ) : null}
       {node.errorMessage ? (
         <div className="mt-3 rounded-md border border-destructive/20 bg-destructive/10 p-2 text-xs text-destructive">
-          {node.errorCode ? `${node.errorCode}：` : ""}{node.errorMessage}
+          {localizePlatformError(node.errorMessage, node.errorCode)}
         </div>
       ) : null}
       {hasOutput ? (

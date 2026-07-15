@@ -1,6 +1,7 @@
 package dbseed
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -413,15 +414,21 @@ func loadResources() ([]resource, error) {
 			}
 			counts[table.Name] = len(rows)
 		}
-		hash := sha256.Sum256(content)
 		resources = append(resources, resource{
 			Path:   path,
-			Hash:   fmt.Sprintf("%x", hash),
+			Hash:   seedContentHash(content),
 			Data:   data,
 			Counts: counts,
 		})
 	}
 	return resources, nil
+}
+
+func seedContentHash(content []byte) string {
+	canonical := bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
+	canonical = bytes.ReplaceAll(canonical, []byte("\r"), []byte("\n"))
+	hash := sha256.Sum256(canonical)
+	return fmt.Sprintf("%x", hash)
 }
 
 func firstNonEmpty(values ...string) string {

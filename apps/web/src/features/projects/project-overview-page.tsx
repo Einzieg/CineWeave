@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { contentTypeLabel, projectTypeLabel, reviewSeverityLabel } from "@/lib/labels";
 import { nextProductionAction, productionActionLabel, productionRefreshKeys, runProductionAction } from "@/features/production/production-actions";
 import { projectHref } from "@/lib/routes";
+import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import type { ProductionStatus } from "@/lib/types";
 
 type FlowStage = {
@@ -32,6 +33,7 @@ type FlowStage = {
 
 export function ProjectOverviewPage({ projectId }: { projectId: string }) {
   const invalidate = useInvalidateKeys();
+  const pollingFallback = useProjectPollingFallback(projectId);
 
   // 获取项目信息
   const { data: project, isLoading: projectLoading } = useApiQuery({
@@ -48,7 +50,7 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
       if (!data) return false;
       // 检查overall status判断是否需要轮询
       const isRunning = data.overall?.status === "running" || data.overall?.status === "processing";
-      return isRunning ? 5000 : false; // 有运行中的任务时5秒轮询
+      return pollingFallback && isRunning ? 5000 : false;
     },
   });
 

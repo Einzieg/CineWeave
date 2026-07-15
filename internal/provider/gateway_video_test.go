@@ -25,6 +25,31 @@ func TestNormalizeGatewayVideoStatus(t *testing.T) {
 	}
 }
 
+func TestValidateGatewayVideoCreateTaskIdentityRejectsCrossExecutionReuse(t *testing.T) {
+	task := gatewayVideoTask{
+		NodeRunID: "node-old", NodeExecutionToken: "token-old", NodeAttemptGeneration: 1,
+	}
+	err := validateGatewayVideoCreateTaskIdentity(task, GatewayVideoCreateTaskRequest{
+		NodeRunID: "node-new", NodeExecutionToken: "token-new", NodeAttemptGeneration: 1,
+	})
+	standard, ok := StandardErrorFromError(err)
+	if !ok || standard.Code != CodeRenderPlanReplanRequired || standard.Retryable {
+		t.Fatalf("cross-execution task error = %#v, %v", standard, err)
+	}
+}
+
+func TestValidateGatewayVideoCreateTaskIdentityAllowsSameExecutionReplay(t *testing.T) {
+	task := gatewayVideoTask{
+		NodeRunID: "node-1", NodeExecutionToken: "token-1", NodeAttemptGeneration: 2,
+	}
+	err := validateGatewayVideoCreateTaskIdentity(task, GatewayVideoCreateTaskRequest{
+		NodeRunID: "node-1", NodeExecutionToken: "token-1", NodeAttemptGeneration: 2,
+	})
+	if err != nil {
+		t.Fatalf("same-execution replay error = %v", err)
+	}
+}
+
 func TestSelectVideoEndpointKeys(t *testing.T) {
 	manifest := ProviderManifest{Endpoints: map[string]ManifestEndpoint{
 		"custom_create": {EndpointType: "async_create"},

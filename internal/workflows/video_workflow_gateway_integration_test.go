@@ -334,6 +334,9 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 			if req.PromptTemplateKey != promptKeyStoryboardImage || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
 				t.Fatalf("image prompt trace = %+v", req)
 			}
+			if !strings.HasPrefix(req.IdempotencyKey, "shot-image:") || req.Options.IdempotencyKey != req.IdempotencyKey || req.Options.Retry {
+				t.Fatalf("image idempotency = %+v", req)
+			}
 			var imageInput map[string]any
 			if err := json.Unmarshal(req.Input, &imageInput); err != nil {
 				t.Fatalf("decode image input: %v", err)

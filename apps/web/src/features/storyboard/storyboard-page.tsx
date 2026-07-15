@@ -17,9 +17,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { studioApi } from "@/lib/api-client";
 import { cssAspectRatio } from "@/lib/aspect-ratio";
+import { localizePlatformError } from "@/lib/error-localization";
 import { assetTypeLabel, requirementTypeLabel, statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
+import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import { secondsToFrameTicks, wholeSecondDuration } from "@/lib/timing";
 import { cn } from "@/lib/utils";
 import type { ScriptTimingAnalysis, ShotProductionShot, StoryboardPlan, StoryboardShot, StoryboardShotDetail, StoryboardShotRequirementDetail, WorkflowRun } from "@/lib/types";
@@ -50,6 +52,7 @@ type ShotRow = {
   mood?: string;
   imagePrompt?: string;
   imagePromptStatus?: string;
+  imagePromptErrorCode?: string;
   imagePromptErrorMessage?: string;
   videoPrompt?: string;
   imageArtifactId?: string;
@@ -58,7 +61,9 @@ type ShotRow = {
   videoPreviewUrl?: string;
   imageStatus?: string;
   videoStatus?: string;
+  imageErrorCode?: string;
   imageErrorMessage?: string;
+  videoErrorCode?: string;
   videoErrorMessage?: string;
   staleState?: string;
   canGenerateImage?: boolean;
@@ -115,6 +120,7 @@ export function StoryboardPage({
   initialRequirementId?: string;
 }) {
   const invalidate = useInvalidateKeys();
+  const pollingFallback = useProjectPollingFallback(projectId);
   const [selectedEpisodeId, setSelectedEpisodeId] = useState("");
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [selectedShotId, setSelectedShotId] = useState(initialShotId);
@@ -154,7 +160,7 @@ export function StoryboardPage({
     queryFn: (session) => studioApi.listStoryboardPlans(session, projectId, effectiveEpisodeId).then((response) => response.items || []),
     enabled: !!effectiveEpisodeId,
     refetchInterval: (query) =>
-      query.state.data?.some((plan) => ["planning", "reviewing"].includes(plan.status)) ? 3000 : false,
+      pollingFallback && query.state.data?.some((plan) => ["planning", "reviewing"].includes(plan.status)) ? 5000 : false,
   });
   const activePlan = storyboardPlans.find((plan) => plan.active) ?? null;
   const effectivePlanId = storyboardPlans.some((plan) => plan.id === selectedPlanId)
@@ -165,14 +171,14 @@ export function StoryboardPage({
     key: qk.storyboardPlan(projectId, effectivePlanId || "none"),
     queryFn: (session) => studioApi.getStoryboardPlan(session, projectId, effectivePlanId),
     enabled: !!effectivePlanId,
-    refetchInterval: selectedPlanSummary && ["planning", "reviewing"].includes(selectedPlanSummary.status) ? 3000 : false,
+    refetchInterval: pollingFallback && selectedPlanSummary && ["planning", "reviewing"].includes(selectedPlanSummary.status) ? 5000 : false,
   });
 
   const { data: workflowRuns = [] } = useApiQuery({
     key: qk.workflowRuns(projectId),
     queryFn: (session) => studioApi.listWorkflowRuns(session, projectId).then((response) => response.items || []),
     refetchInterval: (query) =>
-      query.state.data?.some((run) => isActiveStoryboardRun(run, effectiveEpisodeId)) ? 4000 : false,
+      pollingFallback && query.state.data?.some((run) => isActiveStoryboardRun(run, effectiveEpisodeId)) ? 5000 : false,
   });
   const activeStoryboardRun = workflowRuns.find((run) => isActiveStoryboardRun(run, effectiveEpisodeId));
   const { data: shotProduction, isLoading: productionLoading } = useApiQuery({
@@ -185,7 +191,7 @@ export function StoryboardPage({
         previewExpiresSeconds: 900,
       }),
     enabled: !!effectiveEpisodeId && !!effectivePlanId,
-    refetchInterval: (query) => activeStoryboardRun || (query.state.data?.summary.running ?? 0) > 0 ? 3000 : false,
+    refetchInterval: (query) => pollingFallback && (activeStoryboardRun || (query.state.data?.summary.running ?? 0) > 0) ? 5000 : false,
   });
 
   const productionByShotId = useMemo(
@@ -615,9 +621,9 @@ export function StoryboardPage({
                       生成视频
                     </Button>
                   </div>
-                  {selectedRow?.imageErrorMessage ? <p className="text-xs text-destructive">图片错误：{selectedRow.imageErrorMessage}</p> : null}
-                  {selectedRow?.imagePromptErrorMessage ? <p className="text-xs text-destructive">图片提示词错误：{selectedRow.imagePromptErrorMessage}</p> : null}
-                  {selectedRow?.videoErrorMessage ? <p className="text-xs text-destructive">视频错误：{selectedRow.videoErrorMessage}</p> : null}
+                  {selectedRow?.imageErrorMessage ? <p className="text-xs text-destructive">图片错误：{localizePlatformError(selectedRow.imageErrorMessage, selectedRow.imageErrorCode)}</p> : null}
+                  {selectedRow?.imagePromptErrorMessage ? <p className="text-xs text-destructive">图片提示词错误：{localizePlatformError(selectedRow.imagePromptErrorMessage, selectedRow.imagePromptErrorCode)}</p> : null}
+                  {selectedRow?.videoErrorMessage ? <p className="text-xs text-destructive">视频错误：{localizePlatformError(selectedRow.videoErrorMessage, selectedRow.videoErrorCode)}</p> : null}
                   <div className="grid grid-cols-2 gap-3">
                     <FieldText label="时长（秒）" value={shotDraft.durationSeconds} onChange={(value) => setShotDraftField("durationSeconds", value)} disabled={!inspectingActivePlan} type="number" min={1} step={1} />
                     <FieldText label="情绪" value={shotDraft.mood} onChange={(value) => setShotDraftField("mood", value)} disabled={!inspectingActivePlan} />
@@ -975,6 +981,7 @@ function rowFromPlanShot(shot: StoryboardShot, production?: ShotProductionShot):
     ...row,
     imagePrompt: production.imagePrompt || row.imagePrompt,
     imagePromptStatus: production.imagePromptStatus,
+    imagePromptErrorCode: production.imagePromptErrorCode,
     imagePromptErrorMessage: production.imagePromptErrorMessage,
     videoPrompt: production.videoPrompt || row.videoPrompt,
     imageArtifactId: production.imageArtifactId,
@@ -983,7 +990,9 @@ function rowFromPlanShot(shot: StoryboardShot, production?: ShotProductionShot):
     videoPreviewUrl: production.videoPreviewUrl,
     imageStatus: production.imageStatus,
     videoStatus: production.videoStatus,
+    imageErrorCode: production.imageErrorCode,
     imageErrorMessage: production.imageErrorMessage,
+    videoErrorCode: production.videoErrorCode,
     videoErrorMessage: production.videoErrorMessage,
     staleState: production.staleState,
     canGenerateImage: production.canGenerateImage,

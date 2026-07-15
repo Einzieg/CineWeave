@@ -9,11 +9,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Activity, CheckCircle2, Clock, XCircle, type LucideIcon } from "lucide-react";
 import { productionFieldLabel, productionStageLabel } from "@/lib/labels";
+import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import type { ProductionStatus } from "@/lib/types";
 
 type ProductionStage = ProductionStatus["stages"][keyof ProductionStatus["stages"]];
 
 export function ProductionPage({ projectId }: { projectId: string }) {
+  const pollingFallback = useProjectPollingFallback(projectId);
   // 获取生产状态
   const { data: status, isLoading } = useApiQuery({
     key: qk.productionStatus(projectId),
@@ -21,7 +23,7 @@ export function ProductionPage({ projectId }: { projectId: string }) {
     refetchInterval: (query) => {
       const data = query.state.data;
       const isRunning = data?.overall?.status === "running";
-      return isRunning ? 5000 : false;
+      return pollingFallback && isRunning ? 5000 : false;
     },
   });
 

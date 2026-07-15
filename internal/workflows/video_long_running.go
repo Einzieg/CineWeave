@@ -217,6 +217,13 @@ func ShotVideoContinuityGroupWorkflow(ctx workflow.Context, input ShotVideoConti
 	return crossShotVideoContinuityGroupWorkflow(ctx, input)
 }
 
+func shotVideoBatchFailureScope(ctx workflow.Context) string {
+	if workflow.GetVersion(ctx, "video-explicit-batch-failure-scope-v1", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		return ""
+	}
+	return workflowFailureScopeBatchItem
+}
+
 func legacyShotVideoContinuityGroupWorkflow(ctx workflow.Context, input ShotVideoContinuityGroupInput) (BatchShotProductionOutput, error) {
 	options := input.Options
 	textInput := input.TextInput
@@ -225,11 +232,13 @@ func legacyShotVideoContinuityGroupWorkflow(ctx workflow.Context, input ShotVide
 	createOptions.RetryPolicy.MaximumAttempts = 1
 	createCtx := workflow.WithActivityOptions(ctx, createOptions)
 	output := newBatchShotVideoOutput(textInput, groupShotIDs(input.Group))
+	failureScope := shotVideoBatchFailureScope(ctx)
 	for index, shot := range input.Group.Shots {
 		rendered, err := executeShotRenderPlan(ctx, createCtx, ShotRenderExecutionInput{
 			OrganizationID: textInput.OrganizationID, ProjectID: textInput.ProjectID, WorkflowRunID: textInput.WorkflowRunID,
 			CreatedBy: textInput.CreatedBy, ShotID: shot.ShotID, ShotIndex: shot.ShotIndex, ShotNo: shot.ShotNo,
-			WorkflowPrompt: "batch_generate_shot_videos", AspectRatio: options.AspectRatio, Resolution: options.Resolution,
+			WorkflowPrompt: "batch_generate_shot_videos", FailureScope: failureScope,
+			AspectRatio: options.AspectRatio, Resolution: options.Resolution,
 			AudioStrategy: options.AudioStrategy, AudioRequirement: options.AudioRequirement, Force: options.Force,
 			MaxPolls: options.MaxPolls, PollInterval: time.Duration(options.PollIntervalSeconds) * time.Second,
 		})
@@ -260,6 +269,7 @@ func crossShotVideoContinuityGroupWorkflow(ctx workflow.Context, input ShotVideo
 	if input.Group.ContinuityGroupID == "" {
 		return executeIndependentShotVideoGroup(ctx, createCtx, input, output)
 	}
+	failureScope := shotVideoBatchFailureScope(ctx)
 	if strings.TrimSpace(input.Group.InitialDependencyError) != "" {
 		markContinuityReferenceUnavailable(&output, input.Group.Shots, 0, input.Group.InitialDependencyError)
 		output.Status = batchShotOutputStatus(output)
@@ -285,7 +295,8 @@ func crossShotVideoContinuityGroupWorkflow(ctx workflow.Context, input ShotVideo
 		rendered, err := executeShotRenderPlan(ctx, createCtx, ShotRenderExecutionInput{
 			OrganizationID: textInput.OrganizationID, ProjectID: textInput.ProjectID, WorkflowRunID: textInput.WorkflowRunID,
 			CreatedBy: textInput.CreatedBy, ShotID: shot.ShotID, ShotIndex: shot.ShotIndex, ShotNo: shot.ShotNo,
-			WorkflowPrompt: "batch_generate_shot_videos", AspectRatio: options.AspectRatio, Resolution: options.Resolution,
+			WorkflowPrompt: "batch_generate_shot_videos", FailureScope: failureScope,
+			AspectRatio: options.AspectRatio, Resolution: options.Resolution,
 			AudioStrategy: options.AudioStrategy, AudioRequirement: options.AudioRequirement, Force: options.Force,
 			MaxPolls: options.MaxPolls, PollInterval: time.Duration(options.PollIntervalSeconds) * time.Second,
 			ContinuityFirstFrame: continuityFrame,
@@ -318,11 +329,13 @@ func crossShotVideoContinuityGroupWorkflow(ctx workflow.Context, input ShotVideo
 func executeIndependentShotVideoGroup(ctx, createCtx workflow.Context, input ShotVideoContinuityGroupInput, output BatchShotProductionOutput) (BatchShotProductionOutput, error) {
 	options := input.Options
 	textInput := input.TextInput
+	failureScope := shotVideoBatchFailureScope(ctx)
 	for index, shot := range input.Group.Shots {
 		rendered, err := executeShotRenderPlan(ctx, createCtx, ShotRenderExecutionInput{
 			OrganizationID: textInput.OrganizationID, ProjectID: textInput.ProjectID, WorkflowRunID: textInput.WorkflowRunID,
 			CreatedBy: textInput.CreatedBy, ShotID: shot.ShotID, ShotIndex: shot.ShotIndex, ShotNo: shot.ShotNo,
-			WorkflowPrompt: "batch_generate_shot_videos", AspectRatio: options.AspectRatio, Resolution: options.Resolution,
+			WorkflowPrompt: "batch_generate_shot_videos", FailureScope: failureScope,
+			AspectRatio: options.AspectRatio, Resolution: options.Resolution,
 			AudioStrategy: options.AudioStrategy, AudioRequirement: options.AudioRequirement, Force: options.Force,
 			MaxPolls: options.MaxPolls, PollInterval: time.Duration(options.PollIntervalSeconds) * time.Second,
 		})

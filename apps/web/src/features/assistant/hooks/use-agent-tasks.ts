@@ -57,8 +57,10 @@ export function useAgentTasks(projectId: string, sessionId?: string | null, enab
   });
   const task = taskDetailQuery.data || activeTask || null;
   const refreshSignature = useMemo(() => (task ? agentTaskRefreshSignature(task) : ""), [task]);
+  const productionRefreshSignature = useMemo(() => (task ? agentTaskProductionRefreshSignature(task) : ""), [task]);
   const generatedScript = useMemo(() => (task ? agentTaskGeneratedScript(task) : null), [task]);
   const lastRefreshSignatureRef = useRef("");
+  const lastProductionRefreshSignatureRef = useRef("");
   const lastGeneratedScriptRef = useRef("");
 
   useEffect(() => {
@@ -66,11 +68,16 @@ export function useAgentTasks(projectId: string, sessionId?: string | null, enab
       return;
     }
     lastRefreshSignatureRef.current = refreshSignature;
-    invalidate([
-      ...(scopedSessionId ? [qk.agentMessages(projectId, scopedSessionId)] : []),
-      ...projectAgentProductionInvalidationKeys(projectId),
-    ]);
+    if (scopedSessionId) invalidate([qk.agentMessages(projectId, scopedSessionId)]);
   }, [invalidate, projectId, refreshSignature, scopedSessionId]);
+
+  useEffect(() => {
+    if (!productionRefreshSignature || productionRefreshSignature === lastProductionRefreshSignatureRef.current) {
+      return;
+    }
+    lastProductionRefreshSignatureRef.current = productionRefreshSignature;
+    invalidate(projectAgentProductionInvalidationKeys(projectId));
+  }, [invalidate, productionRefreshSignature, projectId]);
 
   useEffect(() => {
     if (!workflowEventRevision || !activeTask?.id) {
@@ -79,7 +86,6 @@ export function useAgentTasks(projectId: string, sessionId?: string | null, enab
     invalidate([
       qk.agentTask(projectId, activeTask.id),
       qk.agentTasks(projectId, scopedSessionId),
-      ...projectAgentProductionInvalidationKeys(projectId),
     ]);
   }, [activeTask?.id, invalidate, projectId, scopedSessionId, workflowEventRevision]);
 
@@ -229,6 +235,13 @@ function agentTaskRefreshSignature(task: AgentTask) {
     task.completedAt || "",
     stepSignature,
   ].join(":");
+}
+
+function agentTaskProductionRefreshSignature(task: AgentTask) {
+  const stepSignature = (task.steps || [])
+    .map((step) => `${step.id}:${step.status}:${step.completedAt || ""}`)
+    .join("|");
+  return [task.id, task.status, task.completedAt || "", stepSignature].join(":");
 }
 
 function agentTaskGeneratedScript(task: AgentTask) {

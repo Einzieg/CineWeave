@@ -81,6 +81,7 @@ type CreateShotVideoTaskInput struct {
 	ShotNo    int    `json:"shotNo"`
 
 	WorkflowPrompt             string                        `json:"workflowPrompt"`
+	FailureScope               string                        `json:"failureScope,omitempty"`
 	Duration                   float64                       `json:"duration"`
 	PlannedDuration            float64                       `json:"plannedDuration,omitempty"`
 	AspectRatio                string                        `json:"aspectRatio"`
@@ -135,6 +136,7 @@ type PollShotVideoTaskInput struct {
 	OrganizationID      string `json:"organizationId"`
 	ProjectID           string `json:"projectId"`
 	WorkflowRunID       string `json:"workflowRunId"`
+	FailureScope        string `json:"failureScope,omitempty"`
 	ShotID              string `json:"shotId"`
 	ShotIndex           int    `json:"shotIndex"`
 	ShotNo              int    `json:"shotNo"`
@@ -463,6 +465,13 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeExecution, "image_failed", "storyboard.shot.image.failed", workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
 
+	idempotencyKey := "shot-image:" + nodeExecution.NodeRunID
+	stopHeartbeat := startWorkflowActivityHeartbeat(ctx, map[string]any{
+		"nodeRunId": nodeExecution.NodeRunID,
+		"shotId":    shot.ID,
+		"phase":     "provider_image_generate",
+	})
+	defer stopHeartbeat()
 	gatewayResp, err := a.gateway.GenerateImage(ctx, provider.GatewayImageRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
@@ -473,6 +482,7 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 		PromptVersionID:   promptTrace.PromptVersionID,
 		PromptHash:        promptHash,
 		PromptSource:      promptSource,
+		IdempotencyKey:    idempotencyKey,
 		Input: mustJSON(map[string]any{
 			"prompt":         finalPrompt,
 			"negativePrompt": promptTrace.NegativePrompt,
@@ -482,6 +492,10 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 			"quality":        projectSettings.ImageQuality,
 		}),
 		References: assetContext.ImageReferences,
+		Options: provider.GatewayImageOptions{
+			IdempotencyKey: idempotencyKey,
+			Retry:          currentActivityAttempt(ctx) > 1,
+		},
 	})
 	if err != nil {
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeExecution, "image_failed", "storyboard.shot.image.failed", workflowErrorFromProvider(err, codeActivityFailed))
@@ -509,6 +523,7 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 		WorkflowRunID:  input.WorkflowRunID,
 		Prompt:         input.WorkflowPrompt,
 		CreatedBy:      input.CreatedBy,
+		FailureScope:   input.FailureScope,
 	}
 	if err := validateStoryboardInput(baseInput); err != nil {
 		return CreateShotVideoTaskOutput{}, err
@@ -723,6 +738,7 @@ func (a Activities) PollShotVideoTask(ctx context.Context, input PollShotVideoTa
 		ProjectID:      input.ProjectID,
 		WorkflowRunID:  input.WorkflowRunID,
 		Prompt:         "video polling",
+		FailureScope:   input.FailureScope,
 	}
 	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.NodeRunID) == "" {
 		return PollShotVideoTaskOutput{}, fmt.Errorf("organizationId, projectId, workflowRunId, and nodeRunId are required")
@@ -1563,7 +1579,7 @@ func (a Activities) failShotActivity(ctx context.Context, input TextToStoryboard
 	if err == nil {
 		_, err = failNodeRunTx(persistCtx, tx, nodeExecution, code, message, json.RawMessage(`{}`))
 	}
-	if err == nil && !strings.HasPrefix(input.Prompt, "batch_") {
+	if err == nil && shouldTransitionWorkflowOnActivityFailure(input) {
 		_, _, err = transitionWorkflowRunTx(persistCtx, tx, input.WorkflowRunID, "failed", code, message, mustJSON(map[string]any{
 			"code": code, "message": message,
 		}))

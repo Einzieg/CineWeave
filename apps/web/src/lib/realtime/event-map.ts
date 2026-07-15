@@ -17,6 +17,7 @@ type InvalidationHandler =
   | "export"
   | "final"
   | "project"
+  | "progress"
   | "provider"
   | "review"
   | "storyboard"
@@ -110,7 +111,8 @@ export const projectEventInvalidation = {
   "storyboard.segment.prompt.reviewed": "storyboard",
   "storyboard.segment.prompt.running": "storyboard",
   "storyboard.segment.queued": "storyboard",
-  "storyboard.segment.running": "storyboard",
+  "storyboard.segment.retry_planned": "storyboard",
+  "storyboard.segment.running": "progress",
   "storyboard.segment.succeeded": "storyboard",
   "storyboard.shot.cancelled": "storyboard",
   "storyboard.shot.continuity_frame.extracted": "storyboard",
@@ -129,7 +131,7 @@ export const projectEventInvalidation = {
   "storyboard.shot.video.composed": "storyboard",
   "storyboard.shot.video.created": "storyboard",
   "storyboard.shot.video.failed": "storyboard",
-  "storyboard.shot.video.polled": "storyboard",
+  "storyboard.shot.video.polled": "progress",
   "storyboard.shot.video.segment_failed": "storyboard",
   "storyboard.shot.video.stale": "storyboard",
   "storyboard.shot.video_prompt.context_changed": "storyboard",
@@ -148,7 +150,7 @@ export const projectEventInvalidation = {
   "workflow.node.cancelled": "workflow",
   "workflow.node.completed": "workflow",
   "workflow.node.failed": "workflow",
-  "workflow.node.progress": "workflow",
+  "workflow.node.progress": "progress",
   "workflow.node.started": "workflow",
   "workflow.result.discarded": "workflow",
   "workflow.run.cancel_warning": "workflow",
@@ -207,6 +209,9 @@ export function keysForProjectEvent(
         qk.productionStatus(projectId),
         ...(workflowRunId ? [qk.workflowNodes(workflowRunId)] : []),
       );
+      break;
+    case "progress":
+      if (workflowRunId) keys.push(qk.workflowNodes(workflowRunId));
       break;
     case "artifact":
       keys.push(qk.artifacts(projectId));

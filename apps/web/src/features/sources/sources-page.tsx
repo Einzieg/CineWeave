@@ -30,10 +30,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { localizePlatformError } from "@/lib/error-localization";
 import { contentFormatLabel, sourceTypeLabel, statusLabel, targetFormatLabel } from "@/lib/labels";
 import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
 import { useUiStore } from "@/lib/stores/ui-store";
 import { isActiveWorkflowStatus } from "@/lib/workflow-status";
+import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import type { AdaptationPlan, JsonRecord, NovelChapterSummary, ProjectSource, ScriptEpisode, WorkflowRun } from "@/lib/types";
 import { EpisodeAudioPanel } from "@/features/sources/episode-audio-panel";
 
@@ -101,6 +103,7 @@ export function SourcesPage({
   const [planEditDraft, setPlanEditDraft] = useState<{ planId: string; form: AdaptationPlanEditForm } | null>(null);
   const [scriptEpisodeEditDraft, setScriptEpisodeEditDraft] = useState<{ episodeId: string; form: ScriptEpisodeEditForm } | null>(null);
   const invalidate = useInvalidateKeys();
+  const pollingFallback = useProjectPollingFallback(projectId);
   const { open: openAgent, setContext } = useAgentDrawerStore();
   const setActivityOpen = useUiStore((state) => state.setActivityOpen);
   const generatedScriptFocus = useUiStore((state) => state.latestGeneratedScripts[projectId]);
@@ -135,7 +138,7 @@ export function SourcesPage({
     queryFn: (session) => studioApi.listWorkflowRuns(session, projectId).then((response) => response.items || []),
     enabled: visibleTab === "scripts",
     refetchInterval: (query) =>
-      query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
+      pollingFallback && query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
   });
 
   const { data: chapters = [], isLoading: chaptersLoading } = useApiQuery({
@@ -1113,7 +1116,7 @@ export function SourcesPage({
                                 </div>
                               </div>
                             </div>
-                            {chapter.errorMessage ? <div className="text-xs text-destructive">{chapter.errorMessage}</div> : null}
+                            {chapter.errorMessage ? <div className="text-xs text-destructive">{localizePlatformError(chapter.errorMessage)}</div> : null}
                           </div>
                         ))}
                       </div>
@@ -1452,9 +1455,14 @@ export function SourcesPage({
                 <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="destructive">提取失败</Badge>
-                    <span className="text-sm font-medium">{latestAssetExtractionError.errorCode || "ASSET_EXTRACTION_FAILED"}</span>
                   </div>
-                  <p className="mt-2 text-sm text-muted-foreground">{latestAssetExtractionError.errorMessage || "资产提取未完成，请重新提取或检查供应商调用日志。"}</p>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    {localizePlatformError(
+                      latestAssetExtractionError.errorMessage,
+                      latestAssetExtractionError.errorCode,
+                      "资产提取未完成，请重新提取或检查供应商调用日志。",
+                    )}
+                  </p>
                 </div>
               ) : null}
 
