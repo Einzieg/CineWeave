@@ -5,6 +5,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
+import { localizePlatformError } from "@/lib/error-localization";
 import type {
   JsonRecord,
   JsonValue,
@@ -602,7 +603,7 @@ export function ProvidersPage() {
       if (result.status === "succeeded") {
         toast.success("模型测试成功");
       } else {
-        toast.error(result.errorMessage || "模型测试失败");
+        toast.error(localizePlatformError(result.errorMessage, result.errorCode, "模型测试失败"));
       }
     },
     onError: (error) => toast.error("模型测试失败：" + error.message),

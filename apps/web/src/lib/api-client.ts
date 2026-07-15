@@ -89,6 +89,8 @@ import type {
   WorkflowRun,
   Workspace,
 } from "./types";
+import { localizePlatformError } from "./error-localization";
+import { wrapBrowserCachedMediaUrls } from "./media-cache";
 
 const apiBase = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:19288");
 
@@ -147,7 +149,11 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
   const envelope = (await response.json().catch(() => ({}))) as ApiEnvelope<TData>;
   if (!response.ok || envelope.error || envelope.data === undefined) {
     const errorCode = envelope.error?.code ?? "HTTP_ERROR";
-    const errorMessage = errorCode === "UNAUTHENTICATED" ? "登录已过期，请重新登录" : envelope.error?.message ?? `请求失败：HTTP ${response.status}`;
+    const errorMessage = localizePlatformError(
+      envelope.error?.message,
+      errorCode,
+      `请求失败：HTTP ${response.status}`,
+    );
     throw new StudioApiError(
       errorMessage,
       errorCode,
@@ -156,7 +162,7 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
       envelope.error?.details,
     );
   }
-  return envelope.data;
+  return wrapBrowserCachedMediaUrls(envelope.data, options.session);
 }
 
 export const studioApi = {

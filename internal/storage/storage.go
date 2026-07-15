@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,20 +23,30 @@ import (
 )
 
 type Config struct {
-	Endpoint        string
-	PublicEndpoint  string
-	Region          string
-	Bucket          string
-	AccessKeyID     string
-	SecretAccessKey string
-	UsePathStyle    bool
+	Endpoint            string
+	PublicEndpoint      string
+	Region              string
+	Bucket              string
+	AccessKeyID         string
+	SecretAccessKey     string
+	UsePathStyle        bool
+	DownloadPartSize    int64
+	DownloadConcurrency int
 }
 
 type Client struct {
-	s3        *s3.Client
-	presignS3 *s3.Client
-	bucket    string
+	s3                  *s3.Client
+	presignS3           *s3.Client
+	bucket              string
+	downloadPartSize    int64
+	downloadConcurrency int
 }
+
+const (
+	defaultDownloadPartSize    = int64(1 << 20)
+	defaultDownloadConcurrency = 8
+	maxDownloadConcurrency     = 32
+)
 
 type PutResult struct {
 	StorageKey  string
@@ -67,6 +78,14 @@ func ConfigFromEnv() Config {
 		AccessKeyID:     env("S3_ACCESS_KEY_ID", "minio"),
 		SecretAccessKey: env("S3_SECRET_ACCESS_KEY", "minio123"),
 		UsePathStyle:    envBool("S3_USE_PATH_STYLE", true),
+		DownloadPartSize: envInt64(
+			"S3_DOWNLOAD_PART_SIZE_BYTES",
+			defaultDownloadPartSize,
+		),
+		DownloadConcurrency: envInt(
+			"S3_DOWNLOAD_CONCURRENCY",
+			defaultDownloadConcurrency,
+		),
 	}
 }
 
@@ -88,7 +107,21 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		presignEndpoint = cfg.PublicEndpoint
 	}
 	presignClient := newS3Client(awsCfg, presignEndpoint, cfg.UsePathStyle)
-	return &Client{s3: client, presignS3: presignClient, bucket: cfg.Bucket}, nil
+	partSize := cfg.DownloadPartSize
+	if partSize <= 0 {
+		partSize = defaultDownloadPartSize
+	}
+	concurrency := cfg.DownloadConcurrency
+	if concurrency <= 0 {
+		concurrency = defaultDownloadConcurrency
+	}
+	if concurrency > maxDownloadConcurrency {
+		concurrency = maxDownloadConcurrency
+	}
+	return &Client{
+		s3: client, presignS3: presignClient, bucket: cfg.Bucket,
+		downloadPartSize: partSize, downloadConcurrency: concurrency,
+	}, nil
 }
 
 func (c *Client) Ping(ctx context.Context) error {
@@ -179,31 +212,118 @@ func (c *Client) GetObject(ctx context.Context, key string, maxBytes int64) ([]b
 	if err != nil {
 		return nil, "", err
 	}
-	result, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
+	head, err := c.s3.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(normalizedKey),
 	})
 	if err != nil {
 		return nil, "", err
 	}
-	defer result.Body.Close()
-
-	reader := io.Reader(result.Body)
-	if maxBytes > 0 {
-		reader = io.LimitReader(result.Body, maxBytes+1)
+	if head.ContentLength == nil || *head.ContentLength < 0 {
+		return nil, "", fmt.Errorf("object %s did not report a valid content length", normalizedKey)
 	}
-	body, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, "", err
-	}
-	if maxBytes > 0 && int64(len(body)) > maxBytes {
+	size := *head.ContentLength
+	if maxBytes > 0 && size > maxBytes {
 		return nil, "", fmt.Errorf("object %s exceeds maxBytes limit", normalizedKey)
 	}
 	contentType := ""
-	if result.ContentType != nil {
-		contentType = *result.ContentType
+	if head.ContentType != nil {
+		contentType = *head.ContentType
+	}
+	if size == 0 {
+		return []byte{}, contentType, nil
+	}
+	body, err := c.downloadObjectRanges(ctx, normalizedKey, size, head.ETag)
+	if err != nil {
+		return nil, "", err
 	}
 	return body, contentType, nil
+}
+
+type objectByteRange struct {
+	start int64
+	end   int64
+}
+
+func (c *Client) downloadObjectRanges(ctx context.Context, key string, size int64, etag *string) ([]byte, error) {
+	partSize := c.downloadPartSize
+	if partSize <= 0 {
+		partSize = defaultDownloadPartSize
+	}
+	partCount := int((size + partSize - 1) / partSize)
+	concurrency := c.downloadConcurrency
+	if concurrency <= 0 {
+		concurrency = defaultDownloadConcurrency
+	}
+	if concurrency > partCount {
+		concurrency = partCount
+	}
+	body := make([]byte, size)
+	jobs := make(chan objectByteRange, partCount)
+	for start := int64(0); start < size; start += partSize {
+		end := start + partSize - 1
+		if end >= size {
+			end = size - 1
+		}
+		jobs <- objectByteRange{start: start, end: end}
+	}
+	close(jobs)
+
+	downloadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wait sync.WaitGroup
+	var firstErr error
+	var firstErrOnce sync.Once
+	for workerIndex := 0; workerIndex < concurrency; workerIndex++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for part := range jobs {
+				if downloadCtx.Err() != nil {
+					return
+				}
+				if err := c.downloadObjectRange(downloadCtx, key, etag, part, body[part.start:part.end+1]); err != nil {
+					firstErrOnce.Do(func() {
+						firstErr = err
+						cancel()
+					})
+					return
+				}
+			}
+		}()
+	}
+	wait.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (c *Client) downloadObjectRange(ctx context.Context, key string, etag *string, part objectByteRange, destination []byte) error {
+	rangeValue := fmt.Sprintf("bytes=%d-%d", part.start, part.end)
+	result, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
+		Bucket:  aws.String(c.bucket),
+		Key:     aws.String(key),
+		Range:   aws.String(rangeValue),
+		IfMatch: etag,
+	})
+	if err != nil {
+		return fmt.Errorf("download object %s range %s: %w", key, rangeValue, err)
+	}
+	defer result.Body.Close()
+	expected := int64(len(destination))
+	partBody, err := io.ReadAll(io.LimitReader(result.Body, expected+1))
+	if err != nil {
+		return fmt.Errorf("read object %s range %s: %w", key, rangeValue, err)
+	}
+	if int64(len(partBody)) != expected {
+		return fmt.Errorf("object %s range %s returned %d bytes, expected %d", key, rangeValue, len(partBody), expected)
+	}
+	copy(destination, partBody)
+	return nil
 }
 
 func (c *Client) PresignPutObject(ctx context.Context, key, contentType string, expires time.Duration) (PresignedPutResult, error) {
@@ -305,6 +425,30 @@ func envBool(key string, fallback bool) bool {
 	}
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func envInt64(key string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
 		return fallback
 	}
 	return parsed

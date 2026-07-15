@@ -19,9 +19,11 @@ import {
 } from "@/features/storyboard/shot-reference-controls";
 import { studioApi } from "@/lib/api-client";
 import { cssAspectRatio } from "@/lib/aspect-ratio";
+import { localizePlatformError } from "@/lib/error-localization";
 import { statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
+import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import { retainUsableSignedMediaUrl } from "@/lib/signed-media-url";
 import type { NativeAudioReview, StoryboardShotDetail, StoryboardShotVideoReferenceOption, UpdateStoryboardShotRequest, VideoRenderPlan } from "@/lib/types";
 
@@ -59,6 +61,7 @@ export function ShotVideoDetailDialog({
   onChanged: () => void;
 }) {
   const invalidate = useInvalidateKeys();
+  const pollingFallback = useProjectPollingFallback(projectId);
   const [draft, setDraft] = useState<VideoDraft>(EMPTY_DRAFT);
   const [largePreview, setLargePreview] = useState<{ url: string; title: string; kind: "image" | "video" } | null>(null);
   const [readyVideoKey, setReadyVideoKey] = useState("");
@@ -69,7 +72,7 @@ export function ShotVideoDetailDialog({
     refetchInterval: (query) => {
       const videoStatus = query.state.data?.shot.videoStatus;
       const promptStatus = query.state.data?.shot.videoPromptStatus;
-      return open && (
+      return pollingFallback && open && (
         videoStatus === "queued"
         || videoStatus === "running"
         || promptStatus === "queued"
@@ -85,13 +88,13 @@ export function ShotVideoDetailDialog({
     key: qk.shotRenderPlan(projectId, shotId || "none"),
     queryFn: (session) => studioApi.getStoryboardShotRenderPlan(session, projectId, shotId),
     enabled: open && !!shotId && !!detail?.shot.activeVideoRenderPlanId,
-    refetchInterval: (query) => open && ["planned", "running"].includes(query.state.data?.status ?? "") ? 3000 : false,
+    refetchInterval: (query) => pollingFallback && open && ["planned", "running"].includes(query.state.data?.status ?? "") ? 5000 : false,
   });
   const { data: audioReviews = [], isLoading: audioReviewsLoading } = useApiQuery({
     key: qk.nativeAudioReviews(projectId, shotId || "none"),
     queryFn: (session) => studioApi.listNativeAudioReviews(session, projectId, shotId).then((response) => response.items),
     enabled: open && !!shotId && !!detail?.shot.activeVideoRenderPlanId,
-    refetchInterval: (query) => open && query.state.data?.some((review) => review.status === "queued" || review.status === "running") ? 3000 : false,
+    refetchInterval: (query) => pollingFallback && open && query.state.data?.some((review) => review.status === "queued" || review.status === "running") ? 5000 : false,
   });
 
   const detailPromptRevision = detail ? promptRevision(detail) : "";
@@ -278,13 +281,13 @@ export function ShotVideoDetailDialog({
 
               {detail.shot.videoErrorMessage ? (
                 <div role="alert" className="mt-4 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {detail.shot.videoErrorMessage}
+                  {localizePlatformError(detail.shot.videoErrorMessage, detail.shot.videoErrorCode)}
                 </div>
               ) : null}
 
               {detail.shot.videoPromptErrorMessage ? (
                 <div role="alert" className="mt-4 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  视频提示词生成失败：{detail.shot.videoPromptErrorMessage}
+                  视频提示词生成失败：{localizePlatformError(detail.shot.videoPromptErrorMessage, detail.shot.videoPromptErrorCode)}
                 </div>
               ) : null}
 
@@ -631,7 +634,7 @@ function RenderPlanPanel({
                   {segment.trimEndTick ? <span>尾部安全裁剪</span> : null}
                   {segment.retryGeneration > 0 ? <span>重试 {segment.retryGeneration} 次</span> : null}
                 </div>
-                {segment.errorMessage ? <p className="mt-2 text-xs text-destructive">{segment.errorMessage}</p> : null}
+                {segment.errorMessage ? <p className="mt-2 text-xs text-destructive">{localizePlatformError(segment.errorMessage, segment.errorCode)}</p> : null}
               </div>
             ))}
           </div>
@@ -664,7 +667,7 @@ function NativeAudioReviewList({ reviews }: { reviews: NativeAudioReview[] }) {
             {review.speakerTurnAccuracy !== undefined ? <Badge variant="outline">说话人 {(review.speakerTurnAccuracy * 100).toFixed(0)}%</Badge> : null}
           </div>
           {review.transcript ? <div className="mt-2 text-muted-foreground">{review.transcript}</div> : null}
-          {review.errorMessage ? <div className="mt-2 text-destructive">{review.errorMessage}</div> : null}
+          {review.errorMessage ? <div className="mt-2 text-destructive">{localizePlatformError(review.errorMessage, review.errorCode)}</div> : null}
         </div>
       ))}
     </div>
@@ -694,7 +697,7 @@ function VideoGenerationHistory({ detail, onOpen }: { detail: StoryboardShotDeta
                   <span className="truncate text-xs text-muted-foreground">{run.modelName || run.modelId || "未记录模型"}</span>
                 </div>
                 <div className="mt-2 text-xs text-muted-foreground">{formatGenerationTime(run.completedAt || run.startedAt)}</div>
-                {run.errorMessage ? <p className="mt-2 line-clamp-2 text-xs text-destructive">{run.errorMessage}</p> : null}
+                {run.errorMessage ? <p className="mt-2 line-clamp-2 text-xs text-destructive">{localizePlatformError(run.errorMessage, run.errorCode)}</p> : null}
                 <details className="mt-2 text-xs">
                   <summary className="cursor-pointer text-muted-foreground">查看提示词与任务信息</summary>
                   {run.prompt ? <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-2 text-foreground">{run.prompt}{run.promptTruncated ? "\n\n[内容过长，详情中已截断]" : ""}</pre> : null}

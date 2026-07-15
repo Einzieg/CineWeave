@@ -40,7 +40,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	if current.StoryboardPlanID != nil && req.PlannedDurationTicks != nil {
-		httpx.WriteError(w, r, http.StatusConflict, "STORYBOARD_PLAN_REVISION_REQUIRED", "planned timing for a storyboard plan shot must be changed through the storyboard plan timing revision endpoint", map[string]any{
+		httpx.WriteError(w, r, http.StatusConflict, "STORYBOARD_PLAN_REVISION_REQUIRED", "分镜计划中的镜头时长必须通过计划时长修订功能修改", map[string]any{
 			"storyboardPlanId": *current.StoryboardPlanID,
 			"shotId":           current.ID,
 		}, false)
@@ -52,7 +52,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		FPSDenominator: int64(project.FPSDenominator),
 	}
 	if req.PlannedDurationTicks != nil && (*req.PlannedDurationTicks <= 0 || !timebase.IsFrameAligned(*req.PlannedDurationTicks)) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "plannedDurationTicks must be positive and aligned to the project frame rate", nil, false)
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "镜头时长必须大于零，并与项目帧率对齐", nil, false)
 		return
 	}
 	imageReferenceMode := current.ImageReferenceMode
@@ -96,7 +96,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	}
 	if req.ImageReferenceMode != nil || req.ImageReferenceKeys != nil {
 		if imageReferenceMode != "auto" && imageReferenceMode != "custom" && imageReferenceMode != "none" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "imageReferenceMode must be auto, custom, or none", nil, false)
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "图片参考图策略无效", nil, false)
 			return
 		}
 		if imageReferenceMode != "custom" {
@@ -111,12 +111,12 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 				available[option.Key] = true
 			}
 			if len(imageReferenceKeys) == 0 {
-				httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "custom image references require at least one selected reference", nil, false)
+				httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "手动选择图片参考图时至少需要选择一张图片", nil, false)
 				return
 			}
 			for _, key := range imageReferenceKeys {
 				if !available[key] {
-					httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "selected image reference is not available for this shot", map[string]any{"referenceKey": key}, false)
+					httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "选择的图片参考图不适用于当前镜头", map[string]any{"referenceKey": key}, false)
 					return
 				}
 			}
@@ -124,7 +124,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	}
 	if req.VideoReferenceMode != nil || req.VideoReferenceKeys != nil {
 		if videoReferenceMode != "auto" && videoReferenceMode != "custom" && videoReferenceMode != "none" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "videoReferenceMode must be auto, custom, or none", nil, false)
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "视频参考图策略无效", nil, false)
 			return
 		}
 		if videoReferenceMode != "custom" {
@@ -139,12 +139,12 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 				available[option.Key] = true
 			}
 			if len(videoReferenceKeys) == 0 {
-				httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "custom video references require at least one selected reference", nil, false)
+				httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "手动选择视频参考素材时至少需要选择一项", nil, false)
 				return
 			}
 			for _, key := range videoReferenceKeys {
 				if !available[key] {
-					httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "selected video reference is not available for this shot", map[string]any{"referenceKey": key}, false)
+					httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "选择的视频参考素材不适用于当前镜头", map[string]any{"referenceKey": key}, false)
 					return
 				}
 			}
@@ -154,7 +154,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		req.ImagePrompt != nil || req.VideoPrompt != nil || req.ImageReferenceMode != nil || req.ImageReferenceKeys != nil ||
 		req.VideoReferenceMode != nil || req.VideoReferenceKeys != nil
 	if !hasFields {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "at least one storyboard shot field is required", nil, false)
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "请至少修改一项镜头设置", nil, false)
 		return
 	}
 	visualChanged := stringFieldChanged(req.Visual, current.Visual)
@@ -174,19 +174,19 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	if imageChanged && (current.ImageStatus == "queued" || current.ImageStatus == "running") {
-		httpx.WriteError(w, r, http.StatusConflict, "SHOT_IMAGE_RUNNING", "shot image settings cannot be changed while generation is running", nil, true)
+		httpx.WriteError(w, r, http.StatusConflict, "SHOT_IMAGE_RUNNING", "镜头图片正在生成，完成前不能修改图片生成设置", nil, true)
 		return
 	}
 	if imageChanged && (current.ImagePromptStatus == "queued" || current.ImagePromptStatus == "running") {
-		httpx.WriteError(w, r, http.StatusConflict, "SHOT_IMAGE_PROMPT_RUNNING", "shot image prompt settings cannot be changed while prompt generation is running", nil, true)
+		httpx.WriteError(w, r, http.StatusConflict, "SHOT_IMAGE_PROMPT_RUNNING", "镜头图片提示词正在生成，完成前不能修改图片提示词设置", nil, true)
 		return
 	}
 	if videoChanged && (current.VideoStatus == "queued" || current.VideoStatus == "running") {
-		httpx.WriteError(w, r, http.StatusConflict, "SHOT_VIDEO_RUNNING", "shot video settings cannot be changed while generation is running", nil, true)
+		httpx.WriteError(w, r, http.StatusConflict, "SHOT_VIDEO_RUNNING", "镜头视频正在生成，完成前不能修改视频生成设置", nil, true)
 		return
 	}
 	if videoChanged && (current.VideoPromptStatus == "queued" || current.VideoPromptStatus == "running") {
-		httpx.WriteError(w, r, http.StatusConflict, "SHOT_VIDEO_PROMPT_RUNNING", "shot video prompt settings cannot be changed while prompt generation is running", nil, true)
+		httpx.WriteError(w, r, http.StatusConflict, "SHOT_VIDEO_PROMPT_RUNNING", "镜头视频提示词正在生成，完成前不能修改视频提示词设置", nil, true)
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -459,7 +459,7 @@ func (s *Server) unlinkStoryboardShotMedia(w http.ResponseWriter, r *http.Reques
 	}
 	kind := strings.TrimSpace(req.Kind)
 	if kind != "image" && kind != "video" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "kind must be image or video", nil, false)
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "生成类型必须是图片或视频", nil, false)
 		return
 	}
 	tx, err := s.db.Begin(r.Context())

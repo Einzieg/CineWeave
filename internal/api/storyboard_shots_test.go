@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -413,6 +414,31 @@ func TestStoryboardWorkbenchAPIs(t *testing.T) {
 	}, &updated)
 	if updated.StaleState != "needs_regeneration" || !updated.ManualOverride || updated.Visual != "Edited second shot" {
 		t.Fatalf("updated shot = %+v", updated)
+	}
+
+	if _, err := seed.pool.Exec(seed.ctx, `UPDATE storyboard_shots SET video_prompt_status = 'running' WHERE id = $1`, second.ID); err != nil {
+		t.Fatalf("mark video prompt running: %v", err)
+	}
+	runningPromptResponse := doAPIRequest(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/storyboard-shots/"+second.ID, seed.ownerToken, seed.organizationID, map[string]any{
+		"videoPrompt": "cannot change while running",
+	})
+	if runningPromptResponse.Code != http.StatusConflict {
+		t.Fatalf("running video prompt update status = %d, want %d body=%s", runningPromptResponse.Code, http.StatusConflict, runningPromptResponse.Body.String())
+	}
+	var runningPromptEnvelope struct {
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(runningPromptResponse.Body.Bytes(), &runningPromptEnvelope); err != nil {
+		t.Fatalf("decode running video prompt error: %v", err)
+	}
+	if runningPromptEnvelope.Error == nil || runningPromptEnvelope.Error.Code != "SHOT_VIDEO_PROMPT_RUNNING" || runningPromptEnvelope.Error.Message != "镜头视频提示词正在生成，完成前不能修改视频提示词设置" {
+		t.Fatalf("running video prompt error = %#v", runningPromptEnvelope.Error)
+	}
+	if _, err := seed.pool.Exec(seed.ctx, `UPDATE storyboard_shots SET video_prompt_status = 'succeeded' WHERE id = $1`, second.ID); err != nil {
+		t.Fatalf("reset video prompt status: %v", err)
 	}
 
 	doAPISuccess(t, server, http.MethodDelete, "/api/projects/"+seed.projectID+"/storyboard-shots/"+second.ID, seed.ownerToken, seed.organizationID, nil, &struct{}{})

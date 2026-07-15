@@ -15,9 +15,11 @@ import { ShotImageDetailDialog } from "@/features/storyboard/shot-image-detail-d
 import { ShotVideoDetailDialog } from "@/features/video/shot-video-detail-dialog";
 import { studioApi } from "@/lib/api-client";
 import { cssAspectRatio } from "@/lib/aspect-ratio";
+import { localizePlatformError } from "@/lib/error-localization";
 import { statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
+import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import type { FinalVideoVersion, ProjectTimeline, ShotProductionShot } from "@/lib/types";
 
 type ShotAction = "generate_image_prompts" | "generate_video_prompts" | "generate_missing_images" | "generate_missing_videos" | "regenerate_failed_images" | "regenerate_failed_videos" | "cancel_running_videos";
@@ -25,6 +27,7 @@ type EpisodeShotAction = { action: ShotAction; scriptEpisodeId: string };
 
 export function VideoPage({ projectId }: { projectId: string }) {
   const invalidate = useInvalidateKeys();
+  const pollingFallback = useProjectPollingFallback(projectId);
   const [finalVideoToDelete, setFinalVideoToDelete] = useState<FinalVideoVersion | null>(null);
   const [imageDetailShot, setImageDetailShot] = useState<ShotProductionShot | null>(null);
   const [videoDetailShot, setVideoDetailShot] = useState<ShotProductionShot | null>(null);
@@ -61,12 +64,12 @@ export function VideoPage({ projectId }: { projectId: string }) {
         previewExpiresSeconds: 900,
       }),
     enabled: !!effectiveEpisodeId,
-    refetchInterval: (query) => (query.state.data?.summary.running ?? 0) > 0 ? 3000 : false,
+    refetchInterval: (query) => pollingFallback && (query.state.data?.summary.running ?? 0) > 0 ? 5000 : false,
   });
   const { data: projectStatus } = useApiQuery({
     key: qk.shotProduction(projectId),
     queryFn: (session) => studioApi.getShotProductionStatus(session, projectId),
-    refetchInterval: (query) => (query.state.data?.summary.running ?? 0) > 0 ? 5000 : false,
+    refetchInterval: (query) => pollingFallback && (query.state.data?.summary.running ?? 0) > 0 ? 5000 : false,
   });
   const { data: timelines = [], isLoading: timelinesLoading } = useApiQuery({
     key: qk.timelines(projectId),
@@ -426,10 +429,10 @@ function ShotVideoRow({
           </div>
         </div>
         <p className="text-sm leading-6 text-muted-foreground">{shot.visual || "未填写画面描述"}</p>
-        {shot.imageErrorMessage ? <p className="text-sm text-destructive">图片错误：{shot.imageErrorMessage}</p> : null}
-        {shot.imagePromptErrorMessage ? <p className="text-sm text-destructive">图片提示词错误：{shot.imagePromptErrorMessage}</p> : null}
-        {shot.videoErrorMessage ? <p className="text-sm text-destructive">视频错误：{shot.videoErrorMessage}</p> : null}
-        {shot.videoPromptErrorMessage ? <p className="text-sm text-destructive">提示词错误：{shot.videoPromptErrorMessage}</p> : null}
+        {shot.imageErrorMessage ? <p className="text-sm text-destructive">图片错误：{localizePlatformError(shot.imageErrorMessage, shot.imageErrorCode)}</p> : null}
+        {shot.imagePromptErrorMessage ? <p className="text-sm text-destructive">图片提示词错误：{localizePlatformError(shot.imagePromptErrorMessage, shot.imagePromptErrorCode)}</p> : null}
+        {shot.videoErrorMessage ? <p className="text-sm text-destructive">视频错误：{localizePlatformError(shot.videoErrorMessage, shot.videoErrorCode)}</p> : null}
+        {shot.videoPromptErrorMessage ? <p className="text-sm text-destructive">提示词错误：{localizePlatformError(shot.videoPromptErrorMessage, shot.videoPromptErrorCode)}</p> : null}
       </div>
     </div>
   );

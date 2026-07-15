@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { studioApi } from "@/lib/api-client";
+import { localizePlatformError } from "@/lib/error-localization";
 import { statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
@@ -89,7 +90,7 @@ export function EpisodeAudioPanel({ projectId, episodeId }: { projectId: string;
                   {clip.durationSeconds ? <span className="text-muted-foreground">{clip.durationSeconds.toFixed(2)} 秒</span> : null}
                 </div>
                 <div className="mt-1 line-clamp-2 text-sm text-muted-foreground">{clip.sourceText}</div>
-                {clip.errorMessage ? <div className="mt-1 text-sm text-destructive">{clip.errorMessage}</div> : null}
+                {clip.errorMessage ? <div className="mt-1 text-sm text-destructive">{localizePlatformError(clip.errorMessage, clip.errorCode)}</div> : null}
               </div>
               {clip.previewUrl ? <audio className="w-full" controls preload="none" src={clip.previewUrl} /> : null}
             </div>

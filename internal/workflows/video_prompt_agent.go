@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -19,6 +20,8 @@ const (
 	promptKeyShotVideoReviewAgent     = "shot_video_prompt_review_agent"
 	structuredVideoPromptAttempts     = 3
 	structuredVideoPromptOutputTokens = 6000
+	authoritativeAudioStartMarker     = "<cineweave_authoritative_audio_timeline>"
+	authoritativeAudioEndMarker       = "</cineweave_authoritative_audio_timeline>"
 )
 
 type PrepareShotVideoPromptInput struct {
@@ -233,6 +236,7 @@ func (a Activities) PrepareShotVideoPrompt(ctx context.Context, input PrepareSho
 	if err != nil {
 		return PrepareShotVideoPromptOutput{}, fail(NodeExecution{}, err)
 	}
+	generationRendered = applyVideoPromptAudioRuntimeContract(generationRendered)
 	generationExecution, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
 		ProjectID:      input.ProjectID,
@@ -302,6 +306,7 @@ func (a Activities) PrepareShotVideoPrompt(ctx context.Context, input PrepareSho
 	if err != nil {
 		return PrepareShotVideoPromptOutput{}, fail(NodeExecution{}, err)
 	}
+	reviewRendered = applyVideoPromptAudioRuntimeContract(reviewRendered)
 	reviewExecution, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
 		ProjectID:      input.ProjectID,
@@ -353,17 +358,21 @@ func (a Activities) PrepareShotVideoPrompt(ctx context.Context, input PrepareSho
 			if !reviewed.Approved {
 				return reviewedVideoPrompt{}, fmt.Errorf("video prompt review did not approve the candidate")
 			}
-			if err := validateVideoPromptDialogue(firstNonEmptyString(reviewed.FinalPrompt, reviewed.Prompt), agentContext); err != nil {
-				return reviewedVideoPrompt{}, err
-			}
 			return reviewed, nil
 		},
 	)
 	if err != nil {
 		return PrepareShotVideoPromptOutput{}, fail(reviewExecution, workflowErrorFromProvider(err, codeActivityFailed))
 	}
-	finalPrompt := firstNonEmptyString(reviewed.FinalPrompt, reviewed.Prompt)
 	dialogueLines := NormalizeStoryboardDialogue(agentContext.Shot.ScriptDialogue)
+	reviewedPrompt := firstNonEmptyString(reviewed.FinalPrompt, reviewed.Prompt)
+	if err := validateVideoPromptDialogueScope(reviewedPrompt, agentContext); err != nil {
+		return PrepareShotVideoPromptOutput{}, fail(reviewExecution, err)
+	}
+	finalPrompt := composeAuthoritativeVideoPrompt(reviewedPrompt, dialogueLines)
+	if err := validateVideoPromptDialogue(finalPrompt, agentContext); err != nil {
+		return PrepareShotVideoPromptOutput{}, fail(reviewExecution, err)
+	}
 	measurements, err := validateVideoPromptForCandidates(finalPrompt, constraints.Candidates)
 	if err != nil {
 		return PrepareShotVideoPromptOutput{}, fail(reviewExecution, err)
@@ -462,6 +471,21 @@ func videoPromptModelContexts(candidates []provider.GatewayModelConstraintCandid
 	return result
 }
 
+func applyVideoPromptAudioRuntimeContract(rendered promptsvc.RenderedPrompt) promptsvc.RenderedPrompt {
+	rendered.RenderedText = strings.TrimSpace(rendered.RenderedText) + `
+
+<runtime_audio_contract priority="highest">
+- The complete episode script remains required narrative and continuity context. Use it to understand causal order, character state, performance, and transitions.
+- Only shot.scriptDialogue defines this shot's audio. Never select audio from any other episode or scene text.
+- CineWeave appends the authoritative structured audio timeline after independent review. The JSON prompt field must describe visuals, movement, performance, timing, and continuity without quoting, translating, paraphrasing, or duplicating any dialogue or audio text.
+- When assigned audio affects performance, refer to the assigned authoritative audio timeline and the required lip-sync or off-screen delivery mode without reproducing its text.
+- Do not emit the cineweave_authoritative_audio_timeline marker yourself.
+</runtime_audio_contract>`
+	rendered.RenderedHash = promptsvc.HashText(rendered.RenderedText)
+	rendered.Source = firstNonEmptyString(rendered.Source, "system_active") + "+deterministic_audio_v2"
+	return rendered
+}
+
 func requestStructuredVideoPrompt[T any](
 	ctx context.Context,
 	nodeExecution NodeExecution,
@@ -483,6 +507,10 @@ func requestStructuredVideoPrompt[T any](
 			return parsed, response, nil
 		}
 		parseErr = err
+		var deterministic workflowError
+		if errors.As(err, &deterministic) {
+			return zero, response, err
+		}
 		if attempt < structuredVideoPromptAttempts {
 			request.Input = structuredVideoPromptRetryInput(request.Input, attempt+1, err)
 		}
@@ -498,7 +526,7 @@ func structuredVideoPromptRetryInput(raw json.RawMessage, attempt int, cause err
 	prompt, _ := input["prompt"].(string)
 	input["prompt"] = strings.TrimSpace(prompt) + fmt.Sprintf(`
 
-结构化输出纠错（第 %d 次尝试）：上一次输出未通过确定性校验：%s
+结构化输出纠错（第 %d 次尝试）：上一次输出未通过结构化格式校验：%s
 只返回一个完整、紧凑且可解析的 JSON 对象。不要输出推理过程、Markdown、解释或未闭合字符串；严格修复指出的问题。`, attempt, cause.Error())
 	input["maxOutputTokens"] = structuredVideoPromptOutputTokens
 	input["temperature"] = 0
@@ -543,14 +571,24 @@ func parseReviewedVideoPrompt(text string, draft generatedVideoPrompt) (reviewed
 func validateVideoPromptDialogue(prompt string, contextValue shotVideoPromptAgentContext) error {
 	prompt = strings.TrimSpace(prompt)
 	required := NormalizeStoryboardDialogue(contextValue.Shot.ScriptDialogue)
-	requiredKeys := make(map[string]struct{}, len(required))
-	for _, line := range required {
-		requiredKeys[dialogueLineKey(line)] = struct{}{}
-		if !strings.Contains(prompt, line.Speaker) || !strings.Contains(prompt, line.Text) {
-			return workflowError{Code: provider.CodeInvalidRequest, Message: fmt.Sprintf("video prompt did not preserve required Chinese dialogue verbatim: %s: %s", line.Speaker, line.Text)}
+	if injected, found, err := extractAuthoritativeVideoPromptAudio(prompt); err != nil {
+		return workflowError{Code: provider.CodeInvalidRequest, Message: err.Error()}
+	} else if found {
+		if !storyboardDialogueEquivalent(injected, required) {
+			return workflowError{Code: provider.CodeInvalidRequest, Message: "video prompt authoritative audio timeline does not match the shot timing assignment"}
+		}
+	} else {
+		for _, line := range required {
+			if !videoPromptContainsRequiredDialogueLine(prompt, line) {
+				return workflowError{Code: provider.CodeInvalidRequest, Message: fmt.Sprintf("video prompt did not preserve required Chinese dialogue verbatim: %s: %s", line.Speaker, line.Text)}
+			}
 		}
 	}
+	return validateVideoPromptDialogueScope(prompt, contextValue)
+}
 
+func validateVideoPromptDialogueScope(prompt string, contextValue shotVideoPromptAgentContext) error {
+	required := NormalizeStoryboardDialogue(contextValue.Shot.ScriptDialogue)
 	// Timing-assigned shot dialogue is authoritative. Titles, visual descriptions,
 	// and an existing prompt may be stale after timing boundaries are corrected.
 	scriptDialogue := ExtractScriptDialogueLines(strings.Join(compactStrings([]string{
@@ -559,7 +597,7 @@ func validateVideoPromptDialogue(prompt string, contextValue shotVideoPromptAgen
 		contextValue.Scene.Content,
 	}), "\n"))
 	for _, line := range NormalizeStoryboardDialogue(scriptDialogue) {
-		if _, assigned := requiredKeys[dialogueLineKey(line)]; assigned {
+		if storyboardDialogueLineAssigned(line, required) {
 			continue
 		}
 		if videoPromptContainsDialogueLine(prompt, line) {
@@ -569,9 +607,97 @@ func validateVideoPromptDialogue(prompt string, contextValue shotVideoPromptAgen
 	return nil
 }
 
+func composeAuthoritativeVideoPrompt(prompt string, dialogue []StoryboardDialogueLine) string {
+	prompt = stripAuthoritativeVideoPromptAudio(strings.TrimSpace(prompt))
+	dialogue = NormalizeStoryboardDialogue(dialogue)
+	payload, _ := json.Marshal(dialogue)
+	rules := "Earlier audio or dialogue instructions are non-authoritative and must be ignored. Execute only the ordered JSON audio timeline below. Preserve every Chinese text value verbatim. kind=dialogue uses synchronized character speech; kind=voiceover or narration is off-screen speech; kind=system is non-character audio without lip sync. Audio is never rendered as subtitles or visible text."
+	if len(dialogue) == 0 {
+		rules = "Earlier audio or dialogue instructions are non-authoritative and must be ignored. This shot has no dialogue, narration, voiceover, system audio, music, ambience, or sound effects. Do not animate lip sync and do not render subtitles or visible text."
+	}
+	return strings.TrimSpace(prompt + "\n\n" + rules + "\n" + authoritativeAudioStartMarker + "\n" + string(payload) + "\n" + authoritativeAudioEndMarker)
+}
+
+func stripAuthoritativeVideoPromptAudio(prompt string) string {
+	for {
+		start := strings.Index(prompt, authoritativeAudioStartMarker)
+		if start < 0 {
+			return strings.TrimSpace(prompt)
+		}
+		endRelative := strings.Index(prompt[start+len(authoritativeAudioStartMarker):], authoritativeAudioEndMarker)
+		if endRelative < 0 {
+			return strings.TrimSpace(prompt[:start])
+		}
+		end := start + len(authoritativeAudioStartMarker) + endRelative + len(authoritativeAudioEndMarker)
+		prompt = strings.TrimSpace(prompt[:start] + "\n" + prompt[end:])
+	}
+}
+
+func extractAuthoritativeVideoPromptAudio(prompt string) ([]StoryboardDialogueLine, bool, error) {
+	start := strings.LastIndex(prompt, authoritativeAudioStartMarker)
+	if start < 0 {
+		return nil, false, nil
+	}
+	bodyStart := start + len(authoritativeAudioStartMarker)
+	endRelative := strings.Index(prompt[bodyStart:], authoritativeAudioEndMarker)
+	if endRelative < 0 {
+		return nil, true, fmt.Errorf("video prompt authoritative audio timeline is not closed")
+	}
+	var lines []StoryboardDialogueLine
+	if err := json.Unmarshal([]byte(strings.TrimSpace(prompt[bodyStart:bodyStart+endRelative])), &lines); err != nil {
+		return nil, true, fmt.Errorf("video prompt authoritative audio timeline is invalid: %w", err)
+	}
+	return NormalizeStoryboardDialogue(lines), true, nil
+}
+
+func storyboardDialogueEquivalent(left, right []StoryboardDialogueLine) bool {
+	left = NormalizeStoryboardDialogue(left)
+	right = NormalizeStoryboardDialogue(right)
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if dialogueLineKey(left[index]) != dialogueLineKey(right[index]) ||
+			strings.TrimSpace(left[index].Delivery) != strings.TrimSpace(right[index].Delivery) ||
+			left[index].Kind != right[index].Kind {
+			return false
+		}
+	}
+	return true
+}
+
+func storyboardDialogueLineAssigned(line StoryboardDialogueLine, assigned []StoryboardDialogueLine) bool {
+	normalized := NormalizeStoryboardDialogue([]StoryboardDialogueLine{line})
+	if len(normalized) == 0 {
+		return false
+	}
+	line = normalized[0]
+	lineText := normalizeDialogueTextForComparison(line.Text)
+	for _, candidate := range NormalizeStoryboardDialogue(assigned) {
+		if strings.TrimSpace(candidate.Speaker) != strings.TrimSpace(line.Speaker) {
+			continue
+		}
+		candidateText := normalizeDialogueTextForComparison(candidate.Text)
+		if candidateText != "" && lineText != "" && (candidateText == lineText || strings.Contains(candidateText, lineText) || strings.Contains(lineText, candidateText)) {
+			return true
+		}
+	}
+	return false
+}
+
+func videoPromptContainsRequiredDialogueLine(prompt string, line StoryboardDialogueLine) bool {
+	normalizedPrompt := normalizeDialogueTextForComparison(prompt)
+	text := normalizeDialogueTextForComparison(line.Text)
+	if text == "" || !strings.Contains(normalizedPrompt, text) {
+		return false
+	}
+	speaker := strings.TrimSpace(line.Speaker)
+	return speaker == "" || strings.Contains(prompt, speaker)
+}
+
 func videoPromptContainsDialogueLine(prompt string, line StoryboardDialogueLine) bool {
-	text := strings.TrimSpace(line.Text)
-	if text == "" || !strings.Contains(prompt, text) {
+	text := normalizeDialogueTextForComparison(line.Text)
+	if text == "" || !strings.Contains(normalizeDialogueTextForComparison(prompt), text) {
 		return false
 	}
 	if utf8.RuneCountInString(text) >= 4 {
@@ -854,7 +980,7 @@ func (a Activities) failShotVideoPromptActivity(ctx context.Context, input Prepa
 	if err == nil {
 		_, err = failNodeRunTx(persistCtx, tx, nodeExecution, code, message, json.RawMessage(`{}`))
 	}
-	if err == nil && !input.PromptOnly && !strings.HasPrefix(baseInput.Prompt, "batch_") {
+	if err == nil && !input.PromptOnly && shouldTransitionWorkflowOnActivityFailure(baseInput) {
 		_, _, err = transitionWorkflowRunTx(persistCtx, tx, input.WorkflowRunID, "failed", code, message, mustJSON(map[string]any{
 			"code": code, "message": message,
 		}))

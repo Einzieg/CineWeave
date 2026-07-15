@@ -38,3 +38,11 @@ func TestEmbeddedResourceCoverage(t *testing.T) {
 		}
 	}
 }
+
+func TestSeedContentHashIgnoresPlatformLineEndings(t *testing.T) {
+	lf := []byte(`{"resourceKey":"test","resourceVersion":1}` + "\n")
+	crlf := []byte(`{"resourceKey":"test","resourceVersion":1}` + "\r\n")
+	if seedContentHash(lf) != seedContentHash(crlf) {
+		t.Fatalf("seed hash differs by line ending: lf=%s crlf=%s", seedContentHash(lf), seedContentHash(crlf))
+	}
+}

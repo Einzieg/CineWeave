@@ -48,6 +48,12 @@ type ProcessRenderSegmentMediaOutput struct {
 
 func (a Activities) ProcessRenderSegmentMedia(ctx context.Context, input ProcessRenderSegmentMediaInput) (_ ProcessRenderSegmentMediaOutput, err error) {
 	var execution NodeExecution
+	stopHeartbeat := startWorkflowActivityHeartbeat(ctx, map[string]any{
+		"workflowRunId":   input.WorkflowRunID,
+		"renderSegmentId": input.RenderSegmentID,
+		"phase":           "process_render_segment_media",
+	})
+	defer stopHeartbeat()
 	defer func() {
 		err = finalizeWorkflowActivityError(ctx, a.db, execution, err)
 	}()

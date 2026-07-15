@@ -22,6 +22,7 @@ type PlanShotVideoInput struct {
 	WorkflowRunID           string   `json:"workflowRunId"`
 	CreatedBy               string   `json:"createdBy,omitempty"`
 	WorkflowPrompt          string   `json:"workflowPrompt,omitempty"`
+	FailureScope            string   `json:"failureScope,omitempty"`
 	ShotID                  string   `json:"shotId"`
 	ShotIndex               int      `json:"shotIndex"`
 	AspectRatio             string   `json:"aspectRatio"`
@@ -55,6 +56,7 @@ func (a Activities) PlanShotVideo(ctx context.Context, input PlanShotVideoInput)
 		WorkflowRunID:  input.WorkflowRunID,
 		Prompt:         firstNonEmptyString(input.WorkflowPrompt, "plan_shot_video"),
 		CreatedBy:      input.CreatedBy,
+		FailureScope:   input.FailureScope,
 	}
 	fail := func(nodeExecution NodeExecution, cause error) (PlanShotVideoOutput, error) {
 		if input.PromptOnly {
@@ -208,6 +210,7 @@ type EnsurePreparedShotVideoPlanInput struct {
 	WorkflowRunID    string `json:"workflowRunId"`
 	CreatedBy        string `json:"createdBy,omitempty"`
 	WorkflowPrompt   string `json:"workflowPrompt,omitempty"`
+	FailureScope     string `json:"failureScope,omitempty"`
 	ShotID           string `json:"shotId"`
 	ShotIndex        int    `json:"shotIndex"`
 	AspectRatio      string `json:"aspectRatio,omitempty"`
@@ -385,12 +388,14 @@ func (a Activities) EnsurePreparedShotVideoPlan(ctx context.Context, input Ensur
 		ShotID: input.ShotID, ShotIndex: input.ShotIndex, AspectRatio: input.AspectRatio, Resolution: input.Resolution,
 		AudioStrategy: input.AudioStrategy, AudioRequirement: input.AudioRequirement,
 	}
-	prepared, err := a.loadPreparedShotVideoPlan(ctx, loadInput)
-	if err == nil {
-		return prepared, nil
-	}
-	if !isPreparedVideoPromptPlanError(err) {
-		return LoadPreparedShotVideoPlanOutput{}, err
+	if shouldReusePreparedShotVideoPlan(input.Force) {
+		prepared, loadErr := a.loadPreparedShotVideoPlan(ctx, loadInput)
+		if loadErr == nil {
+			return prepared, nil
+		}
+		if !isPreparedVideoPromptPlanError(loadErr) {
+			return LoadPreparedShotVideoPlanOutput{}, loadErr
+		}
 	}
 	source, err := a.reviewedShotVideoPromptSource(ctx, input.OrganizationID, input.ProjectID, input.ShotID)
 	if err != nil {
@@ -401,7 +406,8 @@ func (a Activities) EnsurePreparedShotVideoPlan(ctx context.Context, input Ensur
 	}
 	plan, err := a.PlanShotVideo(ctx, PlanShotVideoInput{
 		OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
-		CreatedBy: input.CreatedBy, WorkflowPrompt: input.WorkflowPrompt, ShotID: input.ShotID, ShotIndex: input.ShotIndex,
+		CreatedBy: input.CreatedBy, WorkflowPrompt: input.WorkflowPrompt, FailureScope: input.FailureScope,
+		ShotID: input.ShotID, ShotIndex: input.ShotIndex,
 		AspectRatio: input.AspectRatio, Resolution: input.Resolution, AudioStrategy: input.AudioStrategy,
 		AudioRequirement: input.AudioRequirement, Force: input.Force,
 	})
@@ -412,6 +418,10 @@ func (a Activities) EnsurePreparedShotVideoPlan(ctx context.Context, input Ensur
 		return LoadPreparedShotVideoPlanOutput{}, err
 	}
 	return a.loadPreparedShotVideoPlan(ctx, loadInput)
+}
+
+func shouldReusePreparedShotVideoPlan(force bool) bool {
+	return !force
 }
 
 func (a Activities) reviewedShotVideoPromptSource(ctx context.Context, organizationID, projectID, shotID string) (reviewedShotVideoPromptSource, error) {

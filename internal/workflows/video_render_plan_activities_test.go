@@ -61,3 +61,32 @@ func TestSameStoryboardDialogueContentIgnoresTimingButNotOwnership(t *testing.T)
 		t.Fatal("changed dialogue text must invalidate the reviewed prompt")
 	}
 }
+
+func TestShouldReusePreparedShotVideoPlan(t *testing.T) {
+	if !shouldReusePreparedShotVideoPlan(false) {
+		t.Fatal("normal generation should reuse an active prepared plan")
+	}
+	if shouldReusePreparedShotVideoPlan(true) {
+		t.Fatal("forced generation must create a new execution plan")
+	}
+}
+
+func TestShouldTransitionWorkflowOnActivityFailure(t *testing.T) {
+	tests := []struct {
+		name  string
+		input TextToStoryboardInput
+		want  bool
+	}{
+		{name: "explicit workflow", input: TextToStoryboardInput{Prompt: "batch_legacy", FailureScope: workflowFailureScopeWorkflow}, want: true},
+		{name: "explicit batch item", input: TextToStoryboardInput{Prompt: "video polling", FailureScope: workflowFailureScopeBatchItem}, want: false},
+		{name: "legacy batch", input: TextToStoryboardInput{Prompt: "batch_generate_shot_videos"}, want: false},
+		{name: "legacy workflow", input: TextToStoryboardInput{Prompt: "regenerate_shot_video"}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := shouldTransitionWorkflowOnActivityFailure(test.input); got != test.want {
+				t.Fatalf("shouldTransitionWorkflowOnActivityFailure() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}

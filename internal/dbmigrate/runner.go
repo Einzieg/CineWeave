@@ -1,6 +1,7 @@
 package dbmigrate
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -423,15 +424,21 @@ func loadMigrationFiles() ([]migrationFile, error) {
 		if !strings.Contains(text, "-- +goose Up") || !strings.Contains(text, "-- +goose Down") {
 			return nil, fmt.Errorf("migration %q must contain Goose Up and Down sections", base)
 		}
-		hash := sha256.Sum256(content)
 		result = append(result, migrationFile{
 			Version: version,
 			Name:    base,
-			Hash:    fmt.Sprintf("%x", hash),
+			Hash:    migrationContentHash(content),
 		})
 		previous = version
 	}
 	return result, nil
+}
+
+func migrationContentHash(content []byte) string {
+	canonical := bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
+	canonical = bytes.ReplaceAll(canonical, []byte("\r"), []byte("\n"))
+	hash := sha256.Sum256(canonical)
+	return fmt.Sprintf("%x", hash)
 }
 
 func configureGoose() {

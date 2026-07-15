@@ -21,7 +21,8 @@ type StoryboardDialogueLine struct {
 }
 
 var (
-	boldDialogueHeaderPattern = regexp.MustCompile(`^\*\*([^*]+)\*\*(?:（([^）]*)）|\(([^)]*)\))?\s*[：:]?\s*(.*)$`)
+	boldDialogueHeaderPattern = regexp.MustCompile(`^\*\*([^*]+)\*\*(.*)$`)
+	speakerDeliveryPattern    = regexp.MustCompile(`^(.+?)(?:（([^）]*)）|\(([^)]*)\))$`)
 	plainDialoguePattern      = regexp.MustCompile(`^([^：:]{1,40})[：:]\s*(.+)$`)
 )
 
@@ -43,10 +44,7 @@ func ExtractScriptDialogueLines(content string) []StoryboardDialogueLine {
 			pendingDelivery = ""
 			continue
 		}
-		if match := boldDialogueHeaderPattern.FindStringSubmatch(line); match != nil {
-			speaker := strings.TrimSpace(match[1])
-			delivery := strings.TrimSpace(firstNonEmptyString(match[2], match[3]))
-			inlineText := strings.TrimSpace(match[4])
+		if speaker, delivery, inlineText, matched := parseBoldDialogueHeader(line); matched {
 			if isScreenplayFieldLabel(speaker) {
 				pendingSpeaker = ""
 				pendingDelivery = ""
@@ -78,14 +76,66 @@ func ExtractScriptDialogueLines(content string) []StoryboardDialogueLine {
 	return result
 }
 
+func parseBoldDialogueHeader(line string) (string, string, string, bool) {
+	match := boldDialogueHeaderPattern.FindStringSubmatch(strings.TrimSpace(line))
+	if match == nil {
+		return "", "", "", false
+	}
+	speaker, delivery := normalizeDialogueSpeaker(match[1])
+	remainder := strings.TrimSpace(match[2])
+	if suffixDelivery, rest, ok := consumeLeadingDialogueDelivery(remainder); ok {
+		delivery = firstNonEmptyString(suffixDelivery, delivery)
+		remainder = rest
+	}
+	remainder = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(remainder), "：:"))
+	return speaker, delivery, remainder, true
+}
+
+func consumeLeadingDialogueDelivery(value string) (string, string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", value, false
+	}
+	pairs := []struct {
+		open  string
+		close string
+	}{{"（", "）"}, {"(", ")"}}
+	for _, pair := range pairs {
+		if !strings.HasPrefix(value, pair.open) {
+			continue
+		}
+		end := strings.Index(value[len(pair.open):], pair.close)
+		if end < 0 {
+			return "", value, false
+		}
+		end += len(pair.open)
+		delivery := strings.TrimSpace(value[len(pair.open):end])
+		rest := strings.TrimSpace(value[end+len(pair.close):])
+		return delivery, rest, true
+	}
+	return "", value, false
+}
+
+func normalizeDialogueSpeaker(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "**"), "**"))
+	value = strings.TrimSpace(strings.TrimRight(value, "：:"))
+	match := speakerDeliveryPattern.FindStringSubmatch(value)
+	if match == nil {
+		return value, ""
+	}
+	return strings.TrimSpace(match[1]), strings.TrimSpace(firstNonEmptyString(match[2], match[3]))
+}
+
 func NormalizeStoryboardDialogue(lines []StoryboardDialogueLine) []StoryboardDialogueLine {
 	result := make([]StoryboardDialogueLine, 0, len(lines))
 	for _, line := range lines {
-		line.Speaker = strings.TrimSpace(line.Speaker)
+		var extractedDelivery string
+		line.Speaker, extractedDelivery = normalizeDialogueSpeaker(line.Speaker)
 		line.Text = strings.TrimSpace(line.Text)
-		line.Delivery = strings.TrimSpace(line.Delivery)
+		line.Delivery = strings.TrimSpace(firstNonEmptyString(line.Delivery, extractedDelivery))
 		line.Kind = normalizeDialogueKind(line.Kind, line.Speaker)
-		if line.Speaker == "" || line.Text == "" {
+		if line.Text == "" || (line.Speaker == "" && line.Kind == "dialogue") {
 			continue
 		}
 		result = append(result, line)
@@ -170,15 +220,22 @@ func normalizeDialogueKind(kind, speaker string) string {
 
 func isScreenplayFieldLabel(value string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(normalized, "**"), "**"))
+	normalized = strings.TrimSpace(strings.TrimRight(normalized, "：:"))
 	_, found := map[string]struct{}{
-		"画面": {}, "动作": {}, "音效": {}, "镜头": {}, "字幕": {}, "字幕提示": {},
-		"画幅": {}, "风格": {}, "氛围": {}, "主要人物": {}, "主要地点": {}, "场景": {},
-		"地点": {}, "时间": {}, "冲突": {}, "结果": {}, "情绪": {}, "dialogue": {},
-		"visual": {}, "action": {}, "sound": {}, "camera": {}, "location": {}, "time": {},
+		"画面": {}, "动作": {}, "音效": {}, "环境音": {}, "音乐": {}, "镜头": {}, "字幕": {}, "字幕提示": {},
+		"画幅": {}, "风格": {}, "氛围": {}, "人物": {}, "主要人物": {}, "主要地点": {}, "场景": {},
+		"地点": {}, "时间": {}, "时间流逝": {}, "冲突": {}, "结果": {}, "情绪": {}, "备注": {}, "dialogue": {},
+		"visual": {}, "action": {}, "sound": {}, "sfx": {}, "music": {}, "camera": {}, "location": {}, "time": {}, "characters": {},
 	}[normalized]
 	return found
 }
 
 func dialogueLineKey(line StoryboardDialogueLine) string {
-	return strings.TrimSpace(line.Speaker) + "\x00" + strings.TrimSpace(line.Text)
+	speaker, _ := normalizeDialogueSpeaker(line.Speaker)
+	return speaker + "\x00" + normalizeDialogueTextForComparison(line.Text)
+}
+
+func normalizeDialogueTextForComparison(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }

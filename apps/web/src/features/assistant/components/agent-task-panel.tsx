@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { localizePlatformError } from "@/lib/error-localization";
 import type { AgentApproval, AgentStep, AgentTask, JsonRecord, JsonValue } from "@/lib/types";
 import { projectHref } from "@/lib/routes";
 import Link from "next/link";
@@ -255,7 +256,11 @@ export function AgentTaskConversationActivity({
   const completedCount = steps.filter((step) => step.status === "succeeded").length;
   const waitingCount = steps.filter((step) => step.status === "waiting_approval").length;
   const failedCount = steps.filter((step) => ["failed", "blocked"].includes(step.status)).length;
-  const summary = task ? stringValue(task.summary?.summary) || task.errorMessage || "任务已创建。" : "正在读取任务";
+  const summary = task
+    ? stringValue(task.summary?.summary) ||
+      (task.errorMessage ? localizePlatformError(task.errorMessage, task.errorCode) : "") ||
+      "任务已创建。"
+    : "正在读取任务";
 
   return (
     <div className="flex min-w-0 items-start gap-3">
@@ -356,7 +361,9 @@ function ResultSummary({ task }: { task: AgentTask }) {
         <Badge variant="outline">权限 {agentPermissionModeLabel(permissionMode)}</Badge>
       </div>
       {task.temporalWorkflowId ? <TechnicalDetails items={[["后台任务", shortID(task.temporalWorkflowId)]]} /> : null}
-      <div className="mt-2 break-words text-xs text-muted-foreground">{summary || task.errorMessage || "任务已创建。"}</div>
+      <div className="mt-2 break-words text-xs text-muted-foreground">
+        {summary || (task.errorMessage ? localizePlatformError(task.errorMessage, task.errorCode) : "任务已创建。")}
+      </div>
     </div>
   );
 }
@@ -547,7 +554,7 @@ function ToolCallCard({
       ) : null}
       {stepWorkflowRunId(step) ? <TechnicalDetails items={[["任务编号", shortID(stepWorkflowRunId(step))]]} /> : null}
       {verifierStatus && verifierStatus !== "skipped" ? <VerifierLine verifier={verifier} /> : null}
-      {step.errorMessage ? <div className="mt-2 text-xs text-destructive">{step.errorMessage}</div> : null}
+      {step.errorMessage ? <div className="mt-2 text-xs text-destructive">{localizePlatformError(step.errorMessage, step.errorCode)}</div> : null}
 
       <details className="mt-2">
         <summary className="cursor-pointer text-xs text-muted-foreground">执行详情</summary>
@@ -612,6 +619,7 @@ type StepWorkflowProgress = {
     episodeTitle: string;
     partialText: string;
     receivedChars: number;
+    errorCode: string;
     errorMessage: string;
   };
 };
@@ -661,7 +669,7 @@ function WorkflowProgress({ progress }: { progress: StepWorkflowProgress }) {
       ) : node?.status === "running" ? (
         <div className="mt-2 text-xs text-muted-foreground">正在处理当前分集</div>
       ) : null}
-      {node?.errorMessage ? <div className="mt-2 text-xs text-destructive">{node.errorMessage}</div> : null}
+      {node?.errorMessage ? <div className="mt-2 text-xs text-destructive">{localizePlatformError(node.errorMessage, node.errorCode)}</div> : null}
     </div>
   );
 }
@@ -759,7 +767,8 @@ function VerifierLine({ verifier }: { verifier: Record<string, unknown> | null }
     return null;
   }
   const status = stringValue(verifier.status);
-  const text = stringValue(verifier.summary) || stringValue(verifier.errorMessage);
+  const verifierError = stringValue(verifier.errorMessage);
+  const text = stringValue(verifier.summary) || localizePlatformError(verifierError, stringValue(verifier.errorCode), "");
   if (!text) {
     return null;
   }
@@ -1118,6 +1127,7 @@ function stepWorkflowProgress(step: AgentStep): StepWorkflowProgress | null {
             episodeTitle: stringValue(nodeInput?.episodeTitle),
             partialText: stringValue(nodeOutput?.partialText),
             receivedChars: numberValue(nodeOutput?.receivedChars),
+            errorCode: stringValue(activeNode.errorCode),
             errorMessage: stringValue(activeNode.errorMessage),
           },
         }

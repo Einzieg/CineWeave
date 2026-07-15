@@ -20,6 +20,7 @@ type ShotRenderExecutionInput struct {
 	ShotIndex            int
 	ShotNo               int
 	WorkflowPrompt       string
+	FailureScope         string
 	AspectRatio          string
 	Resolution           string
 	AudioStrategy        string
@@ -81,7 +82,8 @@ func executePreparedShotRenderPlan(ctx, createCtx workflow.Context, input ShotRe
 	} else {
 		preparePlan = workflow.ExecuteActivity(ctx, "EnsurePreparedShotVideoPlan", EnsurePreparedShotVideoPlanInput{
 			OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
-			CreatedBy: input.CreatedBy, WorkflowPrompt: input.WorkflowPrompt, ShotID: input.ShotID, ShotIndex: input.ShotIndex,
+			CreatedBy: input.CreatedBy, WorkflowPrompt: input.WorkflowPrompt, FailureScope: input.FailureScope,
+			ShotID: input.ShotID, ShotIndex: input.ShotIndex,
 			AspectRatio: input.AspectRatio, Resolution: input.Resolution, AudioStrategy: input.AudioStrategy,
 			AudioRequirement: input.AudioRequirement, Force: input.Force,
 		})
@@ -122,7 +124,7 @@ func executePreparedShotRenderPlan(ctx, createCtx workflow.Context, input ShotRe
 			createErr := workflow.ExecuteActivity(createCtx, "CreateShotVideoTask", CreateShotVideoTaskInput{
 				OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
 				CreatedBy: input.CreatedBy, ShotID: input.ShotID, ShotIndex: input.ShotIndex, ShotNo: input.ShotNo,
-				WorkflowPrompt: input.WorkflowPrompt, Duration: segment.RequestedDurationSeconds,
+				WorkflowPrompt: input.WorkflowPrompt, FailureScope: input.FailureScope, Duration: segment.RequestedDurationSeconds,
 				PlannedDuration: segment.PlannedDurationSeconds,
 				AspectRatio:     input.AspectRatio, Resolution: input.Resolution, Force: input.Force,
 				ExecutionPlanID: prepared.Plan.ExecutionPlanID, RenderSegmentID: segment.SegmentID,
@@ -162,7 +164,8 @@ func executePreparedShotRenderPlan(ctx, createCtx workflow.Context, input ShotRe
 				var poll PollShotVideoTaskOutput
 				if err := workflow.ExecuteActivity(ctx, "PollShotVideoTask", PollShotVideoTaskInput{
 					OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
-					ShotID: input.ShotID, ShotIndex: input.ShotIndex, ShotNo: input.ShotNo,
+					FailureScope: input.FailureScope,
+					ShotID:       input.ShotID, ShotIndex: input.ShotIndex, ShotNo: input.ShotNo,
 					NodeRunID: created.NodeRunID, ExecutionToken: created.ExecutionToken,
 					AttemptGeneration: created.AttemptGeneration, ProviderAsyncTaskID: created.ProviderAsyncTaskID,
 					ExternalTaskID: created.ExternalTaskID, PollCount: pollCount,
@@ -280,7 +283,8 @@ func executeLegacyShotRenderPlan(ctx, createCtx workflow.Context, input ShotRend
 		var plan PlanShotVideoOutput
 		if err := workflow.ExecuteActivity(ctx, "PlanShotVideo", PlanShotVideoInput{
 			OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
-			WorkflowPrompt: input.WorkflowPrompt, ShotID: input.ShotID, ShotIndex: input.ShotIndex, AspectRatio: input.AspectRatio, Resolution: input.Resolution,
+			WorkflowPrompt: input.WorkflowPrompt, FailureScope: input.FailureScope,
+			ShotID: input.ShotID, ShotIndex: input.ShotIndex, AspectRatio: input.AspectRatio, Resolution: input.Resolution,
 			AudioStrategy: input.AudioStrategy, AudioRequirement: input.AudioRequirement,
 			Force:                   input.Force,
 			ExcludeProviderModelIDs: attemptedModels, PreviousExecutionPlanID: previousPlanID,
@@ -303,7 +307,7 @@ func executeLegacyShotRenderPlan(ctx, createCtx workflow.Context, input ShotRend
 				created, createErr := executeAgentReviewedShotVideoCreate(ctx, createCtx, CreateShotVideoTaskInput{
 					OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
 					CreatedBy: input.CreatedBy, ShotID: input.ShotID, ShotIndex: input.ShotIndex, ShotNo: input.ShotNo,
-					WorkflowPrompt: input.WorkflowPrompt, Duration: segment.RequestedDurationSeconds,
+					WorkflowPrompt: input.WorkflowPrompt, FailureScope: input.FailureScope, Duration: segment.RequestedDurationSeconds,
 					PlannedDuration: segment.PlannedDurationSeconds,
 					AspectRatio:     input.AspectRatio, Resolution: input.Resolution, Force: input.Force,
 					ExecutionPlanID: plan.ExecutionPlanID, RenderSegmentID: segment.SegmentID,
@@ -340,7 +344,8 @@ func executeLegacyShotRenderPlan(ctx, createCtx workflow.Context, input ShotRend
 					var poll PollShotVideoTaskOutput
 					if err := workflow.ExecuteActivity(ctx, "PollShotVideoTask", PollShotVideoTaskInput{
 						OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
-						ShotID: input.ShotID, ShotIndex: input.ShotIndex, ShotNo: input.ShotNo,
+						FailureScope: input.FailureScope,
+						ShotID:       input.ShotID, ShotIndex: input.ShotIndex, ShotNo: input.ShotNo,
 						NodeRunID: created.NodeRunID, ExecutionToken: created.ExecutionToken,
 						AttemptGeneration: created.AttemptGeneration, ProviderAsyncTaskID: created.ProviderAsyncTaskID,
 						ExternalTaskID: created.ExternalTaskID, PollCount: pollCount,
@@ -429,9 +434,7 @@ func executeLegacyShotRenderPlan(ctx, createCtx workflow.Context, input ShotRend
 }
 
 func composeShotRenderPlan(ctx workflow.Context, input ShotRenderExecutionInput, plan PlanShotVideoOutput) (ComposeShotRenderPlanMediaOutput, error) {
-	options := defaultActivityOptions()
-	options.TaskQueue = MediaTaskQueue
-	options.StartToCloseTimeout = 30 * time.Minute
+	options := mediaProcessingActivityOptions()
 	mediaCtx := workflow.WithActivityOptions(ctx, options)
 	var output ComposeShotRenderPlanMediaOutput
 	err := workflow.ExecuteActivity(mediaCtx, "ComposeShotRenderPlanMedia", ComposeShotRenderPlanMediaInput{
@@ -442,9 +445,7 @@ func composeShotRenderPlan(ctx workflow.Context, input ShotRenderExecutionInput,
 }
 
 func processVideoRenderSegment(ctx workflow.Context, input ShotRenderExecutionInput, plan PlanShotVideoOutput, segment provider.GatewayVideoPlanSegment, poll PollShotVideoTaskOutput) (ProcessRenderSegmentMediaOutput, error) {
-	options := defaultActivityOptions()
-	options.TaskQueue = MediaTaskQueue
-	options.StartToCloseTimeout = 30 * time.Minute
+	options := mediaProcessingActivityOptions()
 	mediaCtx := workflow.WithActivityOptions(ctx, options)
 	var output ProcessRenderSegmentMediaOutput
 	err := workflow.ExecuteActivity(mediaCtx, "ProcessRenderSegmentMedia", ProcessRenderSegmentMediaInput{

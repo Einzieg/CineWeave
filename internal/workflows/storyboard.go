@@ -37,6 +37,8 @@ const (
 	nodeComposeFinalVideoKey        = "compose_final_video"
 	promptKeyStoryboardPlanner      = "storyboard_planner"
 	promptKeyStoryboardImage        = "storyboard_image_prompt"
+	workflowFailureScopeBatchItem   = "batch_item"
+	workflowFailureScopeWorkflow    = "workflow"
 )
 
 type TextToStoryboardInput struct {
@@ -45,8 +47,21 @@ type TextToStoryboardInput struct {
 	WorkflowRunID       string                       `json:"workflowRunId"`
 	Prompt              string                       `json:"prompt"`
 	CreatedBy           string                       `json:"createdBy"`
+	FailureScope        string                       `json:"failureScope,omitempty"`
 	Input               json.RawMessage              `json:"input,omitempty"`
 	SourceToScriptState *SourceToScriptWorkflowState `json:"sourceToScriptState,omitempty"`
+}
+
+func shouldTransitionWorkflowOnActivityFailure(input TextToStoryboardInput) bool {
+	switch strings.TrimSpace(input.FailureScope) {
+	case workflowFailureScopeBatchItem:
+		return false
+	case workflowFailureScopeWorkflow:
+		return true
+	default:
+		// Preserve workflow histories created before failure scopes were explicit.
+		return !strings.HasPrefix(strings.TrimSpace(input.Prompt), "batch_")
+	}
 }
 
 type TextToStoryboardOutput struct {

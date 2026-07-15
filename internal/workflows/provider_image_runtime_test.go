@@ -14,6 +14,16 @@ func TestProviderImageActivityTimeoutOutlivesGatewayClient(t *testing.T) {
 	if options.StartToCloseTimeout != 15*time.Minute {
 		t.Fatalf("StartToCloseTimeout = %s, want 15m", options.StartToCloseTimeout)
 	}
+	if options.HeartbeatTimeout != providerTextHeartbeatTimeout {
+		t.Fatalf("HeartbeatTimeout = %s, want %s", options.HeartbeatTimeout, providerTextHeartbeatTimeout)
+	}
+}
+
+func TestMediaProcessingActivityOptionsHaveHeartbeat(t *testing.T) {
+	options := mediaProcessingActivityOptions()
+	if options.TaskQueue != MediaTaskQueue || options.StartToCloseTimeout != 30*time.Minute || options.HeartbeatTimeout != providerTextHeartbeatTimeout {
+		t.Fatalf("media activity options = %+v", options)
+	}
 }
 
 func TestProviderContentRejectionIsNonRetryable(t *testing.T) {

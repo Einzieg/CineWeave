@@ -1,6 +1,10 @@
 package provider
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Einzieg/cineweave/internal/events"
+)
 
 func TestSameVideoCapabilityFamilyRequiresFamilyVariantAndHash(t *testing.T) {
 	base := videoFallbackCandidate{ModelFamily: "veo", VariantKey: "native-720p", CapabilitySnapshotHash: "sha256:a"}
@@ -29,6 +33,22 @@ func TestVideoSegmentFailureRetryability(t *testing.T) {
 	for _, code := range []string{CodeInvalidRequest, CodeAuthFailed, CodeContentRejected} {
 		if videoSegmentFailureRetryable(code) {
 			t.Fatalf("%s should not be retried automatically", code)
+		}
+	}
+}
+
+func TestVideoRenderSegmentEventsAreRegistered(t *testing.T) {
+	for _, status := range []string{"planned", "retry_planned", "queued", "running", "succeeded", "failed", "cancelled"} {
+		eventType, err := videoRenderSegmentEventType(status)
+		if err != nil {
+			t.Fatalf("videoRenderSegmentEventType(%q): %v", status, err)
+		}
+		definition, ok := events.DefinitionFor(eventType)
+		if !ok {
+			t.Fatalf("video render segment event %q is not registered", eventType)
+		}
+		if definition.AggregateType != "video_render_segment" {
+			t.Fatalf("event %q aggregate = %q", eventType, definition.AggregateType)
 		}
 	}
 }

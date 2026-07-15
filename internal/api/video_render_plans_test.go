@@ -1,9 +1,44 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"testing"
+
+	"github.com/Einzieg/cineweave/internal/provider"
+	"github.com/Einzieg/cineweave/internal/workflows"
 )
+
+func TestAPIGatewayVideoDialogueSpansPreservesSpeakerlessSystemAudio(t *testing.T) {
+	shot := StoryboardShot{
+		StartTick: 90000,
+		EndTick:   6 * 90000,
+		ScriptDialogue: []workflows.StoryboardDialogueLine{
+			{TimingUnitID: "system-1", Text: "一声清越蝉鸣，骤然响彻天地。", Kind: "system", SpanStartTick: 3 * 90000, SpanEndTick: 6 * 90000},
+		},
+	}
+	spans, err := apiGatewayVideoDialogueSpans(shot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spans) != 1 || spans[0].Speaker != "" || spans[0].Kind != "system" || spans[0].StartTick != 2*90000 || spans[0].EndTick != 5*90000 {
+		t.Fatalf("system audio span = %+v", spans)
+	}
+}
+
+func TestAPIGatewayVideoDialogueSpansRejectsSpeakerlessDialogue(t *testing.T) {
+	_, err := apiGatewayVideoDialogueSpans(StoryboardShot{
+		StartTick: 0,
+		EndTick:   5 * 90000,
+		ScriptDialogue: []workflows.StoryboardDialogueLine{
+			{Text: "缺少说话人", Kind: "dialogue", SpanStartTick: 0, SpanEndTick: 90000},
+		},
+	})
+	var standard *provider.StandardErrorError
+	if !errors.As(err, &standard) || standard.Standard.Code != provider.CodeStoryboardReplanRequired {
+		t.Fatalf("error = %v, want %s", err, provider.CodeStoryboardReplanRequired)
+	}
+}
 
 func TestGetStoryboardShotRenderPlanRestoresPersistentSegmentState(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)

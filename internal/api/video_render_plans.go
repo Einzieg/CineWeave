@@ -194,14 +194,21 @@ func (s *Server) createStoryboardShotRenderPlan(w http.ResponseWriter, r *http.R
 func apiGatewayVideoDialogueSpans(shot StoryboardShot) ([]provider.GatewayVideoDialogueSpan, error) {
 	result := make([]provider.GatewayVideoDialogueSpan, 0, len(shot.ScriptDialogue))
 	for _, line := range shot.ScriptDialogue {
-		if strings.TrimSpace(line.Speaker) == "" || strings.TrimSpace(line.Text) == "" {
+		if strings.TrimSpace(line.Text) == "" {
 			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(line.Kind))
+		if kind == "" {
+			kind = "dialogue"
+		}
+		if kind == "dialogue" && strings.TrimSpace(line.Speaker) == "" {
+			return nil, &provider.StandardErrorError{Standard: provider.StandardError{Code: provider.CodeStoryboardReplanRequired, Message: "角色对白缺少说话人，需要先重新生成分镜计划", Retryable: false}}
 		}
 		if line.SpanEndTick <= line.SpanStartTick || line.SpanStartTick < shot.StartTick || line.SpanEndTick > shot.EndTick {
 			return nil, &provider.StandardErrorError{Standard: provider.StandardError{Code: provider.CodeStoryboardReplanRequired, Message: "分镜台词缺少精确的帧级时间范围，需要先重新生成分镜计划", Retryable: false}}
 		}
 		result = append(result, provider.GatewayVideoDialogueSpan{
-			TimingUnitID: line.TimingUnitID, Speaker: line.Speaker, Text: line.Text, Delivery: line.Delivery, Kind: line.Kind,
+			TimingUnitID: line.TimingUnitID, Speaker: line.Speaker, Text: line.Text, Delivery: line.Delivery, Kind: kind,
 			StartTick: line.SpanStartTick - shot.StartTick, EndTick: line.SpanEndTick - shot.StartTick,
 			ContinuesFromPrevious: line.ContinuesFromPrevious, ContinuesToNext: line.ContinuesToNext,
 		})

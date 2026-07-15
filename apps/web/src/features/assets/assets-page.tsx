@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import { orgScopedKey, useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { StudioApiError, studioApi } from "@/lib/api-client";
+import { localizePlatformError } from "@/lib/error-localization";
 import { Surface, SectionTitle } from "@/components/layout/app-shell";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ import { artifactTypeLabel, assetReferenceTypeLabel, assetTypeLabel, requirement
 import { useUiStore } from "@/lib/stores/ui-store";
 import { isActiveWorkflowStatus } from "@/lib/workflow-status";
 import { useStudioSession } from "@/lib/session";
+import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import type { Artifact, AssetReference, CanonicalAsset, JsonRecord, OutputImpact, ShotAssetRequirement, StudioSession, WorkflowRun } from "@/lib/types";
 
 type AssetTypeFilter = "all" | "character" | "scene" | "prop";
@@ -108,6 +110,7 @@ export function AssetsPage({
   const [generatingRequirementIds, setGeneratingRequirementIds] = useState<string[]>([]);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const invalidate = useInvalidateKeys();
+  const pollingFallback = useProjectPollingFallback(projectId);
   const setActivityOpen = useUiStore((state) => state.setActivityOpen);
 
   const { data: project } = useApiQuery({
@@ -131,7 +134,7 @@ export function AssetsPage({
     key: qk.workflowRuns(projectId),
     queryFn: (session) => studioApi.listWorkflowRuns(session, projectId).then((response) => response.items || []),
     refetchInterval: (query) =>
-      query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
+      pollingFallback && query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
   });
 
   const selectedAssetFromList = useMemo(() => assets.find((asset) => asset.id === selectedAssetId) ?? null, [assets, selectedAssetId]);
@@ -1097,7 +1100,7 @@ function AssetDetailPanel({
 
         {imageFailureReason ? (
           <div role="alert" className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            图像生成失败：{imageFailureReason}
+            图像生成失败：{localizePlatformError(imageFailureReason)}
           </div>
         ) : null}
 

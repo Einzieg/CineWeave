@@ -12,7 +12,7 @@ export async function consumeServerSentEvents(
   onEvent: (event: ServerSentEvent) => void | Promise<void>,
 ): Promise<void> {
   if (!response.body) {
-    throw new Error("SSE response body is unavailable");
+    throw new Error("实时响应连接不可用");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -23,7 +23,7 @@ export async function consumeServerSentEvents(
       const { done, value } = await reader.read();
       buffer += decoder.decode(value, { stream: !done });
       if (buffer.length > maxBufferedEventBytes) {
-        throw new Error("SSE event exceeds the maximum buffered size");
+        throw new Error("实时响应单条消息过长，已停止接收");
       }
       buffer = buffer.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
       let boundary = buffer.indexOf("\n\n");

@@ -15,9 +15,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { studioApi } from "@/lib/api-client";
 import { cssAspectRatio } from "@/lib/aspect-ratio";
+import { localizePlatformError } from "@/lib/error-localization";
 import { assetTypeLabel, statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
+import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import { wholeSecondDuration } from "@/lib/timing";
 import { cn } from "@/lib/utils";
 import type { StoryboardShotDetail, StoryboardShotImageReferenceOption } from "@/lib/types";
@@ -51,6 +53,7 @@ export function ShotImageDetailDialog({
   onChanged: () => void;
 }) {
   const invalidate = useInvalidateKeys();
+  const pollingFallback = useProjectPollingFallback(projectId);
   const [draft, setDraft] = useState<ImageDraft>(EMPTY_DRAFT);
   const [largePreview, setLargePreview] = useState<{ url: string; title: string } | null>(null);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
@@ -63,12 +66,12 @@ export function ShotImageDetailDialog({
     refetchInterval: (query) => {
       const imageStatus = query.state.data?.shot.imageStatus;
       const promptStatus = query.state.data?.shot.imagePromptStatus;
-      return open && (
+      return pollingFallback && open && (
         imageStatus === "queued"
         || imageStatus === "running"
         || promptStatus === "queued"
         || promptStatus === "running"
-      ) ? 3000 : false;
+      ) ? 5000 : false;
     },
   });
 
@@ -244,13 +247,13 @@ export function ShotImageDetailDialog({
 
               {detail.shot.imageErrorMessage ? (
                 <div role="alert" className="mt-4 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {detail.shot.imageErrorMessage}
+                  {localizePlatformError(detail.shot.imageErrorMessage, detail.shot.imageErrorCode)}
                 </div>
               ) : null}
 
               {detail.shot.imagePromptErrorMessage ? (
                 <div role="alert" className="mt-4 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  图片提示词生成失败：{detail.shot.imagePromptErrorMessage}
+                  图片提示词生成失败：{localizePlatformError(detail.shot.imagePromptErrorMessage, detail.shot.imagePromptErrorCode)}
                 </div>
               ) : null}
 
@@ -498,7 +501,7 @@ function ImageGenerationHistory({ detail, onOpen }: { detail: StoryboardShotDeta
                   <span className="truncate text-xs text-muted-foreground">{run.modelName || run.modelId || "未记录模型"}</span>
                 </div>
                 <div className="mt-2 text-xs text-muted-foreground">{formatRunTime(run.completedAt || run.startedAt)}</div>
-                {run.errorMessage ? <p className="mt-2 line-clamp-2 text-xs text-destructive">{run.errorMessage}</p> : null}
+                {run.errorMessage ? <p className="mt-2 line-clamp-2 text-xs text-destructive">{localizePlatformError(run.errorMessage, run.errorCode)}</p> : null}
                 {run.prompt ? <details className="mt-2 text-xs"><summary className="cursor-pointer text-muted-foreground">查看提示词与溯源</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-2 text-foreground">{run.prompt}{run.promptTruncated ? "\n\n[内容过长，详情中已截断]" : ""}</pre><div className="mt-2 break-all text-muted-foreground">调用：{run.providerCallId}{run.promptHash ? `\n哈希：${run.promptHash}` : ""}</div></details> : null}
               </div>
             </div>

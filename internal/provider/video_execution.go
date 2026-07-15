@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -349,7 +350,10 @@ func refreshVideoRenderPlanStateTx(ctx context.Context, tx pgx.Tx, planID string
 }
 
 func insertVideoRenderSegmentEvent(ctx context.Context, tx pgx.Tx, organizationID, projectID, planID, segmentID, status, providerTaskID, providerCallID, errorMessage string) error {
-	eventType := "storyboard.segment." + status
+	eventType, err := videoRenderSegmentEventType(status)
+	if err != nil {
+		return err
+	}
 	var workflowRunID sql.NullString
 	if err := tx.QueryRow(ctx, `SELECT workflow_run_id::text FROM video_render_plans WHERE id = $1`, planID).Scan(&workflowRunID); err != nil {
 		return err
@@ -367,6 +371,27 @@ func insertVideoRenderSegmentEvent(ctx context.Context, tx pgx.Tx, organizationI
 		return err
 	}
 	return events.AppendTx(ctx, tx, organizationID, projectID, eventType, "video_render_segment", segmentID, payload)
+}
+
+func videoRenderSegmentEventType(status string) (string, error) {
+	switch strings.TrimSpace(status) {
+	case "planned":
+		return "storyboard.segment.planned", nil
+	case "retry_planned":
+		return "storyboard.segment.retry_planned", nil
+	case "queued":
+		return "storyboard.segment.queued", nil
+	case "running":
+		return "storyboard.segment.running", nil
+	case "succeeded":
+		return "storyboard.segment.succeeded", nil
+	case "failed":
+		return "storyboard.segment.failed", nil
+	case "cancelled":
+		return "storyboard.segment.cancelled", nil
+	default:
+		return "", fmt.Errorf("%w: unsupported video render segment event status %q", ErrValidation, status)
+	}
 }
 
 func normalizeVideoRenderSegmentStatus(status string) string {

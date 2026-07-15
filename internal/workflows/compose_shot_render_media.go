@@ -50,6 +50,12 @@ type renderPlanComposeRecord struct {
 
 func (a Activities) ComposeShotRenderPlanMedia(ctx context.Context, input ComposeShotRenderPlanMediaInput) (_ ComposeShotRenderPlanMediaOutput, err error) {
 	var execution NodeExecution
+	stopHeartbeat := startWorkflowActivityHeartbeat(ctx, map[string]any{
+		"workflowRunId":   input.WorkflowRunID,
+		"executionPlanId": input.ExecutionPlanID,
+		"phase":           "compose_shot_render_plan_media",
+	})
+	defer stopHeartbeat()
 	defer func() {
 		err = finalizeWorkflowActivityError(ctx, a.db, execution, err)
 	}()

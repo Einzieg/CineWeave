@@ -121,6 +121,29 @@ func TestPlanVideoSegmentsRejectsDialogueLongerThanProviderCapacity(t *testing.T
 	}
 }
 
+func TestValidateGatewayVideoDialogueSpansAllowsSpeakerlessSystemAudioAtShotEnd(t *testing.T) {
+	targetTicks := int64(5 * 90000)
+	spans, err := validateGatewayVideoDialogueSpans([]GatewayVideoDialogueSpan{
+		{TimingUnitID: "system-1", Text: "一声清越蝉鸣，骤然响彻天地。", Kind: "system", StartTick: 2 * 90000, EndTick: targetTicks, ContinuesToNext: true},
+	}, targetTicks, 3750)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spans) != 1 || spans[0].Speaker != "" || spans[0].Kind != "system" || spans[0].EndTick != targetTicks {
+		t.Fatalf("system audio span = %+v", spans)
+	}
+}
+
+func TestValidateGatewayVideoDialogueSpansRejectsSpeakerlessDialogue(t *testing.T) {
+	_, err := validateGatewayVideoDialogueSpans([]GatewayVideoDialogueSpan{
+		{Text: "缺少说话人", Kind: "dialogue", StartTick: 0, EndTick: 90000},
+	}, 5*90000, 3750)
+	var standard *StandardErrorError
+	if !errors.As(err, &standard) || standard.Standard.Code != CodeStoryboardReplanRequired {
+		t.Fatalf("error = %v, want %s", err, CodeStoryboardReplanRequired)
+	}
+}
+
 func TestMatchVideoGenerationVariantKeepsNativeAudioUnknownDistinct(t *testing.T) {
 	variant := VideoGenerationVariant{
 		VariantKey:   "native-unknown",

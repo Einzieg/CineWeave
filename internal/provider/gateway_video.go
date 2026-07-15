@@ -119,7 +119,8 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 	}
 	response, runErr := s.executeGatewayVideoCreate(ctx, req, start.Request.ID, start.Request.AttemptGeneration)
 	if runErr != nil {
-		if errors.Is(runErr, ErrValidation) || errors.Is(runErr, pgx.ErrNoRows) {
+		_, standardError := StandardErrorFromError(runErr)
+		if standardError || errors.Is(runErr, ErrValidation) || errors.Is(runErr, pgx.ErrNoRows) {
 			_, code, message, _, _ := normalizedProviderFailure(runErr)
 			standard := standardErrorFromRunError(runErr, code, message)
 			response = GatewayVideoCreateTaskResponse{ProviderRequestID: start.Request.ID, AttemptGeneration: start.Request.AttemptGeneration, Status: "failed", Error: standard}
@@ -170,6 +171,17 @@ func (s *Service) executeGatewayVideoCreate(ctx context.Context, req GatewayVide
 		return GatewayVideoCreateTaskResponse{}, err
 	}
 	if executionSegment != nil && executionSegment.ProviderAsyncTaskID != "" && executionSegment.ProviderTaskStatus != "failed" && executionSegment.ProviderTaskStatus != "cancelled" {
+		existingTask, taskErr := s.getGatewayVideoTask(ctx, GatewayVideoPollTaskRequest{
+			OrganizationID: req.OrganizationID, ProviderAsyncTaskID: executionSegment.ProviderAsyncTaskID,
+		})
+		if taskErr != nil {
+			return GatewayVideoCreateTaskResponse{}, &StandardErrorError{Standard: StandardError{
+				Code: CodeRenderPlanReplanRequired, Message: "视频渲染片段关联的供应商任务已失效，请重新生成视频提示词计划", Retryable: false,
+			}}
+		}
+		if err := validateGatewayVideoCreateTaskIdentity(existingTask, req); err != nil {
+			return GatewayVideoCreateTaskResponse{}, err
+		}
 		return GatewayVideoCreateTaskResponse{
 			ProviderRequestID: providerRequestID, AttemptGeneration: attemptGeneration,
 			ProviderCallID: executionSegment.ProviderCallID, ProviderAsyncTaskID: executionSegment.ProviderAsyncTaskID,
@@ -225,6 +237,19 @@ func (s *Service) executeGatewayVideoCreate(ctx context.Context, req GatewayVide
 		}
 	}
 	return final, nil
+}
+
+func validateGatewayVideoCreateTaskIdentity(task gatewayVideoTask, req GatewayVideoCreateTaskRequest) error {
+	err := validateGatewayVideoTaskRequestIdentity(task, GatewayVideoPollTaskRequest{
+		NodeRunID: req.NodeRunID, NodeExecutionToken: req.NodeExecutionToken,
+		NodeAttemptGeneration: req.NodeAttemptGeneration,
+	})
+	if err == nil {
+		return nil
+	}
+	return &StandardErrorError{Standard: StandardError{
+		Code: CodeRenderPlanReplanRequired, Message: "视频渲染片段已绑定到另一工作流执行，请重新生成视频提示词计划", Retryable: false,
+	}}
 }
 
 func (s *Service) executeGatewayVideoCreateAttempt(ctx context.Context, req GatewayVideoCreateTaskRequest, videoInput gatewayVideoInput, selection gatewayModelSelection, attemptIndex, maxAttempts int, selectedBy, providerRequestID string, attemptGeneration int) (GatewayVideoCreateTaskResponse, GatewayAttempt, error) {
