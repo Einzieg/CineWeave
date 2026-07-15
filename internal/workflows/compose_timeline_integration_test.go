@@ -12,7 +12,7 @@ import (
 func TestComposeTimelineClipsSkipsDisabledAndCarriesTrim(t *testing.T) {
 	ctx := context.Background()
 	pool := openWorkflowGatewayIntegrationDB(t, ctx)
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	orgID, _, projectID, workflowRunID, _, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
@@ -24,12 +24,12 @@ func TestComposeTimelineClipsSkipsDisabledAndCarriesTrim(t *testing.T) {
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO timeline_clips(
 			organization_id, project_id, timeline_id, storyboard_shot_id, video_artifact_id, video_media_file_id,
-			clip_index, title, enabled, source_storage_key, source_duration_seconds,
-			trim_start_seconds, trim_end_seconds, target_duration_seconds, metadata
+			clip_index, title, enabled, source_storage_key, source_duration_ticks,
+			trim_start_tick, trim_end_tick, start_tick, end_tick, metadata
 		)
 		VALUES
-		  ($1, $2, $3, $4, $5, $6, 0, 'enabled', true, 'timeline/clip-a.mp4', 5, 1.5, 3.75, 4, '{}'),
-		  ($1, $2, $3, $4, $5, $6, 1, 'disabled', false, 'timeline/clip-b.mp4', 5, 0, NULL, NULL, '{}')
+		  ($1, $2, $3, $4, $5, $6, 0, 'enabled', true, 'timeline/clip-a.mp4', 450000, 135000, 337500, 0, 360000, '{}'),
+		  ($1, $2, $3, $4, $5, $6, 1, 'disabled', false, 'timeline/clip-b.mp4', 450000, 0, 450000, 360000, 810000, '{}')
 	`, orgID, projectID, timelineID, shotID, videoArtifactID, mediaFileID); err != nil {
 		t.Fatalf("insert timeline clips: %v", err)
 	}
@@ -50,14 +50,14 @@ func TestComposeTimelineClipsSkipsDisabledAndCarriesTrim(t *testing.T) {
 func TestCompleteComposeFinalVideoWritesFinalVideoVersion(t *testing.T) {
 	ctx := context.Background()
 	pool := openWorkflowGatewayIntegrationDB(t, ctx)
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	orgID, userID, projectID, workflowRunID, _, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
 	})
 	timelineID := insertWorkflowProjectTimeline(t, ctx, pool, orgID, projectID)
 	activities := NewActivities(pool, nil, nil)
-	nodeRunID, err := StartNodeRun(ctx, pool, NodeRunInput{
+	nodeExecution, err := StartNodeRun(ctx, pool, NodeRunInput{
 		OrganizationID: orgID,
 		ProjectID:      projectID,
 		WorkflowRunID:  workflowRunID,
@@ -78,7 +78,20 @@ func TestCompleteComposeFinalVideoWritesFinalVideoVersion(t *testing.T) {
 		Title:          "Final A",
 		AspectRatio:    "16:9",
 		Resolution:     "720p",
-	}, nodeRunID, []composeClipRecord{{TimelineClipID: "clip", ShotID: "shot", ClipIndex: 0, Enabled: true, StorageKey: "timeline/clip-a.mp4"}}, storage.PutResult{
+	}, nodeExecution, []composeClipRecord{{
+		TimelineClipID:      "clip",
+		ShotID:              "shot",
+		ClipIndex:           0,
+		Enabled:             true,
+		StorageKey:          "timeline/clip-a.mp4",
+		StartTick:           0,
+		EndTick:             450000,
+		DurationTicks:       450000,
+		SourceDurationTicks: 450000,
+		TimelineTimebase:    90000,
+		FPSNumerator:        24,
+		FPSDenominator:      1,
+	}}, storage.PutResult{
 		StorageKey:  "timeline/timeline.json",
 		ContentHash: "sha256:timeline",
 		ByteSize:    10,
@@ -148,11 +161,12 @@ func insertWorkflowTimelineShot(t *testing.T, ctx context.Context, pool *pgxpool
 	var id string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO storyboard_shots(
-			organization_id, project_id, workflow_run_id, shot_index, shot_no, duration_seconds,
+			organization_id, project_id, workflow_run_id, shot_index, shot_no,
+			start_tick, end_tick, duration_min_ticks, duration_max_ticks,
 			visual, image_prompt, video_prompt, video_artifact_id, video_media_file_id, video_storage_key,
 			status, video_status, metadata
 		)
-		VALUES ($1, $2, $3, 0, 1, 5, 'visual', 'image', 'video', $4, $5, $6, 'video_succeeded', 'succeeded', '{}')
+		VALUES ($1, $2, $3, 0, 1, 0, 450000, 450000, 450000, 'visual', 'image', 'video', $4, $5, $6, 'video_succeeded', 'succeeded', '{}')
 		RETURNING id::text
 	`, orgID, projectID, workflowRunID, artifactID, mediaFileID, storageKey).Scan(&id); err != nil {
 		t.Fatalf("insert workflow timeline shot: %v", err)

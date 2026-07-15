@@ -14,6 +14,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/workflows"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -307,7 +308,7 @@ func (s *Server) agentToolListSources(r *http.Request, principal auth.Principal,
 		return agentToolError("list_sources", args, err)
 	}
 	limit := agentIntArg(args, "limit", 20, 1, 100)
-	sources, err := s.projectSourceList(r, project.ID)
+	sources, err := s.projectSourceList(r, project.ID, "active")
 	if err != nil {
 		return agentToolError("list_sources", args, err)
 	}
@@ -462,7 +463,7 @@ func (s *Server) agentToolListScripts(r *http.Request, principal auth.Principal,
 		       s.created_at, s.updated_at
 		FROM scripts s
 		LEFT JOIN script_versions sv ON sv.id = s.current_version_id
-		WHERE s.project_id = $1
+		WHERE s.project_id = $1 AND COALESCE(s.status, 'active') <> 'archived'
 		ORDER BY CASE WHEN s.status = 'active' THEN 0 ELSE 1 END, s.updated_at DESC, s.created_at DESC
 		LIMIT $2
 	`, project.ID, limit)
@@ -570,13 +571,11 @@ func (s *Server) agentToolListWorkflowRuns(r *http.Request, principal auth.Princ
 		return agentToolError("list_workflow_runs", args, err)
 	}
 	limit := agentIntArg(args, "limit", 20, 1, 100)
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	rows, err := s.db.Query(r.Context(), workflowRunSelectSQL(`
 		WHERE project_id = $1
 		ORDER BY created_at DESC
 		LIMIT $2
-	`, project.ID, limit)
+	`), project.ID, limit)
 	if err != nil {
 		return agentToolError("list_workflow_runs", args, err)
 	}
@@ -655,11 +654,9 @@ func (s *Server) agentToolCancelWorkflow(r *http.Request, principal auth.Princip
 	if runID == "" {
 		return agentToolError("cancel_workflow", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowRunId is required"))
 	}
-	item, err := scanWorkflowRun(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	item, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
 		WHERE id = $1 AND project_id = $2
-	`, runID, project.ID))
+	`), runID, project.ID))
 	if err != nil {
 		return agentToolError("cancel_workflow", args, err)
 	}
@@ -678,11 +675,9 @@ func (s *Server) agentToolCancelWorkflow(r *http.Request, principal auth.Princip
 			_ = s.insertWorkflowCancelWarning(r.Context(), item, reason, err)
 		}
 	}
-	updated, err := scanWorkflowRun(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	updated, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
 		WHERE id = $1
-	`, item.ID))
+	`), item.ID))
 	if err != nil {
 		return agentToolError("cancel_workflow", args, err)
 	}
@@ -800,6 +795,8 @@ func scriptAgentToolLabel(name string) string {
 		"list_events":             "列出事件",
 		"list_scripts":            "列出剧本",
 		"list_assets":             "列出资产",
+		"asset.get":               "读取资产卡",
+		"asset.revise_prompt":     "修订资产提示词",
 		"list_storyboard_shots":   "列出分镜",
 		"list_workflow_runs":      "列出任务",
 		"start_production_action": "启动生产动作",
@@ -860,11 +857,112 @@ func cleanAgentReferenceString(value string) string {
 	if isAgentReferencePlaceholder(trimmed) {
 		return ""
 	}
+	if _, err := uuid.Parse(trimmed); err != nil {
+		return ""
+	}
 	return trimmed
 }
 
 func isAgentReferencePlaceholder(value string) bool {
-	return strings.Contains(value, "{{") && strings.Contains(value, "}}")
+	trimmed := strings.TrimSpace(value)
+	return (strings.Contains(trimmed, "{{") && strings.Contains(trimmed, "}}")) ||
+		(strings.HasPrefix(trimmed, "<") && strings.HasSuffix(trimmed, ">"))
+}
+
+var agentUUIDArgumentKeys = map[string]bool{
+	"accountId":       true,
+	"artifactId":      true,
+	"assetId":         true,
+	"chapterId":       true,
+	"clipId":          true,
+	"episodeId":       true,
+	"finalVideoId":    true,
+	"fixId":           true,
+	"itemId":          true,
+	"modelId":         true,
+	"planId":          true,
+	"promptVersionId": true,
+	"providerModelId": true,
+	"requirementId":   true,
+	"scriptId":        true,
+	"scriptSceneId":   true,
+	"scriptVersionId": true,
+	"shotId":          true,
+	"sourceId":        true,
+	"templateId":      true,
+	"timelineId":      true,
+	"versionId":       true,
+	"workflowRunId":   true,
+}
+
+var agentUUIDArrayArgumentKeys = map[string]bool{
+	"artifactIds":      true,
+	"assetIds":         true,
+	"chapterIds":       true,
+	"eventIds":         true,
+	"scriptEpisodeIds": true,
+	"shotIds":          true,
+	"workflowRunIds":   true,
+}
+
+func validateAgentRuntimeArguments(args map[string]any) error {
+	return validateAgentRuntimeValue(args, "args", "")
+}
+
+func validateAgentRuntimeValue(value any, path, key string) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		for childKey, child := range typed {
+			if err := validateAgentRuntimeValue(child, path+"."+childKey, childKey); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for index, child := range typed {
+			if err := validateAgentRuntimeValue(child, fmt.Sprintf("%s[%d]", path, index), key); err != nil {
+				return err
+			}
+		}
+	case []string:
+		for index, child := range typed {
+			if err := validateAgentRuntimeValue(child, fmt.Sprintf("%s[%d]", path, index), key); err != nil {
+				return err
+			}
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		if isAgentPlanningPlaceholder(trimmed) {
+			return newAPIError(http.StatusUnprocessableEntity, "AGENT_ARGUMENT_UNRESOLVED", fmt.Sprintf("工具参数 %s 仍是规划占位文本，请改用真实值或语义选择条件", path))
+		}
+		if agentUUIDArgumentKeys[key] || agentUUIDArrayArgumentKeys[key] {
+			if _, err := uuid.Parse(trimmed); err != nil {
+				return newAPIError(http.StatusUnprocessableEntity, "AGENT_ARGUMENT_INVALID", fmt.Sprintf("工具参数 %s 必须是有效 UUID", path))
+			}
+		}
+	}
+	return nil
+}
+
+func isAgentPlanningPlaceholder(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if strings.Contains(trimmed, "{{") && strings.Contains(trimmed, "}}") {
+		return false // Prompt templates may intentionally contain Go-style placeholders.
+	}
+	if !strings.HasPrefix(trimmed, "<") || !strings.HasSuffix(trimmed, ">") {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, marker := range []string{
+		"上一步", "返回", "读取", "完整正文", "实际", "待填", "填入", "替换", "sourceid", "chapterid", "scriptid", "workflowrunid",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func agentIntArg(args map[string]any, key string, fallback, min, max int) int {

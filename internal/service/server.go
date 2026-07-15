@@ -11,12 +11,17 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/config"
+	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/observability"
 )
 
 func Serve(ctx context.Context, cfg config.Server, handler http.Handler, logger *slog.Logger) error {
+	root := http.NewServeMux()
+	root.Handle("/metrics", observability.MetricsHandler())
+	root.Handle("/", handler)
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           handler,
+		Handler:           httpx.WithRequestID(observability.HTTPMiddleware(cfg.Name, logger, root)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

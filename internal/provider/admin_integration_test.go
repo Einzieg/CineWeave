@@ -159,6 +159,136 @@ func TestDeleteModelRemovesBindingsAndAllowsRebinding(t *testing.T) {
 	}
 }
 
+func TestUpdateModelProfileBinding(t *testing.T) {
+	ctx, pool, vault := openProviderAdminTestDB(t)
+	orgID, _, modelID := seedGatewayIntegrationData(t, ctx, pool, vault, "http://example.test")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+	})
+
+	var accountID, profileID string
+	if err := pool.QueryRow(ctx, `SELECT provider_account_id FROM provider_models WHERE id = $1`, modelID).Scan(&accountID); err != nil {
+		t.Fatalf("select provider account id: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO model_profiles(organization_id, profile_key, name, purpose, routing_strategy, fallback_strategy)
+		VALUES ($1, 'update-model-binding-test', 'Update Model Binding Test', 'update_model_binding_test', 'priority_with_fallback', '{}')
+		RETURNING id
+	`, orgID).Scan(&profileID); err != nil {
+		t.Fatalf("insert model profile: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE provider_model_capabilities
+		SET provider_options_schema = '{"xCapabilities":{"supportsReasoning":true,"supportsReasoningLevels":true,"reasoningLevels":["low","medium","high"]}}'
+		WHERE provider_model_id = $1
+	`, modelID); err != nil {
+		t.Fatalf("configure reasoning levels: %v", err)
+	}
+
+	service := NewService(pool, vault)
+	priority, weight, enabled := 200, 100, true
+	profile, err := service.CreateModelProfileBinding(ctx, orgID, profileID, CreateModelProfileBindingRequest{
+		ProviderModelID: modelID,
+		Priority:        &priority,
+		Weight:          &weight,
+		Enabled:         &enabled,
+		RuntimeOptions:  &ModelProfileBindingRuntimeOptions{ReasoningLevel: "low"},
+	})
+	if err != nil {
+		t.Fatalf("create model profile binding: %v", err)
+	}
+	if len(profile.Bindings) != 1 {
+		t.Fatalf("bindings = %#v, want one", profile.Bindings)
+	}
+	bindingID := profile.Bindings[0].ID
+
+	if profile.Bindings[0].RuntimeOptions.ReasoningLevel != "low" {
+		t.Fatalf("created runtime options = %#v, want low", profile.Bindings[0].RuntimeOptions)
+	}
+
+	priority, weight, enabled = 50, 250, false
+	profile, err = service.UpdateModelProfileBinding(ctx, orgID, profileID, bindingID, UpdateModelProfileBindingRequest{
+		Priority:       &priority,
+		Weight:         &weight,
+		Enabled:        &enabled,
+		RuntimeOptions: &ModelProfileBindingRuntimeOptions{ReasoningLevel: "high"},
+	})
+	if err != nil {
+		t.Fatalf("update model profile binding: %v", err)
+	}
+	if len(profile.Bindings) != 1 || profile.Bindings[0].Priority != 50 || profile.Bindings[0].Weight != 250 || profile.Bindings[0].Enabled || profile.Bindings[0].RuntimeOptions.ReasoningLevel != "high" {
+		t.Fatalf("updated binding = %#v", profile.Bindings)
+	}
+
+	enabled = true
+	profile, err = service.UpdateModelProfileBinding(ctx, orgID, profileID, bindingID, UpdateModelProfileBindingRequest{Enabled: &enabled})
+	if err != nil {
+		t.Fatalf("enable model profile binding: %v", err)
+	}
+	if profile.Bindings[0].Priority != 50 || profile.Bindings[0].Weight != 250 || !profile.Bindings[0].Enabled || profile.Bindings[0].RuntimeOptions.ReasoningLevel != "high" {
+		t.Fatalf("partially updated binding = %#v", profile.Bindings[0])
+	}
+	if _, err := service.UpdateModel(ctx, orgID, modelID, UpdateModelRequest{
+		Capabilities: &CapabilityInput{
+			TaskTypes:             json.RawMessage(`["text.generate","text.stream"]`),
+			InputLimits:           json.RawMessage(`{}`),
+			OutputLimits:          json.RawMessage(`{}`),
+			QualityTiers:          json.RawMessage(`[]`),
+			ProviderOptionsSchema: json.RawMessage(`{"xCapabilities":{"supportsReasoning":true,"supportsReasoningLevels":true,"reasoningLevels":["low","medium"]}}`),
+			PricingPolicy:         json.RawMessage(`{}`),
+		},
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("capability update that removes bound reasoning level error = %v, want validation", err)
+	}
+	candidates, err := service.ResolveRoutingCandidates(ctx, RoutingRequest{
+		OrganizationID:  orgID,
+		ModelProfileKey: "update-model-binding-test",
+		TaskType:        TaskTypeTextGenerate,
+		Modality:        "text",
+	})
+	if err != nil {
+		t.Fatalf("resolve routing candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].RuntimeOptions.ReasoningLevel != "high" {
+		t.Fatalf("routing runtime options = %#v, want high", candidates)
+	}
+
+	secondary, err := service.CreateModel(ctx, orgID, accountID, CreateModelRequest{
+		ModelKey:    "binding-update-secondary",
+		DisplayName: "Binding Update Secondary",
+		Modality:    "text",
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create secondary model: %v", err)
+	}
+	priority, weight = 50, 300
+	profile, err = service.CreateModelProfileBinding(ctx, orgID, profileID, CreateModelProfileBindingRequest{
+		ProviderModelID: secondary.ID,
+		Priority:        &priority,
+		Weight:          &weight,
+	})
+	if err != nil {
+		t.Fatalf("bind secondary model: %v", err)
+	}
+	if len(profile.Bindings) != 2 || profile.Bindings[0].ProviderModelID != secondary.ID {
+		t.Fatalf("binding order = %#v, want higher equal-priority weight first", profile.Bindings)
+	}
+
+	negative := -1
+	if _, err := service.UpdateModelProfileBinding(ctx, orgID, profileID, bindingID, UpdateModelProfileBindingRequest{Priority: &negative}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("negative priority error = %v, want validation", err)
+	}
+	if _, err := service.UpdateModelProfileBinding(ctx, orgID, profileID, bindingID, UpdateModelProfileBindingRequest{}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("empty update error = %v, want validation", err)
+	}
+	if _, err := service.UpdateModelProfileBinding(ctx, orgID, profileID, bindingID, UpdateModelProfileBindingRequest{
+		RuntimeOptions: &ModelProfileBindingRuntimeOptions{ReasoningLevel: "max"},
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("unsupported reasoning level error = %v, want validation", err)
+	}
+}
+
 func TestProviderModelDiscoveryDoesNotReviveDisabledModels(t *testing.T) {
 	ctx, pool, vault := openProviderAdminTestDB(t)
 	orgID, _, modelID := seedGatewayIntegrationData(t, ctx, pool, vault, "http://example.test")

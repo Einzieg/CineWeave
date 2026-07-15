@@ -70,6 +70,7 @@ func TestAgentToolErrorIncludesRetryableAndNextActions(t *testing.T) {
 }
 
 func TestAgentReferenceArgsIgnorePlannerPlaceholders(t *testing.T) {
+	validSourceID := "3d81d715-0d3a-42b1-95dd-f32a55576f93"
 	args := map[string]any{
 		"sourceId": "{{上一步确认的小说sourceId}}",
 		"content":  "Hello {{ input.prompt }}",
@@ -96,6 +97,36 @@ func TestAgentReferenceArgsIgnorePlannerPlaceholders(t *testing.T) {
 	}
 	if got := options["prompt"]; got != "保留 {{ input.prompt }} 模板变量" {
 		t.Fatalf("prompt = %v, want unchanged", got)
+	}
+	for _, placeholder := range []string{
+		"<由source.list返回的小说原文sourceId>",
+		"not-a-uuid",
+	} {
+		if got := agentReferenceStringArg(map[string]any{"sourceId": placeholder}, "sourceId"); got != "" {
+			t.Fatalf("sourceId = %q for placeholder %q, want empty", got, placeholder)
+		}
+	}
+	if got := agentReferenceStringArg(map[string]any{"sourceId": validSourceID}, "sourceId"); got != validSourceID {
+		t.Fatalf("sourceId = %q, want %q", got, validSourceID)
+	}
+}
+
+func TestValidateAgentRuntimeArgumentsRejectsUnresolvedValues(t *testing.T) {
+	for _, args := range []map[string]any{
+		{"sourceId": "<由source.list返回的小说原文sourceId>"},
+		{"sourceId": "not-a-uuid"},
+		{"patch": map[string]any{"content": "<从读取到的原文全文中移除第1节后的完整正文>"}},
+		{"chapterIds": []any{"3d81d715-0d3a-42b1-95dd-f32a55576f93", "not-a-uuid"}},
+	} {
+		if err := validateAgentRuntimeArguments(args); err == nil {
+			t.Fatalf("args = %+v, want validation error", args)
+		}
+	}
+	if err := validateAgentRuntimeArguments(map[string]any{
+		"sourceId": "3d81d715-0d3a-42b1-95dd-f32a55576f93",
+		"patch":    map[string]any{"content": "Hello {{ input.prompt }}"},
+	}); err != nil {
+		t.Fatalf("valid runtime args: %v", err)
 	}
 }
 

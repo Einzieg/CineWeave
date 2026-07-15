@@ -9,6 +9,7 @@ export type ApiErrorBody = {
   code: string;
   message: string;
   retryable?: boolean;
+  details?: JsonValue;
 };
 
 export type ApiEnvelope<TData> = {
@@ -63,11 +64,21 @@ export type Project = {
   imageModelProfileKey?: string;
   videoModelProfileKey?: string;
   scriptModelProfileKey?: string;
+  ttsModelProfileKey?: string;
+  asrModelProfileKey?: string;
+  audioStrategy?: "native_av" | "hybrid" | "tts_postdub";
+  audioRequirement?: "preferred" | "required" | "disabled";
+  audioConfigurationRevision?: number;
   imageQuality?: string;
   productionMode?: string;
+  timelineTimebase?: number;
+  fpsNumerator?: number;
+  fpsDenominator?: number;
   activeFinalVideoVersionId?: string | null;
+  activeAudioMixVersionId?: string | null;
   status?: string;
   settings?: JsonRecord;
+  revision: number;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -245,6 +256,150 @@ export type ScriptVersion = {
   createdAt?: string;
 };
 
+export type ScriptEpisode = {
+  id: string;
+  projectId: string;
+  scriptId: string;
+  scriptVersionId: string;
+  sourceId?: string;
+  sourceChapterId?: string;
+  episodeIndex: number;
+  volumeIndex?: number;
+  sectionIndex?: number;
+  volumeTitle?: string;
+  episodeTitle: string;
+  content: string;
+  contentFormat: string;
+  promptVersionId?: string;
+  promptHash?: string;
+  providerCallId?: string;
+  reviewStatus: string;
+  manualOverride: boolean;
+  staleState: string;
+  metadata?: JsonRecord;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type CharacterVoiceProfile = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  canonicalAssetId?: string;
+  characterName: string;
+  displayName: string;
+  language: string;
+  modelProfileKey: string;
+  providerModelId?: string;
+  voiceKey: string;
+  instructions?: string;
+  referenceArtifactId?: string;
+  referenceMediaFileId?: string;
+  parameters: JsonRecord;
+  isDefault: boolean;
+  status: string;
+  metadata: JsonRecord;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TTSAudioClip = {
+  id: string;
+  timingAnalysisId: string;
+  timingUnitId: string;
+  appliedTimingAnalysisId?: string;
+  voiceProfileId?: string;
+  providerModelId?: string;
+  providerCallId?: string;
+  sourceText: string;
+  speaker?: string;
+  language: string;
+  voiceKey: string;
+  outputFormat: string;
+  status: string;
+  revision: number;
+  audioConfigurationRevision: number;
+  active: boolean;
+  artifactId?: string;
+  mediaFileId?: string;
+  storageKey?: string;
+  previewUrl?: string;
+  mimeType?: string;
+  sampleRate?: number;
+  sampleCount?: number;
+  channelCount?: number;
+  durationTicks?: number;
+  timelineTimebase: number;
+  durationSeconds?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+};
+
+export type AudioMixVersion = {
+  id: string;
+  scriptEpisodeId?: string;
+  storyboardPlanId?: string;
+  timingAnalysisId?: string;
+  workflowRunId?: string;
+  revision: number;
+  audioConfigurationRevision: number;
+  status: string;
+  active: boolean;
+  audioStrategy: string;
+  timelineTimebase: number;
+  durationTicks?: number;
+  durationSeconds?: number;
+  sampleRate: number;
+  channelCount: number;
+  artifactId?: string;
+  mediaFileId?: string;
+  storageKey?: string;
+  previewUrl?: string;
+  mimeType?: string;
+  productionReadiness: string;
+  trackSummary: JsonRecord;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+};
+
+export type EpisodeAudio = {
+  clips: TTSAudioClip[];
+  mixes: AudioMixVersion[];
+};
+
+export type NativeAudioReview = {
+  id: string;
+  videoRenderPlanId: string;
+  videoRenderSegmentId: string;
+  workflowRunId?: string;
+  providerCallId?: string;
+  providerModelId?: string;
+  revision: number;
+  audioConfigurationRevision: number;
+  status: string;
+  expectedDialogue: JsonValue;
+  transcript?: string;
+  language?: string;
+  alignment: JsonValue;
+  dialogueCoverage?: number;
+  textAccuracy?: number;
+  timingAccuracy?: number;
+  speakerTurnAccuracy?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+};
+
 export type Script = {
   id: string;
   organizationId: string;
@@ -263,6 +418,7 @@ export type ScriptScene = {
   projectId: string;
   scriptId: string;
   scriptVersionId: string;
+  scriptEpisodeId?: string;
   sceneIndex: number;
   sceneNo: number;
   title: string;
@@ -290,6 +446,195 @@ export type ScriptScene = {
   editedAt?: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type StoryboardDialogueLine = {
+  timingUnitId: string;
+  speaker: string;
+  text: string;
+  delivery?: string;
+  kind?: "dialogue" | "voiceover" | "narration" | "system" | string;
+  spanStartTick: number;
+  spanEndTick: number;
+  sourceStartOffset?: number;
+  sourceEndOffset?: number;
+  continuesFromPrevious: boolean;
+  continuesToNext: boolean;
+};
+
+export type ScriptTimingUnit = {
+  id: string;
+  sceneId?: string;
+  ordinal: number;
+  type: string;
+  track: "audio" | "visual" | string;
+  parallelGroup?: string;
+  speaker?: string;
+  sourceText?: string;
+  delivery?: string;
+  durationTicks: number;
+  startTick: number;
+  endTick: number;
+  durationSource: string;
+  forceBoundaryBefore?: boolean;
+  forceBoundaryAfter?: boolean;
+};
+
+export type ScriptTimingBlock = {
+  id: string;
+  sceneId?: string;
+  ordinal: number;
+  parallelGroup?: string;
+  startTick: number;
+  endTick: number;
+  durationTicks: number;
+  units: ScriptTimingUnit[];
+};
+
+export type ScriptTimingScene = {
+  sceneKey: string;
+  scriptSceneId?: string;
+  sceneOrdinal: number;
+  startTick: number;
+  endTick: number;
+  units: ScriptTimingUnit[];
+  blocks: ScriptTimingBlock[];
+};
+
+export type ScriptTimingAnalysis = {
+  id: string;
+  scriptId: string;
+  scriptVersionId: string;
+  scriptEpisodeId: string;
+  revision: number;
+  status: string;
+  estimatedDurationTicks: number;
+  minimumDurationTicks: number;
+  targetDurationTicks?: number;
+  dialogueDurationTicks: number;
+  actionDurationTicks: number;
+  pauseDurationTicks: number;
+  estimatedDurationFrames: number;
+  minimumDurationFrames: number;
+  targetDurationFrames?: number;
+  estimatedDurationSeconds: number;
+  minimumDurationSeconds: number;
+  targetDurationSeconds?: number;
+  timelineTimebase: number;
+  fpsNumerator: number;
+  fpsDenominator: number;
+  methodVersion: string;
+  scenes: ScriptTimingScene[];
+  providerCallId?: string;
+  modelId?: string;
+  promptVersionId?: string;
+  promptHash?: string;
+  metadata: JsonRecord;
+  createdAt: string;
+};
+
+export type StoryboardScenePlan = {
+  id: string;
+  storyboardPlanId: string;
+  blueprintId: string;
+  scriptSceneId?: string;
+  sceneKey: string;
+  sceneOrdinal: number;
+  dependencyGroup?: string;
+  status: string;
+  retryGeneration: number;
+  startTick: number;
+  endTick: number;
+  durationTicks: number;
+  shotCount: number;
+  plannerInput: JsonRecord;
+  plannerOutput: JsonRecord;
+  reviewerOutput: JsonRecord;
+  entryState: JsonRecord;
+  exitState: JsonRecord;
+  errorCode?: string;
+  errorMessage?: string;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+};
+
+export type StoryboardPlanReview = {
+  id: string;
+  storyboardPlanId: string;
+  revision: number;
+  status: string;
+  approved: boolean;
+  issues: JsonRecord[];
+  corrections: JsonRecord[];
+  deterministicReport: JsonRecord;
+  providerCallId?: string;
+  modelId?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  metadata: JsonRecord;
+  createdAt: string;
+  completedAt?: string;
+};
+
+export type StoryboardPlan = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  scriptId: string;
+  scriptVersionId: string;
+  scriptEpisodeId: string;
+  timingAnalysisId: string;
+  revision: number;
+  status: string;
+  pacingProfile: JsonRecord;
+  targetDurationTicks: number;
+  targetDurationFrames: number;
+  targetDurationSeconds: number;
+  estimatedShotCount: number;
+  actualShotCount: number;
+  sceneCount: number;
+  completedSceneCount: number;
+  failedSceneCount: number;
+  active: boolean;
+  staleState: string;
+  timelineTimebase: number;
+  fpsNumerator: number;
+  fpsDenominator: number;
+  metadata: JsonRecord;
+  createdBy?: string;
+  createdAt: string;
+  activatedAt?: string;
+  scenePlans?: StoryboardScenePlan[];
+  reviews?: StoryboardPlanReview[];
+  shots?: StoryboardShot[];
+};
+
+export type StoryboardPlanValidationReport = {
+  storyboardPlanId: string;
+  scriptEpisodeId: string;
+  timingAnalysisId: string;
+  shotCount: number;
+  timingUnitCount: number;
+  timingSpanCount: number;
+  targetDurationTicks: number;
+  timelineTimebase: number;
+  fpsNumerator: number;
+  fpsDenominator: number;
+  valid: boolean;
+};
+
+export type StoryboardPlanEditResponse = {
+  edit: {
+    storyboardPlanId: string;
+    sourceStoryboardPlanId: string;
+    scriptEpisodeId: string;
+    revision: number;
+    shotIds: string[];
+    validation: StoryboardPlanValidationReport;
+  };
+  plan: StoryboardPlan;
 };
 
 export type ParseScriptScenesResponse = {
@@ -420,6 +765,7 @@ export type CanonicalAsset = {
   editedBy?: string;
   editedAt?: string;
   sourceScriptIds?: string[];
+  metadata?: JsonRecord;
   createdAt?: string;
   updatedAt?: string;
   sceneLinks?: AssetSceneLink[];
@@ -429,6 +775,8 @@ export type CanonicalAsset = {
   storyboardShotCount?: number;
   referenceCount?: number;
   shotRequirementCount?: number;
+  revision: number;
+  promptRevision: number;
 };
 
 export type AssetReference = {
@@ -459,6 +807,10 @@ export type GenerateAssetCardResponse = {
   negativePrompt: string;
   providerCallId?: string;
   modelId?: string;
+  visualManualPromptVersionId?: string;
+  visualManualTemplateKey?: string;
+  visualStyleSlug?: string;
+  assetTypeTemplateKey?: string;
   applied: boolean;
 };
 
@@ -515,19 +867,50 @@ export type WorkflowRun = {
   organizationId: string;
   projectId: string;
   temporalWorkflowId: string;
+  workflowType: string;
   status: string;
   input: JsonRecord;
   output: JsonRecord;
   errorCode?: string;
   errorMessage?: string;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  revision: number;
+  attemptGeneration: number;
+  rootWorkflowRunId?: string;
+  retryOfWorkflowRunId?: string;
   createdAt?: string;
   startedAt?: string;
   completedAt?: string;
   cancelledAt?: string;
+  updatedAt: string;
+};
+
+export type RuntimeOperation = {
+  id: string;
+  organizationId: string;
+  projectId?: string;
+  operationType: string;
+  status: "processing" | "succeeded" | "failed_retryable" | "failed_terminal" | "unknown_outcome";
+  workflowRunId?: string;
+  requestHash: string;
+  hashSchemaVersion: number;
+  resultSnapshot?: unknown;
+  errorCode?: string;
+  errorMessage?: string;
+  leaseExpiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  reconcileRequired: boolean;
+  retryAllowed: boolean;
 };
 
 export type WorkflowNodeRun = {
   id: string;
+  organizationId: string;
+  projectId: string;
   workflowRunId: string;
   nodeKey: string;
   nodeType: string;
@@ -540,12 +923,39 @@ export type WorkflowNodeRun = {
   startedAt?: string;
   completedAt?: string;
   createdAt?: string;
+  revision: number;
+  updatedAt: string;
 };
+
+export type AssetBatchOperation = "generate_prompts" | "generate_images";
+
+export type CreateAssetBatchRequest = {
+  operation: AssetBatchOperation;
+  assetIds: string[];
+  maxConcurrency?: number;
+  force?: boolean;
+  expectedProjectRevision: number;
+  idempotencyKey?: string;
+};
+
+export type RetryFailedWorkflowRequest = {
+  maxConcurrency?: number;
+  force?: boolean;
+  expectedProjectRevision: number;
+  idempotencyKey?: string;
+};
+
+export type RetryAssetBatchRequest = RetryFailedWorkflowRequest;
 
 export type StoryboardShot = {
   id: string;
+  storyboardPlanId?: string;
   workflowRunId: string;
   scriptSceneId?: string;
+  scriptEpisodeId?: string;
+  episodeIndex?: number;
+  episodeShotIndex?: number;
+  episodeTitle?: string;
   sourceScene?: {
     id: string;
     sceneNo: number;
@@ -555,13 +965,44 @@ export type StoryboardShot = {
   };
   shotIndex: number;
   shotNo: number;
+  title?: string;
+  startTick: number;
+  endTick: number;
+  plannedDurationTicks: number;
+  durationMinTicks?: number;
+  durationMaxTicks?: number;
+  durationSource: string;
+  timingConfidence?: number;
+  durationLocked: boolean;
+  shotGroupId?: string;
+  continuityGroupId?: string;
+  oneTake: boolean;
+  timingRevision: number;
+  timelineTimebase: number;
+  fpsNumerator: number;
+  fpsDenominator: number;
   durationSeconds?: number;
   visual?: string;
   camera?: string;
   motion?: string;
   mood?: string;
   imagePrompt?: string;
+  imagePromptStatus: string;
+  imagePromptErrorCode?: string;
+  imagePromptErrorMessage?: string;
+  imagePromptWorkflowRunId?: string;
+  imagePromptUpdatedAt?: string;
   videoPrompt?: string;
+  scriptDialogue: StoryboardDialogueLine[];
+  videoPromptStatus: string;
+  videoPromptErrorCode?: string;
+  videoPromptErrorMessage?: string;
+  videoPromptWorkflowRunId?: string;
+  videoPromptUpdatedAt?: string;
+  imageReferenceMode: "auto" | "custom" | "none" | string;
+  imageReferenceKeys: string[];
+  videoReferenceMode: "auto" | "custom" | "none" | string;
+  videoReferenceKeys: string[];
   imageArtifactId?: string;
   imageMediaFileId?: string;
   imageStorageKey?: string;
@@ -574,6 +1015,9 @@ export type StoryboardShot = {
   externalTaskId?: string;
   imageStatus?: string;
   videoStatus?: string;
+  activeVideoRenderPlanId?: string;
+  nativeAudioStatus?: string;
+  productionReadiness?: string;
   imageErrorCode?: string;
   imageErrorMessage?: string;
   videoErrorCode?: string;
@@ -592,14 +1036,187 @@ export type StoryboardShot = {
   editedAt?: string;
 };
 
+export type UpdateStoryboardShotRequest = {
+  visual?: string;
+  camera?: string;
+  motion?: string;
+  mood?: string;
+  plannedDurationTicks?: number;
+  imagePrompt?: string;
+  videoPrompt?: string;
+  imageReferenceMode?: "auto" | "custom" | "none";
+  imageReferenceKeys?: string[];
+  videoReferenceMode?: "auto" | "custom" | "none";
+  videoReferenceKeys?: string[];
+};
+
 export type StoryboardShotDetail = {
+  aspectRatio: string;
   shot: StoryboardShot;
   scriptScene?: StoryboardShot["sourceScene"];
   requirements: StoryboardShotRequirementDetail[];
+  imageReferenceOptions: StoryboardShotImageReferenceOption[];
+  imageGenerationRuns: StoryboardShotImageGenerationRun[];
+  videoReferenceOptions: StoryboardShotVideoReferenceOption[];
+  videoGenerationRuns: StoryboardShotVideoGenerationRun[];
   imageArtifact?: Artifact;
   imagePreviewUrl?: string;
   videoArtifact?: Artifact;
   videoPreviewUrl?: string;
+};
+
+export type VideoRenderSegment = {
+  id: string;
+  segmentIndex: number;
+  plannedStartTick: number;
+  plannedEndTick: number;
+  plannedDurationTicks: number;
+  plannedDurationFrames: number;
+  plannedDurationSeconds: number;
+  requestedDurationSeconds: number;
+  trimEndTick?: number;
+  continuityMode: string;
+  status: string;
+  retryGeneration: number;
+  providerAsyncTaskId?: string;
+  providerCallId?: string;
+  providerModelId?: string;
+  externalTaskId?: string;
+  artifactId?: string;
+  mediaFileId?: string;
+  storageKey?: string;
+  previewUrl?: string;
+  prompt?: string;
+  dialogue?: JsonValue;
+  nativeAudioRequested: boolean;
+  nativeAudioDetected?: boolean;
+  audioVerificationStatus: string;
+  productionReadiness: string;
+  rawAvArtifactId?: string;
+  mezzanineArtifactId?: string;
+  mezzaninePreviewUrl?: string;
+  extractedAudioArtifactId?: string;
+  extractedAudioPreviewUrl?: string;
+  audioVerifiedBy?: string;
+  audioVerifiedAt?: string;
+  audioVerificationNotes?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type VideoRenderPlan = {
+  id: string;
+  storyboardPlanId?: string;
+  storyboardShotId: string;
+  providerAccountId: string;
+  providerModelId: string;
+  modelFamily: string;
+  variantKey: string;
+  capabilitySnapshot: VideoGenerationVariant;
+  capabilitySnapshotHash: string;
+  status: string;
+  active: boolean;
+  targetDurationTicks: number;
+  targetDurationFrames: number;
+  targetDurationSeconds: number;
+  timelineTimebase: number;
+  fpsNumerator: number;
+  fpsDenominator: number;
+  taskType: string;
+  referenceMode: string;
+  aspectRatio: string;
+  resolution: string;
+  audioStrategy: "native_av" | "hybrid" | "tts_postdub";
+  audioRequirement: "preferred" | "required" | "disabled";
+  nativeAudioStatus: string;
+  productionReadiness: string;
+  outputArtifactId?: string;
+  outputMediaFileId?: string;
+  outputStorageKey?: string;
+  outputPreviewUrl?: string;
+  audioVerifiedBy?: string;
+  audioVerifiedAt?: string;
+  audioVerificationNotes?: string;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  segments: VideoRenderSegment[];
+};
+
+export type StoryboardShotImageReferenceOption = {
+  key: string;
+  sourceType: "derived_asset" | "asset_primary" | string;
+  sourceId: string;
+  assetId: string;
+  assetType: "character" | "scene" | "prop" | string;
+  assetName: string;
+  title: string;
+  artifactId?: string;
+  mediaFileId?: string;
+  storageKey?: string;
+  previewUrl?: string;
+  isShotAsset: boolean;
+  selected: boolean;
+  autoSelected: boolean;
+};
+
+export type StoryboardShotImageGenerationRun = {
+  providerCallId: string;
+  modelId?: string;
+  modelName?: string;
+  status: string;
+  prompt?: string;
+  promptTruncated: boolean;
+  promptVersionId?: string;
+  promptHash?: string;
+  artifactId?: string;
+  previewUrl?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  startedAt?: string;
+  completedAt?: string;
+  references: string[];
+};
+
+export type StoryboardShotVideoReferenceOption = {
+  key: string;
+  referenceType: "first_frame" | "image" | "last_frame" | "video" | string;
+  sourceType: "shot_image" | "derived_asset" | "asset_reference" | "asset_primary" | string;
+  sourceId: string;
+  assetId?: string;
+  assetName?: string;
+  title: string;
+  artifactId?: string;
+  mediaFileId?: string;
+  storageKey?: string;
+  previewUrl?: string;
+  selected: boolean;
+  autoSelected: boolean;
+};
+
+export type StoryboardShotVideoGenerationRun = {
+  providerCallId: string;
+  providerAsyncTaskId?: string;
+  externalTaskId?: string;
+  modelId?: string;
+  modelName?: string;
+  status: string;
+  prompt?: string;
+  promptTruncated: boolean;
+  promptVersionId?: string;
+  promptHash?: string;
+  artifactId?: string;
+  previewUrl?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  startedAt?: string;
+  completedAt?: string;
+  references: string[];
 };
 
 export type ShotProductionSummary = {
@@ -608,20 +1225,46 @@ export type ShotProductionSummary = {
   imageMissing: number;
   imageFailed: number;
   imageStale: number;
+  imagePromptSucceeded: number;
+  imagePromptMissing: number;
+  imagePromptFailed: number;
+  imagePromptRunning: number;
   videoSucceeded: number;
   videoMissing: number;
   videoFailed: number;
   videoStale: number;
+  videoPromptSucceeded: number;
+  videoPromptMissing: number;
+  videoPromptFailed: number;
+  videoPromptRunning: number;
   running: number;
 };
 
 export type ShotProductionShot = {
   id: string;
   workflowRunId: string;
+  storyboardPlanId?: string;
   scriptSceneId?: string;
+  scriptEpisodeId?: string;
+  episodeIndex?: number;
+  episodeShotIndex?: number;
+  episodeTitle?: string;
   shotIndex: number;
   shotNo: number;
+  title?: string;
+  durationSeconds?: number;
   visual?: string;
+  imagePrompt?: string;
+  imagePromptStatus: string;
+  imagePromptErrorCode?: string;
+  imagePromptErrorMessage?: string;
+  imagePromptWorkflowRunId?: string;
+  videoPrompt?: string;
+  scriptDialogue: StoryboardDialogueLine[];
+  videoPromptStatus: string;
+  videoPromptErrorCode?: string;
+  videoPromptErrorMessage?: string;
+  videoPromptWorkflowRunId?: string;
   imageStatus: string;
   videoStatus: string;
   staleState: string;
@@ -633,6 +1276,8 @@ export type ShotProductionShot = {
   videoMediaFileId?: string;
   videoStorageKey?: string;
   videoPreviewUrl?: string;
+  videoReferenceMode: "auto" | "custom" | "none" | string;
+  videoReferenceKeys: string[];
   imageErrorCode?: string;
   imageErrorMessage?: string;
   videoErrorCode?: string;
@@ -642,13 +1287,16 @@ export type ShotProductionShot = {
   providerAsyncTaskId?: string;
   externalTaskId?: string;
   canGenerateImage: boolean;
+  canGenerateImagePrompt: boolean;
   canGenerateVideo: boolean;
+  canGenerateVideoPrompt: boolean;
   canRetryImage: boolean;
   canRetryVideo: boolean;
 };
 
 export type ShotProductionStatus = {
   projectId: string;
+  aspectRatio: string;
   summary: ShotProductionSummary;
   shots: ShotProductionShot[];
 };
@@ -916,6 +1564,9 @@ export type ProjectTimeline = {
   status: string;
   aspectRatio: string;
   resolution: string;
+	timelineTimebase: number;
+	fpsNumerator: number;
+	fpsDenominator: number;
   metadata?: JsonRecord;
   createdBy?: string | null;
   editedBy?: string | null;
@@ -936,10 +1587,19 @@ export type TimelineClip = {
   title: string;
   enabled: boolean;
   sourceStorageKey?: string | null;
+	startTick: number;
+	endTick: number;
+	durationTicks: number;
+	sourceDurationTicks?: number | null;
+	trimStartTick: number;
+	trimEndTick?: number | null;
+	timelineTimebase: number;
+	fpsNumerator: number;
+	fpsDenominator: number;
+	durationSeconds: number;
   sourceDurationSeconds?: number | null;
   trimStartSeconds: number;
   trimEndSeconds?: number | null;
-  targetDurationSeconds?: number | null;
   notes?: string | null;
   metadata?: JsonRecord;
   createdAt: string;
@@ -961,10 +1621,16 @@ export type FinalVideoVersion = {
   version: number;
   title: string;
   status: string;
+  nativeAudioStatus: string;
+  productionReadiness: string;
   artifactId?: string | null;
   mediaFileId?: string | null;
   storageKey?: string | null;
+	durationTicks?: number | null;
   durationSeconds?: number | null;
+	timelineTimebase: number;
+	fpsNumerator: number;
+	fpsDenominator: number;
   resolution: string;
   aspectRatio: string;
   composeSettings?: JsonRecord;
@@ -1069,9 +1735,56 @@ export type ProviderModelCapabilityOptions = JsonRecord & {
   xCapabilities?: ProviderModelXCapabilities;
 };
 
+export type VideoGenerationVariant = {
+  variantKey: string;
+  modelFamily?: string;
+  when: {
+    taskTypes?: string[];
+    referenceModes?: string[];
+    nativeAudioRequested?: boolean;
+  };
+  duration: {
+    mode: "continuous_range" | "discrete" | "fixed" | "source_duration";
+    minSeconds?: number;
+    maxSeconds?: number;
+    values?: number[];
+    stepSeconds?: number;
+  };
+  resolutions?: string[];
+  aspectRatios?: string[];
+  frameRate: {
+    mode: "fixed" | "selectable" | "unknown";
+    values?: number[];
+  };
+  supportedPromptLanguages?: string[];
+  nativeAudio: {
+    support: "true" | "false" | "unknown";
+    canDisable?: boolean;
+    supportsDialogue?: boolean;
+    supportsVoiceover?: boolean;
+    supportsAmbientSound?: boolean;
+    supportsMusic?: boolean;
+    supportsLipSync?: boolean;
+    supportedDialogueLanguages?: string[];
+    audioTrackSeparable: boolean;
+  };
+  continuation: {
+    supportsExtension: boolean;
+    supportsFirstFrame: boolean;
+    supportsLastFrame: boolean;
+    supportsVideoReference: boolean;
+  };
+  requestModes?: string[];
+  source?: string;
+  sourceUrl?: string;
+  verifiedAt?: string;
+  capabilityVersion?: string;
+};
+
 export type ProviderModelXCapabilities = JsonRecord & {
   supportsAsyncTask?: boolean;
   supportsStreaming?: boolean;
+  streamTerminalMode?: "done_marker" | "finish_reason" | "done_or_finish_reason";
   supportsReasoning?: boolean;
   supportsReasoningLevels?: boolean;
   supportsMultimodalInput?: boolean;
@@ -1093,6 +1806,7 @@ export type ProviderModelXCapabilities = JsonRecord & {
   durations?: number[];
   minDurationSeconds?: number;
   maxDurationSeconds?: number;
+  videoGenerationVariants?: VideoGenerationVariant[];
 };
 
 export type ProviderModel = {
@@ -1226,7 +1940,27 @@ export type ModelProfileBinding = {
   priority: number;
   weight: number;
   enabled: boolean;
+  runtimeOptions: ModelProfileBindingRuntimeOptions;
   createdAt: string;
+};
+
+export type ModelProfileBindingRuntimeOptions = {
+  reasoningLevel?: string;
+};
+
+export type CreateModelProfileBindingRequest = {
+  providerModelId: string;
+  priority?: number;
+  weight?: number;
+  enabled?: boolean;
+  runtimeOptions?: ModelProfileBindingRuntimeOptions;
+};
+
+export type UpdateModelProfileBindingRequest = {
+  priority?: number;
+  weight?: number;
+  enabled?: boolean;
+  runtimeOptions?: ModelProfileBindingRuntimeOptions;
 };
 
 export type ProviderFallbackStrategy = {
@@ -1250,8 +1984,29 @@ export type ModelProfile = {
   updatedAt?: string;
 };
 
+export type ProviderVideoMediaProbe = {
+  status: "succeeded" | "failed" | "unavailable" | string;
+  error?: string;
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
+  frameRateNumerator?: number;
+  frameRateDenominator?: number;
+  frameRate?: number;
+  frameCount?: number;
+  frameCountEstimated: boolean;
+  videoStreamCount: number;
+  audioStreamCount: number;
+  hasAudio: boolean;
+  videoCodec?: string;
+  audioCodecs?: string[];
+};
+
 export type ProviderCallLog = {
   id: string;
+  providerRequestId?: string | null;
+  attemptGeneration: number;
+  attemptSequence: number;
   organizationId: string;
   projectId?: string | null;
   workflowRunId?: string | null;
@@ -1268,6 +2023,9 @@ export type ProviderCallLog = {
   latencyMs?: number | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  requestedDurationSeconds?: number | null;
+  actualDurationSeconds?: number | null;
+  mediaProbe?: ProviderVideoMediaProbe | JsonRecord;
   estimatedCost?: string | null;
   currency?: string | null;
   errorCode?: string | null;

@@ -11,6 +11,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type ProjectManualBinding struct {
@@ -189,6 +190,9 @@ func (s *Server) defaultProjectManualVersionIDTx(ctx context.Context, tx pgx.Tx,
 }
 
 func (s *Server) bindProjectManualTx(ctx context.Context, tx pgx.Tx, organizationID, projectID, manualKind, promptVersionID, createdBy string) (string, string, error) {
+	if _, err := lockProjectConfigurationTx(ctx, tx, projectID, organizationID); err != nil {
+		return "", "", err
+	}
 	version, err := s.projectManualVersionTx(ctx, tx, promptVersionID)
 	if err != nil {
 		return "", "", err
@@ -219,11 +223,11 @@ func (s *Server) bindProjectManualTx(ctx context.Context, tx pgx.Tx, organizatio
 		return "", "", err
 	}
 	if manualKind == "director" {
-		if _, err := tx.Exec(ctx, `UPDATE projects SET director_manual = $2 WHERE id = $1`, projectID, version.Content); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE projects SET director_manual = $2, revision = revision + 1, updated_at = now() WHERE id = $1`, projectID, version.Content); err != nil {
 			return "", "", err
 		}
 	} else {
-		if _, err := tx.Exec(ctx, `UPDATE projects SET visual_manual = $2 WHERE id = $1`, projectID, version.Content); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE projects SET visual_manual = $2, revision = revision + 1, updated_at = now() WHERE id = $1`, projectID, version.Content); err != nil {
 			return "", "", err
 		}
 	}
@@ -257,6 +261,14 @@ func (s *Server) projectManualBinding(ctx context.Context, bindingID string) (Pr
 }
 
 func (s *Server) disableManualBindingsForDirectEdit(ctx context.Context, projectID string, directorEdited, visualEdited bool) error {
+	return disableManualBindingsForDirectEditTx(ctx, s.db, projectID, directorEdited, visualEdited)
+}
+
+type projectManualBindingExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+func disableManualBindingsForDirectEditTx(ctx context.Context, db projectManualBindingExecer, projectID string, directorEdited, visualEdited bool) error {
 	kinds := make([]string, 0, 2)
 	if directorEdited {
 		kinds = append(kinds, "director")
@@ -267,7 +279,7 @@ func (s *Server) disableManualBindingsForDirectEdit(ctx context.Context, project
 	if len(kinds) == 0 {
 		return nil
 	}
-	_, err := s.db.Exec(ctx, `
+	_, err := db.Exec(ctx, `
 		UPDATE project_manual_bindings
 		SET status = 'disabled'
 		WHERE project_id = $1

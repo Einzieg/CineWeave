@@ -65,12 +65,17 @@ func LoadReviewFixTarget(ctx context.Context, db QueryRower, projectID, entityTy
 			  'camera', camera,
 			  'motion', motion,
 			  'mood', mood,
-			  'durationSeconds', duration_seconds,
+			  'plannedDurationTicks', planned_duration_ticks,
+			  'durationSeconds', planned_duration_ticks::float8 / project.timeline_timebase,
+			  'timelineTimebase', project.timeline_timebase,
+			  'fpsNumerator', project.fps_numerator,
+			  'fpsDenominator', project.fps_denominator,
 			  'imagePrompt', image_prompt,
 			  'videoPrompt', video_prompt
 			)
-			FROM storyboard_shots
-			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL`
+			FROM storyboard_shots shot
+			JOIN projects project ON project.id = shot.project_id
+			WHERE shot.project_id = $1 AND shot.id = $2 AND shot.deleted_at IS NULL`
 	case "shot_asset_requirement":
 		query = `
 			SELECT jsonb_build_object(
@@ -88,15 +93,22 @@ func LoadReviewFixTarget(ctx context.Context, db QueryRower, projectID, entityTy
 	case "timeline_clip":
 		query = `
 			SELECT jsonb_build_object(
-			  'title', title,
-			  'enabled', enabled,
-			  'trimStartSeconds', trim_start_seconds,
-			  'trimEndSeconds', trim_end_seconds,
-			  'targetDurationSeconds', target_duration_seconds,
-			  'notes', notes
+			  'title', clip.title,
+			  'enabled', clip.enabled,
+			  'startTick', clip.start_tick,
+			  'endTick', clip.end_tick,
+			  'durationTicks', clip.end_tick - clip.start_tick,
+			  'sourceDurationTicks', clip.source_duration_ticks,
+			  'trimStartTick', clip.trim_start_tick,
+			  'trimEndTick', clip.trim_end_tick,
+			  'timelineTimebase', timeline.timeline_timebase,
+			  'fpsNumerator', timeline.fps_numerator,
+			  'fpsDenominator', timeline.fps_denominator,
+			  'notes', clip.notes
 			)
-			FROM timeline_clips
-			WHERE project_id = $1 AND id = $2`
+			FROM timeline_clips clip
+			JOIN project_timelines timeline ON timeline.id = clip.timeline_id
+			WHERE clip.project_id = $1 AND clip.id = $2`
 	case "project_timeline":
 		query = `
 			SELECT jsonb_build_object(

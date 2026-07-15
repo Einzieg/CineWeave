@@ -399,6 +399,23 @@ func (s *Server) createModelProfileBinding(w http.ResponseWriter, r *http.Reques
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
 }
 
+func (s *Server) updateModelProfileBinding(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req provider.UpdateModelProfileBindingRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.UpdateModelProfileBinding(r.Context(), orgID, r.PathValue("profileId"), r.PathValue("bindingId"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
 func (s *Server) deleteModelProfileBinding(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
 	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {

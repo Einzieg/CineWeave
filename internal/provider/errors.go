@@ -33,10 +33,12 @@ const (
 	CodeInvalidRequest                = "INVALID_REQUEST"
 	CodeUnsupportedCapability         = "UNSUPPORTED_CAPABILITY"
 	CodeUpstreamTimeout               = "UPSTREAM_TIMEOUT"
+	CodeUpstreamStreamTruncated       = "UPSTREAM_STREAM_TRUNCATED"
 	CodeUpstreamInternalError         = "UPSTREAM_INTERNAL_ERROR"
 	CodePollingTimeout                = "POLLING_TIMEOUT"
 	CodeResultExpired                 = "RESULT_EXPIRED"
 	CodeMediaDownloadFailed           = "MEDIA_DOWNLOAD_FAILED"
+	CodeUpstreamOutputMismatch        = "UPSTREAM_OUTPUT_MISMATCH"
 	CodeContentRejected               = "CONTENT_REJECTED"
 	CodeProviderGatewayRequired       = "PROVIDER_GATEWAY_REQUIRED"
 	CodeCannotCancelCompletedTask     = "CANNOT_CANCEL_COMPLETED_TASK"
@@ -54,6 +56,12 @@ const (
 	CodeProviderManifestInvalid       = "PROVIDER_MANIFEST_INVALID"
 	CodeProviderModelTemplateInvalid  = "PROVIDER_MODEL_TEMPLATE_INVALID"
 	CodeProviderSetupFieldMissing     = "PROVIDER_SETUP_FIELD_MISSING"
+	CodeProviderIdempotencyConflict   = "PROVIDER_IDEMPOTENCY_CONFLICT"
+	CodeProviderRequestInProgress     = "PROVIDER_REQUEST_IN_PROGRESS"
+	CodeProviderUnknownOutcome        = "PROVIDER_UNKNOWN_OUTCOME"
+	CodeModelCapabilityUnavailable    = "MODEL_CAPABILITY_UNAVAILABLE"
+	CodeRenderPlanReplanRequired      = "RENDER_PLAN_REPLAN_REQUIRED"
+	CodeStoryboardReplanRequired      = "STORYBOARD_REPLAN_REQUIRED"
 	CodeUnknownError                  = "UNKNOWN_ERROR"
 )
 
@@ -103,8 +111,12 @@ func HTTPStatusForStandardError(standard *StandardError) int {
 		return http.StatusPaymentRequired
 	case CodeUpstreamTimeout, CodePollingTimeout:
 		return http.StatusGatewayTimeout
-	case CodeInvalidRequest, CodeUnsupportedCapability, CodeModelNotFound, CodeContentRejected, CodeProviderTaskNotFound, CodeCannotCancelCompletedTask:
+	case CodeUpstreamStreamTruncated:
+		return http.StatusBadGateway
+	case CodeInvalidRequest, CodeUnsupportedCapability, CodeModelNotFound, CodeContentRejected, CodeProviderTaskNotFound, CodeCannotCancelCompletedTask, CodeModelCapabilityUnavailable:
 		return http.StatusUnprocessableEntity
+	case CodeRenderPlanReplanRequired, CodeStoryboardReplanRequired, CodeProviderIdempotencyConflict, CodeProviderRequestInProgress, CodeProviderUnknownOutcome:
+		return http.StatusConflict
 	case CodeProviderGatewayRequired:
 		return http.StatusServiceUnavailable
 	default:
@@ -113,9 +125,10 @@ func HTTPStatusForStandardError(standard *StandardError) int {
 }
 
 type UpstreamError struct {
-	Status int
-	Code   string
-	Body   string
+	Status  int
+	Code    string
+	Message string
+	Body    string
 }
 
 func (e *UpstreamError) Error() string {
@@ -129,6 +142,16 @@ func (e *UpstreamError) Error() string {
 }
 
 func NormalizeHTTPError(status int, upstreamCode string) StandardError {
+	return NormalizeUpstreamError(&UpstreamError{Status: status, Code: upstreamCode})
+}
+
+func NormalizeUpstreamError(upstream *UpstreamError) StandardError {
+	if upstream == nil {
+		return StandardError{Code: CodeUnknownError, Message: "provider request failed", Retryable: false}
+	}
+	status := upstream.Status
+	upstreamCode := strings.TrimSpace(upstream.Code)
+	upstreamMessage := normalizeUpstreamMessage(upstream.Message)
 	normalizedUpstreamCode := strings.ToLower(strings.TrimSpace(upstreamCode))
 	err := StandardError{
 		Code:           CodeUnknownError,
@@ -168,11 +191,50 @@ func NormalizeHTTPError(status int, upstreamCode string) StandardError {
 		err.Message = "provider quota was exceeded"
 		err.Retryable = false
 	}
-	if strings.Contains(normalizedUpstreamCode, "content") || strings.Contains(normalizedUpstreamCode, "moderation") || strings.Contains(normalizedUpstreamCode, "safety") {
+	if containsUpstreamContentRejectionSignal(upstreamCode, upstreamMessage) {
 		err.Code = CodeContentRejected
-		err.Message = "provider rejected the content"
+		if upstreamMessage != "" {
+			err.Message = upstreamMessage
+		} else {
+			err.Message = "provider rejected the content"
+		}
 		err.Retryable = false
+	} else if (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity) && upstreamMessage != "" {
+		err.Message = upstreamMessage
 	}
 
 	return err
+}
+
+func containsUpstreamContentRejectionSignal(code, message string) bool {
+	normalizedCode := strings.ToLower(strings.TrimSpace(code))
+	for _, signal := range []string{"content", "moderation", "safety"} {
+		if strings.Contains(normalizedCode, signal) {
+			return true
+		}
+	}
+	normalizedMessage := strings.ToLower(strings.TrimSpace(message))
+	for _, signal := range []string{
+		"moderation", "safety", "guardrail", "violate", "violence",
+		"content policy", "policy violation", "blocked prompt", "prohibited",
+	} {
+		if strings.Contains(normalizedMessage, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeUpstreamMessage(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = strings.Join(strings.Fields(value), " ")
+	const maxRunes = 1200
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		value = strings.TrimSpace(string(runes[:maxRunes]))
+	}
+	return value
 }

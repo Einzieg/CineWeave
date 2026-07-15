@@ -18,10 +18,14 @@ import Link from "next/link";
 import type { Route } from "next";
 import {
   AlertTriangle,
+  Bot,
+  ChevronDown,
+  ChevronUp,
   CheckCircle2,
   Clock3,
   FileDiff,
-  PlayCircle,
+  ListChecks,
+  Loader2,
   RotateCcw,
   ShieldCheck,
   SquareTerminal,
@@ -52,6 +56,21 @@ type PendingDecision = {
   step: AgentStep;
 };
 
+type AgentQuestionOption = {
+  id: string;
+  label: string;
+  description?: string;
+  nextGoal?: string;
+  value?: JsonValue;
+};
+
+type AgentQuestionPrompt = {
+  question: string;
+  options: AgentQuestionOption[];
+  allowCustom: boolean;
+  defaultOptionId?: string;
+};
+
 export function AgentTaskPanel({ projectId, task, isLoading, onApproveStep, onRejectStep, onCancelTask, onResumeTask, busy }: AgentTaskPanelProps) {
   const [pendingDecision, setPendingDecision] = useState<PendingDecision | null>(null);
   const [note, setNote] = useState("");
@@ -66,6 +85,7 @@ export function AgentTaskPanel({ projectId, task, isLoading, onApproveStep, onRe
     }
     return items;
   }, [task?.approvals]);
+  const visibleTaskSteps = useMemo(() => sequentialVisibleAgentSteps(task?.steps || []), [task?.steps]);
 
   if (!task && !isLoading) {
     return null;
@@ -110,7 +130,7 @@ export function AgentTaskPanel({ projectId, task, isLoading, onApproveStep, onRe
           <ResultSummary task={task} />
           <div className="max-h-[min(30rem,52dvh)] w-full max-w-full overflow-y-auto overflow-x-hidden pr-2">
             <div className="w-full min-w-0 max-w-full space-y-2">
-              {(task.steps || []).map((step) => (
+              {visibleTaskSteps.map((step) => (
                 <ToolCallCard
                   key={step.id}
                   projectId={projectId}
@@ -118,6 +138,13 @@ export function AgentTaskPanel({ projectId, task, isLoading, onApproveStep, onRe
                   approval={approvalsByStep.get(step.id)}
                   onApprove={() => setPendingDecision({ kind: "approve", step })}
                   onReject={() => setPendingDecision({ kind: "reject", step })}
+                  onAnswerQuestion={(payload) =>
+                    onApproveStep({
+                      taskId: step.taskId,
+                      stepId: step.id,
+                      ...payload,
+                    })
+                  }
                   busy={busy}
                 />
               ))}
@@ -195,6 +222,123 @@ export function AgentTaskPanel({ projectId, task, isLoading, onApproveStep, onRe
   );
 }
 
+export function AgentTaskConversationActivity({
+  projectId,
+  task,
+  isLoading,
+  onApproveStep,
+  onRejectStep,
+  onCancelTask,
+  onResumeTask,
+  busy,
+}: AgentTaskPanelProps) {
+  const [expanded, setExpanded] = useState(false);
+  const approvalsByStep = useMemo(() => {
+    const items = new Map<string, AgentApproval>();
+    for (const approval of task?.approvals || []) {
+      if (approval.stepId) {
+        items.set(approval.stepId, approval);
+      }
+    }
+    return items;
+  }, [task?.approvals]);
+
+  if (!task && !isLoading) {
+    return null;
+  }
+
+  const steps = task?.steps || [];
+  const sequentialSteps = sequentialVisibleAgentSteps(steps);
+  const visibleSteps = expanded ? sequentialSteps : conversationFocusSteps(sequentialSteps);
+  const activeStep = conversationActiveStep(sequentialSteps);
+  const activeProgress = activeStep ? stepStreamProgress(activeStep) : null;
+  const completedCount = steps.filter((step) => step.status === "succeeded").length;
+  const waitingCount = steps.filter((step) => step.status === "waiting_approval").length;
+  const failedCount = steps.filter((step) => ["failed", "blocked"].includes(step.status)).length;
+  const summary = task ? stringValue(task.summary?.summary) || task.errorMessage || "任务已创建。" : "正在读取任务";
+
+  return (
+    <div className="flex min-w-0 items-start gap-3">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+        {task?.status === "running" || task?.status === "planning" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
+      </div>
+      <div className="min-w-0 max-w-[88%] flex-1 overflow-hidden rounded-lg border bg-background p-3 shadow-sm">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <ListChecks className="h-4 w-4 shrink-0 text-primary" />
+              <div className="truncate text-sm font-medium">任务动态</div>
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground">{task?.userGoal || "正在读取任务"}</div>
+          </div>
+          {task ? <TaskStatusBadge status={task.status} /> : null}
+        </div>
+
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
+          <Badge variant="outline">完成 {completedCount}</Badge>
+          <Badge variant={waitingCount > 0 ? "secondary" : "outline"}>待确认 {waitingCount}</Badge>
+          <Badge variant={failedCount > 0 ? "destructive" : "outline"}>异常 {failedCount}</Badge>
+          {task ? <Badge variant="outline">权限 {agentPermissionModeLabel(stringValue(task.constraints?.permissionMode))}</Badge> : null}
+        </div>
+
+        <div className="mt-2 break-words text-xs text-muted-foreground">{summary}</div>
+
+        {activeProgress ? <StreamProgress progress={activeProgress} /> : null}
+
+        {visibleSteps.length > 0 ? (
+          <div className="mt-3 grid max-h-[min(34rem,56dvh)] gap-2 overflow-y-auto overflow-x-hidden pr-1">
+            {visibleSteps.map((step) => (
+              <ToolCallCard
+                key={step.id}
+                projectId={projectId}
+                step={step}
+                approval={approvalsByStep.get(step.id)}
+                onApprove={() => onApproveStep({ taskId: step.taskId, stepId: step.id })}
+                onReject={() => onRejectStep({ taskId: step.taskId, stepId: step.id })}
+                onAnswerQuestion={(payload) =>
+                  onApproveStep({
+                    taskId: step.taskId,
+                    stepId: step.id,
+                    ...payload,
+                  })
+                }
+                busy={busy}
+              />
+            ))}
+          </div>
+        ) : null}
+
+        {task ? (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-2">
+              {sequentialSteps.length > conversationFocusSteps(sequentialSteps).length ? (
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setExpanded((value) => !value)}>
+                  {expanded ? <ChevronUp className="mr-1 h-3.5 w-3.5" /> : <ChevronDown className="mr-1 h-3.5 w-3.5" />}
+                  {expanded ? "收起步骤" : `展开已开始 ${sequentialSteps.length}`}
+                </Button>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {canResume(task.status) ? (
+                <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onResumeTask(task.id)} disabled={busy}>
+                  <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                  恢复
+                </Button>
+              ) : null}
+              {canCancel(task.status) ? (
+                <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onCancelTask(task.id)} disabled={busy}>
+                  <X className="mr-1 h-3.5 w-3.5" />
+                  取消
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function ResultSummary({ task }: { task: AgentTask }) {
   const steps = task.steps || [];
   const done = steps.filter((step) => step.status === "succeeded").length;
@@ -217,12 +361,73 @@ function ResultSummary({ task }: { task: AgentTask }) {
   );
 }
 
+function conversationFocusSteps(steps: AgentStep[]) {
+  if (steps.length <= 4) {
+    return steps;
+  }
+  const important = steps.filter((step) => ["running", "waiting_approval", "blocked", "failed"].includes(step.status));
+  const recent = [...steps].filter((step) => step.status === "succeeded").slice(-2);
+  const selected = [...important, ...recent];
+  if (selected.length === 0) {
+    selected.push(...steps.slice(-3));
+  }
+  const seen = new Set<string>();
+  return selected
+    .filter((step) => {
+      if (seen.has(step.id)) {
+        return false;
+      }
+      seen.add(step.id);
+      return true;
+    })
+    .sort((a, b) => a.stepIndex - b.stepIndex)
+    .slice(-4);
+}
+
+function sequentialVisibleAgentSteps(steps: AgentStep[]) {
+  const visible: AgentStep[] = [];
+  for (const step of steps) {
+    if (step.status === "planned") {
+      break;
+    }
+    visible.push(step);
+    if (!isTerminalAgentStepStatus(step.status)) {
+      break;
+    }
+    const progress = stepWorkflowProgress(step);
+    if (progress && !isTerminalWorkflowProgressStatus(progress.status)) {
+      break;
+    }
+  }
+  return visible;
+}
+
+function isTerminalAgentStepStatus(status: string) {
+  return ["succeeded", "failed", "blocked", "skipped", "cancelled"].includes(status);
+}
+
+function isTerminalWorkflowProgressStatus(status: string) {
+  return ["succeeded", "failed", "cancelled", "skipped"].includes(status);
+}
+
+function conversationActiveStep(steps: AgentStep[]) {
+  return (
+    steps.find((step) => step.status === "running" && stepStreamProgress(step)) ||
+    steps.find((step) => step.status === "running") ||
+    steps.find((step) => step.status === "waiting_approval") ||
+    steps.find((step) => ["failed", "blocked"].includes(step.status)) ||
+    [...steps].reverse().find((step) => step.status === "succeeded") ||
+    null
+  );
+}
+
 function ToolCallCard({
   projectId,
   step,
   approval,
   onApprove,
   onReject,
+  onAnswerQuestion,
   busy,
 }: {
   projectId: string;
@@ -230,8 +435,10 @@ function ToolCallCard({
   approval?: AgentApproval;
   onApprove: () => void;
   onReject: () => void;
+  onAnswerQuestion: (payload: { note?: string; decision: JsonRecord }) => void;
   busy?: boolean;
 }) {
+  const [customAnswer, setCustomAnswer] = useState("");
   const waitingApproval = step.status === "waiting_approval";
   const verifier = asRecord(step.verifierOutput);
   const verifierStatus = stringValue(verifier?.status);
@@ -246,18 +453,52 @@ function ToolCallCard({
   const retryable = Boolean(output?.retryable);
   const nextActions = stepNextActions(step);
   const businessLinks = stepBusinessLinks(projectId, step);
+  const questionPrompt = agentQuestionPrompt(approval, step);
+  const streamProgress = stepStreamProgress(step);
+  const workflowProgress = stepWorkflowProgress(step);
+  const displayStatus = stepDisplayStatus(step, workflowProgress);
+
+  const submitQuestionOption = (option: AgentQuestionOption) => {
+    const decision: JsonRecord = {
+      kind: "option",
+      selectedOptionId: option.id,
+      selectedOptionLabel: option.label,
+    };
+    if (option.nextGoal) {
+      decision.nextGoal = option.nextGoal;
+    }
+    if (option.value !== undefined) {
+      decision.value = option.value;
+    }
+    onAnswerQuestion({ note: option.label, decision });
+  };
+
+  const submitCustomAnswer = () => {
+    const value = customAnswer.trim();
+    if (!value) {
+      return;
+    }
+    onAnswerQuestion({
+      note: value,
+      decision: {
+        kind: "custom",
+        customAnswer: value,
+      },
+    });
+    setCustomAnswer("");
+  };
 
   return (
     <article className="w-full min-w-0 max-w-full overflow-hidden rounded-md border bg-background p-3">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
-            <StepIcon status={step.status} />
+            <StepIcon status={displayStatus} />
             <span className="min-w-0 truncate text-sm font-medium">{toolLabel(step.toolName)}</span>
           </div>
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
             <Badge variant="outline">{riskLabel(step.risk)}</Badge>
-            <Badge variant={stepStatusVariant(step.status)}>{stepStatusLabel(step.status)}</Badge>
+            <Badge variant={stepStatusVariant(displayStatus)}>{stepStatusLabel(displayStatus)}</Badge>
             {step.permission ? <Badge variant="outline">{permissionLabel(step.permission)}</Badge> : null}
             {estimatedCostCents > 0 ? <Badge variant="outline">预计 {formatCents(estimatedCostCents)}</Badge> : null}
             {retryable ? <Badge variant="outline">可重试</Badge> : null}
@@ -281,6 +522,8 @@ function ToolCallCard({
       ) : null}
 
       {stepOutputText(step) ? <div className="mt-2 break-words text-xs text-muted-foreground">{stepOutputText(step)}</div> : null}
+      {streamProgress ? <StreamProgress progress={streamProgress} /> : null}
+      {workflowProgress ? <WorkflowProgress progress={workflowProgress} /> : null}
       {nextActions.length > 0 ? (
         <div className="mt-2 min-w-0 overflow-hidden rounded bg-muted px-2 py-1.5 text-xs text-muted-foreground">
           <div className="font-medium text-foreground">下一步</div>
@@ -317,7 +560,19 @@ function ToolCallCard({
         </div>
       </details>
 
-      {waitingApproval ? (
+      {waitingApproval && questionPrompt ? (
+        <QuestionPrompt
+          prompt={questionPrompt}
+          customAnswer={customAnswer}
+          onCustomAnswerChange={setCustomAnswer}
+          onSubmitCustomAnswer={submitCustomAnswer}
+          onSelectOption={submitQuestionOption}
+          onSkip={onReject}
+          busy={busy || approval?.status !== "pending"}
+        />
+      ) : null}
+
+      {waitingApproval && !questionPrompt ? (
         <div className="mt-3 flex justify-end gap-2">
           <Button size="sm" variant="outline" onClick={onReject} disabled={busy || approval?.status !== "pending"}>
             拒绝
@@ -329,6 +584,155 @@ function ToolCallCard({
         </div>
       ) : null}
     </article>
+  );
+}
+
+type StepStreamProgress = {
+  episodeIndex: number;
+  episodeTotal: number;
+  chapterTitle: string;
+  text: string;
+  textLength: number;
+  done: boolean;
+  updatedAt: string;
+};
+
+type StepWorkflowProgress = {
+  workflowRunId: string;
+  workflowType: string;
+  status: string;
+  totalNodes: number;
+  completedNodes: number;
+  activeNode?: {
+    nodeKey: string;
+    nodeType: string;
+    status: string;
+    episodeIndex: number;
+    episodeTotal: number;
+    episodeTitle: string;
+    partialText: string;
+    receivedChars: number;
+    errorMessage: string;
+  };
+};
+
+function StreamProgress({ progress }: { progress: StepStreamProgress }) {
+  const title =
+    progress.episodeTotal > 1
+      ? `第 ${progress.episodeIndex}/${progress.episodeTotal} 集`
+      : "当前输出";
+  return (
+    <div className="mt-2 min-w-0 overflow-hidden rounded-md border border-blue-500/20 bg-blue-500/5 p-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+        <span className="font-medium text-blue-700">实时输出</span>
+        <Badge variant="outline">{title}</Badge>
+        {progress.chapterTitle ? <Badge variant="outline" className="max-w-full truncate">{progress.chapterTitle}</Badge> : null}
+        {progress.textLength > 0 ? <Badge variant="outline">已输出 {progress.textLength} 字</Badge> : null}
+        {progress.done ? <Badge variant="outline">本集完成</Badge> : null}
+      </div>
+      {progress.text ? (
+        <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-background/80 p-2 text-xs leading-relaxed text-foreground">
+          {progress.text}
+        </pre>
+      ) : (
+        <div className="mt-2 text-xs text-muted-foreground">等待模型返回内容</div>
+      )}
+    </div>
+  );
+}
+
+function WorkflowProgress({ progress }: { progress: StepWorkflowProgress }) {
+  const node = progress.activeNode;
+  const active = ["pending", "queued", "running", "cancelling"].includes(progress.status);
+  return (
+    <div className="mt-2 min-w-0 overflow-hidden rounded-md border border-primary/20 bg-primary/5 p-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+        {active ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
+        <span className="font-medium text-primary">后台任务</span>
+        <Badge variant="outline">{stepStatusLabel(progress.status)}</Badge>
+        {node?.episodeTotal ? <Badge variant="outline">第 {node.episodeIndex}/{node.episodeTotal} 集</Badge> : null}
+        {node?.episodeTitle ? <Badge variant="outline" className="max-w-full truncate">{node.episodeTitle}</Badge> : null}
+        <Badge variant="outline">节点 {progress.completedNodes}/{progress.totalNodes}</Badge>
+      </div>
+      {node?.partialText ? (
+        <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-background/80 p-2 text-xs leading-relaxed text-foreground">
+          {node.partialText}
+        </pre>
+      ) : node?.status === "running" ? (
+        <div className="mt-2 text-xs text-muted-foreground">正在处理当前分集</div>
+      ) : null}
+      {node?.errorMessage ? <div className="mt-2 text-xs text-destructive">{node.errorMessage}</div> : null}
+    </div>
+  );
+}
+
+function QuestionPrompt({
+  prompt,
+  customAnswer,
+  onCustomAnswerChange,
+  onSubmitCustomAnswer,
+  onSelectOption,
+  onSkip,
+  busy,
+}: {
+  prompt: AgentQuestionPrompt;
+  customAnswer: string;
+  onCustomAnswerChange: (value: string) => void;
+  onSubmitCustomAnswer: () => void;
+  onSelectOption: (option: AgentQuestionOption) => void;
+  onSkip: () => void;
+  busy?: boolean;
+}) {
+  return (
+    <div className="mt-3 space-y-3 rounded-md border border-primary/20 bg-primary/5 p-3">
+      <div>
+        <div className="text-xs font-medium text-primary">助手需要确认</div>
+        <div className="mt-1 break-words text-sm font-medium">{prompt.question}</div>
+      </div>
+      {prompt.options.length > 0 ? (
+        <div className="grid gap-2">
+          {prompt.options.map((option) => (
+            <Button
+              key={option.id}
+              type="button"
+              variant={option.id === prompt.defaultOptionId ? "default" : "outline"}
+              className="h-auto justify-start whitespace-normal px-3 py-2 text-left"
+              onClick={() => onSelectOption(option)}
+              disabled={busy}
+            >
+              <span className="min-w-0">
+                <span className="block text-sm">{option.label}</span>
+                {option.description ? <span className="mt-0.5 block text-xs opacity-75">{option.description}</span> : null}
+              </span>
+            </Button>
+          ))}
+        </div>
+      ) : null}
+      {prompt.allowCustom ? (
+        <div className="space-y-2">
+          <Textarea
+            value={customAnswer}
+            onChange={(event) => onCustomAnswerChange(event.target.value)}
+            placeholder="输入自定义下一步"
+            className="min-h-20 bg-background"
+          />
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={onSkip} disabled={busy}>
+              跳过
+            </Button>
+            <Button size="sm" onClick={onSubmitCustomAnswer} disabled={busy || !customAnswer.trim()}>
+              发送
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex justify-end">
+          <Button size="sm" variant="outline" onClick={onSkip} disabled={busy}>
+            跳过
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -410,7 +814,7 @@ function StepIcon({ status }: { status: string }) {
     return <XCircle className="h-4 w-4 shrink-0 text-destructive" />;
   }
   if (status === "running") {
-    return <PlayCircle className="h-4 w-4 shrink-0 text-blue-600" />;
+    return <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-600" />;
   }
   return <Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" />;
 }
@@ -511,18 +915,26 @@ function agentPermissionModeLabel(value: string) {
 
 function toolLabel(tool: string) {
   const labels: Record<string, string> = {
+    "agent.ask_user": "询问用户",
     "project.read_summary": "读取项目摘要",
     "source.list": "列出原文",
     "source.list_chapters": "列出分集章节",
+    "source.update": "覆盖原文",
+    "source.delete": "删除原文",
     "script.list": "列出剧本",
     "script.get": "读取剧本",
+    "script.update_episode": "覆盖剧本分集",
     "script.generate_from_source": "生成剧本",
     "script.rewrite": "改写剧本",
     "script.rewrite_preview": "剧本改写预览",
     "script.create_version": "创建剧本版本",
     "script.activate_version": "激活剧本版本",
+    "script.delete": "删除剧本",
     "asset.list": "列出资产",
+    "asset.get": "读取资产卡",
     "asset.update": "更新资产",
+    "asset.revise_prompt": "修订资产提示词",
+    "asset.delete": "删除资产",
     "storyboard.list": "列出分镜",
     "storyboard.update_shot": "更新分镜",
     "storyboard.reorder": "重排分镜",
@@ -560,6 +972,7 @@ function toolLabel(tool: string) {
 function supervisorReasonLabel(reason: string) {
   const labels: Record<string, string> = {
     approval_required: "需要确认",
+    user_question: "等待用户选择",
     missing_permission: "权限不足",
     plan_only: "仅规划",
     unknown_risk: "未知风险",
@@ -593,6 +1006,52 @@ function toolImpactChips(toolName: string, input: JsonRecord) {
   return chips;
 }
 
+function agentQuestionPrompt(approval: AgentApproval | undefined, step: AgentStep): AgentQuestionPrompt | null {
+  const requested = asRecord(approval?.requestedPayload);
+  const isQuestion =
+    approval?.approvalType === "question" ||
+    stringValue(requested?.interactionType) === "question" ||
+    step.toolName === "agent.ask_user";
+  if (!isQuestion) {
+    return null;
+  }
+  const question = firstNonEmptyString(
+    stringValue(requested?.question),
+    stringValue(step.input?.question),
+    stringValue(step.dryRunOutput?.question),
+    "请选择下一步。",
+  );
+  return {
+    question,
+    options: agentQuestionOptions(requested?.options ?? step.input?.options ?? step.dryRunOutput?.options),
+    allowCustom: booleanValue(requested?.allowCustom) || booleanValue(step.input?.allowCustom),
+    defaultOptionId: firstNonEmptyString(stringValue(requested?.defaultOptionId), stringValue(step.input?.defaultOptionId)),
+  };
+}
+
+function agentQuestionOptions(value: unknown): AgentQuestionOption[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => asRecord(item))
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map((item) => {
+      const option: AgentQuestionOption = {
+        id: stringValue(item.id),
+        label: stringValue(item.label),
+      };
+      const description = stringValue(item.description);
+      const nextGoal = stringValue(item.nextGoal);
+      const jsonValue = toJsonValue(item.value);
+      if (description) option.description = description;
+      if (nextGoal) option.nextGoal = nextGoal;
+      if (jsonValue !== undefined) option.value = jsonValue;
+      return option;
+    })
+    .filter((option) => option.id && option.label);
+}
+
 function fieldLabel(field: string) {
   const labels: Record<string, string> = {
     sourceId: "原文",
@@ -615,6 +1074,71 @@ function approvalDialogSummary(step: AgentStep) {
 function stepOutputText(step: AgentStep) {
   const output = step.output || {};
   return stringValue(output.summary) || stringValue(asRecord(output.data)?.summary);
+}
+
+function stepStreamProgress(step: AgentStep): StepStreamProgress | null {
+  const progress = asRecord(step.output?.progress);
+  if (!progress || stringValue(progress.kind) !== "stream_text") {
+    return null;
+  }
+  return {
+    episodeIndex: Math.max(1, numberValue(progress.episodeIndex)),
+    episodeTotal: Math.max(1, numberValue(progress.episodeTotal)),
+    chapterTitle: stringValue(progress.chapterTitle),
+    text: stringValue(progress.text),
+    textLength: numberValue(progress.textLength),
+    done: booleanValue(progress.done),
+    updatedAt: stringValue(progress.updatedAt),
+  };
+}
+
+function stepWorkflowProgress(step: AgentStep): StepWorkflowProgress | null {
+  const data = asRecord(step.output?.data);
+  const progress = asRecord(data?.workflowProgress);
+  if (!progress) {
+    return null;
+  }
+  const activeNode = asRecord(progress.activeNode);
+  const nodeInput = asRecord(activeNode?.input);
+  const nodeOutput = asRecord(activeNode?.output);
+  return {
+    workflowRunId: stringValue(progress.workflowRunId),
+    workflowType: stringValue(progress.workflowType),
+    status: stringValue(progress.status),
+    totalNodes: numberValue(progress.totalNodes),
+    completedNodes: numberValue(progress.completedNodes),
+    ...(activeNode
+      ? {
+          activeNode: {
+            nodeKey: stringValue(activeNode.nodeKey),
+            nodeType: stringValue(activeNode.nodeType),
+            status: stringValue(activeNode.status),
+            episodeIndex: numberValue(nodeInput?.episodeIndex),
+            episodeTotal: numberValue(nodeInput?.episodeTotal),
+            episodeTitle: stringValue(nodeInput?.episodeTitle),
+            partialText: stringValue(nodeOutput?.partialText),
+            receivedChars: numberValue(nodeOutput?.receivedChars),
+            errorMessage: stringValue(activeNode.errorMessage),
+          },
+        }
+      : {}),
+  };
+}
+
+function stepDisplayStatus(step: AgentStep, workflowProgress: StepWorkflowProgress | null) {
+  if (!workflowProgress) {
+    return step.status;
+  }
+  if (["pending", "queued", "running", "cancelling"].includes(workflowProgress.status)) {
+    return "running";
+  }
+  if (workflowProgress.status === "failed") {
+    return "failed";
+  }
+  if (workflowProgress.status === "cancelled") {
+    return "cancelled";
+  }
+  return step.status;
 }
 
 function stepDryRunText(step: AgentStep) {
@@ -695,8 +1219,28 @@ function stringValue(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
+function firstNonEmptyString(...values: string[]) {
+  return values.find((value) => value.trim())?.trim() || "";
+}
+
+function booleanValue(value: unknown) {
+  return value === true;
+}
+
 function numberValue(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function toJsonValue(value: unknown): JsonValue | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    JSON.stringify(value);
+    return value as JsonValue;
+  } catch {
+    return undefined;
+  }
 }
 
 function formatCents(value: number) {

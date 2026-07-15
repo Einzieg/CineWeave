@@ -11,7 +11,6 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/workflows"
-	"go.temporal.io/sdk/client"
 )
 
 type ProjectExport struct {
@@ -110,6 +109,12 @@ func (s *Server) createProjectExport(w http.ResponseWriter, r *http.Request, pri
 	if req.Options == nil {
 		req.Options = map[string]any{}
 	}
+	if exportType == "final_video" {
+		if _, err := s.requireFinalVideoProductionReady(r.Context(), project.ID, finalVideoOptionString(req.Options, "finalVideoVersionId")); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
 	requestJSON := mustMarshal(map[string]any{
 		"exportType": exportType,
 		"format":     format,
@@ -155,8 +160,8 @@ func (s *Server) createProjectExport(w http.ResponseWriter, r *http.Request, pri
 	var run WorkflowRun
 	if err := tx.QueryRow(r.Context(), `
 		WITH new_run AS (SELECT gen_random_uuid() AS id)
-		INSERT INTO workflow_runs(id, organization_id, project_id, temporal_workflow_id, status, input, output, created_by)
-		SELECT id, $1, $2, 'workflow-' || id::text, 'queued', $3, '{}', $4
+		INSERT INTO workflow_runs(id, organization_id, project_id, temporal_workflow_id, workflow_type, status, input, output, created_by)
+		SELECT id, $1, $2, 'workflow-' || id::text, 'export_project', 'queued', $3, '{}', $4
 		FROM new_run
 		RETURNING id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
 	`, project.OrganizationID, project.ID, runInput, principal.UserID).Scan(
@@ -178,30 +183,33 @@ func (s *Server) createProjectExport(w http.ResponseWriter, r *http.Request, pri
 	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE project_exports
-		SET workflow_run_id = $2, request = jsonb_set(request, '{workflowRunId}', to_jsonb($2::text), true)
+		SET workflow_run_id = $2::uuid, request = jsonb_set(request, '{workflowRunId}', to_jsonb($2::text), true)
 		WHERE id = $1
 	`, exportItem.ID, run.ID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := s.enqueueWorkflowStartTx(
+		r.Context(),
+		tx,
+		run.ID,
+		"",
+		project.OrganizationID,
+		project.ID,
+		"export_project",
+		"export_project",
+		run.TemporalWorkflowID,
+		workflows.MediaTaskQueue,
+		workflowInput,
+	); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if _, err := s.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
-		ID:        run.TemporalWorkflowID,
-		TaskQueue: workflows.MediaTaskQueue,
-	}, workflows.ExportProjectWorkflow, workflowInput); err != nil {
-		_, _ = s.db.Exec(r.Context(), `
-			UPDATE workflow_runs
-			SET status = 'failed', error_code = 'TEMPORAL_START_FAILED', error_message = $2, completed_at = now()
-			WHERE id = $1
-		`, run.ID, err.Error())
-		_, _ = s.db.Exec(r.Context(), `
-			UPDATE project_exports
-			SET status = 'failed', error_code = 'TEMPORAL_START_FAILED', error_message = $2, completed_at = now()
-			WHERE id = $1
-		`, exportItem.ID, err.Error())
+	if err := insertWorkflowQueuedEventTx(r.Context(), tx, run, "export_project"); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}

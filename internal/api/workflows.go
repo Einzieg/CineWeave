@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,25 +14,34 @@ import (
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
-	"go.temporal.io/sdk/client"
+	"go.temporal.io/api/serviceerror"
 )
 
 type WorkflowRun struct {
-	ID                 string          `json:"id"`
-	OrganizationID     string          `json:"organizationId"`
-	ProjectID          string          `json:"projectId"`
-	TemplateID         *string         `json:"templateId,omitempty"`
-	TemporalWorkflowID string          `json:"temporalWorkflowId"`
-	Status             string          `json:"status"`
-	Input              json.RawMessage `json:"input"`
-	Output             json.RawMessage `json:"output"`
-	ErrorCode          *string         `json:"errorCode,omitempty"`
-	ErrorMessage       *string         `json:"errorMessage,omitempty"`
-	CreatedBy          string          `json:"createdBy"`
-	CreatedAt          time.Time       `json:"createdAt"`
-	StartedAt          *time.Time      `json:"startedAt,omitempty"`
-	CompletedAt        *time.Time      `json:"completedAt,omitempty"`
-	CancelledAt        *time.Time      `json:"cancelledAt,omitempty"`
+	ID                   string          `json:"id"`
+	OrganizationID       string          `json:"organizationId"`
+	ProjectID            string          `json:"projectId"`
+	TemplateID           *string         `json:"templateId,omitempty"`
+	TemporalWorkflowID   string          `json:"temporalWorkflowId"`
+	Status               string          `json:"status"`
+	Input                json.RawMessage `json:"input"`
+	Output               json.RawMessage `json:"output"`
+	ErrorCode            *string         `json:"errorCode,omitempty"`
+	ErrorMessage         *string         `json:"errorMessage,omitempty"`
+	CreatedBy            string          `json:"createdBy"`
+	CreatedAt            time.Time       `json:"createdAt"`
+	StartedAt            *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt          *time.Time      `json:"completedAt,omitempty"`
+	CancelledAt          *time.Time      `json:"cancelledAt,omitempty"`
+	WorkflowType         string          `json:"workflowType"`
+	TotalItems           int             `json:"totalItems"`
+	CompletedItems       int             `json:"completedItems"`
+	FailedItems          int             `json:"failedItems"`
+	Revision             int64           `json:"revision"`
+	AttemptGeneration    int             `json:"attemptGeneration"`
+	RootWorkflowRunID    *string         `json:"rootWorkflowRunId,omitempty"`
+	RetryOfWorkflowRunID *string         `json:"retryOfWorkflowRunId,omitempty"`
+	UpdatedAt            time.Time       `json:"updatedAt"`
 }
 
 type WorkflowNodeRun struct {
@@ -50,6 +60,8 @@ type WorkflowNodeRun struct {
 	StartedAt      *time.Time      `json:"startedAt,omitempty"`
 	CompletedAt    *time.Time      `json:"completedAt,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
+	Revision       int64           `json:"revision"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
 }
 
 type Artifact struct {
@@ -98,11 +110,11 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 	if workflowType == "" {
 		workflowType = "video_production"
 	}
-	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "extract_novel_events" && workflowType != "generate_adaptation_plan" && workflowType != "adaptation_plan_to_script" && workflowType != "source_to_script" && workflowType != "parse_script_scenes" && workflowType != "script_to_assets" && workflowType != "script_to_storyboard" && workflowType != "script_to_video" && workflowType != "full_production" && workflowType != "compose_timeline" {
+	if workflowType != "video_production" && workflowType != "text_to_storyboard" && workflowType != "extract_novel_events" && workflowType != "generate_adaptation_plan" && workflowType != "adaptation_plan_to_script" && workflowType != "source_to_script" && workflowType != "parse_script_scenes" && workflowType != "script_to_assets" && workflowType != "script_to_storyboard" && workflowType != "script_episode_timing" && workflowType != "script_to_video" && workflowType != "full_production" && workflowType != "compose_timeline" {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowType is not supported", nil, false)
 		return
 	}
-	workflowRequestInput, err := normalizeWorkflowRequestInput(workflowType, req.Input, projectDefaultAspectRatio(project))
+	workflowRequestInput, err := normalizeWorkflowRequestInput(workflowType, req.Input, project)
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error(), nil, false)
 		return
@@ -114,49 +126,7 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		"prompt":       strings.TrimSpace(req.Prompt),
 		"input":        string(workflowRequestInput),
 	})
-	idempotencyState, ok := s.prepareIdempotency(w, r, project.OrganizationID, "workflow-runs:create", idempotency, requestHash)
-	if !ok {
-		return
-	}
-
 	input := json.RawMessage(mustMarshal(map[string]any{"prompt": strings.TrimSpace(req.Prompt), "workflowType": workflowType, "input": workflowRequestInput}))
-	var run WorkflowRun
-	err = s.db.QueryRow(r.Context(), `
-		WITH new_run AS (SELECT gen_random_uuid() AS id)
-		INSERT INTO workflow_runs(id, organization_id, project_id, temporal_workflow_id, status, input, output, created_by)
-		SELECT id, $1, $2, 'workflow-' || id::text, 'queued', $3, '{}', $4
-		FROM new_run
-		RETURNING id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-	`, project.OrganizationID, project.ID, input, principal.UserID).Scan(
-		&run.ID,
-		&run.OrganizationID,
-		&run.ProjectID,
-		&run.TemplateID,
-		&run.TemporalWorkflowID,
-		&run.Status,
-		&run.Input,
-		&run.Output,
-		&run.ErrorCode,
-		&run.ErrorMessage,
-		&run.CreatedBy,
-		&run.CreatedAt,
-		&run.StartedAt,
-		&run.CompletedAt,
-		&run.CancelledAt,
-	)
-	if err != nil {
-		s.failIdempotency(r.Context(), idempotencyState)
-		s.writeError(w, r, err)
-		return
-	}
-	workflowInput := workflows.TextToStoryboardInput{
-		OrganizationID: run.OrganizationID,
-		ProjectID:      run.ProjectID,
-		WorkflowRunID:  run.ID,
-		Prompt:         strings.TrimSpace(req.Prompt),
-		CreatedBy:      principal.UserID,
-		Input:          workflowRequestInput,
-	}
 	var workflowFunc any
 	switch workflowType {
 	case "extract_novel_events":
@@ -177,31 +147,111 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		workflowFunc = workflows.VideoProductionWorkflow
 	case "script_to_storyboard":
 		workflowFunc = workflows.ScriptToStoryboardWorkflow
+	case "script_episode_timing":
+		workflowFunc = workflows.AnalyzeScriptEpisodeTimingWorkflow
 	case "compose_timeline":
 		workflowFunc = workflows.ComposeTimelineWorkflow
 	default:
 		workflowFunc = workflows.TextToStoryboardWorkflow
 	}
-	_, err = s.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
-		ID:        run.TemporalWorkflowID,
-		TaskQueue: workflows.ScriptTaskQueue,
-	}, workflowFunc, workflowInput)
+	tx, err := s.db.BeginTx(r.Context(), pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
-		_, _ = s.db.Exec(r.Context(), `
-			UPDATE workflow_runs
-			SET status = 'failed', error_code = 'TEMPORAL_START_FAILED', error_message = $2, completed_at = now()
-			WHERE id = $1
-		`, run.ID, err.Error())
-		s.failIdempotency(r.Context(), idempotencyState)
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.completeIdempotency(r.Context(), idempotencyState, run); err != nil {
+	defer tx.Rollback(r.Context())
+	lockedProject, err := scanProject(tx.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1 FOR UPDATE OF p`), project.ID))
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.insertWorkflowQueuedEvent(r.Context(), run, workflowType)
-	httpx.WriteJSON(w, r, http.StatusCreated, run, nil)
+	if lockedProject.OrganizationID != project.OrganizationID {
+		s.writeError(w, r, newAPIError(http.StatusNotFound, "NOT_FOUND", "project was not found"))
+		return
+	}
+	claim, err := claimIdempotencyTx(r.Context(), tx, lockedProject.OrganizationID, "workflow-runs:create", idempotency, requestHash)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if len(claim.replaySnapshot) > 0 {
+		var replay WorkflowRun
+		if err := json.Unmarshal(claim.replaySnapshot, &replay); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		_ = tx.Rollback(r.Context())
+		status := claim.replayStatus
+		if status < 200 || status > 299 {
+			status = http.StatusOK
+		}
+		httpx.WriteJSON(w, r, status, replay, map[string]any{"idempotentReplay": true, "operationId": claim.state.operationID})
+		return
+	}
+	operationID, err := ensureRuntimeOperationTx(
+		r.Context(), tx, &claim, lockedProject.OrganizationID, lockedProject.ID, "workflow-runs:create", requestHash,
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	run, err := s.enqueueProjectWorkflowTx(
+		r.Context(), tx, principal, lockedProject, workflowType, input, workflows.ScriptTaskQueue, workflowFunc,
+		func(run WorkflowRun) any {
+			return workflows.TextToStoryboardInput{
+				OrganizationID: run.OrganizationID,
+				ProjectID:      run.ProjectID,
+				WorkflowRunID:  run.ID,
+				Prompt:         strings.TrimSpace(req.Prompt),
+				CreatedBy:      principal.UserID,
+				Input:          workflowRequestInput,
+			}
+		},
+		func(ctx context.Context, tx pgx.Tx, run WorkflowRun) error {
+			startInput := workflows.TextToStoryboardInput{
+				OrganizationID: run.OrganizationID,
+				ProjectID:      run.ProjectID,
+				WorkflowRunID:  run.ID,
+				Prompt:         strings.TrimSpace(req.Prompt),
+				CreatedBy:      principal.UserID,
+				Input:          workflowRequestInput,
+			}
+			snapshotRaw, snapshotHash, err := marshalWorkflowStartInput(startInput)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO workflow_input_snapshots(
+					workflow_run_id, organization_id, project_id, project_revision, snapshot, snapshot_hash
+				)
+				VALUES ($1, $2, $3, $4, $5, $6)
+			`, run.ID, run.OrganizationID, run.ProjectID, lockedProject.Revision, snapshotRaw, snapshotHash); err != nil {
+				return err
+			}
+			updated, err := scanWorkflowRun(tx.QueryRow(ctx, workflowRunSelectSQL(`WHERE id = $1`), run.ID))
+			if err != nil {
+				return err
+			}
+			if _, err := completeRuntimeOperationTx(ctx, tx, operationID, run.ID, updated); err != nil {
+				return err
+			}
+			return completeIdempotencyTxWithStatus(ctx, tx, claim.state, http.StatusAccepted, updated)
+		},
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	updated, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`WHERE id = $1`), run.ID))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusAccepted, updated, map[string]any{"operationId": operationID})
 }
 
 func (s *Server) listWorkflowRuns(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -214,14 +264,12 @@ func (s *Server) listWorkflowRuns(w http.ResponseWriter, r *http.Request, princi
 	} else if !s.authorize(w, r, principal, authz.PermissionWorkflowRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	rows, err := s.db.Query(r.Context(), workflowRunSelectSQL(`
 		WHERE organization_id = $1
 		  AND ($2 = '' OR project_id = $2::uuid)
 		ORDER BY created_at DESC
 		LIMIT 100
-	`, orgID, projectID)
+	`), orgID, projectID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -240,11 +288,9 @@ func (s *Server) listWorkflowRuns(w http.ResponseWriter, r *http.Request, princi
 }
 
 func (s *Server) getWorkflowRun(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	item, err := scanWorkflowRun(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	item, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
 		WHERE id = $1
-	`, r.PathValue("workflowRunId")))
+	`), r.PathValue("workflowRunId")))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -262,11 +308,9 @@ func (s *Server) cancelWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 	if !decode(w, r, &req) {
 		return
 	}
-	item, err := scanWorkflowRun(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	item, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
 		WHERE id = $1
-	`, r.PathValue("workflowRunId")))
+	`), r.PathValue("workflowRunId")))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -294,6 +338,26 @@ func (s *Server) cancelWorkflowRunItem(ctx context.Context, item WorkflowRun, re
 	if reason == "" {
 		reason = "User requested cancellation"
 	}
+	preStart, err := s.cancelWorkflowStartOutbox(ctx, item.ID, reason)
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	if preStart {
+		if err := workflows.CancelWorkflowRun(ctx, s.db, item.ID, json.RawMessage(`{}`), reason); err != nil {
+			return WorkflowRun{}, err
+		}
+		if s.temporal != nil {
+			if err := s.temporal.CancelWorkflow(ctx, item.TemporalWorkflowID, ""); err != nil {
+				var notFound *serviceerror.NotFound
+				if !errors.As(err, &notFound) {
+					_ = s.insertWorkflowCancelWarning(ctx, item, reason, err)
+				}
+			}
+		}
+		return scanWorkflowRun(s.db.QueryRow(ctx, workflowRunSelectSQL(`
+			WHERE id = $1
+		`), item.ID))
+	}
 	if err := workflows.MarkWorkflowCancelling(ctx, s.db, item.ID, reason); err != nil {
 		return WorkflowRun{}, err
 	}
@@ -302,19 +366,50 @@ func (s *Server) cancelWorkflowRunItem(ctx context.Context, item WorkflowRun, re
 			_ = s.insertWorkflowCancelWarning(ctx, item, reason, err)
 		}
 	}
-	return scanWorkflowRun(s.db.QueryRow(ctx, `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	return scanWorkflowRun(s.db.QueryRow(ctx, workflowRunSelectSQL(`
 		WHERE id = $1
-	`, item.ID))
+	`), item.ID))
+}
+
+func (s *Server) cancelWorkflowStartOutbox(ctx context.Context, workflowRunID, reason string) (bool, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var status string
+	err = tx.QueryRow(ctx, `
+		SELECT status
+		FROM workflow_start_outbox
+		WHERE workflow_run_id = $1
+		FOR UPDATE
+	`, workflowRunID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, tx.Commit(ctx)
+	}
+	if err != nil {
+		return false, err
+	}
+	if status != "pending" && status != "processing" && status != "cancelled" {
+		return false, tx.Commit(ctx)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflow_start_outbox
+		SET status = 'cancelled', completed_at = COALESCE(completed_at, now()),
+		    locked_at = NULL, locked_by = NULL,
+		    last_error_code = 'USER_CANCELLED', last_error_message = $2,
+		    updated_at = now()
+		WHERE workflow_run_id = $1
+	`, workflowRunID, reason); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
 
 func (s *Server) listWorkflowNodeRuns(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	run, err := scanWorkflowRun(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	run, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
 		WHERE id = $1
-	`, r.PathValue("workflowRunId")))
+	`), r.PathValue("workflowRunId")))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -323,7 +418,7 @@ func (s *Server) listWorkflowNodeRuns(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, workflow_run_id, node_key, node_type, status, input, output, retry_count, error_code, error_message, started_at, completed_at, created_at
+		SELECT id, organization_id, project_id, workflow_run_id, node_key, node_type, status, input, output, retry_count, error_code, error_message, started_at, completed_at, created_at, revision, updated_at
 		FROM workflow_node_runs
 		WHERE workflow_run_id = $1
 		ORDER BY created_at ASC
@@ -336,7 +431,7 @@ func (s *Server) listWorkflowNodeRuns(w http.ResponseWriter, r *http.Request, pr
 	items := make([]WorkflowNodeRun, 0)
 	for rows.Next() {
 		var item WorkflowNodeRun
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.ProjectID, &item.WorkflowRunID, &item.NodeKey, &item.NodeType, &item.Status, &item.Input, &item.Output, &item.RetryCount, &item.ErrorCode, &item.ErrorMessage, &item.StartedAt, &item.CompletedAt, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.ProjectID, &item.WorkflowRunID, &item.NodeKey, &item.NodeType, &item.Status, &item.Input, &item.Output, &item.RetryCount, &item.ErrorCode, &item.ErrorMessage, &item.StartedAt, &item.CompletedAt, &item.CreatedAt, &item.Revision, &item.UpdatedAt); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
@@ -346,19 +441,20 @@ func (s *Server) listWorkflowNodeRuns(w http.ResponseWriter, r *http.Request, pr
 }
 
 func isTerminalWorkflowStatus(status string) bool {
-	return status == "succeeded" || status == "failed" || status == "cancelled"
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "succeeded", "partial_succeeded", "completed", "failed", "cancelled", "skipped":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) insertWorkflowCancelWarning(ctx context.Context, run WorkflowRun, reason string, cause error) error {
-	_, err := s.db.Exec(ctx, `
-		INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
-		VALUES ($1, $2, 'workflow.run.cancel_warning', 'workflow_run', $3, $4)
-	`, run.OrganizationID, run.ProjectID, run.ID, mustMarshal(map[string]any{
+	return insertAPIEvent(ctx, s.db, run.OrganizationID, run.ProjectID, "workflow.run.cancel_warning", "workflow_run", run.ID, mustMarshal(map[string]any{
 		"workflowRunId": run.ID,
 		"reason":        reason,
 		"message":       cause.Error(),
 	}))
-	return err
 }
 
 func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -429,11 +525,31 @@ func scanWorkflowRun(row pgx.Row) (WorkflowRun, error) {
 		&item.StartedAt,
 		&item.CompletedAt,
 		&item.CancelledAt,
+		&item.WorkflowType,
+		&item.TotalItems,
+		&item.CompletedItems,
+		&item.FailedItems,
+		&item.Revision,
+		&item.AttemptGeneration,
+		&item.RootWorkflowRunID,
+		&item.RetryOfWorkflowRunID,
+		&item.UpdatedAt,
 	)
 	return item, err
 }
 
-func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, projectAspectRatio *string) (json.RawMessage, error) {
+func workflowRunSelectSQL(where string) string {
+	return `
+		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status,
+		       input, output, error_code, error_message, created_by, created_at,
+		       started_at, completed_at, cancelled_at, workflow_type, total_items,
+		       completed_items, failed_items, revision, attempt_generation, root_workflow_run_id,
+		       retry_of_workflow_run_id, updated_at
+		FROM workflow_runs
+	` + where
+}
+
+func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, project Project) (json.RawMessage, error) {
 	values := map[string]any{}
 	if len(raw) > 0 && strings.TrimSpace(string(raw)) != "null" {
 		if err := json.Unmarshal(raw, &values); err != nil {
@@ -446,8 +562,8 @@ func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, pro
 		}
 		if value, ok := values["aspectRatio"].(string); !ok || strings.TrimSpace(value) == "" {
 			aspectRatio := "16:9"
-			if projectAspectRatio != nil && strings.TrimSpace(*projectAspectRatio) != "" {
-				aspectRatio = strings.TrimSpace(*projectAspectRatio)
+			if projectAspectRatio := projectDefaultAspectRatio(project); projectAspectRatio != nil {
+				aspectRatio = *projectAspectRatio
 			}
 			values["aspectRatio"] = aspectRatio
 		}
@@ -488,8 +604,8 @@ func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, pro
 		}
 		if value, ok := values["aspectRatio"].(string); !ok || strings.TrimSpace(value) == "" {
 			aspectRatio := "16:9"
-			if projectAspectRatio != nil && strings.TrimSpace(*projectAspectRatio) != "" {
-				aspectRatio = strings.TrimSpace(*projectAspectRatio)
+			if projectAspectRatio := projectDefaultAspectRatio(project); projectAspectRatio != nil {
+				aspectRatio = *projectAspectRatio
 			}
 			values["aspectRatio"] = aspectRatio
 		}
@@ -497,7 +613,55 @@ func normalizeWorkflowRequestInput(workflowType string, raw json.RawMessage, pro
 			values["resolution"] = "720p"
 		}
 	}
-	if workflowType == "script_to_assets" || workflowType == "script_to_storyboard" || workflowType == "script_to_video" || workflowType == "full_production" {
+	if workflowType == "script_to_storyboard" {
+		if value, ok := values["scriptId"].(string); !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("input.scriptId is required")
+		}
+		pacing, _ := values["pacingProfile"].(string)
+		pacing = strings.ToLower(strings.TrimSpace(pacing))
+		if pacing == "" {
+			pacing = "standard"
+		}
+		if pacing != "standard" && pacing != "fast" && pacing != "slow" {
+			return nil, fmt.Errorf("input.pacingProfile is not supported")
+		}
+		values["pacingProfile"] = pacing
+		if value, ok := values["targetDurationSeconds"].(float64); ok && value <= 0 {
+			return nil, fmt.Errorf("input.targetDurationSeconds must be positive")
+		}
+		if value, ok := values["plannerBatchMaxShots"].(float64); !ok || value == 0 {
+			values["plannerBatchMaxShots"] = 12
+		} else if value < 8 || value > 16 {
+			return nil, fmt.Errorf("input.plannerBatchMaxShots must be between 8 and 16")
+		}
+		if value, ok := values["maxSceneConcurrency"].(float64); !ok || value == 0 {
+			values["maxSceneConcurrency"] = 3
+		} else if value < 1 || value > 8 {
+			return nil, fmt.Errorf("input.maxSceneConcurrency must be between 1 and 8")
+		}
+		if value, ok := values["shotBudget"].(float64); ok && value < 0 {
+			return nil, fmt.Errorf("input.shotBudget cannot be negative")
+		}
+		audioStrategy, _ := values["audioStrategy"].(string)
+		audioStrategy = firstNonEmptyString(strings.ToLower(strings.TrimSpace(audioStrategy)), project.AudioStrategy, "native_av")
+		audioRequirement, _ := values["audioRequirement"].(string)
+		audioRequirement = firstNonEmptyString(strings.ToLower(strings.TrimSpace(audioRequirement)), project.AudioRequirement, "preferred")
+		if !validProjectAudioSettings(audioStrategy, audioRequirement) {
+			return nil, fmt.Errorf("input.audioStrategy or input.audioRequirement is not supported")
+		}
+		values["audioStrategy"] = audioStrategy
+		values["audioRequirement"] = audioRequirement
+	}
+	if workflowType == "script_episode_timing" {
+		for _, key := range []string{"scriptId", "scriptVersionId", "scriptEpisodeId"} {
+			if value, ok := values[key].(string); !ok || strings.TrimSpace(value) == "" {
+				return nil, fmt.Errorf("input.%s is required", key)
+			}
+		}
+		if value, ok := values["targetDurationSeconds"].(float64); ok && value <= 0 {
+			return nil, fmt.Errorf("input.targetDurationSeconds must be positive")
+		}
+	} else if workflowType == "script_to_assets" || workflowType == "script_to_video" || workflowType == "full_production" {
 		if value, ok := values["maxShots"].(float64); ok && (value <= 0 || value > 3) {
 			values["maxShots"] = 3
 		}

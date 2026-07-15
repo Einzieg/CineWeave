@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -11,51 +12,94 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/production"
+	storyboardtiming "github.com/Einzieg/cineweave/internal/storyboard"
+	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
 )
 
+const defaultStoryboardShotDurationSeconds = 5.0
+
 type StoryboardShot struct {
-	ID                       string           `json:"id"`
-	WorkflowRunID            string           `json:"workflowRunId"`
-	ScriptSceneID            *string          `json:"scriptSceneId,omitempty"`
-	SourceScene              *ShotSourceScene `json:"sourceScene,omitempty"`
-	ShotIndex                int              `json:"shotIndex"`
-	ShotNo                   int              `json:"shotNo"`
-	DurationSeconds          *float64         `json:"durationSeconds,omitempty"`
-	Visual                   string           `json:"visual,omitempty"`
-	Camera                   string           `json:"camera,omitempty"`
-	Motion                   string           `json:"motion,omitempty"`
-	Mood                     string           `json:"mood,omitempty"`
-	ImagePrompt              string           `json:"imagePrompt,omitempty"`
-	VideoPrompt              string           `json:"videoPrompt,omitempty"`
-	ImageArtifactID          *string          `json:"imageArtifactId,omitempty"`
-	ImageMediaFileID         *string          `json:"imageMediaFileId,omitempty"`
-	ImageStorageKey          *string          `json:"imageStorageKey,omitempty"`
-	ImagePreviewURL          *string          `json:"imagePreviewUrl,omitempty"`
-	VideoArtifactID          *string          `json:"videoArtifactId,omitempty"`
-	VideoMediaFileID         *string          `json:"videoMediaFileId,omitempty"`
-	VideoStorageKey          *string          `json:"videoStorageKey,omitempty"`
-	VideoPreviewURL          *string          `json:"videoPreviewUrl,omitempty"`
-	VideoProviderAsyncTaskID *string          `json:"providerAsyncTaskId,omitempty"`
-	VideoExternalTaskID      *string          `json:"externalTaskId,omitempty"`
-	ImageStatus              string           `json:"imageStatus"`
-	VideoStatus              string           `json:"videoStatus"`
-	ImageErrorCode           *string          `json:"imageErrorCode,omitempty"`
-	ImageErrorMessage        *string          `json:"imageErrorMessage,omitempty"`
-	VideoErrorCode           *string          `json:"videoErrorCode,omitempty"`
-	VideoErrorMessage        *string          `json:"videoErrorMessage,omitempty"`
-	ImageStartedAt           *time.Time       `json:"imageStartedAt,omitempty"`
-	ImageCompletedAt         *time.Time       `json:"imageCompletedAt,omitempty"`
-	VideoStartedAt           *time.Time       `json:"videoStartedAt,omitempty"`
-	VideoCompletedAt         *time.Time       `json:"videoCompletedAt,omitempty"`
-	ImageWorkflowRunID       *string          `json:"imageWorkflowRunId,omitempty"`
-	VideoWorkflowRunID       *string          `json:"videoWorkflowRunId,omitempty"`
-	Status                   string           `json:"status"`
-	ReviewStatus             string           `json:"reviewStatus"`
-	ManualOverride           bool             `json:"manualOverride"`
-	StaleState               string           `json:"staleState"`
-	EditedBy                 *string          `json:"editedBy,omitempty"`
-	EditedAt                 *time.Time       `json:"editedAt,omitempty"`
+	ID                       string                             `json:"id"`
+	WorkflowRunID            string                             `json:"workflowRunId"`
+	ScriptSceneID            *string                            `json:"scriptSceneId,omitempty"`
+	ScriptEpisodeID          *string                            `json:"scriptEpisodeId,omitempty"`
+	EpisodeIndex             *int                               `json:"episodeIndex,omitempty"`
+	EpisodeShotIndex         *int                               `json:"episodeShotIndex,omitempty"`
+	EpisodeTitle             string                             `json:"episodeTitle,omitempty"`
+	SourceScene              *ShotSourceScene                   `json:"sourceScene,omitempty"`
+	ShotIndex                int                                `json:"shotIndex"`
+	ShotNo                   int                                `json:"shotNo"`
+	Title                    string                             `json:"title,omitempty"`
+	DurationSeconds          *float64                           `json:"durationSeconds,omitempty"`
+	StoryboardPlanID         *string                            `json:"storyboardPlanId,omitempty"`
+	StartTick                int64                              `json:"startTick"`
+	EndTick                  int64                              `json:"endTick"`
+	PlannedDurationTicks     int64                              `json:"plannedDurationTicks"`
+	DurationMinTicks         *int64                             `json:"durationMinTicks,omitempty"`
+	DurationMaxTicks         *int64                             `json:"durationMaxTicks,omitempty"`
+	DurationSource           string                             `json:"durationSource"`
+	TimingConfidence         *float64                           `json:"timingConfidence,omitempty"`
+	DurationLocked           bool                               `json:"durationLocked"`
+	ShotGroupID              *string                            `json:"shotGroupId,omitempty"`
+	ContinuityGroupID        *string                            `json:"continuityGroupId,omitempty"`
+	OneTake                  bool                               `json:"oneTake"`
+	TimingRevision           int                                `json:"timingRevision"`
+	TimelineTimebase         int64                              `json:"timelineTimebase"`
+	FPSNumerator             int                                `json:"fpsNumerator"`
+	FPSDenominator           int                                `json:"fpsDenominator"`
+	Visual                   string                             `json:"visual,omitempty"`
+	Camera                   string                             `json:"camera,omitempty"`
+	Motion                   string                             `json:"motion,omitempty"`
+	Mood                     string                             `json:"mood,omitempty"`
+	ImagePrompt              string                             `json:"imagePrompt,omitempty"`
+	ImagePromptStatus        string                             `json:"imagePromptStatus"`
+	ImagePromptErrorCode     *string                            `json:"imagePromptErrorCode,omitempty"`
+	ImagePromptErrorMessage  *string                            `json:"imagePromptErrorMessage,omitempty"`
+	ImagePromptWorkflowRunID *string                            `json:"imagePromptWorkflowRunId,omitempty"`
+	ImagePromptUpdatedAt     *time.Time                         `json:"imagePromptUpdatedAt,omitempty"`
+	VideoPrompt              string                             `json:"videoPrompt,omitempty"`
+	ScriptDialogue           []workflows.StoryboardDialogueLine `json:"scriptDialogue"`
+	VideoPromptStatus        string                             `json:"videoPromptStatus"`
+	VideoPromptErrorCode     *string                            `json:"videoPromptErrorCode,omitempty"`
+	VideoPromptErrorMessage  *string                            `json:"videoPromptErrorMessage,omitempty"`
+	VideoPromptWorkflowRunID *string                            `json:"videoPromptWorkflowRunId,omitempty"`
+	VideoPromptUpdatedAt     *time.Time                         `json:"videoPromptUpdatedAt,omitempty"`
+	ImageReferenceMode       string                             `json:"imageReferenceMode"`
+	ImageReferenceKeys       []string                           `json:"imageReferenceKeys"`
+	VideoReferenceMode       string                             `json:"videoReferenceMode"`
+	VideoReferenceKeys       []string                           `json:"videoReferenceKeys"`
+	ImageArtifactID          *string                            `json:"imageArtifactId,omitempty"`
+	ImageMediaFileID         *string                            `json:"imageMediaFileId,omitempty"`
+	ImageStorageKey          *string                            `json:"imageStorageKey,omitempty"`
+	ImagePreviewURL          *string                            `json:"imagePreviewUrl,omitempty"`
+	VideoArtifactID          *string                            `json:"videoArtifactId,omitempty"`
+	VideoMediaFileID         *string                            `json:"videoMediaFileId,omitempty"`
+	VideoStorageKey          *string                            `json:"videoStorageKey,omitempty"`
+	VideoPreviewURL          *string                            `json:"videoPreviewUrl,omitempty"`
+	VideoProviderAsyncTaskID *string                            `json:"providerAsyncTaskId,omitempty"`
+	VideoExternalTaskID      *string                            `json:"externalTaskId,omitempty"`
+	ImageStatus              string                             `json:"imageStatus"`
+	VideoStatus              string                             `json:"videoStatus"`
+	ActiveVideoRenderPlanID  *string                            `json:"activeVideoRenderPlanId,omitempty"`
+	NativeAudioStatus        string                             `json:"nativeAudioStatus"`
+	ProductionReadiness      string                             `json:"productionReadiness"`
+	ImageErrorCode           *string                            `json:"imageErrorCode,omitempty"`
+	ImageErrorMessage        *string                            `json:"imageErrorMessage,omitempty"`
+	VideoErrorCode           *string                            `json:"videoErrorCode,omitempty"`
+	VideoErrorMessage        *string                            `json:"videoErrorMessage,omitempty"`
+	ImageStartedAt           *time.Time                         `json:"imageStartedAt,omitempty"`
+	ImageCompletedAt         *time.Time                         `json:"imageCompletedAt,omitempty"`
+	VideoStartedAt           *time.Time                         `json:"videoStartedAt,omitempty"`
+	VideoCompletedAt         *time.Time                         `json:"videoCompletedAt,omitempty"`
+	ImageWorkflowRunID       *string                            `json:"imageWorkflowRunId,omitempty"`
+	VideoWorkflowRunID       *string                            `json:"videoWorkflowRunId,omitempty"`
+	Status                   string                             `json:"status"`
+	ReviewStatus             string                             `json:"reviewStatus"`
+	ManualOverride           bool                               `json:"manualOverride"`
+	StaleState               string                             `json:"staleState"`
+	EditedBy                 *string                            `json:"editedBy,omitempty"`
+	EditedAt                 *time.Time                         `json:"editedAt,omitempty"`
 
 	imageArtifactStorageKey *string
 	imageArtifactMimeType   *string
@@ -77,21 +121,95 @@ type StoryboardShotRequirementDetail struct {
 }
 
 type StoryboardShotDetail struct {
-	Shot            StoryboardShot                    `json:"shot"`
-	ScriptScene     *ShotSourceScene                  `json:"scriptScene,omitempty"`
-	Requirements    []StoryboardShotRequirementDetail `json:"requirements"`
-	ImageArtifact   *Artifact                         `json:"imageArtifact,omitempty"`
-	ImagePreviewURL *string                           `json:"imagePreviewUrl,omitempty"`
-	VideoArtifact   *Artifact                         `json:"videoArtifact,omitempty"`
-	VideoPreviewURL *string                           `json:"videoPreviewUrl,omitempty"`
+	AspectRatio           string                               `json:"aspectRatio"`
+	Shot                  StoryboardShot                       `json:"shot"`
+	ScriptScene           *ShotSourceScene                     `json:"scriptScene,omitempty"`
+	Requirements          []StoryboardShotRequirementDetail    `json:"requirements"`
+	ImageReferenceOptions []StoryboardShotImageReferenceOption `json:"imageReferenceOptions"`
+	ImageGenerationRuns   []StoryboardShotImageGenerationRun   `json:"imageGenerationRuns"`
+	VideoReferenceOptions []StoryboardShotVideoReferenceOption `json:"videoReferenceOptions"`
+	VideoGenerationRuns   []StoryboardShotVideoGenerationRun   `json:"videoGenerationRuns"`
+	ImageArtifact         *Artifact                            `json:"imageArtifact,omitempty"`
+	ImagePreviewURL       *string                              `json:"imagePreviewUrl,omitempty"`
+	VideoArtifact         *Artifact                            `json:"videoArtifact,omitempty"`
+	VideoPreviewURL       *string                              `json:"videoPreviewUrl,omitempty"`
+}
+
+type StoryboardShotImageReferenceOption struct {
+	Key          string  `json:"key"`
+	SourceType   string  `json:"sourceType"`
+	SourceID     string  `json:"sourceId"`
+	AssetID      string  `json:"assetId"`
+	AssetType    string  `json:"assetType"`
+	AssetName    string  `json:"assetName"`
+	Title        string  `json:"title"`
+	ArtifactID   *string `json:"artifactId,omitempty"`
+	MediaFileID  *string `json:"mediaFileId,omitempty"`
+	StorageKey   *string `json:"storageKey,omitempty"`
+	PreviewURL   *string `json:"previewUrl,omitempty"`
+	IsShotAsset  bool    `json:"isShotAsset"`
+	Selected     bool    `json:"selected"`
+	AutoSelected bool    `json:"autoSelected"`
+}
+
+type StoryboardShotImageGenerationRun struct {
+	ProviderCallID  string          `json:"providerCallId"`
+	ModelID         *string         `json:"modelId,omitempty"`
+	ModelName       *string         `json:"modelName,omitempty"`
+	Status          string          `json:"status"`
+	Prompt          *string         `json:"prompt,omitempty"`
+	PromptTruncated bool            `json:"promptTruncated"`
+	PromptVersionID *string         `json:"promptVersionId,omitempty"`
+	PromptHash      *string         `json:"promptHash,omitempty"`
+	ArtifactID      *string         `json:"artifactId,omitempty"`
+	PreviewURL      *string         `json:"previewUrl,omitempty"`
+	ErrorCode       *string         `json:"errorCode,omitempty"`
+	ErrorMessage    *string         `json:"errorMessage,omitempty"`
+	StartedAt       *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt     *time.Time      `json:"completedAt,omitempty"`
+	References      json.RawMessage `json:"references"`
+}
+
+type StoryboardShotVideoReferenceOption struct {
+	Key           string  `json:"key"`
+	ReferenceType string  `json:"referenceType"`
+	SourceType    string  `json:"sourceType"`
+	SourceID      string  `json:"sourceId"`
+	AssetID       string  `json:"assetId,omitempty"`
+	AssetName     string  `json:"assetName,omitempty"`
+	Title         string  `json:"title"`
+	ArtifactID    *string `json:"artifactId,omitempty"`
+	MediaFileID   *string `json:"mediaFileId,omitempty"`
+	StorageKey    *string `json:"storageKey,omitempty"`
+	PreviewURL    *string `json:"previewUrl,omitempty"`
+	Selected      bool    `json:"selected"`
+	AutoSelected  bool    `json:"autoSelected"`
+}
+
+type StoryboardShotVideoGenerationRun struct {
+	ProviderCallID      string          `json:"providerCallId"`
+	ProviderAsyncTaskID *string         `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID      *string         `json:"externalTaskId,omitempty"`
+	ModelID             *string         `json:"modelId,omitempty"`
+	ModelName           *string         `json:"modelName,omitempty"`
+	Status              string          `json:"status"`
+	Prompt              *string         `json:"prompt,omitempty"`
+	PromptTruncated     bool            `json:"promptTruncated"`
+	PromptVersionID     *string         `json:"promptVersionId,omitempty"`
+	PromptHash          *string         `json:"promptHash,omitempty"`
+	ArtifactID          *string         `json:"artifactId,omitempty"`
+	PreviewURL          *string         `json:"previewUrl,omitempty"`
+	ErrorCode           *string         `json:"errorCode,omitempty"`
+	ErrorMessage        *string         `json:"errorMessage,omitempty"`
+	StartedAt           *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt         *time.Time      `json:"completedAt,omitempty"`
+	References          json.RawMessage `json:"references"`
 }
 
 func (s *Server) listWorkflowRunShots(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	run, err := scanWorkflowRun(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	run, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
 		WHERE id = $1
-	`, r.PathValue("workflowRunId")))
+	`), r.PathValue("workflowRunId")))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -109,7 +227,7 @@ func (s *Server) listWorkflowRunShots(w http.ResponseWriter, r *http.Request, pr
 		`+storyboardShotSelectSQL(`
 		WHERE s.workflow_run_id = $1
 		  AND s.deleted_at IS NULL
-		ORDER BY s.shot_index ASC
+		ORDER BY s.episode_index ASC NULLS LAST, s.episode_shot_index ASC NULLS LAST, s.shot_index ASC
 	`), run.ID)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -140,17 +258,19 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	var req struct {
-		WorkflowRunID   string   `json:"workflowRunId"`
-		ScriptSceneID   string   `json:"scriptSceneId"`
-		ShotNo          *int     `json:"shotNo"`
-		ShotIndex       *int     `json:"shotIndex"`
-		DurationSeconds *float64 `json:"durationSeconds"`
-		Visual          string   `json:"visual"`
-		Camera          string   `json:"camera"`
-		Motion          string   `json:"motion"`
-		Mood            string   `json:"mood"`
-		ImagePrompt     string   `json:"imagePrompt"`
-		VideoPrompt     string   `json:"videoPrompt"`
+		WorkflowRunID        string `json:"workflowRunId"`
+		ScriptSceneID        string `json:"scriptSceneId"`
+		ShotNo               *int   `json:"shotNo"`
+		ShotIndex            *int   `json:"shotIndex"`
+		StartTick            *int64 `json:"startTick"`
+		EndTick              *int64 `json:"endTick"`
+		PlannedDurationTicks *int64 `json:"plannedDurationTicks"`
+		Visual               string `json:"visual"`
+		Camera               string `json:"camera"`
+		Motion               string `json:"motion"`
+		Mood                 string `json:"mood"`
+		ImagePrompt          string `json:"imagePrompt"`
+		VideoPrompt          string `json:"videoPrompt"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -161,10 +281,6 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	}
 	if req.ShotNo != nil && *req.ShotNo <= 0 {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotNo must be greater than zero", nil, false)
-		return
-	}
-	if req.DurationSeconds != nil && *req.DurationSeconds <= 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "durationSeconds must be greater than zero", nil, false)
 		return
 	}
 	workflowRunID, err := s.storyboardWorkflowRunForCreate(r, project, strings.TrimSpace(req.WorkflowRunID), principal.UserID)
@@ -183,9 +299,34 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		s.writeError(w, r, err)
 		return
 	}
-	var duration any
-	if req.DurationSeconds != nil {
-		duration = *req.DurationSeconds
+	timebase := storyboardtiming.Timebase{TicksPerSecond: project.TimelineTimebase, FPSNumerator: int64(project.FPSNumerator), FPSDenominator: int64(project.FPSDenominator)}
+	if err := timebase.Validate(); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	startTick := int64(0)
+	if req.StartTick != nil {
+		startTick = *req.StartTick
+	} else if err := s.db.QueryRow(r.Context(), `
+		SELECT COALESCE(MAX(end_tick), 0)
+		FROM storyboard_shots
+		WHERE project_id = $1 AND workflow_run_id = $2 AND deleted_at IS NULL
+	`, project.ID, workflowRunID).Scan(&startTick); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	durationTicks := timebase.SecondsToFrameTicksCeil(defaultStoryboardShotDurationSeconds)
+	if req.PlannedDurationTicks != nil {
+		durationTicks = *req.PlannedDurationTicks
+	}
+	endTick := startTick + durationTicks
+	if req.EndTick != nil {
+		endTick = *req.EndTick
+		durationTicks = endTick - startTick
+	}
+	if startTick < 0 || durationTicks <= 0 || !timebase.IsFrameAligned(startTick) || !timebase.IsFrameAligned(endTick) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shot timing must be positive and aligned to the project frame rate", nil, false)
+		return
 	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
@@ -197,15 +338,20 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	if err := tx.QueryRow(r.Context(), `
 		INSERT INTO storyboard_shots(
 			organization_id, project_id, workflow_run_id, script_scene_id, shot_index, shot_no,
-			duration_seconds, visual, camera, motion, mood, image_prompt, video_prompt,
+			start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source, duration_locked,
+			visual, camera, motion, mood, image_prompt, video_prompt,
 			status, review_status, manual_override, stale_state, edited_by, edited_at, metadata
 		)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''),
-		        NULLIF($12, ''), NULLIF($13, ''), 'pending', 'pending', true, 'needs_regeneration', $14, now(), '{}')
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6,
+		        $7, $8, $9, $9, 'manual_locked', true,
+		        NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''),
+		        NULLIF($14, ''), NULLIF($15, ''), 'pending', 'pending', true, 'needs_regeneration', $16, now(),
+		        jsonb_build_object('timingEditedAt', now(), 'timelineTimebase', $17::bigint, 'fpsNumerator', $18::integer, 'fpsDenominator', $19::integer))
 		RETURNING id::text
-	`, project.OrganizationID, project.ID, workflowRunID, strings.TrimSpace(req.ScriptSceneID), shotIndex, shotNo, duration,
+	`, project.OrganizationID, project.ID, workflowRunID, strings.TrimSpace(req.ScriptSceneID), shotIndex, shotNo, startTick, endTick, durationTicks,
 		strings.TrimSpace(req.Visual), strings.TrimSpace(req.Camera), strings.TrimSpace(req.Motion), strings.TrimSpace(req.Mood),
-		strings.TrimSpace(req.ImagePrompt), strings.TrimSpace(req.VideoPrompt), principal.UserID).Scan(&shotID); err != nil {
+		strings.TrimSpace(req.ImagePrompt), strings.TrimSpace(req.VideoPrompt), principal.UserID,
+		project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator).Scan(&shotID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -246,6 +392,13 @@ func (s *Server) deleteStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		s.writeError(w, r, err)
 		return
 	}
+	if current.StoryboardPlanID != nil {
+		httpx.WriteError(w, r, http.StatusConflict, "STORYBOARD_PLAN_REVISION_REQUIRED", "storyboard plan shots cannot be deleted in place; create a plan revision instead", map[string]any{
+			"storyboardPlanId": *current.StoryboardPlanID,
+			"shotId":           current.ID,
+		}, false)
+		return
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
@@ -263,6 +416,21 @@ func (s *Server) deleteStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	}
 	if tag.RowsAffected() == 0 {
 		s.writeError(w, r, pgx.ErrNoRows)
+		return
+	}
+	if err := reflowStoryboardShotTicksTx(r.Context(), tx, project.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE storyboard_plans
+		SET active = false,
+		    status = CASE WHEN status = 'ready' THEN 'archived' ELSE status END,
+		    stale_state = 'upstream_changed',
+		    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('shotDeletedAt', now())
+		WHERE project_id = $1 AND active = true
+	`, project.ID); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, current.WorkflowRunID); err != nil {
@@ -290,9 +458,10 @@ func (s *Server) reorderStoryboardShots(w http.ResponseWriter, r *http.Request, 
 	}
 	var req struct {
 		Items []struct {
-			ShotID    string `json:"shotId"`
-			ShotIndex int    `json:"shotIndex"`
-			ShotNo    int    `json:"shotNo"`
+			ShotID           string `json:"shotId"`
+			ShotIndex        int    `json:"shotIndex"`
+			ShotNo           int    `json:"shotNo"`
+			EpisodeShotIndex *int   `json:"episodeShotIndex,omitempty"`
 		} `json:"items"`
 	}
 	if !decode(w, r, &req) {
@@ -309,12 +478,31 @@ func (s *Server) reorderStoryboardShots(w http.ResponseWriter, r *http.Request, 
 	}
 	defer tx.Rollback(r.Context())
 	workflowRunIDs := map[string]bool{}
-	for index, item := range req.Items {
+	for _, item := range req.Items {
 		shotID := strings.TrimSpace(item.ShotID)
-		if shotID == "" || item.ShotIndex < 0 || item.ShotNo <= 0 {
+		if shotID == "" || item.ShotIndex < 0 || item.ShotNo <= 0 || (item.EpisodeShotIndex != nil && *item.EpisodeShotIndex < 0) {
 			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotId, non-negative shotIndex, and positive shotNo are required", nil, false)
 			return
 		}
+		var storyboardPlanID *string
+		if err := tx.QueryRow(r.Context(), `
+			SELECT storyboard_plan_id::text
+			FROM storyboard_shots
+			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
+		`, project.ID, shotID).Scan(&storyboardPlanID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if storyboardPlanID != nil {
+			httpx.WriteError(w, r, http.StatusConflict, "STORYBOARD_PLAN_REVISION_REQUIRED", "storyboard plan shots cannot be reordered in place; use split, merge, or timing revision endpoints", map[string]any{
+				"storyboardPlanId": *storyboardPlanID,
+				"shotId":           shotID,
+			}, false)
+			return
+		}
+	}
+	for index, item := range req.Items {
+		shotID := strings.TrimSpace(item.ShotID)
 		var workflowRunID string
 		if err := tx.QueryRow(r.Context(), `
 			UPDATE storyboard_shots
@@ -337,12 +525,28 @@ func (s *Server) reorderStoryboardShots(w http.ResponseWriter, r *http.Request, 
 			UPDATE storyboard_shots
 			SET shot_index = $3,
 			    shot_no = $4,
+			    episode_shot_index = COALESCE($5, episode_shot_index),
 			    updated_at = now()
 			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
-		`, project.ID, strings.TrimSpace(item.ShotID), item.ShotIndex, item.ShotNo); err != nil {
+		`, project.ID, strings.TrimSpace(item.ShotID), item.ShotIndex, item.ShotNo, item.EpisodeShotIndex); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
+	}
+	if err := reflowStoryboardShotTicksTx(r.Context(), tx, project.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE storyboard_plans
+		SET active = false,
+		    status = CASE WHEN status = 'ready' THEN 'archived' ELSE status END,
+		    stale_state = 'upstream_changed',
+		    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('shotsReorderedAt', now())
+		WHERE project_id = $1 AND active = true
+	`, project.ID); err != nil {
+		s.writeError(w, r, err)
+		return
 	}
 	for workflowRunID := range workflowRunIDs {
 		if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, workflowRunID); err != nil {
@@ -361,6 +565,39 @@ func (s *Server) reorderStoryboardShots(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": req.Items}, nil)
+}
+
+func reflowStoryboardShotTicksTx(ctx context.Context, tx pgx.Tx, projectID string) error {
+	_, err := tx.Exec(ctx, `
+		WITH durations AS (
+			SELECT
+				id,
+				project_id,
+				COALESCE(script_episode_id, workflow_run_id, storyboard_id, project_id) AS partition_id,
+				COALESCE(episode_shot_index, shot_index) AS order_index,
+				created_at,
+				planned_duration_ticks AS duration_ticks
+			FROM storyboard_shots
+			WHERE project_id = $1 AND deleted_at IS NULL
+		), positioned AS (
+			SELECT
+				id,
+				COALESCE(SUM(duration_ticks) OVER (
+					PARTITION BY project_id, partition_id
+					ORDER BY order_index, created_at, id
+					ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+				), 0)::bigint AS start_tick,
+				duration_ticks
+			FROM durations
+		)
+		UPDATE storyboard_shots shot
+		SET start_tick = positioned.start_tick,
+		    end_tick = positioned.start_tick + positioned.duration_ticks,
+		    updated_at = now()
+		FROM positioned
+		WHERE shot.id = positioned.id
+	`, projectID)
+	return err
 }
 
 func (s *Server) getStoryboardShotDetail(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -386,16 +623,405 @@ func (s *Server) getStoryboardShotDetail(w http.ResponseWriter, r *http.Request,
 	}
 	imageArtifact, imagePreview := s.optionalArtifactWithPreview(r, stringValue(shot.ImageArtifactID))
 	videoArtifact, videoPreview := s.optionalArtifactWithPreview(r, stringValue(shot.VideoArtifactID))
+	projectReferenceOptions, err := s.projectCurrentAssetReferenceOptions(r, project.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	referenceOptions := s.storyboardShotImageReferenceOptions(r, shot, requirements, projectReferenceOptions...)
+	generationRuns, err := s.storyboardShotImageGenerationRuns(r, project.ID, shot.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	videoReferenceOptions := s.storyboardShotVideoReferenceOptions(r, shot, referenceOptions)
+	videoGenerationRuns, err := s.storyboardShotVideoGenerationRuns(r, project.ID, shot.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	detail := StoryboardShotDetail{
-		Shot:            shot,
-		ScriptScene:     shot.SourceScene,
-		Requirements:    requirements,
-		ImageArtifact:   imageArtifact,
-		ImagePreviewURL: firstStringPtr(shot.ImagePreviewURL, imagePreview),
-		VideoArtifact:   videoArtifact,
-		VideoPreviewURL: firstStringPtr(shot.VideoPreviewURL, videoPreview),
+		AspectRatio:           firstNonEmptyString(project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
+		Shot:                  shot,
+		ScriptScene:           shot.SourceScene,
+		Requirements:          requirements,
+		ImageReferenceOptions: referenceOptions,
+		ImageGenerationRuns:   generationRuns,
+		VideoReferenceOptions: videoReferenceOptions,
+		VideoGenerationRuns:   videoGenerationRuns,
+		ImageArtifact:         imageArtifact,
+		ImagePreviewURL:       firstStringPtr(shot.ImagePreviewURL, imagePreview),
+		VideoArtifact:         videoArtifact,
+		VideoPreviewURL:       firstStringPtr(shot.VideoPreviewURL, videoPreview),
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, detail, nil)
+}
+
+func (s *Server) storyboardShotImageReferenceOptions(r *http.Request, shot StoryboardShot, requirements []StoryboardShotRequirementDetail, projectOptions ...StoryboardShotImageReferenceOption) []StoryboardShotImageReferenceOption {
+	options := make([]StoryboardShotImageReferenceOption, 0)
+	indexByKey := map[string]int{}
+	autoKeys := map[string]bool{}
+	appendOption := func(option StoryboardShotImageReferenceOption) {
+		if option.Key == "" || (option.ArtifactID == nil && option.StorageKey == nil) {
+			return
+		}
+		if index, exists := indexByKey[option.Key]; exists {
+			if options[index].ArtifactID == nil {
+				options[index].ArtifactID = option.ArtifactID
+			}
+			if options[index].MediaFileID == nil {
+				options[index].MediaFileID = option.MediaFileID
+			}
+			if options[index].StorageKey == nil {
+				options[index].StorageKey = option.StorageKey
+			}
+			if options[index].PreviewURL == nil {
+				options[index].PreviewURL = option.PreviewURL
+				if options[index].PreviewURL == nil && options[index].StorageKey != nil {
+					options[index].PreviewURL = s.previewURLForStorageKey(r, *options[index].StorageKey)
+				}
+			}
+			if option.AutoSelected {
+				options[index].AutoSelected = true
+				autoKeys[option.Key] = true
+			}
+			if option.IsShotAsset {
+				options[index].IsShotAsset = true
+			}
+			return
+		}
+		if option.PreviewURL == nil && option.StorageKey != nil {
+			option.PreviewURL = s.previewURLForStorageKey(r, *option.StorageKey)
+		}
+		indexByKey[option.Key] = len(options)
+		if option.AutoSelected {
+			autoKeys[option.Key] = true
+		}
+		options = append(options, option)
+	}
+
+	for _, requirement := range requirements {
+		asset := requirement.Asset
+		assetID := requirement.AssetID
+		assetName := ""
+		assetType := ""
+		if asset != nil {
+			assetID = asset.ID
+			assetName = asset.Name
+			assetType = asset.AssetType
+		}
+		autoKey := ""
+		if requirement.DerivedArtifactID != nil || requirement.DerivedStorageKey != nil {
+			autoKey = "derived:" + requirement.ID
+			appendOption(StoryboardShotImageReferenceOption{
+				Key: autoKey, SourceType: "derived_asset", SourceID: requirement.ID,
+				AssetID: assetID, AssetType: assetType, AssetName: assetName, Title: assetName + " · 镜头衍生图",
+				ArtifactID: requirement.DerivedArtifactID, MediaFileID: requirement.DerivedMediaFileID,
+				StorageKey: requirement.DerivedStorageKey, PreviewURL: requirement.DerivedPreviewURL,
+				IsShotAsset: true, AutoSelected: true,
+			})
+		}
+		if asset == nil {
+			continue
+		}
+		if asset.PrimaryReferenceArtifactID != nil || asset.PrimaryReferenceStorageKey != nil || asset.ReferenceArtifactID != nil || asset.ReferenceStorageKey != nil {
+			primaryKey := "asset_primary:" + asset.ID
+			appendOption(StoryboardShotImageReferenceOption{
+				Key: primaryKey, SourceType: "asset_primary", SourceID: asset.ID,
+				AssetID: asset.ID, AssetType: asset.AssetType, AssetName: asset.Name, Title: asset.Name + " · 当前主图",
+				ArtifactID:  firstStringPtr(asset.PrimaryReferenceArtifactID, asset.ReferenceArtifactID),
+				MediaFileID: firstStringPtr(asset.PrimaryReferenceMediaFileID, asset.ReferenceMediaFileID),
+				StorageKey:  firstStringPtr(asset.PrimaryReferenceStorageKey, asset.ReferenceStorageKey),
+				IsShotAsset: true,
+			})
+			if autoKey == "" {
+				autoKey = primaryKey
+			}
+		}
+		if autoKey != "" {
+			autoKeys[autoKey] = true
+			if index, ok := indexByKey[autoKey]; ok {
+				options[index].AutoSelected = true
+			}
+		}
+	}
+	for _, option := range projectOptions {
+		appendOption(option)
+	}
+
+	selectedKeys := map[string]bool{}
+	for _, key := range shot.ImageReferenceKeys {
+		selectedKeys[key] = true
+	}
+	for index := range options {
+		switch shot.ImageReferenceMode {
+		case "custom":
+			options[index].Selected = selectedKeys[options[index].Key]
+		case "none":
+			options[index].Selected = false
+		default:
+			options[index].Selected = autoKeys[options[index].Key]
+		}
+	}
+	return options
+}
+
+func (s *Server) projectCurrentAssetReferenceOptions(r *http.Request, projectID string) ([]StoryboardShotImageReferenceOption, error) {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT
+			a.id::text,
+			a.asset_type,
+			a.name,
+			COALESCE(a.primary_reference_artifact_id, a.reference_artifact_id)::text,
+			COALESCE(a.primary_reference_media_file_id, a.reference_media_file_id)::text,
+			COALESCE(
+				NULLIF(a.primary_reference_storage_key, ''),
+				NULLIF(a.reference_storage_key, ''),
+				NULLIF(artifact.storage_key, '')
+			)
+		FROM canonical_assets a
+		LEFT JOIN artifacts artifact
+		  ON artifact.id = COALESCE(a.primary_reference_artifact_id, a.reference_artifact_id)
+		WHERE a.project_id = $1
+		  AND COALESCE(a.status, 'draft') <> 'archived'
+		  AND (
+			a.primary_reference_artifact_id IS NOT NULL
+			OR COALESCE(a.primary_reference_storage_key, '') <> ''
+			OR a.reference_artifact_id IS NOT NULL
+			OR COALESCE(a.reference_storage_key, '') <> ''
+		  )
+		ORDER BY CASE a.asset_type WHEN 'character' THEN 1 WHEN 'scene' THEN 2 WHEN 'prop' THEN 3 ELSE 4 END, a.name, a.id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	options := make([]StoryboardShotImageReferenceOption, 0)
+	for rows.Next() {
+		var assetID, assetType, assetName string
+		var artifactID, mediaFileID, storageKey sql.NullString
+		if err := rows.Scan(&assetID, &assetType, &assetName, &artifactID, &mediaFileID, &storageKey); err != nil {
+			return nil, err
+		}
+		options = append(options, StoryboardShotImageReferenceOption{
+			Key:         "asset_primary:" + assetID,
+			SourceType:  "asset_primary",
+			SourceID:    assetID,
+			AssetID:     assetID,
+			AssetType:   assetType,
+			AssetName:   assetName,
+			Title:       assetName + " · 当前主图",
+			ArtifactID:  stringPtrFromNull(artifactID),
+			MediaFileID: stringPtrFromNull(mediaFileID),
+			StorageKey:  stringPtrFromNull(storageKey),
+		})
+	}
+	return options, rows.Err()
+}
+
+func (s *Server) storyboardShotVideoReferenceOptions(r *http.Request, shot StoryboardShot, imageOptions []StoryboardShotImageReferenceOption) []StoryboardShotVideoReferenceOption {
+	options := make([]StoryboardShotVideoReferenceOption, 0, len(imageOptions)+1)
+	hasShotImage := shot.ImageArtifactID != nil || shot.ImageStorageKey != nil
+	if hasShotImage {
+		previewURL := shot.ImagePreviewURL
+		if previewURL == nil && shot.ImageStorageKey != nil {
+			previewURL = s.previewURLForStorageKey(r, *shot.ImageStorageKey)
+		}
+		options = append(options, StoryboardShotVideoReferenceOption{
+			Key:           "shot_image:" + shot.ID,
+			ReferenceType: "first_frame",
+			SourceType:    "shot_image",
+			SourceID:      shot.ID,
+			Title:         "当前镜头图",
+			ArtifactID:    shot.ImageArtifactID,
+			MediaFileID:   shot.ImageMediaFileID,
+			StorageKey:    shot.ImageStorageKey,
+			PreviewURL:    previewURL,
+			AutoSelected:  true,
+		})
+	}
+	for _, option := range imageOptions {
+		options = append(options, StoryboardShotVideoReferenceOption{
+			Key:           option.Key,
+			ReferenceType: "image",
+			SourceType:    option.SourceType,
+			SourceID:      option.SourceID,
+			AssetID:       option.AssetID,
+			AssetName:     option.AssetName,
+			Title:         option.Title,
+			ArtifactID:    option.ArtifactID,
+			MediaFileID:   option.MediaFileID,
+			StorageKey:    option.StorageKey,
+			PreviewURL:    option.PreviewURL,
+			AutoSelected:  !hasShotImage && option.AutoSelected,
+		})
+	}
+	selectedKeys := make(map[string]bool, len(shot.VideoReferenceKeys))
+	for _, key := range shot.VideoReferenceKeys {
+		selectedKeys[key] = true
+	}
+	for index := range options {
+		switch shot.VideoReferenceMode {
+		case "custom":
+			options[index].Selected = selectedKeys[options[index].Key]
+		case "none":
+			options[index].Selected = false
+		default:
+			options[index].Selected = options[index].AutoSelected
+		}
+	}
+	return options
+}
+
+func (s *Server) storyboardShotImageGenerationRuns(r *http.Request, projectID, shotID string) ([]StoryboardShotImageGenerationRun, error) {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT
+			p.id::text,
+			p.provider_model_id::text,
+			COALESCE(NULLIF(pm.display_name, ''), NULLIF(pm.model_key, '')),
+			p.status,
+			NULLIF(left(p.request_snapshot->>'prompt', 16000), ''),
+			length(COALESCE(p.request_snapshot->>'prompt', '')) > 16000,
+			p.prompt_version_id::text,
+			NULLIF(p.prompt_hash, ''),
+			NULLIF(p.artifact_ids->>0, ''),
+			p.error_code,
+			p.error_message,
+			p.started_at,
+			p.completed_at,
+			COALESCE(p.request_snapshot->'referenceKeys', n.input->'imageReferenceKeys', '[]'::jsonb)
+		FROM provider_call_logs p
+		JOIN workflow_node_runs n ON n.id = p.node_run_id
+		LEFT JOIN provider_models pm ON pm.id = p.provider_model_id
+		WHERE p.project_id = $1
+		  AND p.task_type = 'image.generate'
+		  AND n.input->>'shotId' = $2
+		ORDER BY p.started_at DESC NULLS LAST, p.created_at DESC
+		LIMIT 20
+	`, projectID, shotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	runs := make([]StoryboardShotImageGenerationRun, 0)
+	for rows.Next() {
+		var item StoryboardShotImageGenerationRun
+		var modelID, modelName, prompt, promptVersionID, promptHash, artifactID, errorCode, errorMessage sql.NullString
+		var startedAt, completedAt sql.NullTime
+		if err := rows.Scan(&item.ProviderCallID, &modelID, &modelName, &item.Status, &prompt, &item.PromptTruncated, &promptVersionID, &promptHash, &artifactID, &errorCode, &errorMessage, &startedAt, &completedAt, &item.References); err != nil {
+			return nil, err
+		}
+		item.ModelID = stringPtrFromNull(modelID)
+		item.ModelName = stringPtrFromNull(modelName)
+		item.Prompt = stringPtrFromNull(prompt)
+		item.PromptVersionID = stringPtrFromNull(promptVersionID)
+		item.PromptHash = stringPtrFromNull(promptHash)
+		item.ArtifactID = stringPtrFromNull(artifactID)
+		item.ErrorCode = stringPtrFromNull(errorCode)
+		item.ErrorMessage = stringPtrFromNull(errorMessage)
+		if startedAt.Valid {
+			item.StartedAt = &startedAt.Time
+		}
+		if completedAt.Valid {
+			item.CompletedAt = &completedAt.Time
+		}
+		if item.ArtifactID != nil {
+			_, item.PreviewURL = s.optionalArtifactWithPreview(r, *item.ArtifactID)
+		}
+		runs = append(runs, item)
+	}
+	return runs, rows.Err()
+}
+
+func (s *Server) storyboardShotVideoGenerationRuns(r *http.Request, projectID, shotID string) ([]StoryboardShotVideoGenerationRun, error) {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT
+			p.id::text,
+			t.id::text,
+			COALESCE(NULLIF(t.external_task_id, ''), NULLIF(p.external_task_id, '')),
+			p.provider_model_id::text,
+			COALESCE(NULLIF(pm.display_name, ''), NULLIF(pm.model_key, '')),
+			COALESCE(NULLIF(t.status, ''), p.status),
+			NULLIF(left(p.request_snapshot->>'prompt', 16000), ''),
+			length(COALESCE(p.request_snapshot->>'prompt', '')) > 16000,
+			p.prompt_version_id::text,
+			NULLIF(p.prompt_hash, ''),
+			COALESCE(output_call.artifact_id, NULLIF(p.artifact_ids->>0, '')),
+			COALESCE(NULLIF(t.error_code, ''), p.error_code),
+			COALESCE(NULLIF(t.error_message, ''), p.error_message),
+			COALESCE(t.started_at, p.started_at),
+			COALESCE(t.completed_at, output_call.completed_at, p.completed_at),
+			COALESCE(n.input->'videoReferenceKeys', '[]'::jsonb)
+		FROM provider_call_logs p
+		JOIN workflow_node_runs n ON n.id = p.node_run_id
+		LEFT JOIN provider_async_tasks t ON t.provider_call_id = p.id
+		LEFT JOIN provider_models pm ON pm.id = p.provider_model_id
+		LEFT JOIN LATERAL (
+			SELECT NULLIF(pc.artifact_ids->>0, '') AS artifact_id, pc.completed_at
+			FROM provider_call_logs pc
+			WHERE pc.project_id = p.project_id
+			  AND pc.task_type = 'video.poll_task'
+			  AND NULLIF(pc.external_task_id, '') = COALESCE(NULLIF(t.external_task_id, ''), NULLIF(p.external_task_id, ''))
+			ORDER BY pc.completed_at DESC NULLS LAST, pc.created_at DESC
+			LIMIT 1
+		) output_call ON true
+		WHERE p.project_id = $1
+		  AND p.task_type = 'video.create_task'
+		  AND n.input->>'shotId' = $2
+		ORDER BY p.started_at DESC NULLS LAST, p.created_at DESC
+		LIMIT 20
+	`, projectID, shotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	runs := make([]StoryboardShotVideoGenerationRun, 0)
+	for rows.Next() {
+		var item StoryboardShotVideoGenerationRun
+		var providerAsyncTaskID, externalTaskID, modelID, modelName, prompt, promptVersionID, promptHash, artifactID, errorCode, errorMessage sql.NullString
+		var startedAt, completedAt sql.NullTime
+		if err := rows.Scan(
+			&item.ProviderCallID,
+			&providerAsyncTaskID,
+			&externalTaskID,
+			&modelID,
+			&modelName,
+			&item.Status,
+			&prompt,
+			&item.PromptTruncated,
+			&promptVersionID,
+			&promptHash,
+			&artifactID,
+			&errorCode,
+			&errorMessage,
+			&startedAt,
+			&completedAt,
+			&item.References,
+		); err != nil {
+			return nil, err
+		}
+		item.ProviderAsyncTaskID = stringPtrFromNull(providerAsyncTaskID)
+		item.ExternalTaskID = stringPtrFromNull(externalTaskID)
+		item.ModelID = stringPtrFromNull(modelID)
+		item.ModelName = stringPtrFromNull(modelName)
+		item.Prompt = stringPtrFromNull(prompt)
+		item.PromptVersionID = stringPtrFromNull(promptVersionID)
+		item.PromptHash = stringPtrFromNull(promptHash)
+		item.ArtifactID = stringPtrFromNull(artifactID)
+		item.ErrorCode = stringPtrFromNull(errorCode)
+		item.ErrorMessage = stringPtrFromNull(errorMessage)
+		if startedAt.Valid {
+			item.StartedAt = &startedAt.Time
+		}
+		if completedAt.Valid {
+			item.CompletedAt = &completedAt.Time
+		}
+		if item.ArtifactID != nil {
+			_, item.PreviewURL = s.optionalArtifactWithPreview(r, *item.ArtifactID)
+		}
+		runs = append(runs, item)
+	}
+	return runs, rows.Err()
 }
 
 func storyboardShotSelectSQL(where string) string {
@@ -403,15 +1029,47 @@ func storyboardShotSelectSQL(where string) string {
 		SELECT
 			s.id,
 			COALESCE(s.workflow_run_id::text, ''),
+			s.script_episode_id::text,
+			s.episode_index,
+			s.episode_shot_index,
+			COALESCE(se.episode_title, ''),
 			s.shot_index,
 			COALESCE(s.shot_no, s.shot_index + 1),
-			s.duration_seconds,
+			COALESCE(s.title, ''),
+			s.storyboard_plan_id::text,
+			s.start_tick,
+			s.end_tick,
+			s.planned_duration_ticks,
+			s.planned_duration_ticks::float8 / p.timeline_timebase,
+			s.duration_min_ticks,
+			s.duration_max_ticks,
+			s.duration_source,
+			s.timing_confidence::float8,
+			s.duration_locked,
+			s.shot_group_id::text,
+			s.continuity_group_id::text,
+			s.one_take,
+			s.timing_revision,
+			p.timeline_timebase,
+			p.fps_numerator,
+			p.fps_denominator,
 			COALESCE(s.visual, ''),
 			COALESCE(s.camera, ''),
 			COALESCE(s.motion, ''),
 			COALESCE(s.mood, ''),
 			COALESCE(s.image_prompt, ''),
+			COALESCE(s.image_prompt_status, 'not_started'),
+			s.image_prompt_error_code,
+			s.image_prompt_error_message,
+			s.image_prompt_workflow_run_id::text,
+			s.image_prompt_updated_at,
 			COALESCE(s.video_prompt, ''),
+			COALESCE(s.script_dialogue, '[]'::jsonb),
+			COALESCE(s.video_prompt_status, 'not_started'),
+			s.video_prompt_error_code,
+			s.video_prompt_error_message,
+			s.video_prompt_workflow_run_id::text,
+			s.video_prompt_updated_at,
 			s.image_artifact_id,
 			s.image_media_file_id,
 			COALESCE(s.image_storage_key, ia.storage_key),
@@ -426,6 +1084,9 @@ func storyboardShotSelectSQL(where string) string {
 			s.video_external_task_id,
 			COALESCE(s.image_status, 'not_started'),
 			COALESCE(s.video_status, 'not_started'),
+			s.active_video_render_plan_id::text,
+			COALESCE(s.native_audio_status, 'not_requested'),
+			COALESCE(s.production_readiness, 'blocked'),
 			s.image_error_code,
 			s.image_error_message,
 			s.video_error_code,
@@ -442,6 +1103,10 @@ func storyboardShotSelectSQL(where string) string {
 			COALESCE(s.stale_state, 'fresh'),
 			s.edited_by,
 			s.edited_at,
+			COALESCE(s.image_reference_mode, 'auto'),
+			COALESCE(s.image_reference_keys, ARRAY[]::text[]),
+			COALESCE(s.video_reference_mode, 'auto'),
+			COALESCE(s.video_reference_keys, ARRAY[]::text[]),
 			s.script_scene_id::text,
 			sc.id::text,
 			COALESCE(sc.scene_no, 0),
@@ -452,31 +1117,69 @@ func storyboardShotSelectSQL(where string) string {
 		LEFT JOIN artifacts ia ON ia.id = s.image_artifact_id
 		LEFT JOIN artifacts va ON va.id = s.video_artifact_id
 		LEFT JOIN script_scenes sc ON sc.id = s.script_scene_id
+		LEFT JOIN script_episodes se ON se.id = s.script_episode_id
+		JOIN projects p ON p.id = s.project_id
 	` + where
 }
 
 func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	var item StoryboardShot
 	var duration sql.NullFloat64
+	var storyboardPlanID, shotGroupID, continuityGroupID sql.NullString
+	var durationMinTicks, durationMaxTicks sql.NullInt64
+	var timingConfidence sql.NullFloat64
 	var imageArtifactID, imageMediaFileID, imageStorageKey, imageArtifactStorageKey, imageArtifactMimeType sql.NullString
 	var videoArtifactID, videoMediaFileID, videoStorageKey, videoArtifactStorageKey, videoArtifactMimeType sql.NullString
-	var providerAsyncTaskID, externalTaskID, imageErrorCode, imageErrorMessage, videoErrorCode, videoErrorMessage, imageWorkflowRunID, videoWorkflowRunID, editedBy sql.NullString
-	var scriptSceneID, sourceSceneID, sourceSceneTitle, sourceSceneLocation sql.NullString
+	var providerAsyncTaskID, externalTaskID, activeVideoRenderPlanID, imageErrorCode, imageErrorMessage, videoErrorCode, videoErrorMessage, imageWorkflowRunID, videoWorkflowRunID, imagePromptErrorCode, imagePromptErrorMessage, imagePromptWorkflowRunID, videoPromptErrorCode, videoPromptErrorMessage, videoPromptWorkflowRunID, editedBy sql.NullString
+	var scriptSceneID, scriptEpisodeID, sourceSceneID, sourceSceneTitle, sourceSceneLocation sql.NullString
+	var episodeIndex, episodeShotIndex sql.NullInt32
 	var sourceSceneNo sql.NullInt64
-	var sourceSceneCharacters []byte
-	var imageStartedAt, imageCompletedAt, videoStartedAt, videoCompletedAt, editedAt sql.NullTime
+	var sourceSceneCharacters, scriptDialogue []byte
+	var imageStartedAt, imageCompletedAt, videoStartedAt, videoCompletedAt, imagePromptUpdatedAt, videoPromptUpdatedAt, editedAt sql.NullTime
 	err := row.Scan(
 		&item.ID,
 		&item.WorkflowRunID,
+		&scriptEpisodeID,
+		&episodeIndex,
+		&episodeShotIndex,
+		&item.EpisodeTitle,
 		&item.ShotIndex,
 		&item.ShotNo,
+		&item.Title,
+		&storyboardPlanID,
+		&item.StartTick,
+		&item.EndTick,
+		&item.PlannedDurationTicks,
 		&duration,
+		&durationMinTicks,
+		&durationMaxTicks,
+		&item.DurationSource,
+		&timingConfidence,
+		&item.DurationLocked,
+		&shotGroupID,
+		&continuityGroupID,
+		&item.OneTake,
+		&item.TimingRevision,
+		&item.TimelineTimebase,
+		&item.FPSNumerator,
+		&item.FPSDenominator,
 		&item.Visual,
 		&item.Camera,
 		&item.Motion,
 		&item.Mood,
 		&item.ImagePrompt,
+		&item.ImagePromptStatus,
+		&imagePromptErrorCode,
+		&imagePromptErrorMessage,
+		&imagePromptWorkflowRunID,
+		&imagePromptUpdatedAt,
 		&item.VideoPrompt,
+		&scriptDialogue,
+		&item.VideoPromptStatus,
+		&videoPromptErrorCode,
+		&videoPromptErrorMessage,
+		&videoPromptWorkflowRunID,
+		&videoPromptUpdatedAt,
 		&imageArtifactID,
 		&imageMediaFileID,
 		&imageStorageKey,
@@ -491,6 +1194,9 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 		&externalTaskID,
 		&item.ImageStatus,
 		&item.VideoStatus,
+		&activeVideoRenderPlanID,
+		&item.NativeAudioStatus,
+		&item.ProductionReadiness,
 		&imageErrorCode,
 		&imageErrorMessage,
 		&videoErrorCode,
@@ -507,6 +1213,10 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 		&item.StaleState,
 		&editedBy,
 		&editedAt,
+		&item.ImageReferenceMode,
+		&item.ImageReferenceKeys,
+		&item.VideoReferenceMode,
+		&item.VideoReferenceKeys,
 		&scriptSceneID,
 		&sourceSceneID,
 		&sourceSceneNo,
@@ -517,7 +1227,29 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	if duration.Valid {
 		item.DurationSeconds = &duration.Float64
 	}
+	item.StoryboardPlanID = stringPtrFromNull(storyboardPlanID)
+	item.ActiveVideoRenderPlanID = stringPtrFromNull(activeVideoRenderPlanID)
+	if durationMinTicks.Valid {
+		item.DurationMinTicks = &durationMinTicks.Int64
+	}
+	if durationMaxTicks.Valid {
+		item.DurationMaxTicks = &durationMaxTicks.Int64
+	}
+	if timingConfidence.Valid {
+		item.TimingConfidence = &timingConfidence.Float64
+	}
+	item.ShotGroupID = stringPtrFromNull(shotGroupID)
+	item.ContinuityGroupID = stringPtrFromNull(continuityGroupID)
 	item.ImageArtifactID = stringPtrFromNull(imageArtifactID)
+	item.ScriptEpisodeID = stringPtrFromNull(scriptEpisodeID)
+	if episodeIndex.Valid {
+		value := int(episodeIndex.Int32)
+		item.EpisodeIndex = &value
+	}
+	if episodeShotIndex.Valid {
+		value := int(episodeShotIndex.Int32)
+		item.EpisodeShotIndex = &value
+	}
 	item.ImageMediaFileID = stringPtrFromNull(imageMediaFileID)
 	item.ImageStorageKey = stringPtrFromNull(imageStorageKey)
 	item.imageArtifactStorageKey = stringPtrFromNull(imageArtifactStorageKey)
@@ -533,6 +1265,24 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	item.ImageErrorMessage = stringPtrFromNull(imageErrorMessage)
 	item.VideoErrorCode = stringPtrFromNull(videoErrorCode)
 	item.VideoErrorMessage = stringPtrFromNull(videoErrorMessage)
+	item.ImagePromptErrorCode = stringPtrFromNull(imagePromptErrorCode)
+	item.ImagePromptErrorMessage = stringPtrFromNull(imagePromptErrorMessage)
+	item.ImagePromptWorkflowRunID = stringPtrFromNull(imagePromptWorkflowRunID)
+	if imagePromptUpdatedAt.Valid {
+		item.ImagePromptUpdatedAt = &imagePromptUpdatedAt.Time
+	}
+	item.VideoPromptErrorCode = stringPtrFromNull(videoPromptErrorCode)
+	item.VideoPromptErrorMessage = stringPtrFromNull(videoPromptErrorMessage)
+	item.VideoPromptWorkflowRunID = stringPtrFromNull(videoPromptWorkflowRunID)
+	if videoPromptUpdatedAt.Valid {
+		item.VideoPromptUpdatedAt = &videoPromptUpdatedAt.Time
+	}
+	if err == nil {
+		if decodeErr := json.Unmarshal(scriptDialogue, &item.ScriptDialogue); decodeErr != nil {
+			return StoryboardShot{}, decodeErr
+		}
+		item.ScriptDialogue = workflows.NormalizeStoryboardDialogue(item.ScriptDialogue)
+	}
 	item.ImageWorkflowRunID = stringPtrFromNull(imageWorkflowRunID)
 	item.VideoWorkflowRunID = stringPtrFromNull(videoWorkflowRunID)
 	if imageStartedAt.Valid {
@@ -576,6 +1326,16 @@ func normalizeShotProductionStatus(current, legacyStatus, staleState string, has
 	current = strings.TrimSpace(current)
 	legacyStatus = strings.TrimSpace(legacyStatus)
 	stale := strings.TrimSpace(staleState) != "" && staleState != "fresh"
+	// Per-media status is authoritative. The shot-level stale state can describe
+	// a downstream video invalidated by a newly generated image.
+	switch current {
+	case "queued", "running", "succeeded", "failed", "cancelled":
+		return current
+	case "stale":
+		if hasArtifact {
+			return "stale"
+		}
+	}
 	if mediaKind == "image" {
 		if legacyStatus == "image_running" {
 			return "running"
@@ -604,17 +1364,6 @@ func normalizeShotProductionStatus(current, legacyStatus, staleState string, has
 				return "stale"
 			}
 			return "succeeded"
-		}
-	}
-	switch current {
-	case "queued", "running", "succeeded", "failed", "cancelled":
-		if stale && hasArtifact && current == "succeeded" {
-			return "stale"
-		}
-		return current
-	case "stale":
-		if hasArtifact {
-			return "stale"
 		}
 	}
 	if stale && hasArtifact {

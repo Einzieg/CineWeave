@@ -32,7 +32,7 @@ func TestGatewayTextRuntimeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	upstream := httptest.NewServer(openAICompatibleMock(t))
 	defer upstream.Close()
@@ -138,14 +138,12 @@ func testProviderGatewayHTTP(t *testing.T, service *Service, token string) http.
 				return
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
-			resp, err := service.StreamText(r.Context(), req, func(delta GatewayTextDelta) error {
-				return writeGatewayIntegrationSSE(w, "provider.delta", delta)
+			_, err := service.StreamTextEvents(r.Context(), req, func(event GatewayTextStreamEvent) error {
+				return writeGatewayIntegrationSSE(w, event.Type, event.Payload())
 			})
 			if err != nil {
-				_ = writeGatewayIntegrationSSE(w, "provider.error", StandardError{Code: CodeUnknownError, Message: err.Error()})
 				return
 			}
-			_ = writeGatewayIntegrationSSE(w, "provider.completed", resp)
 		case "/internal/provider/image/generate":
 			var req GatewayImageRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -153,6 +151,22 @@ func testProviderGatewayHTTP(t *testing.T, service *Service, token string) http.
 				return
 			}
 			resp, err := service.GenerateImage(r.Context(), req)
+			writeGatewayIntegrationEnvelope(t, w, resp, err)
+		case "/internal/provider/audio/tts":
+			var req GatewayTTSRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
+			resp, err := service.GenerateSpeech(r.Context(), req)
+			writeGatewayIntegrationEnvelope(t, w, resp, err)
+		case "/internal/provider/audio/transcribe":
+			var req GatewayASRRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
+			resp, err := service.TranscribeAudio(r.Context(), req)
 			writeGatewayIntegrationEnvelope(t, w, resp, err)
 		case "/internal/provider/video/create-task":
 			var req GatewayVideoCreateTaskRequest
@@ -222,6 +236,10 @@ func seedGatewayIntegrationData(t *testing.T, ctx context.Context, pool *pgxpool
 	if err := pool.QueryRow(ctx, `INSERT INTO users(email, display_name) VALUES ($1, $2) RETURNING id`, "gateway-"+suffix+"@example.test", "Gateway Test").Scan(&userID); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
 	if _, err := pool.Exec(ctx, `INSERT INTO organization_members(organization_id, user_id) VALUES ($1, $2)`, orgID, userID); err != nil {
 		t.Fatalf("insert organization member: %v", err)
 	}

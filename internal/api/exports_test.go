@@ -31,6 +31,10 @@ func TestCreateProjectExportStartsWorkflow(t *testing.T) {
 	if response.ExportID == "" || response.WorkflowRunID == "" || response.Status != "queued" {
 		t.Fatalf("response = %+v", response)
 	}
+	if temporal.executeCount != 0 {
+		t.Fatalf("HTTP request started Temporal directly: calls=%d", temporal.executeCount)
+	}
+	dispatchWorkflowStartsForTest(t, server)
 	if temporal.executeCount != 1 || temporal.options.TaskQueue != workflows.MediaTaskQueue {
 		t.Fatalf("temporal calls=%d options=%+v", temporal.executeCount, temporal.options)
 	}
@@ -52,6 +56,25 @@ func TestCreateProjectExportStartsWorkflow(t *testing.T) {
 	}
 	if exportStatus != "queued" || workflowRunID != response.WorkflowRunID || workflowType != "export_project" {
 		t.Fatalf("stored export status=%s workflowRunID=%s workflowType=%s", exportStatus, workflowRunID, workflowType)
+	}
+}
+
+func TestFinalVideoExportBlocksUnverifiedNativeAudio(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+	temporal := &fakeTemporalClient{}
+	server := New(seed.pool, seed.authService, nil, nil, nil)
+	server.temporal = temporal
+	timelineID := insertProjectTimeline(t, seed)
+	versionID := insertFinalVideoVersion(t, seed, timelineID, 1, "ready")
+	if _, err := seed.pool.Exec(seed.ctx, `UPDATE final_video_versions SET native_audio_status = 'audio_unverified', production_readiness = 'preview_only' WHERE id = $1`, versionID); err != nil {
+		t.Fatalf("mark final video preview only: %v", err)
+	}
+	assertAPIErrorCode(t, server.Handler(), http.MethodPost, "/api/projects/"+seed.projectID+"/exports", seed.ownerToken, seed.organizationID, map[string]any{
+		"exportType": "final_video", "format": "mp4", "options": map[string]any{"finalVideoVersionId": versionID},
+	}, http.StatusConflict, "AUDIO_VERIFICATION_REQUIRED")
+	if temporal.executeCount != 0 {
+		t.Fatalf("unverified final video started %d workflows", temporal.executeCount)
 	}
 }
 

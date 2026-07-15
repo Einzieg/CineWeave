@@ -7,14 +7,19 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Service struct {
-	db *pgxpool.Pool
+// QueryRower is deliberately narrower than *pgxpool.Pool so prompt resolution
+// can participate in a caller-owned transaction and its isolation snapshot.
+type QueryRower interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-func NewService(db *pgxpool.Pool) *Service {
+type Service struct {
+	db QueryRower
+}
+
+func NewService(db QueryRower) *Service {
 	return &Service{db: db}
 }
 
@@ -55,6 +60,30 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolvedProm
 		return resolved, nil
 	}
 	return ResolvedPrompt{}, Error{Code: CodePromptTemplateNotFound, Message: fmt.Sprintf("template %s has no active prompt version", req.TemplateKey)}
+}
+
+// ResolveVersion resolves an immutable prompt snapshot. The organization and
+// template checks prevent a Workflow from loading an unrelated version ID.
+func (s *Service) ResolveVersion(ctx context.Context, req ResolveRequest, versionID string) (ResolvedPrompt, error) {
+	if s == nil || s.db == nil {
+		return ResolvedPrompt{}, Error{Code: CodePromptTemplateNotFound, Message: "prompt registry database is not configured"}
+	}
+	req.OrganizationID = strings.TrimSpace(req.OrganizationID)
+	req.ProjectID = strings.TrimSpace(req.ProjectID)
+	req.TemplateKey = strings.TrimSpace(req.TemplateKey)
+	versionID = strings.TrimSpace(versionID)
+	if req.OrganizationID == "" || req.TemplateKey == "" || versionID == "" {
+		return ResolvedPrompt{}, Error{Code: CodePromptTemplateNotFound, Message: "organizationId, templateKey, and versionId are required"}
+	}
+	resolved, ok, err := s.resolveOne(ctx, resolveVersionSQL, versionID, req.OrganizationID, req.TemplateKey)
+	if err != nil {
+		return ResolvedPrompt{}, err
+	}
+	if !ok {
+		return ResolvedPrompt{}, Error{Code: CodePromptTemplateNotFound, Message: fmt.Sprintf("template %s has no accessible prompt version %s", req.TemplateKey, versionID)}
+	}
+	resolved.Source = "version_snapshot"
+	return resolved, nil
 }
 
 func (s *Service) resolveOne(ctx context.Context, query string, args ...any) (ResolvedPrompt, bool, error) {
@@ -123,5 +152,15 @@ const resolveSystemActiveSQL = `
 	  AND pt.status = 'active'
 	  AND pv.status = 'active'
 	ORDER BY COALESCE(pv.activated_at, pv.created_at) DESC
+	LIMIT 1
+`
+
+const resolveVersionSQL = `
+	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash
+	FROM prompt_versions pv
+	JOIN prompt_templates pt ON pt.id = COALESCE(pv.template_id, pv.prompt_template_id)
+	WHERE pv.id = $1
+	  AND (pt.organization_id IS NULL OR pt.organization_id = $2)
+	  AND pt.template_key = $3
 	LIMIT 1
 `

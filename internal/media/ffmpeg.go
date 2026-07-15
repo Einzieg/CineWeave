@@ -59,16 +59,27 @@ func NormalizeClipWithTrim(ctx context.Context, inputPath, outputPath string, wi
 	if fps <= 0 {
 		fps = defaultFPS
 	}
+	return NormalizeClipWithTrimRate(ctx, inputPath, outputPath, width, height, fps, 1, trimStartSeconds, trimEndSeconds)
+}
+
+func NormalizeClipWithTrimRate(ctx context.Context, inputPath, outputPath string, width, height, fpsNumerator, fpsDenominator int, trimStartSeconds float64, trimEndSeconds *float64) error {
+	if fpsNumerator <= 0 {
+		fpsNumerator = defaultFPS
+	}
+	if fpsDenominator <= 0 {
+		fpsDenominator = 1
+	}
 	if trimStartSeconds < 0 {
 		trimStartSeconds = 0
 	}
+	fpsExpression := fmt.Sprintf("%d/%d", fpsNumerator, fpsDenominator)
 	filter := fmt.Sprintf(
-		"scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=%d,format=yuv420p",
+		"scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=%s,format=yuv420p",
 		width,
 		height,
 		width,
 		height,
-		fps,
+		fpsExpression,
 	)
 	args := []string{
 		"-hide_banner",
@@ -86,11 +97,64 @@ func NormalizeClipWithTrim(ctx context.Context, inputPath, outputPath string, wi
 	}
 	args = append(args,
 		"-vf", filter,
-		"-r", strconv.Itoa(fps),
+		"-r", fpsExpression,
 		"-c:v", "libx264",
 		"-preset", "veryfast",
 		"-pix_fmt", "yuv420p",
 		"-an",
+		"-movflags", "+faststart",
+		outputPath,
+	)
+	return runFFmpeg(ctx, args...)
+}
+
+func NormalizeClipWithTrimRateAV(ctx context.Context, inputPath, outputPath string, width, height, fpsNumerator, fpsDenominator int, trimStartSeconds float64, trimEndSeconds *float64) error {
+	if fpsNumerator <= 0 {
+		fpsNumerator = defaultFPS
+	}
+	if fpsDenominator <= 0 {
+		fpsDenominator = 1
+	}
+	if trimStartSeconds < 0 {
+		trimStartSeconds = 0
+	}
+	probe, err := ProbeVideo(ctx, inputPath)
+	if err != nil {
+		return err
+	}
+	fpsExpression := fmt.Sprintf("%d/%d", fpsNumerator, fpsDenominator)
+	filter := fmt.Sprintf(
+		"scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=%s,format=yuv420p",
+		width, height, width, height, fpsExpression,
+	)
+	args := []string{"-hide_banner", "-loglevel", "error", "-y"}
+	if trimStartSeconds > 0 {
+		args = append(args, "-ss", formatSeconds(trimStartSeconds))
+	}
+	args = append(args, "-i", inputPath)
+	if !probe.HasAudio {
+		args = append(args, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000")
+	}
+	if trimEndSeconds != nil && *trimEndSeconds > trimStartSeconds {
+		args = append(args, "-t", formatSeconds(*trimEndSeconds-trimStartSeconds))
+	}
+	args = append(args, "-map", "0:v:0")
+	if probe.HasAudio {
+		args = append(args, "-map", "0:a:0", "-af", "aresample=48000,apad")
+	} else {
+		args = append(args, "-map", "1:a:0")
+	}
+	args = append(args,
+		"-vf", filter,
+		"-r", fpsExpression,
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-pix_fmt", "yuv420p",
+		"-c:a", "aac",
+		"-b:a", "192k",
+		"-ar", "48000",
+		"-ac", "2",
+		"-shortest",
 		"-movflags", "+faststart",
 		outputPath,
 	)
@@ -115,6 +179,58 @@ func ConcatClips(ctx context.Context, clipPaths []string, outputPath string) err
 		outputPath,
 	}
 	return runFFmpeg(ctx, args...)
+}
+
+func ExtractAudioTrack(ctx context.Context, inputPath, outputPath string, trimStartSeconds float64, trimEndSeconds *float64) error {
+	if trimStartSeconds < 0 {
+		trimStartSeconds = 0
+	}
+	args := []string{"-hide_banner", "-loglevel", "error", "-y"}
+	if trimStartSeconds > 0 {
+		args = append(args, "-ss", formatSeconds(trimStartSeconds))
+	}
+	args = append(args, "-i", inputPath)
+	if trimEndSeconds != nil && *trimEndSeconds > trimStartSeconds {
+		args = append(args, "-t", formatSeconds(*trimEndSeconds-trimStartSeconds))
+	}
+	args = append(args, "-vn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", outputPath)
+	return runFFmpeg(ctx, args...)
+}
+
+// ExtractLastFrame decodes a bounded tail window and reverses it so the first
+// emitted PNG is the final decodable frame, rather than an earlier keyframe.
+func ExtractLastFrame(ctx context.Context, inputPath, outputPath string, durationSeconds float64) error {
+	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(outputPath) == "" {
+		return fmt.Errorf("input and output paths are required")
+	}
+	tailWindowSeconds := 2.0
+	startSeconds := durationSeconds - tailWindowSeconds
+	if startSeconds < 0 {
+		startSeconds = 0
+	}
+	args := []string{"-hide_banner", "-loglevel", "error", "-y"}
+	if startSeconds > 0 {
+		args = append(args, "-ss", formatSeconds(startSeconds))
+	}
+	args = append(args,
+		"-i", inputPath,
+		"-map", "0:v:0",
+		"-vf", "reverse",
+		"-frames:v", "1",
+		"-an",
+		outputPath,
+	)
+	if err := runFFmpeg(ctx, args...); err != nil {
+		return err
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		return fmt.Errorf("stat extracted frame: %w", err)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("extracted frame is empty")
+	}
+	return nil
 }
 
 func ConcatFileList(clipPaths []string) string {

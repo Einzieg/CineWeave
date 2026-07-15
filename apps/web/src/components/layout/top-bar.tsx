@@ -11,7 +11,8 @@ import { useApiQuery } from "@/lib/query/use-api";
 import { useSessionDetails } from "@/lib/session-details";
 import { useUiStore } from "@/lib/stores/ui-store";
 import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
-import type { StudioSession, WorkflowRun } from "@/lib/types";
+import { isActiveWorkflowStatus } from "@/lib/workflow-status";
+import type { StudioSession } from "@/lib/types";
 
 export function TopBar({
   title,
@@ -38,9 +39,11 @@ export function TopBar({
     key: qk.workflowRuns(projectId || "none"),
     queryFn: (apiSession) => studioApi.listWorkflowRuns(apiSession, projectId).then((response) => response.items),
     enabled: !hideProjectActions && !!projectId,
-    refetchInterval: 5000,
+    refetchInterval: (query) =>
+      query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
   });
-  const activeWorkflowCount = workflowRuns.filter(isActiveWorkflow).length;
+  const activeWorkflowCount = workflowRuns.filter((run) => isActiveWorkflowStatus(run.status)).length;
+  const activeActivityCount = activeWorkflowCount;
 
   return (
     <header className="sticky top-0 z-30 shrink-0 border-b bg-card/80 backdrop-blur-xl">
@@ -71,7 +74,7 @@ export function TopBar({
                 <ListChecks className="h-4 w-4" />
                 <span className="hidden sm:inline">任务活动</span>
                 <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
-                  {activeWorkflowCount}
+                  {activeActivityCount}
                 </Badge>
               </Button>
               <Separator orientation="vertical" className="h-6" />
@@ -98,8 +101,4 @@ export function TopBar({
       </div>
     </header>
   );
-}
-
-function isActiveWorkflow(run: WorkflowRun) {
-  return !["succeeded", "completed", "failed", "cancelled"].includes(run.status.toLowerCase());
 }

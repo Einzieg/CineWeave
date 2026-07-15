@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -196,6 +197,89 @@ func TestGenerateScriptFromAdaptationPlanUsesNovelChapterText(t *testing.T) {
 	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/adaptation-plans/"+planID+"/generate-script", seed.ownerToken, seed.organizationID, map[string]any{}, &response)
 	if response.ScriptID == "" || response.VersionID == "" || !strings.Contains(response.Content, "分镜1.1") {
 		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestGenerateScriptFromAdaptationPlanCreatesEpisodePerNovelChapter(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	gatewayCalls := 0
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/provider/text/generate" {
+			t.Fatalf("unexpected gateway path %s", r.URL.Path)
+		}
+		gatewayCalls++
+		var req provider.GatewayTextRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode gateway request: %v", err)
+		}
+		var input struct {
+			Prompt string `json:"prompt"`
+		}
+		if err := json.Unmarshal(req.Input, &input); err != nil {
+			t.Fatalf("decode gateway input: %v", err)
+		}
+		expected := fmt.Sprintf("第%d节原文", gatewayCalls)
+		if !strings.Contains(input.Prompt, expected) {
+			t.Fatalf("prompt for call %d missing %q: %s", gatewayCalls, expected, input.Prompt)
+		}
+		unexpected := fmt.Sprintf("第%d节原文", gatewayCalls+1)
+		if gatewayCalls < 3 && strings.Contains(input.Prompt, unexpected) {
+			t.Fatalf("prompt for call %d leaked next chapter %q: %s", gatewayCalls, unexpected, input.Prompt)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"data": provider.GatewayTextResponse{
+			ProviderCallID: uuid.NewString(),
+			ModelID:        "model-test",
+			Status:         "succeeded",
+			Output:         provider.GatewayTextOutput{Text: fmt.Sprintf("第 %d 集剧本正文", gatewayCalls)},
+		}}); err != nil {
+			t.Fatalf("encode gateway response: %v", err)
+		}
+	}))
+	defer gateway.Close()
+	t.Setenv("PROVIDER_GATEWAY_URL", gateway.URL)
+	t.Setenv("CINEWEAVE_SERVICE_TOKEN", "novel-script-test-token")
+
+	sourceID := seed.insertProjectSource(t, "novel", "三集小说")
+	eventIDs := make([]string, 0, 3)
+	for i := 1; i <= 3; i++ {
+		chapterID := seed.insertNovelChapterWithOrdinals(t, sourceID, i, 1, i, fmt.Sprintf("第%d节", i), fmt.Sprintf("第%d节原文。", i))
+		eventIDs = append(eventIDs, seed.insertNovelEvent(t, sourceID, chapterID, i, fmt.Sprintf("事件%d", i), fmt.Sprintf("事件%d摘要", i), "pending"))
+	}
+	var planID string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		INSERT INTO adaptation_plans(organization_id, project_id, source_id, title, selected_event_ids, structure, content, max_shots, created_by)
+		VALUES ($1, $2, $3, 'Three Episodes Plan', $4, '{}', '{"title":"Three Episodes Plan"}', 6, $5)
+		RETURNING id
+	`, seed.organizationID, seed.projectID, sourceID, json.RawMessage(mustMarshal(eventIDs)), seed.ownerUserID).Scan(&planID); err != nil {
+		t.Fatalf("insert adaptation plan: %v", err)
+	}
+
+	var response struct {
+		ScriptID     string `json:"scriptId"`
+		VersionID    string `json:"versionId"`
+		EpisodeCount int    `json:"episodeCount"`
+		Content      string `json:"content"`
+	}
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/adaptation-plans/"+planID+"/generate-script", seed.ownerToken, seed.organizationID, map[string]any{}, &response)
+	if gatewayCalls != 3 {
+		t.Fatalf("gateway calls = %d, want 3", gatewayCalls)
+	}
+	if response.ScriptID == "" || response.VersionID == "" || response.EpisodeCount != 3 {
+		t.Fatalf("response = %+v, want script/version and 3 episodes", response)
+	}
+	var episodeCount, distinctSourceChapters int
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT count(*), count(DISTINCT source_chapter_id)
+		FROM script_episodes
+		WHERE project_id = $1 AND script_id = $2 AND script_version_id = $3
+	`, seed.projectID, response.ScriptID, response.VersionID).Scan(&episodeCount, &distinctSourceChapters); err != nil {
+		t.Fatalf("count script episodes: %v", err)
+	}
+	if episodeCount != 3 || distinctSourceChapters != 3 {
+		t.Fatalf("episodes=%d distinctSourceChapters=%d, want 3/3", episodeCount, distinctSourceChapters)
 	}
 }
 

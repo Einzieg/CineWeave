@@ -1,8 +1,10 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { studioApi } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
+import { useUiStore } from "@/lib/stores/ui-store";
+import { useActivityStore } from "@/lib/stores/activity-store";
 import type { AgentPermissionMode, AgentTask, JsonRecord } from "@/lib/types";
 
 type CreateTaskInput = {
@@ -19,9 +21,19 @@ type StepDecisionInput = {
   decision?: JsonRecord;
 };
 
-export function useAgentTasks(projectId: string, sessionId?: string | null) {
+export function useAgentTasks(projectId: string, sessionId?: string | null, enabled = true) {
   const invalidate = useInvalidateKeys();
+  const markGeneratedScript = useUiStore((state) => state.markGeneratedScript);
   const scopedSessionId = sessionId || "";
+  const workflowEventRevision = useActivityStore((state) => {
+    const events = state.eventsByProject[projectId] ?? [];
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      if (events[index].eventType.startsWith("workflow.") || events[index].eventType.startsWith("storyboard.") || events[index].eventType.startsWith("video.production.")) {
+        return events[index].id;
+      }
+    }
+    return "";
+  });
 
   const tasksQuery = useApiQuery({
     key: qk.agentTasks(projectId, scopedSessionId),
@@ -29,8 +41,9 @@ export function useAgentTasks(projectId: string, sessionId?: string | null) {
       studioApi
         .listAgentTasks(session, projectId, { "filter[sessionId]": scopedSessionId })
         .then((response) => response.items || []),
-    enabled: Boolean(scopedSessionId),
-    refetchInterval: 3000,
+    enabled: enabled && Boolean(scopedSessionId),
+    refetchInterval: (query) =>
+      enabled && query.state.data?.some((task) => !isTerminalTask(task.status)) ? 2000 : false,
   });
 
   const tasks = useMemo(() => (scopedSessionId ? tasksQuery.data || [] : []), [scopedSessionId, tasksQuery.data]);
@@ -39,9 +52,48 @@ export function useAgentTasks(projectId: string, sessionId?: string | null) {
   const taskDetailQuery = useApiQuery({
     key: qk.agentTask(projectId, activeTask?.id || ""),
     queryFn: (session) => studioApi.getAgentTask(session, projectId, activeTask!.id),
-    enabled: Boolean(activeTask?.id),
-    refetchInterval: activeTask && !isTerminalTask(activeTask.status) ? 3000 : false,
+    enabled: enabled && Boolean(activeTask?.id),
+    refetchInterval: enabled && activeTask && !isTerminalTask(activeTask.status) ? 1000 : false,
   });
+  const task = taskDetailQuery.data || activeTask || null;
+  const refreshSignature = useMemo(() => (task ? agentTaskRefreshSignature(task) : ""), [task]);
+  const generatedScript = useMemo(() => (task ? agentTaskGeneratedScript(task) : null), [task]);
+  const lastRefreshSignatureRef = useRef("");
+  const lastGeneratedScriptRef = useRef("");
+
+  useEffect(() => {
+    if (!refreshSignature || refreshSignature === lastRefreshSignatureRef.current) {
+      return;
+    }
+    lastRefreshSignatureRef.current = refreshSignature;
+    invalidate([
+      ...(scopedSessionId ? [qk.agentMessages(projectId, scopedSessionId)] : []),
+      ...projectAgentProductionInvalidationKeys(projectId),
+    ]);
+  }, [invalidate, projectId, refreshSignature, scopedSessionId]);
+
+  useEffect(() => {
+    if (!workflowEventRevision || !activeTask?.id) {
+      return;
+    }
+    invalidate([
+      qk.agentTask(projectId, activeTask.id),
+      qk.agentTasks(projectId, scopedSessionId),
+      ...projectAgentProductionInvalidationKeys(projectId),
+    ]);
+  }, [activeTask?.id, invalidate, projectId, scopedSessionId, workflowEventRevision]);
+
+  useEffect(() => {
+    if (!generatedScript?.scriptId) {
+      return;
+    }
+    const signature = `${generatedScript.scriptId}:${generatedScript.versionId || ""}`;
+    if (signature === lastGeneratedScriptRef.current) {
+      return;
+    }
+    lastGeneratedScriptRef.current = signature;
+    markGeneratedScript(projectId, generatedScript.scriptId, generatedScript.versionId);
+  }, [generatedScript, markGeneratedScript, projectId]);
 
   const createTaskMutation = useApiMutation({
     mutationFn: (session, input: CreateTaskInput) => {
@@ -88,7 +140,7 @@ export function useAgentTasks(projectId: string, sessionId?: string | null) {
     mutationFn: (session, payload: StepDecisionInput) =>
       studioApi.approveAgentStep(session, projectId, payload.taskId, payload.stepId, agentStepDecisionBody(payload)),
     onSuccess: (approval) => {
-      toast.success("已批准步骤");
+      toast.success(approval.approvalType === "question" ? "已提交选择" : "已批准步骤");
       invalidate(projectAgentInvalidationKeys(projectId, approval.taskId, scopedSessionId));
     },
     onError: (error) => toast.error("批准失败：" + error.message),
@@ -106,7 +158,8 @@ export function useAgentTasks(projectId: string, sessionId?: string | null) {
 
   return {
     tasks,
-    task: taskDetailQuery.data || activeTask || null,
+    task,
+    isActive: Boolean(activeTask && !isTerminalTask(activeTask.status)),
     isLoading: tasksQuery.isLoading || taskDetailQuery.isLoading,
     createTask: createTaskMutation.mutate,
     isCreatingTask: createTaskMutation.isPending,
@@ -142,9 +195,66 @@ function projectAgentInvalidationKeys(projectId: string, taskId: string, session
     qk.agentTasks(projectId),
     ...(sessionId ? [qk.agentTasks(projectId, sessionId)] : []),
     qk.agentTask(projectId, taskId),
+    ...projectAgentProductionInvalidationKeys(projectId),
+  ];
+}
+
+function projectAgentProductionInvalidationKeys(projectId: string) {
+  return [
     qk.workflowRuns(projectId),
     qk.productionStatus(projectId),
-    qk.shotProduction(projectId),
+    qk.project(projectId),
+    qk.sources(projectId),
+    qk.adaptationPlans(projectId),
+    qk.scripts(projectId),
+    qk.scriptDetailsPrefix(projectId),
+    qk.scriptVersionsPrefix(projectId),
+    qk.scriptEpisodesPrefix(projectId),
+    qk.scriptScenesPrefix(projectId),
+    qk.shotProductionPrefix(projectId),
+    qk.assets(projectId),
+    qk.requirements(projectId),
     qk.artifacts(projectId),
   ];
+}
+
+function agentTaskRefreshSignature(task: AgentTask) {
+  const stepSignature = (task.steps || [])
+    .map((step) => `${step.id}:${step.status}:${step.updatedAt || ""}:${step.completedAt || ""}`)
+    .join("|");
+  return [
+    task.id,
+    task.status,
+    task.updatedAt,
+    task.completedAt || "",
+    stepSignature,
+  ].join(":");
+}
+
+function agentTaskGeneratedScript(task: AgentTask) {
+  const steps = [...(task.steps || [])].reverse();
+  for (const step of steps) {
+    if (step.status !== "succeeded" || step.toolName !== "script.generate_from_source") {
+      continue;
+    }
+    const output = isJsonRecord(step.output) ? step.output : {};
+    const data = isJsonRecord(output.data) ? output.data : output;
+    const scriptId = stringValue(data.scriptId);
+    if (!scriptId) {
+      continue;
+    }
+    return {
+      scriptId,
+      versionId: stringValue(data.versionId),
+    };
+  }
+  return null;
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
@@ -18,7 +19,9 @@ import (
 
 const (
 	ScriptTaskQueue                 = "cineweave-script"
+	AgentTaskQueue                  = "cineweave-agent"
 	MediaTaskQueue                  = "cineweave-media"
+	AudioTaskQueue                  = "cineweave-audio"
 	scriptModelProfileKey           = "script_agent_default"
 	imageGenerationModelProfileKey  = "image_generation_default"
 	videoGenerationModelProfileKey  = "video_generation_default"
@@ -34,16 +37,16 @@ const (
 	nodeComposeFinalVideoKey        = "compose_final_video"
 	promptKeyStoryboardPlanner      = "storyboard_planner"
 	promptKeyStoryboardImage        = "storyboard_image_prompt"
-	promptKeyStoryboardVideo        = "storyboard_video_prompt"
 )
 
 type TextToStoryboardInput struct {
-	OrganizationID string          `json:"organizationId"`
-	ProjectID      string          `json:"projectId"`
-	WorkflowRunID  string          `json:"workflowRunId"`
-	Prompt         string          `json:"prompt"`
-	CreatedBy      string          `json:"createdBy"`
-	Input          json.RawMessage `json:"input,omitempty"`
+	OrganizationID      string                       `json:"organizationId"`
+	ProjectID           string                       `json:"projectId"`
+	WorkflowRunID       string                       `json:"workflowRunId"`
+	Prompt              string                       `json:"prompt"`
+	CreatedBy           string                       `json:"createdBy"`
+	Input               json.RawMessage              `json:"input,omitempty"`
+	SourceToScriptState *SourceToScriptWorkflowState `json:"sourceToScriptState,omitempty"`
 }
 
 type TextToStoryboardOutput struct {
@@ -146,10 +149,11 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 	if err := validateStoryboardInput(baseInput); err != nil {
 		return GenerateStoryboardTextOutput{}, err
 	}
-	aspectRatio, err := a.projectAspectRatio(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID)
 	if err != nil {
-		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
+	aspectRatio := firstNonEmptyString(project.VideoRatio, project.AspectRatio, "16:9")
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardPlanner, map[string]any{
 		"input": map[string]any{
 			"prompt": input.Prompt,
@@ -163,7 +167,7 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 		},
 	})
 	if err != nil {
-		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, "", err)
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
 	}
 	nodeRunID, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
@@ -194,7 +198,7 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
-		NodeRunID:         nodeRunID,
+		NodeRunID:         nodeRunID.NodeRunID,
 		ModelProfileKey:   scriptModelProfileKey,
 		PromptTemplateKey: rendered.TemplateKey,
 		PromptVersionID:   rendered.PromptVersionID,
@@ -214,7 +218,14 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 	if parseShotsErr != nil && parseError == "" {
 		parseError = parseShotsErr.Error()
 	}
-	normalizedShots := NormalizeStoryboardShotsWithLimit(parsedShots, input.Prompt, input.MaxShots)
+	normalizedShots := NormalizeStoryboardShots(parsedShots, input.Prompt)
+	if input.MaxShots > 0 && len(normalizedShots) > input.MaxShots {
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: "DURATION_CONSTRAINT_CONFLICT", Message: fmt.Sprintf("complete storyboard requires %d shots but the user budget is %d", len(normalizedShots), input.MaxShots)})
+	}
+	normalizedShots, err = QuantizeStoryboardShotCandidates(normalizedShots, project)
+	if err != nil {
+		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeInvalidRequest, Message: err.Error()})
+	}
 	storyboardValue := map[string]any{
 		"storyboard": storyboard,
 		"rawText":    gatewayResp.Output.Text,
@@ -228,7 +239,7 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 	if err != nil {
 		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	artifactID, shotRecords, err := a.insertStoryboardArtifactAndShots(ctx, input, nodeRunID, put, gatewayResp, rendered, normalizedShots, parseError)
+	artifactID, shotRecords, err := a.insertStoryboardArtifactAndShots(ctx, input, project, nodeRunID, put, gatewayResp, rendered, normalizedShots, storyboard, parseError)
 	if err != nil {
 		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -242,9 +253,6 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 		Shots:                shotRecords,
 		RawText:              gatewayResp.Output.Text,
 		ParseError:           parseError,
-	}
-	if err := CompleteNodeRun(ctx, a.db, nodeRunID, mustJSON(output)); err != nil {
-		return GenerateStoryboardTextOutput{}, err
 	}
 	return output, nil
 }
@@ -270,7 +278,7 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 	}
 	aspectRatio, err := a.projectAspectRatio(ctx, input.ProjectID)
 	if err != nil {
-		return GenerateStoryboardImageOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+		return GenerateStoryboardImageOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardImage, map[string]any{
 		"input": map[string]any{
@@ -288,7 +296,7 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 		},
 	})
 	if err != nil {
-		return GenerateStoryboardImageOutput{}, a.failActivity(ctx, baseInput, "", err)
+		return GenerateStoryboardImageOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
 	}
 	nodeRunID, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
@@ -320,7 +328,7 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
-		NodeRunID:         nodeRunID,
+		NodeRunID:         nodeRunID.NodeRunID,
 		ModelProfileKey:   imageGenerationModelProfileKey,
 		PromptTemplateKey: rendered.TemplateKey,
 		PromptVersionID:   rendered.PromptVersionID,
@@ -351,23 +359,7 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 }
 
 func (a Activities) CompleteTextToStoryboardWorkflow(ctx context.Context, input TextToStoryboardInput, output TextToStoryboardOutput) error {
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	outputJSON := mustJSON(output)
-	if _, err := tx.Exec(ctx, `
-		UPDATE workflow_runs
-		SET status = 'succeeded', output = $2, completed_at = now()
-		WHERE id = $1
-	`, input.WorkflowRunID, outputJSON); err != nil {
-		return err
-	}
-	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "workflow.run.completed", "workflow_run", input.WorkflowRunID, outputJSON); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return TransitionWorkflowRun(ctx, a.db, input.WorkflowRunID, "succeeded", "", "", mustJSON(output))
 }
 
 func BuildTextToStoryboardOutput(storyboard GenerateStoryboardTextOutput, image ...GenerateStoryboardImageOutput) TextToStoryboardOutput {
@@ -387,12 +379,16 @@ func BuildTextToStoryboardOutput(storyboard GenerateStoryboardTextOutput, image 
 	return output
 }
 
-func (a Activities) insertStoryboardArtifactAndShots(ctx context.Context, input GenerateStoryboardTextInput, nodeRunID string, put storage.PutResult, gatewayResp provider.GatewayTextResponse, rendered promptsvc.RenderedPrompt, shots []StoryboardShot, parseError string) (string, []StoryboardShotRecord, error) {
+func (a Activities) insertStoryboardArtifactAndShots(ctx context.Context, input GenerateStoryboardTextInput, project ProjectProductionSettings, execution NodeExecution, put storage.PutResult, gatewayResp provider.GatewayTextResponse, rendered promptsvc.RenderedPrompt, shots []StoryboardShot, storyboard json.RawMessage, parseError string) (string, []StoryboardShotRecord, error) {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return "", nil, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+		return "", nil, err
+	}
+	nodeRunID := execution.NodeRunID
 	metadata := map[string]any{
 		"source":            "workflow",
 		"nodeKey":           nodeGenerateStoryboardTextKey,
@@ -420,7 +416,7 @@ func (a Activities) insertStoryboardArtifactAndShots(ctx context.Context, input 
 	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, nodeRunID, put.StorageKey, put.ContentHash, rendered.RenderedHash, mustJSON(metadata), input.CreatedBy).Scan(&artifactID); err != nil {
 		return "", nil, err
 	}
-	shotRecords, err := upsertStoryboardShotsTx(ctx, tx, input, artifactID, shots)
+	shotRecords, err := upsertStoryboardShotsTx(ctx, tx, input, project, artifactID, shots)
 	if err != nil {
 		return "", nil, err
 	}
@@ -456,35 +452,68 @@ func (a Activities) insertStoryboardArtifactAndShots(ctx context.Context, input 
 	})); err != nil {
 		return "", nil, err
 	}
+	output := GenerateStoryboardTextOutput{
+		StoryboardArtifactID: artifactID,
+		StorageKey:           put.StorageKey,
+		ProviderCallID:       gatewayResp.ProviderCallID,
+		ModelID:              gatewayResp.ModelID,
+		Storyboard:           storyboard,
+		Shots:                shotRecords,
+		RawText:              gatewayResp.Output.Text,
+		ParseError:           parseError,
+	}
+	if _, err := completeNodeRunTx(ctx, tx, execution, mustJSON(output)); err != nil {
+		return "", nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", nil, err
 	}
 	return artifactID, shotRecords, nil
 }
 
-func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStoryboardTextInput, storyboardArtifactID string, shots []StoryboardShot) ([]StoryboardShotRecord, error) {
+func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStoryboardTextInput, project ProjectProductionSettings, storyboardArtifactID string, shots []StoryboardShot) ([]StoryboardShotRecord, error) {
 	records := make([]StoryboardShotRecord, 0, len(shots))
 	for shotIndex, shot := range shots {
 		var record StoryboardShotRecord
+		var dialogueJSON []byte
 		err := tx.QueryRow(ctx, `
 			INSERT INTO storyboard_shots(
 				organization_id, project_id, workflow_run_id, storyboard_artifact_id,
-				shot_index, shot_no, title, duration_seconds,
-				visual, camera, motion, mood, image_prompt, video_prompt,
+				shot_index, shot_no, title,
+				start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source, timing_confidence,
+				visual, camera, motion, mood, image_prompt, video_prompt, script_dialogue,
 				status, metadata
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''), 'storyboard_ready', $15)
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''),
+			        $8, $9, $10, $11, $12, $13,
+			        NULLIF($14, ''), NULLIF($15, ''), NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''), $20,
+			        'storyboard_ready', $21)
 			ON CONFLICT (workflow_run_id, shot_index) DO UPDATE SET
 				storyboard_artifact_id = EXCLUDED.storyboard_artifact_id,
 				shot_no = EXCLUDED.shot_no,
 				title = EXCLUDED.title,
-				duration_seconds = EXCLUDED.duration_seconds,
+				start_tick = EXCLUDED.start_tick,
+				end_tick = EXCLUDED.end_tick,
+				duration_min_ticks = EXCLUDED.duration_min_ticks,
+				duration_max_ticks = EXCLUDED.duration_max_ticks,
+				duration_source = EXCLUDED.duration_source,
+				timing_confidence = EXCLUDED.timing_confidence,
 				visual = EXCLUDED.visual,
 				camera = EXCLUDED.camera,
 				motion = EXCLUDED.motion,
 				mood = EXCLUDED.mood,
 				image_prompt = EXCLUDED.image_prompt,
+				image_prompt_status = 'not_started',
+				image_prompt_error_code = NULL,
+				image_prompt_error_message = NULL,
+				image_prompt_workflow_run_id = NULL,
+				image_prompt_updated_at = now(),
 				video_prompt = EXCLUDED.video_prompt,
+				script_dialogue = EXCLUDED.script_dialogue,
+				video_prompt_status = 'not_started',
+				video_prompt_error_code = NULL,
+				video_prompt_error_message = NULL,
+				video_prompt_workflow_run_id = NULL,
 				status = CASE
 					WHEN storyboard_shots.status IN ('image_running', 'image_succeeded', 'video_running', 'video_succeeded', 'cancelled') THEN storyboard_shots.status
 					ELSE 'storyboard_ready'
@@ -498,13 +527,29 @@ func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStory
 				shot_index,
 				shot_no,
 				COALESCE(title, ''),
-				COALESCE(duration_seconds, 0)::float8,
+				start_tick,
+				end_tick,
+				planned_duration_ticks,
+				planned_duration_ticks::float8 / $22::bigint,
+				$22::bigint,
+				$23::integer,
+				$24::integer,
+				duration_source,
+				COALESCE(timing_confidence, 0)::float8,
+				COALESCE(duration_locked, false),
+				COALESCE(one_take, false),
+				COALESCE(timing_revision, 1),
 				COALESCE(visual, ''),
 				COALESCE(camera, ''),
 				COALESCE(motion, ''),
 				COALESCE(mood, ''),
 				COALESCE(image_prompt, ''),
+				COALESCE(image_prompt_status, 'not_started'),
+				COALESCE(image_prompt_error_code, ''),
+				COALESCE(image_prompt_error_message, ''),
+				COALESCE(image_prompt_workflow_run_id::text, ''),
 				COALESCE(video_prompt, ''),
+				COALESCE(script_dialogue, '[]'::jsonb),
 				COALESCE(image_artifact_id::text, ''),
 				COALESCE(image_media_file_id::text, ''),
 				COALESCE(image_storage_key, ''),
@@ -514,23 +559,45 @@ func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStory
 				COALESCE(video_provider_async_task_id::text, ''),
 				COALESCE(video_external_task_id, ''),
 				status
-		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, storyboardArtifactID, shotIndex, shot.ShotNo, shot.Title, shot.Duration, shot.Visual, shot.Camera, shot.Motion, shot.Mood, shot.ImagePrompt, shot.VideoPrompt, mustJSON(map[string]any{
-			"source":               "workflow_storyboard",
-			"storyboardArtifactId": storyboardArtifactID,
-		})).Scan(
+		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, storyboardArtifactID, shotIndex, shot.ShotNo, shot.Title,
+			shot.StartTick, shot.EndTick, shot.DurationTicks, shot.DurationTicks, firstNonEmptyString(shot.DurationSource, "agent_estimated"), 0.5,
+			shot.Visual, shot.Camera, shot.Motion, shot.Mood, shot.ImagePrompt, shot.VideoPrompt, mustJSON(shot.Dialogue), mustJSON(map[string]any{
+				"source":               "workflow_storyboard",
+				"storyboardArtifactId": storyboardArtifactID,
+				"startTick":            shot.StartTick,
+				"endTick":              shot.EndTick,
+				"plannedDurationTicks": shot.DurationTicks,
+				"timelineTimebase":     project.TimelineTimebase,
+			}), project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator).Scan(
 			&record.ID,
 			&record.WorkflowRunID,
 			&record.ScriptSceneID,
 			&record.ShotIndex,
 			&record.ShotNo,
 			&record.Title,
+			&record.StartTick,
+			&record.EndTick,
+			&record.PlannedDurationTicks,
 			&record.Duration,
+			&record.TimelineTimebase,
+			&record.FPSNumerator,
+			&record.FPSDenominator,
+			&record.DurationSource,
+			&record.TimingConfidence,
+			&record.DurationLocked,
+			&record.OneTake,
+			&record.TimingRevision,
 			&record.Visual,
 			&record.Camera,
 			&record.Motion,
 			&record.Mood,
 			&record.ImagePrompt,
+			&record.ImagePromptStatus,
+			&record.ImagePromptErrorCode,
+			&record.ImagePromptErrorMessage,
+			&record.ImagePromptWorkflowRunID,
 			&record.VideoPrompt,
+			&dialogueJSON,
 			&record.ImageArtifactID,
 			&record.ImageMediaFileID,
 			&record.ImageStorageKey,
@@ -544,6 +611,11 @@ func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStory
 		if err != nil {
 			return nil, err
 		}
+		if err := json.Unmarshal(dialogueJSON, &record.Dialogue); err != nil {
+			return nil, fmt.Errorf("decode storyboard dialogue: %w", err)
+		}
+		record.ImagePromptStatus = firstNonEmptyString(record.ImagePromptStatus, "not_started")
+		record.VideoPromptStatus = "not_started"
 		records = append(records, record)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -629,36 +701,43 @@ func (a Activities) ensureModelProfileConfigured(ctx context.Context, organizati
 	}
 }
 
-func (a Activities) failActivity(ctx context.Context, input TextToStoryboardInput, nodeRunID string, cause error) error {
-	code, message := workflowErrorFields(cause, codeActivityFailed)
-	if strings.TrimSpace(nodeRunID) != "" {
-		_ = FailNodeRun(ctx, a.db, nodeRunID, code, message)
+func (a Activities) failActivity(ctx context.Context, input TextToStoryboardInput, execution NodeExecution, cause error) error {
+	if isWorkflowWriteFenced(cause) {
+		return discardWorkflowResult(ctx, a.db, execution, cause.Error())
 	}
-	_ = a.markWorkflowFailed(ctx, input, code, message)
-	return temporal.NewApplicationError(message, code)
+	code, message := workflowErrorFields(cause, codeActivityFailed)
+	persistCtx, cancel := workflowFailurePersistenceContext(ctx)
+	defer cancel()
+	output := mustJSON(map[string]any{"code": code, "message": message})
+	if !execution.valid() {
+		_ = TransitionWorkflowRun(persistCtx, a.db, input.WorkflowRunID, "failed", code, message, output)
+		return newWorkflowApplicationError(cause, code, message)
+	}
+	tx, err := a.db.Begin(persistCtx)
+	if err == nil {
+		defer tx.Rollback(persistCtx)
+		_, err = lockNodeBusinessWrite(persistCtx, tx, input.WorkflowRunID, execution)
+	}
+	if err == nil {
+		_, err = failNodeRunTx(persistCtx, tx, execution, code, message, output)
+	}
+	if err == nil {
+		_, _, err = transitionWorkflowRunTx(persistCtx, tx, input.WorkflowRunID, "failed", code, message, output)
+	}
+	if err == nil {
+		err = tx.Commit(persistCtx)
+	}
+	return newWorkflowApplicationError(cause, code, message)
+}
+
+func workflowFailurePersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 }
 
 func (a Activities) markWorkflowFailed(ctx context.Context, input TextToStoryboardInput, code, message string) error {
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `
-		UPDATE workflow_runs
-		SET status = 'failed', error_code = $2, error_message = $3, completed_at = now()
-		WHERE id = $1
-		  AND status NOT IN ('succeeded', 'cancelled')
-	`, input.WorkflowRunID, code, message); err != nil {
-		return err
-	}
-	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "workflow.run.failed", "workflow_run", input.WorkflowRunID, mustJSON(map[string]any{
-		"code":    code,
-		"message": message,
-	})); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return TransitionWorkflowRun(ctx, a.db, input.WorkflowRunID, "failed", code, message, mustJSON(map[string]any{
+		"code": code, "message": message,
+	}))
 }
 
 func validateStoryboardInput(input TextToStoryboardInput) error {
@@ -738,12 +817,12 @@ func selectImagePrompt(storyboard json.RawMessage, fallback string) string {
 
 func workflowErrorFromProvider(err error, fallbackCode string) error {
 	if standard, ok := provider.StandardErrorFromError(err); ok {
-		return workflowError{Code: standard.Code, Message: standard.Message}
+		return workflowError{Code: standard.Code, Message: standard.Message, Retryable: standard.Retryable, RetryabilityKnown: true}
 	}
 	var upstreamErr *provider.UpstreamError
 	if errors.As(err, &upstreamErr) {
-		standard := provider.NormalizeHTTPError(upstreamErr.Status, upstreamErr.Code)
-		return workflowError{Code: standard.Code, Message: standard.Message}
+		standard := provider.NormalizeUpstreamError(upstreamErr)
+		return workflowError{Code: standard.Code, Message: standard.Message, Retryable: standard.Retryable, RetryabilityKnown: true}
 	}
 	if errors.Is(err, provider.ErrProviderGatewayRequired) {
 		return workflowError{Code: provider.CodeProviderGatewayRequired, Message: err.Error()}
@@ -763,12 +842,39 @@ func workflowErrorFields(err error, fallbackCode string) (string, string) {
 }
 
 type workflowError struct {
-	Code    string
-	Message string
+	Code              string
+	Message           string
+	Retryable         bool
+	RetryabilityKnown bool
 }
 
 func (e workflowError) Error() string {
 	return e.Message
+}
+
+func newWorkflowApplicationError(cause error, code, message string) error {
+	var workflowErr workflowError
+	if errors.As(cause, &workflowErr) && workflowErr.RetryabilityKnown {
+		if !workflowErr.Retryable {
+			return temporal.NewNonRetryableApplicationError(message, code, cause)
+		}
+		return temporal.NewApplicationError(message, code, cause)
+	}
+	switch code {
+	case provider.CodeAuthFailed,
+		provider.CodeQuotaExceeded,
+		provider.CodeModelNotFound,
+		provider.CodeInvalidRequest,
+		provider.CodeUnsupportedCapability,
+		provider.CodeContentRejected,
+		provider.CodeProviderGatewayRequired,
+		provider.CodeProviderDailyQuotaExceeded,
+		provider.CodeProviderMonthlyBudgetExceeded,
+		provider.CodeModelProfileNotConfigured:
+		return temporal.NewNonRetryableApplicationError(message, code, cause)
+	default:
+		return temporal.NewApplicationError(message, code, cause)
+	}
 }
 
 func mustJSON(value any) json.RawMessage {

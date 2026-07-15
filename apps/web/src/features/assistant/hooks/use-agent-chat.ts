@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { useStudioSession } from "@/lib/session";
 import type { AgentMessage } from "@/lib/types";
 
-export function useAgentChat(projectId: string, sessionId: string | null) {
+export function useAgentChat(projectId: string, sessionId: string | null, enabled = true, live = false) {
   const invalidate = useInvalidateKeys();
   const queryClient = useQueryClient();
   const { session } = useStudioSession();
@@ -16,8 +16,8 @@ export function useAgentChat(projectId: string, sessionId: string | null) {
   const { data: messages = [], isLoading } = useApiQuery({
     key: qk.agentMessages(projectId, sessionId || ""),
     queryFn: (session) => studioApi.listAgentMessages(session, projectId, sessionId!).then((r) => r.items || []),
-    enabled: !!sessionId,
-    refetchInterval: 3000,
+    enabled: enabled && !!sessionId,
+    refetchInterval: enabled && live ? 3000 : false,
   });
 
   const sendMutation = useApiMutation({

@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+type requestIDContextKey struct{}
+
 func WithRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get(requestIDHeader)
@@ -15,8 +17,16 @@ func WithRequestID(next http.Handler) http.Handler {
 			r.Header.Set(requestIDHeader, requestID)
 		}
 		w.Header().Set(requestIDHeader, requestID)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, requestID)))
 	})
+}
+
+func RequestIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
+	return requestID
 }
 
 func WithCORS(next http.Handler) http.Handler {
@@ -28,7 +38,7 @@ func WithCORS(next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Organization-Id, X-Request-Id, Last-Event-ID")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, X-CineWeave-Stream-High-Watermark")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -42,10 +52,8 @@ func corsAllowedOrigins() []string {
 	raw := strings.TrimSpace(os.Getenv("CINEWEAVE_CORS_ORIGINS"))
 	if raw == "" {
 		return []string{
-			"http://localhost:3000",
-			"http://localhost:3001",
-			"http://127.0.0.1:3000",
-			"http://127.0.0.1:3001",
+			"http://localhost:19285",
+			"http://127.0.0.1:19285",
 		}
 	}
 	parts := strings.Split(raw, ",")

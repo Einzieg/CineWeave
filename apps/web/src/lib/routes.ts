@@ -98,8 +98,16 @@ export function workflowLabel(value: string) {
       return "重新合成最终成片";
     case "batch_generate_shot_images":
       return "批量生成镜头图片";
+    case "batch_generate_shot_image_prompts":
+      return "批量生成镜头图片提示词";
+    case "batch_generate_shot_video_prompts":
+      return "批量生成镜头视频提示词";
     case "batch_generate_shot_videos":
       return "批量生成镜头视频";
+    case "batch_generate_asset_cards":
+      return "批量生成资产提示词";
+    case "batch_generate_asset_images":
+      return "批量生成资产图片";
     case "batch_cancel_shot_videos":
       return "批量取消镜头视频";
     case "compose_timeline":

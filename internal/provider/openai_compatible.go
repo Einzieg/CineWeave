@@ -1,27 +1,46 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
+	"path"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Einzieg/cineweave/internal/observability"
+	"github.com/Einzieg/cineweave/internal/provider/outbound"
 )
 
 type openAICompatibleClient struct {
-	httpClient *http.Client
+	httpClient   *http.Client
+	mediaFetcher *outbound.MediaFetcher
 }
 
 type openAICompatibleConfig struct {
-	ModelsEndpoint            string `json:"modelsEndpoint"`
-	ChatCompletionsEndpoint   string `json:"chatCompletionsEndpoint"`
-	ImagesGenerationsEndpoint string `json:"imagesGenerationsEndpoint"`
-	TimeoutMS                 int    `json:"timeoutMs"`
-	DisableV1Prefix           bool   `json:"disableV1Prefix"`
+	ModelsEndpoint              string `json:"modelsEndpoint"`
+	ChatCompletionsEndpoint     string `json:"chatCompletionsEndpoint"`
+	ImageProtocol               string `json:"imageProtocol"`
+	ImagesGenerationsEndpoint   string `json:"imagesGenerationsEndpoint"`
+	ImagesEditsEndpoint         string `json:"imagesEditsEndpoint"`
+	AudioSpeechEndpoint         string `json:"audioSpeechEndpoint"`
+	AudioTranscriptionsEndpoint string `json:"audioTranscriptionsEndpoint"`
+	VideoProtocol               string `json:"videoProtocol"`
+	VideoCreateEndpoint         string `json:"videoCreateEndpoint"`
+	VideoPollEndpoint           string `json:"videoPollEndpoint"`
+	VideoCancelEndpoint         string `json:"videoCancelEndpoint"`
+	TimeoutMS                   int    `json:"timeoutMs"`
+	DisableV1Prefix             bool   `json:"disableV1Prefix"`
 }
 
 type chatCompletionResult struct {
@@ -47,7 +66,8 @@ type imageGenerationResult struct {
 
 func newOpenAICompatibleClient(timeout time.Duration) openAICompatibleClient {
 	return openAICompatibleClient{
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient:   &http.Client{Timeout: timeout},
+		mediaFetcher: outbound.NewMediaFetcher(outbound.Config{}),
 	}
 }
 
@@ -63,6 +83,30 @@ func parseOpenAICompatibleConfig(raw json.RawMessage) openAICompatibleConfig {
 	if strings.TrimSpace(cfg.ImagesGenerationsEndpoint) == "" {
 		cfg.ImagesGenerationsEndpoint = "/images/generations"
 	}
+	if strings.TrimSpace(cfg.ImagesEditsEndpoint) == "" {
+		cfg.ImagesEditsEndpoint = "/images/edits"
+	}
+	if strings.TrimSpace(cfg.AudioSpeechEndpoint) == "" {
+		cfg.AudioSpeechEndpoint = "/audio/speech"
+	}
+	if strings.TrimSpace(cfg.AudioTranscriptionsEndpoint) == "" {
+		cfg.AudioTranscriptionsEndpoint = "/audio/transcriptions"
+	}
+	if strings.TrimSpace(cfg.VideoProtocol) == "" {
+		cfg.VideoProtocol = accountConfigString(raw, "videoRequestProtocol")
+	}
+	if strings.TrimSpace(cfg.VideoProtocol) == "" {
+		cfg.VideoProtocol = "new_api"
+	}
+	if strings.TrimSpace(cfg.VideoCreateEndpoint) == "" {
+		cfg.VideoCreateEndpoint = accountConfigString(raw, "videoGenerationsEndpoint")
+	}
+	if strings.TrimSpace(cfg.VideoCreateEndpoint) == "" {
+		cfg.VideoCreateEndpoint = "/video/generations"
+	}
+	if strings.TrimSpace(cfg.VideoPollEndpoint) == "" {
+		cfg.VideoPollEndpoint = strings.TrimRight(cfg.VideoCreateEndpoint, "/") + "/{taskId}"
+	}
 	if cfg.TimeoutMS <= 0 {
 		cfg.TimeoutMS = defaultOpenAICompatibleTimeoutMS
 	}
@@ -77,6 +121,14 @@ func openAICompatibleConfigHasTimeout(raw json.RawMessage) bool {
 		return false
 	}
 	return cfg.TimeoutMS != nil && *cfg.TimeoutMS > 0
+}
+
+func usesNativeOpenAICompatibleRuntime(account Account) bool {
+	runtime := strings.ToLower(strings.TrimSpace(accountConfigString(account.Config, "runtime")))
+	if runtime != "" {
+		return runtime == "openai_compatible"
+	}
+	return strings.EqualFold(strings.TrimSpace(account.ConnectorKey), "openai_compatible_custom")
 }
 
 func (c openAICompatibleClient) discoverModels(ctx context.Context, account Account, apiKey string, cfg openAICompatibleConfig) (ModelDiscoveryResult, error) {
@@ -205,32 +257,51 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 	var usage GatewayUsage
 	chunks := make([]json.RawMessage, 0)
 	snapshotBytes := 0
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, ":") {
+	terminalMode := openAIStreamTerminalMode(model)
+	sawDoneMarker := false
+	sawFinishReason := false
+	decoder := newSSEDecoder(resp.Body, defaultSSEMaxEventBytes)
+	for {
+		event, ok, err := decoder.Next()
+		if err != nil {
+			result := "read_error"
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				result = "truncated"
+			}
+			observability.RecordProviderStreamTerminal(terminalMode, result)
+			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}), Text: text.String(), Usage: usage}, err
+		}
+		if !ok {
+			break
+		}
+		payload := strings.TrimSpace(event.Data)
+		if payload == "" {
 			continue
 		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "[DONE]" {
+			sawDoneMarker = true
 			break
 		}
 		payloadBytes := []byte(payload)
+		if strings.EqualFold(event.Event, "error") || openAIStreamPayloadHasError(payloadBytes) {
+			observability.RecordProviderStreamTerminal(terminalMode, "upstream_error")
+			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks, "error": rawJSONValue(json.RawMessage(payloadBytes))}), Text: text.String(), Usage: usage}, upstreamError(http.StatusBadGateway, payloadBytes)
+		}
 		if snapshotBytes+len(payloadBytes) <= 4<<20 {
 			chunkCopy := append(json.RawMessage(nil), payloadBytes...)
 			chunks = append(chunks, chunkCopy)
 			snapshotBytes += len(payloadBytes)
 		}
-		delta, chunkUsage, err := parseChatCompletionStreamChunk(payloadBytes)
+		delta, chunkUsage, chunkTerminal, err := parseChatCompletionStreamChunk(payloadBytes)
 		if err != nil {
-			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks})}, err
+			observability.RecordProviderStreamTerminal(terminalMode, "invalid_event")
+			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}), Text: text.String(), Usage: usage}, err
 		}
 		if chunkUsage.TotalTokens > 0 || chunkUsage.InputTokens > 0 || chunkUsage.OutputTokens > 0 {
 			usage = chunkUsage
+		}
+		if chunkTerminal {
+			sawFinishReason = true
 		}
 		if delta == "" {
 			continue
@@ -238,14 +309,17 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 		text.WriteString(delta)
 		if onDelta != nil {
 			if err := onDelta(delta); err != nil {
-				return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks})}, err
+				observability.RecordProviderStreamTerminal(terminalMode, "consumer_error")
+				return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}), Text: text.String(), Usage: usage}, err
 			}
 		}
 	}
 	latencyMS = int(time.Since(started).Milliseconds())
-	if err := scanner.Err(); err != nil {
-		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks})}, err
+	if !openAIStreamTerminalSatisfied(terminalMode, sawDoneMarker, sawFinishReason) {
+		observability.RecordProviderStreamTerminal(terminalMode, "truncated")
+		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks, "terminalMode": terminalMode, "sawDoneMarker": sawDoneMarker, "sawFinishReason": sawFinishReason}), Text: text.String(), Usage: usage}, fmt.Errorf("%w: provider stream ended without the required %s terminal", io.ErrUnexpectedEOF, terminalMode)
 	}
+	observability.RecordProviderStreamTerminal(terminalMode, "succeeded")
 	outputText := text.String()
 	normalizedOutput, err := json.Marshal(map[string]any{"text": outputText})
 	if err != nil {
@@ -261,16 +335,71 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 	}, nil
 }
 
-func (c openAICompatibleClient) imageGeneration(ctx context.Context, account Account, model Model, apiKey string, cfg openAICompatibleConfig, input json.RawMessage) (imageGenerationResult, error) {
-	endpoint, err := buildProviderURL(account.BaseURL, cfg.ImagesGenerationsEndpoint, !cfg.DisableV1Prefix)
-	if err != nil {
-		return imageGenerationResult{}, err
+func openAIStreamTerminalMode(model Model) string {
+	for _, capability := range model.Capabilities {
+		var schema map[string]any
+		if err := json.Unmarshal(capability.ProviderOptionsSchema, &schema); err != nil {
+			continue
+		}
+		values := schema
+		if nested, ok := schema["xCapabilities"].(map[string]any); ok {
+			values = nested
+		}
+		mode, _ := values["streamTerminalMode"].(string)
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		switch mode {
+		case "done_marker", "finish_reason", "done_or_finish_reason":
+			return mode
+		}
 	}
+	return "done_or_finish_reason"
+}
+
+func openAIStreamTerminalSatisfied(mode string, sawDoneMarker, sawFinishReason bool) bool {
+	switch mode {
+	case "done_marker":
+		return sawDoneMarker
+	case "finish_reason":
+		return sawFinishReason
+	default:
+		return sawDoneMarker || sawFinishReason
+	}
+}
+
+type openAICompatibleImageReference struct {
+	Reference GatewayImageReference
+	FileName  string
+	MimeType  string
+	Body      []byte
+}
+
+func (c openAICompatibleClient) imageGeneration(ctx context.Context, account Account, model Model, apiKey string, cfg openAICompatibleConfig, input json.RawMessage, references ...openAICompatibleImageReference) (imageGenerationResult, error) {
 	requestBody, err := buildImageGenerationRequest(model.ModelKey, input)
 	if err != nil {
 		return imageGenerationResult{}, err
 	}
+
+	endpointPath := cfg.ImagesGenerationsEndpoint
+	contentType := "application/json"
+	requestSnapshotBody := requestBody
+	if strings.EqualFold(strings.TrimSpace(cfg.ImageProtocol), "openrouter") {
+		requestBody, requestSnapshotBody, err = buildOpenRouterImageRequest(requestBody, references)
+	} else if len(references) > 0 {
+		endpointPath = cfg.ImagesEditsEndpoint
+	}
+	if err != nil {
+		return imageGenerationResult{}, err
+	}
 	requestBytes, err := json.Marshal(requestBody)
+	requestSnapshot := mustJSON(requestSnapshotBody)
+	if !strings.EqualFold(strings.TrimSpace(cfg.ImageProtocol), "openrouter") && len(references) > 0 {
+		requestBytes, contentType, err = buildOpenAICompatibleImageEditBody(requestBody, references)
+		requestSnapshot = buildOpenAICompatibleImageEditSnapshot(requestBody, references)
+	}
+	if err != nil {
+		return imageGenerationResult{}, err
+	}
+	endpoint, err := buildProviderURL(account.BaseURL, endpointPath, !cfg.DisableV1Prefix)
 	if err != nil {
 		return imageGenerationResult{}, err
 	}
@@ -278,14 +407,14 @@ func (c openAICompatibleClient) imageGeneration(ctx context.Context, account Acc
 	if err != nil {
 		return imageGenerationResult{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	applyAuth(req, account.AuthType, apiKey)
 
 	started := time.Now()
 	resp, err := c.httpClient.Do(req)
 	latencyMS := int(time.Since(started).Milliseconds())
 	if err != nil {
-		return imageGenerationResult{}, err
+		return imageGenerationResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot}, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGatewayImageBytes*2))
@@ -293,13 +422,143 @@ func (c openAICompatibleClient) imageGeneration(ctx context.Context, account Acc
 		return imageGenerationResult{}, err
 	}
 	if resp.StatusCode >= 400 {
-		return imageGenerationResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: body}, upstreamError(resp.StatusCode, body)
+		return imageGenerationResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ResponseSnapshot: body}, upstreamError(resp.StatusCode, body)
 	}
 	result, err := parseImageGenerationResponse(body)
 	result.LatencyMS = latencyMS
-	result.RequestSnapshot = requestBytes
+	result.RequestSnapshot = requestSnapshot
 	result.ResponseSnapshot = body
 	return result, err
+}
+
+func buildOpenRouterImageRequest(requestBody map[string]any, references []openAICompatibleImageReference) (map[string]any, map[string]any, error) {
+	body := make(map[string]any, len(requestBody)+1)
+	for key, value := range requestBody {
+		if key == "response_format" {
+			continue
+		}
+		body[key] = value
+	}
+	if len(references) == 0 {
+		return body, body, nil
+	}
+
+	inputReferences := make([]map[string]any, 0, len(references))
+	snapshotReferences := make([]map[string]any, 0, len(references))
+	for index, reference := range references {
+		if len(reference.Body) == 0 {
+			return nil, nil, fmt.Errorf("%w: OpenRouter image reference %d is empty", ErrValidation, index+1)
+		}
+		mimeType := normalizeMediaType(reference.MimeType)
+		if mimeType == "" {
+			mimeType = http.DetectContentType(reference.Body)
+		}
+		dataURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(reference.Body)
+		inputReferences = append(inputReferences, map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": dataURL},
+		})
+		snapshotReferences = append(snapshotReferences, map[string]any{
+			"index":      index,
+			"mimeType":   mimeType,
+			"byteSize":   len(reference.Body),
+			"artifactId": reference.Reference.ArtifactID,
+		})
+	}
+	body["input_references"] = inputReferences
+	snapshot := make(map[string]any, len(body)+2)
+	for key, value := range body {
+		snapshot[key] = value
+	}
+	snapshot["input_references"] = snapshotReferences
+	snapshot["referenceCountUsed"] = len(references)
+	return body, snapshot, nil
+}
+
+func buildOpenAICompatibleImageEditBody(requestBody map[string]any, references []openAICompatibleImageReference) ([]byte, string, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	keys := make([]string, 0, len(requestBody))
+	for key := range requestBody {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value, err := imageEditFormValue(requestBody[key])
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: image option %s is invalid", ErrValidation, key)
+		}
+		if err := writer.WriteField(key, value); err != nil {
+			return nil, "", err
+		}
+	}
+	for index, reference := range references {
+		fileName := strings.TrimSpace(path.Base(reference.FileName))
+		if fileName == "" || fileName == "." || fileName == "/" {
+			fileName = fmt.Sprintf("reference-%02d.png", index+1)
+		}
+		contentType := normalizeMediaType(reference.MimeType)
+		if contentType == "" {
+			contentType = http.DetectContentType(reference.Body)
+		}
+		header := make(textproto.MIMEHeader)
+		header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{
+			"name":     "image[]",
+			"filename": fileName,
+		}))
+		header.Set("Content-Type", contentType)
+		part, err := writer.CreatePart(header)
+		if err != nil {
+			return nil, "", err
+		}
+		if _, err := part.Write(reference.Body); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return body.Bytes(), writer.FormDataContentType(), nil
+}
+
+func imageEditFormValue(value any) (string, error) {
+	switch typed := value.(type) {
+	case string:
+		return typed, nil
+	case bool:
+		return strconv.FormatBool(typed), nil
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64), nil
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32), nil
+	case int:
+		return strconv.Itoa(typed), nil
+	case int64:
+		return strconv.FormatInt(typed, 10), nil
+	case json.Number:
+		return typed.String(), nil
+	case nil:
+		return "", nil
+	default:
+		raw, err := json.Marshal(value)
+		return string(raw), err
+	}
+}
+
+func buildOpenAICompatibleImageEditSnapshot(requestBody map[string]any, references []openAICompatibleImageReference) json.RawMessage {
+	snapshot := make(map[string]any, len(requestBody)+4)
+	for key, value := range requestBody {
+		snapshot[key] = value
+	}
+	selected := make([]GatewayImageReference, 0, len(references))
+	for _, reference := range references {
+		selected = append(selected, reference.Reference)
+	}
+	snapshot["requestMode"] = "images.edit"
+	snapshot["referenceCountUsed"] = len(selected)
+	snapshot["referenceKeys"] = gatewayImageReferenceKeys(selected)
+	snapshot["references"] = gatewayImageReferenceSnapshots(selected)
+	return mustJSON(snapshot)
 }
 
 func buildProviderURL(baseURL *string, endpoint string, autoV1Prefix bool) (string, error) {
@@ -334,11 +593,12 @@ func applyAuth(req *http.Request, authType, apiKey string) {
 }
 
 func openAICompatiblePathNeedsV1(path string) bool {
-	switch strings.TrimLeft(path, "/") {
-	case "models", "chat/completions", "images/generations":
+	path = strings.TrimLeft(path, "/")
+	switch path {
+	case "models", "chat/completions", "images/generations", "images/edits", "audio/speech", "audio/transcriptions", "video/generations", "videos":
 		return true
 	default:
-		return false
+		return strings.HasPrefix(path, "video/generations/") || strings.HasPrefix(path, "videos/")
 	}
 }
 
@@ -373,6 +633,7 @@ func buildChatCompletionRequest(modelKey string, input json.RawMessage, stream b
 		"stop",
 		"presence_penalty",
 		"frequency_penalty",
+		"reasoning_effort",
 		"response_format",
 		"tools",
 		"tool_choice",
@@ -383,7 +644,16 @@ func buildChatCompletionRequest(modelKey string, input json.RawMessage, stream b
 		}
 	}
 	if value, ok := decoded["maxOutputTokens"]; ok {
-		requestBody["max_tokens"] = value
+		if usesMaxCompletionTokens(modelKey) {
+			requestBody["max_completion_tokens"] = value
+		} else {
+			requestBody["max_tokens"] = value
+		}
+	}
+	for _, key := range []string{"reasoningLevel", "reasoningEffort"} {
+		if value, ok := decoded[key]; ok {
+			requestBody["reasoning_effort"] = value
+		}
 	}
 	if value, ok := decoded["responseFormat"]; ok {
 		if responseFormat := normalizeResponseFormat(value); responseFormat != nil {
@@ -411,6 +681,17 @@ func buildChatCompletionRequest(modelKey string, input json.RawMessage, stream b
 	return requestBody, nil
 }
 
+func usesMaxCompletionTokens(modelKey string) bool {
+	model := strings.ToLower(strings.TrimSpace(modelKey))
+	if slash := strings.LastIndex(model, "/"); slash >= 0 {
+		model = model[slash+1:]
+	}
+	return strings.HasPrefix(model, "gpt-5") ||
+		strings.HasPrefix(model, "o1") ||
+		strings.HasPrefix(model, "o3") ||
+		strings.HasPrefix(model, "o4")
+}
+
 func buildImageGenerationRequest(modelKey string, input json.RawMessage) (map[string]any, error) {
 	var decoded map[string]any
 	if len(input) > 0 {
@@ -434,11 +715,13 @@ func buildImageGenerationRequest(modelKey string, input json.RawMessage) (map[st
 		return nil, fmt.Errorf("%w: image.generate only supports n=1 in this version", ErrValidation)
 	}
 	requestBody := map[string]any{
-		"model":           modelKey,
-		"prompt":          prompt,
-		"size":            imageStringOption(decoded, "size", "1024x1024"),
-		"n":               n,
-		"response_format": "url",
+		"model":  modelKey,
+		"prompt": prompt,
+		"size":   imageStringOption(decoded, "size", "1024x1024"),
+		"n":      n,
+	}
+	if !isGPTImage2Model(modelKey) {
+		requestBody["response_format"] = "url"
 	}
 	for _, key := range []string{"quality", "style", "background", "moderation"} {
 		if value, ok := decoded[key]; ok {
@@ -469,6 +752,14 @@ func buildImageGenerationRequest(modelKey string, input json.RawMessage) (map[st
 		}
 	}
 	return requestBody, nil
+}
+
+func isGPTImage2Model(modelKey string) bool {
+	model := strings.ToLower(strings.TrimSpace(modelKey))
+	if slash := strings.LastIndex(model, "/"); slash >= 0 {
+		model = model[slash+1:]
+	}
+	return model == "gpt-image-2" || strings.HasPrefix(model, "gpt-image-2-")
 }
 
 func parseOpenAIModels(body []byte) ([]DiscoveredModel, error) {
@@ -611,7 +902,7 @@ func parseChatCompletionUsage(body []byte) GatewayUsage {
 	return usage
 }
 
-func parseChatCompletionStreamChunk(body []byte) (string, GatewayUsage, error) {
+func parseChatCompletionStreamChunk(body []byte) (string, GatewayUsage, bool, error) {
 	var response struct {
 		Choices []struct {
 			Message struct {
@@ -620,7 +911,8 @@ func parseChatCompletionStreamChunk(body []byte) (string, GatewayUsage, error) {
 			Delta struct {
 				Content any `json:"content"`
 			} `json:"delta"`
-			Text string `json:"text"`
+			Text         string  `json:"text"`
+			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
@@ -631,7 +923,7 @@ func parseChatCompletionStreamChunk(body []byte) (string, GatewayUsage, error) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", GatewayUsage{}, fmt.Errorf("%w: provider stream chunk is invalid", ErrValidation)
+		return "", GatewayUsage{}, false, fmt.Errorf("%w: provider stream chunk is invalid", ErrValidation)
 	}
 	usage := GatewayUsage{
 		InputTokens:  firstPositiveInt(response.Usage.InputTokens, response.Usage.PromptTokens),
@@ -641,21 +933,38 @@ func parseChatCompletionStreamChunk(body []byte) (string, GatewayUsage, error) {
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	terminal := false
+	for _, choice := range response.Choices {
+		if choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "" {
+			terminal = true
+			break
+		}
+	}
 	if len(response.Choices) == 0 {
-		return "", usage, nil
+		return "", usage, terminal, nil
 	}
 	choice := response.Choices[0]
 	if content, ok := choice.Delta.Content.(string); ok {
-		return content, usage, nil
+		return content, usage, terminal, nil
 	}
 	switch {
 	case choice.Message.Content != "":
-		return choice.Message.Content, usage, nil
+		return choice.Message.Content, usage, terminal, nil
 	case choice.Text != "":
-		return choice.Text, usage, nil
+		return choice.Text, usage, terminal, nil
 	default:
-		return "", usage, nil
+		return "", usage, terminal, nil
 	}
+}
+
+func openAIStreamPayloadHasError(body []byte) bool {
+	var decoded struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return false
+	}
+	return len(decoded.Error) > 0 && strings.TrimSpace(string(decoded.Error)) != "" && strings.TrimSpace(string(decoded.Error)) != "null"
 }
 
 func normalizeResponseFormat(value any) any {
@@ -718,36 +1027,46 @@ func imageRequestCount(value any) int {
 }
 
 func upstreamError(status int, body []byte) error {
-	code := ""
-	var decoded struct {
-		Error any `json:"error"`
-		Code  any `json:"code"`
-	}
-	if err := json.Unmarshal(body, &decoded); err == nil {
-		switch errValue := decoded.Error.(type) {
-		case map[string]any:
-			if value, ok := errValue["code"].(string); ok {
-				code = value
-			}
-			if code == "" {
-				if value, ok := errValue["type"].(string); ok {
-					code = value
-				}
-			}
-		case string:
-			code = errValue
-		}
-		if code == "" {
-			if value, ok := decoded.Code.(string); ok {
-				code = value
-			}
-		}
-	}
+	code, message := parseUpstreamErrorBody(body)
 	return &UpstreamError{
-		Status: status,
-		Code:   code,
-		Body:   string(body),
+		Status:  status,
+		Code:    code,
+		Message: message,
+		Body:    string(body),
 	}
+}
+
+func parseUpstreamErrorBody(body []byte) (code, message string) {
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return "", ""
+	}
+
+	code = firstUpstreamString(decoded, "code", "type")
+	message = firstUpstreamString(decoded, "message", "detail")
+	switch errorValue := decoded["error"].(type) {
+	case map[string]any:
+		if code == "" {
+			code = firstUpstreamString(errorValue, "code", "type")
+		}
+		if message == "" {
+			message = firstUpstreamString(errorValue, "message", "detail")
+		}
+	case string:
+		if message == "" {
+			message = strings.TrimSpace(errorValue)
+		}
+	}
+	return strings.TrimSpace(code), normalizeUpstreamMessage(message)
+}
+
+func firstUpstreamString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func apiKeyFromCredential(payload map[string]any) (string, error) {

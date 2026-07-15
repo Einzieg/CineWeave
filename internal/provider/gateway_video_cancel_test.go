@@ -17,14 +17,12 @@ func TestGatewayVideoCancelIdempotency(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL is required for provider gateway video cancel tests")
 	}
-	t.Setenv("CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS", "true")
-
 	ctx := context.Background()
 	pool, err := db.Open(ctx, databaseURL)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	upstream := newVideoRuntimeMock(t)
 	defer upstream.Close()

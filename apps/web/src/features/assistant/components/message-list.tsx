@@ -10,18 +10,18 @@ interface MessageListProps {
   messages: AgentMessage[];
   isLoading?: boolean;
   activity?: ReactNode;
+  activityKey?: string;
 }
 
-export function MessageList({ messages, isLoading, activity }: MessageListProps) {
+export function MessageList({ messages, isLoading, activity, activityKey }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasActivity = Boolean(activity);
 
-  // 自动滚动到最新消息
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, hasActivity]);
+  }, [messages, hasActivity, activityKey]);
 
   if (messages.length === 0 && !isLoading && !hasActivity) {
     return (
@@ -37,10 +37,10 @@ export function MessageList({ messages, isLoading, activity }: MessageListProps)
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden" ref={scrollRef}>
       <div className="w-full min-w-0 max-w-full space-y-4 px-4 py-4">
-        {activity}
         {messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
         ))}
+        {activity}
         {isLoading && (
           <div className="flex min-w-0 items-start gap-3">
             <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">

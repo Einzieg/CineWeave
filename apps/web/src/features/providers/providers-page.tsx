@@ -15,6 +15,7 @@ import type {
   ProviderModelCapability,
   ModelProfile,
   ModelProfileBinding,
+  UpdateModelProfileBindingRequest,
 } from "@/lib/types";
 import { AppShell, SectionTitle, Surface } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
@@ -50,8 +51,10 @@ import {
   Edit2,
   Key,
   Layers3,
+  Loader2,
   Plus,
   RefreshCw,
+  Save,
   Sparkles,
   Trash2,
   X,
@@ -60,7 +63,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { providerKeyLabel, taskTypeLabel } from "@/lib/labels";
+import { providerKeyLabel, reasoningLevelLabel, taskTypeLabel } from "@/lib/labels";
 
 type AccountDialogMode = "create" | "edit";
 type ModelDialogMode = "create" | "edit";
@@ -86,6 +89,7 @@ type BusinessModelBindingDraft = {
   priority: string;
   weight: string;
   enabled: boolean;
+  reasoningLevel: string;
 };
 
 type AccountForm = {
@@ -98,6 +102,43 @@ type AccountForm = {
   configText: string;
 };
 
+type CapabilityTruth = "unknown" | "true" | "false";
+
+type VideoVariantForm = {
+  variantKey: string;
+  modelFamily: string;
+  taskTypesText: string;
+  referenceModesText: string;
+  nativeAudioRequested: "any" | "true" | "false";
+  durationMode: "continuous_range" | "discrete" | "fixed" | "source_duration";
+  minDurationSeconds: string;
+  maxDurationSeconds: string;
+  durationStepSeconds: string;
+  durationValuesText: string;
+  resolutionsText: string;
+  aspectRatiosText: string;
+  frameRateMode: "fixed" | "selectable" | "unknown";
+  frameRatesText: string;
+  promptLanguagesText: string;
+  nativeAudioSupport: CapabilityTruth;
+  nativeAudioCanDisable: CapabilityTruth;
+  supportsDialogue: CapabilityTruth;
+  supportsVoiceover: CapabilityTruth;
+  supportsAmbientSound: CapabilityTruth;
+  supportsMusic: CapabilityTruth;
+  supportsLipSync: CapabilityTruth;
+  dialogueLanguagesText: string;
+  audioTrackSeparable: boolean;
+  supportsExtension: boolean;
+  supportsFirstFrame: boolean;
+  supportsLastFrame: boolean;
+  supportsVideoReference: boolean;
+  requestModesText: string;
+  source: string;
+  sourceUrl: string;
+  capabilityVersion: string;
+};
+
 type ModelForm = {
   modelKey: string;
   displayName: string;
@@ -105,20 +146,24 @@ type ModelForm = {
   status: string;
   supportsAsyncTask: boolean;
   supportsStreaming: boolean;
+  streamTerminalMode: "done_marker" | "finish_reason" | "done_or_finish_reason";
   supportsReasoning: boolean;
   supportsReasoningLevels: boolean;
+  reasoningLevelsText: string;
   supportsMultimodalInput: boolean;
   maxInputTokens: string;
   maxOutputTokens: string;
   supportedInputTypesText: string;
   supportedOutputTypesText: string;
   promptMaxLength: string;
+  promptLengthUnit: string;
   supportsReferenceImages: boolean;
   supportsImageEdit: boolean;
   maxReferenceImages: string;
   imageRequestModesText: string;
   imageAspectRatiosText: string;
   imageResolutionsText: string;
+  imageQualityTiersText: string;
   imageResponseFormatsText: string;
   minDurationSeconds: string;
   maxDurationSeconds: string;
@@ -131,6 +176,16 @@ type ModelForm = {
   videoAspectRatiosText: string;
   videoResolutionsText: string;
   videoOutputFormatsText: string;
+  videoVariants: VideoVariantForm[];
+  supportsTTS: boolean;
+  supportsTranscription: boolean;
+  audioVoicesText: string;
+  audioLanguagesText: string;
+  audioInputFormatsText: string;
+  audioOutputFormatsText: string;
+  audioRequestModesText: string;
+  maxTTSCharacters: string;
+  maxAudioDurationSeconds: string;
   taskTypesText: string;
   inputLimitsText: string;
   outputLimitsText: string;
@@ -153,7 +208,8 @@ const defaultTaskTypesByModality: Record<string, string[]> = {
   text: ["text.generate", "text.stream"],
   image: ["image.generate"],
   video: ["video.text_to_video", "video.image_to_video", "video.create_task", "video.poll_task", "video.cancel_task"],
-  multimodal: ["text.generate", "text.stream", "image.generate", "video.create_task", "video.poll_task"],
+  audio: ["audio.tts", "audio.transcribe"],
+  multimodal: ["text.generate", "text.stream", "image.generate", "video.create_task", "video.poll_task", "audio.tts", "audio.transcribe"],
 };
 
 const businessProfileSlots: BusinessProfileSlot[] = [
@@ -181,6 +237,22 @@ const businessProfileSlots: BusinessProfileSlot[] = [
     modalities: ["video", "multimodal"],
     taskTypes: ["video.text_to_video", "video.image_to_video", "video.create_task", "video.poll_task", "video.cancel_task"],
   },
+  {
+    profileKey: "tts_generation_default",
+    name: "角色配音默认模型",
+    purpose: "audio_tts",
+    description: "用于角色对白、旁白和解说的语音合成。",
+    modalities: ["audio", "multimodal"],
+    taskTypes: ["audio.tts"],
+  },
+  {
+    profileKey: "audio_transcription_default",
+    name: "音轨识别与审核默认模型",
+    purpose: "audio_transcription",
+    description: "用于原生音轨转写、对白覆盖率和说话人轮次审核。",
+    modalities: ["audio", "multimodal"],
+    taskTypes: ["audio.transcribe"],
+  },
 ];
 
 const routingStrategyOptions = [
@@ -195,6 +267,7 @@ const modalityOptions = [
   { value: "text", label: "文本" },
   { value: "image", label: "图片" },
   { value: "video", label: "视频" },
+  { value: "audio", label: "音频" },
   { value: "multimodal", label: "多模态" },
 ];
 
@@ -393,6 +466,7 @@ export function ProvidersPage() {
         priority: number;
         weight: number;
         enabled: boolean;
+        reasoningLevel: string;
       },
     ) => {
       let profile = data.profile;
@@ -410,6 +484,7 @@ export function ProvidersPage() {
         priority: data.priority,
         weight: data.weight,
         enabled: data.enabled,
+        runtimeOptions: data.reasoningLevel ? { reasoningLevel: data.reasoningLevel } : {},
       });
     },
     onSuccess: (_profile, data) => {
@@ -421,6 +496,22 @@ export function ProvidersPage() {
       invalidate([qk.modelProfiles()]);
     },
     onError: (error) => toast.error("保存业务模型绑定失败：" + error.message),
+  });
+
+  const updateProfileBindingMutation = useApiMutation({
+    mutationFn: (
+      session,
+      data: {
+        profileId: string;
+        bindingId: string;
+        body: UpdateModelProfileBindingRequest;
+      },
+    ) => studioApi.updateModelProfileBinding(session, data.profileId, data.bindingId, data.body),
+    onSuccess: () => {
+      toast.success("业务模型绑定已更新");
+      invalidate([qk.modelProfiles()]);
+    },
+    onError: (error) => toast.error("更新业务模型绑定失败：" + error.message),
   });
 
   const deleteProfileBindingMutation = useApiMutation({
@@ -942,6 +1033,7 @@ export function ProvidersPage() {
       priority,
       weight,
       enabled: draft.enabled,
+      reasoningLevel: draft.reasoningLevel,
     });
   }
 
@@ -1106,6 +1198,8 @@ export function ProvidersPage() {
                 const profile = profileByKey.get(slot.profileKey);
                 const draft = businessBindingDrafts[slot.profileKey] || defaultBusinessBindingDraft();
                 const compatibleModels = activeProviderModels.filter((model) => modelMatchesBusinessSlot(model, slot));
+                const selectedDraftModel = modelById.get(draft.modelId);
+                const selectedDraftReasoningLevels = selectedDraftModel ? providerModelReasoningLevels(selectedDraftModel) : [];
                 const bindings = profile?.bindings || [];
                 return (
                   <div key={slot.profileKey} className="rounded-lg border p-4">
@@ -1156,7 +1250,7 @@ export function ProvidersPage() {
                           <div className="grid gap-2">
                             {bindings.map((binding) => (
                               <BusinessBindingRow
-                                key={binding.id}
+                                key={`${binding.id}:${binding.priority}:${binding.weight}:${binding.enabled}:${binding.runtimeOptions?.reasoningLevel || ""}`}
                                 binding={binding}
                                 model={modelById.get(binding.providerModelId)}
                                 onDelete={() =>
@@ -1166,7 +1260,17 @@ export function ProvidersPage() {
                                     bindingId: binding.id,
                                   })
                                 }
-                                deleting={deleteProfileBindingMutation.isPending}
+                                onUpdate={(body) =>
+                                  profile
+                                    ? updateProfileBindingMutation
+                                        .mutateAsync({ profileId: profile.id, bindingId: binding.id, body })
+                                        .then(() => undefined)
+                                    : Promise.reject(new Error("业务模型配置不存在"))
+                                }
+                                deleting={
+                                  deleteProfileBindingMutation.isPending &&
+                                  deleteProfileBindingMutation.variables?.bindingId === binding.id
+                                }
                               />
                             ))}
                           </div>
@@ -1179,7 +1283,14 @@ export function ProvidersPage() {
                           <Label>供应商模型</Label>
                           <Select
                             value={draft.modelId}
-                            onValueChange={(value) => updateBusinessBindingDraft(slot.profileKey, { modelId: value })}
+                            onValueChange={(value) => {
+                              const selectedModel = modelById.get(value);
+                              const levels = selectedModel ? providerModelReasoningLevels(selectedModel) : [];
+                              updateBusinessBindingDraft(slot.profileKey, {
+                                modelId: value,
+                                reasoningLevel: levels.includes(draft.reasoningLevel) ? draft.reasoningLevel : "",
+                              });
+                            }}
                             onOpenChange={trackPortaledControlOpen}
                             disabled={compatibleModels.length === 0}
                           >
@@ -1195,6 +1306,27 @@ export function ProvidersPage() {
                             </SelectContent>
                           </Select>
                         </div>
+                        {selectedDraftReasoningLevels.length > 0 && (
+                          <div className="space-y-1.5">
+                            <Label>默认思考等级</Label>
+                            <Select
+                              value={draft.reasoningLevel || "__provider_default__"}
+                              onValueChange={(value) => updateBusinessBindingDraft(slot.profileKey, {
+                                reasoningLevel: value === "__provider_default__" ? "" : value,
+                              })}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__provider_default__">供应商默认</SelectItem>
+                                {selectedDraftReasoningLevels.map((level) => (
+                                  <SelectItem key={level} value={level}>{reasoningLevelLabel(level)}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
                         <div className="grid grid-cols-2 gap-3">
                           <div className="space-y-1.5">
                             <Label>优先级</Label>
@@ -1703,18 +1835,6 @@ export function ProvidersPage() {
               />
             </div>
             <ModelCapabilityFields modelForm={modelForm} setModelForm={setModelForm} />
-            <div className="grid gap-3 md:grid-cols-2">
-              <JsonTextarea label="输入限制 JSON" value={modelForm.inputLimitsText} onChange={(value) => setModelForm({ ...modelForm, inputLimitsText: value })} />
-              <JsonTextarea label="输出限制 JSON" value={modelForm.outputLimitsText} onChange={(value) => setModelForm({ ...modelForm, outputLimitsText: value })} />
-              <JsonTextarea label="质量档位 JSON" value={modelForm.qualityTiersText} onChange={(value) => setModelForm({ ...modelForm, qualityTiersText: value })} />
-              <JsonTextarea label="计费策略 JSON" value={modelForm.pricingPolicyText} onChange={(value) => setModelForm({ ...modelForm, pricingPolicyText: value })} />
-            </div>
-            <JsonTextarea
-              label="供应商选项 JSON"
-              value={modelForm.providerOptionsSchemaText}
-              onChange={(value) => setModelForm({ ...modelForm, providerOptionsSchemaText: value })}
-              large
-            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setModelDialogOpen(false)}>取消</Button>
@@ -1755,8 +1875,25 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
   const isText = modelForm.modality === "text" || modelForm.modality === "multimodal";
   const isImage = modelForm.modality === "image" || modelForm.modality === "multimodal";
   const isVideo = modelForm.modality === "video" || modelForm.modality === "multimodal";
+  const isAudio = modelForm.modality === "audio" || modelForm.modality === "multimodal";
   return (
     <div className="space-y-4 rounded-lg border p-4">
+      <div className="grid gap-3 md:grid-cols-2">
+        <LabeledInput label="Prompt 最大长度" value={modelForm.promptMaxLength} onChange={(value) => update({ promptMaxLength: value })} />
+        <div className="space-y-1.5">
+          <Label>Prompt 长度单位</Label>
+          <Select value={modelForm.promptLengthUnit} onValueChange={(value) => update({ promptLengthUnit: value })}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="characters">Unicode 字符</SelectItem>
+              <SelectItem value="utf8_bytes">UTF-8 字节</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       {isText && (
         <div className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2">
@@ -1767,8 +1904,50 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <SwitchField label="支持流式输出" checked={modelForm.supportsStreaming} onChange={(checked) => update({ supportsStreaming: checked })} />
-            <SwitchField label="支持思考" checked={modelForm.supportsReasoning} onChange={(checked) => update({ supportsReasoning: checked })} />
-            <SwitchField label="支持思考等级" checked={modelForm.supportsReasoningLevels} onChange={(checked) => update({ supportsReasoningLevels: checked })} />
+            {modelForm.supportsStreaming && (
+              <div className="space-y-1.5">
+                <Label>流式完成判定</Label>
+                <Select
+                  value={modelForm.streamTerminalMode}
+                  onValueChange={(value) => update({ streamTerminalMode: value as ModelForm["streamTerminalMode"] })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="done_or_finish_reason">完成标记或结束原因</SelectItem>
+                    <SelectItem value="done_marker">完成标记</SelectItem>
+                    <SelectItem value="finish_reason">结束原因</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <SwitchField
+              label="支持思考"
+              checked={modelForm.supportsReasoning}
+              onChange={(checked) => update({
+                supportsReasoning: checked,
+                supportsReasoningLevels: checked ? modelForm.supportsReasoningLevels : false,
+              })}
+            />
+            <SwitchField
+              label="支持思考等级"
+              checked={modelForm.supportsReasoningLevels}
+              onChange={(checked) => update({
+                supportsReasoning: checked || modelForm.supportsReasoning,
+                supportsReasoningLevels: checked,
+                reasoningLevelsText: checked && !modelForm.reasoningLevelsText.trim()
+                  ? listText(["low", "medium", "high"])
+                  : modelForm.reasoningLevelsText,
+              })}
+            />
+            {modelForm.supportsReasoningLevels && (
+              <LabeledListInput
+                label="可用思考等级"
+                value={modelForm.reasoningLevelsText}
+                onChange={(value) => update({ reasoningLevelsText: value })}
+              />
+            )}
             <SwitchField label="支持多模态输入" checked={modelForm.supportsMultimodalInput} onChange={(checked) => update({ supportsMultimodalInput: checked })} />
           </div>
         </div>
@@ -1777,11 +1956,15 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
       {isImage && (
         <div className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2">
-            <LabeledInput label="Prompt 最大长度" value={modelForm.promptMaxLength} onChange={(value) => update({ promptMaxLength: value })} />
             <LabeledInput label="参考图数量上限" value={modelForm.maxReferenceImages} onChange={(value) => update({ maxReferenceImages: value })} />
             <LabeledListInput label="图片请求方式" value={modelForm.imageRequestModesText} onChange={(value) => update({ imageRequestModesText: value })} />
             <LabeledListInput label="图片比例" value={modelForm.imageAspectRatiosText} onChange={(value) => update({ imageAspectRatiosText: value })} />
             <LabeledListInput label="图片清晰度" value={modelForm.imageResolutionsText} onChange={(value) => update({ imageResolutionsText: value })} />
+            <LabeledListInput
+              label="图片质量档位"
+              value={modelForm.imageQualityTiersText}
+              onChange={(value) => update({ imageQualityTiersText: value })}
+            />
             <LabeledListInput label="图片输出格式" value={modelForm.imageResponseFormatsText} onChange={(value) => update({ imageResponseFormatsText: value })} />
           </div>
           <div className="grid gap-3 md:grid-cols-2">
@@ -1794,23 +1977,203 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
       {isVideo && (
         <div className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2">
-            <LabeledInput label="最短秒数" value={modelForm.minDurationSeconds} onChange={(value) => update({ minDurationSeconds: value })} />
-            <LabeledInput label="最长秒数" value={modelForm.maxDurationSeconds} onChange={(value) => update({ maxDurationSeconds: value })} />
-            <LabeledListInput label="可选秒数" value={modelForm.durationsText} onChange={(value) => update({ durationsText: value })} />
+            <LabeledInput label="参考图数量上限" value={modelForm.maxReferenceImages} onChange={(value) => update({ maxReferenceImages: value })} />
             <LabeledInput label="参考视频数量上限" value={modelForm.maxReferenceVideos} onChange={(value) => update({ maxReferenceVideos: value })} />
-            <LabeledListInput label="视频请求方式" value={modelForm.videoRequestModesText} onChange={(value) => update({ videoRequestModesText: value })} />
-            <LabeledListInput label="视频比例" value={modelForm.videoAspectRatiosText} onChange={(value) => update({ videoAspectRatiosText: value })} />
-            <LabeledListInput label="视频清晰度" value={modelForm.videoResolutionsText} onChange={(value) => update({ videoResolutionsText: value })} />
             <LabeledListInput label="视频输出格式" value={modelForm.videoOutputFormatsText} onChange={(value) => update({ videoOutputFormatsText: value })} />
           </div>
+          <VideoVariantEditor
+            variants={modelForm.videoVariants}
+            taskTypes={taskTypesFromText(modelForm.taskTypesText)}
+            onChange={(videoVariants) => update({ videoVariants })}
+          />
+        </div>
+      )}
+
+      {isAudio && (
+        <div className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2">
-            <SwitchField label="支持参考图" checked={modelForm.supportsReferenceImages} onChange={(checked) => update({ supportsReferenceImages: checked })} />
-            <SwitchField label="支持首帧" checked={modelForm.supportsFirstFrame} onChange={(checked) => update({ supportsFirstFrame: checked })} />
-            <SwitchField label="支持尾帧" checked={modelForm.supportsLastFrame} onChange={(checked) => update({ supportsLastFrame: checked })} />
-            <SwitchField label="支持视频参考" checked={modelForm.supportsVideoReference} onChange={(checked) => update({ supportsVideoReference: checked })} />
+            <LabeledListInput label="可用声音" value={modelForm.audioVoicesText} onChange={(value) => update({ audioVoicesText: value })} />
+            <LabeledListInput label="支持语言" value={modelForm.audioLanguagesText} onChange={(value) => update({ audioLanguagesText: value })} />
+            <LabeledListInput label="音频输入格式" value={modelForm.audioInputFormatsText} onChange={(value) => update({ audioInputFormatsText: value })} />
+            <LabeledListInput label="音频输出格式" value={modelForm.audioOutputFormatsText} onChange={(value) => update({ audioOutputFormatsText: value })} />
+            <LabeledListInput label="请求方式" value={modelForm.audioRequestModesText} onChange={(value) => update({ audioRequestModesText: value })} />
+            <LabeledInput label="单次合成文本上限" value={modelForm.maxTTSCharacters} onChange={(value) => update({ maxTTSCharacters: value })} />
+            <LabeledInput label="单次识别音频上限（秒）" value={modelForm.maxAudioDurationSeconds} onChange={(value) => update({ maxAudioDurationSeconds: value })} />
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <SwitchField label="支持语音合成" checked={modelForm.supportsTTS} onChange={(checked) => update({ supportsTTS: checked })} />
+            <SwitchField label="支持语音识别" checked={modelForm.supportsTranscription} onChange={(checked) => update({ supportsTranscription: checked })} />
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function VideoVariantEditor({
+  variants,
+  taskTypes,
+  onChange,
+}: {
+  variants: VideoVariantForm[];
+  taskTypes: string[];
+  onChange: (variants: VideoVariantForm[]) => void;
+}) {
+  const updateVariant = (index: number, patch: Partial<VideoVariantForm>) => {
+    onChange(variants.map((variant, variantIndex) => (variantIndex === index ? { ...variant, ...patch } : variant)));
+  };
+  return (
+    <div className="space-y-3 border-t pt-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="font-medium">视频能力矩阵</div>
+          <div className="text-xs text-muted-foreground">每个能力组合独立匹配，运行时不会跨组合拼接。</div>
+        </div>
+        <Button type="button" size="sm" variant="outline" onClick={() => onChange([...variants, emptyVideoVariant(variants.length + 1, taskTypes)])}>
+          <Plus className="h-3.5 w-3.5" />
+          添加能力
+        </Button>
+      </div>
+      {variants.map((variant, index) => (
+        <div key={`${variant.variantKey}-${index}`} className="space-y-4 rounded-md border bg-muted/20 p-3">
+          <div className="flex items-end gap-3">
+            <div className="grid min-w-0 flex-1 gap-3 md:grid-cols-2">
+              <LabeledInput label="能力标识" value={variant.variantKey} onChange={(value) => updateVariant(index, { variantKey: value })} />
+              <LabeledInput label="模型家族" value={variant.modelFamily} onChange={(value) => updateVariant(index, { modelFamily: value })} />
+            </div>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label="删除能力"
+              title="删除能力"
+              disabled={variants.length === 1}
+              onClick={() => onChange(variants.filter((_, variantIndex) => variantIndex !== index))}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <LabeledListInput label="任务类型" value={variant.taskTypesText} onChange={(value) => updateVariant(index, { taskTypesText: value })} />
+            <LabeledListInput label="参考模式" value={variant.referenceModesText} onChange={(value) => updateVariant(index, { referenceModesText: value })} />
+            <LabeledListInput label="画面比例" value={variant.aspectRatiosText} onChange={(value) => updateVariant(index, { aspectRatiosText: value })} />
+            <LabeledListInput label="清晰度" value={variant.resolutionsText} onChange={(value) => updateVariant(index, { resolutionsText: value })} />
+            <LabeledListInput label="请求方式" value={variant.requestModesText} onChange={(value) => updateVariant(index, { requestModesText: value })} />
+            <LabeledListInput label="Prompt 语言" value={variant.promptLanguagesText} onChange={(value) => updateVariant(index, { promptLanguagesText: value })} />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <LabeledSelect
+              label="时长规则"
+              value={variant.durationMode}
+              options={[
+                { value: "continuous_range", label: "连续范围" },
+                { value: "discrete", label: "离散秒数" },
+                { value: "fixed", label: "固定秒数" },
+                { value: "source_duration", label: "跟随源视频" },
+              ]}
+              onChange={(value) => updateVariant(index, { durationMode: value as VideoVariantForm["durationMode"] })}
+            />
+            {variant.durationMode === "continuous_range" ? (
+              <>
+                <LabeledInput label="最短秒数" value={variant.minDurationSeconds} onChange={(value) => updateVariant(index, { minDurationSeconds: value })} />
+                <LabeledInput label="最长秒数" value={variant.maxDurationSeconds} onChange={(value) => updateVariant(index, { maxDurationSeconds: value })} />
+                <LabeledInput label="步进秒数" value={variant.durationStepSeconds} onChange={(value) => updateVariant(index, { durationStepSeconds: value })} />
+              </>
+            ) : variant.durationMode !== "source_duration" ? (
+              <LabeledListInput label="可用秒数" value={variant.durationValuesText} onChange={(value) => updateVariant(index, { durationValuesText: value })} />
+            ) : null}
+            <LabeledSelect
+              label="帧率规则"
+              value={variant.frameRateMode}
+              options={[
+                { value: "unknown", label: "未知，生成后探测" },
+                { value: "fixed", label: "固定帧率" },
+                { value: "selectable", label: "可选帧率" },
+              ]}
+              onChange={(value) => updateVariant(index, { frameRateMode: value as VideoVariantForm["frameRateMode"] })}
+            />
+            {variant.frameRateMode !== "unknown" ? (
+              <LabeledListInput label="帧率" value={variant.frameRatesText} onChange={(value) => updateVariant(index, { frameRatesText: value })} />
+            ) : null}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <LabeledSelect
+              label="请求原生音频时"
+              value={variant.nativeAudioRequested}
+              options={[
+                { value: "any", label: "均可匹配" },
+                { value: "true", label: "仅请求音频" },
+                { value: "false", label: "仅不请求音频" },
+              ]}
+              onChange={(value) => updateVariant(index, { nativeAudioRequested: value as VideoVariantForm["nativeAudioRequested"] })}
+            />
+            <CapabilityTruthSelect label="原生音频" value={variant.nativeAudioSupport} onChange={(value) => updateVariant(index, { nativeAudioSupport: value })} />
+            <CapabilityTruthSelect label="可关闭原生音频" value={variant.nativeAudioCanDisable} onChange={(value) => updateVariant(index, { nativeAudioCanDisable: value })} />
+            <CapabilityTruthSelect label="生成对白" value={variant.supportsDialogue} onChange={(value) => updateVariant(index, { supportsDialogue: value })} />
+            <CapabilityTruthSelect label="生成旁白" value={variant.supportsVoiceover} onChange={(value) => updateVariant(index, { supportsVoiceover: value })} />
+            <CapabilityTruthSelect label="生成环境声" value={variant.supportsAmbientSound} onChange={(value) => updateVariant(index, { supportsAmbientSound: value })} />
+            <CapabilityTruthSelect label="生成音乐" value={variant.supportsMusic} onChange={(value) => updateVariant(index, { supportsMusic: value })} />
+            <CapabilityTruthSelect label="口型同步" value={variant.supportsLipSync} onChange={(value) => updateVariant(index, { supportsLipSync: value })} />
+            <LabeledListInput label="对白语言" value={variant.dialogueLanguagesText} onChange={(value) => updateVariant(index, { dialogueLanguagesText: value })} />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <SwitchField label="支持延长任务" checked={variant.supportsExtension} onChange={(checked) => updateVariant(index, { supportsExtension: checked })} />
+            <SwitchField label="支持首帧续接" checked={variant.supportsFirstFrame} onChange={(checked) => updateVariant(index, { supportsFirstFrame: checked })} />
+            <SwitchField label="支持尾帧续接" checked={variant.supportsLastFrame} onChange={(checked) => updateVariant(index, { supportsLastFrame: checked })} />
+            <SwitchField label="支持视频参考" checked={variant.supportsVideoReference} onChange={(checked) => updateVariant(index, { supportsVideoReference: checked })} />
+            <SwitchField label="音轨可独立分离" checked={variant.audioTrackSeparable} onChange={(checked) => updateVariant(index, { audioTrackSeparable: checked })} />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <LabeledInput label="能力来源" value={variant.source} onChange={(value) => updateVariant(index, { source: value })} />
+            <LabeledInput label="来源地址" value={variant.sourceUrl} onChange={(value) => updateVariant(index, { sourceUrl: value })} />
+            <LabeledInput label="能力版本" value={variant.capabilityVersion} onChange={(value) => updateVariant(index, { capabilityVersion: value })} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CapabilityTruthSelect({ label, value, onChange }: { label: string; value: CapabilityTruth; onChange: (value: CapabilityTruth) => void }) {
+  return (
+    <LabeledSelect
+      label={label}
+      value={value}
+      options={[
+        { value: "unknown", label: "未知" },
+        { value: "true", label: "支持" },
+        { value: "false", label: "不支持" },
+      ]}
+      onChange={(next) => onChange(next as CapabilityTruth)}
+    />
+  );
+}
+
+function LabeledSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {options.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -1842,31 +2205,67 @@ function SwitchField({ label, checked, onChange }: { label: string; checked: boo
   );
 }
 
-function JsonTextarea({ label, value, onChange, large = false }: { label: string; value: string; onChange: (value: string) => void; large?: boolean }) {
-  return (
-    <div className="hidden">
-      <Label>{label}</Label>
-      <Textarea
-        className={cn("font-mono text-xs", large ? "min-h-36" : "min-h-24")}
-        spellCheck={false}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </div>
-  );
-}
-
 function BusinessBindingRow({
   binding,
   model,
   onDelete,
+  onUpdate,
   deleting,
 }: {
   binding: ModelProfileBinding;
   model?: ProviderModelWithAccount;
   onDelete: () => void;
+  onUpdate: (body: UpdateModelProfileBindingRequest) => Promise<void>;
   deleting: boolean;
 }) {
+  const [priority, setPriority] = useState(String(binding.priority));
+  const [weight, setWeight] = useState(String(binding.weight));
+  const [enabled, setEnabled] = useState(binding.enabled);
+  const [reasoningLevel, setReasoningLevel] = useState(binding.runtimeOptions?.reasoningLevel || "");
+  const [saving, setSaving] = useState(false);
+  const reasoningLevels = model ? providerModelReasoningLevels(model) : [];
+
+  const priorityValue = parseNonNegativeBindingInteger(priority);
+  const weightValue = parseNonNegativeBindingInteger(weight);
+  const valuesDirty = priorityValue !== null && weightValue !== null && (
+    priorityValue !== binding.priority ||
+    weightValue !== binding.weight ||
+    reasoningLevel !== (binding.runtimeOptions?.reasoningLevel || "")
+  );
+  const busy = saving || deleting;
+
+  async function saveRoutingValues() {
+    if (priorityValue === null || weightValue === null) {
+      toast.error("优先顺序和权重必须是大于或等于 0 的整数");
+      return;
+    }
+    setSaving(true);
+    try {
+      await onUpdate({
+        priority: priorityValue,
+        weight: weightValue,
+        runtimeOptions: reasoningLevel ? { reasoningLevel } : {},
+      });
+    } catch {
+      // The mutation reports the normalized API error.
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function changeEnabled(next: boolean) {
+    const previous = enabled;
+    setEnabled(next);
+    setSaving(true);
+    try {
+      await onUpdate({ enabled: next });
+    } catch {
+      setEnabled(previous);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="rounded-md border p-3">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -1874,7 +2273,7 @@ function BusinessBindingRow({
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{model?.displayName || model?.modelKey || "模型不可用"}</span>
             {model ? <Badge variant="outline">{modalityLabel(model.modality)}</Badge> : <Badge variant="secondary">未找到</Badge>}
-            <Badge variant={binding.enabled ? "default" : "secondary"}>{binding.enabled ? "启用" : "停用"}</Badge>
+            <Badge variant={enabled ? "default" : "secondary"}>{enabled ? "启用" : "停用"}</Badge>
           </div>
           <div className="truncate font-mono text-xs text-muted-foreground">{model?.modelKey || binding.providerModelId}</div>
           {model ? (
@@ -1882,20 +2281,98 @@ function BusinessBindingRow({
               <span>{model.providerLabel}</span>
               <span>·</span>
               <span>{model.accountName}</span>
-              <span>·</span>
-              <span>优先级 {binding.priority}</span>
-              <span>·</span>
-              <span>权重 {binding.weight}</span>
             </div>
           ) : null}
         </div>
-        <Button size="sm" variant="destructive" onClick={onDelete} disabled={deleting}>
+        <Button size="sm" variant="destructive" onClick={onDelete} disabled={busy}>
           <Trash2 className="h-3.5 w-3.5" />
           删除
         </Button>
       </div>
+
+      <div className={cn(
+        "mt-3 grid gap-3 border-t pt-3 sm:grid-cols-2 xl:items-end",
+        reasoningLevels.length > 0
+          ? "xl:grid-cols-[minmax(110px,0.8fr)_minmax(110px,0.8fr)_minmax(150px,1fr)_minmax(180px,1.2fr)_auto]"
+          : "xl:grid-cols-[minmax(120px,1fr)_minmax(120px,1fr)_minmax(180px,1.2fr)_auto]",
+      )}>
+        <div className="space-y-1.5">
+          <Label htmlFor={`binding-priority-${binding.id}`}>优先顺序</Label>
+          <Input
+            id={`binding-priority-${binding.id}`}
+            type="number"
+            inputMode="numeric"
+            min={0}
+            step={1}
+            value={priority}
+            onChange={(event) => setPriority(event.target.value)}
+            disabled={busy}
+          />
+          <div className="text-xs text-muted-foreground">数字越小越优先</div>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`binding-weight-${binding.id}`}>权重</Label>
+          <Input
+            id={`binding-weight-${binding.id}`}
+            type="number"
+            inputMode="numeric"
+            min={0}
+            step={1}
+            value={weight}
+            onChange={(event) => setWeight(event.target.value)}
+            disabled={busy}
+          />
+          <div className="text-xs text-muted-foreground">同级时数字越大越优先</div>
+        </div>
+        {reasoningLevels.length > 0 && (
+          <div className="space-y-1.5">
+            <Label htmlFor={`binding-reasoning-${binding.id}`}>默认思考等级</Label>
+            <Select
+              value={reasoningLevel || "__provider_default__"}
+              onValueChange={(value) => setReasoningLevel(value === "__provider_default__" ? "" : value)}
+              disabled={busy}
+            >
+              <SelectTrigger id={`binding-reasoning-${binding.id}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__provider_default__">供应商默认</SelectItem>
+                {reasoningLevels.map((level) => (
+                  <SelectItem key={level} value={level}>{reasoningLevelLabel(level)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="text-xs text-muted-foreground">用于该业务模型的所有文本请求</div>
+          </div>
+        )}
+        <div className="flex h-16 items-center justify-between gap-3 rounded-md border px-3">
+          <div className="min-w-0">
+            <Label htmlFor={`binding-enabled-${binding.id}`}>启用路由</Label>
+            <div className="mt-1 text-xs text-muted-foreground">{enabled ? "已开启" : "已关闭"}</div>
+          </div>
+          <Switch
+            id={`binding-enabled-${binding.id}`}
+            checked={enabled}
+            onCheckedChange={(checked) => void changeEnabled(checked)}
+            disabled={busy}
+          />
+        </div>
+        <Button size="sm" onClick={() => void saveRoutingValues()} disabled={busy || !valuesDirty || priorityValue === null || weightValue === null}>
+          {saving ? <Loader2 className="animate-spin" /> : <Save />}
+          保存
+        </Button>
+      </div>
     </div>
   );
+}
+
+function parseNonNegativeBindingInteger(value: string) {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function accountFormFromCatalog(entry: ProviderCatalogEntry | null): AccountForm {
@@ -1947,22 +2424,27 @@ function defaultCapabilityFormFields(modality: string, taskTypes: string[]) {
   const isText = modality === "text" || modality === "multimodal";
   const isImage = modality === "image" || modality === "multimodal";
   const isVideo = modality === "video" || modality === "multimodal";
+  const isAudio = modality === "audio" || modality === "multimodal";
   return {
     supportsStreaming: taskTypes.includes("text.stream"),
+    streamTerminalMode: "done_or_finish_reason" as const,
     supportsReasoning: false,
     supportsReasoningLevels: false,
+    reasoningLevelsText: "",
     supportsMultimodalInput: modality === "multimodal",
     maxInputTokens: "",
     maxOutputTokens: "",
     supportedInputTypesText: listText(isText && modality === "multimodal" ? ["text", "image"] : ["text"]),
     supportedOutputTypesText: listText(isVideo ? ["video"] : isImage ? ["image"] : ["text"]),
     promptMaxLength: "",
+    promptLengthUnit: "characters",
     supportsReferenceImages: false,
     supportsImageEdit: false,
     maxReferenceImages: "",
     imageRequestModesText: listText(["images.generate"]),
     imageAspectRatiosText: listText(["1:1", "16:9", "9:16"]),
-    imageResolutionsText: listText(["standard", "hd"]),
+    imageResolutionsText: listText(["1024x1024"]),
+    imageQualityTiersText: listText(["standard", "hd"]),
     imageResponseFormatsText: listText(["url", "b64_json"]),
     minDurationSeconds: "",
     maxDurationSeconds: "",
@@ -1975,6 +2457,53 @@ function defaultCapabilityFormFields(modality: string, taskTypes: string[]) {
     videoAspectRatiosText: listText(["16:9", "9:16", "1:1"]),
     videoResolutionsText: listText(["720p", "1080p"]),
     videoOutputFormatsText: listText(["video"]),
+    videoVariants: isVideo ? [emptyVideoVariant(1, taskTypes)] : [],
+    supportsTTS: taskTypes.includes("audio.tts"),
+    supportsTranscription: taskTypes.includes("audio.transcribe"),
+    audioVoicesText: "",
+    audioLanguagesText: listText(["zh-CN", "en"]),
+    audioInputFormatsText: listText(["mp3", "wav", "m4a", "webm"]),
+    audioOutputFormatsText: listText(["mp3", "wav", "aac", "flac", "opus"]),
+    audioRequestModesText: listText(isAudio ? ["audio.speech", "audio.transcriptions"] : []),
+    maxTTSCharacters: "",
+    maxAudioDurationSeconds: "",
+  };
+}
+
+function emptyVideoVariant(index: number, taskTypes: string[]): VideoVariantForm {
+  return {
+    variantKey: `variant_${index}`,
+    modelFamily: "",
+    taskTypesText: listText(taskTypes.filter((taskType) => taskType.startsWith("video."))),
+    referenceModesText: listText(["none", "first_frame"]),
+    nativeAudioRequested: "any",
+    durationMode: "discrete",
+    minDurationSeconds: "",
+    maxDurationSeconds: "",
+    durationStepSeconds: "",
+    durationValuesText: listText(["5", "10"]),
+    resolutionsText: listText(["720p", "1080p"]),
+    aspectRatiosText: listText(["16:9", "9:16", "1:1"]),
+    frameRateMode: "unknown",
+    frameRatesText: "",
+    promptLanguagesText: listText(["zh-CN", "en"]),
+    nativeAudioSupport: "unknown",
+    nativeAudioCanDisable: "unknown",
+    supportsDialogue: "unknown",
+    supportsVoiceover: "unknown",
+    supportsAmbientSound: "unknown",
+    supportsMusic: "unknown",
+    supportsLipSync: "unknown",
+    dialogueLanguagesText: listText(["zh-CN"]),
+    audioTrackSeparable: false,
+    supportsExtension: false,
+    supportsFirstFrame: true,
+    supportsLastFrame: false,
+    supportsVideoReference: false,
+    requestModesText: listText(["async_create", "poll", "cancel"]),
+    source: "user",
+    sourceUrl: "",
+    capabilityVersion: "1",
   };
 }
 
@@ -1997,20 +2526,25 @@ function capabilityFormFieldsFromValues(
   const responseFormats = arrayFromValue(xCapabilities.responseFormats).length
     ? arrayFromValue(xCapabilities.responseFormats)
     : arrayFromValue(outputLimits.responseFormats);
-  const supportedResolutions = arrayFromValue(xCapabilities.supportedResolutions).length
-    ? arrayFromValue(xCapabilities.supportedResolutions)
+  const supportedResolutions = arrayFromValue(xCapabilities.supportedResolutions);
+  const imageQualityTiers = arrayFromValue(xCapabilities.quality).filter((value) => value !== "auto").length
+    ? arrayFromValue(xCapabilities.quality).filter((value) => value !== "auto")
     : arrayFromValue(qualityTiers);
+  const videoVariants = videoVariantFormsFromCapabilities(xCapabilities, taskTypes);
   return {
     ...defaults,
     supportsStreaming: booleanFromValue(xCapabilities.supportsStreaming, defaults.supportsStreaming),
+    streamTerminalMode: streamTerminalModeFromValue(xCapabilities.streamTerminalMode),
     supportsReasoning: booleanFromValue(xCapabilities.supportsReasoning, defaults.supportsReasoning),
     supportsReasoningLevels: booleanFromValue(xCapabilities.supportsReasoningLevels, defaults.supportsReasoningLevels),
+    reasoningLevelsText: listText(arrayFromValue(xCapabilities.reasoningLevels)),
     supportsMultimodalInput: booleanFromValue(xCapabilities.supportsMultimodalInput, defaults.supportsMultimodalInput),
     maxInputTokens: textFromValue(inputLimits.maxTokens),
     maxOutputTokens: textFromValue(outputLimits.maxTokens),
     supportedInputTypesText: listText(supportedInputTypes.length ? supportedInputTypes : splitList(defaults.supportedInputTypesText)),
     supportedOutputTypesText: listText(supportedOutputTypes.length ? supportedOutputTypes : splitList(defaults.supportedOutputTypesText)),
     promptMaxLength: textFromValue(inputLimits.promptMaxLength),
+    promptLengthUnit: textFromValue(inputLimits.promptLengthUnit ?? xCapabilities.promptLengthUnit) || defaults.promptLengthUnit,
     supportsReferenceImages: booleanFromValue(
       xCapabilities.supportsReferenceImages ?? xCapabilities.supportsReferences,
       defaults.supportsReferenceImages,
@@ -2020,6 +2554,9 @@ function capabilityFormFieldsFromValues(
     imageRequestModesText: listText(arrayFromValue(xCapabilities.requestModes).length ? arrayFromValue(xCapabilities.requestModes) : splitList(defaults.imageRequestModesText)),
     imageAspectRatiosText: listText(arrayFromValue(xCapabilities.supportedAspectRatios).length ? arrayFromValue(xCapabilities.supportedAspectRatios) : splitList(defaults.imageAspectRatiosText)),
     imageResolutionsText: listText(supportedResolutions.length ? supportedResolutions : splitList(defaults.imageResolutionsText)),
+    imageQualityTiersText: listText(
+      imageQualityTiers.length ? imageQualityTiers : splitList(defaults.imageQualityTiersText),
+    ),
     imageResponseFormatsText: listText(responseFormats.length ? responseFormats : splitList(defaults.imageResponseFormatsText)),
     minDurationSeconds: textFromValue(xCapabilities.minDurationSeconds),
     maxDurationSeconds: textFromValue(xCapabilities.maxDurationSeconds),
@@ -2032,7 +2569,113 @@ function capabilityFormFieldsFromValues(
     videoAspectRatiosText: listText(arrayFromValue(xCapabilities.supportedAspectRatios).length ? arrayFromValue(xCapabilities.supportedAspectRatios) : splitList(defaults.videoAspectRatiosText)),
     videoResolutionsText: listText(supportedResolutions.length ? supportedResolutions : splitList(defaults.videoResolutionsText)),
     videoOutputFormatsText: listText(supportedOutputTypes.length ? supportedOutputTypes : splitList(defaults.videoOutputFormatsText)),
+    videoVariants: videoVariants.length > 0 ? videoVariants : defaults.videoVariants,
+    supportsTTS: booleanFromValue(xCapabilities.supportsTTS, defaults.supportsTTS),
+    supportsTranscription: booleanFromValue(xCapabilities.supportsTranscription, defaults.supportsTranscription),
+    audioVoicesText: listText(arrayFromValue(xCapabilities.audioVoices).length ? arrayFromValue(xCapabilities.audioVoices) : splitList(defaults.audioVoicesText)),
+    audioLanguagesText: listText(arrayFromValue(xCapabilities.audioLanguages).length ? arrayFromValue(xCapabilities.audioLanguages) : splitList(defaults.audioLanguagesText)),
+    audioInputFormatsText: listText(arrayFromValue(xCapabilities.audioInputFormats).length ? arrayFromValue(xCapabilities.audioInputFormats) : splitList(defaults.audioInputFormatsText)),
+    audioOutputFormatsText: listText(arrayFromValue(xCapabilities.audioResponseFormats).length ? arrayFromValue(xCapabilities.audioResponseFormats) : splitList(defaults.audioOutputFormatsText)),
+    audioRequestModesText: listText(arrayFromValue(xCapabilities.audioRequestModes).length ? arrayFromValue(xCapabilities.audioRequestModes) : splitList(defaults.audioRequestModesText)),
+    maxTTSCharacters: textFromValue(xCapabilities.maxTTSCharacters ?? inputLimits.maxTTSCharacters),
+    maxAudioDurationSeconds: textFromValue(xCapabilities.maxAudioDurationSeconds ?? inputLimits.maxAudioDurationSeconds),
   };
+}
+
+function videoVariantFormsFromCapabilities(xCapabilities: JsonRecord, taskTypes: string[]): VideoVariantForm[] {
+  const rawVariants = Array.isArray(xCapabilities.videoGenerationVariants)
+    ? xCapabilities.videoGenerationVariants.filter(isRecord)
+    : [];
+  if (rawVariants.length === 0) {
+    const fallback = emptyVideoVariant(1, taskTypes);
+    const durations = arrayFromValue(xCapabilities.durations);
+    const minDuration = textFromValue(xCapabilities.minDurationSeconds);
+    const maxDuration = textFromValue(xCapabilities.maxDurationSeconds);
+    fallback.durationMode = durations.length === 1 ? "fixed" : durations.length > 1 ? "discrete" : minDuration && maxDuration ? "continuous_range" : "discrete";
+    fallback.durationValuesText = durations.length > 0 ? listText(durations) : fallback.durationValuesText;
+    fallback.minDurationSeconds = minDuration;
+    fallback.maxDurationSeconds = maxDuration;
+    fallback.resolutionsText = listText(arrayFromValue(xCapabilities.supportedResolutions));
+    fallback.aspectRatiosText = listText(arrayFromValue(xCapabilities.supportedAspectRatios));
+    fallback.requestModesText = listText(arrayFromValue(xCapabilities.requestModes));
+    fallback.supportsFirstFrame = booleanFromValue(xCapabilities.supportsFirstFrame, false);
+    fallback.supportsLastFrame = booleanFromValue(xCapabilities.supportsLastFrame, false);
+    fallback.supportsVideoReference = booleanFromValue(xCapabilities.supportsVideoReference, false);
+    fallback.referenceModesText = listText([
+      "none",
+      ...(booleanFromValue(xCapabilities.supportsReferenceImages, false) || fallback.supportsFirstFrame ? ["first_frame"] : []),
+      ...(fallback.supportsLastFrame ? ["last_frame"] : []),
+      ...(fallback.supportsVideoReference ? ["video_reference"] : []),
+    ]);
+    fallback.source = "derived";
+    return [fallback];
+  }
+  return rawVariants.map((raw, index) => {
+    const form = emptyVideoVariant(index + 1, taskTypes);
+    const when = isPlainRecord(raw.when) ? raw.when : {};
+    const duration = isPlainRecord(raw.duration) ? raw.duration : {};
+    const frameRate = isPlainRecord(raw.frameRate) ? raw.frameRate : {};
+    const nativeAudio = isPlainRecord(raw.nativeAudio) ? raw.nativeAudio : {};
+    const continuation = isPlainRecord(raw.continuation) ? raw.continuation : {};
+    return {
+      ...form,
+      variantKey: textFromValue(raw.variantKey) || form.variantKey,
+      modelFamily: textFromValue(raw.modelFamily),
+      taskTypesText: listText(arrayFromValue(when.taskTypes)),
+      referenceModesText: listText(arrayFromValue(when.referenceModes)),
+      nativeAudioRequested: capabilityTruthFromValue(when.nativeAudioRequested, "any"),
+      durationMode: videoDurationModeFromValue(duration.mode),
+      minDurationSeconds: textFromValue(duration.minSeconds),
+      maxDurationSeconds: textFromValue(duration.maxSeconds),
+      durationStepSeconds: textFromValue(duration.stepSeconds),
+      durationValuesText: listText(arrayFromValue(duration.values)),
+      resolutionsText: listText(arrayFromValue(raw.resolutions)),
+      aspectRatiosText: listText(arrayFromValue(raw.aspectRatios)),
+      frameRateMode: videoFrameRateModeFromValue(frameRate.mode),
+      frameRatesText: listText(arrayFromValue(frameRate.values)),
+      promptLanguagesText: listText(arrayFromValue(raw.supportedPromptLanguages)),
+      nativeAudioSupport: capabilityTruthFromValue(nativeAudio.support),
+      nativeAudioCanDisable: capabilityTruthFromValue(nativeAudio.canDisable),
+      supportsDialogue: capabilityTruthFromValue(nativeAudio.supportsDialogue),
+      supportsVoiceover: capabilityTruthFromValue(nativeAudio.supportsVoiceover),
+      supportsAmbientSound: capabilityTruthFromValue(nativeAudio.supportsAmbientSound),
+      supportsMusic: capabilityTruthFromValue(nativeAudio.supportsMusic),
+      supportsLipSync: capabilityTruthFromValue(nativeAudio.supportsLipSync),
+      dialogueLanguagesText: listText(arrayFromValue(nativeAudio.supportedDialogueLanguages)),
+      audioTrackSeparable: booleanFromValue(nativeAudio.audioTrackSeparable, false),
+      supportsExtension: booleanFromValue(continuation.supportsExtension, false),
+      supportsFirstFrame: booleanFromValue(continuation.supportsFirstFrame, false),
+      supportsLastFrame: booleanFromValue(continuation.supportsLastFrame, false),
+      supportsVideoReference: booleanFromValue(continuation.supportsVideoReference, false),
+      requestModesText: listText(arrayFromValue(raw.requestModes)),
+      source: textFromValue(raw.source) || "user",
+      sourceUrl: textFromValue(raw.sourceUrl),
+      capabilityVersion: textFromValue(raw.capabilityVersion) || "1",
+    };
+  });
+}
+
+function videoDurationModeFromValue(value: JsonValue | undefined): VideoVariantForm["durationMode"] {
+  const mode = textFromValue(value);
+  return mode === "continuous_range" || mode === "fixed" || mode === "source_duration" ? mode : "discrete";
+}
+
+function videoFrameRateModeFromValue(value: JsonValue | undefined): VideoVariantForm["frameRateMode"] {
+  const mode = textFromValue(value);
+  return mode === "fixed" || mode === "selectable" ? mode : "unknown";
+}
+
+function capabilityTruthFromValue<T extends "unknown" | "any" = "unknown">(
+  value: JsonValue | undefined,
+  empty: T = "unknown" as T,
+): "true" | "false" | T {
+  if (value === true || value === "true") {
+    return "true" as const;
+  }
+  if (value === false || value === "false") {
+    return "false" as const;
+  }
+  return empty;
 }
 
 function catalogInstallModelBody(model: ProviderCatalogModelTemplate | ModelDraft): JsonRecord {
@@ -2075,6 +2718,9 @@ function inferModelModality(modelKey: string) {
   }
   if (normalized.includes("image") || normalized.includes("imagine") || normalized.includes("seedream")) {
     return "image";
+  }
+  if (normalized.includes("whisper") || normalized.includes("tts") || normalized.includes("speech") || normalized.includes("audio")) {
+    return "audio";
   }
   return "text";
 }
@@ -2188,18 +2834,16 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
   const promptMaxLength = parseOptionalNumber(modelForm.promptMaxLength, "Prompt 最大长度");
   const maxReferenceImages = parseOptionalNumber(modelForm.maxReferenceImages, "参考图数量上限");
   const maxReferenceVideos = parseOptionalNumber(modelForm.maxReferenceVideos, "参考视频数量上限");
-  const minDurationSeconds = parseOptionalNumber(modelForm.minDurationSeconds, "最短秒数");
-  const maxDurationSeconds = parseOptionalNumber(modelForm.maxDurationSeconds, "最长秒数");
-  const durations = parseNumberList(modelForm.durationsText, "可选秒数");
+  const maxTTSCharacters = parseOptionalNumber(modelForm.maxTTSCharacters, "单次合成文本上限");
+  const maxAudioDurationSeconds = parseOptionalNumber(modelForm.maxAudioDurationSeconds, "单次识别音频上限");
   if (
     textInputTokens === null ||
     textOutputTokens === null ||
     promptMaxLength === null ||
     maxReferenceImages === null ||
     maxReferenceVideos === null ||
-    minDurationSeconds === null ||
-    maxDurationSeconds === null ||
-    durations === null
+    maxTTSCharacters === null ||
+    maxAudioDurationSeconds === null
   ) {
     return null;
   }
@@ -2220,12 +2864,35 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
   }
   if (promptMaxLength !== undefined) {
     inputLimits.promptMaxLength = promptMaxLength;
+    inputLimits.promptLengthUnit = modelForm.promptLengthUnit;
+    xCapabilities.promptMaxLength = promptMaxLength;
+    xCapabilities.promptLengthUnit = modelForm.promptLengthUnit;
+  } else {
+    delete inputLimits.promptMaxLength;
+    delete inputLimits.promptLengthUnit;
+    delete xCapabilities.promptMaxLength;
+    delete xCapabilities.promptLengthUnit;
   }
 
   xCapabilities.supportsAsyncTask = modelForm.supportsAsyncTask;
   xCapabilities.supportsStreaming = modelForm.supportsStreaming;
+  if (modelForm.supportsStreaming) {
+    xCapabilities.streamTerminalMode = modelForm.streamTerminalMode;
+  } else {
+    delete xCapabilities.streamTerminalMode;
+  }
   xCapabilities.supportsReasoning = modelForm.supportsReasoning;
   xCapabilities.supportsReasoningLevels = modelForm.supportsReasoningLevels;
+  const reasoningLevels = splitList(modelForm.reasoningLevelsText);
+  if (modelForm.supportsReasoningLevels) {
+    if (reasoningLevels.length === 0) {
+      toast.error("支持思考等级时必须填写至少一个可用等级");
+      return null;
+    }
+    xCapabilities.reasoningLevels = reasoningLevels;
+  } else {
+    delete xCapabilities.reasoningLevels;
+  }
   xCapabilities.supportsMultimodalInput = modelForm.supportsMultimodalInput;
 
   let qualityTiers = Array.isArray(qualityTiersFromState) ? qualityTiersFromState : [];
@@ -2236,6 +2903,7 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
     }
     const imageAspectRatios = splitList(modelForm.imageAspectRatiosText);
     const imageResolutions = splitList(modelForm.imageResolutionsText);
+    const imageQualityTiers = splitList(modelForm.imageQualityTiersText);
     const imageResponseFormats = splitList(modelForm.imageResponseFormatsText);
     xCapabilities.supportsReferences = modelForm.supportsReferenceImages;
     xCapabilities.supportsReferenceImages = modelForm.supportsReferenceImages;
@@ -2249,7 +2917,13 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
     }
     if (imageResolutions.length > 0) {
       xCapabilities.supportedResolutions = imageResolutions;
-      qualityTiers = imageResolutions;
+    }
+    if (imageQualityTiers.length > 0) {
+      const supportsAutoQuality = arrayFromValue(xCapabilities.quality).includes("auto");
+      xCapabilities.quality = supportsAutoQuality
+        ? uniqueStrings(["auto", ...imageQualityTiers])
+        : imageQualityTiers;
+      qualityTiers = imageQualityTiers;
     }
     if (imageResponseFormats.length > 0) {
       outputLimits.responseFormats = imageResponseFormats;
@@ -2258,24 +2932,28 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
   }
 
   if (modelForm.modality === "video" || modelForm.modality === "multimodal") {
-    const videoRequestModes = splitList(modelForm.videoRequestModesText);
-    const videoAspectRatios = splitList(modelForm.videoAspectRatiosText);
-    const videoResolutions = splitList(modelForm.videoResolutionsText);
+    const videoVariants = buildVideoGenerationVariants(modelForm.videoVariants);
+    if (!videoVariants) {
+      return null;
+    }
+    const videoRequestModes = uniqueStrings(videoVariants.flatMap((variant) => variant.requestModes as string[]));
+    const videoAspectRatios = uniqueStrings(videoVariants.flatMap((variant) => variant.aspectRatios as string[]));
+    const videoResolutions = uniqueStrings(videoVariants.flatMap((variant) => variant.resolutions as string[]));
     const videoOutputFormats = splitList(modelForm.videoOutputFormatsText);
+    const referenceModes = uniqueStrings(videoVariants.flatMap((variant) => {
+      const when = variant.when as JsonRecord;
+      return Array.isArray(when.referenceModes) ? when.referenceModes.map(String) : [];
+    }));
+    const continuations = videoVariants.map((variant) => variant.continuation as JsonRecord);
+    xCapabilities.videoGenerationVariants = videoVariants;
     xCapabilities.requestModes = videoRequestModes;
-    xCapabilities.supportsReferenceImages = modelForm.supportsReferenceImages;
-    xCapabilities.supportsFirstFrame = modelForm.supportsFirstFrame;
-    xCapabilities.supportsLastFrame = modelForm.supportsLastFrame;
-    xCapabilities.supportsVideoReference = modelForm.supportsVideoReference;
-    if (minDurationSeconds !== undefined) {
-      xCapabilities.minDurationSeconds = minDurationSeconds;
-    }
-    if (maxDurationSeconds !== undefined) {
-      xCapabilities.maxDurationSeconds = maxDurationSeconds;
-    }
-    if (durations.length > 0) {
-      xCapabilities.durations = durations;
-    }
+    xCapabilities.supportsReferenceImages = referenceModes.includes("first_frame");
+    xCapabilities.supportsFirstFrame = continuations.some((item) => item.supportsFirstFrame === true);
+    xCapabilities.supportsLastFrame = continuations.some((item) => item.supportsLastFrame === true);
+    xCapabilities.supportsVideoReference = continuations.some((item) => item.supportsVideoReference === true);
+    delete xCapabilities.minDurationSeconds;
+    delete xCapabilities.maxDurationSeconds;
+    delete xCapabilities.durations;
     if (maxReferenceImages !== undefined) {
       inputLimits.maxReferenceImages = maxReferenceImages;
       xCapabilities.maxReferenceImages = maxReferenceImages;
@@ -2297,6 +2975,35 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
     }
   }
 
+  if (modelForm.modality === "audio" || modelForm.modality === "multimodal") {
+    const audioVoices = splitList(modelForm.audioVoicesText);
+    const audioLanguages = splitList(modelForm.audioLanguagesText);
+    const audioInputFormats = splitList(modelForm.audioInputFormatsText);
+    const audioOutputFormats = splitList(modelForm.audioOutputFormatsText);
+    const audioRequestModes = splitList(modelForm.audioRequestModesText);
+    xCapabilities.supportsTTS = modelForm.supportsTTS;
+    xCapabilities.supportsTranscription = modelForm.supportsTranscription;
+    xCapabilities.audioVoices = audioVoices;
+    xCapabilities.audioLanguages = audioLanguages;
+    xCapabilities.audioInputFormats = audioInputFormats;
+    xCapabilities.audioResponseFormats = audioOutputFormats;
+    xCapabilities.audioRequestModes = audioRequestModes;
+    if (maxTTSCharacters !== undefined) {
+      inputLimits.maxTTSCharacters = maxTTSCharacters;
+      xCapabilities.maxTTSCharacters = maxTTSCharacters;
+    }
+    if (maxAudioDurationSeconds !== undefined) {
+      inputLimits.maxAudioDurationSeconds = maxAudioDurationSeconds;
+      xCapabilities.maxAudioDurationSeconds = maxAudioDurationSeconds;
+    }
+    if (audioInputFormats.length > 0) {
+      inputLimits.audioFormats = audioInputFormats;
+    }
+    if (audioOutputFormats.length > 0) {
+      outputLimits.audioFormats = audioOutputFormats;
+    }
+  }
+
   return {
     taskTypes,
     inputLimits,
@@ -2308,6 +3015,129 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
     },
     pricingPolicy,
   };
+}
+
+function buildVideoGenerationVariants(forms: VideoVariantForm[]): JsonRecord[] | null {
+  if (forms.length === 0) {
+    toast.error("请至少配置一个视频能力组合");
+    return null;
+  }
+  const keys = new Set<string>();
+  const variants: JsonRecord[] = [];
+  for (const [index, form] of forms.entries()) {
+    const label = `视频能力 ${index + 1}`;
+    const variantKey = form.variantKey.trim();
+    if (!variantKey) {
+      toast.error(`${label}缺少能力标识`);
+      return null;
+    }
+    if (keys.has(variantKey)) {
+      toast.error(`视频能力标识 ${variantKey} 重复`);
+      return null;
+    }
+    keys.add(variantKey);
+    const duration: JsonRecord = { mode: form.durationMode };
+    if (form.durationMode === "continuous_range") {
+      const minSeconds = parseOptionalNumber(form.minDurationSeconds, `${label}最短秒数`);
+      const maxSeconds = parseOptionalNumber(form.maxDurationSeconds, `${label}最长秒数`);
+      const stepSeconds = parseOptionalNumber(form.durationStepSeconds, `${label}步进秒数`);
+      if (minSeconds === null || maxSeconds === null || stepSeconds === null) {
+        return null;
+      }
+      if (minSeconds === undefined || maxSeconds === undefined || minSeconds <= 0 || maxSeconds < minSeconds || (stepSeconds ?? 0) < 0) {
+        toast.error(`${label}的连续时长范围无效`);
+        return null;
+      }
+      duration.minSeconds = minSeconds;
+      duration.maxSeconds = maxSeconds;
+      if (stepSeconds !== undefined) {
+        duration.stepSeconds = stepSeconds;
+      }
+    } else if (form.durationMode === "discrete" || form.durationMode === "fixed") {
+      const values = parseNumberList(form.durationValuesText, `${label}可用秒数`);
+      if (!values || values.length === 0 || values.some((value) => value <= 0)) {
+        toast.error(`${label}需要正数时长`);
+        return null;
+      }
+      if (form.durationMode === "fixed" && values.length !== 1) {
+        toast.error(`${label}的固定时长只能填写一个值`);
+        return null;
+      }
+      duration.values = uniqueNumbers(values);
+    }
+    const frameRates = parseNumberList(form.frameRatesText, `${label}帧率`);
+    if (frameRates === null) {
+      return null;
+    }
+    if (form.frameRateMode !== "unknown" && (frameRates.length === 0 || frameRates.some((value) => value <= 0))) {
+      toast.error(`${label}需要有效帧率`);
+      return null;
+    }
+    if (form.frameRateMode === "fixed" && frameRates.length !== 1) {
+      toast.error(`${label}的固定帧率只能填写一个值`);
+      return null;
+    }
+    const when: JsonRecord = {
+      taskTypes: splitList(form.taskTypesText),
+      referenceModes: splitList(form.referenceModesText),
+    };
+    const nativeAudioRequested = truthToOptionalBoolean(form.nativeAudioRequested);
+    if (nativeAudioRequested !== undefined) {
+      when.nativeAudioRequested = nativeAudioRequested;
+    }
+    const nativeAudio: JsonRecord = {
+      support: form.nativeAudioSupport,
+      supportedDialogueLanguages: splitList(form.dialogueLanguagesText),
+      audioTrackSeparable: form.audioTrackSeparable,
+    };
+    for (const [key, value] of [
+      ["canDisable", form.nativeAudioCanDisable],
+      ["supportsDialogue", form.supportsDialogue],
+      ["supportsVoiceover", form.supportsVoiceover],
+      ["supportsAmbientSound", form.supportsAmbientSound],
+      ["supportsMusic", form.supportsMusic],
+      ["supportsLipSync", form.supportsLipSync],
+    ] as Array<[string, CapabilityTruth]>) {
+      const resolved = truthToOptionalBoolean(value);
+      if (resolved !== undefined) {
+        nativeAudio[key] = resolved;
+      }
+    }
+    variants.push({
+      variantKey,
+      ...(form.modelFamily.trim() ? { modelFamily: form.modelFamily.trim() } : {}),
+      when,
+      duration,
+      resolutions: splitList(form.resolutionsText),
+      aspectRatios: splitList(form.aspectRatiosText),
+      frameRate: { mode: form.frameRateMode, values: uniqueNumbers(frameRates) },
+      supportedPromptLanguages: splitList(form.promptLanguagesText),
+      nativeAudio,
+      continuation: {
+        supportsExtension: form.supportsExtension,
+        supportsFirstFrame: form.supportsFirstFrame,
+        supportsLastFrame: form.supportsLastFrame,
+        supportsVideoReference: form.supportsVideoReference,
+      },
+      requestModes: splitList(form.requestModesText),
+      source: form.source.trim() || "user",
+      ...(form.sourceUrl.trim() ? { sourceUrl: form.sourceUrl.trim() } : {}),
+      capabilityVersion: form.capabilityVersion.trim() || "1",
+    });
+  }
+  return variants;
+}
+
+function truthToOptionalBoolean(value: string) {
+  return value === "true" ? true : value === "false" ? false : undefined;
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function uniqueNumbers(values: number[]) {
+  return Array.from(new Set(values)).sort((left, right) => left - right);
 }
 
 function safeJsonRecord(text: string): JsonRecord | null {
@@ -2360,6 +3190,12 @@ function booleanFromValue(value: JsonValue | undefined, fallback: boolean) {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function streamTerminalModeFromValue(value: JsonValue | undefined): ModelForm["streamTerminalMode"] {
+  return value === "done_marker" || value === "finish_reason" || value === "done_or_finish_reason"
+    ? value
+    : "done_or_finish_reason";
+}
+
 function parseOptionalNumber(text: string, label: string) {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -2393,6 +3229,7 @@ function defaultBusinessBindingDraft(): BusinessModelBindingDraft {
     priority: "100",
     weight: "100",
     enabled: true,
+    reasoningLevel: "",
   };
 }
 
@@ -2511,6 +3348,25 @@ function modelTaskTypes(model: ProviderModel) {
   return defaultTaskTypesByModality[model.modality] || [];
 }
 
+function providerModelReasoningLevels(model: ProviderModel) {
+  const levels: string[] = [];
+  const seen = new Set<string>();
+  for (const capability of model.capabilities || []) {
+    const options = capability.providerOptionsSchema;
+    const xCapabilities = isPlainRecord(options?.xCapabilities) ? options.xCapabilities : {};
+    for (const level of arrayFromValue(xCapabilities.reasoningLevels)) {
+      const normalized = level.trim();
+      const key = normalized.toLowerCase();
+      if (!key || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      levels.push(normalized);
+    }
+  }
+  return levels;
+}
+
 function modelCapabilityLabels(model: ProviderModel) {
   const capability = model.capabilities?.[0] as ProviderModelCapability | undefined;
   const options = capability?.providerOptionsSchema;
@@ -2529,6 +3385,12 @@ function modelCapabilityLabels(model: ProviderModel) {
   if (xCapabilities.supportsAsyncTask === true) {
     labels.push("异步任务");
   }
+  if (xCapabilities.supportsTTS === true) {
+    labels.push("语音合成");
+  }
+  if (xCapabilities.supportsTranscription === true) {
+    labels.push("语音识别");
+  }
   if (xCapabilities.supportsReferences === true || xCapabilities.supportsReferenceImages === true) {
     labels.push("参考图");
   }
@@ -2541,6 +3403,17 @@ function modelCapabilityLabels(model: ProviderModel) {
   if (xCapabilities.supportsVideoReference === true) {
     labels.push("视频参考");
   }
+  if (Array.isArray(xCapabilities.videoGenerationVariants) && xCapabilities.videoGenerationVariants.length > 0) {
+    labels.push(`${xCapabilities.videoGenerationVariants.length} 个视频能力`);
+    const audioSupports = xCapabilities.videoGenerationVariants
+      .filter(isRecord)
+      .map((variant) => isPlainRecord(variant.nativeAudio) ? variant.nativeAudio.support : undefined);
+    if (audioSupports.includes("true")) {
+      labels.push("原生音频");
+    } else if (audioSupports.includes("unknown")) {
+      labels.push("原生音频待验证");
+    }
+  }
   if (Array.isArray(xCapabilities.requestModes) && xCapabilities.requestModes.length > 0) {
     labels.push(`请求 ${xCapabilities.requestModes.map(String).join("/")}`);
   }
@@ -2552,7 +3425,7 @@ function isPlainRecord(value: JsonValue | undefined): value is JsonRecord {
 }
 
 function groupModelsByModality(models: ProviderModel[]) {
-  const order = ["text", "image", "video", "multimodal"];
+  const order = ["text", "image", "video", "audio", "multimodal"];
   return order
     .map((modality) => ({
       modality,

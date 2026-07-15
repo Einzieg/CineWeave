@@ -74,6 +74,56 @@ func TestNormalizeShotAssetRequirements(t *testing.T) {
 	}
 }
 
+func TestResolveShotAssetRequirementsSupportsNamesIDsAndVisibleFallback(t *testing.T) {
+	storyboard := json.RawMessage(`{
+	  "shots": [
+	    {"shotNo":1,"assetRequirements":["绝境山巅", "前世方源"]},
+	    {"shotNo":2,"assetRequirements":[{"assetId":"prop-1","requirementType":"prop_state","action":"振翅"}]},
+	    {"shotNo":3,"assetRequirements":[]}
+	  ]
+	}`)
+	parsed, err := ParseShotAssetRequirements(storyboard)
+	if err != nil {
+		t.Fatalf("ParseShotAssetRequirements: %v", err)
+	}
+	resolved, err := ResolveShotAssetRequirements(parsed, []StoryboardShot{
+		{ShotNo: 1, Visual: "前世方源站在绝境山巅。"},
+		{ShotNo: 2, Visual: "春秋蝉振翅。"},
+		{ShotNo: 3, Visual: "古月方源在房中醒来。"},
+	}, []CanonicalAssetRecord{
+		{ID: "scene-1", AssetType: "scene", Name: "绝境山巅"},
+		{ID: "character-1", AssetType: "character", Name: "前世方源"},
+		{ID: "prop-1", AssetType: "prop", Name: "春秋蝉"},
+		{ID: "character-2", AssetType: "character", Name: "古月方源"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveShotAssetRequirements: %v", err)
+	}
+	if len(resolved) != 4 {
+		t.Fatalf("resolved len = %d, want 4: %+v", len(resolved), resolved)
+	}
+	byAssetID := map[string]ShotAssetRequirementRecord{}
+	for _, requirement := range resolved {
+		byAssetID[requirement.AssetID] = requirement
+	}
+	if byAssetID["scene-1"].RequirementType != "scene_variant" || byAssetID["character-1"].RequirementType != "character_appearance" || byAssetID["prop-1"].AssetName != "春秋蝉" {
+		t.Fatalf("resolved requirements = %+v", resolved)
+	}
+	if byAssetID["character-2"].ShotNo != 3 {
+		t.Fatalf("visible fallback missing: %+v", resolved)
+	}
+}
+
+func TestResolveShotAssetRequirementsRejectsSilentTotalMismatch(t *testing.T) {
+	parsed, err := ParseShotAssetRequirements(json.RawMessage(`{"shots":[{"shotNo":1,"assetRequirements":["不存在的资产"]}]}`))
+	if err != nil {
+		t.Fatalf("ParseShotAssetRequirements: %v", err)
+	}
+	if _, err := ResolveShotAssetRequirements(parsed, []StoryboardShot{{ShotNo: 1, Visual: "空镜"}}, []CanonicalAssetRecord{{ID: "scene-1", AssetType: "scene", Name: "绝境山巅"}}); err == nil {
+		t.Fatal("expected unmatched model requirements to fail")
+	}
+}
+
 func TestResolveSourceToScriptOptions(t *testing.T) {
 	options := resolveSourceToScriptOptions(json.RawMessage(`{
 	  "sourceId": "  source-1  ",

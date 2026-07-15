@@ -19,6 +19,8 @@ const (
 	TaskTypeTextGenerate    = "text.generate"
 	TaskTypeTextStream      = "text.stream"
 	TaskTypeImageGenerate   = "image.generate"
+	TaskTypeAudioTTS        = "audio.tts"
+	TaskTypeAudioTranscribe = "audio.transcribe"
 	TaskTypeVideoCreateTask = "video.create_task"
 	TaskTypeVideoPollTask   = "video.poll_task"
 	TaskTypeVideoCancelTask = "video.cancel_task"
@@ -854,7 +856,7 @@ func validateBudget(raw string) error {
 
 func validProviderLimitTaskType(taskType string) bool {
 	switch strings.TrimSpace(taskType) {
-	case TaskTypeAny, TaskTypeTextGenerate, TaskTypeTextStream, TaskTypeImageGenerate, TaskTypeVideoCreateTask, TaskTypeVideoPollTask, TaskTypeVideoCancelTask:
+	case TaskTypeAny, TaskTypeTextGenerate, TaskTypeTextStream, TaskTypeImageGenerate, TaskTypeAudioTTS, TaskTypeAudioTranscribe, TaskTypeVideoCreateTask, TaskTypeVideoPollTask, TaskTypeVideoCancelTask:
 		return true
 	default:
 		return false

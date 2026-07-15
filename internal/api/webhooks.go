@@ -116,10 +116,7 @@ func (s *Server) recordProviderWebhook(r *http.Request, accountID, externalTaskI
 		"status":              status,
 		"payload":             payload,
 	})
-	if _, err := tx.Exec(r.Context(), `
-		INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
-		VALUES ($1, $2, 'provider.webhook.received', 'provider_async_task', $3, $4)
-	`, organizationID, projectID, taskID, eventPayload); err != nil {
+	if err := insertAPIEvent(r.Context(), tx, organizationID, stringValue(projectID), "provider.webhook.received", "provider_async_task", taskID, eventPayload); err != nil {
 		return providerWebhookResult{}, err
 	}
 	if err := tx.Commit(r.Context()); err != nil {

@@ -53,3 +53,32 @@ func TestCatalogInstallModelsFromTemplates(t *testing.T) {
 		t.Fatalf("inputLimits = %#v", inputLimits)
 	}
 }
+
+func TestNormalizeCatalogInstallModelMergesDocumentedCapabilityHints(t *testing.T) {
+	supportsJSON := true
+	supportsTools := false
+	model, err := normalizeCatalogInstallModel(CatalogInstallModel{
+		ModelKey:           "example/model",
+		DisplayName:        "Example Model",
+		Modality:           "text",
+		TaskTypes:          []string{"text.generate", "text.stream"},
+		ExecutionMode:      "sync",
+		SupportsJsonOutput: &supportsJSON,
+		SupportsToolCalls:  &supportsTools,
+		ProviderOptionsSchema: json.RawMessage(`{
+			"type":"object",
+			"xCapabilities":{"supportsStreaming":true}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("normalizeCatalogInstallModel() error = %v", err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(model.ProviderOptionsSchema, &schema); err != nil {
+		t.Fatalf("decode provider options: %v", err)
+	}
+	xCapabilities, _ := schema["xCapabilities"].(map[string]any)
+	if xCapabilities["executionMode"] != "sync" || xCapabilities["supportsJsonOutput"] != true || xCapabilities["supportsToolCalls"] != false || xCapabilities["supportsStreaming"] != true {
+		t.Fatalf("xCapabilities = %#v", xCapabilities)
+	}
+}

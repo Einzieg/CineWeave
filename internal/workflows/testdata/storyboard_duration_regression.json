@@ -1,0 +1,25 @@
+{
+  "name": "6355-character episode legacy duration clamp regression",
+  "scriptCharacterCount": 6355,
+  "rawTotalSeconds": 410,
+  "legacyMaxShotSeconds": 15,
+  "legacyStoredTotalSeconds": 240,
+  "shots": [
+    {"shotNo": 1, "duration": 28, "visual": "shot 1"},
+    {"shotNo": 2, "duration": 22, "visual": "shot 2"},
+    {"shotNo": 3, "duration": 20, "visual": "shot 3"},
+    {"shotNo": 4, "duration": 35, "visual": "shot 4"},
+    {"shotNo": 5, "duration": 25, "visual": "shot 5"},
+    {"shotNo": 6, "duration": 22, "visual": "shot 6"},
+    {"shotNo": 7, "duration": 15, "visual": "shot 7"},
+    {"shotNo": 8, "duration": 22, "visual": "shot 8"},
+    {"shotNo": 9, "duration": 42, "visual": "shot 9"},
+    {"shotNo": 10, "duration": 45, "visual": "shot 10"},
+    {"shotNo": 11, "duration": 35, "visual": "shot 11"},
+    {"shotNo": 12, "duration": 18, "visual": "shot 12"},
+    {"shotNo": 13, "duration": 20, "visual": "shot 13"},
+    {"shotNo": 14, "duration": 26, "visual": "shot 14"},
+    {"shotNo": 15, "duration": 20, "visual": "shot 15"},
+    {"shotNo": 16, "duration": 15, "visual": "shot 16"}
+  ]
+}

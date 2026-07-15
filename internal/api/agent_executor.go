@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Einzieg/cineweave/internal/agent"
 	"github.com/Einzieg/cineweave/internal/auth"
@@ -59,6 +60,20 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 			if len(pendingRuns) > 0 {
 				return s.finishAgentTaskWaitingForWorkflows(r.Context(), project, task.ID, pendingRuns)
 			}
+			failedRuns, err := s.agentTaskFailedWorkflowRuns(r.Context(), project.ID, task.ID)
+			if err != nil {
+				return AgentTask{}, err
+			}
+			if len(failedRuns) > 0 {
+				return s.finishAgentTaskFailedWorkflows(r.Context(), project, task.ID, failedRuns)
+			}
+			appendedQuestionContinuation, err := s.appendAgentQuestionContinuationPlan(r, principal, project, task.ID)
+			if err != nil {
+				return AgentTask{}, err
+			}
+			if appendedQuestionContinuation {
+				continue
+			}
 			appended, stopped, err := s.appendAgentAutoContinuationPlan(r, principal, project, task.ID)
 			if err != nil {
 				return AgentTask{}, err
@@ -81,6 +96,13 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 		if len(pendingRuns) > 0 {
 			return s.finishAgentTaskWaitingForWorkflows(r.Context(), project, task.ID, pendingRuns)
 		}
+		failedRuns, err := s.agentTaskFailedWorkflowRuns(r.Context(), project.ID, task.ID)
+		if err != nil {
+			return AgentTask{}, err
+		}
+		if len(failedRuns) > 0 {
+			return s.finishAgentTaskFailedWorkflows(r.Context(), project, task.ID, failedRuns)
+		}
 		result, execErr := s.executeAgentStep(r, principal, project, task, *next, registry)
 		if execErr != nil {
 			return AgentTask{}, execErr
@@ -96,6 +118,79 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 			return s.finishAgentTaskWaitingForWorkflows(r.Context(), project, task.ID, pendingRuns)
 		}
 	}
+}
+
+type agentQuestionContinuation struct {
+	StepIndex int
+	Answer    string
+	NextGoal  string
+}
+
+func (s *Server) pendingAgentQuestionContinuation(ctx context.Context, taskID string) (agentQuestionContinuation, bool, error) {
+	var continuation agentQuestionContinuation
+	err := s.db.QueryRow(ctx, `
+		SELECT question.step_index,
+		       COALESCE(question.output #>> '{data,answer}', ''),
+		       COALESCE(question.output #>> '{data,nextGoal}', '')
+		FROM agent_steps question
+		WHERE question.task_id = $1
+		  AND question.tool_name = 'agent.ask_user'
+		  AND question.status = 'succeeded'
+		  AND COALESCE(question.output #>> '{data,nextGoal}', '') <> ''
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM agent_steps later
+		    WHERE later.task_id = question.task_id
+		      AND later.step_index > question.step_index
+		  )
+		ORDER BY question.step_index DESC
+		LIMIT 1
+	`, taskID).Scan(&continuation.StepIndex, &continuation.Answer, &continuation.NextGoal)
+	if err == pgx.ErrNoRows {
+		return agentQuestionContinuation{}, false, nil
+	}
+	if err != nil {
+		return agentQuestionContinuation{}, false, err
+	}
+	continuation.Answer = strings.TrimSpace(continuation.Answer)
+	continuation.NextGoal = strings.TrimSpace(continuation.NextGoal)
+	return continuation, continuation.NextGoal != "", nil
+}
+
+func (s *Server) appendAgentQuestionContinuationPlan(r *http.Request, principal auth.Principal, project Project, taskID string) (bool, error) {
+	continuation, ok, err := s.pendingAgentQuestionContinuation(r.Context(), taskID)
+	if err != nil || !ok {
+		return false, err
+	}
+	task, err := s.agentTask(r, project.ID, taskID)
+	if err != nil {
+		return false, err
+	}
+	continuationTask := task
+	continuationTask.UserGoal = strings.TrimSpace(fmt.Sprintf(
+		"用户原始目标：%s\n用户已经回答：%s\n已确认的下一步：%s\n请直接规划并执行这个已确认的下一步，不要再次询问同一个问题。",
+		task.UserGoal,
+		firstNonEmpty(continuation.Answer, "已确认"),
+		continuation.NextGoal,
+	))
+	if _, err := s.planAgentTask(r, principal, project, continuationTask); err != nil {
+		return false, err
+	}
+	if err := s.mergeAgentTaskSummaryPatch(r.Context(), project.ID, task.ID, map[string]any{
+		"questionContinuation": map[string]any{
+			"stepIndex": continuation.StepIndex,
+			"answer":    continuation.Answer,
+			"nextGoal":  continuation.NextGoal,
+		},
+	}); err != nil {
+		return false, err
+	}
+	s.insertAgentTaskEvent(r.Context(), project, task.ID, "agent.task.question_continued", map[string]any{
+		"stepIndex": continuation.StepIndex,
+		"answer":    continuation.Answer,
+		"nextGoal":  continuation.NextGoal,
+	})
+	return true, nil
 }
 
 func nextExecutableAgentStep(steps []AgentStep) (*AgentStep, string) {
@@ -206,7 +301,12 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 	if err != nil {
 		return agentToolError(step.ToolName, nil, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "step input must be a JSON object"))
 	}
+	if err := validateAgentRuntimeArguments(args); err != nil {
+		return agentToolError(step.ToolName, args, err)
+	}
 	switch step.ToolName {
+	case agentAskUserToolName:
+		return s.agentToolAskUser(r, project, task, step, args)
 	case "project.read_summary":
 		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolProjectStatus(r, principal, project, args))
 	case "source.list":
@@ -219,6 +319,8 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 		return s.agentToolGetScript(r, project, args)
 	case "asset.list":
 		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListAssets(r, principal, project, args))
+	case "asset.get":
+		return s.agentToolGetCanonicalAsset(r, project, args)
 	case "storyboard.list":
 		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListStoryboardShots(r, principal, project, args))
 	case "workflow.read_runs":
@@ -241,6 +343,14 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 		return s.agentToolRenderPromptTest(r, project, args)
 	case "script.rewrite_preview":
 		return s.agentToolRewriteScriptPreview(r, principal, project, task, step, args)
+	case "source.update":
+		return s.agentToolUpdateSource(r, principal, project, args)
+	case "source.delete":
+		return s.agentToolDeleteSource(r, principal, project, task, step, args)
+	case "source.delete_chapter":
+		return s.agentToolDeleteSourceChapter(r, principal, project, task, step, args)
+	case "script.update_episode":
+		return s.agentToolUpdateScriptEpisode(r, principal, project, args)
 	case "script.generate_from_source":
 		return s.agentToolGenerateScriptFromSource(r, principal, project, task, step, args)
 	case "script.rewrite":
@@ -249,8 +359,14 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 		return s.agentToolCreateScriptVersion(r, principal, project, task, step, args)
 	case "script.activate_version":
 		return s.agentToolActivateScriptVersion(r, project, task, step, args)
+	case "script.delete":
+		return s.agentToolDeleteScript(r, principal, project, task, step, args)
 	case "asset.update":
 		return s.agentToolUpdateReviewPatchTarget(r, principal, project, task, step, args, "asset.update", "canonical_asset", "assetId")
+	case "asset.revise_prompt":
+		return s.agentToolReviseCanonicalAssetPrompt(r, principal, project, task, step, args)
+	case "asset.delete":
+		return s.agentToolDeleteCanonicalAsset(r, principal, project, args)
 	case "storyboard.update_shot":
 		return s.agentToolUpdateReviewPatchTarget(r, principal, project, task, step, args, "storyboard.update_shot", "storyboard_shot", "shotId")
 	case "storyboard.reorder":
@@ -480,6 +596,9 @@ func (s *Server) verifyAgentToolResult(ctx context.Context, project Project, res
 	case "script.activate_version":
 		scriptID := stringValueFromAny(result.Data["scriptId"])
 		versionID := stringValueFromAny(result.Data["versionId"])
+		if scriptID == "" || versionID == "" {
+			return fail("VERIFIER_MISSING_SCRIPT_VERSION", "scriptId and versionId are required in tool output")
+		}
 		var current string
 		if err := s.db.QueryRow(ctx, `SELECT current_version_id::text FROM scripts WHERE project_id = $1 AND id = $2`, project.ID, scriptID).Scan(&current); err != nil {
 			return fail("VERIFIER_SCRIPT_NOT_FOUND", err.Error())
@@ -488,8 +607,50 @@ func (s *Server) verifyAgentToolResult(ctx context.Context, project Project, res
 			return fail("VERIFIER_SCRIPT_VERSION_NOT_ACTIVE", "script current version does not match tool output")
 		}
 		return ok("script version is active")
-	case "script.create_version", "script.generate_from_source", "script.rewrite":
-		versionID := stringValueFromAny(result.Data["versionId"])
+	case "script.generate_from_source":
+		versionID := firstNonEmpty(stringValueFromAny(result.Data["versionId"]), stringValueFromAny(result.Data["scriptVersionId"]))
+		if versionID == "" {
+			runID := stringValueFromAny(result.Data["workflowRunId"])
+			if runID == "" {
+				return fail("VERIFIER_MISSING_WORKFLOW_RUN", "workflowRunId is required for async script generation verification")
+			}
+			var workflowStatus string
+			var workflowOutput json.RawMessage
+			var workflowErrorMessage *string
+			if err := s.db.QueryRow(ctx, `
+				SELECT status, output, error_message
+				FROM workflow_runs
+				WHERE project_id = $1 AND id = $2
+			`, project.ID, runID).Scan(&workflowStatus, &workflowOutput, &workflowErrorMessage); err != nil {
+				return fail("VERIFIER_WORKFLOW_NOT_FOUND", err.Error())
+			}
+			switch workflowStatus {
+			case "queued", "running", "cancelling":
+				return ok("source_to_script workflow exists with status " + workflowStatus)
+			case "failed", "cancelled":
+				return fail("VERIFIER_SCRIPT_WORKFLOW_FAILED", firstNonEmpty(stringPtrValue(workflowErrorMessage), "source_to_script workflow "+workflowStatus))
+			case "succeeded":
+				versionID = firstNonEmpty(scriptVersionIDFromWorkflowOutput(workflowOutput), workflowOutputString(workflowOutput, "versionId"))
+				if versionID == "" {
+					return fail("VERIFIER_MISSING_SCRIPT_VERSION", "source_to_script workflow succeeded without scriptVersionId")
+				}
+			default:
+				return fail("VERIFIER_WORKFLOW_BAD_STATUS", "workflow run status is "+workflowStatus)
+			}
+		}
+		var exists bool
+		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM script_versions WHERE project_id = $1 AND id = $2 AND COALESCE(status, 'active') <> 'archived')`, project.ID, versionID).Scan(&exists); err != nil {
+			return fail("VERIFIER_SCRIPT_VERSION_CHECK_FAILED", err.Error())
+		}
+		if !exists {
+			return fail("VERIFIER_SCRIPT_VERSION_NOT_FOUND", "script version was not found")
+		}
+		return ok("script version exists")
+	case "script.create_version", "script.rewrite":
+		versionID := firstNonEmpty(stringValueFromAny(result.Data["versionId"]), stringValueFromAny(result.Data["scriptVersionId"]))
+		if versionID == "" {
+			return fail("VERIFIER_MISSING_SCRIPT_VERSION", "versionId is required in tool output")
+		}
 		var exists bool
 		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM script_versions WHERE project_id = $1 AND id = $2 AND COALESCE(status, 'active') <> 'archived')`, project.ID, versionID).Scan(&exists); err != nil {
 			return fail("VERIFIER_SCRIPT_VERSION_CHECK_FAILED", err.Error())
@@ -523,11 +684,40 @@ func (s *Server) verifyAgentToolResult(ctx context.Context, project Project, res
 			return fail("VERIFIER_PREVIEW_URL_INVALID", "preview url or expiry is missing")
 		}
 		return ok("preview url exists")
-	case "asset.update", "storyboard.update_shot", "timeline.update_clip", "storyboard.reorder":
+	case "asset.update", "asset.revise_prompt", "storyboard.update_shot", "timeline.update_clip", "storyboard.reorder":
 		return ok("tool returned explicit before/after update output")
 	default:
 		return map[string]any{"status": "skipped", "reason": "no verifier for tool"}
 	}
+}
+
+func scriptVersionIDFromWorkflowOutput(raw json.RawMessage) string {
+	return firstNonEmpty(
+		workflowOutputString(raw, "scriptVersionId"),
+		workflowOutputString(raw, "versionId"),
+		workflowOutputNestedString(raw, "data", "scriptVersionId"),
+		workflowOutputNestedString(raw, "data", "versionId"),
+	)
+}
+
+func workflowOutputString(raw json.RawMessage, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	payload := rawObject(raw)
+	return stringValueFromAny(payload[key])
+}
+
+func workflowOutputNestedString(raw json.RawMessage, objectKey, valueKey string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	payload := rawObject(raw)
+	nested, ok := payload[objectKey].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return stringValueFromAny(nested[valueKey])
 }
 
 func (s *Server) finishAgentTaskState(ctx context.Context, projectID, taskID, status, code, message string) (AgentTask, error) {
@@ -581,6 +771,26 @@ func (s *Server) finishAgentTaskWaitingForWorkflows(ctx context.Context, project
 	return s.agentTaskWithDetails(requestWithContext(ctx), project.ID, taskID)
 }
 
+func (s *Server) finishAgentTaskFailedWorkflows(ctx context.Context, project Project, taskID string, runs []agentPendingWorkflowRun) (AgentTask, error) {
+	summary := map[string]any{
+		"summary":            fmt.Sprintf("子工作流失败，已停止后续执行。失败工作流 %d 个。", len(runs)),
+		"failedWorkflowRuns": runs,
+	}
+	if _, err := s.db.Exec(ctx, `
+		UPDATE agent_tasks
+		SET status = 'failed',
+		    summary = COALESCE(summary, '{}'::jsonb) || $3::jsonb,
+		    error_code = 'CHILD_WORKFLOW_FAILED',
+		    error_message = 'child workflow failed',
+		    completed_at = now()
+		WHERE id = $1 AND project_id = $2
+	`, taskID, project.ID, mustMarshal(summary)); err != nil {
+		return AgentTask{}, err
+	}
+	s.insertAgentTaskEvent(ctx, project, taskID, "agent.task.child_workflow_failed", summary)
+	return s.agentTaskWithDetails(requestWithContext(ctx), project.ID, taskID)
+}
+
 func (s *Server) agentTaskPendingWorkflowRuns(ctx context.Context, projectID, taskID string) ([]agentPendingWorkflowRun, error) {
 	ids, err := s.agentTaskWorkflowRunIDs(ctx, taskID)
 	if err != nil || len(ids) == 0 {
@@ -624,6 +834,38 @@ func (s *Server) agentTaskPendingWorkflowRuns(ctx context.Context, projectID, ta
 	return pending, rows.Err()
 }
 
+func (s *Server) agentTaskFailedWorkflowRuns(ctx context.Context, projectID, taskID string) ([]agentPendingWorkflowRun, error) {
+	ids, err := s.agentTaskWorkflowRunIDs(ctx, taskID)
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			w.id::text,
+			COALESCE(w.input->>'workflowType', w.template_id::text, ''),
+			w.status,
+			0,
+			0
+		FROM workflow_runs w
+		WHERE w.project_id = $1
+		  AND w.id = ANY($2::uuid[])
+		  AND w.status IN ('failed', 'cancelled')
+	`, projectID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	failed := make([]agentPendingWorkflowRun, 0)
+	for rows.Next() {
+		var run agentPendingWorkflowRun
+		if err := rows.Scan(&run.ID, &run.WorkflowType, &run.Status, &run.ActiveNodeRuns, &run.ActiveProviderTasks); err != nil {
+			return nil, err
+		}
+		failed = append(failed, run)
+	}
+	return failed, rows.Err()
+}
+
 func (s *Server) agentTaskWorkflowRunIDs(ctx context.Context, taskID string) ([]string, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT tool_name, output
@@ -664,6 +906,7 @@ func (s *Server) agentTaskWorkflowRunIDs(ctx context.Context, taskID string) ([]
 func agentToolWaitsForWorkflow(toolName string) bool {
 	switch toolName {
 	case "workflow.start",
+		"script.generate_from_source",
 		"timeline.compose",
 		"shot.generate_missing_images",
 		"shot.generate_missing_videos",
@@ -1109,10 +1352,7 @@ func (s *Server) insertAgentStepEvent(ctx context.Context, project Project, task
 	if sessionID := s.agentTaskSessionID(ctx, taskID); sessionID != "" {
 		payload["sessionId"] = sessionID
 	}
-	_, _ = s.db.Exec(ctx, `
-		INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
-		VALUES ($1, $2, $3, 'agent_step', $4, $5)
-	`, project.OrganizationID, project.ID, eventType, stepID, mustMarshal(payload))
+	_ = insertAPIEvent(ctx, s.db, project.OrganizationID, project.ID, eventType, "agent_step", stepID, mustMarshal(payload))
 }
 
 func (s *Server) insertAgentTaskEvent(ctx context.Context, project Project, taskID, eventType string, payload map[string]any) {
@@ -1123,10 +1363,7 @@ func (s *Server) insertAgentTaskEvent(ctx context.Context, project Project, task
 	if sessionID := s.agentTaskSessionID(ctx, taskID); sessionID != "" {
 		payload["sessionId"] = sessionID
 	}
-	_, _ = s.db.Exec(ctx, `
-		INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
-		VALUES ($1, $2, $3, 'agent_task', $4, $5)
-	`, project.OrganizationID, project.ID, eventType, taskID, mustMarshal(payload))
+	_ = insertAPIEvent(ctx, s.db, project.OrganizationID, project.ID, eventType, "agent_task", taskID, mustMarshal(payload))
 }
 
 func (s *Server) agentTaskSessionID(ctx context.Context, taskID string) string {
@@ -1227,11 +1464,9 @@ func (s *Server) agentToolListWorkflowShots(r *http.Request, project Project, ar
 }
 
 func (s *Server) workflowRunForProject(r *http.Request, projectID, runID string) (WorkflowRun, error) {
-	return scanWorkflowRun(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	return scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
 		WHERE id = $1 AND project_id = $2
-	`, runID, projectID))
+	`), runID, projectID))
 }
 
 func (s *Server) agentToolGetScript(r *http.Request, project Project, args map[string]any) agentToolResult {
@@ -1464,7 +1699,7 @@ func (s *Server) agentWorkflowStartSpec(r *http.Request, project Project, workfl
 	case "compose_timeline":
 		return s.productionActionWorkflowCore(r, project, "compose_final_video", req)
 	case "video_production", "text_to_storyboard":
-		normalized, err := normalizeWorkflowRequestInput(workflowType, mustMarshal(input), projectDefaultAspectRatio(project))
+		normalized, err := normalizeWorkflowRequestInput(workflowType, mustMarshal(input), project)
 		if err != nil {
 			return productionWorkflowSpec{}, err
 		}
@@ -1502,16 +1737,14 @@ func agentWorkflowFuncForType(workflowType string) any {
 }
 
 func (s *Server) agentWorkflowRunForStep(ctx context.Context, projectID, taskID, stepID string) (WorkflowRun, bool, error) {
-	run, err := scanWorkflowRun(s.db.QueryRow(ctx, `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-		FROM workflow_runs
+	run, err := scanWorkflowRun(s.db.QueryRow(ctx, workflowRunSelectSQL(`
 		WHERE project_id = $1
 		  AND input->'input'->>'agentTaskId' = $2
 		  AND input->'input'->>'agentStepId' = $3
 		  AND status <> 'failed'
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, projectID, taskID, stepID))
+	`), projectID, taskID, stepID))
 	if err == pgx.ErrNoRows {
 		return WorkflowRun{}, false, nil
 	}
@@ -1534,12 +1767,16 @@ func (s *Server) agentToolRunShotProduction(r *http.Request, principal auth.Prin
 	if err != nil {
 		return agentToolError(action, args, err)
 	}
+	options := cleanAgentReferenceOptions(agentMapArg(args, "options"))
+	if value, exists := args["maxConcurrency"]; exists {
+		options["maxConcurrency"] = value
+	}
 	req := ShotProductionActionRequest{
 		Action:        action,
 		ScriptSceneID: agentReferenceStringArg(args, "scriptSceneId"),
 		WorkflowRunID: agentReferenceStringArg(args, "workflowRunId"),
 		ShotIDs:       agentReferenceStringSliceArg(args, "shotIds"),
-		Options:       cleanAgentReferenceOptions(agentMapArg(args, "options")),
+		Options:       options,
 	}
 	targets, errorCode := selectShotProductionTargets(req, status.Shots)
 	if errorCode != "" {
@@ -1550,17 +1787,15 @@ func (s *Server) agentToolRunShotProduction(r *http.Request, principal auth.Prin
 		return agentToolError(action, args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shot production action is not supported"))
 	}
 	input := map[string]any{
-		"action":      action,
-		"shotIds":     targets,
-		"force":       shotProductionOptionBool(req.Options, "force", true),
-		"aspectRatio": firstNonEmptyString(shotProductionOptionString(req.Options, "aspectRatio"), project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
-		"resolution":  firstNonEmptyString(shotProductionOptionString(req.Options, "resolution"), "720p"),
+		"action":         action,
+		"shotIds":        targets,
+		"force":          shotProductionOptionBool(req.Options, "force", true),
+		"aspectRatio":    firstNonEmptyString(project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
+		"resolution":     firstNonEmptyString(shotProductionOptionString(req.Options, "resolution"), "720p"),
+		"maxConcurrency": shotProductionMaxConcurrency(action, req.Options),
 	}
 	if value := shotProductionOptionFloat(req.Options, "duration", 0); value > 0 {
 		input["duration"] = value
-	}
-	if value := shotProductionOptionInt(req.Options, "maxConcurrency", 1); value > 0 {
-		input["maxConcurrency"] = value
 	}
 	if value := shotProductionOptionInt(req.Options, "pollIntervalSeconds", 0); value > 0 {
 		input["pollIntervalSeconds"] = value
@@ -1684,6 +1919,82 @@ func agentToolPromptOptions(task AgentTask, step AgentStep) scriptAgentPromptOpt
 		StepID:         step.ID,
 		IdempotencyKey: agentStepIdempotencyKey(task, step),
 	}
+}
+
+func (s *Server) agentStepStreamProgressCallback(ctx context.Context, project Project, task AgentTask, step AgentStep, toolName string, episodeIndex, episodeTotal int, chapterTitle string) func(scriptAgentStreamProgress) error {
+	if episodeTotal <= 0 {
+		episodeTotal = 1
+	}
+	if episodeIndex <= 0 {
+		episodeIndex = 1
+	}
+	lastFlush := time.Time{}
+	lastLength := 0
+	return func(update scriptAgentStreamProgress) error {
+		textLength := len([]rune(update.Text))
+		now := time.Now()
+		if !update.Done && now.Sub(lastFlush) < 1200*time.Millisecond && textLength-lastLength < 160 {
+			return nil
+		}
+		lastFlush = now
+		lastLength = textLength
+		summary := fmt.Sprintf("正在生成剧本：第 %d/%d 集", episodeIndex, episodeTotal)
+		if strings.TrimSpace(chapterTitle) != "" {
+			summary += "「" + strings.TrimSpace(chapterTitle) + "」"
+		}
+		if update.Done {
+			summary = fmt.Sprintf("已完成剧本分集：第 %d/%d 集", episodeIndex, episodeTotal)
+		}
+		progress := map[string]any{
+			"kind":           "stream_text",
+			"toolName":       toolName,
+			"agentRunId":     update.RunID,
+			"episodeIndex":   episodeIndex,
+			"episodeTotal":   episodeTotal,
+			"chapterTitle":   strings.TrimSpace(chapterTitle),
+			"text":           tailRunes(strings.TrimSpace(update.Text), 6000),
+			"textLength":     textLength,
+			"done":           update.Done,
+			"updatedAt":      now.UTC().Format(time.RFC3339Nano),
+			"providerCallId": strings.TrimSpace(update.ProviderCallID),
+			"modelId":        strings.TrimSpace(update.ModelID),
+		}
+		return s.updateAgentStepProgress(ctx, project.ID, task.ID, step.ID, map[string]any{
+			"status":   "running",
+			"summary":  summary,
+			"progress": progress,
+		})
+	}
+}
+
+func (s *Server) updateAgentStepProgress(ctx context.Context, projectID, taskID, stepID string, patch map[string]any) error {
+	if len(patch) == 0 {
+		return nil
+	}
+	_, err := s.db.Exec(ctx, `
+		UPDATE agent_steps
+		SET output = COALESCE(output, '{}'::jsonb) || $4::jsonb,
+		    updated_at = now()
+		WHERE id = $1
+		  AND task_id = $2
+		  AND status = 'running'
+		  AND EXISTS (
+		    SELECT 1 FROM agent_tasks t
+		    WHERE t.id = agent_steps.task_id AND t.project_id = $3
+		  )
+	`, stepID, taskID, projectID, mustMarshal(patch))
+	return err
+}
+
+func tailRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[len(runes)-limit:])
 }
 
 func agentStepMetadata(task AgentTask, step AgentStep, toolName string) map[string]any {
@@ -1916,11 +2227,13 @@ func (s *Server) agentToolRewriteScriptPreview(r *http.Request, principal auth.P
 	if err != nil {
 		return agentToolError("script.rewrite_preview", args, err)
 	}
+	promptOptions := agentToolPromptOptions(task, step)
+	promptOptions.Stream = true
 	content, runID, rendered, gatewayResp, err := s.runScriptAgentPromptWithOptions(r, principal, project, nil, "rewrite_preview", "script_agent_rewrite", map[string]any{
 		"project": projectPromptVariables(project),
 		"script":  map[string]any{"id": script.ID, "versionId": current.ID, "content": current.Content},
 		"input":   map[string]any{"instruction": instruction},
-	}, agentToolPromptOptions(task, step))
+	}, promptOptions)
 	if err != nil {
 		return agentToolError("script.rewrite_preview", args, err)
 	}
@@ -1951,7 +2264,7 @@ func (s *Server) agentToolGenerateScriptFromSource(r *http.Request, principal au
 		if err := s.db.QueryRow(r.Context(), `
 			SELECT id::text
 			FROM project_sources
-			WHERE project_id = $1
+			WHERE project_id = $1 AND COALESCE(status, 'ready') <> 'archived'
 			ORDER BY created_at DESC
 			LIMIT 1
 		`, project.ID).Scan(&sourceID); err != nil {
@@ -1963,54 +2276,141 @@ func (s *Server) agentToolGenerateScriptFromSource(r *http.Request, principal au
 		return agentToolError("script.generate_from_source", args, err)
 	}
 	title := firstNonEmpty(agentStringArg(args, "title"), source.Title+" Script")
-	content, runID, rendered, gatewayResp, err := s.runScriptAgentPromptWithOptions(r, principal, project, nil, "generate_script", "script_agent_generate", map[string]any{
-		"project": projectPromptVariables(project),
-		"source": map[string]any{
-			"id":         source.ID,
-			"title":      source.Title,
-			"sourceType": source.SourceType,
-			"content":    source.Content,
-		},
-		"input": map[string]any{"instruction": agentStringArg(args, "instruction")},
-	}, agentToolPromptOptions(task, step))
+	instruction := agentStringArg(args, "instruction")
+	chapterRange := agentStringArg(args, "chapterRange")
+	scopeText := strings.Join([]string{task.UserGoal, title, instruction, chapterRange}, "\n")
+	chapterIDs := agentReferenceStringSliceArg(args, "chapterIds")
+	if source.SourceType == "novel" && len(chapterIDs) == 0 {
+		if resolvedSourceID, resolvedChapterIDs, matched, err := s.resolveNovelChapterRangeScope(r, project.ID, sourceID, scopeText); err != nil {
+			return agentToolError("script.generate_from_source", args, err)
+		} else if matched {
+			sourceID = resolvedSourceID
+			chapterIDs = resolvedChapterIDs
+			source, err = s.projectSource(r, project.ID, sourceID)
+			if err != nil {
+				return agentToolError("script.generate_from_source", args, err)
+			}
+		} else if resolvedSourceID, resolvedChapterIDs, matched, err := s.resolveNovelChapterScope(r, project.ID, sourceID, scopeText); err != nil {
+			return agentToolError("script.generate_from_source", args, err)
+		} else if matched {
+			sourceID = resolvedSourceID
+			chapterIDs = resolvedChapterIDs
+			source, err = s.projectSource(r, project.ID, sourceID)
+			if err != nil {
+				return agentToolError("script.generate_from_source", args, err)
+			}
+		}
+	}
+	chapterContexts := []scriptNovelChapterContext{}
+	if source.SourceType == "novel" {
+		if len(chapterIDs) == 0 {
+			allChapters, err := s.scriptNovelChapters(r, project.ID, sourceID, nil)
+			if err != nil {
+				return agentToolError("script.generate_from_source", args, err)
+			}
+			switch len(allChapters) {
+			case 0:
+				return agentToolError("script.generate_from_source", args, newAPIError(http.StatusUnprocessableEntity, "CHAPTER_RANGE_REQUIRED", "当前小说来源没有可生成的分集，请先重新导入或拆分原文。"))
+			case 1:
+				chapterIDs = []string{allChapters[0].ID}
+			default:
+				return agentToolError("script.generate_from_source", args, newAPIError(http.StatusUnprocessableEntity, "CHAPTER_RANGE_REQUIRED", "生成小说剧本必须指定分集范围，例如 chapterRange=1-10集；一条小说分集只能生成一条剧本分集。当前来源分集数："+intToString(len(allChapters))))
+			}
+		}
+		chapters, err := s.scriptNovelChapters(r, project.ID, sourceID, chapterIDs)
+		if err != nil {
+			return agentToolError("script.generate_from_source", args, err)
+		}
+		if len(chapters) != len(uniqueNonEmptyStrings(chapterIDs)) {
+			return agentToolError("script.generate_from_source", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "chapterIds do not match any novel chapter"))
+		}
+		chapterContexts = scriptNovelChapterContexts(chapters)
+	}
+	input := map[string]any{
+		"sourceId":       sourceID,
+		"title":          title,
+		"instruction":    instruction,
+		"chapterIds":     chapterIDs,
+		"maxConcurrency": agentIntArg(args, "maxConcurrency", 2, 1, 4),
+	}
+	spec, err := s.agentWorkflowStartSpec(r, project, "source_to_script", input)
 	if err != nil {
 		return agentToolError("script.generate_from_source", args, err)
 	}
-	tx, err := s.db.Begin(r.Context())
+	if existing, ok, err := s.agentWorkflowRunForStep(r.Context(), project.ID, task.ID, step.ID); err != nil {
+		return agentToolError("script.generate_from_source", args, err)
+	} else if ok {
+		return agentToolOK("script.generate_from_source", args, fmt.Sprintf("已存在原文转剧本工作流 %s，未重复启动。", existing.ID), map[string]any{
+			"workflowRunId": existing.ID,
+			"workflowType":  spec.WorkflowType,
+			"status":        existing.Status,
+			"input":         rawObject(existing.Input),
+			"agentTaskId":   task.ID,
+			"agentStepId":   step.ID,
+			"idempotent":    true,
+		})
+	}
+	specInput := cloneMap(spec.Input)
+	specInput["agentTaskId"] = task.ID
+	specInput["agentStepId"] = step.ID
+	specInput["idempotencyKey"] = agentStepIdempotencyKey(task, step)
+	run, err := s.startProjectWorkflowCore(r.Context(), principal, project, spec.WorkflowType, specInput, spec.WorkflowFunc)
 	if err != nil {
 		return agentToolError("script.generate_from_source", args, err)
 	}
-	defer tx.Rollback(r.Context())
-	script, err := scanScript(tx.QueryRow(r.Context(), scriptInsertSQL(), project.OrganizationID, project.ID, &source.ID, title, "active", principal.UserID))
-	if err != nil {
-		return agentToolError("script.generate_from_source", args, err)
-	}
-	version, err := insertScriptVersionTx(r, tx, project, script.ID, 1, content, "markdown", stringPtrFromValue("agent_generated"), rendered.PromptVersionID, rendered.RenderedHash, json.RawMessage(`{}`), principal.UserID)
-	if err != nil {
-		return agentToolError("script.generate_from_source", args, err)
-	}
-	if _, err := activateScriptVersionTx(r, tx, project, script, version); err != nil {
-		return agentToolError("script.generate_from_source", args, err)
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE agent_runs
-		SET status = 'succeeded', output = $2, provider_call_id = NULLIF($3, '')::uuid,
-		    prompt_version_id = $4, prompt_hash = $5, completed_at = now()
-		WHERE id = $1
-	`, runID, mustMarshal(map[string]any{"scriptId": script.ID, "versionId": version.ID, "content": content}), gatewayResp.ProviderCallID, rendered.PromptVersionID, rendered.RenderedHash); err != nil {
-		return agentToolError("script.generate_from_source", args, err)
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		return agentToolError("script.generate_from_source", args, err)
-	}
-	return agentToolOK("script.generate_from_source", args, "已从原文生成剧本。", map[string]any{
-		"scriptId":       script.ID,
-		"versionId":      version.ID,
-		"content":        content,
-		"agentRunId":     runID,
-		"providerCallId": gatewayResp.ProviderCallID,
-		"promptHash":     rendered.RenderedHash,
+	return agentToolOK("script.generate_from_source", args, fmt.Sprintf("已启动原文转剧本工作流 %s。", run.ID), map[string]any{
+		"workflowRunId":  run.ID,
+		"workflowType":   spec.WorkflowType,
+		"status":         run.Status,
+		"sourceId":       sourceID,
+		"sourceType":     source.SourceType,
+		"sourceTitle":    source.Title,
+		"chapterIds":     chapterIDs,
+		"episodeCount":   maxInt(1, len(chapterContexts)),
+		"maxConcurrency": specInput["maxConcurrency"],
+		"agentTaskId":    task.ID,
+		"agentStepId":    step.ID,
+		"idempotencyKey": specInput["idempotencyKey"],
 	})
+}
+
+func scriptEpisodeGenerationInstruction(base string, index, total int, chapter scriptNovelChapterContext) string {
+	parts := []string{}
+	if strings.TrimSpace(base) != "" {
+		parts = append(parts, strings.TrimSpace(base))
+	}
+	parts = append(parts,
+		"本次只改编当前单个分集，禁止合并其它章节，禁止跳到后续分集。",
+		"保持原文事件顺序和重要台词，删除旁白时必须保留剧情因果。",
+		"输出该分集可直接进入分镜解析的完整剧本正文。",
+		"分集序号："+intToString(index)+"/"+intToString(total),
+		"原文分集："+chapter.Title,
+	)
+	return strings.Join(parts, "\n")
+}
+
+func (s *Server) markAgentRunsAborted(r *http.Request, runIDs []string, code, message string) {
+	for _, runID := range runIDs {
+		runID = strings.TrimSpace(runID)
+		if runID == "" {
+			continue
+		}
+		_, _ = s.db.Exec(r.Context(), `
+			UPDATE agent_runs
+			SET status = 'failed', error_code = $2, error_message = $3, completed_at = now()
+			WHERE id = $1 AND status = 'running'
+		`, runID, code, message)
+	}
+}
+
+func firstString(values []string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *Server) agentToolRewriteScript(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
@@ -2031,11 +2431,13 @@ func (s *Server) agentToolRewriteScript(r *http.Request, principal auth.Principa
 	if err != nil {
 		return agentToolError("script.rewrite", args, err)
 	}
+	promptOptions := agentToolPromptOptions(task, step)
+	promptOptions.Stream = true
 	content, runID, rendered, gatewayResp, err := s.runScriptAgentPromptWithOptions(r, principal, project, nil, "rewrite_script", "script_agent_rewrite", map[string]any{
 		"project": projectPromptVariables(project),
 		"script":  map[string]any{"id": script.ID, "versionId": current.ID, "content": current.Content},
 		"input":   map[string]any{"instruction": instruction},
-	}, agentToolPromptOptions(task, step))
+	}, promptOptions)
 	if err != nil {
 		return agentToolError("script.rewrite", args, err)
 	}
@@ -2050,6 +2452,15 @@ func (s *Server) agentToolRewriteScript(r *http.Request, principal auth.Principa
 	}
 	newVersion, err := insertScriptVersionTx(r, tx, project, script.ID, nextVersion, content, current.ContentFormat, stringPtrFromValue("agent_rewrite"), rendered.PromptVersionID, rendered.RenderedHash, json.RawMessage(`{}`), principal.UserID)
 	if err != nil {
+		return agentToolError("script.rewrite", args, err)
+	}
+	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, newVersion.ID, principal.UserID, []scriptEpisodeDraft{
+		defaultScriptEpisodeDraft(script.SourceID, "第 1 集", content, current.ContentFormat, rendered.PromptVersionID, rendered.RenderedHash, gatewayResp.ProviderCallID, mustRawJSON(map[string]any{
+			"agentRunId":        runID,
+			"source":            "project_agent_script_rewrite",
+			"previousVersionId": current.ID,
+		})),
+	}); err != nil {
 		return agentToolError("script.rewrite", args, err)
 	}
 	activate := false
@@ -2153,6 +2564,11 @@ func (s *Server) agentToolCreateScriptVersion(r *http.Request, principal auth.Pr
 	}
 	version, err := insertScriptVersionTx(r, tx, project, script.ID, nextVersion, content, contentFormat, sourceType, "", "", metadata, principal.UserID)
 	if err != nil {
+		return agentToolError("script.create_version", args, err)
+	}
+	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, version.ID, principal.UserID, []scriptEpisodeDraft{
+		defaultScriptEpisodeDraft(script.SourceID, "第 1 集", content, contentFormat, "", "", "", metadata),
+	}); err != nil {
 		return agentToolError("script.create_version", args, err)
 	}
 	activate := false
@@ -2459,6 +2875,9 @@ func (s *Server) agentToolActivateFinalVideo(r *http.Request, project Project, t
 	versionID := firstNonEmpty(agentReferenceStringArg(args, "finalVideoId"), agentReferenceStringArg(args, "versionId"))
 	if versionID == "" {
 		return agentToolError("final_video.activate", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "finalVideoId is required"))
+	}
+	if _, err := s.requireFinalVideoProductionReady(r.Context(), project.ID, versionID); err != nil {
+		return agentToolError("final_video.activate", args, err)
 	}
 	var activeVersionID string
 	if err := s.db.QueryRow(r.Context(), `SELECT COALESCE(active_final_video_version_id::text, '') FROM projects WHERE id = $1`, project.ID).Scan(&activeVersionID); err != nil {

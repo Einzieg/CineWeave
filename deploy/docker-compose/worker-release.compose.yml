@@ -1,0 +1,69 @@
+name: ${CINEWEAVE_WORKER_PROJECT_NAME:?CINEWEAVE_WORKER_PROJECT_NAME is required}
+
+x-worker-environment: &worker-environment
+  CINEWEAVE_ENV: production
+  CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:?CINEWEAVE_RELEASE_ID is required}
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS:-temporal:7233}
+  TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+  TEMPORAL_WORKER_VERSIONING_ENABLED: "true"
+  TEMPORAL_WORKER_DEPLOYMENT_PREFIX: ${TEMPORAL_WORKER_DEPLOYMENT_PREFIX:-cineweave}
+  PROVIDER_GATEWAY_URL: ${PROVIDER_GATEWAY_URL:-http://provider-gateway:8082}
+  CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:?CINEWEAVE_SERVICE_TOKEN is required}
+  CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS:-660000}
+  CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK: "false"
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://minio:9000}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_BUCKET: ${S3_BUCKET:-cineweave}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
+  S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
+
+x-worker-service: &worker-service
+  restart: unless-stopped
+  stop_grace_period: 2m
+  environment: *worker-environment
+  healthcheck:
+    test: ["CMD-SHELL", "test -d /proc/1"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 15s
+  labels:
+    cineweave.release-id: ${CINEWEAVE_RELEASE_ID:?CINEWEAVE_RELEASE_ID is required}
+
+services:
+  script-worker:
+    <<: *worker-service
+    image: ${CINEWEAVE_SCRIPT_WORKER_IMAGE:?CINEWEAVE_SCRIPT_WORKER_IMAGE is required}
+    environment:
+      <<: *worker-environment
+      TEMPORAL_WORKER_VERSIONING_BEHAVIOR: pinned
+
+  agent-worker:
+    <<: *worker-service
+    image: ${CINEWEAVE_AGENT_WORKER_IMAGE:?CINEWEAVE_AGENT_WORKER_IMAGE is required}
+    environment:
+      <<: *worker-environment
+      TEMPORAL_WORKER_VERSIONING_BEHAVIOR: auto_upgrade
+      CINEWEAVE_JWT_SECRET: ${CINEWEAVE_JWT_SECRET:?CINEWEAVE_JWT_SECRET is required}
+
+  media-worker:
+    <<: *worker-service
+    image: ${CINEWEAVE_MEDIA_WORKER_IMAGE:?CINEWEAVE_MEDIA_WORKER_IMAGE is required}
+    environment:
+      <<: *worker-environment
+      TEMPORAL_WORKER_VERSIONING_BEHAVIOR: pinned
+
+  audio-worker:
+    <<: *worker-service
+    image: ${CINEWEAVE_AUDIO_WORKER_IMAGE:?CINEWEAVE_AUDIO_WORKER_IMAGE is required}
+    environment:
+      <<: *worker-environment
+      TEMPORAL_WORKER_VERSIONING_BEHAVIOR: pinned
+
+networks:
+  default:
+    external: true
+    name: ${CINEWEAVE_INTERNAL_NETWORK:-cineweave_internal}

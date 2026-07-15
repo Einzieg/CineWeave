@@ -2,11 +2,13 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/exporter"
+	"github.com/jackc/pgx/v5"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -47,24 +49,24 @@ func (a Activities) ExportProject(ctx context.Context, input ExportProjectInput)
 	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.ExportID) == "" {
 		return ExportProjectOutput{}, fmt.Errorf("organizationId, projectId, workflowRunId, and exportId are required")
 	}
-	if _, err := a.db.Exec(ctx, `
-		UPDATE project_exports
-		SET status = 'running', started_at = COALESCE(started_at, now()), error_code = NULL, error_message = NULL
-		WHERE id = $1 AND project_id = $2
-	`, input.ExportID, input.ProjectID); err != nil {
+	execution, err := StartNodeRun(ctx, a.db, NodeRunInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
+		NodeKey:        "project_export:" + input.ExportID,
+		NodeType:       "project.export",
+		Input:          mustJSON(input),
+	})
+	if err != nil {
 		return ExportProjectOutput{}, err
 	}
-	if _, err := a.db.Exec(ctx, `
-		UPDATE workflow_runs
-		SET status = 'running', started_at = COALESCE(started_at, now()), error_code = NULL, error_message = NULL
-		WHERE id = $1
-	`, input.WorkflowRunID); err != nil {
+	if err := a.markProjectExportRunning(ctx, input, execution); err != nil {
 		return ExportProjectOutput{}, err
 	}
 	objectStore, ok := a.storage.(exporter.ObjectStore)
 	if !ok {
 		err := fmt.Errorf("object storage does not support project export")
-		_ = a.failProjectExport(ctx, input, codeActivityFailed, err.Error())
+		_ = a.failProjectExport(ctx, input, execution, codeActivityFailed, err.Error())
 		return ExportProjectOutput{}, temporal.NewApplicationError(err.Error(), codeActivityFailed)
 	}
 	result, err := exporter.New(a.db, objectStore).Export(ctx, exporter.Request{
@@ -79,13 +81,23 @@ func (a Activities) ExportProject(ctx context.Context, input ExportProjectInput)
 		CreatedBy:      input.CreatedBy,
 	})
 	if err != nil {
-		_ = a.failProjectExport(ctx, input, codeActivityFailed, err.Error())
+		_ = a.failProjectExport(ctx, input, execution, codeActivityFailed, err.Error())
 		return ExportProjectOutput{}, temporal.NewApplicationError(err.Error(), codeActivityFailed)
 	}
-	artifactID, mediaFileID, err := a.ensureProjectExportMedia(ctx, input, result)
+	tx, err := a.db.Begin(ctx)
 	if err != nil {
-		_ = a.failProjectExport(ctx, input, codeActivityFailed, err.Error())
-		return ExportProjectOutput{}, temporal.NewApplicationError(err.Error(), codeActivityFailed)
+		return ExportProjectOutput{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+		if errors.Is(err, ErrWorkflowWriteFenced) || errors.Is(err, pgx.ErrNoRows) {
+			return ExportProjectOutput{}, tx.Commit(ctx)
+		}
+		return ExportProjectOutput{}, err
+	}
+	artifactID, mediaFileID, err := a.ensureProjectExportMediaTx(ctx, tx, input, execution, result)
+	if err != nil {
+		return ExportProjectOutput{}, err
 	}
 	if artifactID != "" {
 		result.ArtifactID = artifactID
@@ -123,11 +135,6 @@ func (a Activities) ExportProject(ctx context.Context, input ExportProjectInput)
 			exportOutput[key] = value
 		}
 	}
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return ExportProjectOutput{}, err
-	}
-	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
 		UPDATE project_exports
 		SET status = 'succeeded',
@@ -142,11 +149,10 @@ func (a Activities) ExportProject(ctx context.Context, input ExportProjectInput)
 	`, input.ExportID, input.ProjectID, output.ArtifactID, output.MediaFileID, output.StorageKey, output.ByteSize, output.ContentHash, mustJSON(exportOutput)); err != nil {
 		return ExportProjectOutput{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE workflow_runs
-		SET status = 'succeeded', output = $2, completed_at = now()
-		WHERE id = $1
-	`, input.WorkflowRunID, outputJSON); err != nil {
+	if _, err := completeNodeRunTx(ctx, tx, execution, outputJSON); err != nil {
+		return ExportProjectOutput{}, err
+	}
+	if _, _, err := transitionWorkflowRunTx(ctx, tx, input.WorkflowRunID, "succeeded", "", "", outputJSON); err != nil {
 		return ExportProjectOutput{}, err
 	}
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "project.export.completed", "project_export", input.ExportID, outputJSON); err != nil {
@@ -158,7 +164,30 @@ func (a Activities) ExportProject(ctx context.Context, input ExportProjectInput)
 	return output, nil
 }
 
-func (a Activities) ensureProjectExportMedia(ctx context.Context, input ExportProjectInput, result exporter.Result) (string, string, error) {
+func (a Activities) markProjectExportRunning(ctx context.Context, input ExportProjectInput, execution NodeExecution) error {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE project_exports
+		SET status = 'running', started_at = COALESCE(started_at, now()), error_code = NULL, error_message = NULL
+		WHERE id = $1 AND project_id = $2
+	`, input.ExportID, input.ProjectID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("project export %s was not found", input.ExportID)
+	}
+	return tx.Commit(ctx)
+}
+
+func (a Activities) ensureProjectExportMediaTx(ctx context.Context, tx pgx.Tx, input ExportProjectInput, execution NodeExecution, result exporter.Result) (string, string, error) {
 	if result.StorageKey == "" {
 		return result.ArtifactID, result.MediaFileID, nil
 	}
@@ -171,15 +200,15 @@ func (a Activities) ensureProjectExportMedia(ctx context.Context, input ExportPr
 		"exportType": input.ExportType,
 		"format":     input.Format,
 	})
-	if err := a.db.QueryRow(ctx, `
-		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, type, storage_key, mime_type, content_hash, metadata, created_by)
-		VALUES ($1, $2, $3, 'project_export', $4, $5, NULLIF($6, ''), $7, NULLIF($8, '')::uuid)
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, metadata, created_by)
+		VALUES ($1, $2, $3, $4, 'project_export', $5, $6, NULLIF($7, ''), $8, NULLIF($9, '')::uuid)
 		RETURNING id::text
-	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, result.StorageKey, result.MimeType, result.ContentHash, metadata, input.CreatedBy).Scan(&artifactID); err != nil {
+	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, execution.NodeRunID, result.StorageKey, result.MimeType, result.ContentHash, metadata, input.CreatedBy).Scan(&artifactID); err != nil {
 		return "", "", err
 	}
 	var mediaFileID string
-	if err := a.db.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO media_files(organization_id, project_id, artifact_id, storage_key, mime_type, byte_size, checksum, metadata)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, 0), NULLIF($7, ''), $8)
 		RETURNING id::text
@@ -189,7 +218,7 @@ func (a Activities) ensureProjectExportMedia(ctx context.Context, input ExportPr
 	return artifactID, mediaFileID, nil
 }
 
-func (a Activities) failProjectExport(ctx context.Context, input ExportProjectInput, code, message string) error {
+func (a Activities) failProjectExport(ctx context.Context, input ExportProjectInput, execution NodeExecution, code, message string) error {
 	if strings.TrimSpace(code) == "" {
 		code = codeActivityFailed
 	}
@@ -199,6 +228,12 @@ func (a Activities) failProjectExport(ctx context.Context, input ExportProjectIn
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+		if errors.Is(err, ErrWorkflowWriteFenced) || errors.Is(err, pgx.ErrNoRows) {
+			return tx.Commit(ctx)
+		}
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE project_exports
 		SET status = 'failed', error_code = $3, error_message = $4, output = $5, completed_at = now()
@@ -206,11 +241,10 @@ func (a Activities) failProjectExport(ctx context.Context, input ExportProjectIn
 	`, input.ExportID, input.ProjectID, code, message, output); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE workflow_runs
-		SET status = 'failed', error_code = $2, error_message = $3, output = $4, completed_at = now()
-		WHERE id = $1
-	`, input.WorkflowRunID, code, message, output); err != nil {
+	if _, err := failNodeRunTx(ctx, tx, execution, code, message, output); err != nil {
+		return err
+	}
+	if _, _, err := transitionWorkflowRunTx(ctx, tx, input.WorkflowRunID, "failed", code, message, output); err != nil {
 		return err
 	}
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "project.export.failed", "project_export", input.ExportID, output); err != nil {

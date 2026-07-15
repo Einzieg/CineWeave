@@ -9,13 +9,17 @@ import type {
   Artifact,
   AuthResponse,
   CanonicalAsset,
+  CreateAssetBatchRequest,
+  CharacterVoiceProfile,
   AssetReference,
   ComposeTimelineResponse,
   CreateProjectExportResponse,
   DownloadUrlResponse,
   FinalVideoVersion,
+  EpisodeAudio,
   GenerateAssetCardResponse,
   JsonRecord,
+  JsonValue,
   ImportProjectSourceResponse,
   ListEnvelope,
   ModelProfile,
@@ -23,6 +27,7 @@ import type {
   NovelChapterSummary,
   NovelEvent,
   NovelEventLink,
+  NativeAudioReview,
   Organization,
   OutputImpact,
   ParseScriptScenesResponse,
@@ -56,8 +61,11 @@ import type {
   ProviderTestResult,
   ProviderUsageSummary,
   ReviewResponse,
+  RetryFailedWorkflowRequest,
   Role,
+  RuntimeOperation,
   Script,
+  ScriptEpisode,
   ScriptScene,
   ScriptVersion,
   ShotProductionActionResponse,
@@ -66,10 +74,17 @@ import type {
   ShotAssetRequirement,
   StoryboardShot,
   StoryboardShotDetail,
+  StoryboardPlan,
+  StoryboardPlanEditResponse,
+  ScriptTimingAnalysis,
   StudioSession,
   Team,
   TimelineClip,
   TimelineDetail,
+  UpdateModelProfileBindingRequest,
+  CreateModelProfileBindingRequest,
+  UpdateStoryboardShotRequest,
+  VideoRenderPlan,
   WorkflowNodeRun,
   WorkflowRun,
   Workspace,
@@ -85,18 +100,21 @@ type ApiRequestOptions = {
 };
 
 type ProviderListStatus = "active" | "disabled" | "all";
+type ArchiveListStatus = "active" | "archived" | "all";
 
 export class StudioApiError extends Error {
   code: string;
   status: number;
   retryable: boolean;
+  details?: JsonValue;
 
-  constructor(message: string, code: string, status: number, retryable = false) {
+  constructor(message: string, code: string, status: number, retryable = false, details?: JsonValue) {
     super(message);
     this.name = "StudioApiError";
     this.code = code;
     this.status = status;
     this.retryable = retryable;
+    this.details = details;
   }
 }
 
@@ -135,6 +153,7 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
       errorCode,
       response.status,
       envelope.error?.retryable ?? false,
+      envelope.error?.details,
     );
   }
   return envelope.data;
@@ -252,7 +271,11 @@ export const studioApi = {
       query: confirmActive ? { confirmActive: true } : undefined,
     }),
 
-  listSources: (session: StudioSession, projectId: string) => apiRequest<ListEnvelope<ProjectSource>>(`/api/projects/${projectId}/sources`, { session }),
+  listSources: (session: StudioSession, projectId: string, status?: ArchiveListStatus) =>
+    apiRequest<ListEnvelope<ProjectSource>>(`/api/projects/${projectId}/sources`, {
+      session,
+      query: status ? { "filter[status]": status } : undefined,
+    }),
   getSource: (session: StudioSession, projectId: string, sourceId: string) =>
     apiRequest<ProjectSource>(`/api/projects/${projectId}/sources/${sourceId}`, { session }),
   createSource: (session: StudioSession, projectId: string, body: JsonRecord) =>
@@ -269,6 +292,15 @@ export const studioApi = {
     apiRequest<ListEnvelope<NovelChapterSummary>>(`/api/projects/${projectId}/sources/${sourceId}/chapters`, { session }),
   getSourceChapter: (session: StudioSession, projectId: string, sourceId: string, chapterId: string) =>
     apiRequest<NovelChapter>(`/api/projects/${projectId}/sources/${sourceId}/chapters/${chapterId}`, { session }),
+  deleteSourceChapter: (session: StudioSession, projectId: string, sourceId: string, chapterId: string) =>
+    apiRequest<{
+      deleted: boolean;
+      mode: "delete_chapter";
+      sourceId: string;
+      chapterId: string;
+      deletedChapterIndex: number;
+      remainingChapterCount: number;
+    }>(`/api/projects/${projectId}/sources/${sourceId}/chapters/${chapterId}`, { method: "DELETE", session }),
   extractNovelEvents: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/sources/${sourceId}/extract-events`, { method: "POST", session, body }),
   listSourceNovelEvents: (session: StudioSession, projectId: string, sourceId: string, query?: { chapterId?: string }) =>
@@ -303,6 +335,8 @@ export const studioApi = {
     apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}`, { method: "PATCH", session, body }),
   listScriptVersions: (session: StudioSession, projectId: string, scriptId: string) =>
     apiRequest<ListEnvelope<ScriptVersion>>(`/api/projects/${projectId}/scripts/${scriptId}/versions`, { session }),
+  listScriptEpisodes: (session: StudioSession, projectId: string, scriptId: string, versionId: string) =>
+    apiRequest<ListEnvelope<ScriptEpisode>>(`/api/projects/${projectId}/scripts/${scriptId}/versions/${versionId}/episodes`, { session }),
   createScriptVersion: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
     apiRequest<ScriptVersion>(`/api/projects/${projectId}/scripts/${scriptId}/versions`, { method: "POST", session, body }),
   activateScriptVersion: (session: StudioSession, projectId: string, scriptId: string, versionId: string) =>
@@ -313,6 +347,12 @@ export const studioApi = {
     apiRequest<ParseScriptScenesResponse>(`/api/projects/${projectId}/scripts/${scriptId}/versions/${versionId}/parse-scenes`, { method: "POST", session, body }),
   listScriptScenes: (session: StudioSession, projectId: string, scriptId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
     apiRequest<ListEnvelope<ScriptScene>>(`/api/projects/${projectId}/scripts/${scriptId}/scenes`, { session, query }),
+  updateScriptEpisode: (session: StudioSession, projectId: string, episodeId: string, body: JsonRecord) =>
+    apiRequest<ScriptEpisode>(`/api/projects/${projectId}/script-episodes/${episodeId}`, { method: "PATCH", session, body }),
+  getEpisodeAudio: (session: StudioSession, projectId: string, episodeId: string) =>
+    apiRequest<EpisodeAudio>(`/api/projects/${projectId}/script-episodes/${episodeId}/audio`, { session }),
+  produceEpisodeAudio: (session: StudioSession, projectId: string, episodeId: string, body: JsonRecord = {}) =>
+    apiRequest<WorkflowRun>(`/api/projects/${projectId}/script-episodes/${episodeId}/audio/produce`, { method: "POST", session, body }),
   updateScriptScene: (session: StudioSession, projectId: string, sceneId: string, body: JsonRecord) =>
     apiRequest<ScriptScene>(`/api/projects/${projectId}/script-scenes/${sceneId}`, { method: "PATCH", session, body }),
   deleteScriptScene: (session: StudioSession, projectId: string, sceneId: string) =>
@@ -339,7 +379,7 @@ export const studioApi = {
       body,
     }),
   rewriteScript: (session: StudioSession, projectId: string, body: JsonRecord) =>
-    apiRequest<{ scriptId: string; versionId: string; content: string; agentRunId: string }>(`/api/projects/${projectId}/script-agent/rewrite-script`, {
+    apiRequest<{ scriptId: string; versionId: string; content: string; agentRunId: string; activated?: boolean; previousVersionId?: string }>(`/api/projects/${projectId}/script-agent/rewrite-script`, {
       method: "POST",
       session,
       body,
@@ -361,12 +401,23 @@ export const studioApi = {
   resumeAgentTask: (session: StudioSession, projectId: string, taskId: string) =>
     apiRequest<AgentTask>(`/api/projects/${projectId}/agent/tasks/${taskId}/resume`, { method: "POST", session, body: {} }),
 
-  listCanonicalAssets: (session: StudioSession, projectId: string) =>
-    apiRequest<ListEnvelope<CanonicalAsset>>(`/api/projects/${projectId}/canonical-assets`, { session }),
+  listCanonicalAssets: (session: StudioSession, projectId: string, status?: ArchiveListStatus) =>
+    apiRequest<ListEnvelope<CanonicalAsset>>(`/api/projects/${projectId}/canonical-assets`, {
+      session,
+      query: status ? { "filter[status]": status } : undefined,
+    }),
   getCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, includePreviewUrl = false) =>
     apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, { session, query: includePreviewUrl ? { includePreviewUrl: "true" } : undefined }),
   updateCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
     apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, { method: "PATCH", session, body }),
+  getCanonicalAssetImpact: (session: StudioSession, projectId: string, assetId: string) =>
+    apiRequest<OutputImpact>(`/api/projects/${projectId}/canonical-assets/${assetId}/impact`, { session }),
+  deleteCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, expectedRevision: number) =>
+    apiRequest<{ deleted: boolean; mode?: string; assetId: string }>(`/api/projects/${projectId}/canonical-assets/${assetId}`, {
+      method: "DELETE",
+      session,
+      body: { expectedRevision },
+    }),
   generateAssetCard: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
     apiRequest<GenerateAssetCardResponse>(`/api/projects/${projectId}/canonical-assets/${assetId}/generate-card`, { method: "POST", session, body }),
   listAssetReferences: (session: StudioSession, projectId: string, assetId: string, includePreviewUrl = false) =>
@@ -401,11 +452,35 @@ export const studioApi = {
 
   generateStoryboard: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/scripts/${scriptId}/generate-storyboard`, { method: "POST", session, body }),
+  analyzeScriptEpisodeTiming: (session: StudioSession, projectId: string, episodeId: string, body: JsonRecord = {}) =>
+    apiRequest<WorkflowRun>(`/api/projects/${projectId}/script-episodes/${episodeId}/timing/analyze`, { method: "POST", session, body }),
+  getScriptEpisodeTiming: (session: StudioSession, projectId: string, episodeId: string) =>
+    apiRequest<ScriptTimingAnalysis>(`/api/projects/${projectId}/script-episodes/${episodeId}/timing`, { session }),
+  listStoryboardPlans: (session: StudioSession, projectId: string, episodeId: string) =>
+    apiRequest<ListEnvelope<StoryboardPlan>>(`/api/projects/${projectId}/script-episodes/${episodeId}/storyboard-plans`, { session }),
+  getStoryboardPlan: (session: StudioSession, projectId: string, planId: string) =>
+    apiRequest<StoryboardPlan>(`/api/projects/${projectId}/storyboard-plans/${planId}`, { session }),
+  activateStoryboardPlan: (session: StudioSession, projectId: string, planId: string) =>
+    apiRequest<StoryboardPlan>(`/api/projects/${projectId}/storyboard-plans/${planId}/activate`, { method: "POST", session, body: {} }),
+  splitStoryboardShot: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord) =>
+    apiRequest<StoryboardPlanEditResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/split`, { method: "POST", session, body }),
+  mergeStoryboardShots: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<StoryboardPlanEditResponse>(`/api/projects/${projectId}/storyboard-shots/merge`, { method: "POST", session, body }),
+  updateStoryboardShotTiming: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord) =>
+    apiRequest<StoryboardPlanEditResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/timing`, { method: "PATCH", session, body }),
   createWorkflowRun: (session: StudioSession, body: JsonRecord) => apiRequest<WorkflowRun>("/api/workflow-runs", { method: "POST", session, body }),
+  createAssetBatch: (session: StudioSession, projectId: string, body: CreateAssetBatchRequest) =>
+    apiRequest<WorkflowRun>(`/api/projects/${projectId}/asset-batches`, { method: "POST", session, body }),
   listWorkflowRuns: (session: StudioSession, projectId?: string) =>
     apiRequest<ListEnvelope<WorkflowRun>>("/api/workflow-runs", { session, query: projectId ? { "filter[projectId]": projectId } : undefined }),
   cancelWorkflowRun: (session: StudioSession, workflowRunId: string, reason: string) =>
     apiRequest<WorkflowRun>(`/api/workflow-runs/${workflowRunId}/cancel`, { method: "POST", session, body: { reason } }),
+  retryFailedWorkflowRun: (session: StudioSession, workflowRunId: string, body: RetryFailedWorkflowRequest) =>
+    apiRequest<WorkflowRun>(`/api/workflow-runs/${workflowRunId}/retry-failed`, { method: "POST", session, body }),
+  getRuntimeOperation: (session: StudioSession, projectId: string, operationId: string) =>
+    apiRequest<RuntimeOperation>(`/api/projects/${projectId}/operations/${operationId}`, { session }),
+  reconcileRuntimeOperation: (session: StudioSession, projectId: string, operationId: string) =>
+    apiRequest<RuntimeOperation>(`/api/projects/${projectId}/operations/${operationId}/reconcile`, { method: "POST", session, body: {} }),
   listWorkflowNodes: (session: StudioSession, workflowRunId: string) =>
     apiRequest<ListEnvelope<WorkflowNodeRun>>(`/api/workflow-runs/${workflowRunId}/nodes`, { session }),
   listWorkflowShots: (session: StudioSession, workflowRunId: string) =>
@@ -422,11 +497,21 @@ export const studioApi = {
   getStoryboardShotDetail: (session: StudioSession, projectId: string, shotId: string) =>
     apiRequest<StoryboardShotDetail>(`/api/projects/${projectId}/storyboard-shots/${shotId}/detail`, {
       session,
-      query: { previewExpiresSeconds: 900 },
+      query: { previewExpiresSeconds: 3600 },
     }),
+  getStoryboardShotRenderPlan: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<VideoRenderPlan>(`/api/projects/${projectId}/storyboard-shots/${shotId}/render-plan`, { session }),
+  createStoryboardShotRenderPlan: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord = {}) =>
+    apiRequest<VideoRenderPlan>(`/api/projects/${projectId}/storyboard-shots/${shotId}/render-plan`, { method: "POST", session, body }),
+  verifyStoryboardShotRenderPlanAudio: (session: StudioSession, projectId: string, shotId: string, body: { decision: "approve" | "reject"; notes?: string }) =>
+    apiRequest<VideoRenderPlan>(`/api/projects/${projectId}/storyboard-shots/${shotId}/render-plan/audio-verification`, { method: "POST", session, body }),
+  startNativeAudioReview: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord = {}) =>
+    apiRequest<WorkflowRun>(`/api/projects/${projectId}/storyboard-shots/${shotId}/render-plan/audio-review`, { method: "POST", session, body }),
+  listNativeAudioReviews: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<ListEnvelope<NativeAudioReview>>(`/api/projects/${projectId}/storyboard-shots/${shotId}/render-plan/audio-reviews`, { session }),
   reviewStoryboardShot: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord) =>
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/review`, { method: "POST", session, body }),
-  updateStoryboardShot: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord) =>
+  updateStoryboardShot: (session: StudioSession, projectId: string, shotId: string, body: UpdateStoryboardShotRequest) =>
     apiRequest<StoryboardShot>(`/api/projects/${projectId}/storyboard-shots/${shotId}`, { method: "PATCH", session, body }),
   unlinkStoryboardShotMedia: (session: StudioSession, projectId: string, shotId: string, kind: "image" | "video") =>
     apiRequest<StoryboardShot>(`/api/projects/${projectId}/storyboard-shots/${shotId}/media/unlink`, { method: "POST", session, body: { kind } }),
@@ -442,6 +527,17 @@ export const studioApi = {
       session,
       query: status ? { "filter[status]": status } : undefined,
     }),
+  listCharacterVoices: (session: StudioSession, projectId: string, status?: ArchiveListStatus) =>
+    apiRequest<ListEnvelope<CharacterVoiceProfile>>(`/api/projects/${projectId}/character-voices`, {
+      session,
+      query: status ? { "filter[status]": status } : undefined,
+    }),
+  createCharacterVoice: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<CharacterVoiceProfile>(`/api/projects/${projectId}/character-voices`, { method: "POST", session, body }),
+  updateCharacterVoice: (session: StudioSession, projectId: string, voiceId: string, body: JsonRecord) =>
+    apiRequest<CharacterVoiceProfile>(`/api/projects/${projectId}/character-voices/${voiceId}`, { method: "PATCH", session, body }),
+  deleteCharacterVoice: (session: StudioSession, projectId: string, voiceId: string) =>
+    apiRequest<void>(`/api/projects/${projectId}/character-voices/${voiceId}`, { method: "DELETE", session }),
   listProviderConnectors: (session: StudioSession) => apiRequest<ListEnvelope<ProviderConnector>>("/api/providers/connectors", { session }),
   importProviderConnector: (session: StudioSession, body: JsonRecord) =>
     apiRequest<ProviderConnector>("/api/providers/connectors/import", { method: "POST", session, body }),
@@ -480,8 +576,10 @@ export const studioApi = {
   createModelProfile: (session: StudioSession, body: JsonRecord) => apiRequest<ModelProfile>("/api/model-profiles", { method: "POST", session, body }),
   updateModelProfile: (session: StudioSession, profileId: string, body: JsonRecord) =>
     apiRequest<ModelProfile>(`/api/model-profiles/${profileId}`, { method: "PATCH", session, body }),
-  createModelProfileBinding: (session: StudioSession, profileId: string, body: JsonRecord) =>
+  createModelProfileBinding: (session: StudioSession, profileId: string, body: CreateModelProfileBindingRequest) =>
     apiRequest<ModelProfile>(`/api/model-profiles/${profileId}/bindings`, { method: "POST", session, body }),
+  updateModelProfileBinding: (session: StudioSession, profileId: string, bindingId: string, body: UpdateModelProfileBindingRequest) =>
+    apiRequest<ModelProfile>(`/api/model-profiles/${profileId}/bindings/${bindingId}`, { method: "PATCH", session, body }),
   deleteModelProfileBinding: (session: StudioSession, profileId: string, bindingId: string) =>
     apiRequest<{ deleted: boolean }>(`/api/model-profiles/${profileId}/bindings/${bindingId}`, { method: "DELETE", session }),
   listProviderCallLogs: (session: StudioSession, query?: Record<string, string | number | boolean | undefined | null>) =>

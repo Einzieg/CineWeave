@@ -10,24 +10,29 @@ import (
 func (e *Exporter) ExportFinalVideo(ctx context.Context, req Request) (Result, error) {
 	versionID := strings.TrimSpace(stringOption(req.Options, "finalVideoVersionId"))
 	var row struct {
-		ID              string
-		Title           string
-		Status          string
-		ArtifactID      sql.NullString
-		MediaFileID     sql.NullString
-		StorageKey      sql.NullString
-		ByteSize        sql.NullInt64
-		ContentHash     sql.NullString
-		DurationSeconds sql.NullFloat64
-		Resolution      string
-		AspectRatio     string
+		ID                  string
+		Title               string
+		Status              string
+		ArtifactID          sql.NullString
+		MediaFileID         sql.NullString
+		StorageKey          sql.NullString
+		ByteSize            sql.NullInt64
+		ContentHash         sql.NullString
+		DurationTicks       sql.NullInt64
+		TimelineTimebase    int64
+		Resolution          string
+		AspectRatio         string
+		NativeAudioStatus   string
+		ProductionReadiness string
 	}
 	err := e.db.QueryRow(ctx, `
 		SELECT f.id::text, f.title, f.status, f.artifact_id::text, f.media_file_id::text, f.storage_key,
 		       COALESCE(mf.byte_size, 0), COALESCE(mf.checksum, a.content_hash, ''),
-		       COALESCE(f.duration_seconds, mf.duration_seconds, 0)::float8, f.resolution, f.aspect_ratio
+		       f.duration_ticks, timeline.timeline_timebase, f.resolution, f.aspect_ratio,
+		       f.native_audio_status, f.production_readiness
 		FROM final_video_versions f
 		JOIN projects p ON p.id = f.project_id
+		JOIN project_timelines timeline ON timeline.id = f.timeline_id
 		LEFT JOIN media_files mf ON mf.id = f.media_file_id
 		LEFT JOIN artifacts a ON a.id = f.artifact_id
 		WHERE f.organization_id = $1
@@ -48,15 +53,21 @@ func (e *Exporter) ExportFinalVideo(ctx context.Context, req Request) (Result, e
 		&row.StorageKey,
 		&row.ByteSize,
 		&row.ContentHash,
-		&row.DurationSeconds,
+		&row.DurationTicks,
+		&row.TimelineTimebase,
 		&row.Resolution,
 		&row.AspectRatio,
+		&row.NativeAudioStatus,
+		&row.ProductionReadiness,
 	)
 	if err != nil {
 		return Result{}, err
 	}
 	if !row.StorageKey.Valid || strings.TrimSpace(row.StorageKey.String) == "" {
 		return Result{}, fmt.Errorf("final video version has no storage object")
+	}
+	if row.ProductionReadiness != "ready" {
+		return Result{}, fmt.Errorf("AUDIO_VERIFICATION_REQUIRED: final video native audio is %s and production readiness is %s", row.NativeAudioStatus, row.ProductionReadiness)
 	}
 	output := map[string]any{
 		"finalVideoVersionId": row.ID,
@@ -66,8 +77,10 @@ func (e *Exporter) ExportFinalVideo(ctx context.Context, req Request) (Result, e
 		"resolution":          row.Resolution,
 		"aspectRatio":         row.AspectRatio,
 	}
-	if row.DurationSeconds.Valid && row.DurationSeconds.Float64 > 0 {
-		output["durationSeconds"] = row.DurationSeconds.Float64
+	if row.DurationTicks.Valid && row.DurationTicks.Int64 > 0 && row.TimelineTimebase > 0 {
+		output["durationTicks"] = row.DurationTicks.Int64
+		output["timelineTimebase"] = row.TimelineTimebase
+		output["durationSeconds"] = float64(row.DurationTicks.Int64) / float64(row.TimelineTimebase)
 	}
 	return Result{
 		ExportID:    req.ExportID,

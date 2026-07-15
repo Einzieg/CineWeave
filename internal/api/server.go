@@ -13,6 +13,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/production"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/storage"
 	"github.com/jackc/pgx/v5"
@@ -27,12 +28,13 @@ type temporalClient interface {
 }
 
 type Server struct {
-	db         *pgxpool.Pool
-	auth       *auth.Service
-	authorizer *authz.Authorizer
-	providers  *provider.Service
-	storage    *storage.Client
-	temporal   temporalClient
+	db                           *pgxpool.Pool
+	auth                         *auth.Service
+	authorizer                   *authz.Authorizer
+	providers                    *provider.Service
+	storage                      *storage.Client
+	temporal                     temporalClient
+	assetBatchSnapshotLockedHook func()
 }
 
 type Organization struct {
@@ -50,27 +52,37 @@ type Workspace struct {
 }
 
 type Project struct {
-	ID                        string          `json:"id"`
-	OrganizationID            string          `json:"organizationId"`
-	WorkspaceID               string          `json:"workspaceId"`
-	Name                      string          `json:"name"`
-	Description               *string         `json:"description,omitempty"`
-	ProjectType               *string         `json:"projectType,omitempty"`
-	ContentType               *string         `json:"contentType,omitempty"`
-	AspectRatio               *string         `json:"aspectRatio,omitempty"`
-	VideoRatio                string          `json:"videoRatio"`
-	ArtStyle                  string          `json:"artStyle"`
-	DirectorManual            string          `json:"directorManual"`
-	VisualManual              string          `json:"visualManual"`
-	ImageModelProfileKey      string          `json:"imageModelProfileKey"`
-	VideoModelProfileKey      string          `json:"videoModelProfileKey"`
-	ScriptModelProfileKey     string          `json:"scriptModelProfileKey"`
-	ImageQuality              string          `json:"imageQuality"`
-	ProductionMode            string          `json:"productionMode"`
-	ActiveFinalVideoVersionID *string         `json:"activeFinalVideoVersionId,omitempty"`
-	Settings                  json.RawMessage `json:"settings"`
-	CreatedAt                 time.Time       `json:"createdAt"`
-	UpdatedAt                 time.Time       `json:"updatedAt"`
+	ID                         string          `json:"id"`
+	OrganizationID             string          `json:"organizationId"`
+	WorkspaceID                string          `json:"workspaceId"`
+	Name                       string          `json:"name"`
+	Description                *string         `json:"description,omitempty"`
+	ProjectType                *string         `json:"projectType,omitempty"`
+	ContentType                *string         `json:"contentType,omitempty"`
+	AspectRatio                *string         `json:"aspectRatio,omitempty"`
+	VideoRatio                 string          `json:"videoRatio"`
+	ArtStyle                   string          `json:"artStyle"`
+	DirectorManual             string          `json:"directorManual"`
+	VisualManual               string          `json:"visualManual"`
+	ImageModelProfileKey       string          `json:"imageModelProfileKey"`
+	VideoModelProfileKey       string          `json:"videoModelProfileKey"`
+	ScriptModelProfileKey      string          `json:"scriptModelProfileKey"`
+	TTSModelProfileKey         string          `json:"ttsModelProfileKey"`
+	ASRModelProfileKey         string          `json:"asrModelProfileKey"`
+	AudioStrategy              string          `json:"audioStrategy"`
+	AudioRequirement           string          `json:"audioRequirement"`
+	AudioConfigurationRevision int             `json:"audioConfigurationRevision"`
+	Revision                   int64           `json:"revision"`
+	ImageQuality               string          `json:"imageQuality"`
+	ProductionMode             string          `json:"productionMode"`
+	TimelineTimebase           int64           `json:"timelineTimebase"`
+	FPSNumerator               int             `json:"fpsNumerator"`
+	FPSDenominator             int             `json:"fpsDenominator"`
+	ActiveFinalVideoVersionID  *string         `json:"activeFinalVideoVersionId,omitempty"`
+	ActiveAudioMixVersionID    *string         `json:"activeAudioMixVersionId,omitempty"`
+	Settings                   json.RawMessage `json:"settings"`
+	CreatedAt                  time.Time       `json:"createdAt"`
+	UpdatedAt                  time.Time       `json:"updatedAt"`
 }
 
 func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provider.Service, storageClient *storage.Client, temporalClient client.Client, authorizers ...*authz.Authorizer) *Server {
@@ -171,6 +183,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/projects/{projectId}/sources/{sourceId}", s.withAuth(s.deleteProjectSource))
 	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}/chapters", s.withAuth(s.listSourceChapters))
 	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}/chapters/{chapterId}", s.withAuth(s.getSourceChapter))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/sources/{sourceId}/chapters/{chapterId}", s.withAuth(s.deleteSourceChapter))
 	mux.HandleFunc("POST /api/projects/{projectId}/sources/{sourceId}/extract-events", s.withAuth(s.extractNovelEvents))
 	mux.HandleFunc("GET /api/projects/{projectId}/sources/{sourceId}/events", s.withAuth(s.listSourceNovelEvents))
 	mux.HandleFunc("POST /api/projects/{projectId}/sources/{sourceId}/generate-adaptation-plan", s.withAuth(s.generateAdaptationPlan))
@@ -183,16 +196,26 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/projects/{projectId}/scripts/{scriptId}", s.withAuth(s.updateScript))
 	mux.HandleFunc("GET /api/projects/{projectId}/scripts/{scriptId}/versions", s.withAuth(s.listScriptVersions))
 	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/versions", s.withAuth(s.createScriptVersion))
+	mux.HandleFunc("GET /api/projects/{projectId}/scripts/{scriptId}/versions/{versionId}/episodes", s.withAuth(s.listScriptEpisodes))
 	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/activate-version", s.withAuth(s.activateScriptVersion))
 	mux.HandleFunc("DELETE /api/projects/{projectId}/scripts/{scriptId}/versions/{versionId}", s.withAuth(s.deleteScriptVersion))
 	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/versions/{versionId}/parse-scenes", s.withAuth(s.parseScriptScenes))
 	mux.HandleFunc("GET /api/projects/{projectId}/scripts/{scriptId}/scenes", s.withAuth(s.listScriptScenes))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/script-episodes/{episodeId}", s.withAuth(s.updateScriptEpisode))
 	mux.HandleFunc("GET /api/projects/{projectId}/script-scenes/{sceneId}", s.withAuth(s.getScriptScene))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/script-scenes/{sceneId}", s.withAuth(s.updateScriptScene))
 	mux.HandleFunc("DELETE /api/projects/{projectId}/script-scenes/{sceneId}", s.withAuth(s.deleteScriptScene))
 	mux.HandleFunc("POST /api/projects/{projectId}/script-scenes/{sceneId}/review", s.withAuth(s.reviewScriptScene))
 	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/analyze-assets", s.withAuth(s.analyzeScriptAssets))
 	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/generate-storyboard", s.withAuth(s.generateScriptStoryboard))
+	mux.HandleFunc("POST /api/projects/{projectId}/script-episodes/{episodeId}/timing/analyze", s.withAuth(s.analyzeScriptEpisodeTiming))
+	mux.HandleFunc("GET /api/projects/{projectId}/script-episodes/{episodeId}/timing", s.withAuth(s.getScriptEpisodeTiming))
+	mux.HandleFunc("GET /api/projects/{projectId}/script-episodes/{episodeId}/storyboard-plans", s.withAuth(s.listStoryboardPlans))
+	mux.HandleFunc("GET /api/projects/{projectId}/storyboard-plans/{planId}", s.withAuth(s.getStoryboardPlan))
+	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-plans/{planId}/activate", s.withAuth(s.activateStoryboardPlan))
+	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/split", s.withAuth(s.splitStoryboardShot))
+	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/merge", s.withAuth(s.mergeStoryboardShots))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/storyboard-shots/{shotId}/timing", s.withAuth(s.updateStoryboardShotTiming))
 	mux.HandleFunc("GET /api/projects/{projectId}/adaptation-plans", s.withAuth(s.listAdaptationPlans))
 	mux.HandleFunc("POST /api/projects/{projectId}/adaptation-plans", s.withAuth(s.createAdaptationPlan))
 	mux.HandleFunc("GET /api/projects/{projectId}/adaptation-plans/{planId}", s.withAuth(s.getAdaptationPlan))
@@ -215,8 +238,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/agent/tasks/{taskId}/steps/{stepId}/reject", s.withAuth(s.rejectAgentStep))
 	mux.HandleFunc("POST /api/projects/{projectId}/agent/tasks/{taskId}/resume", s.withAuth(s.resumeAgentTask))
 	mux.HandleFunc("GET /api/projects/{projectId}/canonical-assets", s.withAuth(s.listCanonicalAssets))
+	mux.HandleFunc("POST /api/projects/{projectId}/asset-batches", s.withAuth(s.createAssetBatch))
+	mux.HandleFunc("GET /api/projects/{projectId}/operations/{operationId}", s.withAuth(s.getRuntimeOperation))
+	mux.HandleFunc("POST /api/projects/{projectId}/operations/{operationId}/reconcile", s.withAuth(s.reconcileRuntimeOperation))
 	mux.HandleFunc("GET /api/projects/{projectId}/canonical-assets/{assetId}", s.withAuth(s.getCanonicalAsset))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/canonical-assets/{assetId}", s.withAuth(s.updateCanonicalAsset))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/canonical-assets/{assetId}", s.withAuth(s.deleteCanonicalAsset))
+	mux.HandleFunc("GET /api/projects/{projectId}/canonical-assets/{assetId}/impact", s.withAuth(s.getCanonicalAssetImpact))
 	mux.HandleFunc("POST /api/projects/{projectId}/canonical-assets/{assetId}/generate-card", s.withAuth(s.generateAssetCard))
 	mux.HandleFunc("POST /api/projects/{projectId}/canonical-assets/{assetId}/generate-image", s.withAuth(s.generateCanonicalAssetImage))
 	mux.HandleFunc("GET /api/projects/{projectId}/canonical-assets/{assetId}/references", s.withAuth(s.listAssetReferences))
@@ -243,8 +271,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots", s.withAuth(s.createStoryboardShot))
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/reorder", s.withAuth(s.reorderStoryboardShots))
 	mux.HandleFunc("GET /api/projects/{projectId}/storyboard-shots/{shotId}/detail", s.withAuth(s.getStoryboardShotDetail))
+	mux.HandleFunc("GET /api/projects/{projectId}/storyboard-shots/{shotId}/render-plan", s.withAuth(s.getStoryboardShotRenderPlan))
+	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/render-plan", s.withAuth(s.createStoryboardShotRenderPlan))
+	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/render-plan/audio-verification", s.withAuth(s.verifyStoryboardShotRenderPlanAudio))
+	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/render-plan/audio-review", s.withAuth(s.startNativeAudioReview))
+	mux.HandleFunc("GET /api/projects/{projectId}/storyboard-shots/{shotId}/render-plan/audio-reviews", s.withAuth(s.listNativeAudioReviews))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/storyboard-shots/{shotId}", s.withAuth(s.updateStoryboardShot))
 	mux.HandleFunc("DELETE /api/projects/{projectId}/storyboard-shots/{shotId}", s.withAuth(s.deleteStoryboardShot))
+	mux.HandleFunc("GET /api/projects/{projectId}/character-voices", s.withAuth(s.listCharacterVoices))
+	mux.HandleFunc("POST /api/projects/{projectId}/character-voices", s.withAuth(s.createCharacterVoice))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/character-voices/{voiceId}", s.withAuth(s.updateCharacterVoice))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/character-voices/{voiceId}", s.withAuth(s.deleteCharacterVoice))
+	mux.HandleFunc("GET /api/projects/{projectId}/script-episodes/{episodeId}/audio", s.withAuth(s.getEpisodeAudio))
+	mux.HandleFunc("POST /api/projects/{projectId}/script-episodes/{episodeId}/audio/produce", s.withAuth(s.produceEpisodeAudio))
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/media/unlink", s.withAuth(s.unlinkStoryboardShotMedia))
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/review", s.withAuth(s.reviewStoryboardShot))
 
@@ -271,6 +310,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/model-profiles", s.withAuth(s.createModelProfile))
 	mux.HandleFunc("PATCH /api/model-profiles/{profileId}", s.withAuth(s.updateModelProfile))
 	mux.HandleFunc("POST /api/model-profiles/{profileId}/bindings", s.withAuth(s.createModelProfileBinding))
+	mux.HandleFunc("PATCH /api/model-profiles/{profileId}/bindings/{bindingId}", s.withAuth(s.updateModelProfileBinding))
 	mux.HandleFunc("DELETE /api/model-profiles/{profileId}/bindings/{bindingId}", s.withAuth(s.deleteModelProfileBinding))
 	mux.HandleFunc("GET /api/provider-call-logs", s.withAuth(s.listProviderCallLogs))
 	mux.HandleFunc("GET /api/provider-usage/summary", s.withAuth(s.getProviderUsageSummary))
@@ -296,6 +336,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/workflow-runs", s.withAuth(s.listWorkflowRuns))
 	mux.HandleFunc("GET /api/workflow-runs/{workflowRunId}", s.withAuth(s.getWorkflowRun))
 	mux.HandleFunc("POST /api/workflow-runs/{workflowRunId}/cancel", s.withAuth(s.cancelWorkflowRun))
+	mux.HandleFunc("POST /api/workflow-runs/{workflowRunId}/retry-failed", s.withAuth(s.retryFailedWorkflowRun))
 	mux.HandleFunc("GET /api/workflow-runs/{workflowRunId}/nodes", s.withAuth(s.listWorkflowNodeRuns))
 	mux.HandleFunc("GET /api/workflow-runs/{workflowRunId}/shots", s.withAuth(s.listWorkflowRunShots))
 	mux.HandleFunc("GET /api/artifacts", s.withAuth(s.listArtifacts))
@@ -571,7 +612,9 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 		SELECT id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
 		       video_ratio, art_style, director_manual, visual_manual,
 		       image_model_profile_key, video_model_profile_key, script_model_profile_key,
-		       image_quality, production_mode, active_final_video_version_id::text, settings, created_at, updated_at
+		       tts_model_profile_key, asr_model_profile_key, audio_strategy, audio_requirement, audio_configuration_revision,
+		       image_quality, production_mode, timeline_timebase, fps_numerator, fps_denominator,
+		       active_final_video_version_id::text, active_audio_mix_version_id::text, settings, revision, created_at, updated_at
 		FROM projects
 		WHERE organization_id = $1
 	`
@@ -603,22 +646,31 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	var req struct {
-		WorkspaceID           string          `json:"workspaceId"`
-		Name                  string          `json:"name"`
-		Description           *string         `json:"description"`
-		ProjectType           *string         `json:"projectType"`
-		ContentType           *string         `json:"contentType"`
-		AspectRatio           *string         `json:"aspectRatio"`
-		VideoRatio            *string         `json:"videoRatio"`
-		ArtStyle              *string         `json:"artStyle"`
-		DirectorManual        *string         `json:"directorManual"`
-		VisualManual          *string         `json:"visualManual"`
-		ImageModelProfileKey  *string         `json:"imageModelProfileKey"`
-		VideoModelProfileKey  *string         `json:"videoModelProfileKey"`
-		ScriptModelProfileKey *string         `json:"scriptModelProfileKey"`
-		ImageQuality          *string         `json:"imageQuality"`
-		ProductionMode        *string         `json:"productionMode"`
-		Settings              json.RawMessage `json:"settings"`
+		WorkspaceID                   string          `json:"workspaceId"`
+		Name                          string          `json:"name"`
+		Description                   *string         `json:"description"`
+		ProjectType                   *string         `json:"projectType"`
+		ContentType                   *string         `json:"contentType"`
+		AspectRatio                   *string         `json:"aspectRatio"`
+		VideoRatio                    *string         `json:"videoRatio"`
+		ArtStyle                      *string         `json:"artStyle"`
+		DirectorManual                *string         `json:"directorManual"`
+		VisualManual                  *string         `json:"visualManual"`
+		DirectorManualPromptVersionID *string         `json:"directorManualPromptVersionId"`
+		VisualManualPromptVersionID   *string         `json:"visualManualPromptVersionId"`
+		ImageModelProfileKey          *string         `json:"imageModelProfileKey"`
+		VideoModelProfileKey          *string         `json:"videoModelProfileKey"`
+		ScriptModelProfileKey         *string         `json:"scriptModelProfileKey"`
+		TTSModelProfileKey            *string         `json:"ttsModelProfileKey"`
+		ASRModelProfileKey            *string         `json:"asrModelProfileKey"`
+		AudioStrategy                 *string         `json:"audioStrategy"`
+		AudioRequirement              *string         `json:"audioRequirement"`
+		ImageQuality                  *string         `json:"imageQuality"`
+		ProductionMode                *string         `json:"productionMode"`
+		TimelineTimebase              *int64          `json:"timelineTimebase"`
+		FPSNumerator                  *int            `json:"fpsNumerator"`
+		FPSDenominator                *int            `json:"fpsDenominator"`
+		Settings                      json.RawMessage `json:"settings"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -639,11 +691,37 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 	artStyle := normalizedProjectString(req.ArtStyle, "")
 	directorManual := normalizedProjectString(req.DirectorManual, "")
 	visualManual := normalizedProjectString(req.VisualManual, "")
+	directorManualPromptVersionID := normalizedProjectString(req.DirectorManualPromptVersionID, "")
+	visualManualPromptVersionID := normalizedProjectString(req.VisualManualPromptVersionID, "")
 	imageModelProfileKey := normalizedProjectString(req.ImageModelProfileKey, "image_generation_default")
 	videoModelProfileKey := normalizedProjectString(req.VideoModelProfileKey, "video_generation_default")
 	scriptModelProfileKey := normalizedProjectString(req.ScriptModelProfileKey, "script_agent_default")
+	ttsModelProfileKey := normalizedProjectString(req.TTSModelProfileKey, "tts_generation_default")
+	asrModelProfileKey := normalizedProjectString(req.ASRModelProfileKey, "audio_transcription_default")
+	audioStrategy := normalizedProjectString(req.AudioStrategy, "native_av")
+	audioRequirement := normalizedProjectString(req.AudioRequirement, "preferred")
+	if !validProjectAudioSettings(audioStrategy, audioRequirement) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "audioStrategy or audioRequirement is invalid", nil, false)
+		return
+	}
 	imageQuality := normalizedProjectString(req.ImageQuality, "standard")
 	productionMode := normalizedProjectString(req.ProductionMode, "silent_video")
+	timelineTimebase := int64(90_000)
+	if req.TimelineTimebase != nil {
+		timelineTimebase = *req.TimelineTimebase
+	}
+	fpsNumerator := 24
+	if req.FPSNumerator != nil {
+		fpsNumerator = *req.FPSNumerator
+	}
+	fpsDenominator := 1
+	if req.FPSDenominator != nil {
+		fpsDenominator = *req.FPSDenominator
+	}
+	if !validProjectTimebase(timelineTimebase, fpsNumerator, fpsDenominator) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "timelineTimebase and frame rate must be positive and exactly representable", nil, false)
+		return
+	}
 
 	var orgID string
 	err := s.db.QueryRow(r.Context(), `SELECT organization_id FROM workspaces WHERE id = $1`, req.WorkspaceID).Scan(&orgID)
@@ -668,20 +746,26 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 			organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
 			video_ratio, art_style, director_manual, visual_manual,
 			image_model_profile_key, video_model_profile_key, script_model_profile_key,
-			image_quality, production_mode, settings, created_by
+			tts_model_profile_key, asr_model_profile_key, audio_strategy, audio_requirement,
+			image_quality, production_mode, timeline_timebase, fps_numerator, fps_denominator, settings, created_by
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 		RETURNING id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
 		          video_ratio, art_style, director_manual, visual_manual,
 		          image_model_profile_key, video_model_profile_key, script_model_profile_key,
-		          image_quality, production_mode, active_final_video_version_id::text, settings, created_at, updated_at
+		          tts_model_profile_key, asr_model_profile_key, audio_strategy, audio_requirement, audio_configuration_revision,
+		          image_quality, production_mode, timeline_timebase, fps_numerator, fps_denominator,
+		          active_final_video_version_id::text, active_audio_mix_version_id::text, settings, revision, created_at, updated_at
 	`, orgID, req.WorkspaceID, strings.TrimSpace(req.Name), req.Description, req.ProjectType, req.ContentType, aspectRatio,
 		videoRatio, artStyle, directorManual, visualManual, imageModelProfileKey, videoModelProfileKey, scriptModelProfileKey,
-		imageQuality, productionMode, settings, principal.UserID).
+		ttsModelProfileKey, asrModelProfileKey, audioStrategy, audioRequirement,
+		imageQuality, productionMode, timelineTimebase, fpsNumerator, fpsDenominator, settings, principal.UserID).
 		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectType, &item.ContentType, &item.AspectRatio,
 			&item.VideoRatio, &item.ArtStyle, &item.DirectorManual, &item.VisualManual,
 			&item.ImageModelProfileKey, &item.VideoModelProfileKey, &item.ScriptModelProfileKey,
-			&item.ImageQuality, &item.ProductionMode, &item.ActiveFinalVideoVersionID, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
+			&item.TTSModelProfileKey, &item.ASRModelProfileKey, &item.AudioStrategy, &item.AudioRequirement, &item.AudioConfigurationRevision,
+			&item.ImageQuality, &item.ProductionMode, &item.TimelineTimebase, &item.FPSNumerator, &item.FPSDenominator,
+			&item.ActiveFinalVideoVersionID, &item.ActiveAudioMixVersionID, &item.Settings, &item.Revision, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -716,20 +800,34 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 	}
 
 	if directorManual == "" {
-		defaultManual, err := s.bindDefaultProjectManualTx(r.Context(), tx, orgID, item.ID, "director", principal.UserID)
+		manual := ""
+		if directorManualPromptVersionID != "" {
+			_, manual, err = s.bindProjectManualTx(r.Context(), tx, orgID, item.ID, "director", directorManualPromptVersionID, principal.UserID)
+		} else {
+			manual, err = s.bindDefaultProjectManualTx(r.Context(), tx, orgID, item.ID, "director", principal.UserID)
+		}
 		if err != nil {
 			s.writeError(w, r, err)
 			return
 		}
-		item.DirectorManual = defaultManual
+		item.DirectorManual = manual
 	}
 	if visualManual == "" {
-		defaultManual, err := s.bindDefaultProjectManualTx(r.Context(), tx, orgID, item.ID, "visual", principal.UserID)
+		manual := ""
+		if visualManualPromptVersionID != "" {
+			_, manual, err = s.bindProjectManualTx(r.Context(), tx, orgID, item.ID, "visual", visualManualPromptVersionID, principal.UserID)
+		} else {
+			manual, err = s.bindDefaultProjectManualTx(r.Context(), tx, orgID, item.ID, "visual", principal.UserID)
+		}
 		if err != nil {
 			s.writeError(w, r, err)
 			return
 		}
-		item.VisualManual = defaultManual
+		item.VisualManual = manual
+	}
+	if err := tx.QueryRow(r.Context(), `SELECT revision, updated_at FROM projects WHERE id = $1`, item.ID).Scan(&item.Revision, &item.UpdatedAt); err != nil {
+		s.writeError(w, r, err)
+		return
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {
@@ -763,23 +861,98 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal
 	}
 
 	var req struct {
-		Name                  *string         `json:"name"`
-		Description           *string         `json:"description"`
-		ProjectType           *string         `json:"projectType"`
-		ContentType           *string         `json:"contentType"`
-		AspectRatio           *string         `json:"aspectRatio"`
-		VideoRatio            *string         `json:"videoRatio"`
-		ArtStyle              *string         `json:"artStyle"`
-		DirectorManual        *string         `json:"directorManual"`
-		VisualManual          *string         `json:"visualManual"`
-		ImageModelProfileKey  *string         `json:"imageModelProfileKey"`
-		VideoModelProfileKey  *string         `json:"videoModelProfileKey"`
-		ScriptModelProfileKey *string         `json:"scriptModelProfileKey"`
-		ImageQuality          *string         `json:"imageQuality"`
-		ProductionMode        *string         `json:"productionMode"`
-		Settings              json.RawMessage `json:"settings"`
+		Name                          *string         `json:"name"`
+		Description                   *string         `json:"description"`
+		ProjectType                   *string         `json:"projectType"`
+		ContentType                   *string         `json:"contentType"`
+		AspectRatio                   *string         `json:"aspectRatio"`
+		VideoRatio                    *string         `json:"videoRatio"`
+		ArtStyle                      *string         `json:"artStyle"`
+		DirectorManual                *string         `json:"directorManual"`
+		VisualManual                  *string         `json:"visualManual"`
+		DirectorManualPromptVersionID *string         `json:"directorManualPromptVersionId"`
+		VisualManualPromptVersionID   *string         `json:"visualManualPromptVersionId"`
+		ImageModelProfileKey          *string         `json:"imageModelProfileKey"`
+		VideoModelProfileKey          *string         `json:"videoModelProfileKey"`
+		ScriptModelProfileKey         *string         `json:"scriptModelProfileKey"`
+		TTSModelProfileKey            *string         `json:"ttsModelProfileKey"`
+		ASRModelProfileKey            *string         `json:"asrModelProfileKey"`
+		AudioStrategy                 *string         `json:"audioStrategy"`
+		AudioRequirement              *string         `json:"audioRequirement"`
+		ImageQuality                  *string         `json:"imageQuality"`
+		ProductionMode                *string         `json:"productionMode"`
+		TimelineTimebase              *int64          `json:"timelineTimebase"`
+		FPSNumerator                  *int            `json:"fpsNumerator"`
+		FPSDenominator                *int            `json:"fpsDenominator"`
+		Settings                      json.RawMessage `json:"settings"`
+		ExpectedRevision              *int64          `json:"expectedRevision"`
 	}
 	if !decode(w, r, &req) {
+		return
+	}
+	if req.ExpectedRevision != nil && *req.ExpectedRevision <= 0 {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedRevision must be positive", nil, false)
+		return
+	}
+
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	item, err = scanProject(tx.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1 FOR UPDATE OF p`), projectID))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if req.ExpectedRevision != nil && item.Revision != *req.ExpectedRevision {
+		conflict := newAPIError(http.StatusConflict, "PROJECT_REVISION_CONFLICT", "project settings changed before the update was applied")
+		conflict.Details = map[string]any{"expectedRevision": *req.ExpectedRevision, "currentRevision": item.Revision}
+		s.writeError(w, r, conflict)
+		return
+	}
+	baseRevision := item.Revision
+	previousVideoRatio := strings.TrimSpace(item.VideoRatio)
+	nextVideoRatio := previousVideoRatio
+	if req.VideoRatio != nil {
+		nextVideoRatio = strings.TrimSpace(*req.VideoRatio)
+	}
+	videoRatioChanged := nextVideoRatio != "" && nextVideoRatio != previousVideoRatio
+	nextTimebase := item.TimelineTimebase
+	if req.TimelineTimebase != nil {
+		nextTimebase = *req.TimelineTimebase
+	}
+	nextFPSNumerator := item.FPSNumerator
+	if req.FPSNumerator != nil {
+		nextFPSNumerator = *req.FPSNumerator
+	}
+	nextFPSDenominator := item.FPSDenominator
+	if req.FPSDenominator != nil {
+		nextFPSDenominator = *req.FPSDenominator
+	}
+	if !validProjectTimebase(nextTimebase, nextFPSNumerator, nextFPSDenominator) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "timelineTimebase and frame rate must be positive and exactly representable", nil, false)
+		return
+	}
+	frameRateChanged := nextTimebase != item.TimelineTimebase || nextFPSNumerator != item.FPSNumerator || nextFPSDenominator != item.FPSDenominator
+	nextAudioStrategy := normalizedProjectString(req.AudioStrategy, item.AudioStrategy)
+	nextAudioRequirement := normalizedProjectString(req.AudioRequirement, item.AudioRequirement)
+	if !validProjectAudioSettings(nextAudioStrategy, nextAudioRequirement) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "audioStrategy or audioRequirement is invalid", nil, false)
+		return
+	}
+	audioSettingsChanged := nextAudioStrategy != item.AudioStrategy || nextAudioRequirement != item.AudioRequirement ||
+		(req.TTSModelProfileKey != nil && strings.TrimSpace(*req.TTSModelProfileKey) != item.TTSModelProfileKey) ||
+		(req.ASRModelProfileKey != nil && strings.TrimSpace(*req.ASRModelProfileKey) != item.ASRModelProfileKey)
+	directorManualPromptVersionID := normalizedProjectString(req.DirectorManualPromptVersionID, "")
+	visualManualPromptVersionID := normalizedProjectString(req.VisualManualPromptVersionID, "")
+	if req.DirectorManual != nil && directorManualPromptVersionID != "" {
+		s.writeError(w, r, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "director manual text and prompt version cannot both be set"))
+		return
+	}
+	if req.VisualManual != nil && visualManualPromptVersionID != "" {
+		s.writeError(w, r, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "visual manual text and prompt version cannot both be set"))
 		return
 	}
 
@@ -787,7 +960,8 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal
 	if len(req.Settings) > 0 {
 		settings = req.Settings
 	}
-	err = s.db.QueryRow(r.Context(), `
+
+	err = tx.QueryRow(r.Context(), `
 		UPDATE projects
 		SET
 			name = COALESCE($2, name),
@@ -802,31 +976,122 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal
 			image_model_profile_key = COALESCE($11, image_model_profile_key),
 			video_model_profile_key = COALESCE($12, video_model_profile_key),
 			script_model_profile_key = COALESCE($13, script_model_profile_key),
-			image_quality = COALESCE($14, image_quality),
-			production_mode = COALESCE($15, production_mode),
-			settings = $16
+			tts_model_profile_key = COALESCE($14, tts_model_profile_key),
+			asr_model_profile_key = COALESCE($15, asr_model_profile_key),
+			audio_strategy = COALESCE($16, audio_strategy),
+			audio_requirement = COALESCE($17, audio_requirement),
+			image_quality = COALESCE($18, image_quality),
+			production_mode = COALESCE($19, production_mode),
+			timeline_timebase = COALESCE($20, timeline_timebase),
+			fps_numerator = COALESCE($21, fps_numerator),
+			fps_denominator = COALESCE($22, fps_denominator),
+			settings = $23,
+			revision = revision + 1,
+			updated_at = now()
 		WHERE id = $1
+		  AND revision = $24
 		RETURNING id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
 		          video_ratio, art_style, director_manual, visual_manual,
 		          image_model_profile_key, video_model_profile_key, script_model_profile_key,
-		          image_quality, production_mode, active_final_video_version_id::text, settings, created_at, updated_at
+		          tts_model_profile_key, asr_model_profile_key, audio_strategy, audio_requirement, audio_configuration_revision,
+		          image_quality, production_mode, timeline_timebase, fps_numerator, fps_denominator,
+		          active_final_video_version_id::text, active_audio_mix_version_id::text, settings, revision, created_at, updated_at
 	`, projectID, req.Name, req.Description, req.ProjectType, req.ContentType, req.AspectRatio,
 		normalizedOptionalString(req.VideoRatio), normalizedOptionalString(req.ArtStyle), normalizedOptionalString(req.DirectorManual), normalizedOptionalString(req.VisualManual),
 		normalizedOptionalString(req.ImageModelProfileKey), normalizedOptionalString(req.VideoModelProfileKey), normalizedOptionalString(req.ScriptModelProfileKey),
-		normalizedOptionalString(req.ImageQuality), normalizedOptionalString(req.ProductionMode), settings).
+		normalizedOptionalString(req.TTSModelProfileKey), normalizedOptionalString(req.ASRModelProfileKey), normalizedOptionalString(req.AudioStrategy), normalizedOptionalString(req.AudioRequirement),
+		normalizedOptionalString(req.ImageQuality), normalizedOptionalString(req.ProductionMode), req.TimelineTimebase, req.FPSNumerator, req.FPSDenominator, settings, baseRevision).
 		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectType, &item.ContentType, &item.AspectRatio,
 			&item.VideoRatio, &item.ArtStyle, &item.DirectorManual, &item.VisualManual,
 			&item.ImageModelProfileKey, &item.VideoModelProfileKey, &item.ScriptModelProfileKey,
-			&item.ImageQuality, &item.ProductionMode, &item.ActiveFinalVideoVersionID, &item.Settings, &item.CreatedAt, &item.UpdatedAt)
+			&item.TTSModelProfileKey, &item.ASRModelProfileKey, &item.AudioStrategy, &item.AudioRequirement, &item.AudioConfigurationRevision,
+			&item.ImageQuality, &item.ProductionMode, &item.TimelineTimebase, &item.FPSNumerator, &item.FPSDenominator,
+			&item.ActiveFinalVideoVersionID, &item.ActiveAudioMixVersionID, &item.Settings, &item.Revision, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	if req.DirectorManual != nil || req.VisualManual != nil {
-		if err := s.disableManualBindingsForDirectEdit(r.Context(), item.ID, req.DirectorManual != nil, req.VisualManual != nil); err != nil {
+		if err := disableManualBindingsForDirectEditTx(r.Context(), tx, item.ID, req.DirectorManual != nil, req.VisualManual != nil); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
+	}
+	if directorManualPromptVersionID != "" {
+		_, manual, err := s.bindProjectManualTx(r.Context(), tx, item.OrganizationID, item.ID, "director", directorManualPromptVersionID, principal.UserID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		item.DirectorManual = manual
+	}
+	if visualManualPromptVersionID != "" {
+		_, manual, err := s.bindProjectManualTx(r.Context(), tx, item.OrganizationID, item.ID, "visual", visualManualPromptVersionID, principal.UserID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		item.VisualManual = manual
+	}
+	if err := tx.QueryRow(r.Context(), `SELECT revision, updated_at FROM projects WHERE id = $1`, item.ID).Scan(&item.Revision, &item.UpdatedAt); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if videoRatioChanged {
+		if err := production.MarkProjectVideoRatioStale(r.Context(), tx, item.ID, item.VideoRatio); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if err := production.MarkFinalVideoStale(r.Context(), tx, item.ID, ""); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if err := insertAPIEvent(r.Context(), tx, item.OrganizationID, item.ID, "project.video_ratio.changed", "project", item.ID, mustRawJSON(map[string]any{
+			"previousAspectRatio": previousVideoRatio,
+			"aspectRatio":         item.VideoRatio,
+		})); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	if frameRateChanged {
+		if err := production.MarkProjectFrameRateStale(r.Context(), tx, item.ID, item.TimelineTimebase, item.FPSNumerator, item.FPSDenominator); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if err := production.MarkFinalVideoStale(r.Context(), tx, item.ID, ""); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if err := insertAPIEvent(r.Context(), tx, item.OrganizationID, item.ID, "project.frame_rate.changed", "project", item.ID, mustRawJSON(map[string]any{
+			"timelineTimebase": item.TimelineTimebase,
+			"fpsNumerator":     item.FPSNumerator,
+			"fpsDenominator":   item.FPSDenominator,
+		})); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	if audioSettingsChanged {
+		invalidation, err := invalidateProjectAudioConfigurationTx(r.Context(), tx, item, "project_audio_settings_changed", principal.UserID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		item.AudioConfigurationRevision = invalidation.Revision
+		item.ActiveAudioMixVersionID = nil
+		if err := insertAPIEvent(r.Context(), tx, item.OrganizationID, item.ID, "project.audio_settings.changed", "project", item.ID, mustRawJSON(map[string]any{
+			"audioStrategy": item.AudioStrategy, "audioRequirement": item.AudioRequirement,
+			"ttsModelProfileKey": item.TTSModelProfileKey, "asrModelProfileKey": item.ASRModelProfileKey,
+			"audioConfigurationRevision": item.AudioConfigurationRevision,
+		})); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
@@ -870,15 +1135,41 @@ func (s *Server) organization(r *http.Request, orgID string) (Organization, erro
 }
 
 func (s *Server) project(r *http.Request, projectID string) (Project, error) {
-	row := s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
-		       video_ratio, art_style, director_manual, visual_manual,
-		       image_model_profile_key, video_model_profile_key, script_model_profile_key,
-		       image_quality, production_mode, active_final_video_version_id::text, settings, created_at, updated_at
-		FROM projects
-		WHERE id = $1
-	`, projectID)
-	return scanProject(row)
+	return scanProject(s.db.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1`), projectID))
+}
+
+func projectSelectSQL(where string) string {
+	return `
+		SELECT p.id, p.organization_id, p.workspace_id, p.name, p.description, p.project_type, p.content_type, p.aspect_ratio,
+		       p.video_ratio, p.art_style,
+		       COALESCE((
+		         SELECT pv.content
+		         FROM project_manual_bindings b
+		         JOIN prompt_versions pv ON pv.id = b.prompt_version_id
+		         WHERE b.project_id = p.id
+		           AND b.manual_kind = 'director'
+		           AND b.status = 'active'
+		           AND pv.status = 'active'
+		         ORDER BY b.updated_at DESC
+		         LIMIT 1
+		       ), p.director_manual) AS director_manual,
+		       COALESCE((
+		         SELECT pv.content
+		         FROM project_manual_bindings b
+		         JOIN prompt_versions pv ON pv.id = b.prompt_version_id
+		         WHERE b.project_id = p.id
+		           AND b.manual_kind = 'visual'
+		           AND b.status = 'active'
+		           AND pv.status = 'active'
+		         ORDER BY b.updated_at DESC
+		         LIMIT 1
+		       ), p.visual_manual) AS visual_manual,
+		       p.image_model_profile_key, p.video_model_profile_key, p.script_model_profile_key,
+		       p.tts_model_profile_key, p.asr_model_profile_key, p.audio_strategy, p.audio_requirement, p.audio_configuration_revision,
+		       p.image_quality, p.production_mode, p.timeline_timebase, p.fps_numerator, p.fps_denominator,
+		       p.active_final_video_version_id::text, p.active_audio_mix_version_id::text, p.settings, p.revision, p.created_at, p.updated_at
+		FROM projects p
+	` + where
 }
 
 func (s *Server) ensureOrganizationMember(r *http.Request, userID, orgID string) error {
@@ -937,14 +1228,34 @@ func scanProject(row pgx.Row) (Project, error) {
 		&item.ImageModelProfileKey,
 		&item.VideoModelProfileKey,
 		&item.ScriptModelProfileKey,
+		&item.TTSModelProfileKey,
+		&item.ASRModelProfileKey,
+		&item.AudioStrategy,
+		&item.AudioRequirement,
+		&item.AudioConfigurationRevision,
 		&item.ImageQuality,
 		&item.ProductionMode,
+		&item.TimelineTimebase,
+		&item.FPSNumerator,
+		&item.FPSDenominator,
 		&item.ActiveFinalVideoVersionID,
+		&item.ActiveAudioMixVersionID,
 		&item.Settings,
+		&item.Revision,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
 	return item, err
+}
+
+func validProjectAudioSettings(strategy, requirement string) bool {
+	validStrategy := strategy == "native_av" || strategy == "hybrid" || strategy == "tts_postdub"
+	validRequirement := requirement == "preferred" || requirement == "required" || requirement == "disabled"
+	return validStrategy && validRequirement
+}
+
+func validProjectTimebase(timebase int64, fpsNumerator, fpsDenominator int) bool {
+	return timebase > 0 && fpsNumerator > 0 && fpsDenominator > 0 && timebase*int64(fpsDenominator)%int64(fpsNumerator) == 0
 }
 
 func normalizedProjectString(value *string, fallback string) string {
@@ -1023,8 +1334,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, provider.ErrProviderGatewayRequired):
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, provider.CodeProviderGatewayRequired, "provider gateway is required", fmt.Sprintf("%v", err), false)
 	case errors.As(err, &upstreamErr):
-		standard := provider.NormalizeHTTPError(upstreamErr.Status, upstreamErr.Code)
-		httpx.WriteError(w, r, http.StatusBadGateway, standard.Code, standard.Message, standard, standard.Retryable)
+		standard := provider.NormalizeUpstreamError(upstreamErr)
+		httpx.WriteError(w, r, provider.HTTPStatusForStandardError(&standard), standard.Code, standard.Message, standard, standard.Retryable)
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.WriteError(w, r, http.StatusNotFound, "NOT_FOUND", "resource was not found", nil, false)
 	default:

@@ -2,12 +2,40 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/Einzieg/cineweave/internal/agent"
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/workflows"
 )
+
+func TestNormalizeStoryboardAgentPlanCollapsesEpisodeWorkflows(t *testing.T) {
+	plan := agent.Plan{Steps: []agent.PlanStep{
+		{Tool: "project.read_summary", Args: json.RawMessage(`{}`)},
+		{Tool: "workflow.start", Args: json.RawMessage(`{"workflowType":"parse_script_scenes","input":{"scriptId":"script-1"}}`)},
+		{Tool: "workflow.start", Args: json.RawMessage(`{"workflowType":"script_to_storyboard","input":{"scriptId":"script-1","scriptEpisodeIds":["episode-1"]}}`)},
+		{Tool: "workflow.start", Args: json.RawMessage(`{"workflowType":"script_to_storyboard","input":{"scriptId":"script-1","scriptEpisodeIds":["episode-2"]}}`)},
+		{Tool: "storyboard.list", Args: json.RawMessage(`{}`)},
+	}}
+
+	got := normalizeStoryboardAgentPlan(plan, "生成第 1-2 集分镜")
+	if len(got.Steps) != 3 {
+		t.Fatalf("steps = %+v, want read + one workflow + list", got.Steps)
+	}
+	if agentPlanWorkflowType(got.Steps[1]) != "script_to_storyboard" {
+		t.Fatalf("workflow step = %+v", got.Steps[1])
+	}
+	args := rawObject(got.Steps[1].Args)
+	input, _ := args["input"].(map[string]any)
+	ids := stringSliceFromAny(input["scriptEpisodeIds"])
+	if strings.Join(ids, ",") != "episode-1,episode-2" {
+		t.Fatalf("scriptEpisodeIds = %v", ids)
+	}
+}
 
 func TestAgentToolsAndTasksAPI(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)
@@ -47,6 +75,13 @@ func TestAgentToolsAndTasksAPI(t *testing.T) {
 		t.Fatal("agent tools list is empty")
 	}
 	assertAgentToolListed(t, tools.Items, "project.read_summary", "read", false)
+	assertAgentToolListed(t, tools.Items, "agent.ask_user", "draft", true)
+	assertAgentToolListed(t, tools.Items, "source.update", "write", true)
+	assertAgentToolListed(t, tools.Items, "source.delete", "destructive", true)
+	assertAgentToolListed(t, tools.Items, "source.delete_chapter", "destructive", true)
+	assertAgentToolListed(t, tools.Items, "script.update_episode", "write", true)
+	assertAgentToolListed(t, tools.Items, "script.delete", "destructive", true)
+	assertAgentToolListed(t, tools.Items, "asset.delete", "destructive", true)
 	assertAgentToolListed(t, tools.Items, "workflow.start", "workflow", true)
 	assertAgentToolListed(t, tools.Items, "provider.update_account", "admin", true)
 	assertAgentToolListed(t, tools.Items, "provider.update_model", "admin", true)
@@ -154,6 +189,47 @@ func TestAgentToolsAndTasksAPI(t *testing.T) {
 	}
 }
 
+func TestAgentTaskDetailIncludesLiveWorkflowEpisodeProgress(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	taskID := seed.insertAgentTask(t, "running")
+	workflowRunID := seed.insertWorkflowRunWithType(t, "script_to_storyboard", "running")
+	seed.insertAgentStepWithOutput(t, taskID, 1, "workflow.start", "workflow", "succeeded", `{"status":"succeeded","data":{"workflowRunId":"`+workflowRunID+`"}}`)
+	if _, err := seed.pool.Exec(seed.ctx, `
+		INSERT INTO workflow_node_runs(
+			organization_id, project_id, workflow_run_id, node_key, node_type, status,
+			input, output, started_at
+		)
+		VALUES (
+			$1, $2, $3, 'generate_storyboard_from_script_episode-2', 'agent.storyboard_generate', 'running',
+			jsonb_build_object('episodeIndex', 2, 'episodeTotal', 10, 'episodeTitle', '第二集'),
+			jsonb_build_object('status', 'streaming', 'partialText', '正在生成第二集分镜', 'receivedChars', 10),
+			now()
+		)
+	`, seed.organizationID, seed.projectID, workflowRunID); err != nil {
+		t.Fatalf("insert live storyboard node: %v", err)
+	}
+
+	var detail AgentTask
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/agent/tasks/"+taskID, seed.ownerToken, seed.organizationID, nil, &detail)
+	if len(detail.Steps) != 1 {
+		t.Fatalf("steps = %+v", detail.Steps)
+	}
+	output := rawObject(detail.Steps[0].Output)
+	data, _ := output["data"].(map[string]any)
+	progress, _ := data["workflowProgress"].(map[string]any)
+	activeNode, _ := progress["activeNode"].(map[string]any)
+	nodeInput, _ := activeNode["input"].(map[string]any)
+	nodeOutput, _ := activeNode["output"].(map[string]any)
+	if progress["status"] != "running" || nodeInput["episodeIndex"] != float64(2) || nodeInput["episodeTotal"] != float64(10) {
+		t.Fatalf("workflow progress = %+v", progress)
+	}
+	if nodeOutput["partialText"] != "正在生成第二集分镜" {
+		t.Fatalf("workflow node output = %+v", nodeOutput)
+	}
+}
+
 func TestProjectAgentStateGateBlocksRunningWorkflow(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
@@ -214,6 +290,105 @@ func TestAgentTaskListFiltersBySession(t *testing.T) {
 	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/agent/tasks?filter%5BsessionId%5D="+secondSessionID, seed.ownerToken, seed.organizationID, nil, &secondList)
 	if len(secondList.Items) != 1 || secondList.Items[0].ID != secondTaskID {
 		t.Fatalf("second session task list = %+v, want %s only", secondList.Items, secondTaskID)
+	}
+}
+
+func TestProjectAgentAskUserQuestion(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	gateway := newAgentPlannerGatewaySequence(t, map[string]any{
+		"summary": "需要用户选择下一步",
+		"steps": []map[string]any{
+			{
+				"tool": "agent.ask_user",
+				"args": map[string]any{
+					"question":    "要先处理哪一部分？",
+					"allowCustom": true,
+					"options": []map[string]any{
+						{
+							"id":          "content",
+							"label":       "先整理内容",
+							"description": "读取原文并确认分集。",
+							"nextGoal":    "整理内容分集",
+						},
+						{
+							"id":          "script",
+							"label":       "先看剧本",
+							"description": "读取剧本版本并检查分集。",
+							"nextGoal":    "检查剧本分集",
+						},
+					},
+					"defaultOptionId": "content",
+				},
+				"expectedResult": "得到用户选择",
+			},
+		},
+	}, map[string]any{
+		"summary": "按用户选择继续整理内容分集",
+		"steps": []map[string]any{
+			{
+				"tool":           "source.list",
+				"args":           map[string]any{},
+				"expectedResult": "读取原文列表并继续整理内容分集",
+			},
+		},
+	})
+	defer gateway.Close()
+	t.Setenv("PROVIDER_GATEWAY_URL", gateway.URL)
+	t.Setenv("CINEWEAVE_SERVICE_TOKEN", "test-service-token")
+
+	var task AgentTask
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/agent/tasks", seed.ownerToken, seed.organizationID, map[string]any{
+		"goal": "帮我继续推进项目",
+		"mode": "supervised",
+		"constraints": map[string]any{
+			"permissionMode": "full_access",
+		},
+	}, &task)
+	if task.Status != "waiting_approval" || len(task.Steps) != 1 || task.Steps[0].Status != "waiting_approval" {
+		t.Fatalf("task = %+v, want waiting question", task)
+	}
+	if len(task.Approvals) != 1 || task.Approvals[0].ApprovalType != "question" {
+		t.Fatalf("approvals = %+v, want one question approval", task.Approvals)
+	}
+	requested := rawObject(task.Approvals[0].RequestedPayload)
+	if got := stringValueFromAny(requested["question"]); got != "要先处理哪一部分？" {
+		t.Fatalf("question = %q", got)
+	}
+	if options := requested["options"].([]any); len(options) != 2 {
+		t.Fatalf("options = %+v, want 2", requested["options"])
+	}
+
+	var approval AgentApproval
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/agent/tasks/"+task.ID+"/steps/"+task.Steps[0].ID+"/approve", seed.ownerToken, seed.organizationID, map[string]any{
+		"note": "先整理内容",
+		"decision": map[string]any{
+			"kind":                "option",
+			"selectedOptionId":    "content",
+			"selectedOptionLabel": "先整理内容",
+			"nextGoal":            "整理内容分集",
+		},
+	}, &approval)
+	if approval.Status != "approved" || approval.ApprovalType != "question" {
+		t.Fatalf("approval = %+v, want approved question", approval)
+	}
+
+	var detail AgentTask
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/agent/tasks/"+task.ID, seed.ownerToken, seed.organizationID, nil, &detail)
+	if detail.Status != "succeeded" || len(detail.Steps) != 2 || detail.Steps[0].Status != "succeeded" || detail.Steps[1].Status != "succeeded" {
+		t.Fatalf("detail = %+v, want succeeded question and continuation steps", detail)
+	}
+	output := rawObject(detail.Steps[0].Output)
+	data := agentObjectFromAny(output["data"])
+	if got := stringValueFromAny(data["selectedOptionId"]); got != "content" {
+		t.Fatalf("selectedOptionId = %q, output=%s", got, string(detail.Steps[0].Output))
+	}
+	if got := stringValueFromAny(data["nextGoal"]); got != "整理内容分集" {
+		t.Fatalf("nextGoal = %q, output=%s", got, string(detail.Steps[0].Output))
+	}
+	if detail.Steps[1].ToolName != "source.list" {
+		t.Fatalf("continuation tool = %q, want source.list", detail.Steps[1].ToolName)
 	}
 }
 
@@ -353,7 +528,8 @@ func TestProjectAgentStopsAfterStartingChildWorkflow(t *testing.T) {
 	defer seed.Close()
 
 	server := New(seed.pool, seed.authService, nil, nil, nil)
-	server.temporal = &fakeTemporalClient{}
+	temporal := &fakeTemporalClient{}
+	server.temporal = temporal
 	scriptID := seed.insertActiveScript(t)
 	project, err := seed.apiServer.project(requestWithContext(seed.ctx), seed.projectID)
 	if err != nil {
@@ -517,6 +693,47 @@ func TestProjectAgentWaitsForActiveProviderTaskWhenWorkflowRunLooksComplete(t *t
 	}
 }
 
+func TestProjectAgentStopsWhenChildWorkflowFails(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	server := New(seed.pool, seed.authService, nil, nil, nil)
+	project, err := seed.apiServer.project(requestWithContext(seed.ctx), seed.projectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	taskID := seed.insertAgentTaskWithGoal(t, "running", "生成1-10集剧本后再列出资产")
+	workflowRunID := seed.insertWorkflowRunWithType(t, "source_to_script", "failed")
+	seed.insertAgentStepWithOutput(t, taskID, 1, "script.generate_from_source", "write", "succeeded", string(mustMarshal(agentToolResult{
+		Name:   "script.generate_from_source",
+		Status: "succeeded",
+		Data: map[string]any{
+			"workflowRunId": workflowRunID,
+			"workflowType":  "source_to_script",
+			"status":        "queued",
+		},
+	})))
+	assetStepID := seed.insertAgentStepWithInputOutput(t, taskID, 2, "asset.list", "read", "planned", `{}`, `{}`)
+
+	updated, err := server.executeAgentTaskReadySteps(requestWithContext(seed.ctx), auth.Principal{UserID: seed.ownerUserID, OrganizationID: seed.organizationID}, project, taskID)
+	if err != nil {
+		t.Fatalf("execute ready steps: %v", err)
+	}
+	if updated.Status != "failed" || updated.ErrorCode == nil || *updated.ErrorCode != "CHILD_WORKFLOW_FAILED" {
+		t.Fatalf("task = %+v, want child workflow failure", updated)
+	}
+	assertAgentStepStatus(t, seed, assetStepID, "planned")
+	var summary struct {
+		FailedWorkflowRuns []agentPendingWorkflowRun `json:"failedWorkflowRuns"`
+	}
+	if err := json.Unmarshal(updated.Summary, &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if len(summary.FailedWorkflowRuns) != 1 || summary.FailedWorkflowRuns[0].ID != workflowRunID {
+		t.Fatalf("failed runs = %#v, want %s", summary.FailedWorkflowRuns, workflowRunID)
+	}
+}
+
 func TestProjectAgentAutoContinuationAppendsNextProductionPlan(t *testing.T) {
 	_, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
@@ -572,7 +789,7 @@ func TestProjectAgentShotImageGenerationVerifier(t *testing.T) {
 	defer seed.Close()
 
 	server := New(seed.pool, seed.authService, nil, nil, nil)
-	server.temporal = &fakeTemporalClient{}
+	temporal := &fakeTemporalClient{}
 	workflowRunID := seed.insertWorkflowRunWithType(t, "script_to_storyboard", "succeeded")
 	shotID := insertShotProductionShot(t, seed, workflowRunID, 0, "", "", "not_started", "not_started")
 	gateway := newAgentPlannerGateway(t, map[string]any{
@@ -580,7 +797,7 @@ func TestProjectAgentShotImageGenerationVerifier(t *testing.T) {
 		"steps": []map[string]any{
 			{
 				"tool":           "shot.generate_missing_images",
-				"args":           map[string]any{"workflowRunId": workflowRunID},
+				"args":           map[string]any{},
 				"expectedResult": "启动缺失镜头图片生成",
 			},
 		},
@@ -597,6 +814,7 @@ func TestProjectAgentShotImageGenerationVerifier(t *testing.T) {
 	if task.Status != "waiting_approval" || len(task.Steps) != 1 || task.Steps[0].Status != "waiting_approval" {
 		t.Fatalf("task before approval = %+v", task)
 	}
+	server.temporal = temporal
 	var imageStatusBefore string
 	if err := seed.pool.QueryRow(seed.ctx, `SELECT image_status FROM storyboard_shots WHERE id = $1`, shotID).Scan(&imageStatusBefore); err != nil {
 		t.Fatalf("read image status before: %v", err)
@@ -610,6 +828,7 @@ func TestProjectAgentShotImageGenerationVerifier(t *testing.T) {
 	if approval.Status != "approved" {
 		t.Fatalf("approval = %+v", approval)
 	}
+	dispatchWorkflowStartsForTest(t, server)
 	var imageStatusAfter string
 	if err := seed.pool.QueryRow(seed.ctx, `SELECT image_status FROM storyboard_shots WHERE id = $1`, shotID).Scan(&imageStatusAfter); err != nil {
 		t.Fatalf("read image status after: %v", err)
@@ -624,12 +843,25 @@ func TestProjectAgentShotImageGenerationVerifier(t *testing.T) {
 	if videoStatusAfter != "not_started" {
 		t.Fatalf("video status after image-only approval = %s, want not_started", videoStatusAfter)
 	}
+	if len(temporal.args) != 1 {
+		t.Fatalf("temporal args len = %d, want 1", len(temporal.args))
+	}
+	workflowInput := temporal.args[0].(workflows.TextToStoryboardInput)
+	var workflowOptions struct {
+		MaxConcurrency int `json:"maxConcurrency"`
+	}
+	if err := json.Unmarshal(workflowInput.Input, &workflowOptions); err != nil {
+		t.Fatalf("decode image workflow input: %v", err)
+	}
+	if workflowOptions.MaxConcurrency != workflows.DefaultShotImageConcurrency {
+		t.Fatalf("maxConcurrency = %d, want %d", workflowOptions.MaxConcurrency, workflows.DefaultShotImageConcurrency)
+	}
 	var detail AgentTask
 	doAPISuccess(t, server.Handler(), http.MethodGet, "/api/projects/"+seed.projectID+"/agent/tasks/"+task.ID, seed.ownerToken, seed.organizationID, nil, &detail)
-	if detail.Status != "succeeded" || len(detail.Steps) != 1 || detail.Steps[0].Status != "succeeded" {
+	if detail.Status != "running" || len(detail.Steps) != 1 || detail.Steps[0].Status != "succeeded" {
 		t.Fatalf("task after approval = %+v", detail)
 	}
-	assertAgentStepVerifierStatus(t, detail.Steps[0], "succeeded")
+	assertAgentStepVerifierStatus(t, detail.Steps[0], "skipped")
 }
 
 func TestProjectAgentShotVideoGenerationVerifier(t *testing.T) {
@@ -1167,15 +1399,15 @@ func TestProjectAgentScriptGenerateAndRewriteRequireApproval(t *testing.T) {
 	defer seed.Close()
 
 	sourceID := seed.insertProjectSource(t, "novel", "Agent Novel")
+	seed.insertNovelChapterWithOrdinals(t, sourceID, 1, 1, 1, "第一节", "第一节原文。")
 	var generatedScriptID string
 
 	callCount := 0
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/internal/provider/text/generate" {
+		if r.URL.Path != "/internal/provider/text/generate" && r.URL.Path != "/internal/provider/text/stream" {
 			t.Fatalf("unexpected gateway path %s", r.URL.Path)
 		}
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
 		text := "生成后的剧本内容"
 		switch callCount {
 		case 1:
@@ -1183,7 +1415,7 @@ func TestProjectAgentScriptGenerateAndRewriteRequireApproval(t *testing.T) {
 				"summary": "从原文生成剧本",
 				"steps": []map[string]any{{
 					"tool":           "script.generate_from_source",
-					"args":           map[string]any{"sourceId": sourceID, "title": "Agent Script", "instruction": "生成短剧本"},
+					"args":           map[string]any{"sourceId": sourceID, "title": "Agent Script", "instruction": "生成短剧本", "chapterRange": "1集"},
 					"expectedResult": "创建剧本",
 				}},
 			}
@@ -1203,6 +1435,11 @@ func TestProjectAgentScriptGenerateAndRewriteRequireApproval(t *testing.T) {
 		default:
 			text = "改写后的剧本内容"
 		}
+		if r.URL.Path == "/internal/provider/text/stream" {
+			writeAgentTestSSE(t, w, text, callCount)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
 				"providerCallId": "00000000-0000-0000-0000-000000000010",
@@ -1283,6 +1520,107 @@ func TestProjectAgentScriptGenerateAndRewriteRequireApproval(t *testing.T) {
 	}
 	if versionCountAfter != versionCountBefore+1 || currentContent != "改写后的剧本内容" {
 		t.Fatalf("version count before=%d after=%d currentContent=%q", versionCountBefore, versionCountAfter, currentContent)
+	}
+}
+
+func TestProjectAgentGenerateScriptFromSourceCreatesOneEpisodePerNovelChapter(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+	temporal := &fakeTemporalClient{}
+	seed.apiServer.temporal = temporal
+
+	sourceID := seed.insertProjectSource(t, "novel", "十集小说")
+	for i := 1; i <= 10; i++ {
+		seed.insertNovelChapterWithOrdinals(t, sourceID, i, 1, i, fmt.Sprintf("第%d节", i), fmt.Sprintf("第%d节原文。", i))
+	}
+
+	project, err := seed.apiServer.project(requestWithContext(seed.ctx), seed.projectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	taskID := seed.insertAgentTaskWithGoal(t, "running", "生成1-10集剧本")
+	stepID := seed.insertAgentStepWithInputOutput(t, taskID, 1, "script.generate_from_source", "write", "running", `{}`, `{}`)
+	result := seed.apiServer.agentToolGenerateScriptFromSource(
+		requestWithContext(seed.ctx),
+		auth.Principal{UserID: seed.ownerUserID, OrganizationID: seed.organizationID},
+		project,
+		AgentTask{ID: taskID, ProjectID: seed.projectID, UserGoal: "生成1-10集剧本", Mode: "supervised", Constraints: json.RawMessage(`{}`)},
+		AgentStep{ID: stepID, TaskID: taskID, ToolName: "script.generate_from_source"},
+		map[string]any{"sourceId": sourceID, "title": "十集剧本", "chapterRange": "1-10集"},
+	)
+	if result.Status != "succeeded" {
+		t.Fatalf("tool result = %+v", result)
+	}
+	workflowRunID, _ := result.Data["workflowRunId"].(string)
+	if workflowRunID == "" || result.Data["workflowType"] != "source_to_script" {
+		t.Fatalf("result data missing workflow: %+v", result.Data)
+	}
+	dispatchWorkflowStartsForTest(t, seed.apiServer)
+	if temporal.executeCount != 1 {
+		t.Fatalf("temporal execute count = %d, want 1", temporal.executeCount)
+	}
+	if len(temporal.args) != 1 {
+		t.Fatalf("temporal args len = %d", len(temporal.args))
+	}
+	workflowInput, ok := temporal.args[0].(workflows.TextToStoryboardInput)
+	if !ok {
+		t.Fatalf("workflow input type = %T", temporal.args[0])
+	}
+	var options struct {
+		SourceID       string   `json:"sourceId"`
+		ChapterIDs     []string `json:"chapterIds"`
+		AgentTaskID    string   `json:"agentTaskId"`
+		AgentStepID    string   `json:"agentStepId"`
+		IdempotencyKey string   `json:"idempotencyKey"`
+		MaxConcurrency int      `json:"maxConcurrency"`
+	}
+	if err := json.Unmarshal(workflowInput.Input, &options); err != nil {
+		t.Fatalf("decode workflow input: %v", err)
+	}
+	if options.SourceID != sourceID || len(options.ChapterIDs) != 10 || options.AgentTaskID != taskID || options.AgentStepID != stepID || options.IdempotencyKey == "" || options.MaxConcurrency != 2 {
+		t.Fatalf("workflow options = %+v", options)
+	}
+}
+
+func TestProjectAgentVerifierReadsScriptVersionFromSourceWorkflowOutput(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+	server := seed.apiServer
+	project, err := server.project(requestWithContext(seed.ctx), seed.projectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	scriptID := seed.insertActiveScript(t)
+	versionID := seed.currentScriptVersionID(t, scriptID)
+	sourceID := seed.insertProjectSource(t, "novel", "十集小说")
+	workflowRunID := seed.insertWorkflowRunWithType(t, "source_to_script", "succeeded")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE workflow_runs
+		SET output = $2
+		WHERE id = $1
+	`, workflowRunID, mustMarshal(map[string]any{
+		"scriptId":         scriptID,
+		"scriptVersionId":  versionID,
+		"episodeCount":     10,
+		"providerCallIds":  []string{},
+		"providerCallId":   "",
+		"sourceId":         sourceID,
+		"workflowRunId":    workflowRunID,
+		"generationStatus": "succeeded",
+	})); err != nil {
+		t.Fatalf("update workflow output: %v", err)
+	}
+	verifier := server.verifyAgentToolResult(seed.ctx, project, agentToolResult{
+		Name:   "script.generate_from_source",
+		Status: "succeeded",
+		Data: map[string]any{
+			"workflowRunId": workflowRunID,
+			"workflowType":  "source_to_script",
+			"status":        "succeeded",
+		},
+	})
+	if got := stringValueFromAny(verifier["status"]); got != "succeeded" {
+		t.Fatalf("verifier status = %q, output=%+v", got, verifier)
 	}
 }
 
@@ -1370,6 +1708,118 @@ func TestProjectAgentCreativeUpdateToolsRequireApproval(t *testing.T) {
 	}
 	if shotVisual != "Agent edited shot visual" {
 		t.Fatalf("shot visual = %q", shotVisual)
+	}
+}
+
+func TestProjectAgentRevisesAssetPromptByNameWithApproval(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	assetID := seed.insertCanonicalAsset(t, "prop", "Oil Lamp", "approved", "")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE canonical_assets
+		SET base_prompt = 'old base prompt',
+		    consistency_prompt = 'old consistency prompt',
+		    negative_prompt = 'old negative prompt',
+		    status = 'prompt_ready'
+		WHERE id = $1
+	`, assetID); err != nil {
+		t.Fatalf("seed asset prompts: %v", err)
+	}
+
+	callCount := 0
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/provider/text/generate" {
+			t.Fatalf("unexpected gateway path %s", r.URL.Path)
+		}
+		callCount++
+		var req struct {
+			PromptTemplateKey string         `json:"promptTemplateKey"`
+			Input             map[string]any `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode gateway request: %v", err)
+		}
+		responseText := ""
+		modelID := "planner-model"
+		providerCallID := "00000000-0000-0000-0000-000000000010"
+		if callCount == 1 {
+			plan := map[string]any{
+				"summary": "强化油灯资产提示词",
+				"steps": []map[string]any{{
+					"tool": "asset.revise_prompt",
+					"args": map[string]any{
+						"assetName":   "Oil Lamp",
+						"instruction": "增强四视图和纯道具约束",
+						"fields":      []string{"basePrompt", "negativePrompt"},
+					},
+					"expectedResult": "保留一致性提示词并强化指定字段",
+				}},
+			}
+			responseText = string(mustMarshal(plan))
+		} else {
+			if req.PromptTemplateKey != "asset_prompt_revision" {
+				t.Fatalf("prompt template key = %q", req.PromptTemplateKey)
+			}
+			prompt := stringValueFromAny(req.Input["prompt"])
+			if !strings.Contains(prompt, "old base prompt") || !strings.Contains(prompt, "增强四视图和纯道具约束") {
+				t.Fatalf("revision prompt is missing current state or instruction: %q", prompt)
+			}
+			responseText = `{"basePrompt":"new four-view base prompt","consistencyPrompt":"model attempted replacement","negativePrompt":"new people-free negative prompt"}`
+			modelID = "asset-revision-model"
+			providerCallID = "00000000-0000-0000-0000-000000000011"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"providerCallId": providerCallID,
+				"modelId":        modelID,
+				"status":         "succeeded",
+				"output":         map[string]any{"text": responseText},
+			},
+		}); err != nil {
+			t.Fatalf("write gateway response: %v", err)
+		}
+	}))
+	defer gateway.Close()
+	t.Setenv("PROVIDER_GATEWAY_URL", gateway.URL)
+	t.Setenv("CINEWEAVE_SERVICE_TOKEN", "test-service-token")
+
+	var task AgentTask
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/agent/tasks", seed.ownerToken, seed.organizationID, map[string]any{
+		"goal": "把 Oil Lamp 的提示词增强四视图和纯道具约束，保持其他设定不变",
+		"mode": "supervised",
+	}, &task)
+	if task.Status != "waiting_approval" || len(task.Steps) != 1 || task.Steps[0].ToolName != "asset.revise_prompt" {
+		t.Fatalf("task before approval = %+v", task)
+	}
+	var approval AgentApproval
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/agent/tasks/"+task.ID+"/steps/"+task.Steps[0].ID+"/approve", seed.ownerToken, seed.organizationID, nil, &approval)
+	if approval.Status != "approved" {
+		t.Fatalf("approval = %+v", approval)
+	}
+	var basePrompt, consistencyPrompt, negativePrompt, status, staleState string
+	var manualOverride bool
+	var metadata map[string]any
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT COALESCE(base_prompt, ''), COALESCE(consistency_prompt, ''), COALESCE(negative_prompt, ''),
+		       status, stale_state, manual_override, metadata
+		FROM canonical_assets
+		WHERE id = $1
+	`, assetID).Scan(&basePrompt, &consistencyPrompt, &negativePrompt, &status, &staleState, &manualOverride, &metadata); err != nil {
+		t.Fatalf("read revised asset: %v", err)
+	}
+	if basePrompt != "new four-view base prompt" || consistencyPrompt != "old consistency prompt" || negativePrompt != "new people-free negative prompt" {
+		t.Fatalf("revised prompts base=%q consistency=%q negative=%q", basePrompt, consistencyPrompt, negativePrompt)
+	}
+	if status != "prompt_ready" || staleState != "needs_regeneration" || !manualOverride {
+		t.Fatalf("asset state status=%q stale=%q manual=%v", status, staleState, manualOverride)
+	}
+	if metadata["agentTool"] != "asset.revise_prompt" || metadata["providerCallId"] != "00000000-0000-0000-0000-000000000011" {
+		t.Fatalf("asset metadata = %+v", metadata)
+	}
+	if callCount != 2 {
+		t.Fatalf("gateway call count = %d", callCount)
 	}
 }
 
@@ -1723,23 +2173,58 @@ func assertAgentToolListed(t *testing.T, items []struct {
 }
 
 func newAgentPlannerGateway(t *testing.T, plan map[string]any) *httptest.Server {
+	return newAgentPlannerGatewaySequence(t, plan)
+}
+
+func newAgentPlannerGatewaySequence(t *testing.T, plans ...map[string]any) *httptest.Server {
 	t.Helper()
+	var callIndex int
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/internal/provider/text/generate" {
 			t.Fatalf("unexpected gateway path %s", r.URL.Path)
 		}
+		index := callIndex
+		callIndex++
+		if index >= len(plans) {
+			index = len(plans) - 1
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
-				"providerCallId": "00000000-0000-0000-0000-000000000099",
+				"providerCallId": "",
 				"modelId":        "planner-model",
 				"status":         "succeeded",
-				"output":         map[string]any{"text": string(mustMarshal(plan))},
+				"output":         map[string]any{"text": string(mustMarshal(plans[index]))},
 			},
 		}); err != nil {
 			t.Fatalf("write gateway response: %v", err)
 		}
 	}))
+}
+
+func writeAgentTestSSE(t *testing.T, w http.ResponseWriter, text string, callIndex int) {
+	t.Helper()
+	w.Header().Set("Content-Type", "text/event-stream")
+	delta, err := json.Marshal(map[string]any{"text": text})
+	if err != nil {
+		t.Fatalf("marshal delta: %v", err)
+	}
+	completed, err := json.Marshal(map[string]any{
+		"providerCallId": fmt.Sprintf("00000000-0000-0000-0000-%012d", callIndex),
+		"modelId":        "script-model",
+		"status":         "succeeded",
+		"output":         map[string]any{"text": text},
+		"usage":          map[string]any{"estimatedCost": "0.00000000", "currency": "USD"},
+	})
+	if err != nil {
+		t.Fatalf("marshal completed: %v", err)
+	}
+	if _, err := fmt.Fprintf(w, "event: provider.delta\ndata: %s\n\n", delta); err != nil {
+		t.Fatalf("write delta: %v", err)
+	}
+	if _, err := fmt.Fprintf(w, "event: provider.completed\ndata: %s\n\n", completed); err != nil {
+		t.Fatalf("write completed: %v", err)
+	}
 }
 
 func assertAgentStepStateGateReason(t *testing.T, step AgentStep, want string) {
@@ -1815,6 +2300,22 @@ func (s *artifactPreviewSeed) insertAgentTaskWithSession(t *testing.T, status, g
 		RETURNING id
 	`, s.organizationID, s.projectID, sessionID, goal, status, s.ownerUserID).Scan(&id); err != nil {
 		t.Fatalf("insert agent task with session: %v", err)
+	}
+	return id
+}
+
+func (s *artifactPreviewSeed) insertNovelChapterWithOrdinals(t *testing.T, sourceID string, chapterIndex, volumeIndex, sectionIndex int, chapterTitle, content string) string {
+	t.Helper()
+	var id string
+	if err := s.pool.QueryRow(s.ctx, `
+		INSERT INTO novel_chapters(
+			organization_id, project_id, source_id, chapter_index,
+			volume_index, section_index, volume_title, chapter_title, content, event_state
+		)
+		VALUES ($1, $2, $3, $4, NULLIF($5, 0), NULLIF($6, 0), $7, $8, $9, 'pending')
+		RETURNING id::text
+	`, s.organizationID, s.projectID, sourceID, chapterIndex, volumeIndex, sectionIndex, "第一卷", chapterTitle, content).Scan(&id); err != nil {
+		t.Fatalf("insert novel chapter: %v", err)
 	}
 	return id
 }
@@ -2027,13 +2528,15 @@ func (s *artifactPreviewSeed) insertProductionShotAt(t *testing.T, workflowRunID
 	if err := s.pool.QueryRow(s.ctx, `
 		INSERT INTO storyboard_shots(
 			organization_id, project_id, workflow_run_id, shot_index, shot_no,
-			duration_seconds, visual, camera, motion, mood, image_prompt, video_prompt,
+			start_tick, end_tick, duration_min_ticks, duration_max_ticks,
+			visual, camera, motion, mood, image_prompt, video_prompt,
 			status, review_status, metadata
 		)
-		VALUES ($1, $2, $3, $4, $5, 5, $6, 'camera', 'motion', 'mood', 'image prompt', 'video prompt',
+		VALUES ($1, $2, $3, $4, $5, $7, $8, 450000, 450000, $6, 'camera', 'motion', 'mood', 'image prompt', 'video prompt',
 		        'image_succeeded', 'approved', '{}')
 		RETURNING id
-	`, s.organizationID, s.projectID, workflowRunID, index, index+1, visual).Scan(&id); err != nil {
+	`, s.organizationID, s.projectID, workflowRunID, index, index+1, visual,
+		int64(index)*450000, int64(index+1)*450000).Scan(&id); err != nil {
 		t.Fatalf("insert production shot at %d: %v", index, err)
 	}
 	return id
@@ -2060,11 +2563,11 @@ func (s *artifactPreviewSeed) insertTimelineClipForAgent(t *testing.T, timelineI
 	if err := s.pool.QueryRow(s.ctx, `
 		INSERT INTO timeline_clips(
 			organization_id, project_id, timeline_id, clip_index, title, enabled,
-			trim_start_seconds, target_duration_seconds, notes, metadata
+			start_tick, end_tick, source_duration_ticks, trim_start_tick, trim_end_tick, notes, metadata
 		)
-		VALUES ($1, $2, $3, $4, $5, true, 0, 3, '', '{}')
+		VALUES ($1, $2, $3, $4, $5, true, $6, $7, 270000, 0, 270000, '', '{}')
 		RETURNING id::text
-	`, s.organizationID, s.projectID, timelineID, index, title).Scan(&id); err != nil {
+	`, s.organizationID, s.projectID, timelineID, index, title, int64(index)*270000, int64(index+1)*270000).Scan(&id); err != nil {
 		t.Fatalf("insert timeline clip: %v", err)
 	}
 	return id

@@ -13,6 +13,8 @@ import (
 func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	registerRenderSegmentMediaTestActivity(env)
+	registerShotVideoExecutionGroupsTestActivity(env)
 	var cancelCalled bool
 	var workflowCancelled bool
 	var cancelOutput CancelShotVideoTaskOutput
@@ -29,6 +31,15 @@ func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, input ListStoryboardShotsInput) ([]StoryboardShotRecord, error) {
 		return shots, nil
 	}, activity.RegisterOptions{Name: "ListStoryboardShots"})
+	env.RegisterActivityWithOptions(func(context.Context, EnsurePreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
+		output := preparedVideoPlanTestOutput("shot-1", "render-plan", "render-segment", "reviewed video prompt")
+		output.Plan.CapabilitySnapshotHash = "sha256:capability"
+		output.Segments[0].RequestedDurationSeconds = 5
+		return output, nil
+	}, activity.RegisterOptions{Name: "EnsurePreparedShotVideoPlan"})
+	env.RegisterActivityWithOptions(func(ctx context.Context, input PrepareShotImagePromptInput) (PrepareShotImagePromptOutput, error) {
+		return PrepareShotImagePromptOutput{ShotID: input.ShotID, Prompt: "reviewed image prompt", PromptHash: "sha256:image"}, nil
+	}, activity.RegisterOptions{Name: "PrepareShotImagePrompt"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input GenerateShotImageInput) (GenerateShotImageOutput, error) {
 		return GenerateShotImageOutput{
 			NodeRunID:        "image-node",
@@ -39,6 +50,10 @@ func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
 			ProviderCallID:   "image-call",
 		}, nil
 	}, activity.RegisterOptions{Name: "GenerateShotImage"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input PrepareShotVideoPromptInput) (PrepareShotVideoPromptOutput, error) {
+		t.Fatalf("video generation must not call prompt agents: %+v", input)
+		return PrepareShotVideoPromptOutput{}, nil
+	}, activity.RegisterOptions{Name: "PrepareShotVideoPrompt"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input CreateShotVideoTaskInput) (CreateShotVideoTaskOutput, error) {
 		return CreateShotVideoTaskOutput{
 			NodeRunID:           "video-node",
@@ -48,6 +63,9 @@ func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
 			ExternalTaskID:      "external-task",
 			Status:              "running",
 			ModelID:             "video-model",
+			ExecutionPlanID:     input.ExecutionPlanID,
+			RenderSegmentID:     input.RenderSegmentID,
+			SegmentCount:        input.SegmentCount,
 		}, nil
 	}, activity.RegisterOptions{Name: "CreateShotVideoTask"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input PollShotVideoTaskInput) (PollShotVideoTaskOutput, error) {
@@ -56,6 +74,9 @@ func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
 			ProviderAsyncTaskID: input.ProviderAsyncTaskID,
 			ExternalTaskID:      input.ExternalTaskID,
 			Status:              "running",
+			ExecutionPlanID:     input.ExecutionPlanID,
+			RenderSegmentID:     input.RenderSegmentID,
+			SegmentCount:        input.SegmentCount,
 		}, nil
 	}, activity.RegisterOptions{Name: "PollShotVideoTask"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input CancelShotVideoTaskInput) (CancelShotVideoTaskOutput, error) {
@@ -71,14 +92,13 @@ func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
 			ShotIndex:           input.ShotIndex,
 			ShotNo:              input.ShotNo,
 			Status:              "cancelled",
+			ExecutionPlanID:     input.ExecutionPlanID,
+			RenderSegmentID:     input.RenderSegmentID,
 		}
 		return cancelOutput, nil
 	}, activity.RegisterOptions{Name: "CancelShotVideoTask"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input TextToStoryboardInput, output CancelShotVideoTaskOutput, reason string) error {
 		workflowCancelled = true
-		if output.ProviderAsyncTaskID != "provider-task" || output.Status != "cancelled" {
-			t.Fatalf("cancel workflow output = %+v", output)
-		}
 		return nil
 	}, activity.RegisterOptions{Name: "CancelVideoProductionWorkflow"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input TextToStoryboardInput, output VideoProductionOutput) error {

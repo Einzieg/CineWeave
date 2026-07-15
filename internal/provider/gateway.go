@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -22,17 +23,256 @@ type gatewayModelSelection struct {
 	ModelProfileID        string
 	ModelProfileBindingID string
 	ModelProfileKey       string
+	RuntimeOptions        ModelProfileBindingRuntimeOptions
 }
 
 func (s *Service) GenerateText(ctx context.Context, req GatewayTextRequest) (GatewayTextResponse, error) {
-	return s.executeGatewayText(ctx, req, false, nil)
+	return s.executeProviderTextRequest(ctx, req, false, nil)
 }
 
 func (s *Service) StreamText(ctx context.Context, req GatewayTextRequest, onDelta func(GatewayTextDelta) error) (GatewayTextResponse, error) {
-	return s.executeGatewayText(ctx, req, true, onDelta)
+	return s.StreamTextEvents(ctx, req, func(event GatewayTextStreamEvent) error {
+		if event.Type != GatewayTextEventDelta || event.Delta == nil || onDelta == nil {
+			return nil
+		}
+		return onDelta(*event.Delta)
+	})
+}
+
+func (s *Service) StreamTextEvents(ctx context.Context, req GatewayTextRequest, emit func(GatewayTextStreamEvent) error) (GatewayTextResponse, error) {
+	response, err := s.executeProviderTextRequest(ctx, req, true, emit)
+	if err != nil {
+		standard := standardErrorForStream(err, response.Error)
+		_ = emitGatewayTextEvent(emit, GatewayTextStreamEvent{
+			Type: GatewayTextEventFailed,
+			Failure: &GatewayTextFailureEvent{
+				SchemaVersion:     GatewayTextStreamSchemaVersion,
+				ProviderRequestID: response.ProviderRequestID,
+				ProviderCallID:    response.ProviderCallID,
+				AttemptGeneration: response.AttemptGeneration,
+				AttemptSequence:   response.AttemptSequence,
+				Error:             standard,
+			},
+		})
+		return response, err
+	}
+	if response.requestDisposition == string(providerRequestReplay) {
+		if err := emitGatewayTextEvent(emit, GatewayTextStreamEvent{
+			Type: GatewayTextEventReplayed,
+			Replay: &GatewayTextReplayEvent{
+				SchemaVersion:     GatewayTextStreamSchemaVersion,
+				ProviderRequestID: response.ProviderRequestID,
+				ProviderCallID:    response.ProviderCallID,
+				AttemptGeneration: response.AttemptGeneration,
+				AttemptSequence:   response.AttemptSequence,
+				ModelID:           response.ModelID,
+				Status:            response.Status,
+				Output:            response.Output,
+				Usage:             response.Usage,
+				LatencyMS:         response.LatencyMS,
+			},
+		}); err != nil {
+			return GatewayTextResponse{}, err
+		}
+		return response, nil
+	}
+	if response.Status != "succeeded" {
+		standard := response.Error
+		if standard == nil {
+			standard = &StandardError{Code: CodeUnknownError, Message: "provider stream failed", Retryable: false}
+		}
+		if err := emitGatewayTextEvent(emit, GatewayTextStreamEvent{
+			Type: GatewayTextEventFailed,
+			Failure: &GatewayTextFailureEvent{
+				SchemaVersion:     GatewayTextStreamSchemaVersion,
+				ProviderRequestID: response.ProviderRequestID,
+				ProviderCallID:    response.ProviderCallID,
+				AttemptGeneration: response.AttemptGeneration,
+				AttemptSequence:   response.AttemptSequence,
+				Error:             standard,
+			},
+		}); err != nil {
+			return GatewayTextResponse{}, err
+		}
+		return response, &StandardErrorError{Standard: *standard}
+	}
+	if err := emitGatewayTextEvent(emit, GatewayTextStreamEvent{Type: GatewayTextEventCompleted, Response: &response}); err != nil {
+		return GatewayTextResponse{}, err
+	}
+	return response, nil
+}
+
+func emitGatewayTextEvent(emit func(GatewayTextStreamEvent) error, event GatewayTextStreamEvent) error {
+	if emit == nil {
+		return nil
+	}
+	return emit(event)
+}
+
+func standardErrorForStream(err error, fallback *StandardError) *StandardError {
+	if fallback != nil {
+		return fallback
+	}
+	var standardErr *StandardErrorError
+	if errors.As(err, &standardErr) {
+		standard := standardErr.Standard
+		return &standard
+	}
+	_, code, message, _, _ := normalizedProviderFailure(err)
+	return standardErrorFromRunError(err, code, message)
+}
+
+func (s *Service) executeProviderTextRequest(ctx context.Context, req GatewayTextRequest, stream bool, emit func(GatewayTextStreamEvent) error) (GatewayTextResponse, error) {
+	if strings.TrimSpace(req.OrganizationID) == "" {
+		return GatewayTextResponse{}, fmt.Errorf("%w: organizationId is required", ErrValidation)
+	}
+	input, err := normalizeJSON(req.Input, "{}")
+	if err != nil {
+		return GatewayTextResponse{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
+	}
+	req.Input = input
+	taskType := TaskTypeTextGenerate
+	if stream {
+		taskType = TaskTypeTextStream
+	}
+	requestHash, err := gatewayRequestHash(req)
+	if err != nil {
+		return GatewayTextResponse{}, err
+	}
+	start, err := s.beginProviderRequest(ctx, providerRequestStartInput{
+		OrganizationID: req.OrganizationID,
+		ProjectID:      req.ProjectID,
+		WorkflowRunID:  req.WorkflowRunID,
+		NodeRunID:      req.NodeRunID,
+		TaskType:       taskType,
+		IdempotencyKey: gatewayIdempotencyKey(req),
+		RequestHash:    requestHash,
+		Retry:          req.Options.Retry,
+	})
+	if err != nil {
+		return GatewayTextResponse{}, err
+	}
+
+	if start.Disposition == providerRequestReplay {
+		response, decodeErr := decodeProviderRequestResult[GatewayTextResponse](start.Request)
+		if decodeErr != nil || strings.TrimSpace(response.Status) == "" {
+			response = providerTextStatusResponse(start.Request)
+		}
+		response.ProviderRequestID = start.Request.ID
+		response.SchemaVersion = GatewayTextStreamSchemaVersion
+		response.AttemptGeneration = start.Request.AttemptGeneration
+		response.requestDisposition = string(providerRequestReplay)
+		return response, nil
+	}
+	if start.Disposition == providerRequestInProgress {
+		response := providerTextStatusResponse(start.Request)
+		response.requestDisposition = string(providerRequestInProgress)
+		return response, nil
+	}
+
+	response, runErr := s.executeGatewayText(ctx, req, stream, emit, start.Request.ID, start.Request.AttemptGeneration)
+	if runErr != nil {
+		if errors.Is(runErr, ErrValidation) || errors.Is(runErr, pgx.ErrNoRows) {
+			_, code, message, _, _ := normalizedProviderFailure(runErr)
+			standard := standardErrorFromRunError(runErr, code, message)
+			response = GatewayTextResponse{
+				SchemaVersion:     GatewayTextStreamSchemaVersion,
+				ProviderRequestID: start.Request.ID,
+				AttemptGeneration: start.Request.AttemptGeneration,
+				Status:            "failed",
+				Error:             standard,
+			}
+			if completeErr := s.completeProviderRequest(ctx, start.Request.ID, start.Request.AttemptGeneration, response.Status, response, nil, nil, standard); completeErr != nil {
+				return GatewayTextResponse{}, completeErr
+			}
+			return response, nil
+		}
+		_ = s.markProviderRequestUnknown(context.WithoutCancel(ctx), start.Request.ID, start.Request.AttemptGeneration, runErr)
+		return GatewayTextResponse{}, runErr
+	}
+	response.ProviderRequestID = start.Request.ID
+	response.SchemaVersion = GatewayTextStreamSchemaVersion
+	response.AttemptGeneration = start.Request.AttemptGeneration
+	response.requestDisposition = string(providerRequestExecute)
+	if err := s.completeProviderRequest(ctx, start.Request.ID, start.Request.AttemptGeneration, response.Status, response, nil, nil, response.Error); err != nil {
+		_ = s.markProviderRequestUnknown(context.WithoutCancel(ctx), start.Request.ID, start.Request.AttemptGeneration, err)
+		return GatewayTextResponse{}, err
+	}
+	return response, nil
+}
+
+func providerTextStatusResponse(request ProviderRequest) GatewayTextResponse {
+	return GatewayTextResponse{
+		SchemaVersion:     GatewayTextStreamSchemaVersion,
+		ProviderRequestID: request.ID,
+		AttemptGeneration: request.AttemptGeneration,
+		Status:            request.Status,
+		Error:             providerRequestStatusError(request),
+	}
 }
 
 func (s *Service) DiscoverModelsViaGateway(ctx context.Context, req GatewayDiscoverModelsRequest) (GatewayDiscoverModelsResponse, error) {
+	if strings.TrimSpace(req.OrganizationID) == "" || strings.TrimSpace(req.AccountID) == "" {
+		return GatewayDiscoverModelsResponse{}, fmt.Errorf("%w: organizationId and accountId are required", ErrValidation)
+	}
+	taskType := strings.TrimSpace(req.TestType)
+	if taskType == "" {
+		taskType = "model_discovery"
+	}
+	requestHash, err := gatewayRequestHash(req)
+	if err != nil {
+		return GatewayDiscoverModelsResponse{}, err
+	}
+	start, err := s.beginProviderRequest(ctx, providerRequestStartInput{
+		OrganizationID: req.OrganizationID,
+		TaskType:       taskType,
+		IdempotencyKey: req.IdempotencyKey,
+		RequestHash:    requestHash,
+		Retry:          req.Retry,
+	})
+	if err != nil {
+		return GatewayDiscoverModelsResponse{}, err
+	}
+	if start.Disposition == providerRequestReplay {
+		response, decodeErr := decodeProviderRequestResult[GatewayDiscoverModelsResponse](start.Request)
+		if decodeErr != nil || strings.TrimSpace(response.Status) == "" {
+			response = providerDiscoveryStatusResponse(start.Request)
+		}
+		response.ProviderRequestID = start.Request.ID
+		response.AttemptGeneration = start.Request.AttemptGeneration
+		return response, nil
+	}
+	if start.Disposition == providerRequestInProgress {
+		return providerDiscoveryStatusResponse(start.Request), nil
+	}
+	response, runErr := s.executeGatewayDiscovery(ctx, req, taskType, start.Request.ID, start.Request.AttemptGeneration)
+	if runErr != nil {
+		if errors.Is(runErr, ErrValidation) || errors.Is(runErr, pgx.ErrNoRows) {
+			_, code, message, _, _ := normalizedProviderFailure(runErr)
+			standard := standardErrorFromRunError(runErr, code, message)
+			response = GatewayDiscoverModelsResponse{ProviderRequestID: start.Request.ID, AttemptGeneration: start.Request.AttemptGeneration, Status: "failed", Error: standard}
+			if completeErr := s.completeProviderRequest(ctx, start.Request.ID, start.Request.AttemptGeneration, "failed", response, nil, nil, standard); completeErr != nil {
+				return GatewayDiscoverModelsResponse{}, completeErr
+			}
+			return response, nil
+		}
+		_ = s.markProviderRequestUnknown(context.WithoutCancel(ctx), start.Request.ID, start.Request.AttemptGeneration, runErr)
+		return GatewayDiscoverModelsResponse{}, runErr
+	}
+	response.ProviderRequestID = start.Request.ID
+	response.AttemptGeneration = start.Request.AttemptGeneration
+	if err := s.completeProviderRequest(ctx, start.Request.ID, start.Request.AttemptGeneration, response.Status, response, nil, nil, response.Error); err != nil {
+		_ = s.markProviderRequestUnknown(context.WithoutCancel(ctx), start.Request.ID, start.Request.AttemptGeneration, err)
+		return GatewayDiscoverModelsResponse{}, err
+	}
+	return response, nil
+}
+
+func providerDiscoveryStatusResponse(request ProviderRequest) GatewayDiscoverModelsResponse {
+	return GatewayDiscoverModelsResponse{ProviderRequestID: request.ID, AttemptGeneration: request.AttemptGeneration, Status: request.Status, Models: []DiscoveredModel{}, Unsupported: []any{}, Error: providerRequestStatusError(request)}
+}
+
+func (s *Service) executeGatewayDiscovery(ctx context.Context, req GatewayDiscoverModelsRequest, taskType, providerRequestID string, attemptGeneration int) (GatewayDiscoverModelsResponse, error) {
 	if strings.TrimSpace(req.OrganizationID) == "" || strings.TrimSpace(req.AccountID) == "" {
 		return GatewayDiscoverModelsResponse{}, fmt.Errorf("%w: organizationId and accountId are required", ErrValidation)
 	}
@@ -54,6 +294,24 @@ func (s *Service) DiscoverModelsViaGateway(ctx context.Context, req GatewayDisco
 
 	cfg := parseOpenAICompatibleConfig(account.Config)
 	client := newOpenAICompatibleClient(time.Duration(cfg.TimeoutMS) * time.Millisecond)
+	callID := uuid.NewString()
+	baseCall := RecordCallRequest{
+		ID:                callID,
+		ProviderRequestID: providerRequestID,
+		AttemptGeneration: attemptGeneration,
+		AttemptSequence:   1,
+		OrganizationID:    req.OrganizationID,
+		ProviderAccountID: account.ID,
+		CredentialID:      credentialID,
+		IdempotencyKey:    req.IdempotencyKey,
+		TaskType:          taskType,
+		ExecutionMode:     "sync",
+		Status:            "running",
+		RequestSnapshot:   mustJSON(map[string]any{"method": "GET", "endpoint": cfg.ModelsEndpoint}),
+	}
+	if _, err := recordCall(ctx, s.db, baseCall); err != nil {
+		return GatewayDiscoverModelsResponse{}, err
+	}
 	started := time.Now()
 	discovery, runErr := client.discoverModels(ctx, account, apiKey, cfg)
 	latencyMS := int(time.Since(started).Milliseconds())
@@ -72,42 +330,33 @@ func (s *Service) DiscoverModelsViaGateway(ctx context.Context, req GatewayDisco
 		standardError = standardErrorFromRunError(runErr, errorCode, errorMessage)
 	}
 
-	taskType := strings.TrimSpace(req.TestType)
-	if taskType == "" {
-		taskType = "model_discovery"
-	}
-	call, err := recordCall(ctx, s.db, RecordCallRequest{
-		OrganizationID:    req.OrganizationID,
-		ProviderAccountID: account.ID,
-		CredentialID:      credentialID,
-		IdempotencyKey:    req.IdempotencyKey,
-		TaskType:          taskType,
-		ExecutionMode:     "sync",
-		Status:            status,
-		LatencyMS:         &latencyMS,
-		ErrorCode:         errorCode,
-		ErrorMessage:      errorMessage,
-		UpstreamStatus:    upstreamStatus,
-		UpstreamErrorCode: upstreamErrorCode,
-		RequestSnapshot:   mustJSON(map[string]any{"method": "GET", "endpoint": cfg.ModelsEndpoint}),
-		ResponseSnapshot:  responseSnapshot,
-		NormalizedOutput:  normalizedOutput,
-	})
+	finalCall := baseCall
+	finalCall.Status = status
+	finalCall.LatencyMS = &latencyMS
+	finalCall.ErrorCode = errorCode
+	finalCall.ErrorMessage = errorMessage
+	finalCall.UpstreamStatus = upstreamStatus
+	finalCall.UpstreamErrorCode = upstreamErrorCode
+	finalCall.ResponseSnapshot = responseSnapshot
+	finalCall.NormalizedOutput = normalizedOutput
+	call, err := recordCall(ctx, s.db, finalCall)
 	if err != nil {
 		return GatewayDiscoverModelsResponse{}, err
 	}
 
 	return GatewayDiscoverModelsResponse{
-		ProviderCallID: call.ID,
-		Status:         status,
-		Models:         discovery.Models,
-		Unsupported:    discovery.Unsupported,
-		Error:          standardError,
-		LatencyMS:      latencyMS,
+		ProviderRequestID: providerRequestID,
+		AttemptGeneration: attemptGeneration,
+		ProviderCallID:    call.ID,
+		Status:            status,
+		Models:            discovery.Models,
+		Unsupported:       discovery.Unsupported,
+		Error:             standardError,
+		LatencyMS:         latencyMS,
 	}, nil
 }
 
-func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest, stream bool, onDelta func(GatewayTextDelta) error) (GatewayTextResponse, error) {
+func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest, stream bool, emit func(GatewayTextStreamEvent) error, providerRequestID string, attemptGeneration int) (GatewayTextResponse, error) {
 	if strings.TrimSpace(req.OrganizationID) == "" {
 		return GatewayTextResponse{}, fmt.Errorf("%w: organizationId is required", ErrValidation)
 	}
@@ -129,7 +378,7 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		if err != nil {
 			return GatewayTextResponse{}, err
 		}
-		response, _, err := s.executeGatewayTextAttempt(ctx, req, selection, stream, onDelta, taskType, executionMode, 1, 1, string(RoutingPriority))
+		response, _, err := s.executeGatewayTextAttempt(ctx, req, selection, stream, emit, taskType, executionMode, 1, 1, string(RoutingPriority), providerRequestID, attemptGeneration)
 		return response, err
 	}
 
@@ -154,19 +403,16 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 			return GatewayTextResponse{}, err
 		}
 		sentDelta := false
-		attemptDelta := onDelta
+		attemptEmit := emit
 		if stream {
-			attemptDelta = func(delta GatewayTextDelta) error {
-				if strings.TrimSpace(delta.Text) != "" {
+			attemptEmit = func(event GatewayTextStreamEvent) error {
+				if event.Type == GatewayTextEventDelta && event.Delta != nil && strings.TrimSpace(event.Delta.Text) != "" {
 					sentDelta = true
 				}
-				if onDelta == nil {
-					return nil
-				}
-				return onDelta(delta)
+				return emitGatewayTextEvent(emit, event)
 			}
 		}
-		response, attempt, err := s.executeGatewayTextAttempt(ctx, req, selection, stream, attemptDelta, taskType, executionMode, i+1, maxAttempts, candidate.RoutingStrategy)
+		response, attempt, err := s.executeGatewayTextAttempt(ctx, req, selection, stream, attemptEmit, taskType, executionMode, i+1, maxAttempts, candidate.RoutingStrategy, providerRequestID, attemptGeneration)
 		if err != nil {
 			return GatewayTextResponse{}, err
 		}
@@ -186,7 +432,12 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	return final, nil
 }
 
-func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayTextRequest, selection gatewayModelSelection, stream bool, onDelta func(GatewayTextDelta) error, taskType, executionMode string, attemptIndex, maxAttempts int, selectedBy string) (GatewayTextResponse, GatewayAttempt, error) {
+func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayTextRequest, selection gatewayModelSelection, stream bool, emit func(GatewayTextStreamEvent) error, taskType, executionMode string, attemptIndex, maxAttempts int, selectedBy, providerRequestID string, attemptGeneration int) (GatewayTextResponse, GatewayAttempt, error) {
+	effectiveInput, err := applyTextRuntimeOptions(req.Input, selection.Model, selection.RuntimeOptions)
+	if err != nil {
+		return GatewayTextResponse{}, GatewayAttempt{}, err
+	}
+	req.Input = effectiveInput
 	cfg := parseOpenAICompatibleConfig(selection.Account.Config)
 	if req.Options.TimeoutMS > 0 {
 		cfg.TimeoutMS = req.Options.TimeoutMS
@@ -196,6 +447,49 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	callID := uuid.NewString()
+	baseCall := RecordCallRequest{
+		ID:                    callID,
+		ProviderRequestID:     providerRequestID,
+		AttemptGeneration:     attemptGeneration,
+		AttemptSequence:       attemptIndex,
+		OrganizationID:        req.OrganizationID,
+		ProjectID:             req.ProjectID,
+		WorkflowRunID:         req.WorkflowRunID,
+		NodeRunID:             req.NodeRunID,
+		ProviderAccountID:     selection.Account.ID,
+		ProviderModelID:       selection.Model.ID,
+		CredentialID:          selection.CredentialID,
+		ModelProfileID:        selection.ModelProfileID,
+		ModelProfileBindingID: selection.ModelProfileBindingID,
+		ModelProfileKey:       selection.ModelProfileKey,
+		PromptVersionID:       req.PromptVersionID,
+		PromptHash:            req.PromptHash,
+		IdempotencyKey:        gatewayIdempotencyKey(req),
+		TaskType:              taskType,
+		ExecutionMode:         executionMode,
+		Status:                "running",
+		RequestSnapshot:       req.Input,
+	}
+	if _, err := recordCall(ctx, s.db, baseCall); err != nil {
+		return GatewayTextResponse{}, GatewayAttempt{}, err
+	}
+	if stream {
+		if err := emitGatewayTextEvent(emit, GatewayTextStreamEvent{
+			Type: GatewayTextEventAttemptStarted,
+			Attempt: &GatewayTextAttemptEvent{
+				SchemaVersion:     GatewayTextStreamSchemaVersion,
+				ProviderRequestID: providerRequestID,
+				ProviderCallID:    callID,
+				AttemptGeneration: attemptGeneration,
+				AttemptSequence:   attemptIndex,
+				ProviderModelID:   selection.Model.ID,
+				Status:            "running",
+			},
+		}); err != nil {
+			return GatewayTextResponse{}, GatewayAttempt{}, err
+		}
+	}
 
 	guardReq := s.gatewayGuardRequest(gatewayGuardRequestInput{
 		OrganizationID: req.OrganizationID,
@@ -211,57 +505,61 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 		if !ok {
 			return GatewayTextResponse{}, GatewayAttempt{}, guardErr
 		}
-		call, err := s.recordGatewayTextCall(ctx, selection, req, RecordCallRequest{
-			OrganizationID:        req.OrganizationID,
-			ProjectID:             req.ProjectID,
-			WorkflowRunID:         req.WorkflowRunID,
-			NodeRunID:             req.NodeRunID,
-			ProviderAccountID:     selection.Account.ID,
-			ProviderModelID:       selection.Model.ID,
-			CredentialID:          selection.CredentialID,
-			ModelProfileID:        selection.ModelProfileID,
-			ModelProfileBindingID: selection.ModelProfileBindingID,
-			ModelProfileKey:       selection.ModelProfileKey,
-			PromptVersionID:       req.PromptVersionID,
-			PromptHash:            req.PromptHash,
-			IdempotencyKey:        gatewayIdempotencyKey(req),
-			TaskType:              taskType,
-			ExecutionMode:         executionMode,
-			Status:                "blocked",
-			ErrorCode:             standard.Code,
-			ErrorMessage:          standard.Message,
-			RequestSnapshot:       req.Input,
-			ResponseSnapshot:      blockedResponseSnapshot(standard),
-			NormalizedOutput:      withRoutingNormalizedOutput(blockedNormalizedOutput(standard), selection, attemptIndex, maxAttempts, selectedBy),
-		}, GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"})
+		blockedCall := baseCall
+		blockedCall.Status = "blocked"
+		blockedCall.ErrorCode = standard.Code
+		blockedCall.ErrorMessage = standard.Message
+		blockedCall.ResponseSnapshot = blockedResponseSnapshot(standard)
+		blockedCall.NormalizedOutput = withRoutingNormalizedOutput(blockedNormalizedOutput(standard), selection, attemptIndex, maxAttempts, selectedBy)
+		call, err := s.recordGatewayTextCall(ctx, selection, req, blockedCall, GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"})
 		if err != nil {
 			return GatewayTextResponse{}, GatewayAttempt{}, err
 		}
 		attempt := gatewayAttemptFromCall(call, selection, standard, 0)
-		return GatewayTextResponse{
-			ProviderCallID: call.ID,
-			ModelID:        selection.Model.ID,
-			Status:         "blocked",
-			Output:         GatewayTextOutput{Raw: blockedResponseSnapshot(standard)},
-			Usage:          GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
-			Error:          standard,
-			Attempts:       []GatewayAttempt{attempt},
-		}, attempt, nil
+		response := GatewayTextResponse{
+			SchemaVersion:     GatewayTextStreamSchemaVersion,
+			ProviderRequestID: providerRequestID,
+			AttemptGeneration: attemptGeneration,
+			AttemptSequence:   attemptIndex,
+			ProviderCallID:    call.ID,
+			ModelID:           selection.Model.ID,
+			Status:            "blocked",
+			Output:            GatewayTextOutput{Raw: blockedResponseSnapshot(standard)},
+			Usage:             GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
+			Error:             standard,
+			Attempts:          []GatewayAttempt{attempt},
+		}
+		if stream {
+			if err := emitGatewayTextAttemptFailed(emit, response, selection.Model.ID, standard); err != nil {
+				return GatewayTextResponse{}, GatewayAttempt{}, err
+			}
+		}
+		return response, attempt, nil
 	}
-	providerCallID := ""
+	recordedProviderCallID := ""
 	defer func() {
-		s.releaseGatewayLease(lease, providerCallID)
+		s.releaseGatewayLease(lease, recordedProviderCallID)
 	}()
 
 	client := newOpenAICompatibleClient(timeout)
 	var result chatCompletionResult
-	var err error
 	if stream {
+		var sequence int64
 		result, err = client.streamChatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input, func(text string) error {
-			if onDelta == nil {
+			if emit == nil {
 				return nil
 			}
-			return onDelta(GatewayTextDelta{Text: text})
+			sequence++
+			delta := &GatewayTextDelta{
+				SchemaVersion:     GatewayTextStreamSchemaVersion,
+				ProviderRequestID: providerRequestID,
+				ProviderCallID:    callID,
+				AttemptGeneration: attemptGeneration,
+				AttemptSequence:   attemptIndex,
+				Sequence:          sequence,
+				Text:              text,
+			}
+			return emitGatewayTextEvent(emit, GatewayTextStreamEvent{Type: GatewayTextEventDelta, Delta: delta})
 		})
 	} else {
 		result, err = client.chatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input)
@@ -294,41 +592,26 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 
 	runErr := err
 	usage := estimateTextCost(result.Usage, selection.Model.Capabilities)
-	call, err := s.recordGatewayTextCall(ctx, selection, req, RecordCallRequest{
-		OrganizationID:        req.OrganizationID,
-		ProjectID:             req.ProjectID,
-		WorkflowRunID:         req.WorkflowRunID,
-		NodeRunID:             req.NodeRunID,
-		ProviderAccountID:     selection.Account.ID,
-		ProviderModelID:       selection.Model.ID,
-		CredentialID:          selection.CredentialID,
-		ModelProfileID:        selection.ModelProfileID,
-		ModelProfileBindingID: selection.ModelProfileBindingID,
-		ModelProfileKey:       selection.ModelProfileKey,
-		PromptVersionID:       req.PromptVersionID,
-		PromptHash:            req.PromptHash,
-		LeaseID:               lease.LeaseID,
-		IdempotencyKey:        gatewayIdempotencyKey(req),
-		TaskType:              taskType,
-		ExecutionMode:         executionMode,
-		Status:                status,
-		LatencyMS:             &result.LatencyMS,
-		InputTokens:           intPtrIfPositive(usage.InputTokens),
-		OutputTokens:          intPtrIfPositive(usage.OutputTokens),
-		EstimatedCost:         usage.EstimatedCost,
-		Currency:              usage.Currency,
-		ErrorCode:             errorCode,
-		ErrorMessage:          errorMessage,
-		UpstreamStatus:        upstreamStatus,
-		UpstreamErrorCode:     upstreamErrorCode,
-		RequestSnapshot:       result.RequestSnapshot,
-		ResponseSnapshot:      responseSnapshot,
-		NormalizedOutput:      normalizedOutput,
-	}, usage)
+	finalCall := baseCall
+	finalCall.LeaseID = lease.LeaseID
+	finalCall.Status = status
+	finalCall.LatencyMS = &result.LatencyMS
+	finalCall.InputTokens = intPtrIfPositive(usage.InputTokens)
+	finalCall.OutputTokens = intPtrIfPositive(usage.OutputTokens)
+	finalCall.EstimatedCost = usage.EstimatedCost
+	finalCall.Currency = usage.Currency
+	finalCall.ErrorCode = errorCode
+	finalCall.ErrorMessage = errorMessage
+	finalCall.UpstreamStatus = upstreamStatus
+	finalCall.UpstreamErrorCode = upstreamErrorCode
+	finalCall.RequestSnapshot = result.RequestSnapshot
+	finalCall.ResponseSnapshot = responseSnapshot
+	finalCall.NormalizedOutput = normalizedOutput
+	call, err := s.recordGatewayTextCall(ctx, selection, req, finalCall, usage)
 	if err != nil {
 		return GatewayTextResponse{}, GatewayAttempt{}, err
 	}
-	providerCallID = call.ID
+	recordedProviderCallID = call.ID
 	if runErr != nil {
 		s.recordGatewayGuardFailure(ctx, guardReq, errorCode, errorMessage)
 	} else {
@@ -336,10 +619,14 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 	}
 
 	attempt := gatewayAttemptFromCall(call, selection, standardError, result.LatencyMS)
-	return GatewayTextResponse{
-		ProviderCallID: call.ID,
-		ModelID:        selection.Model.ID,
-		Status:         status,
+	response := GatewayTextResponse{
+		SchemaVersion:     GatewayTextStreamSchemaVersion,
+		ProviderRequestID: providerRequestID,
+		AttemptGeneration: attemptGeneration,
+		AttemptSequence:   attemptIndex,
+		ProviderCallID:    call.ID,
+		ModelID:           selection.Model.ID,
+		Status:            status,
 		Output: GatewayTextOutput{
 			Text: result.Text,
 			Raw:  responseSnapshot,
@@ -348,7 +635,29 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 		Error:     standardError,
 		LatencyMS: result.LatencyMS,
 		Attempts:  []GatewayAttempt{attempt},
-	}, attempt, nil
+	}
+	if stream && standardError != nil {
+		if err := emitGatewayTextAttemptFailed(emit, response, selection.Model.ID, standardError); err != nil {
+			return GatewayTextResponse{}, GatewayAttempt{}, err
+		}
+	}
+	return response, attempt, nil
+}
+
+func emitGatewayTextAttemptFailed(emit func(GatewayTextStreamEvent) error, response GatewayTextResponse, providerModelID string, standard *StandardError) error {
+	return emitGatewayTextEvent(emit, GatewayTextStreamEvent{
+		Type: GatewayTextEventAttemptFailed,
+		Attempt: &GatewayTextAttemptEvent{
+			SchemaVersion:     GatewayTextStreamSchemaVersion,
+			ProviderRequestID: response.ProviderRequestID,
+			ProviderCallID:    response.ProviderCallID,
+			AttemptGeneration: response.AttemptGeneration,
+			AttemptSequence:   response.AttemptSequence,
+			ProviderModelID:   providerModelID,
+			Status:            response.Status,
+			Error:             standard,
+		},
+	})
 }
 
 func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextRequest, taskType string) (gatewayModelSelection, error) {
@@ -398,7 +707,12 @@ func (s *Service) completeGatewaySelectionFromCandidate(ctx context.Context, org
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	return s.completeGatewaySelection(ctx, organizationID, account, model, candidate.ModelProfileID, candidate.ModelProfileBindingID, candidate.ModelProfileKey)
+	selection, err := s.completeGatewaySelection(ctx, organizationID, account, model, candidate.ModelProfileID, candidate.ModelProfileBindingID, candidate.ModelProfileKey)
+	if err != nil {
+		return gatewayModelSelection{}, err
+	}
+	selection.RuntimeOptions = candidate.RuntimeOptions
+	return selection, nil
 }
 
 func (s *Service) completeGatewaySelection(ctx context.Context, organizationID string, account Account, model Model, profileID, bindingID, profileKey string) (gatewayModelSelection, error) {
@@ -464,6 +778,7 @@ func insertTextCostRecord(ctx context.Context, tx pgx.Tx, providerCallID string,
 			cost_type, amount, currency, unit, quantity, metadata
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::numeric, $11, 'token', $12, $13)
+		ON CONFLICT (provider_call_id) WHERE provider_call_id IS NOT NULL DO NOTHING
 	`,
 		req.OrganizationID,
 		nullString(req.ProjectID),
@@ -509,12 +824,15 @@ func estimateTextCost(usage GatewayUsage, capabilities []Capability) GatewayUsag
 }
 
 func standardErrorFromRunError(err error, code, message string) *StandardError {
+	if standard, ok := StandardErrorFromError(err); ok {
+		return standard
+	}
 	var upstreamErr *UpstreamError
 	if errors.As(err, &upstreamErr) {
-		standard := NormalizeHTTPError(upstreamErr.Status, upstreamErr.Code)
+		standard := NormalizeUpstreamError(upstreamErr)
 		return &standard
 	}
-	retryable := errors.Is(err, context.DeadlineExceeded)
+	retryable := errors.Is(err, context.DeadlineExceeded) || isTransientProviderTransportError(err) || code == CodeUpstreamInternalError || code == CodeUpstreamStreamTruncated
 	return &StandardError{
 		Code:      code,
 		Message:   message,

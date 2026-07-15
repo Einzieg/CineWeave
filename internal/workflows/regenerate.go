@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -31,7 +30,7 @@ type RegenerationOutput struct {
 
 func RegenerateCanonicalAssetImageWorkflow(ctx workflow.Context, input TextToStoryboardInput) (RegenerationOutput, error) {
 	options := resolveRegenerationOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerImageActivityOptions())
 	var image GenerateCanonicalAssetImageOutput
 	if err := workflow.ExecuteActivity(ctx, "GenerateCanonicalAssetImage", GenerateCanonicalAssetImageInput{
 		OrganizationID: input.OrganizationID,
@@ -51,7 +50,7 @@ func RegenerateCanonicalAssetImageWorkflow(ctx workflow.Context, input TextToSto
 
 func RegenerateDerivedAssetImageWorkflow(ctx workflow.Context, input TextToStoryboardInput) (RegenerationOutput, error) {
 	options := resolveRegenerationOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerImageActivityOptions())
 	var image GenerateDerivedAssetImageOutput
 	if err := workflow.ExecuteActivity(ctx, "GenerateDerivedAssetImage", GenerateDerivedAssetImageInput{
 		OrganizationID: input.OrganizationID,
@@ -71,7 +70,12 @@ func RegenerateDerivedAssetImageWorkflow(ctx workflow.Context, input TextToStory
 
 func RegenerateShotImageWorkflow(ctx workflow.Context, input TextToStoryboardInput) (RegenerationOutput, error) {
 	options := resolveRegenerationOptions(input.Input)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	if workflow.GetVersion(ctx, "regenerate-shot-image-prompt-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+		if err := prepareSingleShotImagePrompt(ctx, input, options.TargetID, "regenerate_shot_image", options.AspectRatio); err != nil {
+			return RegenerationOutput{}, err
+		}
+	}
+	ctx = workflow.WithActivityOptions(ctx, providerImageActivityOptions())
 	var image GenerateShotImageOutput
 	if err := workflow.ExecuteActivity(ctx, "GenerateShotImage", GenerateShotImageInput{
 		OrganizationID: input.OrganizationID,
@@ -98,51 +102,17 @@ func RegenerateShotVideoWorkflow(ctx workflow.Context, input TextToStoryboardInp
 	createOptions := defaultActivityOptions()
 	createOptions.RetryPolicy.MaximumAttempts = 1
 	createCtx := workflow.WithActivityOptions(ctx, createOptions)
-	var created CreateShotVideoTaskOutput
-	if err := workflow.ExecuteActivity(createCtx, "CreateShotVideoTask", CreateShotVideoTaskInput{
-		OrganizationID: input.OrganizationID,
-		ProjectID:      input.ProjectID,
-		WorkflowRunID:  input.WorkflowRunID,
-		CreatedBy:      input.CreatedBy,
-		ShotID:         options.TargetID,
-		WorkflowPrompt: "regenerate_shot_video",
-		Duration:       options.Duration,
-		AspectRatio:    options.AspectRatio,
-		Resolution:     options.Resolution,
-		Force:          options.Force,
-	}).Get(createCtx, &created); err != nil {
+	rendered, err := executeShotRenderPlan(ctx, createCtx, ShotRenderExecutionInput{
+		OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
+		CreatedBy: input.CreatedBy, ShotID: options.TargetID, WorkflowPrompt: "regenerate_shot_video",
+		AspectRatio: options.AspectRatio, Resolution: options.Resolution,
+		AudioStrategy: "native_av", AudioRequirement: "preferred", Force: options.Force,
+		MaxPolls: options.MaxPolls, PollInterval: time.Duration(options.PollIntervalSeconds) * time.Second,
+	})
+	if err != nil {
 		return RegenerationOutput{}, err
 	}
-	var terminal PollShotVideoTaskOutput
-	for pollCount := 1; pollCount <= options.MaxPolls; pollCount++ {
-		var poll PollShotVideoTaskOutput
-		if err := workflow.ExecuteActivity(ctx, "PollShotVideoTask", PollShotVideoTaskInput{
-			OrganizationID:      input.OrganizationID,
-			ProjectID:           input.ProjectID,
-			WorkflowRunID:       input.WorkflowRunID,
-			ShotID:              options.TargetID,
-			NodeRunID:           created.NodeRunID,
-			ProviderAsyncTaskID: created.ProviderAsyncTaskID,
-			ExternalTaskID:      created.ExternalTaskID,
-			PollCount:           pollCount,
-		}).Get(ctx, &poll); err != nil {
-			return RegenerationOutput{}, err
-		}
-		if poll.Status == "succeeded" {
-			terminal = poll
-			break
-		}
-		if poll.Status == "failed" || poll.Status == "cancelled" {
-			return RegenerationOutput{}, temporal.NewApplicationError("provider video task "+poll.Status, codeActivityFailed)
-		}
-		if err := workflow.Sleep(ctx, time.Duration(options.PollIntervalSeconds)*time.Second); err != nil {
-			return RegenerationOutput{}, err
-		}
-	}
-	if terminal.Status != "succeeded" {
-		return RegenerationOutput{}, temporal.NewApplicationError("provider video task polling timed out", codeProviderVideoPollingTimeout)
-	}
-	output := RegenerationOutput{TargetType: "shot_video", TargetID: options.TargetID, Status: "succeeded", Output: mustJSON(terminal)}
+	output := RegenerationOutput{TargetType: "shot_video", TargetID: options.TargetID, Status: "succeeded", Output: mustJSON(rendered)}
 	if err := workflow.ExecuteActivity(ctx, "CompleteRegenerationWorkflow", input, output).Get(ctx, nil); err != nil {
 		return RegenerationOutput{}, err
 	}

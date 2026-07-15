@@ -3,37 +3,42 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { toast } from "sonner";
+import { consumeServerSentEvents } from "@/lib/realtime/fetch-sse";
 import { keysForProjectEvent, projectEventNames, toastForProjectEvent } from "@/lib/realtime/event-map";
+import { projectEventDefinitions, type ProjectEventName } from "@/lib/realtime/generated-events";
+import { qk } from "@/lib/query/keys";
 import { orgScopedKey } from "@/lib/query/use-api";
 import { useStudioSession } from "@/lib/session";
 import { useActivityStore } from "@/lib/stores/activity-store";
 
 const realtimeBase = process.env.NEXT_PUBLIC_REALTIME_URL ?? "http://localhost:19281/api/realtime/events";
+const knownProjectEvents = new Set<string>(projectEventNames);
 
-/**
- * 订阅项目级 SSE 事件,按 event-map 失效对应 query 并弹完成/失败 toast。
- *
- * 注意:realtime 网关每次连接会重放 event_outbox 历史(无游标),
- * 因此连接后的前几秒视为“重放窗口”,只静默失效缓存、不弹 toast;
- * 条件轮询是第一可靠机制,SSE 只做加速。
- */
+type RealtimeErrorBody = {
+  error?: { code?: string };
+};
+
 export function useProjectEvents(projectId: string) {
   const queryClient = useQueryClient();
   const { session, ready } = useStudioSession();
   const organizationId = session.organizationId;
+  const accessToken = session.accessToken;
   const recordActivityEvent = useActivityStore((state) => state.recordEvent);
   const setConnectionStatus = useActivityStore((state) => state.setConnectionStatus);
 
   useEffect(() => {
-    if (!ready || !projectId) {
+    if (!ready || !projectId || !accessToken.trim()) {
       return;
     }
-    const source = new EventSource(`${realtimeBase}?projectId=${encodeURIComponent(projectId)}`);
-    setConnectionStatus(projectId, "reconnecting");
-    const toastArmedAt = Date.now() + 3000;
+    const controller = new AbortController();
+    const cursorKey = `cineweave.realtime.cursor.v1:${organizationId}:${projectId}`;
     const pending = new Set<string>();
     let flushTimer: number | null = null;
-    let closed = false;
+    let stopped = false;
+    let retryDelay = 1000;
+    let toastArmedAt = Number.POSITIVE_INFINITY;
+    let lastStreamPosition = parseStreamPosition(window.sessionStorage.getItem(cursorKey));
+    const latestRevisionByAggregate = new Map<string, number>();
 
     const flush = () => {
       flushTimer = null;
@@ -43,61 +48,184 @@ export function useProjectEvents(projectId: string) {
       pending.clear();
     };
 
-    source.onopen = () => {
-      if (!closed) {
-        setConnectionStatus(projectId, "connected");
+    const scheduleKeys = (keys: readonly (readonly unknown[])[]) => {
+      for (const key of keys) {
+        pending.add(JSON.stringify(orgScopedKey(organizationId, key)));
+      }
+      if (flushTimer === null && pending.size > 0) {
+        flushTimer = window.setTimeout(flush, 250);
       }
     };
 
-    source.onerror = () => {
-      if (!closed) {
+    const resyncAuthoritativeState = () => {
+      scheduleKeys([
+        qk.project(projectId),
+        qk.productionStatus(projectId),
+        qk.workflowRuns(projectId),
+        qk.artifacts(projectId),
+        qk.assets(projectId),
+        qk.requirements(projectId),
+        qk.agentTasks(projectId),
+        qk.shotProductionPrefix(projectId),
+      ]);
+    };
+
+    const run = async () => {
+      while (!stopped && !controller.signal.aborted) {
         setConnectionStatus(projectId, "reconnecting");
-      }
-    };
-
-    const listeners = projectEventNames.map((eventName) => {
-      const listener = (event: MessageEvent) => {
-        if (closed) {
-          return;
+        const cursor = window.sessionStorage.getItem(cursorKey)?.trim() ?? "";
+        const headers = new Headers({
+          Accept: "text/event-stream",
+          Authorization: `Bearer ${accessToken.trim()}`,
+          "Cache-Control": "no-cache",
+        });
+        if (cursor) {
+          headers.set("Last-Event-ID", cursor);
         }
-        let payload: Record<string, unknown> = {};
         try {
-          payload = JSON.parse(event.data) as Record<string, unknown>;
-        } catch {
-          payload = {};
-        }
-        recordActivityEvent(projectId, eventName, payload, event.lastEventId || undefined);
-        for (const key of keysForProjectEvent(eventName, projectId, payload)) {
-          pending.add(JSON.stringify(orgScopedKey(organizationId, key)));
-        }
-        if (flushTimer === null && pending.size > 0) {
-          flushTimer = window.setTimeout(flush, 500);
-        }
-        if (Date.now() > toastArmedAt) {
-          const notice = toastForProjectEvent(eventName, payload);
-          if (notice) {
-            if (notice.kind === "error") {
-              toast.error(notice.text);
-            } else {
-              toast.success(notice.text);
+          const response = await fetch(`${realtimeBase}?projectId=${encodeURIComponent(projectId)}`, {
+            method: "GET",
+            headers,
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          if (response.status === 410) {
+            window.sessionStorage.removeItem(cursorKey);
+            lastStreamPosition = 0;
+            latestRevisionByAggregate.clear();
+            resyncAuthoritativeState();
+            retryDelay = 250;
+            continue;
+          }
+          if (response.status === 401 || response.status === 403 || response.status === 404) {
+            setConnectionStatus(projectId, "disconnected");
+            return;
+          }
+          if (!response.ok) {
+            const body = await readRealtimeError(response);
+            throw new Error(body.error?.code || `Realtime request failed with ${response.status}`);
+          }
+          if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+            throw new Error("Realtime response is not an event stream");
+          }
+
+          await consumeServerSentEvents(response, (event) => {
+            if (event.retry !== undefined) {
+              retryDelay = Math.min(Math.max(event.retry, 250), 15_000);
             }
+            if (event.event === "stream.ready") {
+              setConnectionStatus(projectId, "connected");
+              resyncAuthoritativeState();
+              toastArmedAt = Date.now() + 1000;
+              return;
+            }
+            if (event.event === "stream.error") {
+              throw new Error("Realtime stream reported a read failure");
+            }
+            let payload: Record<string, unknown> = {};
+            try {
+              payload = JSON.parse(event.data) as Record<string, unknown>;
+            } catch {
+              payload = {};
+            }
+            if (event.id) {
+              const position = parseStreamPosition(event.id);
+              if (position > 0 && position <= lastStreamPosition) {
+                return;
+              }
+              if (position > 0) {
+                lastStreamPosition = position;
+              }
+              window.sessionStorage.setItem(cursorKey, event.id);
+            }
+            if (!knownProjectEvents.has(event.event)) {
+              resyncAuthoritativeState();
+              return;
+            }
+            const definition = projectEventDefinitions[event.event as ProjectEventName];
+            if (numberPayload(payload, "schemaVersion") !== definition.schemaVersion) {
+              resyncAuthoritativeState();
+              return;
+            }
+            const aggregateType = stringPayload(payload, "aggregateType");
+            const aggregateId = stringPayload(payload, "aggregateId");
+            const aggregateRevision = numberPayload(payload, "aggregateRevision");
+            if (aggregateType && aggregateId && aggregateRevision >= 0) {
+              const aggregateKey = `${aggregateType}:${aggregateId}`;
+              const currentRevision = latestRevisionByAggregate.get(aggregateKey);
+              if (currentRevision !== undefined && aggregateRevision <= currentRevision) {
+                return;
+              }
+              latestRevisionByAggregate.set(aggregateKey, aggregateRevision);
+            }
+            recordActivityEvent(projectId, event.event, payload, event.id);
+            scheduleKeys(keysForProjectEvent(event.event, projectId, payload));
+            if (Date.now() >= toastArmedAt) {
+              const notice = toastForProjectEvent(event.event, payload);
+              if (notice?.kind === "error") {
+                toast.error(notice.text);
+              } else if (notice) {
+                toast.success(notice.text);
+              }
+            }
+          });
+          retryDelay = 1000;
+        } catch (error) {
+          if (controller.signal.aborted || stopped) {
+            return;
+          }
+          setConnectionStatus(projectId, "reconnecting");
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
           }
         }
-      };
-      source.addEventListener(eventName, listener);
-      return [eventName, listener] as const;
-    });
-
-    return () => {
-      closed = true;
-      setConnectionStatus(projectId, "disconnected");
-      for (const [eventName, listener] of listeners) {
-        source.removeEventListener(eventName, listener);
+        await abortableDelay(retryDelay, controller.signal);
+        retryDelay = Math.min(Math.round(retryDelay * 1.6), 15_000);
       }
-      source.close();
+    };
+
+    void run();
+    return () => {
+      stopped = true;
+      controller.abort();
+      setConnectionStatus(projectId, "disconnected");
       if (flushTimer !== null) {
         window.clearTimeout(flushTimer);
       }
     };
-  }, [organizationId, projectId, queryClient, ready, recordActivityEvent, setConnectionStatus]);
+  }, [accessToken, organizationId, projectId, queryClient, ready, recordActivityEvent, setConnectionStatus]);
+}
+
+function parseStreamPosition(value: string | null | undefined): number {
+  const parsed = Number.parseInt(value?.trim() ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function stringPayload(payload: Record<string, unknown>, key: string): string {
+  return typeof payload[key] === "string" ? payload[key] : "";
+}
+
+function numberPayload(payload: Record<string, unknown>, key: string): number {
+  return typeof payload[key] === "number" && Number.isSafeInteger(payload[key]) ? payload[key] : -1;
+}
+
+async function readRealtimeError(response: Response): Promise<RealtimeErrorBody> {
+  try {
+    return (await response.json()) as RealtimeErrorBody;
+  } catch {
+    return {};
+  }
+}
+
+async function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = window.setTimeout(resolve, milliseconds);
+    signal.addEventListener("abort", () => {
+      window.clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
 }

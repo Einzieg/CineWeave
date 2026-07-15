@@ -16,6 +16,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/production"
 	"github.com/Einzieg/cineweave/internal/provider"
 	reviewpkg "github.com/Einzieg/cineweave/internal/review"
+	storyboardtiming "github.com/Einzieg/cineweave/internal/storyboard"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -375,10 +376,11 @@ func deterministicReviewFix(item ReviewItem, target reviewpkg.ReviewFixTarget) (
 			title = "补充镜头画面"
 			explanation = "镜头画面描述为空时，图片和视频生成缺少核心目标。"
 		}
-		if nonPositiveNumber(target.Snapshot["durationSeconds"]) || strings.Contains(item.Title+item.Description, "时长") || strings.Contains(strings.ToLower(item.Title+item.Description), "duration") {
-			patch["durationSeconds"] = 3
+		if nonPositiveNumber(target.Snapshot["plannedDurationTicks"]) || strings.Contains(item.Title+item.Description, "时长") || strings.Contains(strings.ToLower(item.Title+item.Description), "duration") {
+			timebase := int64ValueOrDefault(target.Snapshot["timelineTimebase"], 90_000)
+			patch["plannedDurationTicks"] = timebase * 3
 			title = "补充镜头时长"
-			explanation = "为缺少时长的镜头设置一个保守的 3 秒默认值。"
+			explanation = "为缺少时长的镜头设置一个帧对齐的 3 秒默认值。"
 		}
 	case "shot_asset_requirement":
 		if blankString(target.Snapshot["prompt"]) || strings.Contains(strings.ToLower(item.Title+item.Description), "prompt") {
@@ -402,8 +404,9 @@ func deterministicReviewFix(item ReviewItem, target reviewpkg.ReviewFixTarget) (
 			title = "启用时间线片段"
 			explanation = "该问题指向禁用片段，建议先启用片段后再检查成片。"
 		}
-		if nonPositiveNumber(target.Snapshot["targetDurationSeconds"]) && (strings.Contains(text, "targetduration") || strings.Contains(item.Title+item.Description, "目标时长")) {
-			patch["targetDurationSeconds"] = 3
+		if nonPositiveNumber(target.Snapshot["durationTicks"]) && (strings.Contains(text, "duration") || strings.Contains(item.Title+item.Description, "目标时长")) {
+			timebase := int64ValueOrDefault(target.Snapshot["timelineTimebase"], 90_000)
+			patch["durationTicks"] = timebase * 3
 			title = "补充片段目标时长"
 			explanation = "为缺少目标时长的片段设置一个保守默认值。"
 		}
@@ -576,13 +579,27 @@ func (s *Server) applyReviewPatchToTarget(ctx context.Context, tx pgx.Tx, projec
 		}
 		return production.MarkFinalVideoStale(ctx, tx, project.ID, "")
 	case "storyboard_shot":
+		plannedDurationTicks := int64Value(after["plannedDurationTicks"])
+		timebase := storyboardtiming.Timebase{
+			TicksPerSecond: project.TimelineTimebase,
+			FPSNumerator:   int64(project.FPSNumerator),
+			FPSDenominator: int64(project.FPSDenominator),
+		}
+		if plannedDurationTicks <= 0 || !timebase.IsFrameAligned(plannedDurationTicks) {
+			return fmt.Errorf("plannedDurationTicks must be positive and frame-aligned")
+		}
 		_, err := tx.Exec(ctx, `
 			UPDATE storyboard_shots
 			SET visual = NULLIF($3, ''),
 			    camera = NULLIF($4, ''),
 			    motion = NULLIF($5, ''),
 			    mood = NULLIF($6, ''),
-			    duration_seconds = $7,
+			    end_tick = start_tick + $7,
+			    duration_min_ticks = LEAST(COALESCE(duration_min_ticks, $7), $7),
+			    duration_max_ticks = GREATEST(COALESCE(duration_max_ticks, $7), $7),
+			    duration_source = 'manual_locked',
+			    duration_locked = true,
+			    timing_revision = timing_revision + 1,
 			    image_prompt = NULLIF($8, ''),
 			    video_prompt = NULLIF($9, ''),
 			    review_status = 'pending',
@@ -601,9 +618,12 @@ func (s *Server) applyReviewPatchToTarget(ctx context.Context, tx pgx.Tx, projec
 			    updated_at = now()
 			WHERE project_id = $1 AND id = $2
 		`, project.ID, entityID, stringValueFromAny(after["visual"]), stringValueFromAny(after["camera"]), stringValueFromAny(after["motion"]),
-			stringValueFromAny(after["mood"]), nullableFloat64Value(after["durationSeconds"]), stringValueFromAny(after["imagePrompt"]),
+			stringValueFromAny(after["mood"]), plannedDurationTicks, stringValueFromAny(after["imagePrompt"]),
 			stringValueFromAny(after["videoPrompt"]), userID)
 		if err != nil {
+			return err
+		}
+		if err := reflowStoryboardShotTicksTx(ctx, tx, project.ID); err != nil {
 			return err
 		}
 		if err := production.MarkShotDownstreamStale(ctx, tx, project.ID, entityID); err != nil {
@@ -639,13 +659,49 @@ func (s *Server) applyReviewPatchToTarget(ctx context.Context, tx pgx.Tx, projec
 		}
 		return production.MarkFinalVideoStale(ctx, tx, project.ID, "")
 	case "timeline_clip":
-		_, err := tx.Exec(ctx, `
+		var timelineID string
+		var sourceDuration sql.NullInt64
+		var timelineTimebase int64
+		var fpsNumerator, fpsDenominator int
+		if err := tx.QueryRow(ctx, `
+			SELECT clip.timeline_id::text, clip.source_duration_ticks,
+			       timeline.timeline_timebase, timeline.fps_numerator, timeline.fps_denominator
+			FROM timeline_clips clip
+			JOIN project_timelines timeline ON timeline.id = clip.timeline_id
+			WHERE clip.project_id = $1 AND clip.id = $2
+			FOR UPDATE OF clip, timeline
+		`, project.ID, entityID).Scan(&timelineID, &sourceDuration, &timelineTimebase, &fpsNumerator, &fpsDenominator); err != nil {
+			return err
+		}
+		var sourceDurationTicks *int64
+		if sourceDuration.Valid {
+			value := sourceDuration.Int64
+			sourceDurationTicks = &value
+		}
+		trimStartTick := int64Value(after["trimStartTick"])
+		trimEndTick := nullableInt64Value(after["trimEndTick"])
+		durationTicks := int64Value(after["durationTicks"])
+		_, trimStartTick, trimEndTick, durationTicks, err := resolveTimelineClipTiming(
+			storyboardtiming.Timebase{
+				TicksPerSecond: timelineTimebase,
+				FPSNumerator:   int64(fpsNumerator),
+				FPSDenominator: int64(fpsDenominator),
+			},
+			sourceDurationTicks,
+			trimStartTick,
+			trimEndTick,
+			&durationTicks,
+		)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `
 			UPDATE timeline_clips
 			SET title = $3,
 			    enabled = $4,
-			    trim_start_seconds = $5,
-			    trim_end_seconds = $6,
-			    target_duration_seconds = $7,
+			    trim_start_tick = $5,
+			    trim_end_tick = $6,
+			    end_tick = start_tick + $7,
 			    notes = NULLIF($8, ''),
 			    manual_override = true,
 			    stale_state = 'needs_regeneration',
@@ -653,9 +709,12 @@ func (s *Server) applyReviewPatchToTarget(ctx context.Context, tx pgx.Tx, projec
 			    edited_at = now(),
 			    updated_at = now()
 			WHERE project_id = $1 AND id = $2
-		`, project.ID, entityID, stringValueFromAny(after["title"]), boolValueFromAny(after["enabled"]), float64Value(after["trimStartSeconds"]),
-			nullableFloat64Value(after["trimEndSeconds"]), nullableFloat64Value(after["targetDurationSeconds"]), stringValueFromAny(after["notes"]), userID)
+		`, project.ID, entityID, stringValueFromAny(after["title"]), boolValueFromAny(after["enabled"]), trimStartTick,
+			nullableInt64Ptr(trimEndTick), durationTicks, stringValueFromAny(after["notes"]), userID)
 		if err != nil {
+			return err
+		}
+		if err := reflowTimelineClipTicks(ctx, tx, timelineID); err != nil {
 			return err
 		}
 		return production.MarkFinalVideoStale(ctx, tx, project.ID, "")
@@ -720,6 +779,11 @@ func markScriptSceneDownstreamStaleFromContext(ctx context.Context, db scriptSce
 	_, err := db.Exec(ctx, `
 		UPDATE storyboard_shots
 		SET stale_state = 'needs_regeneration',
+		    image_prompt_status = 'not_started',
+		    image_prompt_error_code = NULL,
+		    image_prompt_error_message = NULL,
+		    image_prompt_workflow_run_id = NULL,
+		    image_prompt_updated_at = now(),
 		    image_status = CASE
 		      WHEN image_artifact_id IS NOT NULL OR image_media_file_id IS NOT NULL OR COALESCE(image_storage_key, '') <> '' THEN 'stale'
 		      ELSE image_status
@@ -882,14 +946,23 @@ func float64Value(value any) float64 {
 	}
 }
 
-func nullableFloat64Value(value any) *float64 {
+func int64Value(value any) int64 {
+	return int64(float64Value(value))
+}
+
+func int64ValueOrDefault(value any, fallback int64) int64 {
+	parsed := int64Value(value)
+	if parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func nullableInt64Value(value any) *int64 {
 	if value == nil {
 		return nil
 	}
-	parsed := float64Value(value)
-	if parsed <= 0 {
-		return nil
-	}
+	parsed := int64Value(value)
 	return &parsed
 }
 

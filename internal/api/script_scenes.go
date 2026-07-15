@@ -46,9 +46,14 @@ func (s *Server) parseScriptScenes(w http.ResponseWriter, r *http.Request, princ
 		s.writeError(w, r, err)
 		return
 	}
+	episodeRefs, err := workflows.LoadScriptSceneEpisodeRefs(r.Context(), s.db, project.ID, script.ID, version.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "script_scene_parser", map[string]any{
 		"project": projectPromptVariables(project),
-		"script":  map[string]any{"id": script.ID, "versionId": version.ID, "title": script.Title, "content": version.Content},
+		"script":  map[string]any{"id": script.ID, "versionId": version.ID, "title": script.Title, "content": version.Content, "episodes": string(mustRawJSON(episodeRefs))},
 	}, true)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -78,6 +83,7 @@ func (s *Server) parseScriptScenes(w http.ResponseWriter, r *http.Request, princ
 		PromptVersionID:   rendered.PromptVersionID,
 		PromptHash:        rendered.RenderedHash,
 		Source:            "script_scene_parser",
+		ScriptEpisodeIDs:  workflows.ScriptSceneEpisodeIDMap(episodeRefs),
 	}, candidates)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -465,6 +471,11 @@ func markScriptSceneDownstreamStale(r *http.Request, db scriptSceneExecer, proje
 	_, err := db.Exec(r.Context(), `
 		UPDATE storyboard_shots
 		SET stale_state = 'needs_regeneration',
+		    image_prompt_status = 'not_started',
+		    image_prompt_error_code = NULL,
+		    image_prompt_error_message = NULL,
+		    image_prompt_workflow_run_id = NULL,
+		    image_prompt_updated_at = now(),
 		    image_status = CASE
 		      WHEN image_artifact_id IS NOT NULL OR image_media_file_id IS NOT NULL OR COALESCE(image_storage_key, '') <> '' THEN 'stale'
 		      ELSE image_status

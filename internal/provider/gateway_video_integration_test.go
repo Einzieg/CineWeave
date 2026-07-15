@@ -3,7 +3,9 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,14 +26,12 @@ func TestGatewayVideoRuntimeIntegration(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL is required for provider gateway video integration tests")
 	}
-	t.Setenv("CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS", "true")
-
 	ctx := context.Background()
 	pool, err := db.Open(ctx, databaseURL)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	upstream := newVideoRuntimeMock(t)
 	defer upstream.Close()
@@ -49,6 +49,23 @@ func TestGatewayVideoRuntimeIntegration(t *testing.T) {
 	gatewayService := NewService(pool, vault)
 	gatewayService.EnableGatewayRuntime()
 	gatewayService.SetStorage(objectStorage)
+	gatewayService.SetVideoMediaProbe(func(context.Context, []byte, string) (GatewayVideoMediaProbe, error) {
+		return GatewayVideoMediaProbe{
+			DurationSeconds:      4.96,
+			Width:                1280,
+			Height:               720,
+			FrameRateNumerator:   24,
+			FrameRateDenominator: 1,
+			FrameRate:            24,
+			FrameCount:           119,
+			FrameCountEstimated:  true,
+			VideoStreamCount:     1,
+			AudioStreamCount:     1,
+			HasAudio:             true,
+			VideoCodec:           "h264",
+			AudioCodecs:          []string{"aac"},
+		}, nil
+	})
 
 	createResp, err := gatewayService.CreateVideoTask(ctx, GatewayVideoCreateTaskRequest{
 		OrganizationID:  orgID,
@@ -94,6 +111,9 @@ func TestGatewayVideoRuntimeIntegration(t *testing.T) {
 	if secondPoll.Status != "succeeded" || secondPoll.Output.ArtifactID == "" || secondPoll.Output.MediaFileID == "" || secondPoll.Output.StorageKey == "" {
 		t.Fatalf("second poll = %+v", secondPoll)
 	}
+	if secondPoll.Output.RequestedDurationSeconds == nil || *secondPoll.Output.RequestedDurationSeconds != 5 || secondPoll.Output.ActualDurationSeconds == nil || *secondPoll.Output.ActualDurationSeconds != 4.96 || secondPoll.Output.DurationSource != "media_probe" {
+		t.Fatalf("duration observation = %+v", secondPoll.Output)
+	}
 	assertGatewayVideoObjectStored(t, objectStorage, secondPoll.Output.StorageKey)
 	assertGatewayVideoRowsPersisted(t, ctx, pool, secondPoll.ProviderCallID, createResp.ProviderAsyncTaskID, createResp.ExternalTaskID, secondPoll.Output, projectID, modelID)
 	assertGatewayVideoAsyncTask(t, ctx, pool, createResp.ProviderAsyncTaskID, "succeeded", 2)
@@ -122,16 +142,162 @@ func TestGatewayVideoRuntimeIntegration(t *testing.T) {
 	assertSnapshotsDoNotLeakAPIKey(t, ctx, pool, result.ProviderCallID, result.TestRunID)
 }
 
+func TestGatewayVideoTaskRejectsStaleNodeExecution(t *testing.T) {
+	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
+		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run provider gateway video integration tests")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is required for provider gateway video integration tests")
+	}
+	ctx := context.Background()
+	pool, err := db.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	upstream := newVideoRuntimeMock(t)
+	defer upstream.Close()
+	vault, err := NewVault("")
+	if err != nil {
+		t.Fatalf("new vault: %v", err)
+	}
+	orgID, userID, projectID, modelID := seedGatewayVideoIntegrationData(t, ctx, pool, vault, upstream.URL)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+	})
+
+	var workflowRunID, nodeRunID, executionToken string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO workflow_runs(
+			organization_id, project_id, temporal_workflow_id, status, input, output,
+			attempt_generation, started_at, created_by
+		)
+		VALUES ($1, $2, $3, 'running', '{}', '{}', 1, now(), $4)
+		RETURNING id::text
+	`, orgID, projectID, "gateway-video-fence-"+fmt.Sprint(time.Now().UnixNano()), userID).Scan(&workflowRunID); err != nil {
+		t.Fatalf("insert workflow run: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO workflow_node_runs(
+			organization_id, project_id, workflow_run_id, node_key, node_type,
+			status, input, output, attempt_generation, started_at
+		)
+		VALUES ($1, $2, $3, 'video-fence', 'video.generate', 'running', '{}', '{}', 1, now())
+		RETURNING id::text, execution_token::text
+	`, orgID, projectID, workflowRunID).Scan(&nodeRunID, &executionToken); err != nil {
+		t.Fatalf("insert workflow node: %v", err)
+	}
+
+	service := NewService(pool, vault)
+	service.EnableGatewayRuntime()
+	service.SetStorage(newMemoryObjectStorage())
+	if _, err := pool.Exec(ctx, `
+		UPDATE provider_model_capabilities
+		SET provider_options_schema = $2::jsonb
+		WHERE provider_model_id = $1
+	`, modelID, mustJSON(map[string]any{"xCapabilities": map[string]any{
+		"supportsAsyncTask": true,
+		"videoGenerationVariants": []map[string]any{{
+			"variantKey": "text_to_video_720p", "modelFamily": "integration-video",
+			"when":        map[string]any{"taskTypes": []string{"video.text_to_video"}, "referenceModes": []string{"none"}, "nativeAudioRequested": false},
+			"duration":    map[string]any{"mode": "discrete", "values": []float64{10}},
+			"resolutions": []string{"720p"}, "aspectRatios": []string{"16:9"},
+			"frameRate":                map[string]any{"mode": "fixed", "values": []int{24}},
+			"supportedPromptLanguages": []string{"zh-CN"},
+			"nativeAudio":              map[string]any{"support": "false"},
+			"continuation":             map[string]any{},
+			"requestModes":             []string{"async_create", "poll"}, "source": "test", "capabilityVersion": "1",
+		}},
+	}})); err != nil {
+		t.Fatalf("configure video capabilities: %v", err)
+	}
+	shotID, storyboardPlanID := seedVideoPlannerShot(t, ctx, pool, orgID, projectID)
+	plan, err := service.PlanVideo(ctx, GatewayVideoPlanRequest{
+		OrganizationID: orgID, ProjectID: projectID, WorkflowRunID: workflowRunID, NodeRunID: nodeRunID,
+		NodeExecutionToken: executionToken, NodeAttemptGeneration: 1,
+		StoryboardPlanID: storyboardPlanID, StoryboardShotID: shotID, ProviderModelID: modelID,
+		TaskType: "video.text_to_video", TargetDurationTicks: 10 * 90000, TimelineTimebase: 90000,
+		FPSNumerator: 24, FPSDenominator: 1, AudioStrategy: "native_av", AudioRequirement: "disabled",
+		ReferenceMode: "none", AspectRatio: "16:9", Resolution: "720p", PromptLanguage: "zh-CN",
+	})
+	if err != nil {
+		t.Fatalf("plan video: %v", err)
+	}
+	if len(plan.Segments) == 0 {
+		t.Fatal("video plan has no render segments")
+	}
+	created, err := service.CreateVideoTask(ctx, GatewayVideoCreateTaskRequest{
+		OrganizationID:         orgID,
+		ProjectID:              projectID,
+		WorkflowRunID:          workflowRunID,
+		NodeRunID:              nodeRunID,
+		NodeExecutionToken:     executionToken,
+		NodeAttemptGeneration:  1,
+		ProviderModelID:        modelID,
+		ExecutionPlanID:        plan.ExecutionPlanID,
+		RenderSegmentID:        plan.Segments[0].SegmentID,
+		CapabilitySnapshotHash: plan.CapabilitySnapshotHash,
+		Input: mustJSON(map[string]any{
+			"prompt": "A stable execution fence test", "duration": 10,
+			"aspectRatio": "16:9", "resolution": "720p", "mode": "text_to_video",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create video task: %v", err)
+	}
+	var storedToken string
+	var storedGeneration int
+	if err := pool.QueryRow(ctx, `
+		SELECT node_execution_token::text, node_attempt_generation
+		FROM provider_async_tasks
+		WHERE id = $1
+	`, created.ProviderAsyncTaskID).Scan(&storedToken, &storedGeneration); err != nil {
+		t.Fatalf("load provider task execution identity: %v", err)
+	}
+	if storedToken != executionToken || storedGeneration != 1 {
+		t.Fatalf("stored execution identity token=%s generation=%d", storedToken, storedGeneration)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE workflow_node_runs
+		SET execution_token = gen_random_uuid(), revision = revision + 1, updated_at = now()
+		WHERE id = $1
+	`, nodeRunID); err != nil {
+		t.Fatalf("rotate node execution token: %v", err)
+	}
+	_, err = service.PollVideoTask(ctx, GatewayVideoPollTaskRequest{
+		OrganizationID:        orgID,
+		ProjectID:             projectID,
+		ProviderAsyncTaskID:   created.ProviderAsyncTaskID,
+		NodeRunID:             nodeRunID,
+		NodeExecutionToken:    executionToken,
+		NodeAttemptGeneration: 1,
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale poll error = %v, want ErrConflict", err)
+	}
+	var status string
+	var pollCount int
+	if err := pool.QueryRow(ctx, `SELECT status, poll_count FROM provider_async_tasks WHERE id = $1`, created.ProviderAsyncTaskID).Scan(&status, &pollCount); err != nil {
+		t.Fatalf("reload provider task: %v", err)
+	}
+	if status != "running" || pollCount != 0 {
+		t.Fatalf("stale poll mutated provider task: status=%s pollCount=%d", status, pollCount)
+	}
+}
+
 func newVideoRuntimeMock(t *testing.T) *httptest.Server {
 	t.Helper()
 	var mu sync.Mutex
 	polls := map[string]int{}
+	durations := map[string]float64{}
 	nextTask := 0
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/files/video.mp4" {
 			w.Header().Set("Content-Type", "video/mp4")
-			_, _ = w.Write([]byte("fake mp4 bytes"))
+			_, _ = w.Write([]byte("\x00\x00\x00\x18ftypmp42fake mp4 bytes"))
 			return
 		}
 		if r.Header.Get("Authorization") != "Bearer "+gatewayIntegrationAPIKey {
@@ -145,13 +311,15 @@ func newVideoRuntimeMock(t *testing.T) *httptest.Server {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			if request["model"] != "video-integration-model" || request["prompt"] == "" || request["duration"] != float64(5) {
+			requestedDuration, _ := request["duration"].(float64)
+			if request["model"] != "video-integration-model" || request["prompt"] == "" || requestedDuration <= 0 {
 				t.Errorf("create request = %#v", request)
 			}
 			mu.Lock()
 			nextTask++
 			taskID := fmt.Sprintf("task-%d", nextTask)
 			polls[taskID] = 0
+			durations[taskID] = requestedDuration
 			mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"taskId": taskID, "status": "processing"})
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/video/poll/"):
@@ -159,6 +327,7 @@ func newVideoRuntimeMock(t *testing.T) *httptest.Server {
 			mu.Lock()
 			polls[taskID]++
 			count := polls[taskID]
+			duration := durations[taskID]
 			mu.Unlock()
 			if count == 1 {
 				_ = json.NewEncoder(w).Encode(map[string]any{"status": "processing"})
@@ -168,7 +337,7 @@ func newVideoRuntimeMock(t *testing.T) *httptest.Server {
 				"status":          "completed",
 				"videoUrl":        server.URL + "/files/video.mp4",
 				"mimeType":        "video/mp4",
-				"durationSeconds": 5,
+				"durationSeconds": duration,
 			})
 		default:
 			http.NotFound(w, r)
@@ -187,6 +356,10 @@ func seedGatewayVideoIntegrationData(t *testing.T, ctx context.Context, pool *pg
 	if err := pool.QueryRow(ctx, `INSERT INTO users(email, display_name) VALUES ($1, $2) RETURNING id`, "gateway-video-"+suffix+"@example.test", "Gateway Video Test").Scan(&userID); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
 	if _, err := pool.Exec(ctx, `INSERT INTO organization_members(organization_id, user_id) VALUES ($1, $2)`, orgID, userID); err != nil {
 		t.Fatalf("insert organization member: %v", err)
 	}
@@ -216,7 +389,8 @@ func seedGatewayVideoIntegrationData(t *testing.T, ctx context.Context, pool *pg
 	})
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO provider_accounts(organization_id, connector_id, name, base_url, auth_type, status, config, created_by)
-		VALUES ($1, $2, 'Video Integration Account', $3, 'bearer', 'active', '{}', $4)
+		VALUES ($1, $2, 'Video Integration Account', $3, 'bearer', 'active',
+		        '{"mediaEgress":{"allowedPrivateHosts":["127.0.0.1"],"allowedPrivateCidrs":["127.0.0.0/8"]}}', $4)
 		RETURNING id
 	`, orgID, connectorID, upstreamURL, userID).Scan(&accountID); err != nil {
 		t.Fatalf("insert provider account: %v", err)
@@ -245,7 +419,7 @@ func seedGatewayVideoIntegrationData(t *testing.T, ctx context.Context, pool *pg
 		INSERT INTO provider_model_capabilities(
 			provider_model_id, task_types, input_limits, output_limits, quality_tiers, provider_options_schema, pricing_policy
 		)
-		VALUES ($1, '["video.generate"]', '{}', '{}', '["standard"]', '{}', '{"currency":"USD","videoCostPerSecond":"0.0500","videoCostByResolution":{"720p":"0.0500"},"videoCostFlat":"0.2000"}')
+		VALUES ($1, '["video.create_task","video.poll_task","video.cancel_task"]', '{}', '{}', '["standard"]', '{}', '{"currency":"USD","videoCostPerSecond":"0.0500","videoCostByResolution":{"720p":"0.0500"},"videoCostFlat":"0.2000"}')
 	`, modelID); err != nil {
 		t.Fatalf("insert provider model capability: %v", err)
 	}
@@ -312,20 +486,34 @@ func assertGatewayVideoObjectStored(t *testing.T, objectStorage *memoryObjectSto
 	if !ok {
 		t.Fatalf("storage key %q was not written", storageKey)
 	}
-	if object.contentType != "video/mp4" || string(object.body) != "fake mp4 bytes" {
+	if object.contentType != "video/mp4" || string(object.body) != "\x00\x00\x00\x18ftypmp42fake mp4 bytes" {
 		t.Fatalf("stored object = %+v", object)
 	}
 }
 
 func assertGatewayVideoAsyncTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID, wantStatus string, wantPollCount int) {
 	t.Helper()
-	var status string
+	var status, probeStatus string
 	var pollCount int
-	if err := pool.QueryRow(ctx, `SELECT status, poll_count FROM provider_async_tasks WHERE id = $1`, taskID).Scan(&status, &pollCount); err != nil {
+	var requestedDuration, actualDuration float64
+	if err := pool.QueryRow(ctx, `
+		SELECT status, poll_count,
+		       COALESCE(requested_duration_seconds, -1)::float8,
+		       COALESCE(actual_duration_seconds, -1)::float8,
+		       COALESCE(media_probe->>'status', '')
+		FROM provider_async_tasks
+		WHERE id = $1
+	`, taskID).Scan(&status, &pollCount, &requestedDuration, &actualDuration, &probeStatus); err != nil {
 		t.Fatalf("select provider_async_tasks: %v", err)
 	}
 	if status != wantStatus || pollCount != wantPollCount {
 		t.Fatalf("async task status/poll_count = %s/%d, want %s/%d", status, pollCount, wantStatus, wantPollCount)
+	}
+	if requestedDuration != 5 {
+		t.Fatalf("async task requested duration = %f, want 5", requestedDuration)
+	}
+	if wantStatus == "succeeded" && (actualDuration != 4.96 || probeStatus != "succeeded") {
+		t.Fatalf("async task actual/probe = %f/%s, want 4.96/succeeded", actualDuration, probeStatus)
 	}
 }
 
@@ -342,17 +530,26 @@ func assertGatewayVideoArtifactCount(t *testing.T, ctx context.Context, pool *pg
 
 func assertGatewayVideoRowsPersisted(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerCallID, providerAsyncTaskID, externalTaskID string, output GatewayVideoOutput, projectID, modelID string) {
 	t.Helper()
-	var mediaArtifactID, mediaStorageKey, mediaMimeType, mediaChecksum, mediaSource, mediaCallID, mediaTaskID string
+	var mediaArtifactID, mediaStorageKey, mediaMimeType, mediaChecksum, mediaSource, mediaCallID, mediaTaskID, mediaProbeStatus string
 	var mediaByteSize int64
+	var mediaDuration float64
+	var frameRateNumerator, frameRateDenominator, frameCount int64
+	var videoStreamCount, audioStreamCount int
 	if err := pool.QueryRow(ctx, `
-		SELECT artifact_id::text, storage_key, mime_type, byte_size, checksum, metadata->>'source', metadata->>'providerCallId', metadata->>'providerAsyncTaskId'
+		SELECT artifact_id::text, storage_key, mime_type, byte_size, checksum,
+		       metadata->>'source', metadata->>'providerCallId', metadata->>'providerAsyncTaskId',
+		       duration_seconds::float8, frame_rate_numerator, frame_rate_denominator, frame_count,
+		       video_stream_count, audio_stream_count, media_probe->>'status'
 		FROM media_files
 		WHERE id = $1
-	`, output.MediaFileID).Scan(&mediaArtifactID, &mediaStorageKey, &mediaMimeType, &mediaByteSize, &mediaChecksum, &mediaSource, &mediaCallID, &mediaTaskID); err != nil {
+	`, output.MediaFileID).Scan(&mediaArtifactID, &mediaStorageKey, &mediaMimeType, &mediaByteSize, &mediaChecksum, &mediaSource, &mediaCallID, &mediaTaskID, &mediaDuration, &frameRateNumerator, &frameRateDenominator, &frameCount, &videoStreamCount, &audioStreamCount, &mediaProbeStatus); err != nil {
 		t.Fatalf("select media_files: %v", err)
 	}
 	if mediaArtifactID != output.ArtifactID || mediaStorageKey != output.StorageKey || mediaMimeType != "video/mp4" || mediaByteSize == 0 || mediaSource != "provider_gateway" || mediaCallID != providerCallID || mediaTaskID != providerAsyncTaskID || !strings.HasPrefix(mediaChecksum, "sha256:") {
 		t.Fatalf("media row mismatch: artifact=%s key=%s mime=%s bytes=%d source=%s call=%s task=%s checksum=%s", mediaArtifactID, mediaStorageKey, mediaMimeType, mediaByteSize, mediaSource, mediaCallID, mediaTaskID, mediaChecksum)
+	}
+	if mediaDuration != 4.96 || frameRateNumerator != 24 || frameRateDenominator != 1 || frameCount != 119 || videoStreamCount != 1 || audioStreamCount != 1 || mediaProbeStatus != "succeeded" {
+		t.Fatalf("media observation mismatch: duration=%f fps=%d/%d frames=%d streams=%d/%d probe=%s", mediaDuration, frameRateNumerator, frameRateDenominator, frameCount, videoStreamCount, audioStreamCount, mediaProbeStatus)
 	}
 
 	var artifactProjectID, artifactType, artifactStorageKey, artifactModelID, artifactMediaID, artifactCallID, artifactTaskID, artifactExternalTaskID string
@@ -379,19 +576,23 @@ func assertGatewayVideoCostRecord(t *testing.T, ctx context.Context, pool *pgxpo
 	`, providerCallID).Scan(&costType, &unit, &currency, &amount, &quantity, &resolution); err != nil {
 		t.Fatalf("select cost_records: %v", err)
 	}
-	if costType != "video.generate" || unit != "second" || currency != "USD" || amount != 0.25 || quantity != 5 || resolution != "720p" {
+	if costType != "video.generate" || unit != "second" || currency != "USD" || math.Abs(amount-0.248) > 0.0000001 || math.Abs(quantity-4.96) > 0.0000001 || resolution != "720p" {
 		t.Fatalf("cost row mismatch: type=%s unit=%s currency=%s amount=%f quantity=%f resolution=%s", costType, unit, currency, amount, quantity, resolution)
 	}
 }
 
 func assertGatewayVideoCallLog(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerCallID, wantTaskType, artifactID, mediaFileID string) {
 	t.Helper()
-	var taskType, artifactIDsRaw, mediaFileIDsRaw, requestSnapshot string
+	var taskType, artifactIDsRaw, mediaFileIDsRaw, requestSnapshot, probeStatus string
+	var requestedDuration, actualDuration float64
 	if err := pool.QueryRow(ctx, `
-		SELECT task_type, artifact_ids::text, media_file_ids::text, request_snapshot::text
+		SELECT task_type, artifact_ids::text, media_file_ids::text, request_snapshot::text,
+		       COALESCE(requested_duration_seconds, -1)::float8,
+		       COALESCE(actual_duration_seconds, -1)::float8,
+		       COALESCE(media_probe->>'status', '')
 		FROM provider_call_logs
 		WHERE id = $1
-	`, providerCallID).Scan(&taskType, &artifactIDsRaw, &mediaFileIDsRaw, &requestSnapshot); err != nil {
+	`, providerCallID).Scan(&taskType, &artifactIDsRaw, &mediaFileIDsRaw, &requestSnapshot, &requestedDuration, &actualDuration, &probeStatus); err != nil {
 		t.Fatalf("select provider_call_logs: %v", err)
 	}
 	if taskType != wantTaskType {
@@ -402,6 +603,12 @@ func assertGatewayVideoCallLog(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 	if artifactID != "" && (!jsonArrayContains(artifactIDsRaw, artifactID) || !jsonArrayContains(mediaFileIDsRaw, mediaFileID)) {
 		t.Fatalf("call log ids mismatch: artifact_ids=%s media_file_ids=%s", artifactIDsRaw, mediaFileIDsRaw)
+	}
+	if requestedDuration != 5 {
+		t.Fatalf("call log requested duration = %f, want 5", requestedDuration)
+	}
+	if artifactID != "" && (actualDuration != 4.96 || probeStatus != "succeeded") {
+		t.Fatalf("call log actual/probe = %f/%s, want 4.96/succeeded", actualDuration, probeStatus)
 	}
 }
 

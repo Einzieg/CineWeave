@@ -35,7 +35,7 @@ func TestVideoComposeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	storageClient, err := storage.New(ctx, storage.ConfigFromEnv())
 	if err != nil {
 		t.Fatalf("create storage client: %v", err)
@@ -116,12 +116,14 @@ func insertVideoComposeClip(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO storyboard_shots(
-			organization_id, project_id, workflow_run_id, shot_index, shot_no, duration_seconds,
+			organization_id, project_id, workflow_run_id, shot_index, shot_no,
+			start_tick, end_tick, duration_min_ticks, duration_max_ticks,
 			visual, image_prompt, video_prompt,
 			video_artifact_id, video_media_file_id, video_storage_key, status, metadata
 		)
-		VALUES ($1, $2, $3, $4, $5, 0.25, $6, $6, $6, $7, $8, $9, 'video_succeeded', $10)
-	`, orgID, projectID, workflowRunID, shotIndex, shotIndex+1, fmt.Sprintf("compose shot %d", shotIndex+1), artifactID, mediaFileID, put.StorageKey, mustJSON(map[string]any{"source": "video_compose_integration"})); err != nil {
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 22500, 22500, $8, $8, $8, $9, $10, $11, 'video_succeeded', $12)
+	`, orgID, projectID, workflowRunID, shotIndex, shotIndex+1, int64(shotIndex)*22500, int64(shotIndex+1)*22500,
+		fmt.Sprintf("compose shot %d", shotIndex+1), artifactID, mediaFileID, put.StorageKey, mustJSON(map[string]any{"source": "video_compose_integration"})); err != nil {
 		t.Fatalf("insert storyboard shot: %v", err)
 	}
 	return artifactID, mediaFileID

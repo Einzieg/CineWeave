@@ -22,11 +22,7 @@ ROUTE_SOURCES = [
 
 HTTP_METHODS = {"get", "post", "patch", "delete", "put"}
 
-# Provider Gateway has internal service-token routes that are not part of the
-# public API surface. They are still extracted so any non-internal drift fails.
-ALLOW_MISSING_OPENAPI = {
-    ("post", "/internal/provider/audio/tts"),
-}
+ALLOW_MISSING_OPENAPI: set[tuple[str, str]] = set()
 
 
 def infer_method(path: str) -> str:
@@ -37,7 +33,7 @@ def infer_method(path: str) -> str:
 
 def actual_routes() -> set[tuple[str, str]]:
     routes: set[tuple[str, str]] = set()
-    pattern = re.compile(r'mux\.HandleFunc\("([^"]+)"')
+    pattern = re.compile(r'mux\.Handle(?:Func)?\("([^"]+)"')
     for source in ROUTE_SOURCES:
         text = source.read_text(encoding="utf-8")
         for match in pattern.finditer(text):

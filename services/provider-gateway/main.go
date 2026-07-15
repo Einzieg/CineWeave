@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -22,7 +23,8 @@ import (
 func main() {
 	cfg := config.ServerFromEnv("provider-gateway", "CINEWEAVE_PROVIDER_GATEWAY_ADDR", ":8082")
 	logger := observability.Logger(cfg.Name, cfg.Env)
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	pool, err := db.Open(ctx, config.Get("DATABASE_URL", "postgres://cineweave:cineweave_dev_password@localhost:5432/cineweave?sslmode=disable"))
 	if err != nil {
@@ -40,6 +42,13 @@ func main() {
 		log.Fatal(err)
 	}
 	providerService.SetStorage(storageClient)
+	go runProviderRequestReconciler(
+		ctx,
+		providerService,
+		logger,
+		providerReconcileDuration("CINEWEAVE_PROVIDER_REQUEST_RECONCILE_INTERVAL", time.Minute),
+		providerReconcileDuration("CINEWEAVE_PROVIDER_REQUEST_STALE_AFTER", 30*time.Minute),
+	)
 	serviceToken := config.Get("CINEWEAVE_SERVICE_TOKEN", config.DefaultServiceToken)
 	if err := config.ValidateProductionSecret(cfg.Env, "CINEWEAVE_SERVICE_TOKEN", serviceToken, config.DefaultServiceToken); err != nil {
 		log.Fatal(err)
@@ -61,18 +70,60 @@ func main() {
 		},
 	}))
 	mux.HandleFunc("/internal/provider/models/discover", handler.withServiceAuth(handler.discoverModels))
+	mux.HandleFunc("/internal/provider/models/constraints", handler.withServiceAuth(handler.resolveModelConstraints))
 	mux.HandleFunc("/internal/provider/text/generate", handler.withServiceAuth(handler.generateText))
 	mux.HandleFunc("/internal/provider/text/stream", handler.withServiceAuth(handler.streamText))
 	mux.HandleFunc("/internal/provider/manifests/test-run", handler.withServiceAuth(handler.runManifestTest))
 	mux.HandleFunc("/internal/provider/image/generate", handler.withServiceAuth(handler.generateImage))
+	mux.HandleFunc("/internal/provider/video/plan", handler.withServiceAuth(handler.planVideo))
+	mux.HandleFunc("/internal/provider/video/retry-segment", handler.withServiceAuth(handler.retryVideoSegment))
 	mux.HandleFunc("/internal/provider/video/create-task", handler.withServiceAuth(handler.createVideoTask))
 	mux.HandleFunc("/internal/provider/video/poll-task", handler.withServiceAuth(handler.pollVideoTask))
 	mux.HandleFunc("/internal/provider/video/cancel-task", handler.withServiceAuth(handler.cancelVideoTask))
-	mux.HandleFunc("/internal/provider/audio/tts", httpx.NotImplemented("provider audio tts"))
+	mux.HandleFunc("/internal/provider/audio/tts", handler.withServiceAuth(handler.generateSpeech))
+	mux.HandleFunc("/internal/provider/audio/transcribe", handler.withServiceAuth(handler.transcribeAudio))
 
 	if err := service.Serve(ctx, cfg, httpx.WithRequestID(mux), logger); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func runProviderRequestReconciler(ctx context.Context, providers *provider.Service, logger *slog.Logger, interval, staleAfter time.Duration) {
+	reconcile := func() {
+		count, err := providers.ReconcileStaleProviderRequests(ctx, staleAfter, 100)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				logger.Error("provider request reconciliation failed", "error", err)
+			}
+			return
+		}
+		if count > 0 {
+			logger.Warn("provider requests marked unknown", "count", count, "staleAfter", staleAfter.String())
+		}
+	}
+	reconcile()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reconcile()
+		}
+	}
+}
+
+func providerReconcileDuration(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(config.Get(key, ""))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 type gatewayHandler struct {
@@ -100,6 +151,23 @@ func (h gatewayHandler) discoverModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := h.providers.DiscoverModelsViaGateway(r.Context(), req)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (h gatewayHandler) resolveModelConstraints(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+		return
+	}
+	var req provider.GatewayModelConstraintsRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.ResolveModelConstraints(r.Context(), req)
 	if err != nil {
 		writeGatewayError(w, r, err)
 		return
@@ -141,6 +209,40 @@ func (h gatewayHandler) generateImage(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
 }
 
+func (h gatewayHandler) generateSpeech(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+		return
+	}
+	var req provider.GatewayTTSRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.GenerateSpeech(r.Context(), req)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (h gatewayHandler) transcribeAudio(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+		return
+	}
+	var req provider.GatewayASRRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.TranscribeAudio(r.Context(), req)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
 func (h gatewayHandler) createVideoTask(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
@@ -151,6 +253,40 @@ func (h gatewayHandler) createVideoTask(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	response, err := h.providers.CreateVideoTask(r.Context(), req)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (h gatewayHandler) planVideo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+		return
+	}
+	var req provider.GatewayVideoPlanRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.PlanVideo(r.Context(), req)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+}
+
+func (h gatewayHandler) retryVideoSegment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil, false)
+		return
+	}
+	var req provider.GatewayVideoRetrySegmentRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.RetryVideoRenderSegment(r.Context(), req)
 	if err != nil {
 		writeGatewayError(w, r, err)
 		return
@@ -206,8 +342,8 @@ func (h gatewayHandler) streamText(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	response, err := h.providers.StreamText(r.Context(), req, func(delta provider.GatewayTextDelta) error {
-		if err := writeSSE(w, "provider.delta", delta); err != nil {
+	_, err := h.providers.StreamTextEvents(r.Context(), req, func(event provider.GatewayTextStreamEvent) error {
+		if err := writeSSE(w, event.Type, event.Payload()); err != nil {
 			return err
 		}
 		if flusher != nil {
@@ -216,13 +352,11 @@ func (h gatewayHandler) streamText(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		_ = writeSSE(w, "provider.error", standardGatewayError(err))
 		if flusher != nil {
 			flusher.Flush()
 		}
 		return
 	}
-	_ = writeSSE(w, "provider.completed", response)
 	if flusher != nil {
 		flusher.Flush()
 	}
@@ -293,7 +427,7 @@ func writeGatewayError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	var upstreamErr *provider.UpstreamError
 	if errors.As(err, &upstreamErr) {
-		status = http.StatusBadGateway
+		status = provider.HTTPStatusForStandardError(&standard)
 	}
 	httpx.WriteError(w, r, status, standard.Code, standard.Message, standard, standard.Retryable)
 }
@@ -307,7 +441,7 @@ func standardGatewayError(err error) provider.StandardError {
 	}
 	var upstreamErr *provider.UpstreamError
 	if errors.As(err, &upstreamErr) {
-		return provider.NormalizeHTTPError(upstreamErr.Status, upstreamErr.Code)
+		return provider.NormalizeUpstreamError(upstreamErr)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return provider.StandardError{Code: provider.CodeUpstreamTimeout, Message: "provider request timed out", Retryable: true}

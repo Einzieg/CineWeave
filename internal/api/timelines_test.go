@@ -60,6 +60,11 @@ func TestTimelineAccessAndFinalVideoActivation(t *testing.T) {
 	timelineID := insertProjectTimeline(t, seed)
 	first := insertFinalVideoVersion(t, seed, timelineID, 1, "active")
 	second := insertFinalVideoVersion(t, seed, timelineID, 2, "ready")
+	blocked := insertFinalVideoVersion(t, seed, timelineID, 3, "ready")
+	if _, err := seed.pool.Exec(seed.ctx, `UPDATE final_video_versions SET native_audio_status = 'audio_unverified', production_readiness = 'preview_only' WHERE id = $1`, blocked); err != nil {
+		t.Fatalf("mark preview-only final video: %v", err)
+	}
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/final-videos/"+blocked+"/activate", seed.ownerToken, seed.organizationID, nil, http.StatusConflict, "AUDIO_VERIFICATION_REQUIRED")
 
 	var activated FinalVideoVersion
 	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/final-videos/"+second+"/activate", seed.ownerToken, seed.organizationID, nil, &activated)
@@ -110,13 +115,15 @@ func insertTimelineStoryboardShot(t *testing.T, seed *artifactPreviewSeed, workf
 	if err := seed.pool.QueryRow(seed.ctx, `
 		INSERT INTO storyboard_shots(
 			organization_id, project_id, workflow_run_id, shot_index, shot_no,
-			duration_seconds, visual, camera, motion, mood, image_prompt, video_prompt,
+			start_tick, end_tick, duration_min_ticks, duration_max_ticks,
+			visual, camera, motion, mood, image_prompt, video_prompt,
 			video_artifact_id, status, video_status, review_status, metadata
 		)
-		VALUES ($1, $2, $3, $4, $5, 5, $6, 'slow push', 'mist drifting', 'hopeful',
-		        'image prompt', 'video prompt', $7, 'video_succeeded', 'succeeded', 'approved', '{}')
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 450000, 450000, $8, 'slow push', 'mist drifting', 'hopeful',
+		        'image prompt', 'video prompt', $9, 'video_succeeded', 'succeeded', 'approved', '{}')
 		RETURNING id
-	`, seed.organizationID, seed.projectID, workflowRunID, shotIndex, shotIndex+1, "Shot visual", videoArtifactID).Scan(&id); err != nil {
+	`, seed.organizationID, seed.projectID, workflowRunID, shotIndex, shotIndex+1,
+		int64(shotIndex)*450000, int64(shotIndex+1)*450000, "Shot visual", videoArtifactID).Scan(&id); err != nil {
 		t.Fatalf("insert timeline storyboard shot: %v", err)
 	}
 	return id
@@ -128,10 +135,11 @@ func insertTimelineStoryboardShotWithoutVideo(t *testing.T, seed *artifactPrevie
 	if err := seed.pool.QueryRow(seed.ctx, `
 		INSERT INTO storyboard_shots(
 			organization_id, project_id, workflow_run_id, shot_index, shot_no,
-			duration_seconds, visual, camera, motion, mood, image_prompt, video_prompt,
+			start_tick, end_tick, duration_min_ticks, duration_max_ticks,
+			visual, camera, motion, mood, image_prompt, video_prompt,
 			status, video_status, review_status, metadata
 		)
-		VALUES ($1, $2, $3, 0, 1, 5, 'Shot without video', 'slow push', 'mist drifting', 'hopeful',
+		VALUES ($1, $2, $3, 0, 1, 0, 450000, 450000, 450000, 'Shot without video', 'slow push', 'mist drifting', 'hopeful',
 		        'image prompt', 'video prompt', 'storyboard_ready', 'not_started', 'approved', '{}')
 		RETURNING id
 	`, seed.organizationID, seed.projectID, workflowRunID).Scan(&id); err != nil {

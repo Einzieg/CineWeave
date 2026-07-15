@@ -1,4 +1,4 @@
-﻿openapi: 3.1.0
+openapi: 3.1.0
 info:
   title: CineWeave API
   version: 0.1.0
@@ -671,6 +671,13 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - name: filter[status]
+          in: query
+          description: Source visibility filter. Defaults to active, which hides archived sources.
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
       responses:
         "200":
           description: Active project manual bindings
@@ -755,6 +762,18 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - name: filter[type]
+          in: query
+          schema:
+            type: string
+            enum: [character, scene, prop]
+        - name: filter[status]
+          in: query
+          description: Canonical asset visibility filter. Defaults to active, which hides archived assets.
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
       responses:
         "200":
           description: Project timelines
@@ -1534,6 +1553,18 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: scriptEpisodeId
+          in: query
+          description: Return storyboard shots for exactly one script episode.
+          schema:
+            type: string
+            format: uuid
+        - name: storyboardPlanId
+          in: query
+          description: Return shots from exactly one storyboard plan. Without an explicit workflow or plan, only active storyboard plans are returned.
+          schema:
+            type: string
+            format: uuid
         - name: includePreviewUrl
           in: query
           schema:
@@ -1602,6 +1633,96 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/character-voices:
+    get:
+      operationId: listCharacterVoices
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
+      responses:
+        "200":
+          description: Active or archived project character voice profiles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CharacterVoiceProfileListEnvelope"
+    post:
+      operationId: createCharacterVoice
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertCharacterVoiceProfileRequest"
+      responses:
+        "201":
+          description: Created character voice profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CharacterVoiceProfileEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/character-voices/{voiceId}:
+    patch:
+      operationId: updateCharacterVoice
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: voiceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertCharacterVoiceProfileRequest"
+      responses:
+        "200":
+          description: Updated character voice profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CharacterVoiceProfileEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteCharacterVoice
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: voiceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Character voice profile archived
+        "404":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/sources:
     get:
@@ -1766,6 +1887,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NovelChapterEnvelope"
+    delete:
+      operationId: deleteSourceChapter
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SourceId"
+        - name: chapterId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Source chapter deleted and downstream outputs marked stale
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteSourceChapterResponseEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/sources/{sourceId}/extract-events:
     post:
       operationId: extractNovelEvents
@@ -2003,6 +2146,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScriptVersionEnvelope"
+  /api/projects/{projectId}/scripts/{scriptId}/versions/{versionId}/episodes:
+    get:
+      operationId: listScriptEpisodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Script episodes for a version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptEpisodeListEnvelope"
   /api/projects/{projectId}/scripts/{scriptId}/activate-version:
     post:
       operationId: activateScriptVersion
@@ -2101,6 +2265,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScriptSceneListEnvelope"
+  /api/projects/{projectId}/script-episodes/{episodeId}:
+    patch:
+      operationId: updateScriptEpisode
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: episodeId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateScriptEpisodeRequest"
+      responses:
+        "200":
+          description: Updated script episode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptEpisodeEnvelope"
   /api/projects/{projectId}/script-scenes/{sceneId}:
     get:
       operationId: getScriptScene
@@ -2233,6 +2423,131 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkflowRunEnvelope"
+  /api/projects/{projectId}/script-episodes/{episodeId}/timing/analyze:
+    post:
+      operationId: analyzeScriptEpisodeTiming
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EpisodeId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeScriptEpisodeTimingRequest"
+      responses:
+        "202":
+          description: Started script episode timing analysis workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+  /api/projects/{projectId}/script-episodes/{episodeId}/timing:
+    get:
+      operationId: getScriptEpisodeTiming
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EpisodeId"
+      responses:
+        "200":
+          description: Latest persisted timing analysis for the script episode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScriptTimingAnalysisEnvelope"
+  /api/projects/{projectId}/script-episodes/{episodeId}/audio:
+    get:
+      operationId: getScriptEpisodeAudio
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EpisodeId"
+      responses:
+        "200":
+          description: TTS clips and audio mix revisions for the script episode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EpisodeAudioEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/script-episodes/{episodeId}/audio/produce:
+    post:
+      operationId: produceScriptEpisodeAudio
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EpisodeId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProduceEpisodeAudioRequest"
+      responses:
+        "202":
+          description: Started durable per-line TTS and audio mix workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/script-episodes/{episodeId}/storyboard-plans:
+    get:
+      operationId: listStoryboardPlans
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EpisodeId"
+      responses:
+        "200":
+          description: Storyboard plan revisions for the script episode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardPlanListEnvelope"
+  /api/projects/{projectId}/storyboard-plans/{planId}:
+    get:
+      operationId: getStoryboardPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/PlanId"
+      responses:
+        "200":
+          description: Storyboard plan with scene progress, reviews, and shots
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardPlanEnvelope"
+  /api/projects/{projectId}/storyboard-plans/{planId}/activate:
+    post:
+      operationId: activateStoryboardPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/PlanId"
+      responses:
+        "200":
+          description: Atomically activated a validated storyboard plan revision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardPlanEnvelope"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/adaptation-plans:
     get:
       operationId: listAdaptationPlans
@@ -2554,6 +2869,12 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateAgentTaskRequest"
       responses:
+        "202":
+          description: Project agent task accepted for durable Temporal start
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTaskEnvelope"
         "201":
           description: Created project agent task
           content:
@@ -2669,6 +2990,76 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CanonicalAssetListEnvelope"
+  /api/projects/{projectId}/asset-batches:
+    post:
+      operationId: createAssetBatch
+      summary: Create a durable asset prompt or image batch
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetBatchRequest"
+      responses:
+        "202":
+          description: Asset batch and durable Temporal start request accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "200":
+          description: Idempotent replay of a previously created asset batch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/operations/{operationId}:
+    get:
+      operationId: getRuntimeOperation
+      summary: Get a durable runtime operation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/OperationId"
+      responses:
+        "200":
+          description: Runtime operation state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeOperationEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/operations/{operationId}/reconcile:
+    post:
+      operationId: reconcileRuntimeOperation
+      summary: Reconcile a runtime operation with an unknown outcome
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/OperationId"
+      responses:
+        "200":
+          description: Reconciled or already terminal runtime operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeOperationEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/canonical-assets/{assetId}:
     get:
       operationId: getCanonicalAsset
@@ -2708,6 +3099,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CanonicalAssetEnvelope"
+    delete:
+      operationId: deleteCanonicalAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArchiveCanonicalAssetRequest"
+      responses:
+        "200":
+          description: Archived canonical asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteCanonicalAssetResponseEnvelope"
+  /api/projects/{projectId}/canonical-assets/{assetId}/impact:
+    get:
+      operationId: getCanonicalAssetImpact
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: Canonical asset archive impact summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutputImpactEnvelope"
   /api/projects/{projectId}/canonical-assets/{assetId}/generate-card:
     post:
       operationId: generateAssetCard
@@ -3068,6 +3494,28 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/merge:
+    post:
+      operationId: mergeStoryboardShots
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MergeStoryboardShotsRequest"
+      responses:
+        "201":
+          description: Derived and validated a storyboard plan revision with two adjacent shots merged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardPlanEditEnvelope"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/storyboard-shots/{shotId}:
     patch:
       operationId: updateStoryboardShot
@@ -3149,6 +3597,166 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/render-plan:
+    get:
+      operationId: getStoryboardShotRenderPlan
+      summary: Get the active provider video render plan for a storyboard shot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "200":
+          description: Active video render plan and segment execution state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoRenderPlanEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createStoryboardShotRenderPlan
+      summary: Resolve and persist a provider video render plan for a storyboard shot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVideoRenderPlanRequest"
+      responses:
+        "201":
+          description: Immutable provider video render plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoRenderPlanEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/render-plan/audio-verification:
+    post:
+      operationId: verifyStoryboardShotRenderPlanAudio
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyVideoRenderPlanAudioRequest"
+      responses:
+        "200":
+          description: Manually approved or rejected the generated native audio
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoRenderPlanEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/render-plan/audio-review:
+    post:
+      operationId: reviewStoryboardShotRenderPlanAudio
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartNativeAudioReviewRequest"
+      responses:
+        "202":
+          description: Started ASR and forced-alignment review workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/render-plan/audio-reviews:
+    get:
+      operationId: listStoryboardShotNativeAudioReviews
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "200":
+          description: Native audio ASR and alignment review revisions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NativeAudioReviewListEnvelope"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/split:
+    post:
+      operationId: splitStoryboardShot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SplitStoryboardShotRequest"
+      responses:
+        "201":
+          description: Derived and validated a storyboard plan revision with the shot split
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardPlanEditEnvelope"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/timing:
+    patch:
+      operationId: updateStoryboardShotTiming
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateStoryboardShotTimingRequest"
+      responses:
+        "201":
+          description: Derived and validated a storyboard plan revision with updated frame-aligned timing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardPlanEditEnvelope"
+        "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/storyboard-shots/{shotId}/media/unlink:
     post:
@@ -3379,8 +3987,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateWorkflowRunRequest"
       responses:
-        "201":
-          description: Created workflow run
+        "202":
+          description: Workflow run and durable Temporal start request accepted
           content:
             application/json:
               schema:
@@ -3584,6 +4192,38 @@ paths:
               schema:
                 $ref: "#/components/schemas/MediaFileDownloadUrlEnvelope"
         "404":
+          $ref: "#/components/responses/Error"
+  /api/workflow-runs/{workflowRunId}/retry-failed:
+    post:
+      operationId: retryFailedWorkflowRun
+      summary: Retry failed workflow items as a new generation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowRunId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetryFailedWorkflowRequest"
+      responses:
+        "202":
+          description: Retry workflow and durable Temporal start request accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "200":
+          description: Idempotent replay of a previously created retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /api/provider-catalog:
     get:
@@ -4038,6 +4678,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/ModelProfileEnvelope"
   /api/model-profiles/{profileId}/bindings/{bindingId}:
+    patch:
+      operationId: updateModelProfileBinding
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ProfileId"
+        - $ref: "#/components/parameters/BindingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateModelProfileBindingRequest"
+      responses:
+        "200":
+          description: Updated model profile binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelProfileEnvelope"
     delete:
       operationId: deleteModelProfileBinding
       security:
@@ -4452,6 +5113,30 @@ paths:
           $ref: "#/components/responses/GatewayError"
         "502":
           $ref: "#/components/responses/GatewayError"
+  /internal/provider/models/constraints:
+    post:
+      operationId: internalProviderResolveModelConstraints
+      summary: Resolve model constraints for an internal model profile
+      description: Internal API. Provider Gateway owns routing and returns the current candidate models with structured prompt limits.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayModelConstraintsRequest"
+      responses:
+        "200":
+          description: Routed model constraints
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayModelConstraintsEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
   /internal/provider/text/generate:
     post:
       operationId: internalProviderTextGenerate
@@ -4503,6 +5188,110 @@ paths:
         "422":
           $ref: "#/components/responses/GatewayError"
         "502":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/video/plan:
+    post:
+      operationId: internalProviderVideoPlan
+      summary: Resolve an immutable Provider Gateway video execution plan
+      description: Internal API. Selects one complete conditional video capability variant, quantizes the narrative shot duration, and persists executable render segments.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayVideoPlanRequest"
+      responses:
+        "200":
+          description: Provider video execution plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayVideoPlanEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/audio/tts:
+    post:
+      operationId: internalProviderAudioTTS
+      summary: Internal Provider Gateway speech synthesis
+      description: Internal API. Resolves credentials and an audio model, calls an OpenAI-compatible speech endpoint, stores the resulting media, and records call and cost rows.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayTTSRequest"
+      responses:
+        "200":
+          description: Stored speech synthesis result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayTTSEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/audio/transcribe:
+    post:
+      operationId: internalProviderAudioTranscribe
+      summary: Internal Provider Gateway audio transcription
+      description: Internal API. Reads only project-registered media, resolves credentials and an audio model, and records ASR call and cost rows.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayASRRequest"
+      responses:
+        "200":
+          description: Audio transcription with segment and word timestamps
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayASREnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/video/retry-segment:
+    post:
+      operationId: internalProviderVideoRetrySegment
+      summary: Prepare an isolated failed video render segment retry
+      description: Reuses the current model once or selects an active same-family candidate with the identical capability snapshot. Returns RENDER_PLAN_REPLAN_REQUIRED when the whole shot must be replanned.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayVideoRetrySegmentRequest"
+      responses:
+        "200":
+          description: Failed segment reset for a same-family retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayVideoRetrySegmentEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "409":
+          $ref: "#/components/responses/GatewayError"
+        "422":
           $ref: "#/components/responses/GatewayError"
   /internal/provider/video/create-task:
     post:
@@ -4586,7 +5375,7 @@ paths:
     post:
       operationId: internalProviderTextStream
       summary: Internal Provider Gateway text stream
-      description: Internal API. Requires bearer service token and streams provider.delta/provider.completed events.
+      description: Internal API. Requires bearer service token and streams provider.delta followed by exactly one provider.completed or provider.failed terminal event. Delta events include providerCallId, attempt, and a monotonic sequence; providerRequestId is populated by the logical request layer.
       security:
         - serviceTokenAuth: []
       requestBody:
@@ -4597,7 +5386,7 @@ paths:
               $ref: "#/components/schemas/GatewayTextRequest"
       responses:
         "200":
-          description: Server-sent text stream with provider.delta and provider.completed events
+          description: Server-sent text stream with provider.delta and provider.completed/provider.failed terminal events
           content:
             text/event-stream:
               schema:
@@ -4685,6 +5474,20 @@ components:
       schema:
         type: string
         format: uuid
+    EpisodeId:
+      name: episodeId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PlanId:
+      name: planId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     AgentTaskId:
       name: taskId
       in: path
@@ -4764,6 +5567,13 @@ components:
         format: uuid
     WorkflowRunId:
       name: workflowRunId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OperationId:
+      name: operationId
       in: path
       required: true
       schema:
@@ -5068,7 +5878,7 @@ components:
           format: date-time
     Project:
       type: object
-      required: [id, organizationId, workspaceId, name, settings, createdAt, updatedAt]
+      required: [id, organizationId, workspaceId, name, audioConfigurationRevision, revision, timelineTimebase, fpsNumerator, fpsDenominator, settings, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -5098,6 +5908,20 @@ components:
           type: string
         visualManual:
           type: string
+        directorManualPromptVersionId:
+          type: string
+          format: uuid
+          nullable: true
+        visualManualPromptVersionId:
+          type: string
+          format: uuid
+          nullable: true
+        directorManualPromptVersionId:
+          type: string
+          format: uuid
+        visualManualPromptVersionId:
+          type: string
+          format: uuid
         imageModelProfileKey:
           type: string
           default: image_generation_default
@@ -5107,7 +5931,33 @@ components:
         scriptModelProfileKey:
           type: string
           default: script_agent_default
+        ttsModelProfileKey:
+          type: string
+          default: tts_generation_default
+        asrModelProfileKey:
+          type: string
+          default: audio_transcription_default
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+          default: native_av
+        audioRequirement:
+          type: string
+          enum: [preferred, required, disabled]
+          default: preferred
+        audioConfigurationRevision:
+          type: integer
+          minimum: 1
+          readOnly: true
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          readOnly: true
         activeFinalVideoVersionId:
+          type: string
+          format: uuid
+        activeAudioMixVersionId:
           type: string
           format: uuid
         imageQuality:
@@ -5116,6 +5966,16 @@ components:
         productionMode:
           type: string
           default: silent_video
+        timelineTimebase:
+          type: integer
+          format: int64
+          default: 90000
+        fpsNumerator:
+          type: integer
+          default: 24
+        fpsDenominator:
+          type: integer
+          default: 1
         settings:
           type: object
         createdAt:
@@ -5195,6 +6055,7 @@ components:
           type: string
         status:
           type: string
+          enum: [ready, processing, processed, failed, archived]
         metadata:
           type: object
           additionalProperties: true
@@ -5294,6 +6155,27 @@ components:
         updatedAt:
           type: string
           format: date-time
+    DeleteSourceChapterResponse:
+      type: object
+      required: [deleted, mode, sourceId, chapterId, deletedChapterIndex, remainingChapterCount]
+      properties:
+        deleted:
+          type: boolean
+        mode:
+          type: string
+          enum: [delete_chapter]
+        sourceId:
+          type: string
+          format: uuid
+        chapterId:
+          type: string
+          format: uuid
+        deletedChapterIndex:
+          type: integer
+          minimum: 1
+        remainingChapterCount:
+          type: integer
+          minimum: 1
     CreatedScriptSummary:
       type: object
       required: [id, currentVersionId, title]
@@ -5395,6 +6277,373 @@ components:
         createdAt:
           type: string
           format: date-time
+    ScriptEpisode:
+      type: object
+      required: [id, organizationId, projectId, scriptId, scriptVersionId, episodeIndex, episodeTitle, content, contentFormat, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        scriptId:
+          type: string
+          format: uuid
+        scriptVersionId:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+          format: uuid
+        sourceChapterId:
+          type: string
+          format: uuid
+        episodeIndex:
+          type: integer
+        volumeIndex:
+          type: integer
+        sectionIndex:
+          type: integer
+        volumeTitle:
+          type: string
+        episodeTitle:
+          type: string
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        providerCallId:
+          type: string
+          format: uuid
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        manualOverride:
+          type: boolean
+        staleState:
+          $ref: "#/components/schemas/StaleState"
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        editedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        editedAt:
+          type: string
+          format: date-time
+    CharacterVoiceProfile:
+      type: object
+      required: [id, organizationId, projectId, characterName, displayName, language, modelProfileKey, voiceKey, parameters, isDefault, status, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        canonicalAssetId:
+          type: string
+          format: uuid
+        characterName:
+          type: string
+        displayName:
+          type: string
+        language:
+          type: string
+          default: zh-CN
+        modelProfileKey:
+          type: string
+          default: tts_generation_default
+        providerModelId:
+          type: string
+          format: uuid
+        voiceKey:
+          type: string
+        instructions:
+          type: string
+        referenceArtifactId:
+          type: string
+          format: uuid
+        referenceMediaFileId:
+          type: string
+          format: uuid
+        parameters:
+          type: object
+          additionalProperties: true
+        isDefault:
+          type: boolean
+          default: false
+        status:
+          type: string
+          enum: [active, archived]
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TTSAudioClip:
+      type: object
+      required: [id, timingAnalysisId, timingUnitId, sourceText, language, voiceKey, outputFormat, status, revision, audioConfigurationRevision, active, timelineTimebase, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        timingAnalysisId:
+          type: string
+          format: uuid
+        timingUnitId:
+          type: string
+          format: uuid
+        appliedTimingAnalysisId:
+          type: string
+          format: uuid
+        voiceProfileId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        sourceText:
+          type: string
+        speaker:
+          type: string
+        language:
+          type: string
+        voiceKey:
+          type: string
+        outputFormat:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled, stale]
+        revision:
+          type: integer
+          minimum: 1
+        audioConfigurationRevision:
+          type: integer
+          minimum: 1
+        active:
+          type: boolean
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        previewUrl:
+          type: string
+          format: uri
+        mimeType:
+          type: string
+        sampleRate:
+          type: integer
+        sampleCount:
+          type: integer
+          format: int64
+        channelCount:
+          type: integer
+        durationTicks:
+          type: integer
+          format: int64
+        timelineTimebase:
+          type: integer
+          format: int64
+        durationSeconds:
+          type: number
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    AudioMixVersion:
+      type: object
+      required: [id, revision, audioConfigurationRevision, status, active, audioStrategy, timelineTimebase, sampleRate, channelCount, productionReadiness, trackSummary, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        storyboardPlanId:
+          type: string
+          format: uuid
+        timingAnalysisId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 1
+        audioConfigurationRevision:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [draft, mixing, ready, failed, stale, archived]
+        active:
+          type: boolean
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+        timelineTimebase:
+          type: integer
+          format: int64
+        durationTicks:
+          type: integer
+          format: int64
+        durationSeconds:
+          type: number
+        sampleRate:
+          type: integer
+        channelCount:
+          type: integer
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        previewUrl:
+          type: string
+          format: uri
+        mimeType:
+          type: string
+        productionReadiness:
+          type: string
+          enum: [ready, preview_only, partial, blocked]
+        trackSummary:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    NativeAudioReview:
+      type: object
+      required: [id, videoRenderPlanId, videoRenderSegmentId, revision, audioConfigurationRevision, status, expectedDialogue, alignment, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        videoRenderPlanId:
+          type: string
+          format: uuid
+        videoRenderSegmentId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 1
+        audioConfigurationRevision:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [pending, running, passed, failed, manual_override, cancelled, stale]
+        expectedDialogue: {}
+        transcript:
+          type: string
+        language:
+          type: string
+        alignment: {}
+        dialogueCoverage:
+          type: number
+          minimum: 0
+          maximum: 1
+        textAccuracy:
+          type: number
+          minimum: 0
+          maximum: 1
+        timingAccuracy:
+          type: number
+          minimum: 0
+          maximum: 1
+        speakerTurnAccuracy:
+          type: number
+          minimum: 0
+          maximum: 1
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
     ScriptScene:
       type: object
       required: [id, projectId, scriptId, scriptVersionId, sceneIndex, sceneNo, title, characters, scenes, props, sourceEventIds, content, contentFormat, reviewStatus, manualOverride, staleState]
@@ -5412,6 +6661,9 @@ components:
           type: string
           format: uuid
         scriptVersionId:
+          type: string
+          format: uuid
+        scriptEpisodeId:
           type: string
           format: uuid
         sceneIndex:
@@ -5700,14 +6952,17 @@ components:
           format: uuid
         approvalType:
           type: string
+          enum: [read, draft, write, workflow, costed, destructive, admin, question]
         status:
           type: string
           enum: [pending, approved, rejected, expired, cancelled]
         requestedPayload:
           type: object
+          description: Pending request details. For question approvals this contains interactionType=question, question, options, allowCustom, and defaultOptionId.
           additionalProperties: true
         decisionPayload:
           type: object
+          description: User decision details. For question approvals this can contain selectedOptionId, selectedOptionLabel, nextGoal, or customAnswer.
           additionalProperties: true
         decidedBy:
           type: string
@@ -5758,13 +7013,14 @@ components:
           type: string
         decision:
           type: object
+          description: Structured decision payload. For question approvals send selectedOptionId/selectedOptionLabel or customAnswer.
           additionalProperties: true
     AssetProfile:
       type: object
       additionalProperties: true
     CanonicalAsset:
       type: object
-      required: [id, organizationId, projectId, assetType, name, description, profile, visualTraits, lockReference, status, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, assetType, name, description, profile, visualTraits, lockReference, status, reviewStatus, manualOverride, staleState, metadata, revision, promptRevision, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -5813,6 +7069,7 @@ components:
           type: string
         status:
           type: string
+          enum: [draft, prompt_ready, image_running, image_succeeded, image_failed, archived]
         reviewStatus:
           $ref: "#/components/schemas/ReviewStatus"
         manualOverride:
@@ -5842,6 +7099,16 @@ components:
         updatedAt:
           type: string
           format: date-time
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          readOnly: true
+        promptRevision:
+          type: integer
+          format: int64
+          minimum: 1
+          readOnly: true
         sceneLinks:
           type: array
           items:
@@ -6184,7 +7451,7 @@ components:
           $ref: "#/components/schemas/AssetVariant"
     WorkflowRun:
       type: object
-      required: [id, organizationId, projectId, temporalWorkflowId, status, input, output, createdBy, createdAt]
+      required: [id, organizationId, projectId, temporalWorkflowId, workflowType, status, input, output, totalItems, completedItems, failedItems, revision, attemptGeneration, createdBy, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -6202,7 +7469,9 @@ components:
           type: string
         status:
           type: string
-          enum: [queued, running, cancelling, succeeded, failed, cancelled]
+          enum: [pending, queued, running, waiting_review, cancelling, partial_succeeded, succeeded, failed, cancelled, skipped]
+        workflowType:
+          type: string
         input:
           type: object
           additionalProperties: true
@@ -6232,9 +7501,92 @@ components:
         cancelledAt:
           type: string
           format: date-time
+        totalItems:
+          type: integer
+          minimum: 0
+        completedItems:
+          type: integer
+          minimum: 0
+        failedItems:
+          type: integer
+          minimum: 0
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        attemptGeneration:
+          type: integer
+          minimum: 1
+        rootWorkflowRunId:
+          type: string
+          format: uuid
+        retryOfWorkflowRunId:
+          type: string
+          format: uuid
+        updatedAt:
+          type: string
+          format: date-time
+    RuntimeOperation:
+      type: object
+      required:
+        - id
+        - organizationId
+        - operationType
+        - status
+        - requestHash
+        - hashSchemaVersion
+        - createdAt
+        - updatedAt
+        - reconcileRequired
+        - retryAllowed
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        operationType:
+          type: string
+        status:
+          type: string
+          enum: [processing, succeeded, failed_retryable, failed_terminal, unknown_outcome]
+        workflowRunId:
+          type: string
+          format: uuid
+        requestHash:
+          type: string
+        hashSchemaVersion:
+          type: integer
+          minimum: 1
+        resultSnapshot:
+          description: Durable result snapshot when the operation outcome is known
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        leaseExpiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        reconcileRequired:
+          type: boolean
+        retryAllowed:
+          type: boolean
     WorkflowNodeRun:
       type: object
-      required: [id, organizationId, projectId, workflowRunId, nodeKey, nodeType, status, input, output, retryCount, createdAt]
+      required: [id, organizationId, projectId, workflowRunId, nodeKey, nodeType, status, input, output, retryCount, revision, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -6276,6 +7628,13 @@ components:
           type: string
           format: date-time
         createdAt:
+          type: string
+          format: date-time
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        updatedAt:
           type: string
           format: date-time
     TextToStoryboardOutput:
@@ -6430,9 +7789,470 @@ components:
           format: uuid
         externalTaskId:
           type: string
+    StoryboardDialogueLine:
+      type: object
+      required: [timingUnitId, speaker, text, kind, spanStartTick, spanEndTick, continuesFromPrevious, continuesToNext]
+      properties:
+        timingUnitId:
+          type: string
+          format: uuid
+        speaker:
+          type: string
+        text:
+          type: string
+          description: Verbatim dialogue copied from the bound Chinese script episode.
+        delivery:
+          type: string
+        kind:
+          type: string
+          enum: [dialogue, voiceover, narration, system]
+        spanStartTick:
+          type: integer
+          format: int64
+        spanEndTick:
+          type: integer
+          format: int64
+        sourceStartOffset:
+          type: integer
+          minimum: 0
+        sourceEndOffset:
+          type: integer
+          minimum: 0
+        continuesFromPrevious:
+          type: boolean
+        continuesToNext:
+          type: boolean
+    ScriptTimingUnit:
+      type: object
+      required: [id, ordinal, type, track, durationTicks, startTick, endTick, durationSource]
+      properties:
+        id:
+          type: string
+        sceneId:
+          type: string
+        ordinal:
+          type: integer
+        type:
+          type: string
+          enum: [dialogue, voiceover, narration, system, action, reaction, establishing, pause, ambient_hold, transition]
+        track:
+          type: string
+          enum: [audio, visual]
+        parallelGroup:
+          type: string
+        speaker:
+          type: string
+        sourceText:
+          type: string
+        delivery:
+          type: string
+        durationTicks:
+          type: integer
+          format: int64
+        startTick:
+          type: integer
+          format: int64
+        endTick:
+          type: integer
+          format: int64
+        durationSource:
+          type: string
+        forceBoundaryBefore:
+          type: boolean
+        forceBoundaryAfter:
+          type: boolean
+    ScriptTimingBlock:
+      type: object
+      required: [id, ordinal, startTick, endTick, durationTicks, units]
+      properties:
+        id:
+          type: string
+        sceneId:
+          type: string
+        ordinal:
+          type: integer
+        parallelGroup:
+          type: string
+        startTick:
+          type: integer
+          format: int64
+        endTick:
+          type: integer
+          format: int64
+        durationTicks:
+          type: integer
+          format: int64
+        units:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScriptTimingUnit"
+    ScriptTimingScene:
+      type: object
+      required: [sceneKey, sceneOrdinal, startTick, endTick, units, blocks]
+      properties:
+        sceneKey:
+          type: string
+        scriptSceneId:
+          type: string
+          format: uuid
+        sceneOrdinal:
+          type: integer
+        startTick:
+          type: integer
+          format: int64
+        endTick:
+          type: integer
+          format: int64
+        units:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScriptTimingUnit"
+        blocks:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScriptTimingBlock"
+    ScriptTimingAnalysis:
+      type: object
+      required: [id, scriptId, scriptVersionId, scriptEpisodeId, revision, status, estimatedDurationTicks, minimumDurationTicks, dialogueDurationTicks, actionDurationTicks, pauseDurationTicks, estimatedDurationFrames, minimumDurationFrames, estimatedDurationSeconds, minimumDurationSeconds, timelineTimebase, fpsNumerator, fpsDenominator, methodVersion, scenes, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        scriptId:
+          type: string
+          format: uuid
+        scriptVersionId:
+          type: string
+          format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+        status:
+          type: string
+          enum: [draft, analyzing, ready, failed, archived]
+        estimatedDurationTicks:
+          type: integer
+          format: int64
+        minimumDurationTicks:
+          type: integer
+          format: int64
+        targetDurationTicks:
+          type: integer
+          format: int64
+        dialogueDurationTicks:
+          type: integer
+          format: int64
+        actionDurationTicks:
+          type: integer
+          format: int64
+        pauseDurationTicks:
+          type: integer
+          format: int64
+        estimatedDurationFrames:
+          type: integer
+          format: int64
+        minimumDurationFrames:
+          type: integer
+          format: int64
+        targetDurationFrames:
+          type: integer
+          format: int64
+        estimatedDurationSeconds:
+          type: number
+          format: double
+        minimumDurationSeconds:
+          type: number
+          format: double
+        targetDurationSeconds:
+          type: number
+          format: double
+        timelineTimebase:
+          type: integer
+          format: int64
+        fpsNumerator:
+          type: integer
+        fpsDenominator:
+          type: integer
+        methodVersion:
+          type: string
+        scenes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScriptTimingScene"
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+          format: uuid
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    StoryboardScenePlan:
+      type: object
+      required: [id, storyboardPlanId, blueprintId, sceneKey, sceneOrdinal, status, retryGeneration, startTick, endTick, durationTicks, shotCount, plannerInput, plannerOutput, reviewerOutput, entryState, exitState, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        storyboardPlanId:
+          type: string
+          format: uuid
+        blueprintId:
+          type: string
+          format: uuid
+        scriptSceneId:
+          type: string
+          format: uuid
+        sceneKey:
+          type: string
+        sceneOrdinal:
+          type: integer
+        dependencyGroup:
+          type: string
+        status:
+          type: string
+          enum: [pending, planning, reviewing, ready, failed, cancelled]
+        retryGeneration:
+          type: integer
+        startTick:
+          type: integer
+          format: int64
+        endTick:
+          type: integer
+          format: int64
+        durationTicks:
+          type: integer
+          format: int64
+        shotCount:
+          type: integer
+        plannerInput:
+          type: object
+          additionalProperties: true
+        plannerOutput:
+          type: object
+          additionalProperties: true
+        reviewerOutput:
+          type: object
+          additionalProperties: true
+        entryState:
+          type: object
+          additionalProperties: true
+        exitState:
+          type: object
+          additionalProperties: true
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    StoryboardPlanReview:
+      type: object
+      required: [id, storyboardPlanId, revision, status, approved, issues, corrections, deterministicReport, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        storyboardPlanId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+        status:
+          type: string
+          enum: [reviewing, approved, changes_requested, failed]
+        approved:
+          type: boolean
+        issues:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        corrections:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        deterministicReport:
+          type: object
+          additionalProperties: true
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    StoryboardPlan:
+      type: object
+      required: [id, organizationId, projectId, scriptId, scriptVersionId, scriptEpisodeId, timingAnalysisId, revision, status, pacingProfile, targetDurationTicks, targetDurationFrames, targetDurationSeconds, estimatedShotCount, actualShotCount, sceneCount, completedSceneCount, failedSceneCount, active, staleState, timelineTimebase, fpsNumerator, fpsDenominator, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        scriptId:
+          type: string
+          format: uuid
+        scriptVersionId:
+          type: string
+          format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        timingAnalysisId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+        status:
+          type: string
+          enum: [planning, reviewing, ready, failed, archived]
+        pacingProfile:
+          type: object
+          additionalProperties: true
+        targetDurationTicks:
+          type: integer
+          format: int64
+        targetDurationFrames:
+          type: integer
+          format: int64
+        targetDurationSeconds:
+          type: number
+          format: double
+        estimatedShotCount:
+          type: integer
+        actualShotCount:
+          type: integer
+        sceneCount:
+          type: integer
+        completedSceneCount:
+          type: integer
+        failedSceneCount:
+          type: integer
+        active:
+          type: boolean
+        staleState:
+          type: string
+        timelineTimebase:
+          type: integer
+          format: int64
+        fpsNumerator:
+          type: integer
+        fpsDenominator:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        activatedAt:
+          type: string
+          format: date-time
+        scenePlans:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardScenePlan"
+        reviews:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardPlanReview"
+        shots:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardShot"
+    StoryboardPlanValidationReport:
+      type: object
+      required: [storyboardPlanId, scriptEpisodeId, timingAnalysisId, shotCount, timingUnitCount, timingSpanCount, targetDurationTicks, timelineTimebase, fpsNumerator, fpsDenominator, valid]
+      properties:
+        storyboardPlanId:
+          type: string
+          format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        timingAnalysisId:
+          type: string
+          format: uuid
+        shotCount:
+          type: integer
+        timingUnitCount:
+          type: integer
+        timingSpanCount:
+          type: integer
+        targetDurationTicks:
+          type: integer
+          format: int64
+        timelineTimebase:
+          type: integer
+          format: int64
+        fpsNumerator:
+          type: integer
+        fpsDenominator:
+          type: integer
+        valid:
+          type: boolean
+    StoryboardPlanEditResult:
+      type: object
+      required: [storyboardPlanId, sourceStoryboardPlanId, scriptEpisodeId, revision, shotIds, validation]
+      properties:
+        storyboardPlanId:
+          type: string
+          format: uuid
+        sourceStoryboardPlanId:
+          type: string
+          format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+        shotIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        validation:
+          $ref: "#/components/schemas/StoryboardPlanValidationReport"
     StoryboardShot:
       type: object
-      required: [id, workflowRunId, shotIndex, shotNo, imageStatus, videoStatus, status, reviewStatus, manualOverride, staleState]
+      required: [id, workflowRunId, shotIndex, shotNo, startTick, endTick, plannedDurationTicks, durationSource, durationLocked, oneTake, timingRevision, timelineTimebase, fpsNumerator, fpsDenominator, scriptDialogue, imagePromptStatus, videoPromptStatus, imageReferenceMode, imageReferenceKeys, videoReferenceMode, videoReferenceKeys, imageStatus, videoStatus, status, reviewStatus, manualOverride, staleState]
       properties:
         id:
           type: string
@@ -6443,11 +8263,65 @@ components:
         scriptSceneId:
           type: string
           format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        episodeIndex:
+          type: integer
+          minimum: 1
+        episodeShotIndex:
+          type: integer
+          minimum: 0
+        episodeTitle:
+          type: string
         sourceScene:
           $ref: "#/components/schemas/ShotSourceScene"
         shotIndex:
           type: integer
         shotNo:
+          type: integer
+        storyboardPlanId:
+          type: string
+          format: uuid
+        startTick:
+          type: integer
+          format: int64
+        endTick:
+          type: integer
+          format: int64
+        plannedDurationTicks:
+          type: integer
+          format: int64
+        durationMinTicks:
+          type: integer
+          format: int64
+        durationMaxTicks:
+          type: integer
+          format: int64
+        durationSource:
+          type: string
+          enum: [manual_locked, tts_actual, rule_estimated, agent_estimated]
+        timingConfidence:
+          type: number
+          format: double
+        durationLocked:
+          type: boolean
+        shotGroupId:
+          type: string
+          format: uuid
+        continuityGroupId:
+          type: string
+          format: uuid
+        oneTake:
+          type: boolean
+        timingRevision:
+          type: integer
+        timelineTimebase:
+          type: integer
+          format: int64
+        fpsNumerator:
+          type: integer
+        fpsDenominator:
           type: integer
         durationSeconds:
           type: number
@@ -6462,8 +8336,56 @@ components:
           type: string
         imagePrompt:
           type: string
+        imagePromptStatus:
+          type: string
+          enum: [not_started, queued, running, succeeded, failed]
+        imagePromptErrorCode:
+          type: string
+        imagePromptErrorMessage:
+          type: string
+        imagePromptWorkflowRunId:
+          type: string
+          format: uuid
+        imagePromptUpdatedAt:
+          type: string
+          format: date-time
         videoPrompt:
           type: string
+        scriptDialogue:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardDialogueLine"
+        videoPromptStatus:
+          type: string
+          enum: [not_started, queued, running, succeeded, failed]
+        videoPromptErrorCode:
+          type: string
+        videoPromptErrorMessage:
+          type: string
+        videoPromptWorkflowRunId:
+          type: string
+          format: uuid
+        videoPromptUpdatedAt:
+          type: string
+          format: date-time
+        imageReferenceMode:
+          type: string
+          enum: [auto, custom, none]
+        imageReferenceKeys:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+        videoReferenceMode:
+          type: string
+          enum: [auto, custom, none]
+        videoReferenceKeys:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
         imageArtifactId:
           type: string
           format: uuid
@@ -6496,7 +8418,16 @@ components:
           enum: [not_started, queued, running, succeeded, failed, cancelled, stale]
         videoStatus:
           type: string
-          enum: [not_started, queued, running, succeeded, failed, cancelled, stale]
+          enum: [not_started, queued, running, succeeded, partial_succeeded, failed, cancelled, stale]
+        activeVideoRenderPlanId:
+          type: string
+          format: uuid
+        nativeAudioStatus:
+          type: string
+          enum: [not_requested, native_audio_unavailable, audio_unverified, audio_verified, needs_audio_retry]
+        productionReadiness:
+          type: string
+          enum: [ready, preview_only, partial, blocked]
         imageErrorCode:
           type: string
         imageErrorMessage:
@@ -6539,11 +8470,14 @@ components:
           format: date-time
     ShotProductionStatus:
       type: object
-      required: [projectId, summary, shots]
+      required: [projectId, aspectRatio, summary, shots]
       properties:
         projectId:
           type: string
           format: uuid
+        aspectRatio:
+          type: string
+          example: "16:9"
         summary:
           $ref: "#/components/schemas/ShotProductionSummary"
         shots:
@@ -6552,7 +8486,7 @@ components:
             $ref: "#/components/schemas/ShotProductionShot"
     ShotProductionSummary:
       type: object
-      required: [total, imageSucceeded, imageMissing, imageFailed, imageStale, videoSucceeded, videoMissing, videoFailed, videoStale, running]
+      required: [total, imageSucceeded, imageMissing, imageFailed, imageStale, imagePromptSucceeded, imagePromptMissing, imagePromptFailed, imagePromptRunning, videoSucceeded, videoMissing, videoFailed, videoStale, videoPromptSucceeded, videoPromptMissing, videoPromptFailed, videoPromptRunning, running]
       properties:
         total:
           type: integer
@@ -6564,6 +8498,14 @@ components:
           type: integer
         imageStale:
           type: integer
+        imagePromptSucceeded:
+          type: integer
+        imagePromptMissing:
+          type: integer
+        imagePromptFailed:
+          type: integer
+        imagePromptRunning:
+          type: integer
         videoSucceeded:
           type: integer
         videoMissing:
@@ -6572,11 +8514,19 @@ components:
           type: integer
         videoStale:
           type: integer
+        videoPromptSucceeded:
+          type: integer
+        videoPromptMissing:
+          type: integer
+        videoPromptFailed:
+          type: integer
+        videoPromptRunning:
+          type: integer
         running:
           type: integer
     ShotProductionShot:
       type: object
-      required: [id, workflowRunId, shotIndex, shotNo, imageStatus, videoStatus, staleState, canGenerateImage, canGenerateVideo, canRetryImage, canRetryVideo]
+      required: [id, workflowRunId, shotIndex, shotNo, scriptDialogue, imagePromptStatus, videoPromptStatus, imageStatus, videoStatus, staleState, videoReferenceMode, videoReferenceKeys, canGenerateImage, canGenerateImagePrompt, canGenerateVideo, canGenerateVideoPrompt, canRetryImage, canRetryVideo]
       properties:
         id:
           type: string
@@ -6584,15 +8534,62 @@ components:
         workflowRunId:
           type: string
           format: uuid
+        storyboardPlanId:
+          type: string
+          format: uuid
         scriptSceneId:
           type: string
           format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        episodeIndex:
+          type: integer
+          minimum: 1
+        episodeShotIndex:
+          type: integer
+          minimum: 0
+        episodeTitle:
+          type: string
         shotIndex:
           type: integer
         shotNo:
           type: integer
+        title:
+          type: string
+        durationSeconds:
+          type: number
+          format: double
         visual:
           type: string
+        imagePrompt:
+          type: string
+        imagePromptStatus:
+          type: string
+          enum: [not_started, queued, running, succeeded, failed]
+        imagePromptErrorCode:
+          type: string
+        imagePromptErrorMessage:
+          type: string
+        imagePromptWorkflowRunId:
+          type: string
+          format: uuid
+        videoPrompt:
+          type: string
+        scriptDialogue:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardDialogueLine"
+        videoPromptStatus:
+          type: string
+          enum: [not_started, queued, running, succeeded, failed]
+        videoPromptErrorCode:
+          type: string
+        videoPromptErrorMessage:
+          type: string
+        videoPromptWorkflowRunId:
+          type: string
+          format: uuid
         imageStatus:
           type: string
           enum: [not_started, queued, running, succeeded, failed, cancelled, stale]
@@ -6623,6 +8620,15 @@ components:
         videoPreviewUrl:
           type: string
           format: uri
+        videoReferenceMode:
+          type: string
+          enum: [auto, custom, none]
+        videoReferenceKeys:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
         imageErrorCode:
           type: string
         imageErrorMessage:
@@ -6644,7 +8650,11 @@ components:
           type: string
         canGenerateImage:
           type: boolean
+        canGenerateImagePrompt:
+          type: boolean
         canGenerateVideo:
+          type: boolean
+        canGenerateVideoPrompt:
           type: boolean
         canRetryImage:
           type: boolean
@@ -6657,10 +8667,14 @@ components:
         action:
           type: string
           enum:
+            - generate_image_prompts
+            - generate_selected_image_prompts
             - generate_missing_images
             - regenerate_stale_images
             - regenerate_failed_images
             - generate_selected_images
+            - generate_video_prompts
+            - generate_selected_video_prompts
             - generate_missing_videos
             - regenerate_stale_videos
             - regenerate_failed_videos
@@ -6669,6 +8683,10 @@ components:
         scriptSceneId:
           type: string
           format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+          description: Restrict target selection to the active storyboard shots of exactly one script episode.
         workflowRunId:
           type: string
           format: uuid
@@ -6679,6 +8697,21 @@ components:
             format: uuid
         options:
           type: object
+          properties:
+            maxConcurrency:
+              type: integer
+              minimum: 1
+              maximum: 16
+              description: Maximum concurrent tasks. Image, image-prompt, video-prompt, and independent video continuity groups default to 5. Video groups are capped at 8, prompt actions at 12, and image actions at 16; shots inside one continuity group remain sequential.
+            force:
+              type: boolean
+            aspectRatio:
+              type: string
+            resolution:
+              type: string
+            duration:
+              type: number
+              format: double
           additionalProperties: true
     ShotProductionActionResponse:
       type: object
@@ -6693,7 +8726,7 @@ components:
           type: string
         workflowType:
           type: string
-          enum: [batch_generate_shot_images, batch_generate_shot_videos, batch_cancel_shot_videos]
+          enum: [batch_generate_shot_image_prompts, batch_generate_shot_images, batch_generate_shot_video_prompts, batch_generate_shot_videos, batch_cancel_shot_videos]
         targetShotIds:
           type: array
           items:
@@ -6716,10 +8749,180 @@ components:
           type: array
           items:
             type: string
+    StoryboardShotImageReferenceOption:
+      type: object
+      required: [key, sourceType, sourceId, assetId, assetType, assetName, title, isShotAsset, selected, autoSelected]
+      properties:
+        key:
+          type: string
+        sourceType:
+          type: string
+          enum: [derived_asset, asset_primary]
+        sourceId:
+          type: string
+          format: uuid
+        assetId:
+          type: string
+          format: uuid
+        assetType:
+          type: string
+          enum: [character, scene, prop]
+        assetName:
+          type: string
+        title:
+          type: string
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        previewUrl:
+          type: string
+          format: uri
+        isShotAsset:
+          type: boolean
+        selected:
+          type: boolean
+        autoSelected:
+          type: boolean
+    StoryboardShotImageGenerationRun:
+      type: object
+      required: [providerCallId, status, promptTruncated, references]
+      properties:
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+          format: uuid
+        modelName:
+          type: string
+        status:
+          type: string
+        prompt:
+          type: string
+        promptTruncated:
+          type: boolean
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        artifactId:
+          type: string
+          format: uuid
+        previewUrl:
+          type: string
+          format: uri
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        references:
+          type: array
+          items:
+            type: string
+    StoryboardShotVideoReferenceOption:
+      type: object
+      required: [key, referenceType, sourceType, sourceId, title, selected, autoSelected]
+      properties:
+        key:
+          type: string
+        referenceType:
+          type: string
+          enum: [image, first_frame, last_frame, video]
+        sourceType:
+          type: string
+          enum: [shot_image, derived_asset, asset_reference, asset_primary]
+        sourceId:
+          type: string
+          format: uuid
+        assetId:
+          type: string
+          format: uuid
+        assetName:
+          type: string
+        title:
+          type: string
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        previewUrl:
+          type: string
+          format: uri
+        selected:
+          type: boolean
+        autoSelected:
+          type: boolean
+    StoryboardShotVideoGenerationRun:
+      type: object
+      required: [providerCallId, status, promptTruncated, references]
+      properties:
+        providerCallId:
+          type: string
+          format: uuid
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        modelId:
+          type: string
+          format: uuid
+        modelName:
+          type: string
+        status:
+          type: string
+        prompt:
+          type: string
+        promptTruncated:
+          type: boolean
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        artifactId:
+          type: string
+          format: uuid
+        previewUrl:
+          type: string
+          format: uri
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        references:
+          type: array
+          items:
+            type: string
     StoryboardShotDetail:
       type: object
-      required: [shot, requirements]
+      required: [aspectRatio, shot, requirements, imageReferenceOptions, imageGenerationRuns, videoReferenceOptions, videoGenerationRuns]
       properties:
+        aspectRatio:
+          type: string
+          example: "16:9"
         shot:
           $ref: "#/components/schemas/StoryboardShot"
         scriptScene:
@@ -6728,6 +8931,22 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/StoryboardShotRequirementDetail"
+        imageReferenceOptions:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardShotImageReferenceOption"
+        imageGenerationRuns:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardShotImageGenerationRun"
+        videoReferenceOptions:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardShotVideoReferenceOption"
+        videoGenerationRuns:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoryboardShotVideoGenerationRun"
         imageArtifact:
           $ref: "#/components/schemas/Artifact"
         imagePreviewUrl:
@@ -6738,9 +8957,220 @@ components:
         videoPreviewUrl:
           type: string
           format: uri
+    CreateVideoRenderPlanRequest:
+      type: object
+      properties:
+        modelProfileKey:
+          type: string
+        providerModelId:
+          type: string
+          format: uuid
+        aspectRatio:
+          type: string
+        resolution:
+          type: string
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+          default: native_av
+        audioRequirement:
+          type: string
+          enum: [preferred, required, disabled]
+          default: preferred
+    VerifyVideoRenderPlanAudioRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject]
+        notes:
+          type: string
+    StartNativeAudioReviewRequest:
+      type: object
+      properties:
+        videoRenderPlanId:
+          type: string
+          format: uuid
+        maxConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 20
+    VideoRenderSegment:
+      type: object
+      required: [id, segmentIndex, plannedStartTick, plannedEndTick, plannedDurationTicks, plannedDurationFrames, plannedDurationSeconds, requestedDurationSeconds, continuityMode, status, retryGeneration, dialogue, nativeAudioRequested, audioVerificationStatus, productionReadiness, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        segmentIndex:
+          type: integer
+          minimum: 0
+        plannedStartTick:
+          type: integer
+          format: int64
+        plannedEndTick:
+          type: integer
+          format: int64
+        plannedDurationTicks:
+          type: integer
+          format: int64
+        plannedDurationFrames:
+          type: integer
+          format: int64
+        plannedDurationSeconds:
+          type: number
+        requestedDurationSeconds:
+          type: number
+        trimEndTick:
+          type: integer
+          format: int64
+        continuityMode:
+          type: string
+        status:
+          type: string
+          enum: [planned, queued, running, succeeded, failed, cancelled]
+        retryGeneration:
+          type: integer
+          minimum: 0
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        externalTaskId:
+          type: string
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        previewUrl:
+          type: string
+          format: uri
+        prompt:
+          type: string
+        dialogue:
+          description: Exact dialogue timing payload assigned to this provider render segment.
+        nativeAudioRequested:
+          type: boolean
+        nativeAudioDetected:
+          type: boolean
+        audioVerificationStatus:
+          type: string
+          enum: [not_requested, native_audio_unavailable, audio_unverified, audio_verified, needs_audio_retry]
+        productionReadiness:
+          type: string
+          enum: [ready, preview_only, blocked]
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    VideoRenderPlan:
+      type: object
+      required: [id, storyboardShotId, providerAccountId, providerModelId, modelFamily, variantKey, capabilitySnapshot, capabilitySnapshotHash, status, active, targetDurationTicks, targetDurationFrames, targetDurationSeconds, timelineTimebase, fpsNumerator, fpsDenominator, taskType, referenceMode, aspectRatio, resolution, audioStrategy, audioRequirement, nativeAudioStatus, productionReadiness, expiresAt, createdAt, updatedAt, segments]
+      properties:
+        id:
+          type: string
+          format: uuid
+        storyboardPlanId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        modelFamily:
+          type: string
+        variantKey:
+          type: string
+        capabilitySnapshot:
+          $ref: "#/components/schemas/VideoGenerationVariant"
+        capabilitySnapshotHash:
+          type: string
+        status:
+          type: string
+          enum: [planned, running, succeeded, partial_succeeded, failed, cancelled, stale, archived, replan_required]
+        active:
+          type: boolean
+        targetDurationTicks:
+          type: integer
+          format: int64
+        targetDurationFrames:
+          type: integer
+          format: int64
+        targetDurationSeconds:
+          type: number
+        timelineTimebase:
+          type: integer
+          format: int64
+        fpsNumerator:
+          type: integer
+        fpsDenominator:
+          type: integer
+        taskType:
+          type: string
+        referenceMode:
+          type: string
+        aspectRatio:
+          type: string
+        resolution:
+          type: string
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+        audioRequirement:
+          type: string
+          enum: [preferred, required, disabled]
+        nativeAudioStatus:
+          type: string
+          enum: [not_requested, native_audio_unavailable, audio_unverified, audio_verified, needs_audio_retry]
+        productionReadiness:
+          type: string
+          enum: [ready, preview_only, partial, blocked]
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoRenderSegment"
     ProjectTimeline:
       type: object
-      required: [id, organizationId, projectId, title, status, aspectRatio, resolution, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, title, status, aspectRatio, resolution, timelineTimebase, fpsNumerator, fpsDenominator, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -6763,6 +9193,13 @@ components:
           type: string
         resolution:
           type: string
+        timelineTimebase:
+          type: integer
+          format: int64
+        fpsNumerator:
+          type: integer
+        fpsDenominator:
+          type: integer
         metadata:
           type: object
           additionalProperties: true
@@ -6783,7 +9220,7 @@ components:
           format: date-time
     TimelineClip:
       type: object
-      required: [id, organizationId, projectId, timelineId, clipIndex, title, enabled, trimStartSeconds, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, timelineId, clipIndex, title, enabled, startTick, endTick, durationTicks, trimStartTick, timelineTimebase, fpsNumerator, fpsDenominator, durationSeconds, trimStartSeconds, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -6814,6 +9251,34 @@ components:
           type: boolean
         sourceStorageKey:
           type: string
+        startTick:
+          type: integer
+          format: int64
+        endTick:
+          type: integer
+          format: int64
+        durationTicks:
+          type: integer
+          format: int64
+        sourceDurationTicks:
+          type: integer
+          format: int64
+        trimStartTick:
+          type: integer
+          format: int64
+        trimEndTick:
+          type: integer
+          format: int64
+        timelineTimebase:
+          type: integer
+          format: int64
+        fpsNumerator:
+          type: integer
+        fpsDenominator:
+          type: integer
+        durationSeconds:
+          type: number
+          format: double
         sourceDurationSeconds:
           type: number
           format: double
@@ -6821,9 +9286,6 @@ components:
           type: number
           format: double
         trimEndSeconds:
-          type: number
-          format: double
-        targetDurationSeconds:
           type: number
           format: double
         notes:
@@ -6851,7 +9313,7 @@ components:
               format: uri
     FinalVideoVersion:
       type: object
-      required: [id, organizationId, projectId, timelineId, version, title, status, resolution, aspectRatio, composeSettings, metadata, createdAt]
+      required: [id, organizationId, projectId, timelineId, version, title, status, timelineTimebase, fpsNumerator, fpsDenominator, resolution, aspectRatio, composeSettings, metadata, createdAt]
       properties:
         id:
           type: string
@@ -6883,9 +9345,19 @@ components:
           format: uuid
         storageKey:
           type: string
+        durationTicks:
+          type: integer
+          format: int64
         durationSeconds:
           type: number
           format: double
+        timelineTimebase:
+          type: integer
+          format: int64
+        fpsNumerator:
+          type: integer
+        fpsDenominator:
+          type: integer
         resolution:
           type: string
         aspectRatio:
@@ -7404,18 +9876,18 @@ components:
           type: boolean
         sourceStorageKey:
           type: string
-        sourceDurationSeconds:
-          type: number
-          format: double
-        trimStartSeconds:
-          type: number
-          format: double
-        trimEndSeconds:
-          type: number
-          format: double
-        targetDurationSeconds:
-          type: number
-          format: double
+        sourceDurationTicks:
+          type: integer
+          format: int64
+        trimStartTick:
+          type: integer
+          format: int64
+        trimEndTick:
+          type: integer
+          format: int64
+        durationTicks:
+          type: integer
+          format: int64
         notes:
           type: string
     UpdateTimelineClipRequest:
@@ -7425,15 +9897,15 @@ components:
           type: string
         enabled:
           type: boolean
-        trimStartSeconds:
-          type: number
-          format: double
-        trimEndSeconds:
-          type: number
-          format: double
-        targetDurationSeconds:
-          type: number
-          format: double
+        trimStartTick:
+          type: integer
+          format: int64
+        trimEndTick:
+          type: integer
+          format: int64
+        durationTicks:
+          type: integer
+          format: int64
         notes:
           type: string
     ReorderTimelineClipItem:
@@ -8694,6 +11166,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/NovelChapter"
+    DeleteSourceChapterResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/DeleteSourceChapterResponse"
     NovelChapterSummaryListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -8763,6 +11242,75 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/ScriptVersion"
+    ScriptEpisodeEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ScriptEpisode"
+    ScriptEpisodeListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ScriptEpisode"
+    CharacterVoiceProfileEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CharacterVoiceProfile"
+    CharacterVoiceProfileListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CharacterVoiceProfile"
+    EpisodeAudioEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [clips, mixes]
+              properties:
+                clips:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/TTSAudioClip"
+                mixes:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/AudioMixVersion"
+    NativeAudioReviewListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/NativeAudioReview"
     DeleteScriptVersionResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -8968,6 +11516,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/DeleteAssetReferenceResponse"
+    DeleteCanonicalAssetResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/DeleteCanonicalAssetResponse"
     SetPrimaryAssetReferenceResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -9011,6 +11566,11 @@ components:
                 content:
                   type: string
                 agentRunId:
+                  type: string
+                  format: uuid
+                activated:
+                  type: boolean
+                previousVersionId:
                   type: string
                   format: uuid
     CanonicalAssetImageResultEnvelope:
@@ -9079,6 +11639,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/WorkflowRun"
+    RuntimeOperationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/RuntimeOperation"
     WorkflowRunListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -9117,6 +11684,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/StoryboardShotDetail"
+    VideoRenderPlanEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/VideoRenderPlan"
     StoryboardShotListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -9129,6 +11703,45 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/StoryboardShot"
+    ScriptTimingAnalysisEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ScriptTimingAnalysis"
+    StoryboardPlanEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/StoryboardPlan"
+    StoryboardPlanListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/StoryboardPlan"
+    StoryboardPlanEditEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [edit, plan]
+              properties:
+                edit:
+                  $ref: "#/components/schemas/StoryboardPlanEditResult"
+                plan:
+                  $ref: "#/components/schemas/StoryboardPlan"
     ArtifactListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -9516,11 +12129,19 @@ components:
           description: Whether the model supports provider-side asynchronous create/poll/cancel task execution.
         supportsStreaming:
           type: boolean
+        streamTerminalMode:
+          type: string
+          enum: [done_marker, finish_reason, done_or_finish_reason]
+          description: Explicit terminal condition required before a text stream is accepted as complete.
         supportsReasoning:
           type: boolean
         supportsReasoningLevels:
           type: boolean
         supportsMultimodalInput:
+          type: boolean
+        supportsTTS:
+          type: boolean
+        supportsTranscription:
           type: boolean
         supportsReferences:
           type: boolean
@@ -9562,6 +12183,32 @@ components:
           type: array
           items:
             type: string
+        audioVoices:
+          type: array
+          items:
+            type: string
+        audioLanguages:
+          type: array
+          items:
+            type: string
+        audioInputFormats:
+          type: array
+          items:
+            type: string
+        audioResponseFormats:
+          type: array
+          items:
+            type: string
+        audioRequestModes:
+          type: array
+          items:
+            type: string
+        maxTTSCharacters:
+          type: integer
+          minimum: 1
+        maxAudioDurationSeconds:
+          type: number
+          exclusiveMinimum: 0
         supportedAspectRatios:
           type: array
           items:
@@ -9578,6 +12225,137 @@ components:
           type: number
         maxDurationSeconds:
           type: number
+        videoGenerationVariants:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoGenerationVariant"
+    VideoGenerationVariantWhen:
+      type: object
+      properties:
+        taskTypes:
+          type: array
+          items:
+            type: string
+        referenceModes:
+          type: array
+          items:
+            type: string
+        nativeAudioRequested:
+          type: boolean
+    VideoDurationCapability:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [continuous_range, discrete, fixed, source_duration]
+        minSeconds:
+          type: number
+          exclusiveMinimum: 0
+        maxSeconds:
+          type: number
+          exclusiveMinimum: 0
+        values:
+          type: array
+          items:
+            type: number
+            exclusiveMinimum: 0
+        stepSeconds:
+          type: number
+          minimum: 0
+    VideoFrameRateCapability:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [fixed, selectable, unknown]
+        values:
+          type: array
+          items:
+            type: number
+            exclusiveMinimum: 0
+    VideoNativeAudioCapability:
+      type: object
+      required: [support, audioTrackSeparable]
+      properties:
+        support:
+          type: string
+          enum: ["true", "false", unknown]
+        canDisable:
+          type: boolean
+        supportsDialogue:
+          type: boolean
+        supportsVoiceover:
+          type: boolean
+        supportsAmbientSound:
+          type: boolean
+        supportsMusic:
+          type: boolean
+        supportsLipSync:
+          type: boolean
+        supportedDialogueLanguages:
+          type: array
+          items:
+            type: string
+        audioTrackSeparable:
+          type: boolean
+    VideoContinuationCapability:
+      type: object
+      required: [supportsExtension, supportsFirstFrame, supportsLastFrame, supportsVideoReference]
+      properties:
+        supportsExtension:
+          type: boolean
+        supportsFirstFrame:
+          type: boolean
+        supportsLastFrame:
+          type: boolean
+        supportsVideoReference:
+          type: boolean
+    VideoGenerationVariant:
+      type: object
+      required: [variantKey, when, duration, frameRate, nativeAudio, continuation]
+      properties:
+        variantKey:
+          type: string
+        modelFamily:
+          type: string
+        when:
+          $ref: "#/components/schemas/VideoGenerationVariantWhen"
+        duration:
+          $ref: "#/components/schemas/VideoDurationCapability"
+        resolutions:
+          type: array
+          items:
+            type: string
+        aspectRatios:
+          type: array
+          items:
+            type: string
+        frameRate:
+          $ref: "#/components/schemas/VideoFrameRateCapability"
+        supportedPromptLanguages:
+          type: array
+          items:
+            type: string
+        nativeAudio:
+          $ref: "#/components/schemas/VideoNativeAudioCapability"
+        continuation:
+          $ref: "#/components/schemas/VideoContinuationCapability"
+        requestModes:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
+        sourceUrl:
+          type: string
+          format: uri
+        verifiedAt:
+          type: string
+          format: date-time
+        capabilityVersion:
+          type: string
     ProviderCapability:
       type: object
       required: [id, providerModelId, taskTypes, inputLimits, outputLimits, qualityTiers, providerOptionsSchema, pricingPolicy, createdAt]
@@ -10154,6 +12932,10 @@ components:
           type: integer
         idempotencyKey:
           type: string
+        retry:
+          type: boolean
+          default: false
+          description: Explicitly starts a new attempt generation after a terminal or unknown outcome.
     GatewayTextRequest:
       type: object
       required: [organizationId, input]
@@ -10191,8 +12973,20 @@ components:
           type: string
         idempotencyKey:
           type: string
+        executionPlanId:
+          type: string
+          format: uuid
+        renderSegmentId:
+          type: string
+          format: uuid
+        capabilitySnapshotHash:
+          type: string
         input:
           type: object
+          properties:
+            reasoningLevel:
+              type: string
+              description: Optional per-request override for the selected binding's default reasoning level. It is normalized to the upstream OpenAI-compatible reasoning_effort field.
           additionalProperties: true
         options:
           $ref: "#/components/schemas/GatewayTextOptions"
@@ -10237,7 +13031,7 @@ components:
           format: uuid
         status:
           type: string
-          enum: [succeeded, failed, blocked, queued, running, cancelled, skipped]
+          enum: [succeeded, failed, blocked, queued, running, cancelled, skipped, unknown_outcome]
         errorCode:
           type: string
         errorMessage:
@@ -10248,12 +13042,24 @@ components:
           type: integer
     GatewayTextResponse:
       type: object
-      required: [providerCallId, modelId, status, output, usage]
+      required: [providerRequestId, attemptGeneration, providerCallId, modelId, status, output, usage]
       properties:
+        providerRequestId:
+          type: string
+          format: uuid
+        attemptGeneration:
+          type: integer
+          minimum: 1
         providerCallId:
           type: string
           format: uuid
         modelId:
+          type: string
+          format: uuid
+        executionPlanId:
+          type: string
+          format: uuid
+        renderSegmentId:
           type: string
           format: uuid
         status:
@@ -10277,6 +13083,10 @@ components:
           type: integer
         idempotencyKey:
           type: string
+        retry:
+          type: boolean
+          default: false
+          description: Explicitly starts a new attempt generation after a terminal or unknown outcome.
     GatewayImageReference:
       type: object
       required: [type]
@@ -10385,13 +13195,21 @@ components:
           type: integer
         height:
           type: integer
+        aspectRatio:
+          type: string
         raw:
           type: object
           additionalProperties: true
     GatewayImageResponse:
       type: object
-      required: [providerCallId, modelId, status, output, usage]
+      required: [providerRequestId, attemptGeneration, providerCallId, modelId, status, output, usage]
       properties:
+        providerRequestId:
+          type: string
+          format: uuid
+        attemptGeneration:
+          type: integer
+          minimum: 1
         providerCallId:
           type: string
           format: uuid
@@ -10412,6 +13230,260 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/GatewayAttempt"
+    GatewayAudioOptions:
+      type: object
+      properties:
+        timeoutMs:
+          type: integer
+          minimum: 1
+        idempotencyKey:
+          type: string
+        retry:
+          type: boolean
+          default: false
+          description: Explicitly starts a new attempt generation after a terminal or unknown outcome.
+    GatewayTTSRequest:
+      type: object
+      required: [organizationId, input]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        modelProfileKey:
+          type: string
+        providerModelId:
+          type: string
+          format: uuid
+        idempotencyKey:
+          type: string
+        timelineTimebase:
+          type: integer
+          format: int64
+          default: 90000
+        input:
+          type: object
+          required: [input, voice]
+          properties:
+            input:
+              type: string
+            voice:
+              type: string
+            response_format:
+              type: string
+              enum: [mp3, wav, aac, flac, opus, pcm]
+              default: mp3
+            instructions:
+              type: string
+            speed:
+              type: number
+          additionalProperties: true
+        options:
+          $ref: "#/components/schemas/GatewayAudioOptions"
+    GatewayAudioOutput:
+      type: object
+      properties:
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        mimeType:
+          type: string
+        byteSize:
+          type: integer
+          format: int64
+        contentHash:
+          type: string
+        raw: {}
+    GatewayTTSResponse:
+      type: object
+      required: [providerRequestId, attemptGeneration, providerCallId, modelId, status, output, usage]
+      properties:
+        providerRequestId:
+          type: string
+          format: uuid
+        attemptGeneration:
+          type: integer
+          minimum: 1
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        output:
+          $ref: "#/components/schemas/GatewayAudioOutput"
+        usage:
+          $ref: "#/components/schemas/GatewayUsage"
+        error:
+          $ref: "#/components/schemas/ProviderStandardError"
+        latencyMs:
+          type: integer
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayAttempt"
+    GatewayAudioSource:
+      type: object
+      properties:
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        mimeType:
+          type: string
+        fileName:
+          type: string
+      anyOf:
+        - required: [artifactId]
+        - required: [mediaFileId]
+        - required: [storageKey]
+    GatewayASRRequest:
+      type: object
+      required: [organizationId, source, input]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        modelProfileKey:
+          type: string
+        providerModelId:
+          type: string
+          format: uuid
+        idempotencyKey:
+          type: string
+        source:
+          $ref: "#/components/schemas/GatewayAudioSource"
+        input:
+          type: object
+          properties:
+            language:
+              type: string
+            prompt:
+              type: string
+            response_format:
+              type: string
+              default: verbose_json
+            temperature:
+              type: number
+            timestamp_granularities:
+              type: array
+              items:
+                type: string
+                enum: [segment, word]
+          additionalProperties: true
+        options:
+          $ref: "#/components/schemas/GatewayAudioOptions"
+    GatewayASRWord:
+      type: object
+      required: [word, start, end]
+      properties:
+        word:
+          type: string
+        start:
+          type: number
+        end:
+          type: number
+    GatewayASRSegment:
+      type: object
+      required: [text, start, end]
+      properties:
+        id:
+          type: integer
+        speaker:
+          type: string
+        text:
+          type: string
+        start:
+          type: number
+        end:
+          type: number
+        words:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayASRWord"
+    GatewayASROutput:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+        language:
+          type: string
+        duration:
+          type: number
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayASRSegment"
+        words:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayASRWord"
+        raw: {}
+    GatewayASRResponse:
+      type: object
+      required: [providerRequestId, attemptGeneration, providerCallId, modelId, status, output, usage]
+      properties:
+        providerRequestId:
+          type: string
+          format: uuid
+        attemptGeneration:
+          type: integer
+          minimum: 1
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        output:
+          $ref: "#/components/schemas/GatewayASROutput"
+        usage:
+          $ref: "#/components/schemas/GatewayUsage"
+        error:
+          $ref: "#/components/schemas/ProviderStandardError"
+        latencyMs:
+          type: integer
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayAttempt"
     GatewayVideoOptions:
       type: object
       properties:
@@ -10419,6 +13491,10 @@ components:
           type: integer
         idempotencyKey:
           type: string
+        retry:
+          type: boolean
+          default: false
+          description: Explicitly starts a new attempt generation after a terminal or unknown outcome.
         maxPolls:
           type: integer
     GatewayVideoReference:
@@ -10447,6 +13523,216 @@ components:
         metadata:
           type: object
           additionalProperties: true
+    GatewayVideoPlanRequest:
+      type: object
+      required: [organizationId, projectId, storyboardShotId, taskType, targetDurationTicks, timelineTimebase, fpsNumerator, fpsDenominator, audioStrategy, audioRequirement, hasDialogue, referenceMode, aspectRatio, resolution]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        nodeExecutionToken:
+          type: string
+          format: uuid
+        nodeAttemptGeneration:
+          type: integer
+          minimum: 1
+        storyboardPlanId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        modelProfileKey:
+          type: string
+        providerModelId:
+          type: string
+          format: uuid
+        taskType:
+          type: string
+        targetDurationTicks:
+          type: integer
+          format: int64
+          minimum: 1
+        timelineTimebase:
+          type: integer
+          format: int64
+          minimum: 1
+        fpsNumerator:
+          type: integer
+          minimum: 1
+        fpsDenominator:
+          type: integer
+          minimum: 1
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+        audioRequirement:
+          type: string
+          enum: [preferred, required, disabled]
+        dialogueLanguage:
+          type: string
+        hasDialogue:
+          type: boolean
+        referenceMode:
+          type: string
+        aspectRatio:
+          type: string
+        resolution:
+          type: string
+        promptLanguage:
+          type: string
+        expiresInSeconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+        force:
+          type: boolean
+        excludeProviderModelIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        previousExecutionPlanId:
+          type: string
+          format: uuid
+    GatewayVideoPlanSegment:
+      type: object
+      required: [segmentId, segmentIndex, plannedStartTick, plannedEndTick, plannedDurationTicks, requestedDurationSeconds, continuityMode]
+      properties:
+        segmentId:
+          type: string
+          format: uuid
+        segmentIndex:
+          type: integer
+          minimum: 0
+        plannedStartTick:
+          type: integer
+          format: int64
+        plannedEndTick:
+          type: integer
+          format: int64
+        plannedDurationTicks:
+          type: integer
+          format: int64
+        requestedDurationSeconds:
+          type: number
+          exclusiveMinimum: 0
+        continuityMode:
+          type: string
+        trimEndTick:
+          type: integer
+          format: int64
+    GatewayVideoPlanResponse:
+      type: object
+      required: [executionPlanId, providerModelId, providerAccountId, modelFamily, variantKey, capabilitySnapshot, capabilitySnapshotHash, expiresAt, audioStrategy, audioRequirement, nativeAudioStatus, productionReadiness, segments]
+      properties:
+        executionPlanId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        modelFamily:
+          type: string
+        variantKey:
+          type: string
+        capabilitySnapshot:
+          $ref: "#/components/schemas/VideoGenerationVariant"
+        capabilitySnapshotHash:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+        audioRequirement:
+          type: string
+          enum: [preferred, required, disabled]
+        nativeAudioStatus:
+          type: string
+        productionReadiness:
+          type: string
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayVideoPlanSegment"
+    GatewayVideoRetrySegmentRequest:
+      type: object
+      required:
+        - organizationId
+        - projectId
+        - workflowRunId
+        - nodeRunId
+        - nodeExecutionToken
+        - nodeAttemptGeneration
+        - executionPlanId
+        - renderSegmentId
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        nodeExecutionToken:
+          type: string
+          format: uuid
+        nodeAttemptGeneration:
+          type: integer
+          minimum: 1
+        executionPlanId:
+          type: string
+          format: uuid
+        renderSegmentId:
+          type: string
+          format: uuid
+        failureCode:
+          type: string
+        failureMessage:
+          type: string
+    GatewayVideoRetrySegmentResponse:
+      type: object
+      required: [executionPlanId, renderSegmentId, providerModelId, providerAccountId, capabilitySnapshotHash, retryGeneration, retryScope]
+      properties:
+        executionPlanId:
+          type: string
+          format: uuid
+        renderSegmentId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        capabilitySnapshotHash:
+          type: string
+        retryGeneration:
+          type: integer
+          minimum: 1
+        retryScope:
+          type: string
+          enum: [segment]
     GatewayVideoCreateTaskRequest:
       type: object
       required: [organizationId, input]
@@ -10466,6 +13752,12 @@ components:
         nodeRunId:
           type: string
           format: uuid
+        nodeExecutionToken:
+          type: string
+          format: uuid
+        nodeAttemptGeneration:
+          type: integer
+          minimum: 1
         modelProfileKey:
           type: string
         providerModelId:
@@ -10505,8 +13797,14 @@ components:
           $ref: "#/components/schemas/GatewayVideoOptions"
     GatewayVideoCreateTaskResponse:
       type: object
-      required: [providerCallId, providerAsyncTaskId, modelId, status]
+      required: [providerRequestId, attemptGeneration, providerCallId, providerAsyncTaskId, modelId, status]
       properties:
+        providerRequestId:
+          type: string
+          format: uuid
+        attemptGeneration:
+          type: integer
+          minimum: 1
         providerCallId:
           type: string
           format: uuid
@@ -10556,8 +13854,63 @@ components:
         nodeRunId:
           type: string
           format: uuid
+        nodeExecutionToken:
+          type: string
+          format: uuid
+        nodeAttemptGeneration:
+          type: integer
+          minimum: 1
         options:
           $ref: "#/components/schemas/GatewayVideoOptions"
+    GatewayVideoMediaProbe:
+      type: object
+      required: [status, frameCountEstimated, videoStreamCount, audioStreamCount, hasAudio]
+      properties:
+        status:
+          type: string
+          enum: [succeeded, failed, unavailable]
+        error:
+          type: string
+        durationSeconds:
+          type: number
+          exclusiveMinimum: 0
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        frameRateNumerator:
+          type: integer
+          format: int64
+          minimum: 1
+        frameRateDenominator:
+          type: integer
+          format: int64
+          minimum: 1
+        frameRate:
+          type: number
+          exclusiveMinimum: 0
+        frameCount:
+          type: integer
+          format: int64
+          minimum: 0
+        frameCountEstimated:
+          type: boolean
+        videoStreamCount:
+          type: integer
+          minimum: 0
+        audioStreamCount:
+          type: integer
+          minimum: 0
+        hasAudio:
+          type: boolean
+        videoCodec:
+          type: string
+        audioCodecs:
+          type: array
+          items:
+            type: string
     GatewayVideoOutput:
       type: object
       properties:
@@ -10579,17 +13932,37 @@ components:
           format: int64
         durationSeconds:
           type: number
+        requestedDurationSeconds:
+          type: number
+          exclusiveMinimum: 0
+        providerDurationSeconds:
+          type: number
+          exclusiveMinimum: 0
+        actualDurationSeconds:
+          type: number
+          exclusiveMinimum: 0
+        durationSource:
+          type: string
+          enum: [media_probe, provider, request]
         width:
           type: integer
         height:
           type: integer
+        mediaProbe:
+          $ref: "#/components/schemas/GatewayVideoMediaProbe"
         raw:
           type: object
           additionalProperties: true
     GatewayVideoPollTaskResponse:
       type: object
-      required: [providerCallId, providerAsyncTaskId, status, output, usage]
+      required: [providerRequestId, attemptGeneration, providerCallId, providerAsyncTaskId, status, output, usage]
       properties:
+        providerRequestId:
+          type: string
+          format: uuid
+        attemptGeneration:
+          type: integer
+          minimum: 1
         providerCallId:
           type: string
           format: uuid
@@ -10604,6 +13977,12 @@ components:
         status:
           type: string
           enum: [queued, running, succeeded, failed, cancelled, blocked]
+        executionPlanId:
+          type: string
+          format: uuid
+        renderSegmentId:
+          type: string
+          format: uuid
         output:
           $ref: "#/components/schemas/GatewayVideoOutput"
         usage:
@@ -10630,10 +14009,20 @@ components:
         providerAccountId:
           type: string
           format: uuid
+        idempotencyKey:
+          type: string
+        options:
+          $ref: "#/components/schemas/GatewayVideoOptions"
     GatewayVideoCancelTaskResponse:
       type: object
       required: [status]
       properties:
+        providerRequestId:
+          type: string
+          format: uuid
+        attemptGeneration:
+          type: integer
+          minimum: 1
         providerCallId:
           type: string
           format: uuid
@@ -10645,6 +14034,12 @@ components:
         status:
           type: string
           enum: [cancelled, succeeded, failed, blocked]
+        executionPlanId:
+          type: string
+          format: uuid
+        renderSegmentId:
+          type: string
+          format: uuid
         error:
           $ref: "#/components/schemas/ProviderStandardError"
     GatewayDiscoverModelsRequest:
@@ -10661,10 +14056,20 @@ components:
           type: string
         idempotencyKey:
           type: string
+        retry:
+          type: boolean
+          default: false
+          description: Explicitly starts a new discovery attempt generation after a terminal or unknown outcome.
     GatewayDiscoverModelsResponse:
       type: object
       required: [status, models, unsupported]
       properties:
+        providerRequestId:
+          type: string
+          format: uuid
+        attemptGeneration:
+          type: integer
+          minimum: 1
         providerCallId:
           type: string
           format: uuid
@@ -10681,6 +14086,57 @@ components:
           $ref: "#/components/schemas/ProviderStandardError"
         latencyMs:
           type: integer
+    PromptLengthConstraint:
+      type: object
+      required: [maxLength, unit]
+      properties:
+        maxLength:
+          type: integer
+          minimum: 0
+        unit:
+          type: string
+          enum: [characters, utf8_bytes]
+    GatewayModelConstraintsRequest:
+      type: object
+      required: [organizationId, modelProfileKey, taskType, modality]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        modelProfileKey:
+          type: string
+        taskType:
+          type: string
+        modality:
+          type: string
+          enum: [text, image, video, audio, embedding, multimodal]
+    GatewayModelConstraintCandidate:
+      type: object
+      required: [providerModelId, modelKey, modality, prompt]
+      properties:
+        providerModelId:
+          type: string
+          format: uuid
+        modelKey:
+          type: string
+        modality:
+          type: string
+        prompt:
+          $ref: "#/components/schemas/PromptLengthConstraint"
+    GatewayModelConstraintsResponse:
+      type: object
+      required: [modelProfileKey, taskType, modality, candidates]
+      properties:
+        modelProfileKey:
+          type: string
+        taskType:
+          type: string
+        modality:
+          type: string
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayModelConstraintCandidate"
     GatewayManifestTestRunRequest:
       type: object
       required: [organizationId, userId, request]
@@ -10695,7 +14151,7 @@ components:
           $ref: "#/components/schemas/ManifestTestRunRequest"
     ModelProfileBinding:
       type: object
-      required: [id, modelProfileId, providerModelId, priority, weight, enabled, createdAt]
+      required: [id, modelProfileId, providerModelId, priority, weight, enabled, runtimeOptions, createdAt]
       properties:
         id:
           type: string
@@ -10712,9 +14168,20 @@ components:
           type: integer
         enabled:
           type: boolean
+        runtimeOptions:
+          $ref: "#/components/schemas/ModelProfileBindingRuntimeOptions"
         createdAt:
           type: string
           format: date-time
+    ModelProfileBindingRuntimeOptions:
+      type: object
+      properties:
+        reasoningLevel:
+          type: string
+          minLength: 1
+          description: Default reasoning level for text requests routed through this binding. The value must be declared by the selected model's reasoningLevels capability.
+          example: high
+      additionalProperties: false
     ModelProfile:
       type: object
       required: [id, organizationId, profileKey, name, purpose, routingStrategy, fallbackStrategy, bindings, createdAt, updatedAt]
@@ -10812,13 +14279,41 @@ components:
           minimum: 0
         enabled:
           type: boolean
+        runtimeOptions:
+          $ref: "#/components/schemas/ModelProfileBindingRuntimeOptions"
+    UpdateModelProfileBindingRequest:
+      type: object
+      minProperties: 1
+      properties:
+        priority:
+          type: integer
+          minimum: 0
+          description: Lower values are selected first.
+        weight:
+          type: integer
+          minimum: 0
+          description: Higher values are selected first when priorities are equal, or used as the weighted-routing share.
+        enabled:
+          type: boolean
+        runtimeOptions:
+          $ref: "#/components/schemas/ModelProfileBindingRuntimeOptions"
+      additionalProperties: false
     ProviderCallLog:
       type: object
-      required: [id, organizationId, providerAccountId, taskType, executionMode, status, requestSnapshot, artifactIds, mediaFileIds, createdAt]
+      required: [id, attemptGeneration, attemptSequence, organizationId, providerAccountId, taskType, executionMode, status, requestSnapshot, artifactIds, mediaFileIds, createdAt]
       properties:
         id:
           type: string
           format: uuid
+        providerRequestId:
+          type: string
+          format: uuid
+        attemptGeneration:
+          type: integer
+          minimum: 1
+        attemptSequence:
+          type: integer
+          minimum: 1
         organizationId:
           type: string
           format: uuid
@@ -10860,6 +14355,14 @@ components:
           type: integer
         outputTokens:
           type: integer
+        requestedDurationSeconds:
+          type: number
+          exclusiveMinimum: 0
+        actualDurationSeconds:
+          type: number
+          exclusiveMinimum: 0
+        mediaProbe:
+          $ref: "#/components/schemas/GatewayVideoMediaProbe"
         estimatedCost:
           type: string
         currency:
@@ -11220,6 +14723,34 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/GatewayImageResponse"
+    GatewayTTSEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayTTSResponse"
+    GatewayASREnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayASRResponse"
+    GatewayVideoPlanEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayVideoPlanResponse"
+    GatewayVideoRetrySegmentEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayVideoRetrySegmentResponse"
     GatewayVideoCreateTaskEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -11248,6 +14779,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/GatewayDiscoverModelsResponse"
+    GatewayModelConstraintsEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GatewayModelConstraintsResponse"
     ModelProfileEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -11633,6 +15171,12 @@ components:
           type: string
         visualManual:
           type: string
+        directorManualPromptVersionId:
+          type: string
+          format: uuid
+        visualManualPromptVersionId:
+          type: string
+          format: uuid
         imageModelProfileKey:
           type: string
           default: image_generation_default
@@ -11642,12 +15186,36 @@ components:
         scriptModelProfileKey:
           type: string
           default: script_agent_default
+        ttsModelProfileKey:
+          type: string
+          default: tts_generation_default
+        asrModelProfileKey:
+          type: string
+          default: audio_transcription_default
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+          default: native_av
+        audioRequirement:
+          type: string
+          enum: [preferred, required, disabled]
+          default: preferred
         imageQuality:
           type: string
           default: standard
         productionMode:
           type: string
           default: silent_video
+        timelineTimebase:
+          type: integer
+          format: int64
+          default: 90000
+        fpsNumerator:
+          type: integer
+          default: 24
+        fpsDenominator:
+          type: integer
+          default: 1
         settings:
           type: object
     BindProjectManualRequest:
@@ -11657,6 +15225,41 @@ components:
         promptVersionId:
           type: string
           format: uuid
+    UpsertCharacterVoiceProfileRequest:
+      type: object
+      properties:
+        canonicalAssetId:
+          type: string
+          format: uuid
+        characterName:
+          type: string
+        displayName:
+          type: string
+        language:
+          type: string
+          default: zh-CN
+        modelProfileKey:
+          type: string
+          default: tts_generation_default
+        providerModelId:
+          type: string
+          format: uuid
+        voiceKey:
+          type: string
+        instructions:
+          type: string
+        referenceArtifactId:
+          type: string
+          format: uuid
+        referenceMediaFileId:
+          type: string
+          format: uuid
+        parameters:
+          type: object
+          additionalProperties: true
+        isDefault:
+          type: boolean
+          default: false
     CreateProjectSourceRequest:
       type: object
       required: [sourceType, title, content]
@@ -11815,6 +15418,23 @@ components:
         force:
           type: boolean
           default: false
+    UpdateScriptEpisodeRequest:
+      type: object
+      properties:
+        episodeTitle:
+          type: string
+        content:
+          type: string
+        contentFormat:
+          type: string
+          enum: [plain_text, markdown]
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        staleState:
+          $ref: "#/components/schemas/StaleState"
+        metadata:
+          type: object
+          additionalProperties: true
     ParseScriptScenesResponse:
       type: object
       required: [scriptId, versionId, sceneCount, scenes]
@@ -11895,14 +15515,177 @@ components:
     GenerateScriptStoryboardRequest:
       type: object
       properties:
-        maxShots:
+        scriptEpisodeIds:
+          type: array
+          description: Optional ordered subset of active script episodes. Each episode is a separate durable workflow unit.
+          items:
+            type: string
+            format: uuid
+        pacingProfile:
+          type: string
+          enum: [standard, fast, slow]
+          default: standard
+        targetDurationSeconds:
+          type: number
+          format: double
+          exclusiveMinimum: 0
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+          default: native_av
+        audioRequirement:
+          type: string
+          enum: [preferred, required, disabled]
+          default: preferred
+        plannerBatchMaxShots:
+          type: integer
+          minimum: 8
+          maximum: 16
+          default: 12
+        maxSceneConcurrency:
           type: integer
           minimum: 1
-          maximum: 3
+          maximum: 8
           default: 3
+        shotBudget:
+          type: integer
+          minimum: 0
+          description: Explicit user-locked episode shot budget. Omit or use zero for deterministic automatic sizing.
+        force:
+          type: boolean
+          default: false
         generateDerivedAssets:
           type: boolean
           default: false
+    AnalyzeScriptEpisodeTimingRequest:
+      type: object
+      properties:
+        targetDurationSeconds:
+          type: number
+          format: double
+          exclusiveMinimum: 0
+    AudioMixAdditionalTrack:
+      type: object
+      required: [trackKind, startTick, endTick]
+      properties:
+        trackKind:
+          type: string
+          enum: [ambience, sfx, music, native]
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        startTick:
+          type: integer
+          format: int64
+          minimum: 0
+        endTick:
+          type: integer
+          format: int64
+          minimum: 1
+        trimStartTick:
+          type: integer
+          format: int64
+          minimum: 0
+        trimEndTick:
+          type: integer
+          format: int64
+          minimum: 1
+        gainDb:
+          type: number
+        fadeInTicks:
+          type: integer
+          format: int64
+          minimum: 0
+        fadeOutTicks:
+          type: integer
+          format: int64
+          minimum: 0
+      anyOf:
+        - required: [artifactId]
+        - required: [mediaFileId]
+        - required: [storageKey]
+    ProduceEpisodeAudioRequest:
+      type: object
+      properties:
+        timingAnalysisId:
+          type: string
+          format: uuid
+        defaultVoiceProfileId:
+          type: string
+          format: uuid
+        force:
+          type: boolean
+          default: false
+        maxConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+        mixAfterTts:
+          type: boolean
+          default: true
+        additionalTracks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioMixAdditionalTrack"
+    SplitStoryboardShotRequest:
+      type: object
+      properties:
+        splitTick:
+          type: integer
+          format: int64
+          minimum: 1
+        splitFrame:
+          type: integer
+          format: int64
+          minimum: 1
+        rightTitle:
+          type: string
+      oneOf:
+        - required: [splitTick]
+        - required: [splitFrame]
+    MergeStoryboardShotsRequest:
+      type: object
+      required: [shotIds]
+      properties:
+        shotIds:
+          type: array
+          minItems: 2
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        title:
+          type: string
+        visual:
+          type: string
+        camera:
+          type: string
+        motion:
+          type: string
+        mood:
+          type: string
+    UpdateStoryboardShotTimingRequest:
+      type: object
+      properties:
+        startTick:
+          type: integer
+          format: int64
+          minimum: 0
+        endTick:
+          type: integer
+          format: int64
+          minimum: 1
+        durationFrames:
+          type: integer
+          format: int64
+          minimum: 1
     CreateAgentMessageRequest:
       type: object
       required: [content]
@@ -11950,7 +15733,12 @@ components:
           default: false
     UpdateCanonicalAssetRequest:
       type: object
+      required: [expectedRevision]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         assetType:
           type: string
           enum: [character, scene, prop]
@@ -11976,12 +15764,73 @@ components:
           additionalProperties: true
         status:
           type: string
+          enum: [draft, prompt_ready, image_running, image_succeeded, image_failed, archived]
+    ArchiveCanonicalAssetRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    CreateAssetBatchRequest:
+      type: object
+      required: [operation, assetIds, expectedProjectRevision]
+      properties:
+        operation:
+          type: string
+          enum: [generate_prompts, generate_images]
+        assetIds:
+          type: array
+          minItems: 1
+          maxItems: 500
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        maxConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 16
+          default: 5
+        force:
+          type: boolean
+          default: false
+        expectedProjectRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          maxLength: 200
+    RetryFailedWorkflowRequest:
+      type: object
+      required: [expectedProjectRevision]
+      description: Retry controls shared by asset batches and source-to-script episode workflows. force applies only to asset batches.
+      properties:
+        maxConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 16
+        force:
+          type: boolean
+        expectedProjectRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          maxLength: 200
     GenerateAssetCardRequest:
       type: object
       properties:
         force:
           type: boolean
           default: false
+        visualManualPromptVersionId:
+          type: string
+          format: uuid
+          description: Visual manual snapshot captured when a batch starts. It must have been bound to this project.
     GenerateAssetCardResponse:
       type: object
       required: [assetId, profile, basePrompt, consistencyPrompt, negativePrompt, applied]
@@ -12003,6 +15852,15 @@ components:
         modelId:
           type: string
           format: uuid
+        visualManualPromptVersionId:
+          type: string
+          format: uuid
+        visualManualTemplateKey:
+          type: string
+        visualStyleSlug:
+          type: string
+        assetTypeTemplateKey:
+          type: string
         applied:
           type: boolean
     CreateAssetReferenceUploadUrlRequest:
@@ -12051,6 +15909,18 @@ components:
           type: boolean
         mediaDeleted:
           type: boolean
+    DeleteCanonicalAssetResponse:
+      type: object
+      required: [deleted, mode, assetId]
+      properties:
+        deleted:
+          type: boolean
+        mode:
+          type: string
+          enum: [archive]
+        assetId:
+          type: string
+          format: uuid
     SetPrimaryAssetReferenceResponse:
       type: object
       required: [assetId, reference]
@@ -12094,10 +15964,18 @@ components:
         shotIndex:
           type: integer
           minimum: 0
-        durationSeconds:
-          type: number
-          format: double
+        startTick:
+          type: integer
+          format: int64
           minimum: 0
+        endTick:
+          type: integer
+          format: int64
+          minimum: 1
+        plannedDurationTicks:
+          type: integer
+          format: int64
+          minimum: 1
         visual:
           type: string
         camera:
@@ -12123,6 +16001,9 @@ components:
         shotNo:
           type: integer
           minimum: 1
+        episodeShotIndex:
+          type: integer
+          minimum: 0
     ReorderStoryboardShotsRequest:
       type: object
       required: [items]
@@ -12143,14 +16024,32 @@ components:
           type: string
         mood:
           type: string
-        durationSeconds:
-          type: number
-          format: double
-          minimum: 0
+        plannedDurationTicks:
+          type: integer
+          format: int64
+          minimum: 1
         imagePrompt:
           type: string
         videoPrompt:
           type: string
+        imageReferenceMode:
+          type: string
+          enum: [auto, custom, none]
+        imageReferenceKeys:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+        videoReferenceMode:
+          type: string
+          enum: [auto, custom, none]
+        videoReferenceKeys:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
     UnlinkStoryboardShotMediaRequest:
       type: object
       required: [kind]
@@ -12175,7 +16074,7 @@ components:
         input:
           type: object
           additionalProperties: true
-          description: Optional workflow-specific input. source_to_script, extract_novel_events, and generate_adaptation_plan require sourceId. adaptation_plan_to_script requires planId. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, maxPolls, maxShots, and skipCompose.
+          description: Optional workflow-specific input. source_to_script requires sourceId and may include chapterIds, title, instruction, and maxConcurrency for checkpointed per-episode script generation. extract_novel_events and generate_adaptation_plan require sourceId. adaptation_plan_to_script requires planId. video_production supports duration, aspectRatio, resolution, pollIntervalSeconds, maxPolls, maxShots, maxImageConcurrency, and skipCompose.
           properties:
             sourceId:
               type: string
@@ -12185,6 +16084,12 @@ components:
               format: uuid
             eventIds:
               type: array
+              items:
+                type: string
+                format: uuid
+            scriptEpisodeIds:
+              type: array
+              description: Optional active script episodes for sequential per-episode storyboard generation.
               items:
                 type: string
                 format: uuid
@@ -12199,6 +16104,18 @@ components:
               type: string
             title:
               type: string
+            maxConcurrency:
+              type: integer
+              minimum: 1
+              maximum: 4
+              default: 2
+              description: Bounded source_to_script episode generation concurrency.
+            maxImageConcurrency:
+              type: integer
+              minimum: 1
+              maximum: 16
+              default: 5
+              description: Bounded storyboard image generation concurrency for video_production.
             scriptId:
               type: string
               format: uuid
@@ -12267,9 +16184,31 @@ components:
           type: string
         scriptModelProfileKey:
           type: string
+        ttsModelProfileKey:
+          type: string
+        asrModelProfileKey:
+          type: string
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+        audioRequirement:
+          type: string
+          enum: [preferred, required, disabled]
         imageQuality:
           type: string
         productionMode:
           type: string
+        timelineTimebase:
+          type: integer
+          format: int64
+        fpsNumerator:
+          type: integer
+        fpsDenominator:
+          type: integer
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Optional optimistic concurrency revision. A stale value returns PROJECT_REVISION_CONFLICT.
         settings:
           type: object

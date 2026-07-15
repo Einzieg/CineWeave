@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestDefaultRegistryContainsCoreTools(t *testing.T) {
 	registry, err := DefaultRegistry()
@@ -58,5 +61,36 @@ func TestRegistryDescriptorsAreSorted(t *testing.T) {
 	}
 	if items[0].Name != "asset.list" || items[1].Name != "workflow.start" {
 		t.Fatalf("descriptors not sorted: %#v", items)
+	}
+}
+
+func TestAssetPromptToolsExposeStructuredSchemas(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("default registry: %v", err)
+	}
+	getTool, ok := registry.Get("asset.get")
+	if !ok || getTool.Risk != ToolRiskRead || getTool.RequiresApproval {
+		t.Fatalf("asset.get = %+v", getTool)
+	}
+	reviseTool, ok := registry.Get("asset.revise_prompt")
+	if !ok || reviseTool.Risk != ToolRiskWrite || !reviseTool.RequiresApproval {
+		t.Fatalf("asset.revise_prompt = %+v", reviseTool)
+	}
+	updateTool, ok := registry.Get("asset.update")
+	if !ok {
+		t.Fatal("asset.update is missing")
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(updateTool.InputSchema, &schema); err != nil {
+		t.Fatalf("decode asset.update schema: %v", err)
+	}
+	properties := schema["properties"].(map[string]any)
+	patch := properties["patch"].(map[string]any)
+	patchProperties := patch["properties"].(map[string]any)
+	for _, field := range []string{"basePrompt", "consistencyPrompt", "negativePrompt", "profile"} {
+		if _, exists := patchProperties[field]; !exists {
+			t.Fatalf("asset.update patch schema is missing %s", field)
+		}
 	}
 }

@@ -16,8 +16,18 @@ export function statusLabel(status?: string) {
       return "已归档";
     case "running":
       return "运行中";
+    case "analyzing":
+      return "分析中";
+    case "planning":
+      return "规划中";
+    case "reviewing":
+      return "审核中";
+    case "changes_requested":
+      return "需调整";
     case "processing":
       return "处理中";
+    case "unknown_outcome":
+      return "结果未知";
     case "queued":
       return "排队中";
     case "cancelling":
@@ -50,6 +60,8 @@ export function statusLabel(status?: string) {
       return "需修改";
     case "needs_regeneration":
       return "需重生成";
+    case "source_changed":
+      return "原文已变更";
     case "stale":
       return "已过期";
     case "upstream_changed":
@@ -58,12 +70,46 @@ export function statusLabel(status?: string) {
       return "已跳过";
     case "approved":
       return "已确认";
+    case "passed":
+      return "审核通过";
+    case "manual_override":
+      return "人工通过";
     case "fresh":
       return "最新";
     case "rejected":
       return "已拒绝";
     case "partial":
       return "部分完成";
+    case "partial_succeeded":
+      return "部分完成";
+    case "planned":
+      return "已规划";
+    case "blocked":
+      return "未就绪";
+    case "preview_only":
+      return "仅可预览";
+    case "not_requested":
+      return "未请求音频";
+    case "native_audio_unavailable":
+      return "无可用原生音频";
+    case "audio_unverified":
+      return "音轨待审核";
+    case "audio_verified":
+      return "音频已验证";
+    case "needs_audio_retry":
+      return "音频需重试";
+    case "none":
+      return "不使用参考";
+    case "first_frame":
+      return "首帧参考";
+    case "last_frame":
+      return "尾帧参考";
+    case "video_reference":
+      return "视频参考";
+    case "previous_last_frame":
+      return "前片段尾帧续接";
+    case "extension":
+      return "延长任务";
     case "succeeded":
     case "completed":
       return "已完成";
@@ -182,10 +228,23 @@ export function taskTypeLabel(value?: string) {
       return "图片生成";
     case "video.generate":
       return "视频生成";
+    case "video.text_to_video":
+      return "文生视频";
+    case "video.image_to_video":
+      return "图生视频";
+    case "video.create_task":
+      return "创建视频任务";
     case "video.poll":
+    case "video.poll_task":
       return "视频任务轮询";
+    case "video.cancel_task":
+      return "取消视频任务";
     case "audio.generate":
       return "音频生成";
+    case "audio.tts":
+      return "语音合成";
+    case "audio.transcribe":
+      return "语音识别";
     default:
       return promptCategoryLabel(value);
   }
@@ -295,6 +354,26 @@ export function reviewSeverityLabel(value?: string) {
       return "低";
     default:
       return value || "未知";
+  }
+}
+
+export function reasoningLevelLabel(value?: string) {
+  switch (value?.toLowerCase()) {
+    case "none":
+      return "关闭思考";
+    case "minimal":
+      return "极低";
+    case "low":
+      return "低";
+    case "medium":
+      return "中";
+    case "high":
+      return "高";
+    case "xhigh":
+    case "max":
+      return "最高";
+    default:
+      return value || "供应商默认";
   }
 }
 

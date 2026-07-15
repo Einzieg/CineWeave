@@ -4,11 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 )
+
+func TestWholeSecondVideoRequestDuration(t *testing.T) {
+	for input, want := range map[float64]float64{4: 4, 4.0000000001: 4, 4.25: 5, 10.99: 11} {
+		if got := wholeSecondVideoRequestDuration(input); got != want {
+			t.Fatalf("wholeSecondVideoRequestDuration(%v) = %v, want %v", input, got, want)
+		}
+	}
+}
 
 func TestSelectVideoPromptPriority(t *testing.T) {
 	storyboard := json.RawMessage(`{"shots":[{"videoPrompt":"direct video","imagePrompt":"image prompt","visual":"visual","camera":"pan","motion":"rain","mood":"noir"}]}`)
@@ -31,14 +40,33 @@ func TestSelectVideoPromptPriority(t *testing.T) {
 	}
 }
 
+func TestStoryboardImageSizeForAspectRatio(t *testing.T) {
+	tests := map[string]string{
+		"16:9":    "1536x864",
+		"21:9":    "2016x864",
+		"4 / 3":   "1024x768",
+		"9:16":    "864x1536",
+		"3:4":     "768x1024",
+		"1:1":     "1024x1024",
+		"invalid": "1536x864",
+	}
+	for aspectRatio, expected := range tests {
+		t.Run(aspectRatio, func(t *testing.T) {
+			if actual := storyboardImageSizeForAspectRatio(aspectRatio); actual != expected {
+				t.Fatalf("storyboardImageSizeForAspectRatio(%q) = %q, want %q", aspectRatio, actual, expected)
+			}
+		})
+	}
+}
+
 func TestResolveVideoProductionOptionsDefaultsAndOverrides(t *testing.T) {
 	defaults := resolveVideoProductionOptions(nil)
-	if defaults.Duration != 5 || defaults.AspectRatio != "16:9" || defaults.Resolution != "720p" || defaults.MaxPolls != 120 || defaults.MaxShots != 3 || defaults.SkipCompose || defaults.PollInterval.Seconds() != 5 {
+	if defaults.Duration != 5 || defaults.AspectRatio != "16:9" || defaults.Resolution != "720p" || defaults.MaxPolls != 120 || defaults.MaxShots != 0 || defaults.MaxImageConcurrency != DefaultShotImageConcurrency || defaults.SkipCompose || defaults.PollInterval.Seconds() != 5 {
 		t.Fatalf("defaults = %+v", defaults)
 	}
 
-	overrides := resolveVideoProductionOptions(json.RawMessage(`{"duration":8,"aspectRatio":"9:16","resolution":"1080p","pollIntervalSeconds":2,"maxPolls":3,"maxShots":2,"skipCompose":true}`))
-	if overrides.Duration != 8 || overrides.AspectRatio != "9:16" || overrides.Resolution != "1080p" || overrides.MaxPolls != 3 || overrides.MaxShots != 2 || !overrides.SkipCompose || overrides.PollInterval.Seconds() != 2 {
+	overrides := resolveVideoProductionOptions(json.RawMessage(`{"duration":8,"aspectRatio":"9:16","resolution":"1080p","pollIntervalSeconds":2,"maxPolls":3,"maxShots":2,"maxImageConcurrency":3,"skipCompose":true}`))
+	if overrides.Duration != 8 || overrides.AspectRatio != "9:16" || overrides.Resolution != "1080p" || overrides.MaxPolls != 3 || overrides.MaxShots != 2 || overrides.MaxImageConcurrency != 3 || !overrides.SkipCompose || overrides.PollInterval.Seconds() != 2 {
 		t.Fatalf("overrides = %+v", overrides)
 	}
 }
@@ -61,10 +89,13 @@ func TestBuildVideoProductionOutput(t *testing.T) {
 func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	registerRenderSegmentMediaTestActivity(env)
+	registerShotVideoExecutionGroupsTestActivity(env)
 	var createCalls int
 	var pollCalls int
 	var composeCalls int
 	var completed VideoProductionOutput
+	var observationsMu sync.Mutex
 	shots := []StoryboardShotRecord{
 		{ID: "shot-1", WorkflowRunID: "workflow", ShotIndex: 0, ShotNo: 1, Duration: 5, Visual: "wide station", ImagePrompt: "station image 1", VideoPrompt: "station video 1", Status: "storyboard_ready"},
 		{ID: "shot-2", WorkflowRunID: "workflow", ShotIndex: 1, ShotNo: 2, Duration: 4, Visual: "close-up train", ImagePrompt: "station image 2", VideoPrompt: "station video 2", Status: "storyboard_ready"},
@@ -82,6 +113,15 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, input ListStoryboardShotsInput) ([]StoryboardShotRecord, error) {
 		return shots, nil
 	}, activity.RegisterOptions{Name: "ListStoryboardShots"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input EnsurePreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
+		output := preparedVideoPlanTestOutput(input.ShotID, "plan-"+input.ShotID, "segment-"+input.ShotID, "reviewed "+input.ShotID)
+		output.Plan.CapabilitySnapshotHash = "sha256:capability"
+		output.Segments[0].RequestedDurationSeconds = 5
+		return output, nil
+	}, activity.RegisterOptions{Name: "EnsurePreparedShotVideoPlan"})
+	env.RegisterActivityWithOptions(func(ctx context.Context, input PrepareShotImagePromptInput) (PrepareShotImagePromptOutput, error) {
+		return PrepareShotImagePromptOutput{ShotID: input.ShotID, Prompt: "reviewed image " + input.ShotID, PromptHash: "sha256:image"}, nil
+	}, activity.RegisterOptions{Name: "PrepareShotImagePrompt"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input GenerateShotImageInput) (GenerateShotImageOutput, error) {
 		if input.ShotID == "" || input.WorkflowPrompt == "" {
 			t.Fatalf("image input = %+v", input)
@@ -95,9 +135,15 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 			ProviderCallID:   "image-call-" + input.ShotID,
 		}, nil
 	}, activity.RegisterOptions{Name: "GenerateShotImage"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input PrepareShotVideoPromptInput) (PrepareShotVideoPromptOutput, error) {
+		t.Fatalf("video generation must not call prompt agents: %+v", input)
+		return PrepareShotVideoPromptOutput{}, nil
+	}, activity.RegisterOptions{Name: "PrepareShotVideoPrompt"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input CreateShotVideoTaskInput) (CreateShotVideoTaskOutput, error) {
+		observationsMu.Lock()
 		createCalls++
-		if input.ShotID == "" || input.Duration <= 0 || input.AspectRatio != "16:9" || input.Resolution != "720p" {
+		observationsMu.Unlock()
+		if input.ShotID == "" || input.Duration <= 0 || input.AspectRatio != "16:9" || input.Resolution != "720p" || input.Prompt != "reviewed "+input.ShotID {
 			t.Fatalf("create input = %+v", input)
 		}
 		return CreateShotVideoTaskOutput{
@@ -108,17 +154,22 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 			ExternalTaskID:      "external-task-" + input.ShotID,
 			Status:              "running",
 			ModelID:             "video-model",
+			ExecutionPlanID:     input.ExecutionPlanID,
+			RenderSegmentID:     input.RenderSegmentID,
+			SegmentCount:        input.SegmentCount,
 		}, nil
 	}, activity.RegisterOptions{Name: "CreateShotVideoTask"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input PollShotVideoTaskInput) (PollShotVideoTaskOutput, error) {
+		observationsMu.Lock()
 		pollCalls++
 		pollByTask[input.ProviderAsyncTaskID]++
 		perTaskPoll := pollByTask[input.ProviderAsyncTaskID]
+		observationsMu.Unlock()
 		if input.ProviderAsyncTaskID == "" || input.PollCount != perTaskPoll {
 			t.Fatalf("poll input = %+v", input)
 		}
 		if perTaskPoll == 1 {
-			return PollShotVideoTaskOutput{ProviderCallID: "video-poll-1-" + input.ShotID, ProviderAsyncTaskID: input.ProviderAsyncTaskID, ExternalTaskID: input.ExternalTaskID, Status: "running", PollCount: perTaskPoll}, nil
+			return PollShotVideoTaskOutput{ProviderCallID: "video-poll-1-" + input.ShotID, ProviderAsyncTaskID: input.ProviderAsyncTaskID, ExternalTaskID: input.ExternalTaskID, Status: "running", PollCount: perTaskPoll, ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID, SegmentCount: input.SegmentCount}, nil
 		}
 		return PollShotVideoTaskOutput{
 			ProviderCallID:      "video-poll-2-" + input.ShotID,
@@ -130,10 +181,15 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 			StorageKey:          "video-key-" + input.ShotID,
 			MimeType:            "video/mp4",
 			PollCount:           perTaskPoll,
+			ExecutionPlanID:     input.ExecutionPlanID,
+			RenderSegmentID:     input.RenderSegmentID,
+			SegmentCount:        input.SegmentCount,
 		}, nil
 	}, activity.RegisterOptions{Name: "PollShotVideoTask"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input ComposeFinalVideoInput) (ComposeFinalVideoOutput, error) {
+		observationsMu.Lock()
 		composeCalls++
+		observationsMu.Unlock()
 		if input.WorkflowRunID != "workflow" || input.AspectRatio != "16:9" || input.Resolution != "720p" {
 			t.Fatalf("compose input = %+v", input)
 		}
@@ -147,7 +203,9 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 		}, nil
 	}, activity.RegisterOptions{Name: "ComposeFinalVideo"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input TextToStoryboardInput, output VideoProductionOutput) error {
+		observationsMu.Lock()
 		completed = output
+		observationsMu.Unlock()
 		return nil
 	}, activity.RegisterOptions{Name: "CompleteVideoProductionWorkflow"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input TextToStoryboardInput, nodeRunID, code, message string) error {
@@ -167,14 +225,18 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
 		t.Fatalf("workflow completed=%v error=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
 	}
-	if createCalls != 2 || pollCalls != 4 {
-		t.Fatalf("createCalls=%d pollCalls=%d", createCalls, pollCalls)
+	observationsMu.Lock()
+	gotCreateCalls, gotPollCalls, gotComposeCalls := createCalls, pollCalls, composeCalls
+	gotCompleted := completed
+	observationsMu.Unlock()
+	if gotCreateCalls != 2 || gotPollCalls != 4 {
+		t.Fatalf("createCalls=%d pollCalls=%d", gotCreateCalls, gotPollCalls)
 	}
-	if composeCalls != 1 {
-		t.Fatalf("composeCalls=%d, want 1", composeCalls)
+	if gotComposeCalls != 1 {
+		t.Fatalf("composeCalls=%d, want 1", gotComposeCalls)
 	}
-	if len(completed.Shots) != 2 || completed.Shots[1].VideoArtifactID != "video-artifact-shot-2" || len(completed.ProviderCalls.VideoPolls) != 4 || completed.FinalVideoArtifactID != "final-video-artifact" || completed.FinalVideoMediaFileID != "final-video-media" || completed.FinalVideoStorageKey != "final-video-key.mp4" || completed.TimelineArtifactID != "timeline-artifact" {
-		t.Fatalf("completed output = %+v", completed)
+	if gotCompleted.Status != "succeeded" || len(gotCompleted.Shots) != 2 || gotCompleted.Shots[1].VideoArtifactID != "shot-video-shot-2" || len(gotCompleted.ProviderCalls.VideoPolls) != 4 || gotCompleted.FinalVideoArtifactID != "final-video-artifact" || gotCompleted.FinalVideoMediaFileID != "final-video-media" || gotCompleted.FinalVideoStorageKey != "final-video-key.mp4" || gotCompleted.TimelineArtifactID != "timeline-artifact" {
+		t.Fatalf("completed output = %+v", gotCompleted)
 	}
 }
 

@@ -27,17 +27,20 @@ import {
   ListChecks,
   Save,
   CheckCircle2,
-  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { contentFormatLabel, sourceTypeLabel, statusLabel, targetFormatLabel } from "@/lib/labels";
 import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
 import { useUiStore } from "@/lib/stores/ui-store";
-import type { AdaptationPlan, JsonRecord, NovelChapterSummary, ProjectSource, Script, ScriptScene, ScriptVersion } from "@/lib/types";
+import { isActiveWorkflowStatus } from "@/lib/workflow-status";
+import type { AdaptationPlan, JsonRecord, NovelChapterSummary, ProjectSource, ScriptEpisode, WorkflowRun } from "@/lib/types";
+import { EpisodeAudioPanel } from "@/features/sources/episode-audio-panel";
 
 type ImportSourceType = "novel" | "script" | "brief";
-type SourcesTab = "sources" | "events" | "plans" | "scripts";
+type SourcesTab = "sources" | "scripts";
+type SourcesPageMode = "combined" | "content" | "scripts";
+type SourcesInitialTab = SourcesTab | "events" | "plans";
 
 type SourceEditForm = {
   title: string;
@@ -56,47 +59,34 @@ type AdaptationPlanEditForm = {
   content: string;
 };
 
-type ScriptEditForm = {
-  title: string;
-  status: string;
+type ScriptEpisodeEditForm = {
+  episodeTitle: string;
   contentFormat: string;
   content: string;
-};
-
-type ScriptSceneEditForm = {
-  title: string;
-  summary: string;
-  location: string;
-  timeOfDay: string;
-  atmosphere: string;
-  characters: string;
-  scenes: string;
-  props: string;
-  action: string;
-  dialogue: string;
-  visualGoal: string;
-  emotionalTone: string;
-  conflict: string;
-  outcome: string;
-  content: string;
+  reviewStatus: string;
 };
 
 export function SourcesPage({
   projectId,
   initialTab = "sources",
+  mode = "combined",
 }: {
   projectId: string;
-  initialTab?: SourcesTab;
+  initialTab?: SourcesInitialTab;
   initialSceneId?: string;
+  mode?: SourcesPageMode;
 }) {
-  const [activeTab, setActiveTab] = useState<SourcesTab>(initialTab);
+  const [activeTab, setActiveTab] = useState<SourcesTab>(initialTab === "scripts" ? "scripts" : "sources");
+  const fixedTab = mode === "content" ? "sources" : mode === "scripts" ? "scripts" : null;
+  const visibleTab = fixedTab ?? activeTab;
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [selectedChapterIds, setSelectedChapterIds] = useState<string[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
   const [selectedScriptVersionId, setSelectedScriptVersionId] = useState<string | null>(null);
-  const [selectedScriptSceneId, setSelectedScriptSceneId] = useState<string | null>(null);
+  const [selectedScriptEpisodeId, setSelectedScriptEpisodeId] = useState<string | null>(null);
+  const [scriptEpisodeDialogOpen, setScriptEpisodeDialogOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importTitle, setImportTitle] = useState("");
@@ -109,11 +99,11 @@ export function SourcesPage({
   const [sourceEditForm, setSourceEditForm] = useState<SourceEditForm>(emptySourceEditForm());
   const [sourceToDelete, setSourceToDelete] = useState<ProjectSource | null>(null);
   const [planEditDraft, setPlanEditDraft] = useState<{ planId: string; form: AdaptationPlanEditForm } | null>(null);
-  const [scriptEditDraft, setScriptEditDraft] = useState<{ key: string; form: ScriptEditForm } | null>(null);
-  const [scriptSceneEditDraft, setScriptSceneEditDraft] = useState<{ sceneId: string; form: ScriptSceneEditForm } | null>(null);
+  const [scriptEpisodeEditDraft, setScriptEpisodeEditDraft] = useState<{ episodeId: string; form: ScriptEpisodeEditForm } | null>(null);
   const invalidate = useInvalidateKeys();
   const { open: openAgent, setContext } = useAgentDrawerStore();
   const setActivityOpen = useUiStore((state) => state.setActivityOpen);
+  const generatedScriptFocus = useUiStore((state) => state.latestGeneratedScripts[projectId]);
 
   // 获取原文列表
   const { data: sources = [], isLoading: sourcesLoading } = useApiQuery({
@@ -139,6 +129,13 @@ export function SourcesPage({
   const { data: scripts = [], isLoading: scriptsLoading } = useApiQuery({
     key: qk.scripts(projectId),
     queryFn: (session) => studioApi.listScripts(session, projectId).then(r => r.items || []),
+  });
+  const { data: workflowRuns = [] } = useApiQuery({
+    key: qk.workflowRuns(projectId),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId).then((response) => response.items || []),
+    enabled: visibleTab === "scripts",
+    refetchInterval: (query) =>
+      query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
   });
 
   const { data: chapters = [], isLoading: chaptersLoading } = useApiQuery({
@@ -196,8 +193,12 @@ export function SourcesPage({
   const selectedPlan = selectedPlanDetail ?? selectedPlanSummary;
 
   const selectedScriptSummary = useMemo(
-    () => scripts.find((script) => script.id === selectedScriptId) ?? scripts[0] ?? null,
-    [scripts, selectedScriptId],
+    () =>
+      scripts.find((script) => script.id === selectedScriptId) ??
+      scripts.find((script) => script.id === generatedScriptFocus?.scriptId) ??
+      scripts[0] ??
+      null,
+    [generatedScriptFocus?.scriptId, scripts, selectedScriptId],
   );
   const effectiveScriptId = selectedScriptSummary?.id ?? "";
   const { data: selectedScriptDetail } = useApiQuery({
@@ -206,32 +207,35 @@ export function SourcesPage({
     enabled: !!effectiveScriptId,
   });
   const selectedScript = selectedScriptDetail ?? selectedScriptSummary;
-  const { data: scriptVersions = [], isLoading: scriptVersionsLoading } = useApiQuery({
+  const { data: scriptVersions = [] } = useApiQuery({
     key: qk.scriptVersions(projectId, effectiveScriptId),
     queryFn: (session) => studioApi.listScriptVersions(session, projectId, effectiveScriptId).then((response) => response.items || []),
     enabled: !!effectiveScriptId,
   });
   const selectedScriptVersion = useMemo(
     () =>
+      scriptVersions.find((version) => version.id === generatedScriptFocus?.versionId) ??
       scriptVersions.find((version) => version.id === selectedScriptVersionId) ??
       scriptVersions.find((version) => version.id === selectedScript?.currentVersionId) ??
       selectedScript?.currentVersion ??
       scriptVersions[0] ??
       null,
-    [scriptVersions, selectedScript?.currentVersion, selectedScript?.currentVersionId, selectedScriptVersionId],
+    [generatedScriptFocus?.versionId, scriptVersions, selectedScript?.currentVersion, selectedScript?.currentVersionId, selectedScriptVersionId],
   );
   const effectiveScriptVersionId = selectedScriptVersion?.id ?? "";
-  const { data: scriptScenes = [], isLoading: scriptScenesLoading } = useApiQuery({
-    key: qk.scriptScenes(projectId, effectiveScriptId, effectiveScriptVersionId),
+  const { data: scriptEpisodes = [], isLoading: scriptEpisodesLoading } = useApiQuery({
+    key: qk.scriptEpisodes(projectId, effectiveScriptId, effectiveScriptVersionId),
     queryFn: (session) =>
-      studioApi
-        .listScriptScenes(session, projectId, effectiveScriptId, effectiveScriptVersionId ? { scriptVersionId: effectiveScriptVersionId } : undefined)
-        .then((response) => response.items || []),
+      studioApi.listScriptEpisodes(session, projectId, effectiveScriptId, effectiveScriptVersionId).then((response) => response.items || []),
     enabled: !!effectiveScriptId && !!effectiveScriptVersionId,
   });
-  const selectedScriptScene = useMemo(
-    () => scriptScenes.find((scene) => scene.id === selectedScriptSceneId) ?? scriptScenes[0] ?? null,
-    [scriptScenes, selectedScriptSceneId],
+  const selectedScriptEpisode = useMemo(
+    () => scriptEpisodes.find((episode) => episode.id === selectedScriptEpisodeId) ?? scriptEpisodes[0] ?? null,
+    [scriptEpisodes, selectedScriptEpisodeId],
+  );
+  const latestAssetExtractionError = useMemo(
+    () => workflowRuns.find((run) => workflowRunType(run) === "script_to_assets" && run.status === "failed" && (run.errorCode || run.errorMessage)) ?? null,
+    [workflowRuns],
   );
 
   const planEditForm = useMemo(() => {
@@ -252,41 +256,22 @@ export function SourcesPage({
     setPlanEditDraft({ planId: selectedPlan.id, form });
   };
 
-  const scriptEditKey = selectedScript ? `${selectedScript.id}:${selectedScriptVersion?.id ?? "draft"}` : "";
-  const scriptEditForm = useMemo(() => {
-    if (!selectedScript) {
-      return emptyScriptEditForm();
+  const scriptEpisodeEditForm = useMemo(() => {
+    if (!selectedScriptEpisode) {
+      return emptyScriptEpisodeEditForm();
     }
-    if (scriptEditDraft?.key === scriptEditKey) {
-      return scriptEditDraft.form;
+    if (scriptEpisodeEditDraft?.episodeId === selectedScriptEpisode.id) {
+      return scriptEpisodeEditDraft.form;
     }
-    return scriptToForm(selectedScript, selectedScriptVersion);
-  }, [scriptEditDraft, scriptEditKey, selectedScript, selectedScriptVersion]);
+    return scriptEpisodeToForm(selectedScriptEpisode);
+  }, [scriptEpisodeEditDraft, selectedScriptEpisode]);
 
-  const setScriptEditForm = (form: ScriptEditForm) => {
-    if (!selectedScript) {
-      setScriptEditDraft(null);
+  const setScriptEpisodeEditForm = (form: ScriptEpisodeEditForm) => {
+    if (!selectedScriptEpisode) {
+      setScriptEpisodeEditDraft(null);
       return;
     }
-    setScriptEditDraft({ key: scriptEditKey, form });
-  };
-
-  const scriptSceneEditForm = useMemo(() => {
-    if (!selectedScriptScene) {
-      return emptyScriptSceneEditForm();
-    }
-    if (scriptSceneEditDraft?.sceneId === selectedScriptScene.id) {
-      return scriptSceneEditDraft.form;
-    }
-    return scriptSceneToForm(selectedScriptScene);
-  }, [scriptSceneEditDraft, selectedScriptScene]);
-
-  const setScriptSceneEditForm = (form: ScriptSceneEditForm) => {
-    if (!selectedScriptScene) {
-      setScriptSceneEditDraft(null);
-      return;
-    }
-    setScriptSceneEditDraft({ sceneId: selectedScriptScene.id, form });
+    setScriptEpisodeEditDraft({ episodeId: selectedScriptEpisode.id, form });
   };
 
   // 提取事件
@@ -300,7 +285,7 @@ export function SourcesPage({
       if (payload.chapterIds[0]) {
         setSelectedChapterId(payload.chapterIds[0]);
       }
-      setActiveTab("events");
+      setActiveTab("sources");
       invalidate([
         qk.sources(projectId),
         qk.sourceChapters(projectId, payload.sourceId),
@@ -336,9 +321,8 @@ export function SourcesPage({
 
   // 生成改编计划
   const createPlanMutation = useApiMutation({
-    mutationFn: (session, data: { sourceId: string; title: string; targetFormat: string }) =>
+    mutationFn: (session, data: { sourceId: string; targetFormat: string }) =>
       studioApi.generateAdaptationPlan(session, projectId, data.sourceId, {
-        title: data.title,
         targetFormat: data.targetFormat,
       }),
     onSuccess: (plan) => {
@@ -346,7 +330,7 @@ export function SourcesPage({
       setSelectedPlanId(plan.id);
       setPlanEditDraft({ planId: plan.id, form: adaptationPlanToForm(plan) });
       invalidate([qk.adaptationPlans(projectId)]);
-      setActiveTab("plans");
+      setActiveTab("sources");
     },
     onError: (error) => {
       toast.error("创建失败：" + error.message);
@@ -402,6 +386,7 @@ export function SourcesPage({
         qk.scripts(projectId),
         qk.script(projectId, result.scriptId),
         qk.scriptVersions(projectId, result.scriptId),
+        qk.scriptEpisodes(projectId, result.scriptId, result.versionId),
         qk.adaptationPlans(projectId),
         qk.productionStatus(projectId),
         qk.project(projectId),
@@ -413,170 +398,42 @@ export function SourcesPage({
     },
   });
 
-  const saveScriptMutation = useApiMutation({
-    mutationFn: async (
-      session,
-      data: {
-        script: Script;
-        version: ScriptVersion | null;
-        title: string;
-        status: string;
-        content: string;
-        contentFormat: string;
-      },
-    ) => {
-      const updated = await studioApi.updateScript(session, projectId, data.script.id, {
-        title: data.title,
-        status: data.status,
-      });
-      const currentContent = data.version?.content ?? "";
-      const currentFormat = data.version?.contentFormat ?? "markdown";
-      if (data.content !== currentContent || data.contentFormat !== currentFormat) {
-        const version = await studioApi.createScriptVersion(session, projectId, data.script.id, {
-          content: data.content,
-          contentFormat: data.contentFormat,
-          sourceType: "manual_edit",
-          activate: true,
-        });
-        return { script: updated, version };
-      }
-      return { script: updated, version: null };
-    },
-    onSuccess: ({ script, version }, data) => {
-      toast.success(version ? "剧本已保存为新版本" : "剧本信息已保存");
-      setSelectedScriptId(script.id);
-      const nextVersion = version ?? data.version;
-      if (nextVersion) {
-        setSelectedScriptVersionId(nextVersion.id);
-        setScriptEditDraft({
-          key: `${script.id}:${nextVersion.id}`,
-          form: {
-            title: data.title,
-            status: data.status,
-            contentFormat: data.contentFormat,
-            content: data.content,
-          },
-        });
-      }
+  const analyzeScriptAssetsMutation = useApiMutation({
+    mutationFn: (session, scriptId: string) =>
+      studioApi.analyzeScriptAssets(session, projectId, scriptId, { mergeExisting: true, generateImages: false }),
+    onSuccess: (run) => {
+      toast.success(`资产提取工作流已创建：${run.id.slice(0, 8)}`);
+      setActivityOpen(true);
       invalidate([
-        qk.scripts(projectId),
-        qk.script(projectId, script.id),
-        qk.scriptVersions(projectId, script.id),
-        qk.scriptScenes(projectId, script.id),
+        qk.assets(projectId),
+        qk.workflowRuns(projectId),
         qk.productionStatus(projectId),
         qk.project(projectId),
       ]);
     },
     onError: (error) => {
-      toast.error("保存失败：" + error.message);
+      toast.error("提取失败：" + error.message);
     },
   });
 
-  const activateScriptVersionMutation = useApiMutation({
-    mutationFn: (session, data: { scriptId: string; versionId: string }) =>
-      studioApi.activateScriptVersion(session, projectId, data.scriptId, data.versionId),
-    onSuccess: (script, data) => {
-      toast.success("剧本版本已激活");
-      setSelectedScriptId(script.id);
-      const currentVersion = script.currentVersion ?? null;
-      setSelectedScriptVersionId(currentVersion?.id ?? data.versionId);
-      if (currentVersion) {
-        setScriptEditDraft({
-          key: `${script.id}:${currentVersion.id}`,
-          form: scriptToForm(script, currentVersion),
-        });
-      }
+  const updateScriptEpisodeMutation = useApiMutation({
+    mutationFn: (session, data: { episodeId: string; body: JsonRecord }) =>
+      studioApi.updateScriptEpisode(session, projectId, data.episodeId, data.body),
+    onSuccess: (episode) => {
+      toast.success("分集已保存");
+      setSelectedScriptEpisodeId(episode.id);
+      setScriptEpisodeEditDraft({ episodeId: episode.id, form: scriptEpisodeToForm(episode) });
       invalidate([
-        qk.scripts(projectId),
-        qk.script(projectId, script.id),
-        qk.scriptVersions(projectId, script.id),
+        qk.scriptEpisodes(projectId, episode.scriptId, episode.scriptVersionId),
+        qk.scriptVersions(projectId, episode.scriptId),
+        qk.script(projectId, episode.scriptId),
+        qk.scriptScenes(projectId, episode.scriptId, episode.scriptVersionId),
         qk.productionStatus(projectId),
         qk.project(projectId),
       ]);
     },
     onError: (error) => {
-      toast.error("激活失败：" + error.message);
-    },
-  });
-
-  const deleteScriptVersionMutation = useApiMutation({
-    mutationFn: (session, data: { scriptId: string; versionId: string }) =>
-      studioApi.deleteScriptVersion(session, projectId, data.scriptId, data.versionId),
-    onSuccess: (_result, data) => {
-      toast.success("剧本版本已归档");
-      if (selectedScriptVersionId === data.versionId) {
-        setSelectedScriptVersionId(null);
-      }
-      setSelectedScriptSceneId(null);
-      setScriptSceneEditDraft(null);
-      invalidate([
-        qk.scripts(projectId),
-        qk.script(projectId, data.scriptId),
-        qk.scriptVersions(projectId, data.scriptId),
-        qk.scriptScenes(projectId, data.scriptId),
-        qk.productionStatus(projectId),
-        qk.project(projectId),
-      ]);
-    },
-    onError: (error) => {
-      toast.error("归档失败：" + error.message);
-    },
-  });
-
-  const parseScriptScenesMutation = useApiMutation({
-    mutationFn: (session, data: { scriptId: string; versionId: string; force?: boolean }) =>
-      studioApi.parseScriptScenes(session, projectId, data.scriptId, data.versionId, { force: data.force === true }),
-    onSuccess: (result) => {
-      toast.success(`已解析 ${result.sceneCount} 个场景`);
-      setSelectedScriptSceneId(result.scenes[0]?.id ?? null);
-      setScriptSceneEditDraft(null);
-      invalidate([
-        qk.scriptScenes(projectId, result.scriptId, result.versionId),
-        qk.scripts(projectId),
-        qk.script(projectId, result.scriptId),
-        qk.productionStatus(projectId),
-        qk.project(projectId),
-      ]);
-    },
-    onError: (error) => {
-      toast.error("解析失败：" + error.message);
-    },
-  });
-
-  const updateScriptSceneMutation = useApiMutation({
-    mutationFn: (session, data: { sceneId: string; body: JsonRecord }) =>
-      studioApi.updateScriptScene(session, projectId, data.sceneId, data.body),
-    onSuccess: (scene) => {
-      toast.success("场景已保存");
-      setSelectedScriptSceneId(scene.id);
-      setScriptSceneEditDraft({ sceneId: scene.id, form: scriptSceneToForm(scene) });
-      invalidate([
-        qk.scriptScenes(projectId, scene.scriptId, scene.scriptVersionId),
-        qk.productionStatus(projectId),
-        qk.project(projectId),
-      ]);
-    },
-    onError: (error) => {
-      toast.error("保存场景失败：" + error.message);
-    },
-  });
-
-  const deleteScriptSceneMutation = useApiMutation({
-    mutationFn: (session, scene: ScriptScene) => studioApi.deleteScriptScene(session, projectId, scene.id).then((result) => ({ result, scene })),
-    onSuccess: ({ scene }) => {
-      toast.success("场景已归档");
-      if (selectedScriptSceneId === scene.id) {
-        setSelectedScriptSceneId(null);
-      }
-      setScriptSceneEditDraft(null);
-      invalidate([
-        qk.scriptScenes(projectId, scene.scriptId, scene.scriptVersionId),
-        qk.productionStatus(projectId),
-        qk.project(projectId),
-      ]);
-    },
-    onError: (error) => {
-      toast.error("归档场景失败：" + error.message);
+      toast.error("保存分集失败：" + error.message);
     },
   });
 
@@ -794,115 +651,48 @@ export function SourcesPage({
     generateScriptMutation.mutate(selectedPlan.id);
   };
 
-  const handleSelectScript = (script: Script) => {
-    setSelectedScriptId(script.id);
+  const handleSelectScript = (scriptId: string) => {
+    setSelectedScriptId(scriptId);
     setSelectedScriptVersionId(null);
-    setSelectedScriptSceneId(null);
-    setScriptSceneEditDraft(null);
+    setSelectedScriptEpisodeId(null);
+    setScriptEpisodeEditDraft(null);
   };
 
-  const handleSelectScriptVersion = (version: ScriptVersion) => {
-    setSelectedScriptVersionId(version.id);
-    setSelectedScriptSceneId(null);
-    setScriptSceneEditDraft(null);
-    if (selectedScript) {
-      setScriptEditDraft({
-        key: `${selectedScript.id}:${version.id}`,
-        form: {
-          title: selectedScript.title ?? "",
-          status: selectedScript.status ?? "draft",
-          contentFormat: version.contentFormat || "markdown",
-          content: version.content || "",
-        },
-      });
-    }
-  };
-
-  const handleSaveScript = () => {
+  const handleAnalyzeAssetsFromSelectedScript = () => {
     if (!selectedScript) {
       toast.error("请先选择剧本");
       return;
     }
-    const title = scriptEditForm.title.trim();
+    analyzeScriptAssetsMutation.mutate(selectedScript.id);
+  };
+
+  const handleSelectScriptEpisode = (episode: ScriptEpisode) => {
+    setSelectedScriptEpisodeId(episode.id);
+    setScriptEpisodeEditDraft({ episodeId: episode.id, form: scriptEpisodeToForm(episode) });
+    setScriptEpisodeDialogOpen(true);
+  };
+
+  const handleSaveScriptEpisode = () => {
+    if (!selectedScriptEpisode) {
+      toast.error("请先选择剧本分集");
+      return;
+    }
+    const title = scriptEpisodeEditForm.episodeTitle.trim();
     if (!title) {
-      toast.error("请填写剧本名称");
+      toast.error("请填写分集标题");
       return;
     }
-    if (!scriptEditForm.content.trim()) {
-      toast.error("请填写剧本内容");
+    if (!scriptEpisodeEditForm.content.trim()) {
+      toast.error("请填写分集内容");
       return;
     }
-    saveScriptMutation.mutate({
-      script: selectedScript,
-      version: selectedScriptVersion,
-      title,
-      status: scriptEditForm.status || "draft",
-      content: scriptEditForm.content,
-      contentFormat: scriptEditForm.contentFormat || "markdown",
-    });
-  };
-
-  const handleActivateScriptVersion = (version: ScriptVersion) => {
-    if (!selectedScript) {
-      toast.error("请先选择剧本");
-      return;
-    }
-    activateScriptVersionMutation.mutate({ scriptId: selectedScript.id, versionId: version.id });
-  };
-
-  const handleDeleteScriptVersion = (version: ScriptVersion) => {
-    if (!selectedScript) {
-      toast.error("请先选择剧本");
-      return;
-    }
-    if (version.id === selectedScript.currentVersionId) {
-      toast.error("当前版本不能归档");
-      return;
-    }
-    deleteScriptVersionMutation.mutate({ scriptId: selectedScript.id, versionId: version.id });
-  };
-
-  const handleParseScriptScenes = (force: boolean) => {
-    if (!selectedScript || !selectedScriptVersion) {
-      toast.error("请先选择剧本版本");
-      return;
-    }
-    parseScriptScenesMutation.mutate({ scriptId: selectedScript.id, versionId: selectedScriptVersion.id, force });
-  };
-
-  const handleSelectScriptScene = (scene: ScriptScene) => {
-    setSelectedScriptSceneId(scene.id);
-    setScriptSceneEditDraft({ sceneId: scene.id, form: scriptSceneToForm(scene) });
-  };
-
-  const handleSaveScriptScene = () => {
-    if (!selectedScriptScene) {
-      toast.error("请先选择场景");
-      return;
-    }
-    const title = scriptSceneEditForm.title.trim();
-    if (!title) {
-      toast.error("请填写场景标题");
-      return;
-    }
-    updateScriptSceneMutation.mutate({
-      sceneId: selectedScriptScene.id,
+    updateScriptEpisodeMutation.mutate({
+      episodeId: selectedScriptEpisode.id,
       body: {
-        title,
-        summary: scriptSceneEditForm.summary,
-        location: scriptSceneEditForm.location,
-        timeOfDay: scriptSceneEditForm.timeOfDay,
-        atmosphere: scriptSceneEditForm.atmosphere,
-        characters: listFromTextarea(scriptSceneEditForm.characters),
-        scenes: listFromTextarea(scriptSceneEditForm.scenes),
-        props: listFromTextarea(scriptSceneEditForm.props),
-        action: scriptSceneEditForm.action,
-        dialogue: scriptSceneEditForm.dialogue,
-        visualGoal: scriptSceneEditForm.visualGoal,
-        emotionalTone: scriptSceneEditForm.emotionalTone,
-        conflict: scriptSceneEditForm.conflict,
-        outcome: scriptSceneEditForm.outcome,
-        content: scriptSceneEditForm.content,
+        episodeTitle: title,
+        content: scriptEpisodeEditForm.content,
+        contentFormat: scriptEpisodeEditForm.contentFormat || "markdown",
+        reviewStatus: scriptEpisodeEditForm.reviewStatus || "pending",
       },
     });
   };
@@ -919,29 +709,31 @@ export function SourcesPage({
   return (
     <Surface>
       <SectionTitle
-        title={activeTab === "scripts" ? "剧本" : "内容"}
-        description={activeTab === "scripts" ? "查看、编辑、激活剧本版本" : "添加小说原文、剧本或创意文案并管理分集"}
+        title={visibleTab === "scripts" ? "剧本" : "内容"}
+        description={visibleTab === "scripts" ? "查看、编辑、激活剧本版本" : "添加小说原文、剧本或创意文案并管理分集"}
       />
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SourcesTab)} className="p-4">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="sources">
-            原文管理
-            <Badge variant="secondary" className="ml-2">{sources.length}</Badge>
-          </TabsTrigger>
-          <TabsTrigger value="events">
-            小说事件
-            <Badge variant="secondary" className="ml-2">{events.length}</Badge>
-          </TabsTrigger>
-          <TabsTrigger value="plans">
-            改编计划
-            <Badge variant="secondary" className="ml-2">{plans.length}</Badge>
-          </TabsTrigger>
-          <TabsTrigger value="scripts">
-            剧本列表
-            <Badge variant="secondary" className="ml-2">{scripts.length}</Badge>
-          </TabsTrigger>
-        </TabsList>
+      <Tabs
+        value={visibleTab}
+        onValueChange={(value) => {
+          if (mode === "combined") {
+            setActiveTab(value as SourcesTab);
+          }
+        }}
+        className="p-4"
+      >
+        {mode === "combined" ? (
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="sources">
+              内容
+              <Badge variant="secondary" className="ml-2">{sources.length}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="scripts">
+              剧本
+              <Badge variant="secondary" className="ml-2">{scripts.length}</Badge>
+            </TabsTrigger>
+          </TabsList>
+        ) : null}
 
         {/* 原文管理 */}
         <TabsContent value="sources" className="space-y-4">
@@ -1326,7 +1118,7 @@ export function SourcesPage({
                         ))}
                       </div>
 
-                      <div className="grid content-start gap-3 rounded-lg border p-4">
+                      <div className="grid max-h-[680px] content-start gap-3 overflow-y-auto rounded-lg border p-4">
                         {selectedChapter ? (
                           <>
                             <div>
@@ -1357,6 +1149,26 @@ export function SourcesPage({
                         )}
                       </div>
                     </div>
+                    <SourceAdvancedDetails
+                      selectedSource={selectedSource}
+                      selectedChapter={selectedChapter}
+                      events={events}
+                      plans={plans}
+                      selectedPlan={selectedPlan}
+                      planEditForm={planEditForm}
+                      onPlanFormChange={setPlanEditForm}
+                      onSelectPlan={handleSelectPlan}
+                      onExtractCurrentChapter={extractCurrentChapter}
+                      onCreatePlan={() => createPlanMutation.mutate({ sourceId: effectiveSourceId, targetFormat: "short_video" })}
+                      onGenerateScript={handleGenerateScriptFromSelectedPlan}
+                      onActivatePlan={handleActivatePlan}
+                      onSavePlan={handleSavePlan}
+                      isExtracting={extractEventsMutation.isPending}
+                      isCreatingPlan={createPlanMutation.isPending}
+                      isGeneratingScript={generateScriptMutation.isPending}
+                      isActivatingPlan={activatePlanMutation.isPending}
+                      isSavingPlan={updatePlanMutation.isPending}
+                    />
                   </>
                 )}
               </div>
@@ -1432,7 +1244,6 @@ export function SourcesPage({
                 }
                 createPlanMutation.mutate({
                   sourceId: effectiveSourceId,
-                  title: "新改编计划",
                   targetFormat: "short_video",
                 });
               }}
@@ -1595,13 +1406,6 @@ export function SourcesPage({
 
         {/* 剧本列表 */}
         <TabsContent value="scripts" className="space-y-4">
-          <div className="flex justify-end gap-2">
-            <Button size="sm" onClick={handleUseAgent}>
-              <Wand2 className="h-4 w-4 mr-2" />
-              使用助手改写
-            </Button>
-          </div>
-
           {scriptsLoading && <Skeleton className="h-32" />}
 
           {!scriptsLoading && scripts.length === 0 && (
@@ -1613,356 +1417,191 @@ export function SourcesPage({
           )}
 
           {scripts.length > 0 && (
-            <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-              <div className="grid content-start gap-3">
-                {scripts.map((script) => (
-                  <button
-                    key={script.id}
-                    type="button"
-                    onClick={() => handleSelectScript(script)}
-                    className={cn(
-                      "flex items-start gap-3 rounded-lg border p-4 text-left transition hover:bg-muted/50",
-                      selectedScript?.id === script.id && "bg-muted/50 ring-2 ring-primary",
-                    )}
-                  >
-                    <FileText className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">{script.title}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        当前版本 {script.currentVersionId?.slice(0, 8) || "未设置"}
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <StatusBadge status={script.status} />
-                        {script.updatedAt ? <Badge variant="outline">{formatDateTime(script.updatedAt)}</Badge> : null}
-                      </div>
-                    </div>
-                  </button>
-                ))}
+            <div className="grid gap-4">
+              <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-background p-4">
+                <div className="min-w-64 flex-1">
+                  <Label className="mb-2 block">当前剧本</Label>
+                  <Select value={selectedScript?.id ?? ""} onValueChange={handleSelectScript}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="选择剧本" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {scripts.map((script) => (
+                        <SelectItem key={script.id} value={script.id}>
+                          {script.title}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    {selectedScriptVersion ? `版本 ${selectedScriptVersion.version}` : "未选择版本"}
+                    {scriptEpisodes.length ? ` · ${scriptEpisodes.length} 集` : ""}
+                  </div>
+                </div>
+                <Button variant="outline" onClick={handleUseAgent}>
+                  <Wand2 className="h-4 w-4" />
+                  使用助手
+                </Button>
+                <Button onClick={handleAnalyzeAssetsFromSelectedScript} disabled={!selectedScript || analyzeScriptAssetsMutation.isPending}>
+                  <Wand2 className="h-4 w-4" />
+                  提取资产
+                </Button>
               </div>
 
-              <div className="grid content-start gap-4 rounded-lg border p-4">
+              {latestAssetExtractionError ? (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="destructive">提取失败</Badge>
+                    <span className="text-sm font-medium">{latestAssetExtractionError.errorCode || "ASSET_EXTRACTION_FAILED"}</span>
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground">{latestAssetExtractionError.errorMessage || "资产提取未完成，请重新提取或检查供应商调用日志。"}</p>
+                </div>
+              ) : null}
+
                 {selectedScript ? (
                   <>
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm text-muted-foreground">剧本详情</div>
-                        <h3 className="mt-1 text-lg font-semibold">{selectedScript.title}</h3>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <StatusBadge status={selectedScript.status} />
-                        {selectedScriptVersion ? <Badge variant="outline">版本 {selectedScriptVersion.version}</Badge> : null}
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div className="grid gap-2 md:col-span-2">
-                        <Label htmlFor="script-title">剧本名称</Label>
-                        <Input
-                          id="script-title"
-                          value={scriptEditForm.title}
-                          onChange={(event) => setScriptEditForm({ ...scriptEditForm, title: event.target.value })}
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label>状态</Label>
-                        <Select
-                          value={scriptEditForm.status}
-                          onValueChange={(value) => setScriptEditForm({ ...scriptEditForm, status: value })}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="draft">草稿</SelectItem>
-                            <SelectItem value="active">启用</SelectItem>
-                            <SelectItem value="archived">归档</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid gap-2">
-                        <Label>正文格式</Label>
-                        <Select
-                          value={scriptEditForm.contentFormat}
-                          onValueChange={(value) => setScriptEditForm({ ...scriptEditForm, contentFormat: value })}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="plain_text">纯文本</SelectItem>
-                            <SelectItem value="markdown">Markdown</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label htmlFor="script-content">剧本正文</Label>
-                      <Textarea
-                        id="script-content"
-                        className="min-h-[520px] font-mono text-sm leading-6"
-                        value={scriptEditForm.content}
-                        onChange={(event) => setScriptEditForm({ ...scriptEditForm, content: event.target.value })}
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <Button variant="outline" onClick={handleUseAgent}>
-                        <Wand2 className="h-4 w-4" />
-                        使用助手改写
-                      </Button>
-                      <Button onClick={handleSaveScript} disabled={saveScriptMutation.isPending}>
-                        <Save className="h-4 w-4" />
-                        保存剧本
-                      </Button>
-                    </div>
-
-                    <div className="grid gap-2 border-t pt-4">
-                      <div className="text-sm font-medium">版本记录</div>
-                      {scriptVersionsLoading ? <Skeleton className="h-24" /> : null}
-                      {!scriptVersionsLoading && scriptVersions.length === 0 ? (
-                        <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">暂无版本</div>
-                      ) : null}
-                      <div className="grid gap-2">
-                        {scriptVersions.map((version) => {
-                          const active = version.id === selectedScript.currentVersionId;
-                          const selected = version.id === selectedScriptVersion?.id;
-                          return (
-                            <div
-                              key={version.id}
-                              className={cn(
-                                "flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3",
-                                selected && "bg-muted/50 ring-1 ring-primary",
-                              )}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => handleSelectScriptVersion(version)}
-                                className="min-w-0 flex-1 text-left"
-                              >
-                                <div className="font-medium">版本 {version.version}</div>
-                                <div className="mt-1 text-xs text-muted-foreground">
-                                  {contentFormatLabel(version.contentFormat)} · {version.createdAt ? formatDateTime(version.createdAt) : "未记录时间"}
-                                </div>
-                              </button>
-                              <div className="flex items-center gap-2">
-                                {active ? <Badge>当前</Badge> : null}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleSelectScriptVersion(version)}
-                                >
-                                  查看
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleActivateScriptVersion(version)}
-                                  disabled={active || activateScriptVersionMutation.isPending}
-                                >
-                                  设为当前
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => handleDeleteScriptVersion(version)}
-                                  disabled={active || deleteScriptVersionMutation.isPending}
-                                >
-                                  归档
-                                </Button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 border-t pt-4">
+                    <div className="grid gap-3 rounded-lg border p-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <div className="text-sm font-medium">场景结构</div>
+                          <div className="text-sm font-medium">剧本分集</div>
                           <div className="text-xs text-muted-foreground">
                             {selectedScriptVersion ? `版本 ${selectedScriptVersion.version}` : "未选择版本"}
                           </div>
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleParseScriptScenes(false)}
-                            disabled={!selectedScriptVersion || parseScriptScenesMutation.isPending}
-                          >
-                            <ListChecks className="h-4 w-4" />
-                            解析场景
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleParseScriptScenes(true)}
-                            disabled={!selectedScriptVersion || parseScriptScenesMutation.isPending}
-                          >
-                            <RefreshCw className="h-4 w-4" />
-                            重新解析
-                          </Button>
-                        </div>
+                        <Badge variant="outline">{scriptEpisodes.length} 集</Badge>
                       </div>
 
-                      {scriptScenesLoading ? <Skeleton className="h-24" /> : null}
-                      {!scriptScenesLoading && scriptScenes.length === 0 ? (
-                        <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">暂无场景</div>
+                      {scriptEpisodesLoading ? <Skeleton className="h-24" /> : null}
+                      {!scriptEpisodesLoading && scriptEpisodes.length === 0 ? (
+                        <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">暂无分集</div>
                       ) : null}
 
-                      {scriptScenes.length > 0 ? (
-                        <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-                          <div className="grid content-start gap-2">
-                            {scriptScenes.map((scene) => (
-                              <button
-                                key={scene.id}
-                                type="button"
-                                onClick={() => handleSelectScriptScene(scene)}
-                                className={cn(
-                                  "rounded-lg border p-3 text-left transition hover:bg-muted/50",
-                                  selectedScriptScene?.id === scene.id && "bg-muted/50 ring-1 ring-primary",
-                                )}
-                              >
-                                <div className="font-medium">场景 {scene.sceneNo}</div>
-                                <div className="mt-1 line-clamp-2 text-sm">{scene.title}</div>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  <StatusBadge status={scene.reviewStatus} />
-                                  {scene.staleState ? <Badge variant="outline">{statusLabel(scene.staleState)}</Badge> : null}
+                      {scriptEpisodes.length > 0 ? (
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                          {scriptEpisodes.map((episode) => (
+                            <button
+                              key={episode.id}
+                              type="button"
+                              onClick={() => handleSelectScriptEpisode(episode)}
+                              className={cn(
+                                "grid min-h-44 content-between gap-3 rounded-lg border p-4 text-left transition hover:bg-muted/50",
+                                selectedScriptEpisode?.id === episode.id && "bg-muted/50 ring-1 ring-primary",
+                              )}
+                            >
+                              <div className="grid gap-2">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-medium">{scriptEpisodeOrdinalLabel(episode)}</div>
+                                    <div className="mt-1 line-clamp-2 text-base font-semibold">{episode.episodeTitle}</div>
+                                  </div>
+                                  <StatusBadge status={episode.reviewStatus} />
                                 </div>
-                              </button>
-                            ))}
-                          </div>
-
-                          {selectedScriptScene ? (
-                            <div className="grid gap-3 rounded-lg border p-4">
-                              <div className="flex flex-wrap items-start justify-between gap-3">
-                                <div>
-                                  <div className="text-sm text-muted-foreground">场景 {selectedScriptScene.sceneNo}</div>
-                                  <div className="font-medium">{selectedScriptScene.title}</div>
-                                </div>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => deleteScriptSceneMutation.mutate(selectedScriptScene)}
-                                  disabled={deleteScriptSceneMutation.isPending}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                  归档
-                                </Button>
+                                <p className="line-clamp-4 text-sm leading-6 text-muted-foreground">{scriptEpisodePreview(episode.content)}</p>
                               </div>
-
-                              <div className="grid gap-3 md:grid-cols-2">
-                                <div className="grid gap-2 md:col-span-2">
-                                  <Label>标题</Label>
-                                  <Input
-                                    value={scriptSceneEditForm.title}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, title: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2 md:col-span-2">
-                                  <Label>摘要</Label>
-                                  <Textarea
-                                    className="min-h-20"
-                                    value={scriptSceneEditForm.summary}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, summary: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2">
-                                  <Label>地点</Label>
-                                  <Input
-                                    value={scriptSceneEditForm.location}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, location: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2">
-                                  <Label>时间</Label>
-                                  <Input
-                                    value={scriptSceneEditForm.timeOfDay}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, timeOfDay: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2">
-                                  <Label>人物</Label>
-                                  <Textarea
-                                    className="min-h-20"
-                                    value={scriptSceneEditForm.characters}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, characters: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2">
-                                  <Label>场景资产</Label>
-                                  <Textarea
-                                    className="min-h-20"
-                                    value={scriptSceneEditForm.scenes}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, scenes: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2">
-                                  <Label>道具</Label>
-                                  <Textarea
-                                    className="min-h-20"
-                                    value={scriptSceneEditForm.props}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, props: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2">
-                                  <Label>氛围</Label>
-                                  <Input
-                                    value={scriptSceneEditForm.atmosphere}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, atmosphere: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2 md:col-span-2">
-                                  <Label>动作</Label>
-                                  <Textarea
-                                    className="min-h-24"
-                                    value={scriptSceneEditForm.action}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, action: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2 md:col-span-2">
-                                  <Label>对白</Label>
-                                  <Textarea
-                                    className="min-h-24"
-                                    value={scriptSceneEditForm.dialogue}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, dialogue: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2 md:col-span-2">
-                                  <Label>视觉目标</Label>
-                                  <Textarea
-                                    className="min-h-20"
-                                    value={scriptSceneEditForm.visualGoal}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, visualGoal: event.target.value })}
-                                  />
-                                </div>
-                                <div className="grid gap-2 md:col-span-2">
-                                  <Label>正文</Label>
-                                  <Textarea
-                                    className="min-h-32 font-mono text-sm"
-                                    value={scriptSceneEditForm.content}
-                                    onChange={(event) => setScriptSceneEditForm({ ...scriptSceneEditForm, content: event.target.value })}
-                                  />
-                                </div>
+                              <div className="flex flex-wrap gap-2">
+                                {episode.staleState ? <Badge variant="outline">{statusLabel(episode.staleState)}</Badge> : null}
+                                {episode.updatedAt ? <Badge variant="outline">{formatDateTime(episode.updatedAt)}</Badge> : null}
                               </div>
-                              <div className="flex justify-end">
-                                <Button onClick={handleSaveScriptScene} disabled={updateScriptSceneMutation.isPending}>
-                                  <Save className="h-4 w-4" />
-                                  保存场景
-                                </Button>
-                              </div>
-                            </div>
-                          ) : null}
+                            </button>
+                          ))}
                         </div>
                       ) : null}
                     </div>
+
+                    <Dialog
+                      open={scriptEpisodeDialogOpen && !!selectedScriptEpisode}
+                      onOpenChange={(open) => {
+                        setScriptEpisodeDialogOpen(open);
+                        if (!open) {
+                          setScriptEpisodeEditDraft(null);
+                        }
+                      }}
+                    >
+                      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-4xl">
+                        <DialogHeader>
+                          <DialogTitle>剧本分集</DialogTitle>
+                        </DialogHeader>
+                        {selectedScriptEpisode ? (
+                          <div className="grid gap-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm text-muted-foreground">{scriptEpisodeOrdinalLabel(selectedScriptEpisode)}</div>
+                                <div className="mt-1 text-lg font-semibold">{selectedScriptEpisode.episodeTitle}</div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <StatusBadge status={selectedScriptEpisode.reviewStatus} />
+                                {selectedScriptEpisode.staleState ? <Badge variant="outline">{statusLabel(selectedScriptEpisode.staleState)}</Badge> : null}
+                              </div>
+                            </div>
+
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div className="grid gap-2 md:col-span-2">
+                                <Label>分集标题</Label>
+                                <Input
+                                  value={scriptEpisodeEditForm.episodeTitle}
+                                  onChange={(event) => setScriptEpisodeEditForm({ ...scriptEpisodeEditForm, episodeTitle: event.target.value })}
+                                />
+                              </div>
+                              <div className="grid gap-2">
+                                <Label>正文格式</Label>
+                                <Select
+                                  value={scriptEpisodeEditForm.contentFormat}
+                                  onValueChange={(value) => setScriptEpisodeEditForm({ ...scriptEpisodeEditForm, contentFormat: value })}
+                                >
+                                  <SelectTrigger className="w-full">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="plain_text">纯文本</SelectItem>
+                                    <SelectItem value="markdown">Markdown</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="grid gap-2">
+                                <Label>审核状态</Label>
+                                <Select
+                                  value={scriptEpisodeEditForm.reviewStatus}
+                                  onValueChange={(value) => setScriptEpisodeEditForm({ ...scriptEpisodeEditForm, reviewStatus: value })}
+                                >
+                                  <SelectTrigger className="w-full">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="pending">待审核</SelectItem>
+                                    <SelectItem value="approved">已确认</SelectItem>
+                                    <SelectItem value="needs_edit">需修改</SelectItem>
+                                    <SelectItem value="rejected">已驳回</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="grid gap-2 md:col-span-2">
+                                <Label>分集正文</Label>
+                                <Textarea
+                                  className="min-h-[52vh] font-mono text-sm leading-6"
+                                  value={scriptEpisodeEditForm.content}
+                                  onChange={(event) => setScriptEpisodeEditForm({ ...scriptEpisodeEditForm, content: event.target.value })}
+                                />
+                              </div>
+                            </div>
+                            <EpisodeAudioPanel projectId={projectId} episodeId={selectedScriptEpisode.id} />
+                          </div>
+                        ) : null}
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => setScriptEpisodeDialogOpen(false)} type="button">
+                            关闭
+                          </Button>
+                          <Button onClick={handleSaveScriptEpisode} disabled={!selectedScriptEpisode || updateScriptEpisodeMutation.isPending} type="button">
+                            <Save className="h-4 w-4" />
+                            保存分集
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+
                   </>
                 ) : (
                   <div className="py-16 text-center text-sm text-muted-foreground">请选择剧本</div>
                 )}
-              </div>
             </div>
           )}
         </TabsContent>
@@ -2004,6 +1643,20 @@ function chapterOrdinalLabel(chapter: NovelChapterSummary) {
   return parts.join(" / ");
 }
 
+function scriptEpisodeOrdinalLabel(episode: ScriptEpisode) {
+  const parts: string[] = [];
+  if (typeof episode.volumeIndex === "number" && episode.volumeIndex > 0) {
+    parts.push(`第 ${episode.volumeIndex} 卷`);
+  }
+  if (typeof episode.sectionIndex === "number" && episode.sectionIndex > 0) {
+    parts.push(`第 ${episode.sectionIndex} 节`);
+  }
+  if (parts.length === 0) {
+    parts.push(`第 ${episode.episodeIndex} 集`);
+  }
+  return parts.join(" / ");
+}
+
 function formatContentLength(value: number) {
   if (value >= 10000) {
     return `${(value / 10000).toFixed(value >= 100000 ? 0 : 1)} 万字`;
@@ -2021,6 +1674,203 @@ function chapterPreview(content: string) {
     return trimmed;
   }
   return `${trimmed.slice(0, maxLength)}...`;
+}
+
+function scriptEpisodePreview(content: string) {
+  const trimmed = content.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return "暂无正文";
+  }
+  const maxLength = 180;
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, maxLength)}...`;
+}
+
+function workflowRunType(run: WorkflowRun) {
+  const value = run.input?.workflowType;
+  return typeof value === "string" ? value : "";
+}
+
+function SourceAdvancedDetails({
+  selectedSource,
+  selectedChapter,
+  events,
+  plans,
+  selectedPlan,
+  planEditForm,
+  onPlanFormChange,
+  onSelectPlan,
+  onExtractCurrentChapter,
+  onCreatePlan,
+  onGenerateScript,
+  onActivatePlan,
+  onSavePlan,
+  isExtracting,
+  isCreatingPlan,
+  isGeneratingScript,
+  isActivatingPlan,
+  isSavingPlan,
+}: {
+  selectedSource: ProjectSource;
+  selectedChapter: NovelChapterSummary | null;
+  events: Array<{ id: string; eventIndex: number; title: string; summary: string; reviewStatus: string }>;
+  plans: AdaptationPlan[];
+  selectedPlan: AdaptationPlan | null | undefined;
+  planEditForm: AdaptationPlanEditForm;
+  onPlanFormChange: (form: AdaptationPlanEditForm) => void;
+  onSelectPlan: (plan: AdaptationPlan) => void;
+  onExtractCurrentChapter: () => void;
+  onCreatePlan: () => void;
+  onGenerateScript: () => void;
+  onActivatePlan: () => void;
+  onSavePlan: () => void;
+  isExtracting: boolean;
+  isCreatingPlan: boolean;
+  isGeneratingScript: boolean;
+  isActivatingPlan: boolean;
+  isSavingPlan: boolean;
+}) {
+  return (
+    <details className="rounded-lg border bg-background p-4">
+      <summary className="cursor-pointer text-sm font-medium">生成依据</summary>
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <div className="grid content-start gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-medium">小说事件</div>
+              <div className="text-xs text-muted-foreground">{selectedChapter ? chapterDisplayTitle(selectedChapter) : selectedSource.title}</div>
+            </div>
+            <Button size="sm" variant="outline" onClick={onExtractCurrentChapter} disabled={isExtracting || !selectedChapter}>
+              提取当前分集
+            </Button>
+          </div>
+          {events.length === 0 ? (
+            <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">当前分集暂无事件</div>
+          ) : (
+            <div className="grid max-h-80 gap-2 overflow-y-auto pr-1">
+              {events.map((event) => (
+                <div key={event.id} className="grid gap-1 rounded-md border p-3 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="font-medium">{event.eventIndex}. {event.title}</div>
+                    <Badge variant={event.reviewStatus === "approved" ? "default" : "secondary"}>{statusLabel(event.reviewStatus)}</Badge>
+                  </div>
+                  <div className="line-clamp-2 text-muted-foreground">{event.summary}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="grid content-start gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-medium">改编计划</div>
+              <div className="text-xs text-muted-foreground">计划数量 {plans.length}</div>
+            </div>
+            <Button size="sm" onClick={onCreatePlan} disabled={isCreatingPlan}>
+              创建改编计划
+            </Button>
+          </div>
+          {plans.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {plans.map((plan) => (
+                <Button key={plan.id} size="sm" variant={selectedPlan?.id === plan.id ? "default" : "outline"} onClick={() => onSelectPlan(plan)}>
+                  {plan.title}
+                </Button>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">暂无改编计划</div>
+          )}
+
+          {selectedPlan ? (
+            <div className="grid gap-3 rounded-md border p-3">
+              <div className="grid gap-2">
+                <Label htmlFor="advanced-plan-title">计划名称</Label>
+                <Input id="advanced-plan-title" value={planEditForm.title} onChange={(event) => onPlanFormChange({ ...planEditForm, title: event.target.value })} />
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label>状态</Label>
+                  <Select value={planEditForm.status} onValueChange={(value) => onPlanFormChange({ ...planEditForm, status: value })}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">草稿</SelectItem>
+                      <SelectItem value="active">启用</SelectItem>
+                      <SelectItem value="archived">归档</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label>目标格式</Label>
+                  <Select value={planEditForm.targetFormat} onValueChange={(value) => onPlanFormChange({ ...planEditForm, targetFormat: value })}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="short_video">短视频</SelectItem>
+                      <SelectItem value="episode">剧集</SelectItem>
+                      <SelectItem value="feature">长片</SelectItem>
+                      <SelectItem value="outline">大纲</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="advanced-plan-duration">目标时长（秒）</Label>
+                  <Input
+                    id="advanced-plan-duration"
+                    type="number"
+                    min={0}
+                    inputMode="numeric"
+                    value={planEditForm.targetDurationSeconds}
+                    onChange={(event) => onPlanFormChange({ ...planEditForm, targetDurationSeconds: event.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="advanced-plan-max-shots">最大镜头数</Label>
+                  <Input
+                    id="advanced-plan-max-shots"
+                    type="number"
+                    min={0}
+                    inputMode="numeric"
+                    value={planEditForm.maxShots}
+                    onChange={(event) => onPlanFormChange({ ...planEditForm, maxShots: event.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="advanced-plan-content">计划内容</Label>
+                <Textarea
+                  id="advanced-plan-content"
+                  className="min-h-64 font-mono text-sm leading-6"
+                  value={planEditForm.content}
+                  onChange={(event) => onPlanFormChange({ ...planEditForm, content: event.target.value })}
+                />
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button variant="outline" onClick={onGenerateScript} disabled={isGeneratingScript}>
+                  <Wand2 className="h-4 w-4" />
+                  生成剧本
+                </Button>
+                <Button variant="outline" onClick={onActivatePlan} disabled={isActivatingPlan || selectedPlan.status === "active"}>
+                  <CheckCircle2 className="h-4 w-4" />
+                  设为启用
+                </Button>
+                <Button onClick={onSavePlan} disabled={isSavingPlan}>
+                  <Save className="h-4 w-4" />
+                  保存计划
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </details>
+  );
 }
 
 function emptySourceEditForm(): SourceEditForm {
@@ -2055,76 +1905,22 @@ function adaptationPlanToForm(plan: AdaptationPlan): AdaptationPlanEditForm {
   };
 }
 
-function emptyScriptEditForm(): ScriptEditForm {
+function emptyScriptEpisodeEditForm(): ScriptEpisodeEditForm {
   return {
-    title: "",
-    status: "draft",
+    episodeTitle: "",
     contentFormat: "markdown",
     content: "",
+    reviewStatus: "pending",
   };
 }
 
-function scriptToForm(script: Script, version: ScriptVersion | null): ScriptEditForm {
+function scriptEpisodeToForm(episode: ScriptEpisode): ScriptEpisodeEditForm {
   return {
-    title: script.title || "",
-    status: script.status || "draft",
-    contentFormat: version?.contentFormat || script.currentVersion?.contentFormat || "markdown",
-    content: version?.content || script.currentVersion?.content || "",
+    episodeTitle: episode.episodeTitle || "",
+    contentFormat: episode.contentFormat || "markdown",
+    content: episode.content || "",
+    reviewStatus: episode.reviewStatus || "pending",
   };
-}
-
-function emptyScriptSceneEditForm(): ScriptSceneEditForm {
-  return {
-    title: "",
-    summary: "",
-    location: "",
-    timeOfDay: "",
-    atmosphere: "",
-    characters: "",
-    scenes: "",
-    props: "",
-    action: "",
-    dialogue: "",
-    visualGoal: "",
-    emotionalTone: "",
-    conflict: "",
-    outcome: "",
-    content: "",
-  };
-}
-
-function scriptSceneToForm(scene: ScriptScene): ScriptSceneEditForm {
-  return {
-    title: scene.title || "",
-    summary: scene.summary || "",
-    location: scene.location || "",
-    timeOfDay: scene.timeOfDay || "",
-    atmosphere: scene.atmosphere || "",
-    characters: listToTextarea(scene.characters),
-    scenes: listToTextarea(scene.scenes),
-    props: listToTextarea(scene.props),
-    action: scene.action || "",
-    dialogue: scene.dialogue || "",
-    visualGoal: scene.visualGoal || "",
-    emotionalTone: scene.emotionalTone || "",
-    conflict: scene.conflict || "",
-    outcome: scene.outcome || "",
-    content: scene.content || "",
-  };
-}
-
-function listToTextarea(value: unknown) {
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").join("\n");
-}
-
-function listFromTextarea(value: string) {
-  return value
-    .split(/\r?\n|[,，]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
 }
 
 function positiveIntegerFromText(value: string) {

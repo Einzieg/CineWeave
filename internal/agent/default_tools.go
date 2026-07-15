@@ -12,6 +12,18 @@ func DefaultRegistry() (*Registry, error) {
 
 func DefaultTools() []AgentTool {
 	return []AgentTool{
+		draftTool("agent.ask_user", "询问用户", "当目标存在多种合理路径或缺少关键偏好时，暂停任务并向用户提出一个可选择的问题。", authz.PermissionProjectRead, objectSchemaRequired(map[string]any{
+			"question": stringSchema("需要用户回答的问题。"),
+			"options": arraySchema("建议选项，通常 2 到 4 个。", objectSchemaRequired(map[string]any{
+				"id":          stringSchema("选项稳定 ID。"),
+				"label":       stringSchema("选项展示文案。"),
+				"description": stringSchema("选项说明。"),
+				"nextGoal":    stringSchema("选择该项后建议继续执行的目标。"),
+				"value":       objectSchema(nil, false),
+			}, "id", "label")),
+			"allowCustom":     booleanSchema("是否允许用户自定义下一步。"),
+			"defaultOptionId": stringSchema("推荐默认选项 ID。"),
+		}, "question"), true),
 		readTool("project.read_summary", "项目摘要", "读取项目来源、剧本、资产、分镜、工作流和审阅摘要。", authz.PermissionProjectRead, emptyObjectSchema()),
 		readTool("source.list", "原文列表", "列出当前项目的小说或剧本来源。", authz.PermissionSourceRead, limitSchema()),
 		readTool("source.list_chapters", "分集章节", "列出小说来源的分卷、分集和章节。", authz.PermissionSourceRead, objectSchema(map[string]any{
@@ -25,6 +37,10 @@ func DefaultTools() []AgentTool {
 			"versionId": stringSchema("版本 ID。为空时读取当前版本。"),
 		}, "scriptId")),
 		readTool("asset.list", "资产列表", "列出核心资产、状态和参考图摘要。", authz.PermissionAssetRead, limitSchema()),
+		readTool("asset.get", "读取资产卡", "按资产 ID 或准确名称读取完整资产卡、当前提示词和生成状态。", authz.PermissionAssetRead, objectSchema(map[string]any{
+			"assetId":   stringSchema("资产 ID；与 assetName 至少提供一个。"),
+			"assetName": stringSchema("资产准确名称；与 assetId 至少提供一个。"),
+		}, false)),
 		readTool("storyboard.list", "分镜列表", "列出分镜镜头和生产状态摘要。", authz.PermissionProjectRead, limitSchema()),
 		readTool("workflow.read_runs", "任务列表", "读取最近 workflow runs。", authz.PermissionWorkflowRead, limitSchema()),
 		readTool("workflow.read_nodes", "任务节点", "读取指定 workflow 的节点运行详情。", authz.PermissionWorkflowRead, workflowRunSchema()),
@@ -59,11 +75,36 @@ func DefaultTools() []AgentTool {
 			"sourceSceneId": stringSchema("可选场景 ID。"),
 		}, "scriptId", "instruction"), false),
 
-		writeTool("script.generate_from_source", "生成剧本", "从来源或改编计划生成剧本版本。", authz.PermissionScriptWrite, objectSchema(map[string]any{
-			"sourceId":    stringSchema("来源 ID。为空时使用项目最新来源。"),
-			"planId":      stringSchema("改编计划 ID。"),
-			"title":       stringSchema("剧本标题。"),
-			"instruction": stringSchema("生成要求。"),
+		writeTool("source.update", "覆盖原文", "更新原文标题、正文、格式、状态或重新拆分章节。", authz.PermissionSourceWrite, objectSchemaRequired(map[string]any{
+			"sourceId": stringSchema("原文 ID。"),
+			"patch": objectSchema(map[string]any{
+				"sourceType":    enumSchema("原文类型。", []string{"novel", "script", "brief"}),
+				"title":         stringSchema("标题。"),
+				"content":       stringSchema("正文内容。"),
+				"contentFormat": enumSchema("正文格式。", []string{"plain_text", "markdown"}),
+				"status":        enumSchema("状态。", []string{"ready", "processing", "processed", "failed", "archived"}),
+				"metadata":      objectSchema(nil, false),
+				"splitChapters": booleanSchema("小说正文更新后是否重新自动拆分章节。"),
+			}, false),
+		}, "sourceId", "patch"), true),
+		writeTool("script.update_episode", "覆盖剧本分集", "更新指定剧本分集标题、正文、格式或审核状态，并标记下游需要重生成。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
+			"episodeId": stringSchema("剧本分集 ID。"),
+			"patch": objectSchema(map[string]any{
+				"episodeTitle":  stringSchema("分集标题。"),
+				"content":       stringSchema("分集剧本正文。"),
+				"contentFormat": enumSchema("正文格式。", []string{"plain_text", "markdown"}),
+				"reviewStatus":  enumSchema("审核状态。", []string{"pending", "approved", "rejected", "needs_edit"}),
+				"staleState":    enumSchema("过期状态。", []string{"fresh", "needs_regeneration", "upstream_changed"}),
+				"metadata":      objectSchema(nil, false),
+			}, false),
+		}, "episodeId", "patch"), true),
+		writeTool("script.generate_from_source", "生成剧本", "从来源分集逐集生成剧本版本；小说必须按 chapterIds 或 chapterRange 明确范围，一条小说分集只生成一条剧本分集。", authz.PermissionScriptWrite, objectSchema(map[string]any{
+			"sourceId":     stringSchema("来源 ID。为空时使用项目最新未归档来源。"),
+			"planId":       stringSchema("改编计划 ID。"),
+			"title":        stringSchema("剧本标题。"),
+			"instruction":  stringSchema("生成要求。"),
+			"chapterIds":   arraySchema("要改编的小说分集 ID 列表。每个 ID 会生成独立剧本分集。", stringSchema("小说分集 ID。")),
+			"chapterRange": stringSchema("自然语言分集范围，例如：第一卷1-10节、1-10集、前十节。"),
 		}, false), true),
 		writeTool("script.rewrite", "改写剧本", "改写剧本并创建新版本。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
 			"scriptId":    stringSchema("剧本 ID。"),
@@ -83,10 +124,48 @@ func DefaultTools() []AgentTool {
 			"scriptId":  stringSchema("剧本 ID。"),
 			"versionId": stringSchema("版本 ID。"),
 		}, "scriptId", "versionId"), true),
-		writeTool("asset.update", "更新资产", "修改资产描述、prompt、traits 或审核状态。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+		destructiveTool("script.delete", "删除剧本", "归档整个剧本及其版本，并标记下游分镜、镜头和成片需要重生成。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
+			"scriptId": stringSchema("剧本 ID。"),
+			"reason":   stringSchema("删除原因。"),
+		}, "scriptId")),
+		writeTool("asset.update", "更新资产", "精确替换资产卡字段；编辑提示词时使用 basePrompt、consistencyPrompt、negativePrompt。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
 			"assetId": stringSchema("资产 ID。"),
-			"patch":   objectSchema(nil, false),
+			"patch": objectSchema(map[string]any{
+				"name":              stringSchema("资产名称。"),
+				"description":       stringSchema("资产描述。"),
+				"profile":           freeformObjectSchema("结构化资产外观和稳定设定。"),
+				"basePrompt":        stringSchema("基础生图提示词。"),
+				"consistencyPrompt": stringSchema("跨镜头一致性提示词。"),
+				"negativePrompt":    stringSchema("负向提示词。"),
+				"lockReference":     booleanSchema("是否锁定当前主参考图。"),
+			}, false),
 		}, "assetId", "patch"), true),
+		writeTool("asset.revise_prompt", "修订资产提示词", "根据自然语言要求读取并修改现有资产提示词，保留未要求改变的设定。可直接按资产准确名称执行。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+			"assetId":     stringSchema("资产 ID；与 assetName 至少提供一个。"),
+			"assetName":   stringSchema("资产准确名称；与 assetId 至少提供一个。"),
+			"instruction": stringSchema("用户对提示词的具体修改要求。"),
+			"fields": arraySchema("限定修改字段；为空时修订全部提示词字段。", enumSchema("提示词字段。", []string{
+				"basePrompt", "consistencyPrompt", "negativePrompt",
+			})),
+		}, "instruction"), true),
+		destructiveTool("source.delete", "删除原文", "归档原文并阻止其继续作为生产入口。", authz.PermissionSourceWrite, objectSchemaRequired(map[string]any{
+			"sourceId": stringSchema("原文 ID。"),
+			"reason":   stringSchema("删除原因。"),
+		}, "sourceId")),
+		destructiveTool("source.delete_chapter", "删除原文章节", "从小说原文中删除一个明确的分集/章节，重排后续全局章节序号并标记下游需要重新生成。优先使用真实 chapterId；没有 ID 时可用来源标题和章节序号定位。", authz.PermissionSourceWrite, objectSchema(map[string]any{
+			"sourceId":     stringSchema("小说来源 UUID。未知时省略，不要填写占位文本。"),
+			"sourceTitle":  stringSchema("来源准确标题。sourceId 未知时用于定位来源。"),
+			"chapterId":    stringSchema("章节 UUID。未知时省略，不要填写占位文本。"),
+			"chapterIndex": integerSchema("来源内全局章节序号。", 1, 1000000),
+			"volumeIndex":  integerSchema("卷序号。建议和 sectionIndex 一起使用。", 1, 1000000),
+			"sectionIndex": integerSchema("卷内分集/章节序号。建议和 volumeIndex 一起使用。", 1, 1000000),
+			"chapterTitle": stringSchema("章节准确标题；仅在标题可以唯一定位时使用。"),
+			"reason":       stringSchema("删除原因。"),
+		}, false)),
+		destructiveTool("asset.delete", "删除资产", "归档核心资产，并标记分镜、镜头和成片需要重生成。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+			"assetId": stringSchema("核心资产 ID。"),
+			"reason":  stringSchema("删除原因。"),
+		}, "assetId")),
 		writeTool("storyboard.update_shot", "更新分镜", "修改分镜镜头字段。", authz.PermissionProjectWrite, objectSchemaRequired(map[string]any{
 			"shotId": stringSchema("镜头 ID。"),
 			"patch":  objectSchema(nil, false),
@@ -200,6 +279,10 @@ func workflowTool(name, label, description, permission string, schema json.RawMe
 	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskWorkflow, Permission: permission, InputSchema: schema, RequiresApproval: true}
 }
 
+func destructiveTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
+	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskDestructive, Permission: permission, InputSchema: schema, RequiresApproval: true}
+}
+
 func adminTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
 	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskAdmin, Permission: permission, InputSchema: schema, RequiresApproval: true}
 }
@@ -252,6 +335,14 @@ func objectSchemaRequired(properties map[string]any, requiredKeys ...string) jso
 		schema["required"] = requiredKeys
 	}
 	return mustJSON(schema)
+}
+
+func freeformObjectSchema(description string) map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"description":          description,
+		"additionalProperties": true,
+	}
 }
 
 func stringSchema(description string) map[string]any {

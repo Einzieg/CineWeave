@@ -126,6 +126,14 @@ func normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimit
 	if _, ok := xCapabilities["supportsStreaming"].(bool); !ok {
 		xCapabilities["supportsStreaming"] = containsNormalizedString(taskTypeValues, TaskTypeTextStream)
 	}
+	if truthyBool(xCapabilities["supportsStreaming"]) {
+		mode, _ := xCapabilities["streamTerminalMode"].(string)
+		switch strings.ToLower(strings.TrimSpace(mode)) {
+		case "done_marker", "finish_reason", "done_or_finish_reason":
+		default:
+			xCapabilities["streamTerminalMode"] = "done_or_finish_reason"
+		}
+	}
 	if _, ok := xCapabilities["supportsReasoning"].(bool); !ok {
 		xCapabilities["supportsReasoning"] = false
 	}
@@ -143,6 +151,7 @@ func normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimit
 	}
 	supportsText := containsNormalizedString(taskTypeValues, TaskTypeTextGenerate) || containsNormalizedString(taskTypeValues, TaskTypeTextStream)
 	supportsImage := containsNormalizedString(taskTypeValues, TaskTypeImageGenerate)
+	supportsAudio := containsNormalizedString(taskTypeValues, TaskTypeAudioTTS) || containsNormalizedString(taskTypeValues, TaskTypeAudioTranscribe)
 	supportsVideo := containsNormalizedString(taskTypeValues, TaskTypeVideoCreateTask) || containsNormalizedString(taskTypeValues, "video.text_to_video") || containsNormalizedString(taskTypeValues, "video.image_to_video")
 	if _, ok := xCapabilities["supportsMultimodalInput"].(bool); !ok {
 		xCapabilities["supportsMultimodalInput"] = supportsText && hasNonTextInput(inputTypes)
@@ -173,6 +182,17 @@ func normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimit
 		}
 		if _, ok := xCapabilities["maxReferenceImages"]; !ok && truthyBool(xCapabilities["supportsReferenceImages"]) {
 			xCapabilities["maxReferenceImages"] = 1
+		}
+	}
+	if supportsAudio {
+		if _, ok := xCapabilities["supportsTTS"].(bool); !ok {
+			xCapabilities["supportsTTS"] = containsNormalizedString(taskTypeValues, TaskTypeAudioTTS)
+		}
+		if _, ok := xCapabilities["supportsTranscription"].(bool); !ok {
+			xCapabilities["supportsTranscription"] = containsNormalizedString(taskTypeValues, TaskTypeAudioTranscribe)
+		}
+		if _, ok := xCapabilities["audioResponseFormats"]; !ok {
+			xCapabilities["audioResponseFormats"] = []string{"mp3", "wav", "aac", "flac", "opus"}
 		}
 	}
 	if _, ok := xCapabilities["responseFormats"]; !ok {
@@ -438,6 +458,12 @@ func defaultRequestModes(taskTypes []string) []string {
 	if containsNormalizedString(taskTypes, TaskTypeImageGenerate) {
 		add("images.generate")
 	}
+	if containsNormalizedString(taskTypes, TaskTypeAudioTTS) {
+		add("audio.speech")
+	}
+	if containsNormalizedString(taskTypes, TaskTypeAudioTranscribe) {
+		add("audio.transcriptions")
+	}
 	if containsNormalizedString(taskTypes, TaskTypeVideoCreateTask) {
 		add("async_create")
 	}
@@ -457,7 +483,8 @@ func modelSupportsTaskType(model Model, taskType string) bool {
 	}
 	for _, capability := range model.Capabilities {
 		for _, value := range stringsFromRawJSON(capability.TaskTypes) {
-			if strings.TrimSpace(value) == taskType {
+			value = strings.TrimSpace(value)
+			if value == taskType || (taskType == TaskTypeVideoCreateTask && value == "video.generate") {
 				return true
 			}
 		}

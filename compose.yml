@@ -51,36 +51,111 @@ services:
 
   migrate:
     profiles: ["app", "full"]
-    image: postgres:16@sha256:5a65324fe84dc41709ff914e90b07f3e2f577073ed27bf917d4873aca0c9ec51
+    image: cineweave-database-tools
+    build:
+      context: .
+      dockerfile: deploy/docker-compose/Dockerfile-database-tools
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      PGPASSWORD: cineweave_dev_password
-    volumes:
-      - ./db/migrations:/migrations:ro
-    entrypoint: >
-      /bin/sh -c "
-      for file in /migrations/*.up.sql; do
-        echo applying $$file;
-        psql -h postgres -U cineweave -d cineweave -v ON_ERROR_STOP=1 -f $$file;
-      done"
+      CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
+      CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:-local-dev}
+      DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
+    command: ["/cineweave-migrate", "up"]
+
+  seed:
+    profiles: ["app", "full"]
+    image: cineweave-database-tools
+    build:
+      context: .
+      dockerfile: deploy/docker-compose/Dockerfile-database-tools
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
+      CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:-local-dev}
+      DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
+    command: ["/cineweave-seed", "apply"]
+
+  temporal-release:
+    profiles: ["ops"]
+    image: cineweave-database-tools
+    build:
+      context: .
+      dockerfile: deploy/docker-compose/Dockerfile-database-tools
+    depends_on:
+      temporal:
+        condition: service_healthy
+      temporal-namespace:
+        condition: service_completed_successfully
+    environment:
+      CINEWEAVE_TEMPORAL_ADDRESS: temporal:7233
+      CINEWEAVE_TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:-local-dev}
+    entrypoint: ["/temporal-release"]
 
   nats:
     image: nats:2@sha256:bbfbb6c4cdaeb8a2e3ca57d3de30463a66a6c5181f324f3b680bcf858833d377
     command: ["-js", "-m", "8222"]
 
-  temporal:
-    image: temporalio/auto-setup:1.28@sha256:d4cdc015d667ab5ccc3c6d1221a8792f4603c62378313db9391e47f0cb367305
+  temporal-schema:
+    image: cineweave-temporal-schema
+    build:
+      context: .
+      dockerfile: deploy/docker-compose/Dockerfile-temporal-schema
     depends_on:
       postgres:
         condition: service_healthy
     environment:
+      CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:-local-dev}
+      TEMPORAL_DB_HOST: postgres
+      TEMPORAL_DB_PORT: 5432
+      TEMPORAL_DB_USER: cineweave
+      TEMPORAL_DB_PASSWORD: cineweave_dev_password
+      TEMPORAL_DB_NAME: temporal
+      TEMPORAL_VISIBILITY_DB_NAME: temporal_visibility
+      TEMPORAL_DB_SSLMODE: disable
+      TEMPORAL_SCHEMA_TIMEOUT: ${TEMPORAL_SCHEMA_TIMEOUT:-10m}
+
+  temporal:
+    image: temporalio/server:1.31.2@sha256:b5ecdb8282bededae2a10c36e8d862e27d0bc2d247fc73c5416025997ab4a1da
+    restart: unless-stopped
+    depends_on:
+      temporal-schema:
+        condition: service_completed_successfully
+    environment:
+      TEMPORAL_ALLOW_NO_AUTH: "true"
       DB: postgres12
       DB_PORT: 5432
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
       POSTGRES_USER: cineweave
       POSTGRES_PWD: cineweave_dev_password
       POSTGRES_SEEDS: postgres
+    volumes:
+      - ./deploy/docker-compose/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/docker.yaml:ro
+    healthcheck:
+      test: ["CMD", "nc", "-z", "-w", "1", "temporal", "7233"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  temporal-namespace:
+    build:
+      context: .
+      dockerfile: deploy/docker-compose/Dockerfile-go
+      args:
+        SERVICE_PATH: cmd/temporal-namespace
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_NAMESPACE_RETENTION: ${TEMPORAL_NAMESPACE_RETENTION:-72h}
 
   api:
     profiles: ["app", "full"]
@@ -96,6 +171,12 @@ services:
       CINEWEAVE_CREDENTIAL_MASTER_KEY: ${CINEWEAVE_CREDENTIAL_MASTER_KEY:-}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
       CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS:-660000}
+      CINEWEAVE_WORKFLOW_START_POLL_INTERVAL: ${CINEWEAVE_WORKFLOW_START_POLL_INTERVAL:-1s}
+      CINEWEAVE_WORKFLOW_CANCELLATION_RECONCILE_INTERVAL: ${CINEWEAVE_WORKFLOW_CANCELLATION_RECONCILE_INTERVAL:-1s}
+      CINEWEAVE_WORKFLOW_CANCELLATION_RECONCILE_BATCH_SIZE: ${CINEWEAVE_WORKFLOW_CANCELLATION_RECONCILE_BATCH_SIZE:-32}
+      CINEWEAVE_WORKFLOW_START_LEASE_TIMEOUT: ${CINEWEAVE_WORKFLOW_START_LEASE_TIMEOUT:-30s}
+      CINEWEAVE_WORKFLOW_START_TIMEOUT: ${CINEWEAVE_WORKFLOW_START_TIMEOUT:-15s}
+      CINEWEAVE_WORKFLOW_START_BATCH_SIZE: ${CINEWEAVE_WORKFLOW_START_BATCH_SIZE:-16}
       CINEWEAVE_JWT_SECRET: ${CINEWEAVE_JWT_SECRET:-dev-insecure-cineweave-secret}
       CINEWEAVE_CORS_ORIGINS: ${CINEWEAVE_CORS_ORIGINS:-http://localhost:19285,http://127.0.0.1:19285}
       PROVIDER_GATEWAY_URL: http://provider-gateway:8082
@@ -103,22 +184,23 @@ services:
       CINEWEAVE_ALLOW_PUBLIC_REGISTRATION: ${CINEWEAVE_ALLOW_PUBLIC_REGISTRATION:-false}
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
-      S3_ENDPOINT: http://minio:9000
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
-      S3_REGION: us-east-1
-      S3_BUCKET: cineweave
-      S3_ACCESS_KEY_ID: minio
-      S3_SECRET_ACCESS_KEY: minio123
-      S3_USE_PATH_STYLE: "true"
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-cineweave}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minio}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minio123}
+      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
     ports:
       - "${CINEWEAVE_API_HOST_PORT:-19288}:8080"
     depends_on:
-      migrate:
+      seed:
         condition: service_completed_successfully
       provider-gateway:
         condition: service_healthy
-      temporal:
-        condition: service_started
+      temporal-namespace:
+        condition: service_completed_successfully
       minio-create-bucket:
         condition: service_completed_successfully
     healthcheck:
@@ -138,12 +220,17 @@ services:
         SERVICE_PATH: apps/realtime
     environment:
       CINEWEAVE_REALTIME_ADDR: ":8081"
+      CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
+      CINEWEAVE_JWT_SECRET: ${CINEWEAVE_JWT_SECRET:-dev-insecure-cineweave-secret}
+      CINEWEAVE_ACCESS_TOKEN_TTL: ${CINEWEAVE_ACCESS_TOKEN_TTL:-2h}
+      CINEWEAVE_REFRESH_TOKEN_TTL: ${CINEWEAVE_REFRESH_TOKEN_TTL:-720h}
+      CINEWEAVE_CORS_ORIGINS: ${CINEWEAVE_CORS_ORIGINS:-http://localhost:19285,http://127.0.0.1:19285}
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       NATS_URL: nats://nats:4222
     ports:
       - "${CINEWEAVE_REALTIME_HOST_PORT:-19281}:8081"
     depends_on:
-      migrate:
+      seed:
         condition: service_completed_successfully
       nats:
         condition: service_started
@@ -163,23 +250,74 @@ services:
       args:
         SERVICE_PATH: workers/script-worker
     environment:
+      CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_WORKER_VERSIONING_ENABLED: ${TEMPORAL_WORKER_VERSIONING_ENABLED:-true}
+      TEMPORAL_WORKER_DEPLOYMENT_PREFIX: ${TEMPORAL_WORKER_DEPLOYMENT_PREFIX:-cineweave}
+      TEMPORAL_WORKER_VERSIONING_BEHAVIOR: pinned
+      CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:-local-dev}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
       PROVIDER_GATEWAY_URL: http://provider-gateway:8082
       CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS:-660000}
       CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK: "false"
-      S3_ENDPOINT: http://minio:9000
-      S3_REGION: us-east-1
-      S3_BUCKET: cineweave
-      S3_ACCESS_KEY_ID: minio
-      S3_SECRET_ACCESS_KEY: minio123
-      S3_USE_PATH_STYLE: "true"
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-cineweave}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minio}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minio123}
+      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
     depends_on:
-      migrate:
+      seed:
         condition: service_completed_successfully
-      temporal:
-        condition: service_started
+      temporal-namespace:
+        condition: service_completed_successfully
+      minio-create-bucket:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /proc/1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  agent-worker:
+    profiles: ["app", "full"]
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: deploy/docker-compose/Dockerfile-go
+      args:
+        SERVICE_PATH: workers/agent-worker
+    environment:
+      CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
+      DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_WORKER_VERSIONING_ENABLED: ${TEMPORAL_WORKER_VERSIONING_ENABLED:-true}
+      TEMPORAL_WORKER_DEPLOYMENT_PREFIX: ${TEMPORAL_WORKER_DEPLOYMENT_PREFIX:-cineweave}
+      TEMPORAL_WORKER_VERSIONING_BEHAVIOR: auto_upgrade
+      CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:-local-dev}
+      CINEWEAVE_JWT_SECRET: ${CINEWEAVE_JWT_SECRET:-dev-insecure-cineweave-secret}
+      CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
+      PROVIDER_GATEWAY_URL: http://provider-gateway:8082
+      CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS:-660000}
+      CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK: "false"
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-cineweave}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minio}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minio123}
+      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      provider-gateway:
+        condition: service_healthy
+      temporal-namespace:
+        condition: service_completed_successfully
       minio-create-bucket:
         condition: service_completed_successfully
     healthcheck:
@@ -198,20 +336,69 @@ services:
       args:
         SERVICE_PATH: workers/media-worker
     environment:
+      CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
-      S3_ENDPOINT: http://minio:9000
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_WORKER_VERSIONING_ENABLED: ${TEMPORAL_WORKER_VERSIONING_ENABLED:-true}
+      TEMPORAL_WORKER_DEPLOYMENT_PREFIX: ${TEMPORAL_WORKER_DEPLOYMENT_PREFIX:-cineweave}
+      TEMPORAL_WORKER_VERSIONING_BEHAVIOR: pinned
+      CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:-local-dev}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
-      S3_REGION: us-east-1
-      S3_BUCKET: cineweave
-      S3_ACCESS_KEY_ID: minio
-      S3_SECRET_ACCESS_KEY: minio123
-      S3_USE_PATH_STYLE: "true"
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-cineweave}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minio}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minio123}
+      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
     depends_on:
-      migrate:
+      seed:
         condition: service_completed_successfully
-      temporal:
-        condition: service_started
+      temporal-namespace:
+        condition: service_completed_successfully
+      minio-create-bucket:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /proc/1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  audio-worker:
+    profiles: ["app", "full"]
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: deploy/docker-compose/Dockerfile-media-worker
+      args:
+        SERVICE_PATH: workers/audio-worker
+    environment:
+      CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
+      DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_WORKER_VERSIONING_ENABLED: ${TEMPORAL_WORKER_VERSIONING_ENABLED:-true}
+      TEMPORAL_WORKER_DEPLOYMENT_PREFIX: ${TEMPORAL_WORKER_DEPLOYMENT_PREFIX:-cineweave}
+      TEMPORAL_WORKER_VERSIONING_BEHAVIOR: pinned
+      CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:-local-dev}
+      CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
+      PROVIDER_GATEWAY_URL: http://provider-gateway:8082
+      CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_GATEWAY_CLIENT_TIMEOUT_MS:-660000}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-cineweave}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minio}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minio123}
+      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      provider-gateway:
+        condition: service_healthy
+      temporal-namespace:
+        condition: service_completed_successfully
       minio-create-bucket:
         condition: service_completed_successfully
     healthcheck:
@@ -226,7 +413,7 @@ services:
     restart: unless-stopped
     build:
       context: .
-      dockerfile: deploy/docker-compose/Dockerfile-go
+      dockerfile: deploy/docker-compose/Dockerfile-provider-gateway
       args:
         SERVICE_PATH: services/provider-gateway
     environment:
@@ -234,19 +421,27 @@ services:
       CINEWEAVE_PROVIDER_GATEWAY_ADDR: ":8082"
       CINEWEAVE_CREDENTIAL_MASTER_KEY: ${CINEWEAVE_CREDENTIAL_MASTER_KEY:-}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
-      CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS: ${CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS:-false}
       CINEWEAVE_PROVIDER_GUARD_SERVICE_NAME: ${CINEWEAVE_PROVIDER_GUARD_SERVICE_NAME:-provider-gateway}
       CINEWEAVE_PROVIDER_TEXT_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_TEXT_TIMEOUT_MS:-600000}
+      CINEWEAVE_PROVIDER_IMAGE_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_IMAGE_TIMEOUT_MS:-600000}
+      CINEWEAVE_PROVIDER_AUDIO_TIMEOUT_MS: ${CINEWEAVE_PROVIDER_AUDIO_TIMEOUT_MS:-600000}
       CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES: ${CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES:-536870912}
+      CINEWEAVE_PROVIDER_REQUEST_RECONCILE_INTERVAL: ${CINEWEAVE_PROVIDER_REQUEST_RECONCILE_INTERVAL:-1m}
+      CINEWEAVE_PROVIDER_REQUEST_STALE_AFTER: ${CINEWEAVE_PROVIDER_REQUEST_STALE_AFTER:-30m}
+      CINEWEAVE_ALLOW_PRIVATE_PROVIDER_REFERENCE_URLS: ${CINEWEAVE_ALLOW_PRIVATE_PROVIDER_REFERENCE_URLS:-false}
+      HTTP_PROXY: ${CINEWEAVE_PROVIDER_HTTP_PROXY:-}
+      HTTPS_PROXY: ${CINEWEAVE_PROVIDER_HTTP_PROXY:-}
+      NO_PROXY: ${CINEWEAVE_PROVIDER_NO_PROXY:-localhost,127.0.0.1,::1,postgres,redis,nats,temporal,minio,provider-gateway,api,realtime}
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
-      S3_ENDPOINT: http://minio:9000
-      S3_REGION: us-east-1
-      S3_BUCKET: cineweave
-      S3_ACCESS_KEY_ID: minio
-      S3_SECRET_ACCESS_KEY: minio123
-      S3_USE_PATH_STYLE: "true"
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-cineweave}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minio}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minio123}
+      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
     depends_on:
-      migrate:
+      seed:
         condition: service_completed_successfully
       minio-create-bucket:
         condition: service_completed_successfully
@@ -271,7 +466,7 @@ services:
       CINEWEAVE_EVENT_PUBLISH_INTERVAL: 1s
       CINEWEAVE_EVENT_PUBLISH_BATCH: 50
     depends_on:
-      migrate:
+      seed:
         condition: service_completed_successfully
       nats:
         condition: service_started
@@ -293,6 +488,7 @@ services:
         NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:19281/api/realtime/events}
         S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
     environment:
+      HOSTNAME: 0.0.0.0
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:19288}
       NEXT_PUBLIC_REALTIME_URL: ${NEXT_PUBLIC_REALTIME_URL:-http://localhost:19281/api/realtime/events}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:19290}
@@ -308,3 +504,7 @@ services:
 volumes:
   postgres-data:
   minio-data:
+
+networks:
+  default:
+    name: ${CINEWEAVE_INTERNAL_NETWORK:-cineweave_internal}

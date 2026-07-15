@@ -1,14 +1,12 @@
 FROM node:24-alpine AS deps
 WORKDIR /app
-RUN corepack enable
+RUN npm install --global pnpm@10.32.1
 COPY package.json pnpm-workspace.yaml ./
 COPY pnpm-lock.yaml ./
 COPY apps/web/package.json apps/web/package.json
 RUN pnpm install --filter @cineweave/web --frozen-lockfile
 
-FROM node:24-alpine AS build
-WORKDIR /app
-RUN corepack enable
+FROM deps AS build
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:19288
 ARG NEXT_PUBLIC_REALTIME_URL=http://localhost:19281/api/realtime/events
 ARG S3_PUBLIC_ENDPOINT=http://localhost:19290
@@ -26,14 +24,14 @@ ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:19288
 ARG NEXT_PUBLIC_REALTIME_URL=http://localhost:19281/api/realtime/events
 ARG S3_PUBLIC_ENDPOINT=http://localhost:19290
 ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 ENV S3_PUBLIC_ENDPOINT=$S3_PUBLIC_ENDPOINT
-RUN corepack enable
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
-COPY --from=build /app/apps/web ./apps/web
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/apps/web/node_modules ./apps/web/node_modules
+RUN addgroup -S cineweave && adduser -S cineweave -G cineweave
+COPY --from=build --chown=cineweave:cineweave /app/apps/web/.next/standalone ./
+COPY --from=build --chown=cineweave:cineweave /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=build --chown=cineweave:cineweave /app/apps/web/public ./apps/web/public
+USER cineweave
 EXPOSE 3000
-CMD ["pnpm", "--filter", "@cineweave/web", "start"]
+CMD ["node", "apps/web/server.js"]

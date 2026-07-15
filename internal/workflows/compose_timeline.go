@@ -100,22 +100,5 @@ func resolveComposeTimelineOptions(raw json.RawMessage) (composeTimelineOptions,
 }
 
 func (a Activities) CompleteComposeTimelineWorkflow(ctx context.Context, input TextToStoryboardInput, output ComposeTimelineOutput) error {
-	outputJSON := mustJSON(output)
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `
-		UPDATE workflow_runs
-		SET status = 'succeeded', output = $2, completed_at = now()
-		WHERE id = $1
-		  AND status NOT IN ('cancelled', 'failed')
-	`, input.WorkflowRunID, outputJSON); err != nil {
-		return err
-	}
-	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "workflow.run.completed", "workflow_run", input.WorkflowRunID, outputJSON); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return TransitionWorkflowRun(ctx, a.db, input.WorkflowRunID, "succeeded", "", "", mustJSON(output))
 }

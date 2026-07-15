@@ -119,6 +119,29 @@ func TestProjectAgentWorkflowRetriesTransientPlanActivityFailure(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
+func TestProjectAgentWorkflowDoesNotRetryExecuteReadyStepsFailure(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	input := ProjectAgentWorkflowInput{
+		OrganizationID: "org-1",
+		ProjectID:      "project-1",
+		TaskID:         "task-1",
+		UserID:         "user-1",
+	}
+
+	env.RegisterWorkflow(ProjectAgentWorkflow)
+	registerProjectAgentTestActivities(env)
+	env.OnActivity(projectAgentPlanActivity, mock.Anything, input).Return(ProjectAgentWorkflowState{TaskID: input.TaskID, Status: "queued"}, nil).Once()
+	env.OnActivity(projectAgentExecuteReadyStepsActivity, mock.Anything, input).Return(ProjectAgentWorkflowState{}, errors.New("side effect failed")).Once()
+
+	env.ExecuteWorkflow(ProjectAgentWorkflow, input)
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() == nil {
+		t.Fatalf("workflow completed=%v err=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	env.AssertExpectations(t)
+}
+
 func TestProjectAgentWorkflowReturnsFailedTerminalState(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()

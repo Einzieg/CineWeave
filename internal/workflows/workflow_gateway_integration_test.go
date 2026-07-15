@@ -36,7 +36,7 @@ func TestWorkflowGatewayIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	orgID, userID, projectID, workflowRunID, textModelID, imageModelID := seedWorkflowGatewayIntegrationData(t, ctx, pool)
 	t.Cleanup(func() {
@@ -78,7 +78,7 @@ func TestWorkflowGatewayIntegration(t *testing.T) {
 func TestAnalyzeScriptAssetsWritesSceneAssetLinks(t *testing.T) {
 	ctx := context.Background()
 	pool := openWorkflowGatewayIntegrationDB(t, ctx)
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	orgID, userID, projectID, workflowRunID, textModelID, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
 	t.Cleanup(func() {
@@ -130,7 +130,7 @@ func TestAnalyzeScriptAssetsWritesSceneAssetLinks(t *testing.T) {
 func TestGenerateStoryboardFromScriptStoresScriptSceneID(t *testing.T) {
 	ctx := context.Background()
 	pool := openWorkflowGatewayIntegrationDB(t, ctx)
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	orgID, userID, projectID, workflowRunID, textModelID, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
 	t.Cleanup(func() {
@@ -298,6 +298,10 @@ func seedWorkflowGatewayIntegrationData(t *testing.T, ctx context.Context, pool 
 	if err := pool.QueryRow(ctx, `INSERT INTO users(email, display_name) VALUES ($1, $2) RETURNING id`, "workflow-gateway-"+suffix+"@example.test", "Workflow Gateway").Scan(&userID); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
 	if _, err := pool.Exec(ctx, `INSERT INTO organization_members(organization_id, user_id) VALUES ($1, $2)`, orgID, userID); err != nil {
 		t.Fatalf("insert organization member: %v", err)
 	}

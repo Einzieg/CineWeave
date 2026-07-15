@@ -66,6 +66,50 @@ func TestNovelImportGeneratesChapters(t *testing.T) {
 	}
 }
 
+func TestDeleteSourceChapterRemovesCanonicalContentAndRenumbers(t *testing.T) {
+	server, seed := setupSourceImportTest(t)
+	defer seed.Close()
+
+	var imported ImportProjectSourceResponse
+	doMultipartAPISuccess(t, server, "/api/projects/"+seed.projectID+"/sources/import", seed.ownerToken, seed.organizationID, map[string]string{
+		"sourceType": "novel",
+		"title":      "可编辑小说",
+	}, "novel.txt", "第一章 初见\n她推开门。\n\n第二章 远行\n他们出发。", &imported)
+	if len(imported.Chapters) != 2 {
+		t.Fatalf("chapters len = %d, want 2", len(imported.Chapters))
+	}
+
+	var deleted DeleteSourceChapterResponse
+	doAPISuccess(t, server, http.MethodDelete,
+		"/api/projects/"+seed.projectID+"/sources/"+imported.Source.ID+"/chapters/"+imported.Chapters[0].ID,
+		seed.ownerToken, seed.organizationID, nil, &deleted)
+	if !deleted.Deleted || deleted.DeletedChapterIndex != 1 || deleted.RemainingChapterCount != 1 {
+		t.Fatalf("delete response = %+v", deleted)
+	}
+
+	var remaining struct {
+		Items []NovelChapterSummary `json:"items"`
+	}
+	doAPISuccess(t, server, http.MethodGet,
+		"/api/projects/"+seed.projectID+"/sources/"+imported.Source.ID+"/chapters",
+		seed.ownerToken, seed.organizationID, nil, &remaining)
+	if len(remaining.Items) != 1 || remaining.Items[0].ChapterIndex != 1 || stringValue(remaining.Items[0].ChapterTitle) != "第二章 远行" {
+		t.Fatalf("remaining chapters = %+v", remaining.Items)
+	}
+
+	var source ProjectSource
+	doAPISuccess(t, server, http.MethodGet,
+		"/api/projects/"+seed.projectID+"/sources/"+imported.Source.ID,
+		seed.ownerToken, seed.organizationID, nil, &source)
+	if strings.Contains(source.Content, "她推开门") || !strings.Contains(source.Content, "第二章 远行") || !strings.Contains(source.Content, "他们出发") {
+		t.Fatalf("rebuilt source content = %q", source.Content)
+	}
+
+	assertAPIErrorCode(t, server, http.MethodDelete,
+		"/api/projects/"+seed.projectID+"/sources/"+imported.Source.ID+"/chapters/"+remaining.Items[0].ID,
+		seed.ownerToken, seed.organizationID, nil, http.StatusConflict, "SOURCE_CHAPTER_LAST_REMAINING")
+}
+
 func TestNovelImportPersistsVolumeAndSectionOrdinals(t *testing.T) {
 	server, seed := setupSourceImportTest(t)
 	defer seed.Close()
@@ -160,6 +204,18 @@ func TestScriptImportCreatesScriptAndVersion(t *testing.T) {
 	}
 	if meta.SourceID != imported.Source.ID {
 		t.Fatalf("metadata sourceId = %s, want %s", meta.SourceID, imported.Source.ID)
+	}
+	var episodeCount int
+	var episodeContent string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT count(*), COALESCE(max(content), '')
+		FROM script_episodes
+		WHERE project_id = $1 AND script_id = $2 AND script_version_id = $3
+	`, seed.projectID, imported.Script.ID, imported.Script.CurrentVersionID).Scan(&episodeCount, &episodeContent); err != nil {
+		t.Fatalf("query script episodes: %v", err)
+	}
+	if episodeCount != 1 || episodeContent != "# 第一场\n\n角色进入房间。" {
+		t.Fatalf("episode count/content = %d/%q", episodeCount, episodeContent)
 	}
 }
 

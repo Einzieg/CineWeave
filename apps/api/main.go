@@ -20,7 +20,8 @@ import (
 func main() {
 	cfg := config.ServerFromEnv("api", "CINEWEAVE_API_ADDR", ":8080")
 	logger := observability.Logger(cfg.Name, cfg.Env)
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	pool, err := db.Open(ctx, config.Get("DATABASE_URL", "postgres://cineweave:cineweave_dev_password@localhost:5432/cineweave?sslmode=disable"))
 	if err != nil {
@@ -57,13 +58,16 @@ func main() {
 		log.Fatal(err)
 	}
 	temporalClient, err := client.Dial(client.Options{
-		HostPort: config.Get("TEMPORAL_ADDRESS", "localhost:7233"),
+		HostPort:  config.Get("TEMPORAL_ADDRESS", "localhost:7233"),
+		Namespace: config.Get("TEMPORAL_NAMESPACE", "default"),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer temporalClient.Close()
 	server := api.New(pool, authService, providerService, storageClient, temporalClient, authz.New(pool))
+	go server.RunWorkflowCancellationReconciler(ctx, logger)
+	go server.RunWorkflowStartDispatcher(ctx, logger)
 
 	if err := service.Serve(ctx, cfg, server.Handler(), logger); err != nil {
 		log.Fatal(err)

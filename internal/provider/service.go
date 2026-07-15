@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -16,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Einzieg/cineweave/internal/provider/outbound"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +30,9 @@ type Service struct {
 	allowDirectFallback bool
 	httpClient          *http.Client
 	objectStorage       ObjectStorage
+	mediaFetcher        *outbound.MediaFetcher
+	videoMediaProbe     VideoMediaProbeFunc
+	videoMediaFileProbe VideoMediaFileProbeFunc
 	guard               *ProviderGuard
 }
 
@@ -44,6 +47,9 @@ func NewService(db *pgxpool.Pool, vault *Vault) *Service {
 		vault:               vault,
 		allowDirectFallback: providerDirectFallbackAllowed(os.Getenv("CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK"), env),
 		httpClient:          &http.Client{Timeout: 2 * time.Minute},
+		mediaFetcher:        outbound.NewMediaFetcher(outbound.Config{}),
+		videoMediaProbe:     defaultVideoMediaProbe,
+		videoMediaFileProbe: defaultVideoMediaFileProbe,
 		guard:               NewProviderGuard(db),
 	}
 }
@@ -186,6 +192,9 @@ func (s *Service) CreateAccount(ctx context.Context, organizationID, userID stri
 	if err != nil {
 		return Account{}, fmt.Errorf("%w: config must be valid JSON", ErrValidation)
 	}
+	if _, err := providerMediaRequestPolicy(config); err != nil {
+		return Account{}, err
+	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -260,6 +269,9 @@ func (s *Service) UpdateAccount(ctx context.Context, organizationID, accountID s
 		if err != nil {
 			return Account{}, fmt.Errorf("%w: config must be valid JSON", ErrValidation)
 		}
+	}
+	if _, err := providerMediaRequestPolicy(config); err != nil {
+		return Account{}, err
 	}
 
 	if _, err := s.db.Exec(ctx, `
@@ -565,6 +577,11 @@ func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID strin
 			return Model{}, err
 		}
 	}
+	if capability != nil || modality != current.Modality {
+		if err := validateExistingModelBindingRuntimeOptions(ctx, tx, modelID, modality); err != nil {
+			return Model{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Model{}, err
 	}
@@ -776,15 +793,80 @@ func (s *Service) CreateModelProfileBinding(ctx context.Context, organizationID,
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	runtimeOptions, err := normalizeModelProfileBindingRuntimeOptions(model, req.RuntimeOptions)
+	if err != nil {
+		return ModelProfile{}, err
+	}
+	runtimeOptionsJSON, err := encodeModelProfileBindingRuntimeOptions(runtimeOptions)
+	if err != nil {
+		return ModelProfile{}, err
+	}
 	if _, err := s.db.Exec(ctx, `
-		INSERT INTO model_profile_bindings(model_profile_id, provider_model_id, priority, weight, enabled)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO model_profile_bindings(model_profile_id, provider_model_id, priority, weight, enabled, runtime_options)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (model_profile_id, provider_model_id) DO UPDATE SET
 			priority = EXCLUDED.priority,
 			weight = EXCLUDED.weight,
-			enabled = EXCLUDED.enabled
-	`, profileID, req.ProviderModelID, priority, weight, enabled); err != nil {
+			enabled = EXCLUDED.enabled,
+			runtime_options = EXCLUDED.runtime_options
+	`, profileID, req.ProviderModelID, priority, weight, enabled, runtimeOptionsJSON); err != nil {
 		return ModelProfile{}, err
+	}
+	return s.GetModelProfile(ctx, organizationID, profileID)
+}
+
+func (s *Service) UpdateModelProfileBinding(ctx context.Context, organizationID, profileID, bindingID string, req UpdateModelProfileBindingRequest) (ModelProfile, error) {
+	if req.Priority == nil && req.Weight == nil && req.Enabled == nil && req.RuntimeOptions == nil {
+		return ModelProfile{}, fmt.Errorf("%w: at least one binding field is required", ErrValidation)
+	}
+	if req.Priority != nil && *req.Priority < 0 {
+		return ModelProfile{}, fmt.Errorf("%w: priority must be non-negative", ErrValidation)
+	}
+	if req.Weight != nil && *req.Weight < 0 {
+		return ModelProfile{}, fmt.Errorf("%w: weight must be non-negative", ErrValidation)
+	}
+	var runtimeOptionsJSON json.RawMessage
+	if req.RuntimeOptions != nil {
+		var providerModelID string
+		if err := s.db.QueryRow(ctx, `
+			SELECT b.provider_model_id
+			FROM model_profile_bindings b
+			JOIN model_profiles p ON p.id = b.model_profile_id
+			WHERE p.organization_id = $1 AND p.id = $2 AND b.id = $3
+		`, organizationID, profileID, bindingID).Scan(&providerModelID); err != nil {
+			return ModelProfile{}, err
+		}
+		model, err := s.GetModel(ctx, organizationID, providerModelID)
+		if err != nil {
+			return ModelProfile{}, err
+		}
+		runtimeOptions, err := normalizeModelProfileBindingRuntimeOptions(model, req.RuntimeOptions)
+		if err != nil {
+			return ModelProfile{}, err
+		}
+		runtimeOptionsJSON, err = encodeModelProfileBindingRuntimeOptions(runtimeOptions)
+		if err != nil {
+			return ModelProfile{}, err
+		}
+	}
+
+	tag, err := s.db.Exec(ctx, `
+		UPDATE model_profile_bindings b
+		SET priority = COALESCE($4::integer, b.priority),
+		    weight = COALESCE($5::integer, b.weight),
+		    enabled = COALESCE($6::boolean, b.enabled),
+		    runtime_options = COALESCE($7::jsonb, b.runtime_options)
+		FROM model_profiles p
+		WHERE b.model_profile_id = p.id
+		  AND p.organization_id = $1
+		  AND p.id = $2
+		  AND b.id = $3
+	`, organizationID, profileID, bindingID, req.Priority, req.Weight, req.Enabled, runtimeOptionsJSON)
+	if err != nil {
+		return ModelProfile{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return ModelProfile{}, pgx.ErrNoRows
 	}
 	return s.GetModelProfile(ctx, organizationID, profileID)
 }
@@ -1048,10 +1130,12 @@ func discoveredTaskTypes(modality string) []string {
 		return []string{TaskTypeImageGenerate}
 	case "video":
 		return []string{"video.text_to_video", "video.image_to_video", TaskTypeVideoCreateTask, TaskTypeVideoPollTask, TaskTypeVideoCancelTask}
+	case "audio":
+		return []string{TaskTypeAudioTTS, TaskTypeAudioTranscribe}
 	case "embedding":
 		return []string{"embedding.create"}
 	case "multimodal":
-		return []string{TaskTypeTextGenerate, TaskTypeTextStream, TaskTypeImageGenerate, TaskTypeVideoCreateTask, TaskTypeVideoPollTask}
+		return []string{TaskTypeTextGenerate, TaskTypeTextStream, TaskTypeImageGenerate, TaskTypeAudioTTS, TaskTypeAudioTranscribe, TaskTypeVideoCreateTask, TaskTypeVideoPollTask}
 	default:
 		return []string{TaskTypeTextGenerate, TaskTypeTextStream}
 	}
@@ -1140,6 +1224,8 @@ func (s *Service) RecordProviderModelTest(ctx context.Context, organizationID, u
 		return ProviderTestResult{}, fmt.Errorf("%w: configure PROVIDER_GATEWAY_URL for image_generation_test", ErrProviderGatewayRequired)
 	case "video_generation_test":
 		return ProviderTestResult{}, fmt.Errorf("%w: configure PROVIDER_GATEWAY_URL for video_generation_test", ErrProviderGatewayRequired)
+	case "audio_tts_test", "audio_transcription_test":
+		return ProviderTestResult{}, fmt.Errorf("%w: configure PROVIDER_GATEWAY_URL for %s", ErrProviderGatewayRequired, testType)
 	default:
 		return ProviderTestResult{}, fmt.Errorf("%w: unsupported testType", ErrValidation)
 	}
@@ -1316,6 +1402,46 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		latencyMS = gatewayResp.LatencyMS
 		requestSnapshot = mustJSON(gatewayReq)
 		responseSnapshot = mustJSON(gatewayResp)
+		if isProviderFailureStatus(status) {
+			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
+			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
+		} else {
+			normalizedOutput = mustJSON(gatewayResp.Output)
+		}
+	case "audio_tts_test":
+		gatewayReq := GatewayTTSRequest{
+			OrganizationID: organizationID, ProjectID: stringFieldFromJSON(input, "projectId"),
+			WorkflowRunID: stringFieldFromJSON(input, "workflowRunId"), NodeRunID: stringFieldFromJSON(input, "nodeRunId"),
+			ProviderModelID: modelID, IdempotencyKey: req.IdempotencyKey, Input: input,
+		}
+		var gatewayResp GatewayTTSResponse
+		if err := s.postGatewayJSON(ctx, "/internal/provider/audio/tts", gatewayReq, &gatewayResp); err != nil {
+			return ProviderTestResult{}, err
+		}
+		providerCallID, status, latencyMS = gatewayResp.ProviderCallID, gatewayResp.Status, gatewayResp.LatencyMS
+		attempts, requestSnapshot, responseSnapshot = gatewayResp.Attempts, mustJSON(gatewayReq), mustJSON(gatewayResp)
+		if isProviderFailureStatus(status) {
+			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
+			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
+		} else {
+			normalizedOutput = mustJSON(gatewayResp.Output)
+		}
+	case "audio_transcription_test":
+		gatewayReq := GatewayASRRequest{
+			OrganizationID: organizationID, ProjectID: stringFieldFromJSON(input, "projectId"),
+			WorkflowRunID: stringFieldFromJSON(input, "workflowRunId"), NodeRunID: stringFieldFromJSON(input, "nodeRunId"),
+			ProviderModelID: modelID, IdempotencyKey: req.IdempotencyKey, Input: input,
+			Source: GatewayAudioSource{
+				ArtifactID: stringFieldFromJSON(input, "artifactId"), MediaFileID: stringFieldFromJSON(input, "mediaFileId"),
+				StorageKey: stringFieldFromJSON(input, "storageKey"), FileName: stringFieldFromJSON(input, "fileName"),
+			},
+		}
+		var gatewayResp GatewayASRResponse
+		if err := s.postGatewayJSON(ctx, "/internal/provider/audio/transcribe", gatewayReq, &gatewayResp); err != nil {
+			return ProviderTestResult{}, err
+		}
+		providerCallID, status, latencyMS = gatewayResp.ProviderCallID, gatewayResp.Status, gatewayResp.LatencyMS
+		attempts, requestSnapshot, responseSnapshot = gatewayResp.Attempts, mustJSON(gatewayReq), mustJSON(gatewayResp)
 		if isProviderFailureStatus(status) {
 			errorCode, errorMessage = gatewayErrorFields(gatewayResp.Error)
 			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
@@ -1590,13 +1716,15 @@ func (s *Service) ListCallLogs(ctx context.Context, organizationID string, filte
 	limit := normalizeLimit(filters.Limit, 20, 100)
 	rows, err := s.db.Query(ctx, `
 		SELECT
-			id, organization_id, project_id, workflow_run_id, node_run_id,
+			id, provider_request_id, attempt_generation, attempt_sequence,
+			organization_id, project_id, workflow_run_id, node_run_id,
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
 			task_type, execution_mode, status,
 			latency_ms, input_tokens, output_tokens, estimated_cost::text, currency,
 			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
+			requested_duration_seconds::float8, actual_duration_seconds::float8, media_probe,
 			created_at, started_at, completed_at
 		FROM provider_call_logs
 		WHERE organization_id = $1
@@ -1711,69 +1839,12 @@ func (s *Service) postGatewayJSON(ctx context.Context, path string, payload any,
 }
 
 func (s *Service) postGatewayStream(ctx context.Context, payload GatewayTextRequest) (GatewayTextResponse, error) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return GatewayTextResponse{}, err
+	client := &GatewayClient{
+		BaseURL: s.gatewayURL,
+		Token:   s.gatewayToken,
+		Client:  s.httpClient,
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.gatewayURL+"/internal/provider/text/stream", bytes.NewReader(body))
-	if err != nil {
-		return GatewayTextResponse{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	if s.gatewayToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.gatewayToken)
-	}
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return GatewayTextResponse{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		if readErr != nil {
-			return GatewayTextResponse{}, readErr
-		}
-		return GatewayTextResponse{}, gatewayHTTPError(resp.StatusCode, responseBody)
-	}
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	event := ""
-	var completed GatewayTextResponse
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			event = ""
-			continue
-		}
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		switch event {
-		case "provider.completed":
-			if err := json.Unmarshal([]byte(data), &completed); err != nil {
-				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream completion is invalid", ErrValidation)
-			}
-		case "provider.error":
-			var standard StandardError
-			if err := json.Unmarshal([]byte(data), &standard); err != nil {
-				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream error is invalid", ErrValidation)
-			}
-			return GatewayTextResponse{}, errorFromGatewayStandard(&standard)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return GatewayTextResponse{}, err
-	}
-	if completed.Status == "" {
-		return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream did not complete", ErrValidation)
-	}
-	return completed, nil
+	return client.StreamText(ctx, payload, nil)
 }
 
 func gatewayHTTPError(status int, body []byte) error {
@@ -2124,10 +2195,10 @@ func scanModelProfile(row rowScanner) (ModelProfile, error) {
 
 func (s *Service) listModelProfileBindings(ctx context.Context, profileID string) ([]ModelProfileBinding, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, model_profile_id, provider_model_id, priority, weight, enabled, created_at
+		SELECT id, model_profile_id, provider_model_id, priority, weight, enabled, runtime_options, created_at
 		FROM model_profile_bindings
 		WHERE model_profile_id = $1
-		ORDER BY priority ASC, created_at ASC
+		ORDER BY priority ASC, weight DESC, created_at ASC
 	`, profileID)
 	if err != nil {
 		return nil, err
@@ -2137,7 +2208,12 @@ func (s *Service) listModelProfileBindings(ctx context.Context, profileID string
 	items := make([]ModelProfileBinding, 0)
 	for rows.Next() {
 		var item ModelProfileBinding
-		if err := rows.Scan(&item.ID, &item.ModelProfileID, &item.ProviderModelID, &item.Priority, &item.Weight, &item.Enabled, &item.CreatedAt); err != nil {
+		var runtimeOptions []byte
+		if err := rows.Scan(&item.ID, &item.ModelProfileID, &item.ProviderModelID, &item.Priority, &item.Weight, &item.Enabled, &runtimeOptions, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.RuntimeOptions, err = decodeModelProfileBindingRuntimeOptions(runtimeOptions)
+		if err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -2165,6 +2241,12 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 	if status == "" {
 		status = "running"
 	}
+	if req.AttemptGeneration <= 0 {
+		req.AttemptGeneration = 1
+	}
+	if req.AttemptSequence <= 0 {
+		req.AttemptSequence = 1
+	}
 	requestSnapshot, err := SanitizeRawJSON(req.RequestSnapshot, "{}")
 	if err != nil {
 		return CallLog{}, fmt.Errorf("%w: requestSnapshot must be valid JSON", ErrValidation)
@@ -2185,10 +2267,15 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 	if err != nil {
 		return CallLog{}, fmt.Errorf("%w: mediaFileIds must be valid JSON", ErrValidation)
 	}
+	mediaProbe, err := normalizeJSON(req.MediaProbe, "{}")
+	if err != nil {
+		return CallLog{}, fmt.Errorf("%w: mediaProbe must be valid JSON", ErrValidation)
+	}
 
 	row := db.QueryRow(ctx, `
 		INSERT INTO provider_call_logs(
 			id,
+			provider_request_id, attempt_generation, attempt_sequence,
 			organization_id, project_id, workflow_run_id, node_run_id,
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
@@ -2197,78 +2284,134 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			latency_ms, input_tokens, output_tokens, estimated_cost, currency,
 			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
+			requested_duration_seconds, actual_duration_seconds, media_probe,
 			started_at, completed_at
 		)
 		VALUES (
-			COALESCE(NULLIF($32, '')::uuid, gen_random_uuid()),
-			$1, $2, $3, $4,
-			$5, $6, $7,
-			$8, $9, $10,
-			$11, $12,
-			$13, $14, $15, $16, $17,
-			$18, $19, $20, $21, $22,
-			$23, $24, $25, $26,
-			$27, $28, $29, $30, $31,
-			CASE WHEN $17 IN ('running', 'succeeded', 'failed', 'skipped', 'blocked') THEN now() ELSE NULL END,
-			CASE WHEN $17 IN ('succeeded', 'failed', 'cancelled', 'skipped', 'blocked') THEN now() ELSE NULL END
+			COALESCE(NULLIF(@id, '')::uuid, gen_random_uuid()),
+			NULLIF(@provider_request_id, '')::uuid, @attempt_generation, @attempt_sequence,
+			@organization_id, NULLIF(@project_id, '')::uuid, NULLIF(@workflow_run_id, '')::uuid, NULLIF(@node_run_id, '')::uuid,
+			@provider_account_id, NULLIF(@provider_model_id, '')::uuid, NULLIF(@credential_id, '')::uuid,
+			NULLIF(@model_profile_id, '')::uuid, NULLIF(@model_profile_binding_id, '')::uuid, NULLIF(@model_profile_key, ''),
+			NULLIF(@prompt_version_id, '')::uuid, NULLIF(@prompt_hash, ''),
+			NULLIF(@lease_id, '')::uuid, NULLIF(@idempotency_key, ''), @task_type, @execution_mode, @status,
+			@latency_ms, @input_tokens, @output_tokens, @estimated_cost, @currency,
+			NULLIF(@error_code, ''), NULLIF(@error_message, ''), @upstream_status, NULLIF(@upstream_error_code, ''),
+			@request_snapshot, @response_snapshot, @normalized_output, @artifact_ids, @media_file_ids,
+			@requested_duration_seconds, @actual_duration_seconds, @media_probe,
+			CASE WHEN @status IN ('running', 'succeeded', 'failed', 'skipped', 'blocked', 'unknown_outcome') THEN now() ELSE NULL END,
+			CASE WHEN @status IN ('succeeded', 'failed', 'cancelled', 'skipped', 'blocked', 'unknown_outcome') THEN now() ELSE NULL END
 		)
+		ON CONFLICT (id) DO UPDATE SET
+			provider_request_id = COALESCE(EXCLUDED.provider_request_id, provider_call_logs.provider_request_id),
+			attempt_generation = EXCLUDED.attempt_generation,
+			attempt_sequence = EXCLUDED.attempt_sequence,
+			organization_id = EXCLUDED.organization_id,
+			project_id = EXCLUDED.project_id,
+			workflow_run_id = EXCLUDED.workflow_run_id,
+			node_run_id = EXCLUDED.node_run_id,
+			provider_account_id = EXCLUDED.provider_account_id,
+			provider_model_id = EXCLUDED.provider_model_id,
+			credential_id = EXCLUDED.credential_id,
+			model_profile_id = EXCLUDED.model_profile_id,
+			model_profile_binding_id = EXCLUDED.model_profile_binding_id,
+			model_profile_key = EXCLUDED.model_profile_key,
+			prompt_version_id = EXCLUDED.prompt_version_id,
+			prompt_hash = EXCLUDED.prompt_hash,
+			lease_id = EXCLUDED.lease_id,
+			idempotency_key = EXCLUDED.idempotency_key,
+			task_type = EXCLUDED.task_type,
+			execution_mode = EXCLUDED.execution_mode,
+			status = EXCLUDED.status,
+			latency_ms = EXCLUDED.latency_ms,
+			input_tokens = EXCLUDED.input_tokens,
+			output_tokens = EXCLUDED.output_tokens,
+			estimated_cost = EXCLUDED.estimated_cost,
+			currency = EXCLUDED.currency,
+			error_code = EXCLUDED.error_code,
+			error_message = EXCLUDED.error_message,
+			upstream_status = EXCLUDED.upstream_status,
+			upstream_error_code = EXCLUDED.upstream_error_code,
+			request_snapshot = EXCLUDED.request_snapshot,
+			response_snapshot = EXCLUDED.response_snapshot,
+			normalized_output = EXCLUDED.normalized_output,
+			artifact_ids = EXCLUDED.artifact_ids,
+			media_file_ids = EXCLUDED.media_file_ids,
+			requested_duration_seconds = EXCLUDED.requested_duration_seconds,
+			actual_duration_seconds = EXCLUDED.actual_duration_seconds,
+			media_probe = EXCLUDED.media_probe,
+			started_at = COALESCE(provider_call_logs.started_at, EXCLUDED.started_at),
+			completed_at = EXCLUDED.completed_at
 		RETURNING
-			id, organization_id, project_id, workflow_run_id, node_run_id,
+			id, provider_request_id, attempt_generation, attempt_sequence,
+			organization_id, project_id, workflow_run_id, node_run_id,
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
 			task_type, execution_mode, status,
 			latency_ms, input_tokens, output_tokens, estimated_cost::text, currency,
 			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
+			requested_duration_seconds::float8, actual_duration_seconds::float8, media_probe,
 			created_at, started_at, completed_at
-	`,
-		req.OrganizationID,
-		nullString(req.ProjectID),
-		nullString(req.WorkflowRunID),
-		nullString(req.NodeRunID),
-		req.ProviderAccountID,
-		nullString(req.ProviderModelID),
-		nullString(req.CredentialID),
-		nullString(req.ModelProfileID),
-		nullString(req.ModelProfileBindingID),
-		nullString(req.ModelProfileKey),
-		nullString(req.PromptVersionID),
-		nullString(req.PromptHash),
-		nullString(req.LeaseID),
-		nullString(strings.TrimSpace(req.IdempotencyKey)),
-		taskType,
-		executionMode,
-		status,
-		req.LatencyMS,
-		nullInt(req.InputTokens),
-		nullInt(req.OutputTokens),
-		nullString(req.EstimatedCost),
-		currencyOrDefault(req.Currency),
-		nullString(req.ErrorCode),
-		nullString(req.ErrorMessage),
-		req.UpstreamStatus,
-		nullString(req.UpstreamErrorCode),
-		requestSnapshot,
-		nullIfJSONNull(responseSnapshot),
-		nullIfJSONNull(normalizedOutput),
-		artifactIDs,
-		mediaFileIDs,
-		strings.TrimSpace(req.ID),
-	)
+	`, pgx.NamedArgs{
+		"id":                         strings.TrimSpace(req.ID),
+		"provider_request_id":        strings.TrimSpace(req.ProviderRequestID),
+		"attempt_generation":         req.AttemptGeneration,
+		"attempt_sequence":           req.AttemptSequence,
+		"organization_id":            req.OrganizationID,
+		"project_id":                 strings.TrimSpace(req.ProjectID),
+		"workflow_run_id":            strings.TrimSpace(req.WorkflowRunID),
+		"node_run_id":                strings.TrimSpace(req.NodeRunID),
+		"provider_account_id":        req.ProviderAccountID,
+		"provider_model_id":          strings.TrimSpace(req.ProviderModelID),
+		"credential_id":              strings.TrimSpace(req.CredentialID),
+		"model_profile_id":           strings.TrimSpace(req.ModelProfileID),
+		"model_profile_binding_id":   strings.TrimSpace(req.ModelProfileBindingID),
+		"model_profile_key":          strings.TrimSpace(req.ModelProfileKey),
+		"prompt_version_id":          strings.TrimSpace(req.PromptVersionID),
+		"prompt_hash":                strings.TrimSpace(req.PromptHash),
+		"lease_id":                   strings.TrimSpace(req.LeaseID),
+		"idempotency_key":            strings.TrimSpace(req.IdempotencyKey),
+		"task_type":                  taskType,
+		"execution_mode":             executionMode,
+		"status":                     status,
+		"latency_ms":                 req.LatencyMS,
+		"input_tokens":               nullInt(req.InputTokens),
+		"output_tokens":              nullInt(req.OutputTokens),
+		"estimated_cost":             nullString(req.EstimatedCost),
+		"currency":                   currencyOrDefault(req.Currency),
+		"error_code":                 strings.TrimSpace(req.ErrorCode),
+		"error_message":              strings.TrimSpace(req.ErrorMessage),
+		"upstream_status":            req.UpstreamStatus,
+		"upstream_error_code":        strings.TrimSpace(req.UpstreamErrorCode),
+		"request_snapshot":           requestSnapshot,
+		"response_snapshot":          nullIfJSONNull(responseSnapshot),
+		"normalized_output":          nullIfJSONNull(normalizedOutput),
+		"artifact_ids":               artifactIDs,
+		"media_file_ids":             mediaFileIDs,
+		"requested_duration_seconds": nullFloat(req.RequestedDurationSeconds),
+		"actual_duration_seconds":    nullFloat(req.ActualDurationSeconds),
+		"media_probe":                mediaProbe,
+	})
 	return scanCallLog(row)
 }
 
 func scanCallLog(row rowScanner) (CallLog, error) {
 	var item CallLog
+	var providerRequestID sql.NullString
 	var projectID, workflowRunID, nodeRunID, providerModelID, credentialID sql.NullString
 	var modelProfileID, modelProfileBindingID, modelProfileKey sql.NullString
 	var errorCode, errorMessage, upstreamErrorCode sql.NullString
 	var estimatedCost, currency sql.NullString
 	var latencyMS, inputTokens, outputTokens, upstreamStatus sql.NullInt64
-	var requestSnapshot, responseSnapshot, normalizedOutput, artifactIDs, mediaFileIDs []byte
+	var requestedDurationSeconds, actualDurationSeconds sql.NullFloat64
+	var requestSnapshot, responseSnapshot, normalizedOutput, artifactIDs, mediaFileIDs, mediaProbe []byte
 	var startedAt, completedAt sql.NullTime
 	err := row.Scan(
 		&item.ID,
+		&providerRequestID,
+		&item.AttemptGeneration,
+		&item.AttemptSequence,
 		&item.OrganizationID,
 		&projectID,
 		&workflowRunID,
@@ -2296,10 +2439,14 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 		&normalizedOutput,
 		&artifactIDs,
 		&mediaFileIDs,
+		&requestedDurationSeconds,
+		&actualDurationSeconds,
+		&mediaProbe,
 		&item.CreatedAt,
 		&startedAt,
 		&completedAt,
 	)
+	item.ProviderRequestID = stringPtr(providerRequestID)
 	item.ProjectID = stringPtr(projectID)
 	item.WorkflowRunID = stringPtr(workflowRunID)
 	item.NodeRunID = stringPtr(nodeRunID)
@@ -2323,6 +2470,13 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 		value := int(outputTokens.Int64)
 		item.OutputTokens = &value
 	}
+	if requestedDurationSeconds.Valid {
+		item.RequestedDurationSeconds = &requestedDurationSeconds.Float64
+	}
+	if actualDurationSeconds.Valid {
+		item.ActualDurationSeconds = &actualDurationSeconds.Float64
+	}
+	item.MediaProbe = rawOrDefault(mediaProbe, "{}")
 	item.EstimatedCost = stringPtr(estimatedCost)
 	item.Currency = stringPtr(currency)
 	if upstreamStatus.Valid {
@@ -2345,14 +2499,30 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 
 func normalizedProviderFailure(err error) (status string, code string, message string, upstreamStatus *int, upstreamCode string) {
 	status = "failed"
+	if standard, ok := StandardErrorFromError(err); ok {
+		if standard.UpstreamStatus > 0 {
+			value := standard.UpstreamStatus
+			upstreamStatus = &value
+		}
+		return status, standard.Code, standard.Message, upstreamStatus, standard.UpstreamCode
+	}
 	var upstreamErr *UpstreamError
 	if errors.As(err, &upstreamErr) {
-		standard := NormalizeHTTPError(upstreamErr.Status, upstreamErr.Code)
+		standard := NormalizeUpstreamError(upstreamErr)
 		statusValue := upstreamErr.Status
 		return status, standard.Code, standard.Message, &statusValue, upstreamErr.Code
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return status, CodeUpstreamTimeout, "provider request timed out", nil, ""
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return status, CodeUpstreamStreamTruncated, "provider stream ended before a completion marker", nil, ""
+	}
+	if errors.Is(err, ErrValidation) {
+		return status, CodeInvalidRequest, err.Error(), nil, ""
+	}
+	if isTransientProviderTransportError(err) {
+		return status, CodeUpstreamInternalError, "provider connection was interrupted", nil, ""
 	}
 	return status, CodeUnknownError, err.Error(), nil, ""
 }

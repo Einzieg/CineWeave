@@ -58,7 +58,17 @@ func ComposeClipsWithStore(ctx context.Context, req ComposeRequest, objectStore 
 			return ComposeResult{}, err
 		}
 		normalizedPath := filepath.Join(tempDir, fmt.Sprintf("normalized-%03d.mp4", index))
-		if err := NormalizeClipWithTrim(ctx, inputPath, normalizedPath, width, height, defaultFPS, clip.TrimStartSeconds, clip.TrimEndSeconds); err != nil {
+		if err := NormalizeClipWithTrimRateAV(
+			ctx,
+			inputPath,
+			normalizedPath,
+			width,
+			height,
+			req.FPSNumerator,
+			req.FPSDenominator,
+			clip.TrimStartSeconds,
+			clip.TrimEndSeconds,
+		); err != nil {
 			return ComposeResult{}, fmt.Errorf("normalize clip %d: %w", index, err)
 		}
 		normalizedPaths = append(normalizedPaths, normalizedPath)
@@ -72,7 +82,11 @@ func ComposeClipsWithStore(ctx context.Context, req ComposeRequest, objectStore 
 	if err != nil {
 		return ComposeResult{}, err
 	}
-	put, err := objectStore.PutFile(ctx, BuildFinalVideoStorageKey(req, time.Now().UTC()), outputPath, mimeType)
+	storageKey := strings.TrimSpace(req.OutputStorageKey)
+	if storageKey == "" {
+		storageKey = BuildFinalVideoStorageKey(req, time.Now().UTC())
+	}
+	put, err := objectStore.PutFile(ctx, storageKey, outputPath, mimeType)
 	if err != nil {
 		return ComposeResult{}, err
 	}
@@ -84,6 +98,7 @@ func ComposeClipsWithStore(ctx context.Context, req ComposeRequest, objectStore 
 		DurationSeconds: probe.DurationSeconds,
 		Width:           probe.Width,
 		Height:          probe.Height,
+		Probe:           probe,
 	}, nil
 }
 

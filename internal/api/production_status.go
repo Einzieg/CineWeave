@@ -324,25 +324,30 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 			(
 				SELECT COUNT(*)
 				FROM novel_chapters nc
-				WHERE nc.project_id = $1 AND nc.source_id IS NOT NULL
+				JOIN project_sources ps ON ps.id = nc.source_id AND ps.project_id = nc.project_id
+				WHERE nc.project_id = $1 AND COALESCE(ps.status, 'ready') <> 'archived'
 			),
 			(
 				SELECT COUNT(*)
 				FROM novel_events ne
-				WHERE ne.project_id = $1
+				JOIN project_sources ps ON ps.id = ne.source_id AND ps.project_id = ne.project_id
+				WHERE ne.project_id = $1 AND COALESCE(ps.status, 'ready') <> 'archived'
 			),
 			(
 				SELECT COUNT(*)
 				FROM novel_events ne
-				WHERE ne.project_id = $1 AND ne.review_status = 'approved'
+				JOIN project_sources ps ON ps.id = ne.source_id AND ps.project_id = ne.project_id
+				WHERE ne.project_id = $1 AND ne.review_status = 'approved' AND COALESCE(ps.status, 'ready') <> 'archived'
 			),
 			(
 				SELECT COUNT(*)
 				FROM adaptation_plans ap
+				LEFT JOIN project_sources ps ON ps.id = ap.source_id AND ps.project_id = ap.project_id
 				WHERE ap.project_id = $1
+				  AND (ap.source_id IS NULL OR COALESCE(ps.status, 'ready') <> 'archived')
 			)
 		FROM project_sources
-		WHERE project_id = $1
+		WHERE project_id = $1 AND COALESCE(status, 'ready') <> 'archived'
 	`, projectID).Scan(&novelCount, &scriptSourceCount, &briefSourceCount, &chapterCount, &eventCount, &approvedEventCount, &adaptationPlanCount); err != nil {
 		return ProductionSourceStage{}, err
 	}
@@ -374,6 +379,8 @@ func (s *Server) productionSourceStage(r *http.Request, projectID string) (Produ
 	switch {
 	case activeScriptID != "" && scriptSceneCount == 0:
 		status = "scenes_pending_parse"
+	case activeScriptID != "" && staleScriptSceneCount > 0:
+		status = "needs_regeneration"
 	case activeScriptID != "" && pendingScriptSceneCount > 0:
 		status = "scenes_pending_review"
 	case activeScriptID != "":
@@ -947,6 +954,10 @@ func (s *Server) productionActionWorkflowCore(r *http.Request, project Project, 
 	if maxShots > 3 {
 		maxShots = 3
 	}
+	episodeMaxShots := productionOptionInt(options, "maxShots", 0)
+	if episodeMaxShots < 0 || episodeMaxShots > 24 {
+		episodeMaxShots = 0
+	}
 	switch action {
 	case "extract_events":
 		explicitSourceID := firstNonEmpty(req.SourceID, productionOptionString(options, "sourceId"))
@@ -1047,7 +1058,15 @@ func (s *Server) productionActionWorkflowCore(r *http.Request, project Project, 
 		if sourceID == "" {
 			return productionWorkflowSpec{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source")
 		}
-		return productionWorkflowSpec{WorkflowType: "source_to_script", Input: map[string]any{"sourceId": sourceID}, WorkflowFunc: workflows.SourceToScriptWorkflow}, nil
+		input := map[string]any{
+			"sourceId":       sourceID,
+			"title":          productionOptionString(options, "title"),
+			"instruction":    productionOptionString(options, "instruction"),
+			"chapterIds":     productionOptionStringSlice(options, "chapterIds"),
+			"maxConcurrency": productionOptionInt(options, "maxConcurrency", 0),
+			"idempotencyKey": productionOptionString(options, "idempotencyKey"),
+		}
+		return productionWorkflowSpec{WorkflowType: "source_to_script", Input: input, WorkflowFunc: workflows.SourceToScriptWorkflow}, nil
 	case "parse_script_scenes":
 		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
 		if err != nil {
@@ -1075,7 +1094,7 @@ func (s *Server) productionActionWorkflowCore(r *http.Request, project Project, 
 		if err != nil {
 			return productionWorkflowSpec{}, err
 		}
-		return productionWorkflowSpec{WorkflowType: "script_to_storyboard", Input: map[string]any{"scriptId": scriptID, "maxShots": maxShots, "generateDerivedAssets": false}, WorkflowFunc: workflows.ScriptToStoryboardWorkflow}, nil
+		return productionWorkflowSpec{WorkflowType: "script_to_storyboard", Input: map[string]any{"scriptId": scriptID, "scriptEpisodeIds": productionOptionStringSlice(options, "scriptEpisodeIds"), "maxShots": episodeMaxShots, "generateDerivedAssets": false}, WorkflowFunc: workflows.ScriptToStoryboardWorkflow}, nil
 	case "analyze_shot_assets":
 		scriptID, err := s.requireProductionScriptCore(r, project.ID, req.ScriptID)
 		if err != nil {
@@ -1179,10 +1198,10 @@ func (s *Server) activeProductionScript(r *http.Request, projectID, explicitScri
 		return id, title, err
 	}
 	err := s.db.QueryRow(r.Context(), `
-		SELECT id, title
-		FROM scripts
+		SELECT s.id, s.title
+		FROM scripts s
 		WHERE project_id = $1 AND current_version_id IS NOT NULL
-		ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, updated_at DESC, created_at DESC
+		ORDER BY CASE WHEN s.status = 'active' THEN 0 ELSE 1 END, s.updated_at DESC, s.created_at DESC
 		LIMIT 1
 	`, projectID).Scan(&id, &title)
 	if err == pgx.ErrNoRows {
@@ -1198,11 +1217,11 @@ func (s *Server) activeProductionSourceID(r *http.Request, projectID, explicitSo
 		err := s.db.QueryRow(r.Context(), `
 			SELECT id
 			FROM project_sources
-			WHERE project_id = $1 AND id = $2
+			WHERE project_id = $1 AND id = $2 AND COALESCE(status, 'ready') <> 'archived'
 		`, projectID, explicitSourceID).Scan(&id)
 		return id, err
 	}
-	items, err := s.projectSourceList(r, projectID)
+	items, err := s.projectSourceList(r, projectID, "active")
 	if err != nil {
 		return "", err
 	}
@@ -1217,17 +1236,21 @@ func (s *Server) activeProductionAdaptationPlan(r *http.Request, projectID, expl
 	var id, title, status string
 	if explicitPlanID != "" {
 		err := s.db.QueryRow(r.Context(), `
-			SELECT id, title, status
-			FROM adaptation_plans
-			WHERE project_id = $1 AND id = $2
+			SELECT ap.id, ap.title, ap.status
+			FROM adaptation_plans ap
+			LEFT JOIN project_sources ps ON ps.id = ap.source_id AND ps.project_id = ap.project_id
+			WHERE ap.project_id = $1 AND ap.id = $2
+			  AND (ap.source_id IS NULL OR COALESCE(ps.status, 'ready') <> 'archived')
 		`, projectID, explicitPlanID).Scan(&id, &title, &status)
 		return id, title, status, err
 	}
 	err := s.db.QueryRow(r.Context(), `
-		SELECT id, title, status
-		FROM adaptation_plans
-		WHERE project_id = $1
-		ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, updated_at DESC, created_at DESC
+		SELECT ap.id, ap.title, ap.status
+		FROM adaptation_plans ap
+		LEFT JOIN project_sources ps ON ps.id = ap.source_id AND ps.project_id = ap.project_id
+		WHERE ap.project_id = $1
+		  AND (ap.source_id IS NULL OR COALESCE(ps.status, 'ready') <> 'archived')
+		ORDER BY CASE WHEN ap.status = 'active' THEN 0 ELSE 1 END, ap.updated_at DESC, ap.created_at DESC
 		LIMIT 1
 	`, projectID).Scan(&id, &title, &status)
 	if err == pgx.ErrNoRows {
