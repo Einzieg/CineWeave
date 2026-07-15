@@ -26,7 +26,7 @@ func TestGatewayProviderLimitIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	vault, err := NewVault("")
 	if err != nil {

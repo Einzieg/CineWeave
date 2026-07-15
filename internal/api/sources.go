@@ -16,6 +16,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/production"
 	sourceutil "github.com/Einzieg/cineweave/internal/sources"
 	"github.com/jackc/pgx/v5"
 )
@@ -75,6 +76,15 @@ type NovelChapterSummary struct {
 	UpdatedAt               time.Time       `json:"updatedAt"`
 }
 
+type DeleteSourceChapterResponse struct {
+	Deleted               bool   `json:"deleted"`
+	Mode                  string `json:"mode"`
+	SourceID              string `json:"sourceId"`
+	ChapterID             string `json:"chapterId"`
+	DeletedChapterIndex   int    `json:"deletedChapterIndex"`
+	RemainingChapterCount int    `json:"remainingChapterCount"`
+}
+
 type CreatedScriptSummary struct {
 	ID               string `json:"id"`
 	CurrentVersionID string `json:"currentVersionId"`
@@ -132,7 +142,12 @@ func (s *Server) listProjectSources(w http.ResponseWriter, r *http.Request, prin
 	if !ok {
 		return
 	}
-	items, err := s.projectSourceList(r, project.ID)
+	statusFilter, valid := parseArchivedStatusFilter(r.URL.Query().Get("filter[status]"))
+	if !valid {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "source status filter is invalid", nil, false)
+		return
+	}
+	items, err := s.projectSourceList(r, project.ID, statusFilter)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -140,7 +155,11 @@ func (s *Server) listProjectSources(w http.ResponseWriter, r *http.Request, prin
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
 }
 
-func (s *Server) projectSourceList(r *http.Request, projectID string) ([]ProjectSource, error) {
+func (s *Server) projectSourceList(r *http.Request, projectID, statusFilter string) ([]ProjectSource, error) {
+	statusFilter, valid := parseArchivedStatusFilter(statusFilter)
+	if !valid {
+		statusFilter = "active"
+	}
 	rows, err := s.db.Query(r.Context(), `
 		SELECT s.id, s.organization_id, s.project_id, s.source_type, s.title, s.content_format,
 		       s.original_file_name, s.storage_key, s.status, s.metadata, s.created_by, s.created_at, s.updated_at,
@@ -155,9 +174,14 @@ func (s *Server) projectSourceList(r *http.Request, projectID string) ([]Project
 			WHERE project_id = $1
 			GROUP BY source_id
 		) c ON c.source_id = s.id
-		WHERE s.project_id = $1 AND s.status <> 'archived'
+		WHERE s.project_id = $1
+		  AND (
+		    $2 = 'all'
+		    OR ($2 = 'archived' AND COALESCE(s.status, 'ready') = 'archived')
+		    OR ($2 = 'active' AND COALESCE(s.status, 'ready') <> 'archived')
+		  )
 		ORDER BY s.created_at ASC, s.title ASC
-	`, projectID)
+	`, projectID, statusFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -424,6 +448,19 @@ func (s *Server) getSourceChapter(w http.ResponseWriter, r *http.Request, princi
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
+func (s *Server) deleteSourceChapter(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionSourceWrite)
+	if !ok {
+		return
+	}
+	result, err := s.deleteSourceChapterCore(r, project, r.PathValue("sourceId"), r.PathValue("chapterId"), principal.UserID, nil)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, result, nil)
+}
+
 func (s *Server) updateProjectSource(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionSourceWrite)
 	if !ok {
@@ -481,6 +518,7 @@ func (s *Server) updateProjectSource(w http.ResponseWriter, r *http.Request, pri
 			return
 		}
 	}
+	changedFields := sourceChangedFields(current, sourceType, content, contentFormat, req.Chapters != nil || (sourceType == "novel" && req.Content != nil && shouldSplitChapters(sourceType, req.SplitChapters)))
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
@@ -531,6 +569,17 @@ func (s *Server) updateProjectSource(w http.ResponseWriter, r *http.Request, pri
 		}
 		item.Chapters = chapters
 	}
+	if len(changedFields) > 0 {
+		if err := s.markProjectSourceDownstreamStaleTx(r, tx, project, item.ID, changedFields, principal.UserID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		item.Metadata = mergeRawObject(item.Metadata, map[string]any{
+			"sourceChangedAt":   time.Now().UTC().Format(time.RFC3339),
+			"downstreamStaleAt": time.Now().UTC().Format(time.RFC3339),
+			"changedFields":     changedFields,
+		})
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -556,6 +605,146 @@ func (s *Server) deleteProjectSource(w http.ResponseWriter, r *http.Request, pri
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"deleted": true, "mode": "archive"}, nil)
+}
+
+func (s *Server) deleteSourceChapterCore(r *http.Request, project Project, sourceID, chapterID, userID string, metadata map[string]any) (DeleteSourceChapterResponse, error) {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	defer tx.Rollback(r.Context())
+
+	var sourceType string
+	if err := tx.QueryRow(r.Context(), `
+		SELECT source_type
+		FROM project_sources
+		WHERE project_id = $1 AND id = $2
+		FOR UPDATE
+	`, project.ID, sourceID).Scan(&sourceType); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	if sourceType != "novel" {
+		return DeleteSourceChapterResponse{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceType must be novel")
+	}
+
+	chapter, err := scanNovelChapter(tx.QueryRow(r.Context(), `
+		SELECT id, source_id, chapter_index, volume_index, section_index, volume_title, chapter_title, content,
+		       event_state, event_summary, error_message, created_at, updated_at
+		FROM novel_chapters
+		WHERE project_id = $1 AND source_id = $2 AND id = $3
+		FOR UPDATE
+	`, project.ID, sourceID, chapterID))
+	if err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	var chapterCount int
+	if err := tx.QueryRow(r.Context(), `
+		SELECT count(*)
+		FROM novel_chapters
+		WHERE project_id = $1 AND source_id = $2
+	`, project.ID, sourceID).Scan(&chapterCount); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	if chapterCount <= 1 {
+		return DeleteSourceChapterResponse{}, newAPIError(http.StatusConflict, "SOURCE_CHAPTER_LAST_REMAINING", "不能删除小说的最后一个章节；如需移除全部内容，请归档原文")
+	}
+
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM novel_chapters
+		WHERE project_id = $1 AND source_id = $2 AND id = $3
+	`, project.ID, sourceID, chapter.ID); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	// Use a negative intermediate range so the unique (source_id, chapter_index)
+	// index cannot collide while closing the deleted global-index gap.
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE novel_chapters
+		SET chapter_index = -chapter_index,
+		    updated_at = now()
+		WHERE project_id = $1 AND source_id = $2 AND chapter_index > $3
+	`, project.ID, sourceID, chapter.ChapterIndex); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE novel_chapters
+		SET chapter_index = -chapter_index - 1,
+		    updated_at = now()
+		WHERE project_id = $1 AND source_id = $2 AND chapter_index < 0
+	`, project.ID, sourceID); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	var rebuiltContent string
+	if err := tx.QueryRow(r.Context(), `
+		WITH ordered AS (
+			SELECT chapter_index,
+			       NULLIF(btrim(volume_title), '') AS volume_title,
+			       NULLIF(btrim(chapter_title), '') AS chapter_title,
+			       NULLIF(btrim(content), '') AS content,
+			       lag(NULLIF(btrim(volume_title), '')) OVER (ORDER BY chapter_index) AS previous_volume_title
+			FROM novel_chapters
+			WHERE project_id = $1 AND source_id = $2
+		)
+		SELECT COALESCE(string_agg(
+			concat_ws(E'\n',
+				CASE
+					WHEN volume_title IS NOT NULL AND volume_title IS DISTINCT FROM previous_volume_title
+					THEN volume_title
+				END,
+				chapter_title,
+				content
+			),
+			E'\n\n' ORDER BY chapter_index
+		), '')
+		FROM ordered
+	`, project.ID, sourceID).Scan(&rebuiltContent); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	deletedAt := time.Now().UTC().Format(time.RFC3339)
+	metadataPatch := map[string]any{
+		"sourceChapterDeletedAt": deletedAt,
+		"deletedChapterId":       chapter.ID,
+		"deletedChapterIndex":    chapter.ChapterIndex,
+		"deletedBy":              nullableMetadataValue(userID),
+	}
+	for key, value := range metadata {
+		metadataPatch[key] = value
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE project_sources
+		SET content = $3,
+		    metadata = COALESCE(metadata, '{}'::jsonb) || $4::jsonb,
+		    updated_at = now()
+		WHERE project_id = $1 AND id = $2
+	`, project.ID, sourceID, rebuiltContent, mustMarshal(metadataPatch)); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	if err := s.markProjectSourceDownstreamStaleTx(r, tx, project, sourceID, []string{"content", "chapters"}, userID); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "source.chapter.deleted", "novel_chapter", chapter.ID, mustRawJSON(map[string]any{
+		"sourceId":          sourceID,
+		"chapterId":         chapter.ID,
+		"chapterIndex":      chapter.ChapterIndex,
+		"volumeIndex":       nullableMetadataValue(chapter.VolumeIndex),
+		"sectionIndex":      nullableMetadataValue(chapter.SectionIndex),
+		"chapterTitle":      nullableMetadataValue(chapter.ChapterTitle),
+		"remainingChapters": chapterCount - 1,
+		"deletedBy":         nullableMetadataValue(userID),
+		"deletedAt":         deletedAt,
+	})); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		return DeleteSourceChapterResponse{}, err
+	}
+	return DeleteSourceChapterResponse{
+		Deleted:               true,
+		Mode:                  "delete_chapter",
+		SourceID:              sourceID,
+		ChapterID:             chapter.ID,
+		DeletedChapterIndex:   chapter.ChapterIndex,
+		RemainingChapterCount: chapterCount - 1,
+	}, nil
 }
 
 func (s *Server) getProjectSourceImpact(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -611,6 +800,91 @@ func (s *Server) projectSourceImpact(r *http.Request, projectID, sourceID string
 		Affected:        affected,
 		Warnings:        warnings,
 	}, nil
+}
+
+func (s *Server) markProjectSourceDownstreamStaleTx(r *http.Request, tx pgx.Tx, project Project, sourceID string, changedFields []string, userID string) error {
+	changedAt := time.Now().UTC()
+	metadataPatch := map[string]any{
+		"sourceChangedAt":   changedAt.Format(time.RFC3339),
+		"downstreamStaleAt": changedAt.Format(time.RFC3339),
+		"changedFields":     changedFields,
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE project_sources
+		SET metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb,
+		    updated_at = now()
+		WHERE project_id = $1 AND id = $2
+	`, project.ID, sourceID, mustMarshal(metadataPatch)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE novel_chapters
+		SET event_state = 'pending',
+		    event_summary = NULL,
+		    error_message = NULL,
+		    updated_at = now()
+		WHERE project_id = $1 AND source_id = $2
+	`, project.ID, sourceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE novel_events
+		SET stale_state = 'needs_regeneration',
+		    review_status = 'pending',
+		    metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb,
+		    updated_at = now()
+		WHERE project_id = $1 AND source_id = $2
+	`, project.ID, sourceID, mustMarshal(metadataPatch)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE adaptation_plans
+		SET status = CASE WHEN status = 'archived' THEN status ELSE 'draft' END,
+		    review_status = 'pending',
+		    metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb,
+		    updated_at = now()
+		WHERE project_id = $1 AND source_id = $2
+	`, project.ID, sourceID, mustMarshal(metadataPatch)); err != nil {
+		return err
+	}
+	rows, err := tx.Query(r.Context(), `
+		SELECT DISTINCT current_version_id::text
+		FROM scripts
+		WHERE project_id = $1
+		  AND source_id = $2
+		  AND current_version_id IS NOT NULL
+	`, project.ID, sourceID)
+	if err != nil {
+		return err
+	}
+	versionIDs := make([]string, 0)
+	for rows.Next() {
+		var versionID string
+		if err := rows.Scan(&versionID); err != nil {
+			rows.Close()
+			return err
+		}
+		versionIDs = append(versionIDs, versionID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, versionID := range versionIDs {
+		if err := markScriptVersionDownstreamStale(r, tx, project.ID, versionID); err != nil {
+			return err
+		}
+	}
+	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
+		return err
+	}
+	return insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "source.updated.downstream_stale", "project_source", sourceID, mustRawJSON(map[string]any{
+		"sourceId":      sourceID,
+		"changedFields": changedFields,
+		"changedBy":     nullableMetadataValue(userID),
+		"changedAt":     changedAt.Format(time.RFC3339),
+	}))
 }
 
 func (s *Server) projectSource(r *http.Request, projectID, sourceID string) (ProjectSource, error) {
@@ -1009,6 +1283,51 @@ func validSourceStatus(value string) bool {
 	return value == "ready" || value == "processing" || value == "processed" || value == "failed" || value == "archived"
 }
 
+func parseArchivedStatusFilter(value string) (string, bool) {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "", "active":
+		return "active", true
+	case "archived":
+		return "archived", true
+	case "all":
+		return "all", true
+	default:
+		return "", false
+	}
+}
+
+func sourceChangedFields(current ProjectSource, nextSourceType, nextContent, nextContentFormat string, chaptersChanged bool) []string {
+	fields := make([]string, 0, 4)
+	if current.SourceType != nextSourceType {
+		fields = append(fields, "sourceType")
+	}
+	if current.Content != nextContent {
+		fields = append(fields, "content")
+	}
+	if current.ContentFormat != nextContentFormat {
+		fields = append(fields, "contentFormat")
+	}
+	if chaptersChanged {
+		fields = append(fields, "chapters")
+	}
+	return fields
+}
+
+func mergeRawObject(raw json.RawMessage, patch map[string]any) json.RawMessage {
+	merged := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &merged)
+	}
+	for key, value := range patch {
+		merged[key] = value
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return rawOrDefault(raw, "{}")
+	}
+	return out
+}
+
 var errInvalidSourceImport = errors.New("invalid source import")
 
 func (s *Server) writeImportError(w http.ResponseWriter, r *http.Request, err error) {
@@ -1173,6 +1492,11 @@ func (s *Server) createImportedScript(r *http.Request, tx pgx.Tx, principal auth
 	}
 	version, err := insertScriptVersionTx(r, tx, project, script.ID, 1, content, contentFormat, &sourceType, "", "", metadata, principal.UserID)
 	if err != nil {
+		return Script{}, ScriptVersion{}, err
+	}
+	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, version.ID, principal.UserID, []scriptEpisodeDraft{
+		defaultScriptEpisodeDraft(&sourceID, "第 1 集", content, contentFormat, "", "", "", metadata),
+	}); err != nil {
 		return Script{}, ScriptVersion{}, err
 	}
 	if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {

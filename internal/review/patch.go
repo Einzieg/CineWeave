@@ -60,13 +60,13 @@ func EditableFieldsForEntity(entityType string) map[string]bool {
 			"name", "description", "profile", "basePrompt", "consistencyPrompt", "negativePrompt", "lockReference",
 		},
 		"storyboard_shot": {
-			"visual", "camera", "motion", "mood", "durationSeconds", "imagePrompt", "videoPrompt",
+			"visual", "camera", "motion", "mood", "plannedDurationTicks", "imagePrompt", "videoPrompt",
 		},
 		"shot_asset_requirement": {
 			"costume", "pose", "expression", "action", "cameraRelation", "sceneState", "propState", "prompt",
 		},
 		"timeline_clip": {
-			"title", "enabled", "trimStartSeconds", "trimEndSeconds", "targetDurationSeconds", "notes",
+			"title", "enabled", "trimStartTick", "trimEndTick", "durationTicks", "notes",
 		},
 		"project_timeline": {
 			"title", "aspectRatio", "resolution", "metadata",

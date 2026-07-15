@@ -331,10 +331,10 @@ D:\Code\CineWeave\
     codex-execution-plan.md
 
   scripts/
-    dev.sh
-    test.sh
-    migrate.sh
-    generate-openapi.sh
+    migrate.ps1
+    seed.ps1
+    check-openapi-routes.py
+    test.mjs
 
   .github/
     workflows/
@@ -3282,7 +3282,7 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - The Gateway accepts upstream `url` and `b64_json` image results, then downloads or decodes media inside Provider Gateway.
 - The Gateway writes generated image objects to S3 / MinIO and records `media_files`, `artifacts`, `provider_call_logs`, and `cost_records`.
 - API Server / Worker code must call Provider Gateway and must not call image providers, download upstream media, write provider call logs, or write cost records directly.
-- `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=false` is the default; set it to `true` only for local mock provider media URLs.
+- Returned media uses the shared DNS-pinned `MediaFetcher`; private addresses require an account-level exact-host and CIDR policy.
 
 ## Implementation Note: Provider Gateway Video Runtime v1
 
@@ -3293,7 +3293,7 @@ Task 011: Implement New API-first OpenAI-compatible text provider.
 - `create-task` writes `provider_call_logs` with `task_type=video.create_task` and `execution_mode=async_create`, then writes `provider_async_tasks`.
 - `poll-task` writes `provider_call_logs` with `task_type=video.poll_task` and `execution_mode=async_poll`. Running polls update `provider_async_tasks` only; succeeded polls download video media, store it in S3 / MinIO, write `media_files`, `generated_video` artifacts, and final `cost_records`.
 - `cancel-task` calls a manifest cancel endpoint when configured; otherwise it marks the local async task cancelled.
-- Private video media URLs are blocked by default. Development can set `CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS=true`.
+- Private video media URLs are blocked by default. There is no process-wide bypass; controlled private endpoints use account-level `mediaEgress` policy.
 - Video download size defaults to `CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES=536870912`.
 - `video_generation_test` executes via Provider Gateway create/poll and returns `providerAsyncTaskId`; completed tests also return `artifactId`, `mediaFileId`, and `storageKey`.
 

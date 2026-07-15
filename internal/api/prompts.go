@@ -469,6 +469,12 @@ func (s *Server) createPromptBinding(w http.ResponseWriter, r *http.Request, pri
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if req.ProjectID != "" {
+		if _, err := lockProjectConfigurationTx(r.Context(), tx, req.ProjectID, orgID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
 	if status == "active" {
 		if _, err := tx.Exec(r.Context(), `
 			UPDATE prompt_bindings
@@ -490,6 +496,12 @@ func (s *Server) createPromptBinding(w http.ResponseWriter, r *http.Request, pri
 	`, orgID, req.ProjectID, req.TemplateKey, req.PromptVersionID, status, principal.UserID).Scan(&bindingID); err != nil {
 		s.writeError(w, r, err)
 		return
+	}
+	if req.ProjectID != "" {
+		if err := bumpProjectRevisionTx(r.Context(), tx, req.ProjectID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
@@ -516,7 +528,29 @@ func (s *Server) deletePromptBinding(w http.ResponseWriter, r *http.Request, pri
 	if !s.authorize(w, r, principal, authz.PermissionPromptManage, resource) {
 		return
 	}
-	if _, err := s.db.Exec(r.Context(), `DELETE FROM prompt_bindings WHERE id = $1`, item.ID); err != nil {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if item.ProjectID != nil {
+		if _, err := lockProjectConfigurationTx(r.Context(), tx, *item.ProjectID, item.OrganizationID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	if _, err := tx.Exec(r.Context(), `DELETE FROM prompt_bindings WHERE id = $1`, item.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if item.ProjectID != nil {
+		if err := bumpProjectRevisionTx(r.Context(), tx, *item.ProjectID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}

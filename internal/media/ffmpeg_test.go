@@ -10,7 +10,7 @@ import (
 )
 
 func TestConcatFileListEscapesPaths(t *testing.T) {
-	list := ConcatFileList([]string{`C:\tmp\clip one.mp4`, "/tmp/clip's two.mp4"})
+	list := ConcatFileList([]string{filepath.FromSlash("C:/tmp/clip one.mp4"), "/tmp/clip's two.mp4"})
 	if !strings.Contains(list, "C:/tmp/clip one.mp4") {
 		t.Fatalf("concat list did not normalize slashes: %q", list)
 	}

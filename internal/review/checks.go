@@ -141,7 +141,7 @@ func (r *deterministicRunner) checkStoryboardAndMedia(ctx context.Context) error
 		return nil
 	}
 	rows, err := r.db.Query(ctx, `
-		SELECT id::text, COALESCE(shot_no, shot_index + 1), COALESCE(visual, ''), duration_seconds,
+		SELECT id::text, COALESCE(shot_no, shot_index + 1), COALESCE(visual, ''), planned_duration_ticks,
 		       COALESCE(review_status, ''), COALESCE(stale_state, ''), COALESCE(image_status, ''), COALESCE(video_status, ''),
 		       image_artifact_id::text, video_artifact_id::text
 		FROM storyboard_shots
@@ -155,7 +155,7 @@ func (r *deterministicRunner) checkStoryboardAndMedia(ctx context.Context) error
 	for rows.Next() {
 		var id, visual, reviewStatus, staleState, imageStatus, videoStatus string
 		var shotNo int
-		var duration sql.NullFloat64
+		var duration sql.NullInt64
 		var imageArtifactID, videoArtifactID sql.NullString
 		if err := rows.Scan(&id, &shotNo, &visual, &duration, &reviewStatus, &staleState, &imageStatus, &videoStatus, &imageArtifactID, &videoArtifactID); err != nil {
 			return err
@@ -164,8 +164,8 @@ func (r *deterministicRunner) checkStoryboardAndMedia(ctx context.Context) error
 		if strings.TrimSpace(visual) == "" {
 			r.add("issue", "storyboard", "high", shotLabel+" 缺少画面描述", "分镜镜头没有 visual，图片和视频提示词会缺少核心画面目标。", "补充镜头画面描述。", "storyboard_shot", id)
 		}
-		if !duration.Valid || duration.Float64 <= 0 {
-			r.add("issue", "storyboard", "medium", shotLabel+" 缺少时长", "分镜镜头没有有效 duration_seconds，时间线合成难以估算节奏。", "补充镜头目标时长。", "storyboard_shot", id)
+		if !duration.Valid || duration.Int64 <= 0 {
+			r.add("issue", "storyboard", "medium", shotLabel+" 缺少时长", "分镜镜头没有有效帧级时长，时间线合成难以估算节奏。", "补充镜头目标时长。", "storyboard_shot", id)
 		}
 		if reviewStatus != "" && reviewStatus != "approved" {
 			r.add("warning", "storyboard", "low", shotLabel+" 尚未审阅通过", "分镜镜头审阅状态为 "+reviewStatus+"。", "审阅镜头并标记通过。", "storyboard_shot", id)

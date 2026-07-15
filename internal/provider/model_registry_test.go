@@ -24,6 +24,21 @@ func TestModelCapabilityPresetMatchesAliasesAndGlobs(t *testing.T) {
 	}
 }
 
+func TestModelCapabilityPresetMatchesGPTImage2Snapshots(t *testing.T) {
+	preset := modelCapabilityPreset{
+		PresetKey:     "gpt-image-2",
+		MatchPatterns: json.RawMessage(`["gpt-image-2","gpt-image-2-*","openai/gpt-image-2*"]`),
+	}
+	for _, modelKey := range []string{"gpt-image-2", "gpt-image-2-2026-04-21", "openai/gpt-image-2"} {
+		if !modelCapabilityPresetMatches(modelKey, preset) {
+			t.Fatalf("modelCapabilityPresetMatches(%q) = false, want true", modelKey)
+		}
+	}
+	if modelCapabilityPresetMatches("gpt-image-1.5", preset) {
+		t.Fatal("gpt-image-1.5 unexpectedly matched the GPT Image 2 preset")
+	}
+}
+
 func TestModelCapabilityPresetMatchesStructuredPatterns(t *testing.T) {
 	preset := modelCapabilityPreset{
 		PresetKey: "kling-video",
@@ -104,6 +119,7 @@ func TestNormalizeCapabilityInputAddsTextRuntimeCapabilities(t *testing.T) {
 	var schema struct {
 		XCapabilities struct {
 			SupportsStreaming       bool     `json:"supportsStreaming"`
+			StreamTerminalMode      string   `json:"streamTerminalMode"`
 			SupportsReasoning       bool     `json:"supportsReasoning"`
 			SupportsReasoningLevels bool     `json:"supportsReasoningLevels"`
 			SupportsMultimodalInput bool     `json:"supportsMultimodalInput"`
@@ -116,6 +132,9 @@ func TestNormalizeCapabilityInputAddsTextRuntimeCapabilities(t *testing.T) {
 	}
 	if !schema.XCapabilities.SupportsStreaming {
 		t.Fatalf("supportsStreaming = false, want true in %s", capability.ProviderOptionsSchema)
+	}
+	if schema.XCapabilities.StreamTerminalMode != "done_or_finish_reason" {
+		t.Fatalf("streamTerminalMode = %q, want done_or_finish_reason", schema.XCapabilities.StreamTerminalMode)
 	}
 	if schema.XCapabilities.SupportsReasoning {
 		t.Fatalf("supportsReasoning = true, want default false in %s", capability.ProviderOptionsSchema)

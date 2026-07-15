@@ -24,7 +24,7 @@ func TestNovelEventManualOverrideIntegration(t *testing.T) {
 	}
 	ctx := context.Background()
 	pool := openNovelAdaptationTestDB(t, ctx)
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	seed := seedNovelAdaptationBase(t, ctx, pool)
 	t.Cleanup(func() {
@@ -100,7 +100,7 @@ func TestAdaptationPlanScriptMetadataIntegration(t *testing.T) {
 	}
 	ctx := context.Background()
 	pool := openNovelAdaptationTestDB(t, ctx)
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	seed := seedNovelAdaptationBase(t, ctx, pool)
 	t.Cleanup(func() {
@@ -115,18 +115,31 @@ func TestAdaptationPlanScriptMetadataIntegration(t *testing.T) {
 		t.Fatalf("insert adaptation plan: %v", err)
 	}
 	activities := NewActivities(pool, nil, nil)
+	providerCallID := uuid.NewString()
+	nodeExecution, err := StartNodeRun(ctx, pool, NodeRunInput{
+		OrganizationID: seed.orgID,
+		ProjectID:      seed.projectID,
+		WorkflowRunID:  seed.workflowRunID,
+		NodeKey:        "test-create-script-from-plan",
+		NodeType:       "test",
+	})
+	if err != nil {
+		t.Fatalf("start node: %v", err)
+	}
 	output, err := activities.createGeneratedScriptFromPlan(ctx, GenerateScriptFromPlanInput{
 		OrganizationID: seed.orgID,
 		ProjectID:      seed.projectID,
 		WorkflowRunID:  seed.workflowRunID,
 		CreatedBy:      seed.userID,
 		PlanID:         planID,
-	}, adaptationPlanRecord{ID: planID, SourceID: seed.source.ID, Title: "Plan A", Content: `{}`, Structure: []byte(`{}`)}, promptsvc.RenderedPrompt{
-		TemplateKey:     promptKeyScriptFromAdaptationPlan,
-		RenderedHash:    "sha256:test",
-		RenderedText:    "prompt",
-		PromptVersionID: "",
-	}, provider.GatewayTextResponse{ProviderCallID: uuid.NewString(), ModelID: "model-1"}, "script content")
+	}, adaptationPlanRecord{ID: planID, SourceID: seed.source.ID, Title: "Plan A", Content: `{}`, Structure: []byte(`{}`)}, nodeExecution, "script content", []workflowScriptEpisodeDraft{
+		workflowDefaultScriptEpisodeDraft(seed.source.ID, "第 1 集", "script content", "", "sha256:test", providerCallID, mustJSON(map[string]any{
+			"source":           "adaptation_plan_to_script",
+			"adaptationPlanId": planID,
+			"providerCallId":   providerCallID,
+			"modelId":          "model-1",
+		})),
+	}, "", "sha256:test", []string{providerCallID}, []string{"model-1"})
 	if err != nil {
 		t.Fatalf("createGeneratedScriptFromPlan: %v", err)
 	}
@@ -149,7 +162,7 @@ func TestSourceToScriptNovelPathUsesEventsAndPlanIntegration(t *testing.T) {
 	}
 	ctx := context.Background()
 	pool := openNovelAdaptationTestDB(t, ctx)
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	orgID, userID, projectID, workflowRunID, _, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
 	t.Cleanup(func() {

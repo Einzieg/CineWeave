@@ -29,7 +29,7 @@ func TestPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	authService := auth.NewService(pool, "prompt-test-secret", time.Hour, 24*time.Hour)
 	vault, err := provider.NewVault("")

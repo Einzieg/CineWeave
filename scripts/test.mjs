@@ -4,6 +4,8 @@ const isWindows = process.platform === "win32";
 
 const commands = [
   ["go", ["test", "./..."]],
+  ["go", ["run", "./cmd/cineweave-migrate", "validate"]],
+  ["go", ["run", "./cmd/cineweave-seed", "validate"]],
   ["pnpm", ["--filter", "@cineweave/web", "typecheck"]],
   ["pnpm", ["--filter", "@cineweave/web", "lint"]],
   [

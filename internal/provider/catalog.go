@@ -315,6 +315,10 @@ func catalogInstallModels(entry CatalogEntry, requested []CatalogInstallModel) (
 			DisplayName:           template.DisplayName,
 			Modality:              template.Modality,
 			TaskTypes:             template.TaskTypes,
+			ExecutionMode:         template.ExecutionMode,
+			SupportsJsonOutput:    catalogOptionalTrue(template.SupportsJsonOutput),
+			SupportsToolCalls:     catalogOptionalTrue(template.SupportsToolCalls),
+			SupportsReasoning:     catalogOptionalTrue(template.SupportsReasoning),
 			InputLimits:           template.InputLimits,
 			OutputLimits:          template.OutputLimits,
 			QualityTiers:          template.QualityTiers,
@@ -351,7 +355,49 @@ func normalizeCatalogInstallModel(model CatalogInstallModel) (CatalogInstallMode
 	if len(model.QualityTiers) == 0 {
 		model.QualityTiers = json.RawMessage(`[]`)
 	}
+	providerOptions, err := mergeCatalogInstallCapabilityHints(model)
+	if err != nil {
+		return CatalogInstallModel{}, err
+	}
+	model.ProviderOptionsSchema = providerOptions
 	return model, nil
+}
+
+func catalogOptionalTrue(value bool) *bool {
+	if !value {
+		return nil
+	}
+	result := true
+	return &result
+}
+
+func mergeCatalogInstallCapabilityHints(model CatalogInstallModel) (json.RawMessage, error) {
+	schema := map[string]any{}
+	if len(model.ProviderOptionsSchema) > 0 {
+		if err := json.Unmarshal(model.ProviderOptionsSchema, &schema); err != nil {
+			return nil, CatalogError{Code: CodeProviderModelTemplateInvalid, Message: "provider options schema is invalid"}
+		}
+	}
+	xCapabilities, _ := schema["xCapabilities"].(map[string]any)
+	if xCapabilities == nil {
+		xCapabilities = map[string]any{}
+	}
+	if executionMode := strings.TrimSpace(model.ExecutionMode); executionMode != "" {
+		xCapabilities["executionMode"] = executionMode
+	}
+	for key, value := range map[string]*bool{
+		"supportsJsonOutput": model.SupportsJsonOutput,
+		"supportsToolCalls":  model.SupportsToolCalls,
+		"supportsReasoning":  model.SupportsReasoning,
+	} {
+		if value != nil {
+			xCapabilities[key] = *value
+		}
+	}
+	if len(xCapabilities) > 0 {
+		schema["xCapabilities"] = xCapabilities
+	}
+	return mustJSON(schema), nil
 }
 
 func insertCatalogModel(ctx context.Context, tx pgx.Tx, accountID string, model CatalogInstallModel) (string, error) {

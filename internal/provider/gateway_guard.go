@@ -80,7 +80,12 @@ func blockedResponseSnapshot(standard *StandardError) json.RawMessage {
 }
 
 func isProviderFailureStatus(status string) bool {
-	return status == "failed" || status == "blocked"
+	switch status {
+	case "failed", "blocked", "unknown_outcome":
+		return true
+	default:
+		return false
+	}
 }
 
 func providerGuardServiceName() string {

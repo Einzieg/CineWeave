@@ -70,6 +70,10 @@ type CatalogInstallModel struct {
 	DisplayName           string          `json:"displayName"`
 	Modality              string          `json:"modality"`
 	TaskTypes             []string        `json:"taskTypes"`
+	ExecutionMode         string          `json:"executionMode,omitempty"`
+	SupportsJsonOutput    *bool           `json:"supportsJsonOutput,omitempty"`
+	SupportsToolCalls     *bool           `json:"supportsToolCalls,omitempty"`
+	SupportsReasoning     *bool           `json:"supportsReasoning,omitempty"`
 	InputLimits           json.RawMessage `json:"inputLimits,omitempty"`
 	OutputLimits          json.RawMessage `json:"outputLimits,omitempty"`
 	QualityTiers          json.RawMessage `json:"qualityTiers,omitempty"`
@@ -256,20 +260,26 @@ type RoutingCandidate struct {
 	Capabilities          []Capability
 	RoutingStrategy       string
 	FallbackStrategy      FallbackStrategy
+	RuntimeOptions        ModelProfileBindingRuntimeOptions
 	createdAt             time.Time
 	averageLatencyMS      float64
 	hasLatency            bool
 	estimatedCost         float64
 }
 
+type ModelProfileBindingRuntimeOptions struct {
+	ReasoningLevel string `json:"reasoningLevel,omitempty"`
+}
+
 type ModelProfileBinding struct {
-	ID              string    `json:"id"`
-	ModelProfileID  string    `json:"modelProfileId"`
-	ProviderModelID string    `json:"providerModelId"`
-	Priority        int       `json:"priority"`
-	Weight          int       `json:"weight"`
-	Enabled         bool      `json:"enabled"`
-	CreatedAt       time.Time `json:"createdAt"`
+	ID              string                            `json:"id"`
+	ModelProfileID  string                            `json:"modelProfileId"`
+	ProviderModelID string                            `json:"providerModelId"`
+	Priority        int                               `json:"priority"`
+	Weight          int                               `json:"weight"`
+	Enabled         bool                              `json:"enabled"`
+	RuntimeOptions  ModelProfileBindingRuntimeOptions `json:"runtimeOptions"`
+	CreatedAt       time.Time                         `json:"createdAt"`
 }
 
 type CreateModelProfileRequest struct {
@@ -289,10 +299,18 @@ type UpdateModelProfileRequest struct {
 }
 
 type CreateModelProfileBindingRequest struct {
-	ProviderModelID string `json:"providerModelId"`
-	Priority        *int   `json:"priority"`
-	Weight          *int   `json:"weight"`
-	Enabled         *bool  `json:"enabled"`
+	ProviderModelID string                             `json:"providerModelId"`
+	Priority        *int                               `json:"priority"`
+	Weight          *int                               `json:"weight"`
+	Enabled         *bool                              `json:"enabled"`
+	RuntimeOptions  *ModelProfileBindingRuntimeOptions `json:"runtimeOptions"`
+}
+
+type UpdateModelProfileBindingRequest struct {
+	Priority       *int                               `json:"priority"`
+	Weight         *int                               `json:"weight"`
+	Enabled        *bool                              `json:"enabled"`
+	RuntimeOptions *ModelProfileBindingRuntimeOptions `json:"runtimeOptions"`
 }
 
 type ProviderTestResult struct {
@@ -313,72 +331,84 @@ type TestProviderModelRequest struct {
 }
 
 type CallLog struct {
-	ID                    string          `json:"id"`
-	OrganizationID        string          `json:"organizationId"`
-	ProjectID             *string         `json:"projectId,omitempty"`
-	WorkflowRunID         *string         `json:"workflowRunId,omitempty"`
-	NodeRunID             *string         `json:"nodeRunId,omitempty"`
-	ProviderAccountID     string          `json:"providerAccountId"`
-	ProviderModelID       *string         `json:"providerModelId,omitempty"`
-	CredentialID          *string         `json:"credentialId,omitempty"`
-	ModelProfileID        *string         `json:"modelProfileId,omitempty"`
-	ModelProfileBindingID *string         `json:"modelProfileBindingId,omitempty"`
-	ModelProfileKey       *string         `json:"modelProfileKey,omitempty"`
-	TaskType              string          `json:"taskType"`
-	ExecutionMode         string          `json:"executionMode"`
-	Status                string          `json:"status"`
-	LatencyMS             *int            `json:"latencyMs,omitempty"`
-	InputTokens           *int            `json:"inputTokens,omitempty"`
-	OutputTokens          *int            `json:"outputTokens,omitempty"`
-	EstimatedCost         *string         `json:"estimatedCost,omitempty"`
-	Currency              *string         `json:"currency,omitempty"`
-	ErrorCode             *string         `json:"errorCode,omitempty"`
-	ErrorMessage          *string         `json:"errorMessage,omitempty"`
-	UpstreamStatus        *int            `json:"upstreamStatus,omitempty"`
-	UpstreamErrorCode     *string         `json:"upstreamErrorCode,omitempty"`
-	RequestSnapshot       json.RawMessage `json:"requestSnapshot"`
-	ResponseSnapshot      json.RawMessage `json:"responseSnapshot,omitempty"`
-	NormalizedOutput      json.RawMessage `json:"normalizedOutput,omitempty"`
-	ArtifactIDs           json.RawMessage `json:"artifactIds"`
-	MediaFileIDs          json.RawMessage `json:"mediaFileIds"`
-	CreatedAt             time.Time       `json:"createdAt"`
-	StartedAt             *time.Time      `json:"startedAt,omitempty"`
-	CompletedAt           *time.Time      `json:"completedAt,omitempty"`
+	ID                       string          `json:"id"`
+	ProviderRequestID        *string         `json:"providerRequestId,omitempty"`
+	AttemptGeneration        int             `json:"attemptGeneration"`
+	AttemptSequence          int             `json:"attemptSequence"`
+	OrganizationID           string          `json:"organizationId"`
+	ProjectID                *string         `json:"projectId,omitempty"`
+	WorkflowRunID            *string         `json:"workflowRunId,omitempty"`
+	NodeRunID                *string         `json:"nodeRunId,omitempty"`
+	ProviderAccountID        string          `json:"providerAccountId"`
+	ProviderModelID          *string         `json:"providerModelId,omitempty"`
+	CredentialID             *string         `json:"credentialId,omitempty"`
+	ModelProfileID           *string         `json:"modelProfileId,omitempty"`
+	ModelProfileBindingID    *string         `json:"modelProfileBindingId,omitempty"`
+	ModelProfileKey          *string         `json:"modelProfileKey,omitempty"`
+	TaskType                 string          `json:"taskType"`
+	ExecutionMode            string          `json:"executionMode"`
+	Status                   string          `json:"status"`
+	LatencyMS                *int            `json:"latencyMs,omitempty"`
+	InputTokens              *int            `json:"inputTokens,omitempty"`
+	OutputTokens             *int            `json:"outputTokens,omitempty"`
+	RequestedDurationSeconds *float64        `json:"requestedDurationSeconds,omitempty"`
+	ActualDurationSeconds    *float64        `json:"actualDurationSeconds,omitempty"`
+	MediaProbe               json.RawMessage `json:"mediaProbe,omitempty"`
+	EstimatedCost            *string         `json:"estimatedCost,omitempty"`
+	Currency                 *string         `json:"currency,omitempty"`
+	ErrorCode                *string         `json:"errorCode,omitempty"`
+	ErrorMessage             *string         `json:"errorMessage,omitempty"`
+	UpstreamStatus           *int            `json:"upstreamStatus,omitempty"`
+	UpstreamErrorCode        *string         `json:"upstreamErrorCode,omitempty"`
+	RequestSnapshot          json.RawMessage `json:"requestSnapshot"`
+	ResponseSnapshot         json.RawMessage `json:"responseSnapshot,omitempty"`
+	NormalizedOutput         json.RawMessage `json:"normalizedOutput,omitempty"`
+	ArtifactIDs              json.RawMessage `json:"artifactIds"`
+	MediaFileIDs             json.RawMessage `json:"mediaFileIds"`
+	CreatedAt                time.Time       `json:"createdAt"`
+	StartedAt                *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt              *time.Time      `json:"completedAt,omitempty"`
 }
 
 type RecordCallRequest struct {
-	ID                    string          `json:"id,omitempty"`
-	OrganizationID        string          `json:"organizationId"`
-	ProjectID             string          `json:"projectId"`
-	WorkflowRunID         string          `json:"workflowRunId"`
-	NodeRunID             string          `json:"nodeRunId"`
-	ProviderAccountID     string          `json:"providerAccountId"`
-	ProviderModelID       string          `json:"providerModelId"`
-	CredentialID          string          `json:"credentialId"`
-	ModelProfileID        string          `json:"modelProfileId"`
-	ModelProfileBindingID string          `json:"modelProfileBindingId"`
-	ModelProfileKey       string          `json:"modelProfileKey"`
-	PromptVersionID       string          `json:"promptVersionId"`
-	PromptHash            string          `json:"promptHash"`
-	LeaseID               string          `json:"leaseId"`
-	IdempotencyKey        string          `json:"idempotencyKey"`
-	TaskType              string          `json:"taskType"`
-	ExecutionMode         string          `json:"executionMode"`
-	Status                string          `json:"status"`
-	LatencyMS             *int            `json:"latencyMs"`
-	InputTokens           *int            `json:"inputTokens"`
-	OutputTokens          *int            `json:"outputTokens"`
-	EstimatedCost         string          `json:"estimatedCost"`
-	Currency              string          `json:"currency"`
-	ErrorCode             string          `json:"errorCode"`
-	ErrorMessage          string          `json:"errorMessage"`
-	UpstreamStatus        *int            `json:"upstreamStatus"`
-	UpstreamErrorCode     string          `json:"upstreamErrorCode"`
-	RequestSnapshot       json.RawMessage `json:"requestSnapshot"`
-	ResponseSnapshot      json.RawMessage `json:"responseSnapshot"`
-	NormalizedOutput      json.RawMessage `json:"normalizedOutput"`
-	ArtifactIDs           json.RawMessage `json:"artifactIds"`
-	MediaFileIDs          json.RawMessage `json:"mediaFileIds"`
+	ID                       string          `json:"id,omitempty"`
+	ProviderRequestID        string          `json:"providerRequestId,omitempty"`
+	AttemptGeneration        int             `json:"attemptGeneration,omitempty"`
+	AttemptSequence          int             `json:"attemptSequence,omitempty"`
+	OrganizationID           string          `json:"organizationId"`
+	ProjectID                string          `json:"projectId"`
+	WorkflowRunID            string          `json:"workflowRunId"`
+	NodeRunID                string          `json:"nodeRunId"`
+	ProviderAccountID        string          `json:"providerAccountId"`
+	ProviderModelID          string          `json:"providerModelId"`
+	CredentialID             string          `json:"credentialId"`
+	ModelProfileID           string          `json:"modelProfileId"`
+	ModelProfileBindingID    string          `json:"modelProfileBindingId"`
+	ModelProfileKey          string          `json:"modelProfileKey"`
+	PromptVersionID          string          `json:"promptVersionId"`
+	PromptHash               string          `json:"promptHash"`
+	LeaseID                  string          `json:"leaseId"`
+	IdempotencyKey           string          `json:"idempotencyKey"`
+	TaskType                 string          `json:"taskType"`
+	ExecutionMode            string          `json:"executionMode"`
+	Status                   string          `json:"status"`
+	LatencyMS                *int            `json:"latencyMs"`
+	InputTokens              *int            `json:"inputTokens"`
+	OutputTokens             *int            `json:"outputTokens"`
+	RequestedDurationSeconds *float64        `json:"requestedDurationSeconds"`
+	ActualDurationSeconds    *float64        `json:"actualDurationSeconds"`
+	MediaProbe               json.RawMessage `json:"mediaProbe"`
+	EstimatedCost            string          `json:"estimatedCost"`
+	Currency                 string          `json:"currency"`
+	ErrorCode                string          `json:"errorCode"`
+	ErrorMessage             string          `json:"errorMessage"`
+	UpstreamStatus           *int            `json:"upstreamStatus"`
+	UpstreamErrorCode        string          `json:"upstreamErrorCode"`
+	RequestSnapshot          json.RawMessage `json:"requestSnapshot"`
+	ResponseSnapshot         json.RawMessage `json:"responseSnapshot"`
+	NormalizedOutput         json.RawMessage `json:"normalizedOutput"`
+	ArtifactIDs              json.RawMessage `json:"artifactIds"`
+	MediaFileIDs             json.RawMessage `json:"mediaFileIds"`
 }
 
 type CallLogFilters struct {
@@ -480,6 +510,7 @@ type ModelDiscoveryResult struct {
 type GatewayTextOptions struct {
 	TimeoutMS      int    `json:"timeoutMs"`
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	Retry          bool   `json:"retry,omitempty"`
 }
 
 type GatewayTextRequest struct {
@@ -525,19 +556,25 @@ type GatewayAttempt struct {
 }
 
 type GatewayTextResponse struct {
-	ProviderCallID string            `json:"providerCallId"`
-	ModelID        string            `json:"modelId"`
-	Status         string            `json:"status"`
-	Output         GatewayTextOutput `json:"output"`
-	Usage          GatewayUsage      `json:"usage"`
-	Error          *StandardError    `json:"error,omitempty"`
-	LatencyMS      int               `json:"latencyMs,omitempty"`
-	Attempts       []GatewayAttempt  `json:"attempts,omitempty"`
+	SchemaVersion      int               `json:"schemaVersion,omitempty"`
+	ProviderRequestID  string            `json:"providerRequestId"`
+	AttemptGeneration  int               `json:"attemptGeneration"`
+	AttemptSequence    int               `json:"attemptSequence,omitempty"`
+	ProviderCallID     string            `json:"providerCallId"`
+	ModelID            string            `json:"modelId"`
+	Status             string            `json:"status"`
+	Output             GatewayTextOutput `json:"output"`
+	Usage              GatewayUsage      `json:"usage"`
+	Error              *StandardError    `json:"error,omitempty"`
+	LatencyMS          int               `json:"latencyMs,omitempty"`
+	Attempts           []GatewayAttempt  `json:"attempts,omitempty"`
+	requestDisposition string            `json:"-"`
 }
 
 type GatewayImageOptions struct {
 	TimeoutMS      int    `json:"timeoutMs"`
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	Retry          bool   `json:"retry,omitempty"`
 }
 
 type GatewayImageReference struct {
@@ -575,24 +612,130 @@ type GatewayImageOutput struct {
 	MimeType    string          `json:"mimeType,omitempty"`
 	Width       *int            `json:"width,omitempty"`
 	Height      *int            `json:"height,omitempty"`
+	AspectRatio string          `json:"aspectRatio,omitempty"`
 	Raw         json.RawMessage `json:"raw,omitempty"`
 }
 
 type GatewayImageResponse struct {
-	ProviderCallID string             `json:"providerCallId"`
-	ModelID        string             `json:"modelId"`
-	Status         string             `json:"status"`
-	Output         GatewayImageOutput `json:"output"`
-	Usage          GatewayUsage       `json:"usage"`
-	Error          *StandardError     `json:"error,omitempty"`
-	LatencyMS      int                `json:"latencyMs,omitempty"`
-	Attempts       []GatewayAttempt   `json:"attempts,omitempty"`
+	ProviderRequestID string             `json:"providerRequestId"`
+	AttemptGeneration int                `json:"attemptGeneration"`
+	ProviderCallID    string             `json:"providerCallId"`
+	ModelID           string             `json:"modelId"`
+	Status            string             `json:"status"`
+	Output            GatewayImageOutput `json:"output"`
+	Usage             GatewayUsage       `json:"usage"`
+	Error             *StandardError     `json:"error,omitempty"`
+	LatencyMS         int                `json:"latencyMs,omitempty"`
+	Attempts          []GatewayAttempt   `json:"attempts,omitempty"`
+}
+
+type GatewayAudioOptions struct {
+	TimeoutMS      int    `json:"timeoutMs"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	Retry          bool   `json:"retry,omitempty"`
+}
+
+type GatewayTTSRequest struct {
+	OrganizationID   string              `json:"organizationId"`
+	WorkspaceID      string              `json:"workspaceId,omitempty"`
+	ProjectID        string              `json:"projectId,omitempty"`
+	WorkflowRunID    string              `json:"workflowRunId,omitempty"`
+	NodeRunID        string              `json:"nodeRunId,omitempty"`
+	ModelProfileKey  string              `json:"modelProfileKey,omitempty"`
+	ProviderModelID  string              `json:"providerModelId,omitempty"`
+	IdempotencyKey   string              `json:"idempotencyKey,omitempty"`
+	TimelineTimebase int64               `json:"timelineTimebase,omitempty"`
+	Input            json.RawMessage     `json:"input"`
+	Options          GatewayAudioOptions `json:"options"`
+}
+
+type GatewayAudioOutput struct {
+	ArtifactID  string          `json:"artifactId,omitempty"`
+	MediaFileID string          `json:"mediaFileId,omitempty"`
+	StorageKey  string          `json:"storageKey,omitempty"`
+	MimeType    string          `json:"mimeType,omitempty"`
+	ByteSize    int64           `json:"byteSize,omitempty"`
+	ContentHash string          `json:"contentHash,omitempty"`
+	Raw         json.RawMessage `json:"raw,omitempty"`
+}
+
+type GatewayTTSResponse struct {
+	ProviderRequestID string             `json:"providerRequestId"`
+	AttemptGeneration int                `json:"attemptGeneration"`
+	ProviderCallID    string             `json:"providerCallId"`
+	ModelID           string             `json:"modelId"`
+	Status            string             `json:"status"`
+	Output            GatewayAudioOutput `json:"output"`
+	Usage             GatewayUsage       `json:"usage"`
+	Error             *StandardError     `json:"error,omitempty"`
+	LatencyMS         int                `json:"latencyMs,omitempty"`
+	Attempts          []GatewayAttempt   `json:"attempts,omitempty"`
+}
+
+type GatewayAudioSource struct {
+	ArtifactID  string `json:"artifactId,omitempty"`
+	MediaFileID string `json:"mediaFileId,omitempty"`
+	StorageKey  string `json:"storageKey,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+	FileName    string `json:"fileName,omitempty"`
+}
+
+type GatewayASRRequest struct {
+	OrganizationID  string              `json:"organizationId"`
+	WorkspaceID     string              `json:"workspaceId,omitempty"`
+	ProjectID       string              `json:"projectId,omitempty"`
+	WorkflowRunID   string              `json:"workflowRunId,omitempty"`
+	NodeRunID       string              `json:"nodeRunId,omitempty"`
+	ModelProfileKey string              `json:"modelProfileKey,omitempty"`
+	ProviderModelID string              `json:"providerModelId,omitempty"`
+	IdempotencyKey  string              `json:"idempotencyKey,omitempty"`
+	Source          GatewayAudioSource  `json:"source"`
+	Input           json.RawMessage     `json:"input"`
+	Options         GatewayAudioOptions `json:"options"`
+}
+
+type GatewayASRWord struct {
+	Word  string  `json:"word"`
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+}
+
+type GatewayASRSegment struct {
+	ID      int              `json:"id,omitempty"`
+	Speaker string           `json:"speaker,omitempty"`
+	Text    string           `json:"text"`
+	Start   float64          `json:"start"`
+	End     float64          `json:"end"`
+	Words   []GatewayASRWord `json:"words,omitempty"`
+}
+
+type GatewayASROutput struct {
+	Text     string              `json:"text"`
+	Language string              `json:"language,omitempty"`
+	Duration float64             `json:"duration,omitempty"`
+	Segments []GatewayASRSegment `json:"segments,omitempty"`
+	Words    []GatewayASRWord    `json:"words,omitempty"`
+	Raw      json.RawMessage     `json:"raw,omitempty"`
+}
+
+type GatewayASRResponse struct {
+	ProviderRequestID string           `json:"providerRequestId"`
+	AttemptGeneration int              `json:"attemptGeneration"`
+	ProviderCallID    string           `json:"providerCallId"`
+	ModelID           string           `json:"modelId"`
+	Status            string           `json:"status"`
+	Output            GatewayASROutput `json:"output"`
+	Usage             GatewayUsage     `json:"usage"`
+	Error             *StandardError   `json:"error,omitempty"`
+	LatencyMS         int              `json:"latencyMs,omitempty"`
+	Attempts          []GatewayAttempt `json:"attempts,omitempty"`
 }
 
 type GatewayVideoOptions struct {
 	TimeoutMS      int    `json:"timeoutMs"`
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 	MaxPolls       int    `json:"maxPolls,omitempty"`
+	Retry          bool   `json:"retry,omitempty"`
 }
 
 type GatewayVideoReference struct {
@@ -607,28 +750,37 @@ type GatewayVideoReference struct {
 }
 
 type GatewayVideoCreateTaskRequest struct {
-	OrganizationID    string                  `json:"organizationId"`
-	WorkspaceID       string                  `json:"workspaceId,omitempty"`
-	ProjectID         string                  `json:"projectId,omitempty"`
-	WorkflowRunID     string                  `json:"workflowRunId,omitempty"`
-	NodeRunID         string                  `json:"nodeRunId,omitempty"`
-	ModelProfileKey   string                  `json:"modelProfileKey,omitempty"`
-	ProviderModelID   string                  `json:"providerModelId,omitempty"`
-	PromptTemplateKey string                  `json:"promptTemplateKey,omitempty"`
-	PromptVersionID   string                  `json:"promptVersionId,omitempty"`
-	PromptHash        string                  `json:"promptHash,omitempty"`
-	PromptSource      string                  `json:"promptSource,omitempty"`
-	IdempotencyKey    string                  `json:"idempotencyKey,omitempty"`
-	Input             json.RawMessage         `json:"input"`
-	References        []GatewayVideoReference `json:"references,omitempty"`
-	Options           GatewayVideoOptions     `json:"options"`
+	OrganizationID         string                  `json:"organizationId"`
+	WorkspaceID            string                  `json:"workspaceId,omitempty"`
+	ProjectID              string                  `json:"projectId,omitempty"`
+	WorkflowRunID          string                  `json:"workflowRunId,omitempty"`
+	NodeRunID              string                  `json:"nodeRunId,omitempty"`
+	NodeExecutionToken     string                  `json:"nodeExecutionToken,omitempty"`
+	NodeAttemptGeneration  int                     `json:"nodeAttemptGeneration,omitempty"`
+	ModelProfileKey        string                  `json:"modelProfileKey,omitempty"`
+	ProviderModelID        string                  `json:"providerModelId,omitempty"`
+	PromptTemplateKey      string                  `json:"promptTemplateKey,omitempty"`
+	PromptVersionID        string                  `json:"promptVersionId,omitempty"`
+	PromptHash             string                  `json:"promptHash,omitempty"`
+	PromptSource           string                  `json:"promptSource,omitempty"`
+	IdempotencyKey         string                  `json:"idempotencyKey,omitempty"`
+	ExecutionPlanID        string                  `json:"executionPlanId,omitempty"`
+	RenderSegmentID        string                  `json:"renderSegmentId,omitempty"`
+	CapabilitySnapshotHash string                  `json:"capabilitySnapshotHash,omitempty"`
+	Input                  json.RawMessage         `json:"input"`
+	References             []GatewayVideoReference `json:"references,omitempty"`
+	Options                GatewayVideoOptions     `json:"options"`
 }
 
 type GatewayVideoCreateTaskResponse struct {
+	ProviderRequestID   string           `json:"providerRequestId"`
+	AttemptGeneration   int              `json:"attemptGeneration"`
 	ProviderCallID      string           `json:"providerCallId"`
 	ProviderAsyncTaskID string           `json:"providerAsyncTaskId"`
 	ExternalTaskID      string           `json:"externalTaskId,omitempty"`
 	ModelID             string           `json:"modelId"`
+	ExecutionPlanID     string           `json:"executionPlanId,omitempty"`
+	RenderSegmentID     string           `json:"renderSegmentId,omitempty"`
 	Status              string           `json:"status"`
 	Error               *StandardError   `json:"error,omitempty"`
 	LatencyMS           int              `json:"latencyMs,omitempty"`
@@ -636,36 +788,69 @@ type GatewayVideoCreateTaskResponse struct {
 }
 
 type GatewayVideoPollTaskRequest struct {
-	OrganizationID      string              `json:"organizationId"`
-	ProviderAsyncTaskID string              `json:"providerAsyncTaskId,omitempty"`
-	ExternalTaskID      string              `json:"externalTaskId,omitempty"`
-	ProviderModelID     string              `json:"providerModelId,omitempty"`
-	ProviderAccountID   string              `json:"providerAccountId,omitempty"`
-	ProjectID           string              `json:"projectId,omitempty"`
-	WorkflowRunID       string              `json:"workflowRunId,omitempty"`
-	NodeRunID           string              `json:"nodeRunId,omitempty"`
-	Options             GatewayVideoOptions `json:"options"`
+	OrganizationID        string              `json:"organizationId"`
+	ProviderAsyncTaskID   string              `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID        string              `json:"externalTaskId,omitempty"`
+	ProviderModelID       string              `json:"providerModelId,omitempty"`
+	ProviderAccountID     string              `json:"providerAccountId,omitempty"`
+	ProjectID             string              `json:"projectId,omitempty"`
+	WorkflowRunID         string              `json:"workflowRunId,omitempty"`
+	NodeRunID             string              `json:"nodeRunId,omitempty"`
+	NodeExecutionToken    string              `json:"nodeExecutionToken,omitempty"`
+	NodeAttemptGeneration int                 `json:"nodeAttemptGeneration,omitempty"`
+	Options               GatewayVideoOptions `json:"options"`
+}
+
+type GatewayVideoMediaProbe struct {
+	Status               string   `json:"status"`
+	Error                string   `json:"error,omitempty"`
+	DurationSeconds      float64  `json:"durationSeconds,omitempty"`
+	Width                int      `json:"width,omitempty"`
+	Height               int      `json:"height,omitempty"`
+	FrameRateNumerator   int64    `json:"frameRateNumerator,omitempty"`
+	FrameRateDenominator int64    `json:"frameRateDenominator,omitempty"`
+	FrameRate            float64  `json:"frameRate,omitempty"`
+	FrameCount           int64    `json:"frameCount,omitempty"`
+	FrameCountEstimated  bool     `json:"frameCountEstimated"`
+	VideoStreamCount     int      `json:"videoStreamCount"`
+	AudioStreamCount     int      `json:"audioStreamCount"`
+	HasAudio             bool     `json:"hasAudio"`
+	VideoCodec           string   `json:"videoCodec,omitempty"`
+	AudioCodecs          []string `json:"audioCodecs,omitempty"`
+	AudioSampleRate      int      `json:"audioSampleRate,omitempty"`
+	AudioSampleCount     int64    `json:"audioSampleCount,omitempty"`
+	AudioSampleEstimated bool     `json:"audioSampleCountEstimated"`
+	AudioChannelCount    int      `json:"audioChannelCount,omitempty"`
 }
 
 type GatewayVideoOutput struct {
-	ArtifactID      string          `json:"artifactId,omitempty"`
-	MediaFileID     string          `json:"mediaFileId,omitempty"`
-	StorageKey      string          `json:"storageKey,omitempty"`
-	URL             string          `json:"url,omitempty"`
-	MimeType        string          `json:"mimeType,omitempty"`
-	ByteSize        *int64          `json:"byteSize,omitempty"`
-	DurationSeconds *float64        `json:"durationSeconds,omitempty"`
-	Width           *int            `json:"width,omitempty"`
-	Height          *int            `json:"height,omitempty"`
-	Raw             json.RawMessage `json:"raw,omitempty"`
+	ArtifactID               string                  `json:"artifactId,omitempty"`
+	MediaFileID              string                  `json:"mediaFileId,omitempty"`
+	StorageKey               string                  `json:"storageKey,omitempty"`
+	URL                      string                  `json:"url,omitempty"`
+	MimeType                 string                  `json:"mimeType,omitempty"`
+	ByteSize                 *int64                  `json:"byteSize,omitempty"`
+	DurationSeconds          *float64                `json:"durationSeconds,omitempty"`
+	RequestedDurationSeconds *float64                `json:"requestedDurationSeconds,omitempty"`
+	ProviderDurationSeconds  *float64                `json:"providerDurationSeconds,omitempty"`
+	ActualDurationSeconds    *float64                `json:"actualDurationSeconds,omitempty"`
+	DurationSource           string                  `json:"durationSource,omitempty"`
+	Width                    *int                    `json:"width,omitempty"`
+	Height                   *int                    `json:"height,omitempty"`
+	MediaProbe               *GatewayVideoMediaProbe `json:"mediaProbe,omitempty"`
+	Raw                      json.RawMessage         `json:"raw,omitempty"`
 }
 
 type GatewayVideoPollTaskResponse struct {
+	ProviderRequestID   string             `json:"providerRequestId"`
+	AttemptGeneration   int                `json:"attemptGeneration"`
 	ProviderCallID      string             `json:"providerCallId"`
 	ProviderAsyncTaskID string             `json:"providerAsyncTaskId"`
 	ExternalTaskID      string             `json:"externalTaskId,omitempty"`
 	ModelID             string             `json:"modelId,omitempty"`
 	Status              string             `json:"status"`
+	ExecutionPlanID     string             `json:"executionPlanId,omitempty"`
+	RenderSegmentID     string             `json:"renderSegmentId,omitempty"`
 	Output              GatewayVideoOutput `json:"output"`
 	Usage               GatewayUsage       `json:"usage"`
 	Error               *StandardError     `json:"error,omitempty"`
@@ -673,23 +858,106 @@ type GatewayVideoPollTaskResponse struct {
 }
 
 type GatewayVideoCancelTaskRequest struct {
-	OrganizationID      string `json:"organizationId"`
-	ProviderAsyncTaskID string `json:"providerAsyncTaskId,omitempty"`
-	ExternalTaskID      string `json:"externalTaskId,omitempty"`
-	ProviderModelID     string `json:"providerModelId,omitempty"`
-	ProviderAccountID   string `json:"providerAccountId,omitempty"`
+	OrganizationID      string              `json:"organizationId"`
+	ProviderAsyncTaskID string              `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID      string              `json:"externalTaskId,omitempty"`
+	ProviderModelID     string              `json:"providerModelId,omitempty"`
+	ProviderAccountID   string              `json:"providerAccountId,omitempty"`
+	IdempotencyKey      string              `json:"idempotencyKey,omitempty"`
+	Options             GatewayVideoOptions `json:"options"`
 }
 
 type GatewayVideoCancelTaskResponse struct {
+	ProviderRequestID   string         `json:"providerRequestId,omitempty"`
+	AttemptGeneration   int            `json:"attemptGeneration,omitempty"`
 	ProviderCallID      string         `json:"providerCallId,omitempty"`
 	ProviderAsyncTaskID string         `json:"providerAsyncTaskId,omitempty"`
 	ExternalTaskID      string         `json:"externalTaskId,omitempty"`
 	Status              string         `json:"status"`
+	ExecutionPlanID     string         `json:"executionPlanId,omitempty"`
+	RenderSegmentID     string         `json:"renderSegmentId,omitempty"`
 	Error               *StandardError `json:"error,omitempty"`
 }
 
+const GatewayTextStreamSchemaVersion = 2
+
+const (
+	GatewayTextEventAttemptStarted = "provider.attempt.started"
+	GatewayTextEventDelta          = "provider.delta"
+	GatewayTextEventAttemptFailed  = "provider.attempt.failed"
+	GatewayTextEventCompleted      = "provider.completed"
+	GatewayTextEventFailed         = "provider.failed"
+	GatewayTextEventReplayed       = "provider.replayed"
+)
+
 type GatewayTextDelta struct {
-	Text string `json:"text"`
+	SchemaVersion     int     `json:"schemaVersion"`
+	ProviderRequestID string  `json:"providerRequestId"`
+	ProviderCallID    string  `json:"providerCallId"`
+	AttemptGeneration int     `json:"attemptGeneration"`
+	AttemptSequence   int     `json:"attemptSequence"`
+	Sequence          int64   `json:"sequence"`
+	Text              string  `json:"text"`
+	FinishReason      *string `json:"finishReason"`
+}
+
+type GatewayTextAttemptEvent struct {
+	SchemaVersion     int            `json:"schemaVersion"`
+	ProviderRequestID string         `json:"providerRequestId"`
+	ProviderCallID    string         `json:"providerCallId"`
+	AttemptGeneration int            `json:"attemptGeneration"`
+	AttemptSequence   int            `json:"attemptSequence"`
+	ProviderModelID   string         `json:"providerModelId,omitempty"`
+	Status            string         `json:"status"`
+	Error             *StandardError `json:"error,omitempty"`
+}
+
+type GatewayTextReplayEvent struct {
+	SchemaVersion     int               `json:"schemaVersion"`
+	ProviderRequestID string            `json:"providerRequestId"`
+	ProviderCallID    string            `json:"providerCallId"`
+	AttemptGeneration int               `json:"attemptGeneration"`
+	AttemptSequence   int               `json:"attemptSequence"`
+	ModelID           string            `json:"modelId"`
+	Status            string            `json:"status"`
+	Output            GatewayTextOutput `json:"output"`
+	Usage             GatewayUsage      `json:"usage"`
+	LatencyMS         int               `json:"latencyMs,omitempty"`
+}
+
+type GatewayTextFailureEvent struct {
+	SchemaVersion     int            `json:"schemaVersion"`
+	ProviderRequestID string         `json:"providerRequestId,omitempty"`
+	ProviderCallID    string         `json:"providerCallId,omitempty"`
+	AttemptGeneration int            `json:"attemptGeneration,omitempty"`
+	AttemptSequence   int            `json:"attemptSequence,omitempty"`
+	Error             *StandardError `json:"error"`
+}
+
+type GatewayTextStreamEvent struct {
+	Type     string
+	Attempt  *GatewayTextAttemptEvent
+	Delta    *GatewayTextDelta
+	Response *GatewayTextResponse
+	Replay   *GatewayTextReplayEvent
+	Failure  *GatewayTextFailureEvent
+}
+
+func (event GatewayTextStreamEvent) Payload() any {
+	switch event.Type {
+	case GatewayTextEventAttemptStarted, GatewayTextEventAttemptFailed:
+		return event.Attempt
+	case GatewayTextEventDelta:
+		return event.Delta
+	case GatewayTextEventCompleted:
+		return event.Response
+	case GatewayTextEventReplayed:
+		return event.Replay
+	case GatewayTextEventFailed:
+		return event.Failure
+	default:
+		return nil
+	}
 }
 
 type GatewayDiscoverModelsRequest struct {
@@ -697,15 +965,18 @@ type GatewayDiscoverModelsRequest struct {
 	AccountID      string `json:"accountId"`
 	TestType       string `json:"testType,omitempty"`
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	Retry          bool   `json:"retry,omitempty"`
 }
 
 type GatewayDiscoverModelsResponse struct {
-	ProviderCallID string            `json:"providerCallId,omitempty"`
-	Status         string            `json:"status"`
-	Models         []DiscoveredModel `json:"models"`
-	Unsupported    []any             `json:"unsupported"`
-	Error          *StandardError    `json:"error,omitempty"`
-	LatencyMS      int               `json:"latencyMs,omitempty"`
+	ProviderRequestID string            `json:"providerRequestId,omitempty"`
+	AttemptGeneration int               `json:"attemptGeneration,omitempty"`
+	ProviderCallID    string            `json:"providerCallId,omitempty"`
+	Status            string            `json:"status"`
+	Models            []DiscoveredModel `json:"models"`
+	Unsupported       []any             `json:"unsupported"`
+	Error             *StandardError    `json:"error,omitempty"`
+	LatencyMS         int               `json:"latencyMs,omitempty"`
 }
 
 type GatewayManifestTestRunRequest struct {

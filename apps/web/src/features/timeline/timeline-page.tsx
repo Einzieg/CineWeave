@@ -177,7 +177,7 @@ function ClipRow({ clip }: { clip: TimelineClipDetail }) {
           <Badge variant={clip.enabled ? "outline" : "secondary"}>{statusLabel(clip.enabled ? "enabled" : "disabled")}</Badge>
         </div>
         <div className="text-sm text-muted-foreground">
-          #{clip.clipIndex + 1} · {clip.targetDurationSeconds ?? clip.sourceDurationSeconds ?? "-"}s
+		  #{clip.clipIndex + 1} · {clip.durationSeconds > 0 ? clip.durationSeconds.toFixed(2) : "-"} 秒
         </div>
         {clip.notes ? <p className="text-sm text-muted-foreground">{clip.notes}</p> : null}
       </div>

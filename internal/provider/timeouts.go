@@ -10,11 +10,20 @@ import (
 const (
 	defaultOpenAICompatibleTimeoutMS = 30000
 	defaultGatewayTextTimeoutMS      = 10 * 60 * 1000
+	defaultGatewayImageTimeoutMS     = 10 * 60 * 1000
 	defaultGatewayClientTimeoutMS    = 11 * 60 * 1000
 )
 
 func gatewayTextTimeoutMSFromEnv() int {
 	return envDurationMilliseconds("CINEWEAVE_PROVIDER_TEXT_TIMEOUT_MS", defaultGatewayTextTimeoutMS)
+}
+
+func gatewayImageTimeoutMSFromEnv() int {
+	return envDurationMilliseconds("CINEWEAVE_PROVIDER_IMAGE_TIMEOUT_MS", defaultGatewayImageTimeoutMS)
+}
+
+func gatewayAudioTimeoutMSFromEnv() int {
+	return envDurationMilliseconds("CINEWEAVE_PROVIDER_AUDIO_TIMEOUT_MS", 10*60*1000)
 }
 
 func gatewayClientTimeoutFromEnv() time.Duration {

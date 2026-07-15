@@ -92,6 +92,7 @@ func (s *Server) projectAgentStepDecisionActivity(ctx context.Context, input wor
 	if _, err := s.decideAgentStepApprovalCore(ctx, principal, project, task.ID, strings.TrimSpace(signal.StepID), decision, agentStepApprovalRequest{
 		ApprovalID: strings.TrimSpace(signal.ApprovalID),
 		Note:       strings.TrimSpace(signal.Note),
+		Decision:   signal.Decision,
 	}); err != nil {
 		return workflows.ProjectAgentWorkflowState{}, err
 	}

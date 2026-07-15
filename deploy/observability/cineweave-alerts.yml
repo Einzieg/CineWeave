@@ -1,0 +1,70 @@
+groups:
+  - name: cineweave-runtime
+    interval: 30s
+    rules:
+      - alert: CineWeaveWorkflowStartQueuedTooLong
+        expr: cineweave_workflow_oldest_queued_age_seconds > 120
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: CineWeave workflow start queue is not draining
+          description: The oldest Workflow Start Outbox item has been queued for more than two minutes.
+
+      - alert: CineWeaveWorkflowCancellationStuck
+        expr: cineweave_workflow_oldest_cancellation_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: CineWeave workflow cancellation is not converging
+          description: At least one Workflow Run has remained in cancelling for more than five minutes.
+
+      - alert: CineWeaveProviderRequestRunningTooLong
+        expr: cineweave_provider_oldest_running_request_age_seconds > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: CineWeave provider request is running too long
+          description: A Provider Request has remained running for more than fifteen minutes.
+
+      - alert: CineWeaveProviderUnknownOutcome
+        expr: sum(increase(cineweave_provider_request_transitions_total{status="unknown_outcome"}[10m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: CineWeave observed an unknown provider outcome
+          description: Do not retry automatically. Reconcile the upstream result and durable Provider Request first.
+
+      - alert: CineWeaveProviderStreamTruncationBurst
+        expr: sum(increase(cineweave_provider_stream_terminal_total{result="truncated"}[5m])) >= 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: CineWeave provider streams are being truncated
+          description: Three or more text streams ended without their configured terminal marker in five minutes.
+
+      - alert: CineWeaveProviderMediaPolicyRejectionBurst
+        expr: sum(increase(cineweave_provider_media_policy_rejections_total[10m])) >= 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: CineWeave provider media policy is rejecting many responses
+          description: Inspect rejection reason labels before changing any outbound allowlist.
+
+      - alert: CineWeaveAPIHighServerErrorRate
+        expr: |
+          sum(rate(cineweave_http_requests_total{service="api",status=~"5.."}[5m]))
+            /
+          clamp_min(sum(rate(cineweave_http_requests_total{service="api"}[5m])), 0.001)
+            > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: CineWeave API server error rate is high
+          description: More than five percent of API requests have returned 5xx for ten minutes.

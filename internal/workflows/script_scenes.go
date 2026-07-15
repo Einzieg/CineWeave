@@ -60,6 +60,7 @@ type ParseScriptScenesOutput struct {
 }
 
 type ScriptSceneCandidate struct {
+	EpisodeIndex   int             `json:"episodeIndex,omitempty"`
 	SceneIndex     int             `json:"sceneIndex,omitempty"`
 	SceneNo        int             `json:"sceneNo"`
 	Title          string          `json:"title"`
@@ -87,6 +88,7 @@ type ScriptSceneRecord struct {
 	ProjectID       string          `json:"projectId"`
 	ScriptID        string          `json:"scriptId"`
 	ScriptVersionID string          `json:"scriptVersionId"`
+	ScriptEpisodeID string          `json:"scriptEpisodeId,omitempty"`
 	SceneIndex      int             `json:"sceneIndex"`
 	SceneNo         int             `json:"sceneNo"`
 	Title           string          `json:"title"`
@@ -131,6 +133,13 @@ type ScriptSceneStoreInput struct {
 	PromptVersionID   string
 	PromptHash        string
 	Source            string
+	ScriptEpisodeIDs  map[int]string
+}
+
+type ScriptSceneEpisodeRef struct {
+	ID           string `json:"id"`
+	EpisodeIndex int    `json:"episodeIndex"`
+	EpisodeTitle string `json:"episodeTitle"`
 }
 
 func ParseScriptScenesWorkflow(ctx workflow.Context, input TextToStoryboardInput) (ParseScriptScenesOutput, error) {
@@ -182,7 +191,7 @@ func RegenerateSceneStoryboardWorkflow(ctx workflow.Context, input TextToStorybo
 	var storyboard ScriptStoryboardOutput
 	maxShots := options.MaxShots
 	if maxShots <= 0 {
-		maxShots = defaultMaxStoryboardShots
+		maxShots = plannerBatchMaxShots
 	}
 	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardFromScript", GenerateStoryboardFromScriptInput{
 		OrganizationID: input.OrganizationID,
@@ -212,7 +221,7 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 	if input.ScriptSceneID != "" {
 		scene, err := a.scriptSceneByID(ctx, input.ProjectID, input.ScriptSceneID)
 		if err != nil {
-			return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+			return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 		}
 		if input.ScriptID == "" {
 			input.ScriptID = scene.ScriptID
@@ -223,18 +232,22 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 	}
 	script, err := a.scriptForSceneParse(ctx, input.ProjectID, input.ScriptID, input.ScriptVersionID)
 	if err != nil {
-		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	project, err := a.projectProductionSettings(ctx, input.ProjectID)
 	if err != nil {
-		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	episodeRefs, err := LoadScriptSceneEpisodeRefs(ctx, a.db, input.ProjectID, script.ID, script.VersionID)
+	if err != nil {
+		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyScriptSceneParser, map[string]any{
 		"project": project.asPromptVariables(),
-		"script":  map[string]any{"id": script.ID, "versionId": script.VersionID, "title": script.Title, "content": script.Content},
+		"script":  map[string]any{"id": script.ID, "versionId": script.VersionID, "title": script.Title, "content": script.Content, "episodes": string(mustJSON(episodeRefs))},
 	})
 	if err != nil {
-		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, "", err)
+		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
 	}
 	nodeRunID, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
@@ -266,7 +279,7 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
-		NodeRunID:         nodeRunID,
+		NodeRunID:         nodeRunID.NodeRunID,
 		ModelProfileKey:   project.ScriptModelProfileKey,
 		PromptTemplateKey: rendered.TemplateKey,
 		PromptVersionID:   rendered.PromptVersionID,
@@ -287,6 +300,9 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	defer tx.Rollback(ctx)
+	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, nodeRunID); err != nil {
+		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, nodeRunID, err)
+	}
 	scenes, err := StoreScriptScenes(ctx, tx, ScriptSceneStoreInput{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
@@ -301,6 +317,7 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 		PromptVersionID:   rendered.PromptVersionID,
 		PromptHash:        rendered.RenderedHash,
 		Source:            promptKeyScriptSceneParser,
+		ScriptEpisodeIDs:  ScriptSceneEpisodeIDMap(episodeRefs),
 	}, candidates)
 	if err != nil {
 		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
@@ -313,9 +330,6 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 	})); err != nil {
 		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
-	}
 	output := ParseScriptScenesOutput{
 		ScriptID:        script.ID,
 		ScriptVersionID: script.VersionID,
@@ -324,8 +338,11 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 		ProviderCallID:  gatewayResp.ProviderCallID,
 		ModelID:         gatewayResp.ModelID,
 	}
-	if err := CompleteNodeRun(ctx, a.db, nodeRunID, mustJSON(output)); err != nil {
-		return ParseScriptScenesOutput{}, err
+	if _, err := completeNodeRunTx(ctx, tx, nodeRunID, mustJSON(output)); err != nil {
+		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	return output, nil
 }
@@ -337,11 +354,11 @@ func (a Activities) RegenerateScriptScene(ctx context.Context, input RegenerateS
 	}
 	scene, err := a.scriptSceneByID(ctx, input.ProjectID, input.ScriptSceneID)
 	if err != nil {
-		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	project, err := a.projectProductionSettings(ctx, input.ProjectID)
 	if err != nil {
-		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, "", workflowError{Code: codeActivityFailed, Message: err.Error()})
+		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyScriptSceneRewrite, map[string]any{
 		"project": project.asPromptVariables(),
@@ -351,7 +368,7 @@ func (a Activities) RegenerateScriptScene(ctx context.Context, input RegenerateS
 		"events":  map[string]any{"items": []string{}},
 	})
 	if err != nil {
-		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, "", err)
+		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
 	}
 	nodeRunID, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
@@ -382,7 +399,7 @@ func (a Activities) RegenerateScriptScene(ctx context.Context, input RegenerateS
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
-		NodeRunID:         nodeRunID,
+		NodeRunID:         nodeRunID.NodeRunID,
 		ModelProfileKey:   project.ScriptModelProfileKey,
 		PromptTemplateKey: rendered.TemplateKey,
 		PromptVersionID:   rendered.PromptVersionID,
@@ -408,6 +425,9 @@ func (a Activities) RegenerateScriptScene(ctx context.Context, input RegenerateS
 		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	defer tx.Rollback(ctx)
+	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, nodeRunID); err != nil {
+		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, nodeRunID, err)
+	}
 	updated, err := updateSingleScriptScene(ctx, tx, scene, candidate, ScriptSceneStoreInput{
 		ProjectID:         input.ProjectID,
 		ProviderCallID:    gatewayResp.ProviderCallID,
@@ -430,11 +450,11 @@ func (a Activities) RegenerateScriptScene(ctx context.Context, input RegenerateS
 	})); err != nil {
 		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if _, err := completeNodeRunTx(ctx, tx, nodeRunID, mustJSON(updated)); err != nil {
 		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	if err := CompleteNodeRun(ctx, a.db, nodeRunID, mustJSON(updated)); err != nil {
-		return ScriptSceneRecord{}, err
+	if err := tx.Commit(ctx); err != nil {
+		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	return updated, nil
 }
@@ -499,6 +519,10 @@ func StoreScriptScenes(ctx context.Context, tx pgx.Tx, input ScriptSceneStoreInp
 	records := make([]ScriptSceneRecord, 0, len(scenes))
 	for i, scene := range scenes {
 		scene.SceneIndex = i
+		episodeID := strings.TrimSpace(input.ScriptEpisodeIDs[scene.EpisodeIndex])
+		if len(input.ScriptEpisodeIDs) > 0 && episodeID == "" {
+			return nil, fmt.Errorf("script scene %d has invalid or missing episodeIndex %d", scene.SceneNo, scene.EpisodeIndex)
+		}
 		metadata := mustJSON(map[string]any{
 			"source":             firstNonEmptyString(input.Source, promptKeyScriptSceneParser),
 			"workflowRunId":      input.WorkflowRunID,
@@ -508,6 +532,7 @@ func StoreScriptScenes(ctx context.Context, tx pgx.Tx, input ScriptSceneStoreInp
 			"promptVersionId":    input.PromptVersionID,
 			"promptHash":         input.PromptHash,
 			"overwrittenByAgent": input.Force,
+			"episodeIndex":       scene.EpisodeIndex,
 		})
 		var existingID string
 		var manualOverride bool
@@ -526,18 +551,18 @@ func StoreScriptScenes(ctx context.Context, tx pgx.Tx, input ScriptSceneStoreInp
 					scene_index, scene_no, title, summary, location, time_of_day, atmosphere,
 					characters, scenes, props, action, dialogue, visual_goal, emotional_tone,
 					conflict, outcome, source_event_ids, content, content_format,
-					review_status, manual_override, stale_state, metadata, created_by
+					review_status, manual_override, stale_state, metadata, created_by, script_episode_id
 				)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''),
 				        $12, $13, $14, NULLIF($15, ''), NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''),
 				        NULLIF($19, ''), NULLIF($20, ''), $21, $22, $23,
-				        'pending', false, 'fresh', $24, NULLIF($25, '')::uuid)
+				        'pending', false, 'fresh', $24, NULLIF($25, '')::uuid, NULLIF($26, '')::uuid)
 				RETURNING `+ScriptSceneColumns()+`
 			`, input.OrganizationID, input.ProjectID, input.ScriptID, input.ScriptVersionID,
 				scene.SceneIndex, scene.SceneNo, scene.Title, scene.Summary, scene.Location, scene.TimeOfDay, scene.Atmosphere,
 				jsonOrDefault(scene.Characters, `[]`), jsonOrDefault(scene.Scenes, `[]`), jsonOrDefault(scene.Props, `[]`),
 				scene.Action, scene.Dialogue, scene.VisualGoal, scene.EmotionalTone, scene.Conflict, scene.Outcome,
-				jsonOrDefault(scene.SourceEventIDs, `[]`), scene.Content, scene.ContentFormat, metadata, input.CreatedBy))
+				jsonOrDefault(scene.SourceEventIDs, `[]`), scene.Content, scene.ContentFormat, metadata, input.CreatedBy, episodeID))
 			if err != nil {
 				return nil, err
 			}
@@ -583,6 +608,7 @@ func StoreScriptScenes(ctx context.Context, tx pgx.Tx, input ScriptSceneStoreInp
 			    manual_override = false,
 			    stale_state = 'fresh',
 			    metadata = COALESCE(metadata, '{}'::jsonb) || $22::jsonb,
+			    script_episode_id = COALESCE(NULLIF($23, '')::uuid, script_episode_id),
 			    deleted_at = NULL,
 			    edited_by = NULL,
 			    edited_at = NULL,
@@ -593,7 +619,7 @@ func StoreScriptScenes(ctx context.Context, tx pgx.Tx, input ScriptSceneStoreInp
 			scene.SceneNo, scene.Title, scene.Summary, scene.Location, scene.TimeOfDay, scene.Atmosphere,
 			jsonOrDefault(scene.Characters, `[]`), jsonOrDefault(scene.Scenes, `[]`), jsonOrDefault(scene.Props, `[]`),
 			scene.Action, scene.Dialogue, scene.VisualGoal, scene.EmotionalTone, scene.Conflict, scene.Outcome,
-			jsonOrDefault(scene.SourceEventIDs, `[]`), scene.Content, scene.ContentFormat, metadata))
+			jsonOrDefault(scene.SourceEventIDs, `[]`), scene.Content, scene.ContentFormat, metadata, episodeID))
 		if err != nil {
 			return nil, err
 		}
@@ -697,6 +723,11 @@ func markScriptSceneDownstreamStale(ctx context.Context, tx pgx.Tx, projectID, s
 	_, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
 		SET stale_state = 'needs_regeneration',
+		    image_prompt_status = 'not_started',
+		    image_prompt_error_code = NULL,
+		    image_prompt_error_message = NULL,
+		    image_prompt_workflow_run_id = NULL,
+		    image_prompt_updated_at = now(),
 		    image_status = CASE
 		      WHEN image_artifact_id IS NOT NULL OR image_media_file_id IS NOT NULL OR COALESCE(image_storage_key, '') <> '' THEN 'stale'
 		      ELSE image_status
@@ -725,6 +756,7 @@ func ScriptSceneColumns() string {
 		project_id::text,
 		script_id::text,
 		script_version_id::text,
+		COALESCE(script_episode_id::text, ''),
 		scene_index,
 		scene_no,
 		title,
@@ -766,6 +798,7 @@ func ScanScriptSceneRecord(row interface{ Scan(...any) error }) (ScriptSceneReco
 		&item.ProjectID,
 		&item.ScriptID,
 		&item.ScriptVersionID,
+		&item.ScriptEpisodeID,
 		&item.SceneIndex,
 		&item.SceneNo,
 		&item.Title,
@@ -885,8 +918,64 @@ func (a Activities) storyboardScenesForScript(ctx context.Context, projectID, ve
 	return a.scriptScenesForVersion(ctx, projectID, versionID)
 }
 
+func (a Activities) storyboardScenesForEpisode(ctx context.Context, projectID, versionID, episodeID string) ([]ScriptSceneRecord, error) {
+	approved, err := queryScriptScenes(ctx, a.db, `
+		WHERE project_id = $1
+		  AND script_version_id = $2
+		  AND script_episode_id = $3
+		  AND review_status = 'approved'
+		  AND deleted_at IS NULL
+		ORDER BY scene_index ASC
+	`, projectID, versionID, episodeID)
+	if err != nil {
+		return nil, err
+	}
+	if len(approved) > 0 {
+		return approved, nil
+	}
+	return queryScriptScenes(ctx, a.db, `
+		WHERE project_id = $1
+		  AND script_version_id = $2
+		  AND script_episode_id = $3
+		  AND deleted_at IS NULL
+		ORDER BY scene_index ASC
+	`, projectID, versionID, episodeID)
+}
+
 type scriptSceneQuerier interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func LoadScriptSceneEpisodeRefs(ctx context.Context, db scriptSceneQuerier, projectID, scriptID, versionID string) ([]ScriptSceneEpisodeRef, error) {
+	rows, err := db.Query(ctx, `
+		SELECT id::text, episode_index, episode_title
+		FROM script_episodes
+		WHERE project_id = $1 AND script_id = $2 AND script_version_id = $3
+		ORDER BY episode_index ASC
+	`, projectID, scriptID, versionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]ScriptSceneEpisodeRef, 0)
+	for rows.Next() {
+		var item ScriptSceneEpisodeRef
+		if err := rows.Scan(&item.ID, &item.EpisodeIndex, &item.EpisodeTitle); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func ScriptSceneEpisodeIDMap(items []ScriptSceneEpisodeRef) map[int]string {
+	result := make(map[int]string, len(items))
+	for _, item := range items {
+		if item.EpisodeIndex > 0 && strings.TrimSpace(item.ID) != "" {
+			result[item.EpisodeIndex] = item.ID
+		}
+	}
+	return result
 }
 
 func queryScriptScenes(ctx context.Context, db scriptSceneQuerier, where string, args ...any) ([]ScriptSceneRecord, error) {
@@ -906,12 +995,7 @@ func queryScriptScenes(ctx context.Context, db scriptSceneQuerier, where string,
 	return items, rows.Err()
 }
 
-func (a Activities) upsertSceneAssetLinks(ctx context.Context, input AnalyzeScriptAssetsInput, scenes []ScriptSceneRecord, assets []CanonicalAssetRecord) error {
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
+func upsertSceneAssetLinksTx(ctx context.Context, tx pgx.Tx, input AnalyzeScriptAssetsInput, scenes []ScriptSceneRecord, assets []CanonicalAssetRecord) error {
 	assetByKey := map[string]CanonicalAssetRecord{}
 	for _, asset := range assets {
 		assetByKey[assetKey(asset.AssetType, asset.Name)] = asset
@@ -943,7 +1027,7 @@ func (a Activities) upsertSceneAssetLinks(ctx context.Context, input AnalyzeScri
 			}
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 type sceneAssetReference struct {

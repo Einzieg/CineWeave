@@ -59,6 +59,7 @@ type artifactPreviewSeed struct {
 	organizationID      string
 	otherOrganizationID string
 	ownerUserID         string
+	otherUserID         string
 	ownerToken          string
 	otherToken          string
 	workspaceID         string
@@ -122,6 +123,7 @@ func setupArtifactPreviewTest(t *testing.T) (http.Handler, *artifactPreviewSeed)
 		organizationID:      ownerResp.OrganizationID,
 		otherOrganizationID: otherResp.OrganizationID,
 		ownerUserID:         ownerResp.User.ID,
+		otherUserID:         otherResp.User.ID,
 		ownerToken:          ownerResp.AccessToken,
 		otherToken:          otherResp.AccessToken,
 	}
@@ -144,6 +146,8 @@ func setupArtifactPreviewTest(t *testing.T) (http.Handler, *artifactPreviewSeed)
 func (s *artifactPreviewSeed) Close() {
 	_, _ = s.pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, s.organizationID)
 	_, _ = s.pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, s.otherOrganizationID)
+	_, _ = s.pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, s.ownerUserID)
+	_, _ = s.pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, s.otherUserID)
 	s.pool.Close()
 }
 

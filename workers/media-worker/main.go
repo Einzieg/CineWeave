@@ -8,6 +8,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/db"
 	"github.com/Einzieg/cineweave/internal/storage"
 	"github.com/Einzieg/cineweave/internal/workflows"
+	"github.com/Einzieg/cineweave/workers/workerkit"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
@@ -27,7 +28,8 @@ func main() {
 	}
 
 	temporalClient, err := client.Dial(client.Options{
-		HostPort: config.Get("TEMPORAL_ADDRESS", "localhost:7233"),
+		HostPort:  config.Get("TEMPORAL_ADDRESS", "localhost:7233"),
+		Namespace: config.Get("TEMPORAL_NAMESPACE", "default"),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -35,12 +37,19 @@ func main() {
 	defer temporalClient.Close()
 
 	activities := workflows.NewActivities(pool, storageClient, nil)
-	temporalWorker := worker.New(temporalClient, workflows.MediaTaskQueue, worker.Options{})
+	workerOptions, err := workerkit.TemporalWorkerOptions("media-worker")
+	if err != nil {
+		log.Fatal(err)
+	}
+	temporalWorker := worker.New(temporalClient, workflows.MediaTaskQueue, workerOptions)
 	temporalWorker.RegisterWorkflow(workflows.ExportProjectWorkflow)
 	temporalWorker.RegisterActivityWithOptions(activities.ComposeFinalVideo, activity.RegisterOptions{Name: "ComposeFinalVideo"})
+	temporalWorker.RegisterActivityWithOptions(activities.ProcessRenderSegmentMedia, activity.RegisterOptions{Name: "ProcessRenderSegmentMedia"})
+	temporalWorker.RegisterActivityWithOptions(activities.ComposeShotRenderPlanMedia, activity.RegisterOptions{Name: "ComposeShotRenderPlanMedia"})
+	temporalWorker.RegisterActivityWithOptions(activities.ExtractShotContinuityFrame, activity.RegisterOptions{Name: "ExtractShotContinuityFrame"})
 	temporalWorker.RegisterActivityWithOptions(activities.ExportProject, activity.RegisterOptions{Name: "ExportProject"})
 
-	if err := temporalWorker.Run(worker.InterruptCh()); err != nil {
+	if err := workerkit.RunTemporalWorker(temporalWorker, worker.InterruptCh()); err != nil {
 		log.Fatal(err)
 	}
 }

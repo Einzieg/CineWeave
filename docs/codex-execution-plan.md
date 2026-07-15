@@ -1,6 +1,6 @@
 # CineWeave Codex 当前执行计划
 
-本文档是 Codex 执行入口，用于记录当前项目状态、下一阶段任务顺序和验收命令。详细任务拆解维护在 `docs/follow-up-development-plan.md`。
+本文档是 Codex 执行入口，用于记录当前项目状态、下一阶段任务顺序和验收命令。详细任务拆解维护在 `docs/follow-up-development-plan.md`。运行时基础设施重构的目标架构维护在 `docs/runtime-foundation-hardening-target.md`，逐项完成状态维护在 `docs/runtime-foundation-hardening-progress.md`。
 
 ## 根决策
 

@@ -11,62 +11,94 @@ import (
 )
 
 type ShotProductionStatus struct {
-	ProjectID string                `json:"projectId"`
-	Summary   ShotProductionSummary `json:"summary"`
-	Shots     []ShotProductionShot  `json:"shots"`
+	ProjectID   string                `json:"projectId"`
+	AspectRatio string                `json:"aspectRatio"`
+	Summary     ShotProductionSummary `json:"summary"`
+	Shots       []ShotProductionShot  `json:"shots"`
 }
 
 type ShotProductionSummary struct {
-	Total          int `json:"total"`
-	ImageSucceeded int `json:"imageSucceeded"`
-	ImageMissing   int `json:"imageMissing"`
-	ImageFailed    int `json:"imageFailed"`
-	ImageStale     int `json:"imageStale"`
-	VideoSucceeded int `json:"videoSucceeded"`
-	VideoMissing   int `json:"videoMissing"`
-	VideoFailed    int `json:"videoFailed"`
-	VideoStale     int `json:"videoStale"`
-	Running        int `json:"running"`
+	Total                int `json:"total"`
+	ImageSucceeded       int `json:"imageSucceeded"`
+	ImageMissing         int `json:"imageMissing"`
+	ImageFailed          int `json:"imageFailed"`
+	ImageStale           int `json:"imageStale"`
+	ImagePromptSucceeded int `json:"imagePromptSucceeded"`
+	ImagePromptMissing   int `json:"imagePromptMissing"`
+	ImagePromptFailed    int `json:"imagePromptFailed"`
+	ImagePromptRunning   int `json:"imagePromptRunning"`
+	VideoSucceeded       int `json:"videoSucceeded"`
+	VideoMissing         int `json:"videoMissing"`
+	VideoFailed          int `json:"videoFailed"`
+	VideoStale           int `json:"videoStale"`
+	VideoPromptSucceeded int `json:"videoPromptSucceeded"`
+	VideoPromptMissing   int `json:"videoPromptMissing"`
+	VideoPromptFailed    int `json:"videoPromptFailed"`
+	VideoPromptRunning   int `json:"videoPromptRunning"`
+	Running              int `json:"running"`
 }
 
 type ShotProductionShot struct {
-	ID                  string  `json:"id"`
-	WorkflowRunID       string  `json:"workflowRunId"`
-	ScriptSceneID       *string `json:"scriptSceneId,omitempty"`
-	ShotIndex           int     `json:"shotIndex"`
-	ShotNo              int     `json:"shotNo"`
-	Visual              string  `json:"visual,omitempty"`
-	ImageStatus         string  `json:"imageStatus"`
-	VideoStatus         string  `json:"videoStatus"`
-	StaleState          string  `json:"staleState"`
-	ImageArtifactID     *string `json:"imageArtifactId,omitempty"`
-	ImageMediaFileID    *string `json:"imageMediaFileId,omitempty"`
-	ImageStorageKey     *string `json:"imageStorageKey,omitempty"`
-	ImagePreviewURL     *string `json:"imagePreviewUrl,omitempty"`
-	VideoArtifactID     *string `json:"videoArtifactId,omitempty"`
-	VideoMediaFileID    *string `json:"videoMediaFileId,omitempty"`
-	VideoStorageKey     *string `json:"videoStorageKey,omitempty"`
-	VideoPreviewURL     *string `json:"videoPreviewUrl,omitempty"`
-	ImageErrorCode      *string `json:"imageErrorCode,omitempty"`
-	ImageErrorMessage   *string `json:"imageErrorMessage,omitempty"`
-	VideoErrorCode      *string `json:"videoErrorCode,omitempty"`
-	VideoErrorMessage   *string `json:"videoErrorMessage,omitempty"`
-	ImageWorkflowRunID  *string `json:"imageWorkflowRunId,omitempty"`
-	VideoWorkflowRunID  *string `json:"videoWorkflowRunId,omitempty"`
-	ProviderAsyncTaskID *string `json:"providerAsyncTaskId,omitempty"`
-	ExternalTaskID      *string `json:"externalTaskId,omitempty"`
-	CanGenerateImage    bool    `json:"canGenerateImage"`
-	CanGenerateVideo    bool    `json:"canGenerateVideo"`
-	CanRetryImage       bool    `json:"canRetryImage"`
-	CanRetryVideo       bool    `json:"canRetryVideo"`
+	ID                       string                             `json:"id"`
+	WorkflowRunID            string                             `json:"workflowRunId"`
+	StoryboardPlanID         *string                            `json:"storyboardPlanId,omitempty"`
+	ScriptSceneID            *string                            `json:"scriptSceneId,omitempty"`
+	ScriptEpisodeID          *string                            `json:"scriptEpisodeId,omitempty"`
+	EpisodeIndex             *int                               `json:"episodeIndex,omitempty"`
+	EpisodeShotIndex         *int                               `json:"episodeShotIndex,omitempty"`
+	EpisodeTitle             string                             `json:"episodeTitle,omitempty"`
+	ShotIndex                int                                `json:"shotIndex"`
+	ShotNo                   int                                `json:"shotNo"`
+	Title                    string                             `json:"title,omitempty"`
+	DurationSeconds          *float64                           `json:"durationSeconds,omitempty"`
+	Visual                   string                             `json:"visual,omitempty"`
+	ImagePrompt              string                             `json:"imagePrompt,omitempty"`
+	ImagePromptStatus        string                             `json:"imagePromptStatus"`
+	ImagePromptErrorCode     *string                            `json:"imagePromptErrorCode,omitempty"`
+	ImagePromptErrorMessage  *string                            `json:"imagePromptErrorMessage,omitempty"`
+	ImagePromptWorkflowRunID *string                            `json:"imagePromptWorkflowRunId,omitempty"`
+	VideoPrompt              string                             `json:"videoPrompt,omitempty"`
+	ScriptDialogue           []workflows.StoryboardDialogueLine `json:"scriptDialogue"`
+	VideoPromptStatus        string                             `json:"videoPromptStatus"`
+	VideoPromptErrorCode     *string                            `json:"videoPromptErrorCode,omitempty"`
+	VideoPromptErrorMessage  *string                            `json:"videoPromptErrorMessage,omitempty"`
+	VideoPromptWorkflowRunID *string                            `json:"videoPromptWorkflowRunId,omitempty"`
+	ImageStatus              string                             `json:"imageStatus"`
+	VideoStatus              string                             `json:"videoStatus"`
+	StaleState               string                             `json:"staleState"`
+	ImageArtifactID          *string                            `json:"imageArtifactId,omitempty"`
+	ImageMediaFileID         *string                            `json:"imageMediaFileId,omitempty"`
+	ImageStorageKey          *string                            `json:"imageStorageKey,omitempty"`
+	ImagePreviewURL          *string                            `json:"imagePreviewUrl,omitempty"`
+	VideoArtifactID          *string                            `json:"videoArtifactId,omitempty"`
+	VideoMediaFileID         *string                            `json:"videoMediaFileId,omitempty"`
+	VideoStorageKey          *string                            `json:"videoStorageKey,omitempty"`
+	VideoPreviewURL          *string                            `json:"videoPreviewUrl,omitempty"`
+	VideoReferenceMode       string                             `json:"videoReferenceMode"`
+	VideoReferenceKeys       []string                           `json:"videoReferenceKeys"`
+	ImageErrorCode           *string                            `json:"imageErrorCode,omitempty"`
+	ImageErrorMessage        *string                            `json:"imageErrorMessage,omitempty"`
+	VideoErrorCode           *string                            `json:"videoErrorCode,omitempty"`
+	VideoErrorMessage        *string                            `json:"videoErrorMessage,omitempty"`
+	ImageWorkflowRunID       *string                            `json:"imageWorkflowRunId,omitempty"`
+	VideoWorkflowRunID       *string                            `json:"videoWorkflowRunId,omitempty"`
+	ProviderAsyncTaskID      *string                            `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID           *string                            `json:"externalTaskId,omitempty"`
+	CanGenerateImage         bool                               `json:"canGenerateImage"`
+	CanGenerateImagePrompt   bool                               `json:"canGenerateImagePrompt"`
+	CanGenerateVideo         bool                               `json:"canGenerateVideo"`
+	CanGenerateVideoPrompt   bool                               `json:"canGenerateVideoPrompt"`
+	CanRetryImage            bool                               `json:"canRetryImage"`
+	CanRetryVideo            bool                               `json:"canRetryVideo"`
 }
 
 type ShotProductionActionRequest struct {
-	Action        string         `json:"action"`
-	ScriptSceneID string         `json:"scriptSceneId"`
-	WorkflowRunID string         `json:"workflowRunId"`
-	ShotIDs       []string       `json:"shotIds"`
-	Options       map[string]any `json:"options"`
+	Action          string         `json:"action"`
+	ScriptSceneID   string         `json:"scriptSceneId"`
+	ScriptEpisodeID string         `json:"scriptEpisodeId"`
+	WorkflowRunID   string         `json:"workflowRunId"`
+	ShotIDs         []string       `json:"shotIds"`
+	Options         map[string]any `json:"options"`
 }
 
 type ShotProductionActionResponse struct {
@@ -82,7 +114,15 @@ func (s *Server) getShotProductionStatus(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	status, err := s.loadShotProductionStatus(r, project.ID, r.URL.Query().Get("scriptSceneId"), r.URL.Query().Get("workflowRunId"), strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true"))
+	status, err := s.loadShotProductionStatusForEpisode(
+		r,
+		project.ID,
+		r.URL.Query().Get("scriptSceneId"),
+		r.URL.Query().Get("workflowRunId"),
+		r.URL.Query().Get("scriptEpisodeId"),
+		r.URL.Query().Get("storyboardPlanId"),
+		strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true"),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -107,7 +147,15 @@ func (s *Server) runShotProductionAction(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	status, err := s.loadShotProductionStatus(r, project.ID, req.ScriptSceneID, req.WorkflowRunID, false)
+	status, err := s.loadShotProductionStatusForEpisode(
+		r,
+		project.ID,
+		req.ScriptSceneID,
+		req.WorkflowRunID,
+		req.ScriptEpisodeID,
+		"",
+		false,
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -119,17 +167,18 @@ func (s *Server) runShotProductionAction(w http.ResponseWriter, r *http.Request,
 	}
 	workflowType, workflowFunc, _ := shotProductionWorkflowForAction(req.Action)
 	input := map[string]any{
-		"action":      req.Action,
-		"shotIds":     targets,
-		"force":       shotProductionOptionBool(req.Options, "force", true),
-		"aspectRatio": firstNonEmptyString(shotProductionOptionString(req.Options, "aspectRatio"), project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
-		"resolution":  firstNonEmptyString(shotProductionOptionString(req.Options, "resolution"), "720p"),
+		"action":         req.Action,
+		"shotIds":        targets,
+		"force":          shotProductionOptionBool(req.Options, "force", true),
+		"aspectRatio":    firstNonEmptyString(project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
+		"resolution":     firstNonEmptyString(shotProductionOptionString(req.Options, "resolution"), "720p"),
+		"maxConcurrency": shotProductionMaxConcurrency(req.Action, req.Options),
+	}
+	if scriptEpisodeID := strings.TrimSpace(req.ScriptEpisodeID); scriptEpisodeID != "" {
+		input["scriptEpisodeId"] = scriptEpisodeID
 	}
 	if value := shotProductionOptionFloat(req.Options, "duration", 0); value > 0 {
 		input["duration"] = value
-	}
-	if value := shotProductionOptionInt(req.Options, "maxConcurrency", 1); value > 0 {
-		input["maxConcurrency"] = value
 	}
 	if value := shotProductionOptionInt(req.Options, "pollIntervalSeconds", 0); value > 0 {
 		input["pollIntervalSeconds"] = value
@@ -155,24 +204,65 @@ func (s *Server) runShotProductionAction(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) loadShotProductionStatus(r *http.Request, projectID, scriptSceneID, workflowRunID string, includePreviewURL bool) (ShotProductionStatus, error) {
+	return s.loadShotProductionStatusForEpisode(r, projectID, scriptSceneID, workflowRunID, "", "", includePreviewURL)
+}
+
+func (s *Server) loadShotProductionStatusForEpisode(r *http.Request, projectID, scriptSceneID, workflowRunID, scriptEpisodeID, storyboardPlanID string, includePreviewURL bool) (ShotProductionStatus, error) {
+	if err := s.reconcileTerminalShotImageStates(r, projectID); err != nil {
+		return ShotProductionStatus{}, err
+	}
+	var aspectRatio string
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT COALESCE(NULLIF(BTRIM(video_ratio), ''), NULLIF(BTRIM(aspect_ratio), ''), '16:9')
+		FROM projects
+		WHERE id = $1
+	`, projectID).Scan(&aspectRatio); err != nil {
+		return ShotProductionStatus{}, err
+	}
 	rows, err := s.db.Query(r.Context(), `
 		`+storyboardShotSelectSQL(`
 		WHERE s.project_id = $1
 		  AND s.deleted_at IS NULL
 		  AND ($2 = '' OR s.script_scene_id = $2::uuid)
 		  AND ($3 = '' OR s.workflow_run_id = $3::uuid)
-		ORDER BY COALESCE(sc.scene_no, 0), s.shot_index ASC
-	`), projectID, strings.TrimSpace(scriptSceneID), strings.TrimSpace(workflowRunID))
+		  AND ($4 = '' OR s.script_episode_id = $4::uuid)
+		  AND ($5 = '' OR s.storyboard_plan_id = $5::uuid)
+		  AND (
+		    $5 <> ''
+		    OR $3 <> ''
+		    OR EXISTS (
+		      SELECT 1
+		      FROM storyboard_plans active_plan
+		      WHERE active_plan.id = s.storyboard_plan_id
+		        AND active_plan.project_id = s.project_id
+		        AND active_plan.active = true
+		        AND active_plan.status = 'ready'
+		    )
+		    OR (
+		      s.storyboard_plan_id IS NULL
+		      AND NOT EXISTS (
+		        SELECT 1
+		        FROM storyboard_plans project_active_plan
+		        WHERE project_active_plan.project_id = s.project_id
+		          AND project_active_plan.active = true
+		          AND project_active_plan.status = 'ready'
+		      )
+		    )
+		  )
+		ORDER BY s.episode_index ASC NULLS LAST, s.episode_shot_index ASC NULLS LAST, COALESCE(sc.scene_no, 0), s.shot_index ASC
+	`), projectID, strings.TrimSpace(scriptSceneID), strings.TrimSpace(workflowRunID), strings.TrimSpace(scriptEpisodeID), strings.TrimSpace(storyboardPlanID))
 	if err != nil {
 		return ShotProductionStatus{}, err
 	}
 	defer rows.Close()
-	status := ShotProductionStatus{ProjectID: projectID, Shots: make([]ShotProductionShot, 0)}
+	status := ShotProductionStatus{ProjectID: projectID, AspectRatio: aspectRatio, Shots: make([]ShotProductionShot, 0)}
+	publicIndexByScope := map[string]int{}
 	for rows.Next() {
 		shot, err := scanStoryboardShot(rows)
 		if err != nil {
 			return ShotProductionStatus{}, err
 		}
+		normalizeShotProductionPublicNumber(&shot, publicIndexByScope)
 		if includePreviewURL && s.storage != nil {
 			if err := s.attachShotPreviewURLs(r, &shot, previewURLExpiryFromRequest(r)); err != nil {
 				return ShotProductionStatus{}, err
@@ -185,38 +275,111 @@ func (s *Server) loadShotProductionStatus(r *http.Request, projectID, scriptScen
 	return status, rows.Err()
 }
 
+func normalizeShotProductionPublicNumber(shot *StoryboardShot, publicIndexByScope map[string]int) {
+	scope := firstNonEmptyString(stringValue(shot.StoryboardPlanID), stringValue(shot.ScriptEpisodeID), shot.WorkflowRunID, "project")
+	publicIndex := publicIndexByScope[scope]
+	shot.ShotIndex = publicIndex
+	shot.ShotNo = publicIndex + 1
+	shot.EpisodeShotIndex = &publicIndex
+	publicIndexByScope[scope] = publicIndex + 1
+}
+
+func (s *Server) reconcileTerminalShotImageStates(r *http.Request, projectID string) error {
+	_, err := s.db.Exec(r.Context(), `
+		UPDATE storyboard_shots s
+		SET image_status = 'failed',
+		    image_error_code = CASE
+		      WHEN image_run.status = 'cancelled' THEN 'USER_CANCELLED'
+		      ELSE 'WORKFLOW_TERMINAL'
+		    END,
+		    image_error_message = CASE
+		      WHEN image_run.status = 'cancelled' THEN '关联工作流已取消，图片生成未完成'
+		      ELSE '关联工作流已结束，图片生成未完成'
+		    END,
+		    image_completed_at = now(),
+		    status = 'image_failed',
+		    updated_at = now()
+		FROM workflow_runs image_run
+		WHERE s.project_id = $1
+		  AND s.deleted_at IS NULL
+		  AND image_run.id = s.image_workflow_run_id
+		  AND s.image_status IN ('queued', 'running')
+		  AND image_run.status IN ('succeeded', 'failed', 'cancelled')
+	`, projectID)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(r.Context(), `
+		UPDATE storyboard_shots s
+		SET image_prompt_status = 'failed',
+		    image_prompt_error_code = CASE WHEN w.status = 'cancelled' THEN 'USER_CANCELLED' ELSE 'WORKFLOW_TERMINAL' END,
+		    image_prompt_error_message = CASE WHEN w.status = 'cancelled' THEN '关联工作流已取消，图片提示词未完成' ELSE '关联工作流已结束，图片提示词未完成' END,
+		    image_prompt_updated_at = now(),
+		    updated_at = now()
+		FROM workflow_runs w
+		WHERE s.project_id = $1
+		  AND s.deleted_at IS NULL
+		  AND s.image_prompt_workflow_run_id = w.id
+		  AND s.image_prompt_status IN ('queued', 'running')
+		  AND w.status IN ('succeeded', 'failed', 'cancelled')
+	`, projectID)
+	return err
+}
+
 func shotProductionShotFromStoryboard(shot StoryboardShot) ShotProductionShot {
-	hasImage := shotHasImage(shot)
+	canUseVideoInput := storyboardShotHasVideoInput(shot)
 	return ShotProductionShot{
-		ID:                  shot.ID,
-		WorkflowRunID:       shot.WorkflowRunID,
-		ScriptSceneID:       shot.ScriptSceneID,
-		ShotIndex:           shot.ShotIndex,
-		ShotNo:              shot.ShotNo,
-		Visual:              shot.Visual,
-		ImageStatus:         shot.ImageStatus,
-		VideoStatus:         shot.VideoStatus,
-		StaleState:          shot.StaleState,
-		ImageArtifactID:     shot.ImageArtifactID,
-		ImageMediaFileID:    shot.ImageMediaFileID,
-		ImageStorageKey:     shot.ImageStorageKey,
-		ImagePreviewURL:     shot.ImagePreviewURL,
-		VideoArtifactID:     shot.VideoArtifactID,
-		VideoMediaFileID:    shot.VideoMediaFileID,
-		VideoStorageKey:     shot.VideoStorageKey,
-		VideoPreviewURL:     shot.VideoPreviewURL,
-		ImageErrorCode:      shot.ImageErrorCode,
-		ImageErrorMessage:   shot.ImageErrorMessage,
-		VideoErrorCode:      shot.VideoErrorCode,
-		VideoErrorMessage:   shot.VideoErrorMessage,
-		ImageWorkflowRunID:  shot.ImageWorkflowRunID,
-		VideoWorkflowRunID:  shot.VideoWorkflowRunID,
-		ProviderAsyncTaskID: shot.VideoProviderAsyncTaskID,
-		ExternalTaskID:      shot.VideoExternalTaskID,
-		CanGenerateImage:    shot.ImageStatus == "not_started" || shot.ImageStatus == "stale",
-		CanGenerateVideo:    hasImage && (shot.VideoStatus == "not_started" || shot.VideoStatus == "stale"),
-		CanRetryImage:       shot.ImageStatus == "failed",
-		CanRetryVideo:       hasImage && shot.VideoStatus == "failed",
+		ID:                       shot.ID,
+		WorkflowRunID:            shot.WorkflowRunID,
+		StoryboardPlanID:         shot.StoryboardPlanID,
+		ScriptSceneID:            shot.ScriptSceneID,
+		ScriptEpisodeID:          shot.ScriptEpisodeID,
+		EpisodeIndex:             shot.EpisodeIndex,
+		EpisodeShotIndex:         shot.EpisodeShotIndex,
+		EpisodeTitle:             shot.EpisodeTitle,
+		ShotIndex:                shot.ShotIndex,
+		ShotNo:                   shot.ShotNo,
+		Title:                    shot.Title,
+		DurationSeconds:          shot.DurationSeconds,
+		Visual:                   shot.Visual,
+		ImagePrompt:              shot.ImagePrompt,
+		ImagePromptStatus:        shot.ImagePromptStatus,
+		ImagePromptErrorCode:     shot.ImagePromptErrorCode,
+		ImagePromptErrorMessage:  shot.ImagePromptErrorMessage,
+		ImagePromptWorkflowRunID: shot.ImagePromptWorkflowRunID,
+		VideoPrompt:              shot.VideoPrompt,
+		ScriptDialogue:           append([]workflows.StoryboardDialogueLine(nil), shot.ScriptDialogue...),
+		VideoPromptStatus:        shot.VideoPromptStatus,
+		VideoPromptErrorCode:     shot.VideoPromptErrorCode,
+		VideoPromptErrorMessage:  shot.VideoPromptErrorMessage,
+		VideoPromptWorkflowRunID: shot.VideoPromptWorkflowRunID,
+		ImageStatus:              shot.ImageStatus,
+		VideoStatus:              shot.VideoStatus,
+		StaleState:               shot.StaleState,
+		ImageArtifactID:          shot.ImageArtifactID,
+		ImageMediaFileID:         shot.ImageMediaFileID,
+		ImageStorageKey:          shot.ImageStorageKey,
+		ImagePreviewURL:          shot.ImagePreviewURL,
+		VideoArtifactID:          shot.VideoArtifactID,
+		VideoMediaFileID:         shot.VideoMediaFileID,
+		VideoStorageKey:          shot.VideoStorageKey,
+		VideoPreviewURL:          shot.VideoPreviewURL,
+		VideoReferenceMode:       shot.VideoReferenceMode,
+		VideoReferenceKeys:       append([]string(nil), shot.VideoReferenceKeys...),
+		ImageErrorCode:           shot.ImageErrorCode,
+		ImageErrorMessage:        shot.ImageErrorMessage,
+		VideoErrorCode:           shot.VideoErrorCode,
+		VideoErrorMessage:        shot.VideoErrorMessage,
+		ImageWorkflowRunID:       shot.ImageWorkflowRunID,
+		VideoWorkflowRunID:       shot.VideoWorkflowRunID,
+		ProviderAsyncTaskID:      shot.VideoProviderAsyncTaskID,
+		ExternalTaskID:           shot.VideoExternalTaskID,
+		CanGenerateImage:         shot.ImagePromptStatus == "succeeded" && (shot.ImageStatus == "not_started" || shot.ImageStatus == "stale"),
+		CanGenerateImagePrompt:   shot.ImagePromptStatus != "queued" && shot.ImagePromptStatus != "running",
+		CanGenerateVideo:         canUseVideoInput && shot.VideoPromptStatus == "succeeded" && (shot.VideoStatus == "not_started" || shot.VideoStatus == "stale"),
+		CanGenerateVideoPrompt:   shot.VideoPromptStatus != "queued" && shot.VideoPromptStatus != "running",
+		CanRetryImage:            shot.ImagePromptStatus == "succeeded" && shot.ImageStatus == "failed",
+		CanRetryVideo:            canUseVideoInput && shot.VideoPromptStatus == "succeeded" && shot.VideoStatus == "failed",
 	}
 }
 
@@ -235,6 +398,17 @@ func (summary *ShotProductionSummary) add(shot ShotProductionShot) {
 	default:
 		summary.ImageMissing++
 	}
+	switch shot.ImagePromptStatus {
+	case "succeeded":
+		summary.ImagePromptSucceeded++
+	case "failed":
+		summary.ImagePromptFailed++
+	case "queued", "running":
+		summary.ImagePromptRunning++
+		running = true
+	default:
+		summary.ImagePromptMissing++
+	}
 	switch shot.VideoStatus {
 	case "succeeded":
 		summary.VideoSucceeded++
@@ -247,6 +421,17 @@ func (summary *ShotProductionSummary) add(shot ShotProductionShot) {
 	default:
 		summary.VideoMissing++
 	}
+	switch shot.VideoPromptStatus {
+	case "succeeded":
+		summary.VideoPromptSucceeded++
+	case "failed":
+		summary.VideoPromptFailed++
+	case "queued", "running":
+		summary.VideoPromptRunning++
+		running = true
+	default:
+		summary.VideoPromptMissing++
+	}
 	if running {
 		summary.Running++
 	}
@@ -255,8 +440,10 @@ func (summary *ShotProductionSummary) add(shot ShotProductionShot) {
 func selectShotProductionTargets(req ShotProductionActionRequest, shots []ShotProductionShot) ([]string, string) {
 	requested := cleanShotProductionIDs(req.ShotIDs)
 	selectedActions := map[string]bool{
-		"generate_selected_images": true,
-		"generate_selected_videos": true,
+		"generate_selected_images":        true,
+		"generate_selected_image_prompts": true,
+		"generate_selected_videos":        true,
+		"generate_selected_video_prompts": true,
 	}
 	shotByID := make(map[string]ShotProductionShot, len(shots))
 	for _, shot := range shots {
@@ -271,10 +458,31 @@ func selectShotProductionTargets(req ShotProductionActionRequest, shots []ShotPr
 				return nil, "INVALID_SHOT_SELECTION"
 			}
 		}
-		if req.Action == "generate_selected_videos" {
+		if req.Action == "generate_selected_images" {
 			for _, shotID := range requested {
-				if !shotProductionHasImage(shotByID[shotID]) {
+				if shotByID[shotID].ImagePromptStatus != "succeeded" {
+					return nil, "SHOT_IMAGE_PROMPT_REQUIRED"
+				}
+			}
+		} else if req.Action == "generate_selected_image_prompts" {
+			for _, shotID := range requested {
+				if !shotByID[shotID].CanGenerateImagePrompt {
+					return nil, "SHOT_IMAGE_PROMPT_RUNNING"
+				}
+			}
+		} else if req.Action == "generate_selected_videos" {
+			for _, shotID := range requested {
+				if shotByID[shotID].VideoPromptStatus != "succeeded" {
+					return nil, "SHOT_VIDEO_PROMPT_REQUIRED"
+				}
+				if !shotProductionHasVideoInput(shotByID[shotID]) {
 					return nil, "SHOT_IMAGE_REQUIRED"
+				}
+			}
+		} else if req.Action == "generate_selected_video_prompts" {
+			for _, shotID := range requested {
+				if !shotByID[shotID].CanGenerateVideoPrompt {
+					return nil, "SHOT_VIDEO_PROMPT_RUNNING"
 				}
 			}
 		}
@@ -304,18 +512,22 @@ func selectShotProductionTargets(req ShotProductionActionRequest, shots []ShotPr
 
 func shotProductionActionMatches(action string, shot ShotProductionShot) bool {
 	switch action {
+	case "generate_image_prompts":
+		return shot.CanGenerateImagePrompt && (shot.ImagePromptStatus == "not_started" || shot.ImagePromptStatus == "failed")
 	case "generate_missing_images":
-		return shot.ImageStatus == "not_started" || shot.ImageStatus == "stale"
+		return shot.ImagePromptStatus == "succeeded" && (shot.ImageStatus == "not_started" || shot.ImageStatus == "stale")
 	case "regenerate_stale_images":
-		return shot.ImageStatus == "stale"
+		return shot.ImagePromptStatus == "succeeded" && shot.ImageStatus == "stale"
 	case "regenerate_failed_images":
-		return shot.ImageStatus == "failed"
+		return shot.ImagePromptStatus == "succeeded" && shot.ImageStatus == "failed"
 	case "generate_missing_videos":
-		return shotProductionHasImage(shot) && (shot.VideoStatus == "not_started" || shot.VideoStatus == "stale")
+		return shot.VideoPromptStatus == "succeeded" && shotProductionHasVideoInput(shot) && (shot.VideoStatus == "not_started" || shot.VideoStatus == "stale")
 	case "regenerate_stale_videos":
-		return shotProductionHasImage(shot) && shot.VideoStatus == "stale"
+		return shot.VideoPromptStatus == "succeeded" && shotProductionHasVideoInput(shot) && shot.VideoStatus == "stale"
 	case "regenerate_failed_videos":
-		return shotProductionHasImage(shot) && shot.VideoStatus == "failed"
+		return shot.VideoPromptStatus == "succeeded" && shotProductionHasVideoInput(shot) && shot.VideoStatus == "failed"
+	case "generate_video_prompts":
+		return shot.CanGenerateVideoPrompt && (shot.VideoPromptStatus == "not_started" || shot.VideoPromptStatus == "failed")
 	case "cancel_running_videos":
 		return (shot.VideoStatus == "queued" || shot.VideoStatus == "running") && stringValue(shot.ProviderAsyncTaskID) != ""
 	default:
@@ -325,14 +537,58 @@ func shotProductionActionMatches(action string, shot ShotProductionShot) bool {
 
 func shotProductionWorkflowForAction(action string) (string, any, bool) {
 	switch action {
+	case "generate_image_prompts", "generate_selected_image_prompts":
+		return "batch_generate_shot_image_prompts", workflows.BatchGenerateShotImagePromptsWorkflow, true
 	case "generate_missing_images", "regenerate_stale_images", "regenerate_failed_images", "generate_selected_images":
 		return "batch_generate_shot_images", workflows.BatchGenerateShotImagesWorkflow, true
 	case "generate_missing_videos", "regenerate_stale_videos", "regenerate_failed_videos", "generate_selected_videos":
 		return "batch_generate_shot_videos", workflows.BatchGenerateShotVideosWorkflow, true
+	case "generate_video_prompts", "generate_selected_video_prompts":
+		return "batch_generate_shot_video_prompts", workflows.BatchGenerateShotVideoPromptsWorkflow, true
 	case "cancel_running_videos":
 		return "batch_cancel_shot_videos", workflows.BatchCancelShotVideosWorkflow, true
 	default:
 		return "", nil, false
+	}
+}
+
+func shotProductionMaxConcurrency(action string, options map[string]any) int {
+	fallback := workflows.DefaultShotVideoConcurrency
+	maximum := workflows.MaxShotVideoConcurrency
+	if shotProductionImagePromptAction(action) {
+		fallback = workflows.DefaultShotImagePromptConcurrency
+		maximum = workflows.MaxShotImagePromptConcurrency
+	} else if shotProductionVideoPromptAction(action) {
+		fallback = workflows.DefaultShotVideoPromptConcurrency
+		maximum = workflows.MaxShotVideoPromptConcurrency
+	} else if shotProductionImageAction(action) {
+		fallback = workflows.DefaultShotImageConcurrency
+		maximum = workflows.MaxShotImageConcurrency
+	}
+	value := shotProductionOptionInt(options, "maxConcurrency", fallback)
+	if value < 1 {
+		value = fallback
+	}
+	if value > maximum {
+		value = maximum
+	}
+	return value
+}
+
+func shotProductionVideoPromptAction(action string) bool {
+	return action == "generate_video_prompts" || action == "generate_selected_video_prompts"
+}
+
+func shotProductionImagePromptAction(action string) bool {
+	return action == "generate_image_prompts" || action == "generate_selected_image_prompts"
+}
+
+func shotProductionImageAction(action string) bool {
+	switch action {
+	case "generate_missing_images", "regenerate_stale_images", "regenerate_failed_images", "generate_selected_images":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -341,6 +597,30 @@ func (s *Server) markShotProductionQueued(r *http.Request, action, workflowRunID
 		return nil
 	}
 	switch {
+	case shotProductionImagePromptAction(action):
+		_, err := s.db.Exec(r.Context(), `
+			UPDATE storyboard_shots
+			SET image_prompt_status = 'queued',
+			    image_prompt_error_code = NULL,
+			    image_prompt_error_message = NULL,
+			    image_prompt_workflow_run_id = $1,
+			    image_prompt_updated_at = now(),
+			    updated_at = now()
+			WHERE id = ANY($2::uuid[])
+		`, workflowRunID, shotIDs)
+		return err
+	case shotProductionVideoPromptAction(action):
+		_, err := s.db.Exec(r.Context(), `
+			UPDATE storyboard_shots
+			SET video_prompt_status = 'queued',
+			    video_prompt_error_code = NULL,
+			    video_prompt_error_message = NULL,
+			    video_prompt_workflow_run_id = $1,
+			    video_prompt_updated_at = now(),
+			    updated_at = now()
+			WHERE id = ANY($2::uuid[])
+		`, workflowRunID, shotIDs)
+		return err
 	case strings.Contains(action, "_images"):
 		_, err := s.db.Exec(r.Context(), `
 			UPDATE storyboard_shots
@@ -376,6 +656,14 @@ func shotProductionActionErrorMessage(code string) string {
 		return "shot selection is invalid"
 	case "SHOT_IMAGE_REQUIRED":
 		return "shot image is required before video generation"
+	case "SHOT_IMAGE_PROMPT_REQUIRED":
+		return "shot image prompt must be ready before image generation"
+	case "SHOT_IMAGE_PROMPT_RUNNING":
+		return "shot image prompt generation is already running"
+	case "SHOT_VIDEO_PROMPT_RUNNING":
+		return "shot video prompt generation is already running"
+	case "SHOT_VIDEO_PROMPT_REQUIRED":
+		return "shot video prompt must be generated and reviewed before video generation"
 	default:
 		return "shot production action is invalid"
 	}
@@ -385,8 +673,30 @@ func shotHasImage(shot StoryboardShot) bool {
 	return shot.ImageArtifactID != nil || shot.ImageMediaFileID != nil || stringValue(shot.ImageStorageKey) != ""
 }
 
+func storyboardShotHasVideoInput(shot StoryboardShot) bool {
+	switch shot.VideoReferenceMode {
+	case "none":
+		return true
+	case "custom":
+		return len(shot.VideoReferenceKeys) > 0
+	default:
+		return shotHasImage(shot)
+	}
+}
+
 func shotProductionHasImage(shot ShotProductionShot) bool {
 	return shot.ImageArtifactID != nil || shot.ImageMediaFileID != nil || stringValue(shot.ImageStorageKey) != ""
+}
+
+func shotProductionHasVideoInput(shot ShotProductionShot) bool {
+	switch shot.VideoReferenceMode {
+	case "none":
+		return true
+	case "custom":
+		return len(shot.VideoReferenceKeys) > 0
+	default:
+		return shotProductionHasImage(shot)
+	}
 }
 
 func cleanShotProductionIDs(values []string) []string {

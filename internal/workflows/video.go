@@ -10,6 +10,7 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/storage"
 	"github.com/jackc/pgx/v5"
+	enums "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -23,6 +24,10 @@ type WorkflowArtifact struct {
 }
 
 type VideoProductionOutput struct {
+	Status                string                       `json:"status"`
+	SucceededShotIDs      []string                     `json:"succeededShotIds,omitempty"`
+	FailedShotIDs         []string                     `json:"failedShotIds,omitempty"`
+	Errors                map[string]string            `json:"errors,omitempty"`
 	StoryboardArtifactID  string                       `json:"storyboardArtifactId"`
 	Shots                 []VideoProductionShotOutput  `json:"shots"`
 	FinalVideoArtifactID  string                       `json:"finalVideoArtifactId,omitempty"`
@@ -74,7 +79,7 @@ type ProviderWebhookSignal struct {
 }
 
 func StoryboardToImageWorkflow(ctx workflow.Context, input TextToStoryboardInput, storyboard WorkflowArtifact) (WorkflowArtifact, error) {
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	ctx = workflow.WithActivityOptions(ctx, providerImageActivityOptions())
 	var output WorkflowArtifact
 	if err := workflow.ExecuteActivity(ctx, "GenerateStoryboardImages", input, storyboard).Get(ctx, &output); err != nil {
 		return WorkflowArtifact{}, err
@@ -106,8 +111,7 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 		return ScriptDrivenVideoProduction(ctx, input, options, scriptOptions)
 	}
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
-	var currentCreate CreateShotVideoTaskOutput
-	var currentShot StoryboardShotRecord
+	imageCtx := workflow.WithActivityOptions(ctx, providerImageActivityOptions())
 	workflowTerminal := false
 	defer func() {
 		if ctx.Err() == nil || workflowTerminal {
@@ -116,20 +120,6 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 		cleanupCtx, _ := workflow.NewDisconnectedContext(ctx)
 		reason := "Workflow cancellation requested"
 		var cancelOutput CancelShotVideoTaskOutput
-		if currentCreate.ProviderAsyncTaskID != "" && currentCreate.NodeRunID != "" {
-			_ = workflow.ExecuteActivity(cleanupCtx, "CancelShotVideoTask", CancelShotVideoTaskInput{
-				OrganizationID:      input.OrganizationID,
-				ProjectID:           input.ProjectID,
-				WorkflowRunID:       input.WorkflowRunID,
-				ShotID:              currentShot.ID,
-				ShotIndex:           currentShot.ShotIndex,
-				ShotNo:              currentShot.ShotNo,
-				NodeRunID:           currentCreate.NodeRunID,
-				ProviderAsyncTaskID: currentCreate.ProviderAsyncTaskID,
-				ExternalTaskID:      currentCreate.ExternalTaskID,
-				Reason:              reason,
-			}).Get(cleanupCtx, &cancelOutput)
-		}
 		_ = workflow.ExecuteActivity(cleanupCtx, "CancelVideoProductionWorkflow", input, cancelOutput, reason).Get(cleanupCtx, nil)
 	}()
 
@@ -149,123 +139,107 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 	if len(shots) == 0 {
 		shots = storyboard.Shots
 	}
-	if len(shots) > options.MaxShots {
+	if options.MaxShots > 0 && len(shots) > options.MaxShots {
 		shots = shots[:options.MaxShots]
 	}
-
-	createActivityOptions := defaultActivityOptions()
-	createActivityOptions.RetryPolicy.MaximumAttempts = 1
-	createCtx := workflow.WithActivityOptions(ctx, createActivityOptions)
-	providerCalls := VideoProductionProviderCalls{Storyboard: storyboard.ProviderCallID}
-	shotOutputs := make([]VideoProductionShotOutput, 0, len(shots))
-	for _, shot := range shots {
-		currentShot = shot
-		currentCreate = CreateShotVideoTaskOutput{}
-		var image GenerateShotImageOutput
-		if err := workflow.ExecuteActivity(ctx, "GenerateShotImage", GenerateShotImageInput{
-			OrganizationID: input.OrganizationID,
-			ProjectID:      input.ProjectID,
-			WorkflowRunID:  input.WorkflowRunID,
-			CreatedBy:      input.CreatedBy,
-			ShotID:         shot.ID,
-			ShotIndex:      shot.ShotIndex,
-			ShotNo:         shot.ShotNo,
-			WorkflowPrompt: input.Prompt,
-			AspectRatio:    options.AspectRatio,
-		}).Get(ctx, &image); err != nil {
+	if workflow.GetVersion(ctx, "video-production-shot-image-prompts-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+		if err := prepareShotImagePromptsForProduction(ctx, input, shots, options.AspectRatio, options.MaxImageConcurrency); err != nil {
 			return VideoProductionOutput{}, err
 		}
+	}
+	imageResults := make([]shotImageGenerationResult, len(shots))
+	imageConcurrencyVersion := workflow.GetVersion(ctx, "video-production-shot-image-concurrency-v1", workflow.DefaultVersion, 1)
+	if imageConcurrencyVersion != workflow.DefaultVersion {
+		imageRequests := make([]shotImageGenerationRequest, 0, len(shots))
+		for _, shot := range shots {
+			imageRequests = append(imageRequests, shotImageGenerationRequest{
+				ShotID:         shot.ID,
+				ShotIndex:      shot.ShotIndex,
+				ShotNo:         shot.ShotNo,
+				WorkflowPrompt: input.Prompt,
+				AspectRatio:    options.AspectRatio,
+			})
+		}
+		var err error
+		imageResults, err = generateShotImagesConcurrently(ctx, imageCtx, input, imageRequests, options.MaxImageConcurrency)
+		if err != nil {
+			return VideoProductionOutput{}, err
+		}
+		for _, imageResult := range imageResults {
+			if imageResult.Err != nil {
+				return VideoProductionOutput{}, imageResult.Err
+			}
+		}
+	}
+
+	providerCalls := VideoProductionProviderCalls{Storyboard: storyboard.ProviderCallID}
+	shotOutputs := make([]VideoProductionShotOutput, 0, len(shots))
+	imagesByShotID := make(map[string]GenerateShotImageOutput, len(shots))
+	for index, shot := range shots {
+		var image GenerateShotImageOutput
+		if imageConcurrencyVersion == workflow.DefaultVersion {
+			if err := workflow.ExecuteActivity(imageCtx, "GenerateShotImage", GenerateShotImageInput{
+				OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
+				CreatedBy: input.CreatedBy, ShotID: shot.ID, ShotIndex: shot.ShotIndex, ShotNo: shot.ShotNo,
+				WorkflowPrompt: input.Prompt, AspectRatio: options.AspectRatio,
+			}).Get(imageCtx, &image); err != nil {
+				return VideoProductionOutput{}, err
+			}
+		} else {
+			image = imageResults[index].Output
+		}
+		imagesByShotID[shot.ID] = image
 		if image.ProviderCallID != "" {
 			providerCalls.Images = append(providerCalls.Images, image.ProviderCallID)
 		}
-
+	}
+	videoBatchInput := input
+	shotIDs := make([]string, 0, len(shots))
+	for _, shot := range shots {
+		shotIDs = append(shotIDs, shot.ID)
+	}
+	videoBatchInput.Input = mustJSON(BatchShotProductionOptions{
+		ShotIDs: shotIDs, Force: true, MaxConcurrency: DefaultShotVideoConcurrency,
+		AspectRatio: options.AspectRatio, Resolution: options.Resolution, AudioStrategy: "native_av", AudioRequirement: "preferred",
+		PollIntervalSeconds: int(options.PollInterval / time.Second), MaxPolls: options.MaxPolls, SkipCompletion: true,
+	})
+	childOptions := workflow.ChildWorkflowOptions{
+		WorkflowID: workflow.GetInfo(ctx).WorkflowExecution.ID + ":video-batches", WorkflowExecutionTimeout: 7 * 24 * time.Hour,
+		WorkflowRunTimeout: 24 * time.Hour, WaitForCancellation: true,
+		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL, RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 1},
+	}
+	var videoBatch BatchShotProductionOutput
+	if err := workflow.ExecuteChildWorkflow(workflow.WithChildOptions(ctx, childOptions), BatchGenerateShotVideosWorkflow, videoBatchInput).Get(ctx, &videoBatch); err != nil {
+		return VideoProductionOutput{}, err
+	}
+	providerCalls.VideoCreates = append(providerCalls.VideoCreates, videoBatch.VideoCreateProviderCallIDs...)
+	providerCalls.VideoPolls = append(providerCalls.VideoPolls, videoBatch.VideoPollProviderCallIDs...)
+	videoByShotID := make(map[string]ComposeShotRenderPlanMediaOutput, len(videoBatch.ShotVideoOutputs))
+	for _, video := range videoBatch.ShotVideoOutputs {
+		videoByShotID[video.ShotID] = video
+	}
+	for _, shot := range shots {
+		video, ok := videoByShotID[shot.ID]
+		if !ok {
+			continue
+		}
+		image := imagesByShotID[shot.ID]
 		duration := shot.Duration
 		if duration <= 0 {
 			duration = options.Duration
 		}
-		if duration > maxShotDuration {
-			duration = maxShotDuration
-		}
-		var createOutput CreateShotVideoTaskOutput
-		if err := workflow.ExecuteActivity(createCtx, "CreateShotVideoTask", CreateShotVideoTaskInput{
-			OrganizationID: input.OrganizationID,
-			ProjectID:      input.ProjectID,
-			WorkflowRunID:  input.WorkflowRunID,
-			CreatedBy:      input.CreatedBy,
-			ShotID:         shot.ID,
-			ShotIndex:      shot.ShotIndex,
-			ShotNo:         shot.ShotNo,
-			WorkflowPrompt: input.Prompt,
-			Duration:       duration,
-			AspectRatio:    options.AspectRatio,
-			Resolution:     options.Resolution,
-		}).Get(createCtx, &createOutput); err != nil {
-			return VideoProductionOutput{}, err
-		}
-		currentCreate = createOutput
-		if createOutput.ProviderCallID != "" {
-			providerCalls.VideoCreates = append(providerCalls.VideoCreates, createOutput.ProviderCallID)
-		}
-
-		var terminalPoll PollShotVideoTaskOutput
-		shotTerminal := false
-		for pollCount := 1; pollCount <= options.MaxPolls; pollCount++ {
-			var pollOutput PollShotVideoTaskOutput
-			pollInput := PollShotVideoTaskInput{
-				OrganizationID:      input.OrganizationID,
-				ProjectID:           input.ProjectID,
-				WorkflowRunID:       input.WorkflowRunID,
-				ShotID:              shot.ID,
-				ShotIndex:           shot.ShotIndex,
-				ShotNo:              shot.ShotNo,
-				NodeRunID:           createOutput.NodeRunID,
-				ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
-				ExternalTaskID:      createOutput.ExternalTaskID,
-				PollCount:           pollCount,
-			}
-			if err := workflow.ExecuteActivity(ctx, "PollShotVideoTask", pollInput).Get(ctx, &pollOutput); err != nil {
-				return VideoProductionOutput{}, err
-			}
-			if pollOutput.ProviderCallID != "" {
-				providerCalls.VideoPolls = append(providerCalls.VideoPolls, pollOutput.ProviderCallID)
-			}
-			if pollOutput.Status == "succeeded" {
-				terminalPoll = pollOutput
-				shotTerminal = true
-				break
-			}
-			if pollOutput.Status == "failed" || pollOutput.Status == "cancelled" {
-				return VideoProductionOutput{}, temporal.NewApplicationError("provider video task "+pollOutput.Status, codeActivityFailed)
-			}
-			if err := workflow.Sleep(ctx, options.PollInterval); err != nil {
-				return VideoProductionOutput{}, err
-			}
-		}
-		if !shotTerminal {
-			timeoutMessage := "provider video task polling timed out"
-			if err := workflow.ExecuteActivity(ctx, "FailVideoProductionWorkflow", input, createOutput.NodeRunID, codeProviderVideoPollingTimeout, timeoutMessage).Get(ctx, nil); err != nil {
-				return VideoProductionOutput{}, err
-			}
-			return VideoProductionOutput{}, temporal.NewApplicationError(timeoutMessage, codeProviderVideoPollingTimeout)
-		}
 		shotOutputs = append(shotOutputs, VideoProductionShotOutput{
-			ShotID:              shot.ID,
-			ShotIndex:           shot.ShotIndex,
-			ShotNo:              shot.ShotNo,
-			Duration:            duration,
-			ImageArtifactID:     image.ImageArtifactID,
-			ImageMediaFileID:    image.ImageMediaFileID,
-			ImageStorageKey:     image.ImageStorageKey,
-			VideoArtifactID:     terminalPoll.ArtifactID,
-			VideoMediaFileID:    terminalPoll.MediaFileID,
-			VideoStorageKey:     terminalPoll.StorageKey,
-			ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
-			ExternalTaskID:      firstNonEmptyString(terminalPoll.ExternalTaskID, createOutput.ExternalTaskID),
+			ShotID: shot.ID, ShotIndex: shot.ShotIndex, ShotNo: shot.ShotNo, Duration: duration,
+			ImageArtifactID: image.ImageArtifactID, ImageMediaFileID: image.ImageMediaFileID, ImageStorageKey: image.ImageStorageKey,
+			VideoArtifactID: video.ArtifactID, VideoMediaFileID: video.MediaFileID, VideoStorageKey: video.StorageKey,
+			ProviderAsyncTaskID: videoBatch.ProviderAsyncTaskIDs[shot.ID],
 		})
-		currentCreate = CreateShotVideoTaskOutput{}
-		currentShot = StoryboardShotRecord{}
 	}
 	result = BuildMultiShotVideoProductionOutput(storyboard, shotOutputs, providerCalls)
+	result.Status = videoBatch.Status
+	result.SucceededShotIDs = videoBatch.SucceededShotIDs
+	result.FailedShotIDs = videoBatch.FailedShotIDs
+	result.Errors = videoBatch.Errors
 	if !options.SkipCompose {
 		composeOptions := defaultActivityOptions()
 		composeOptions.TaskQueue = MediaTaskQueue
@@ -273,12 +247,13 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 		composeCtx := workflow.WithActivityOptions(ctx, composeOptions)
 		var composeOutput ComposeFinalVideoOutput
 		if err := workflow.ExecuteActivity(composeCtx, "ComposeFinalVideo", ComposeFinalVideoInput{
-			OrganizationID: input.OrganizationID,
-			ProjectID:      input.ProjectID,
-			WorkflowRunID:  input.WorkflowRunID,
-			CreatedBy:      input.CreatedBy,
-			AspectRatio:    options.AspectRatio,
-			Resolution:     options.Resolution,
+			OrganizationID:    input.OrganizationID,
+			ProjectID:         input.ProjectID,
+			WorkflowRunID:     input.WorkflowRunID,
+			CreatedBy:         input.CreatedBy,
+			AspectRatio:       options.AspectRatio,
+			Resolution:        options.Resolution,
+			ProductionPartial: videoBatch.Status == "partial_succeeded",
 		}).Get(composeCtx, &composeOutput); err != nil {
 			return VideoProductionOutput{}, err
 		}
@@ -295,24 +270,26 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 }
 
 type videoProductionOptions struct {
-	Duration     float64
-	AspectRatio  string
-	Resolution   string
-	PollInterval time.Duration
-	MaxPolls     int
-	MaxShots     int
-	SkipCompose  bool
+	Duration            float64
+	AspectRatio         string
+	Resolution          string
+	PollInterval        time.Duration
+	MaxPolls            int
+	MaxShots            int
+	MaxImageConcurrency int
+	SkipCompose         bool
 }
 
 func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
 	options := videoProductionOptions{
-		Duration:     5,
-		AspectRatio:  "16:9",
-		Resolution:   "720p",
-		PollInterval: 5 * time.Second,
-		MaxPolls:     120,
-		MaxShots:     defaultMaxStoryboardShots,
-		SkipCompose:  false,
+		Duration:            5,
+		AspectRatio:         "16:9",
+		Resolution:          "720p",
+		PollInterval:        5 * time.Second,
+		MaxPolls:            120,
+		MaxShots:            0,
+		MaxImageConcurrency: DefaultShotImageConcurrency,
+		SkipCompose:         false,
 	}
 	if len(raw) == 0 {
 		return options
@@ -324,6 +301,7 @@ func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
 		PollIntervalSeconds int     `json:"pollIntervalSeconds"`
 		MaxPolls            int     `json:"maxPolls"`
 		MaxShots            int     `json:"maxShots"`
+		MaxImageConcurrency int     `json:"maxImageConcurrency"`
 		SkipCompose         bool    `json:"skipCompose"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
@@ -344,9 +322,10 @@ func resolveVideoProductionOptions(raw json.RawMessage) videoProductionOptions {
 	if decoded.MaxPolls > 0 {
 		options.MaxPolls = decoded.MaxPolls
 	}
-	if decoded.MaxShots > 0 && decoded.MaxShots <= defaultMaxStoryboardShots {
+	if decoded.MaxShots > 0 {
 		options.MaxShots = decoded.MaxShots
 	}
+	options.MaxImageConcurrency = clampConcurrency(decoded.MaxImageConcurrency, DefaultShotImageConcurrency, MaxShotImageConcurrency)
 	options.SkipCompose = decoded.SkipCompose
 	return options
 }
@@ -500,14 +479,14 @@ func (a Activities) writeArtifactNode(ctx context.Context, input TextToStoryboar
 	} else if ok {
 		return existing, nil
 	}
-	nodeRunID, err := a.markArtifactNodeStarted(ctx, input, node)
+	nodeExecution, err := a.markArtifactNodeStarted(ctx, input, node)
 	if err != nil {
 		return WorkflowArtifact{}, err
 	}
 	storageKey := fmt.Sprintf("artifacts/%s/%s/%s/%s/%s.json", input.OrganizationID, input.ProjectID, input.WorkflowRunID, node.NodeKey, node.ArtifactType)
 	put, err := a.storage.PutJSON(ctx, storageKey, node.Payload)
 	if err != nil {
-		_ = a.markArtifactNodeFailed(ctx, input, nodeRunID, node.NodeKey, err)
+		_ = a.markArtifactNodeFailed(ctx, input, nodeExecution, node.NodeKey, err)
 		return WorkflowArtifact{}, err
 	}
 	artifact := WorkflowArtifact{
@@ -516,7 +495,7 @@ func (a Activities) writeArtifactNode(ctx context.Context, input TextToStoryboar
 		NodeKey:    node.NodeKey,
 		Payload:    mustJSON(node.Payload),
 	}
-	if err := a.markArtifactNodeSucceeded(ctx, input, nodeRunID, put, node, &artifact); err != nil {
+	if err := a.markArtifactNodeSucceeded(ctx, input, nodeExecution, put, node, &artifact); err != nil {
 		return WorkflowArtifact{}, err
 	}
 	return artifact, nil
@@ -545,61 +524,36 @@ func (a Activities) existingNodeArtifact(ctx context.Context, workflowRunID, nod
 	return artifact, true, nil
 }
 
-func (a Activities) markArtifactNodeStarted(ctx context.Context, input TextToStoryboardInput, node artifactNode) (string, error) {
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE workflow_runs
-		SET status = 'running', started_at = COALESCE(started_at, now())
-		WHERE id = $1
-	`, input.WorkflowRunID); err != nil {
-		return "", err
-	}
-	var nodeRunID string
-	if err := tx.QueryRow(ctx, `
-		INSERT INTO workflow_node_runs(organization_id, project_id, workflow_run_id, node_key, node_type, status, input, started_at)
-		VALUES ($1, $2, $3, $4, $5, 'running', $6, now())
-		ON CONFLICT (workflow_run_id, node_key) DO UPDATE SET
-			status = 'running',
-			input = EXCLUDED.input,
-			retry_count = workflow_node_runs.retry_count + 1,
-			error_code = NULL,
-			error_message = NULL,
-			started_at = now(),
-			completed_at = NULL
-		RETURNING id
-	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, node.NodeKey, node.NodeType, mustJSON(map[string]any{"prompt": input.Prompt})).Scan(&nodeRunID); err != nil {
-		return "", err
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
-		VALUES ($1, $2, 'workflow.node.started', 'workflow_node_run', $3, $4)
-	`, input.OrganizationID, input.ProjectID, nodeRunID, mustJSON(map[string]any{"workflowRunId": input.WorkflowRunID, "nodeKey": node.NodeKey})); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return "", err
-	}
-	return nodeRunID, nil
+func (a Activities) markArtifactNodeStarted(ctx context.Context, input TextToStoryboardInput, node artifactNode) (NodeExecution, error) {
+	return StartNodeRun(ctx, a.db, NodeRunInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
+		NodeKey:        node.NodeKey,
+		NodeType:       node.NodeType,
+		Input:          mustJSON(map[string]any{"prompt": input.Prompt}),
+	})
 }
 
-func (a Activities) markArtifactNodeSucceeded(ctx context.Context, input TextToStoryboardInput, nodeRunID string, put storage.PutResult, node artifactNode, artifact *WorkflowArtifact) error {
+func (a Activities) markArtifactNodeSucceeded(ctx context.Context, input TextToStoryboardInput, execution NodeExecution, put storage.PutResult, node artifactNode, artifact *WorkflowArtifact) error {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+		if errors.Is(err, ErrWorkflowWriteFenced) || errors.Is(err, pgx.ErrNoRows) {
+			return tx.Commit(ctx)
+		}
+		return err
+	}
 
 	var artifactID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, metadata, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, 'application/json', $7, $8, $9)
 		RETURNING id
-	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, nodeRunID, node.ArtifactType, put.StorageKey, put.ContentHash, mustJSON(map[string]any{"byteSize": put.ByteSize}), input.CreatedBy).Scan(&artifactID); err != nil {
+	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, execution.NodeRunID, node.ArtifactType, put.StorageKey, put.ContentHash, mustJSON(map[string]any{"byteSize": put.ByteSize}), input.CreatedBy).Scan(&artifactID); err != nil {
 		return err
 	}
 	artifact.ArtifactID = artifactID
@@ -609,16 +563,11 @@ func (a Activities) markArtifactNodeSucceeded(ctx context.Context, input TextToS
 		"storageKey":   put.StorageKey,
 		"payload":      node.Payload,
 	})
-	if _, err := tx.Exec(ctx, `
-		UPDATE workflow_node_runs
-		SET status = 'succeeded', output = $2, completed_at = now()
-		WHERE id = $1
-	`, nodeRunID, output); err != nil {
+	if _, err := completeNodeRunTx(ctx, tx, execution, output); err != nil {
 		return err
 	}
-	events := []map[string]any{
-		{"event_type": "artifact.created", "aggregate_type": "artifact", "aggregate_id": artifactID, "payload": output},
-		{"event_type": "workflow.node.completed", "aggregate_type": "workflow_node_run", "aggregate_id": nodeRunID, "payload": output},
+	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "artifact.created", "artifact", artifactID, output); err != nil {
+		return err
 	}
 	if node.CompleteOutput != nil {
 		completeOutput := map[string]any{
@@ -631,41 +580,29 @@ func (a Activities) markArtifactNodeSucceeded(ctx context.Context, input TextToS
 			completeOutput[key] = value
 		}
 		workflowOutput := mustJSON(completeOutput)
-		if _, err := tx.Exec(ctx, `
-			UPDATE workflow_runs
-			SET status = 'succeeded', output = $2, completed_at = now()
-			WHERE id = $1
-		`, input.WorkflowRunID, workflowOutput); err != nil {
-			return err
-		}
-		events = append(events, map[string]any{
-			"event_type": "workflow.run.completed", "aggregate_type": "workflow_run", "aggregate_id": input.WorkflowRunID, "payload": workflowOutput,
-		})
-	}
-	for _, event := range events {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, input.OrganizationID, input.ProjectID, event["event_type"], event["aggregate_type"], event["aggregate_id"], event["payload"]); err != nil {
+		if _, _, err := transitionWorkflowRunTx(ctx, tx, input.WorkflowRunID, "succeeded", "", "", workflowOutput); err != nil {
 			return err
 		}
 	}
 	return tx.Commit(ctx)
 }
 
-func (a Activities) markArtifactNodeFailed(ctx context.Context, input TextToStoryboardInput, nodeRunID, nodeKey string, cause error) error {
+func (a Activities) markArtifactNodeFailed(ctx context.Context, input TextToStoryboardInput, execution NodeExecution, nodeKey string, cause error) error {
 	errorMessage := cause.Error()
-	_, err := a.db.Exec(ctx, `
-		UPDATE workflow_node_runs
-		SET status = 'failed', error_code = 'ACTIVITY_FAILED', error_message = $2, completed_at = now()
-		WHERE id = $1;
-		UPDATE workflow_runs
-		SET status = 'failed', error_code = 'ACTIVITY_FAILED', error_message = $2, completed_at = now()
-		WHERE id = $3;
-		INSERT INTO event_outbox(organization_id, project_id, event_type, aggregate_type, aggregate_id, payload)
-		VALUES
-			($4, $5, 'workflow.node.failed', 'workflow_node_run', $1, $6),
-			($4, $5, 'workflow.run.failed', 'workflow_run', $3, $7);
-	`, nodeRunID, errorMessage, input.WorkflowRunID, input.OrganizationID, input.ProjectID, mustJSON(map[string]any{"message": errorMessage, "nodeKey": nodeKey}), mustJSON(map[string]any{"message": errorMessage}))
-	return err
+	output := mustJSON(map[string]any{"message": errorMessage, "nodeKey": nodeKey})
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+		return err
+	}
+	if _, err := failNodeRunTx(ctx, tx, execution, "ACTIVITY_FAILED", errorMessage, output); err != nil {
+		return err
+	}
+	if _, _, err := transitionWorkflowRunTx(ctx, tx, input.WorkflowRunID, "failed", "ACTIVITY_FAILED", errorMessage, output); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

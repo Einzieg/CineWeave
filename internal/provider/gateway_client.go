@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -26,12 +25,20 @@ func NewGatewayClientFromEnv() *GatewayClient {
 	}
 }
 
+func (c *GatewayClient) ResolveModelConstraints(ctx context.Context, req GatewayModelConstraintsRequest) (GatewayModelConstraintsResponse, error) {
+	var response GatewayModelConstraintsResponse
+	if err := c.postJSON(ctx, "/internal/provider/models/constraints", req, &response); err != nil {
+		return GatewayModelConstraintsResponse{}, err
+	}
+	return response, nil
+}
+
 func (c *GatewayClient) GenerateText(ctx context.Context, req GatewayTextRequest) (GatewayTextResponse, error) {
 	var response GatewayTextResponse
 	if err := c.postJSON(ctx, "/internal/provider/text/generate", req, &response); err != nil {
 		return GatewayTextResponse{}, err
 	}
-	if isProviderFailureStatus(response.Status) {
+	if response.Error != nil || isProviderFailureStatus(response.Status) {
 		return GatewayTextResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
@@ -42,7 +49,7 @@ func (c *GatewayClient) StreamText(ctx context.Context, req GatewayTextRequest, 
 	if err != nil {
 		return GatewayTextResponse{}, err
 	}
-	if isProviderFailureStatus(response.Status) {
+	if response.Error != nil || isProviderFailureStatus(response.Status) {
 		return GatewayTextResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
@@ -53,30 +60,84 @@ func (c *GatewayClient) GenerateImage(ctx context.Context, req GatewayImageReque
 	if err := c.postJSON(ctx, "/internal/provider/image/generate", req, &response); err != nil {
 		return GatewayImageResponse{}, err
 	}
-	if isProviderFailureStatus(response.Status) {
+	if response.Error != nil || isProviderFailureStatus(response.Status) {
 		return GatewayImageResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
 }
 
+func (c *GatewayClient) GenerateSpeech(ctx context.Context, req GatewayTTSRequest) (GatewayTTSResponse, error) {
+	var response GatewayTTSResponse
+	if err := c.postJSON(ctx, "/internal/provider/audio/tts", req, &response); err != nil {
+		return GatewayTTSResponse{}, err
+	}
+	if response.Error != nil || isProviderFailureStatus(response.Status) {
+		return GatewayTTSResponse{}, errorFromGatewayStandard(response.Error)
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) TranscribeAudio(ctx context.Context, req GatewayASRRequest) (GatewayASRResponse, error) {
+	var response GatewayASRResponse
+	if err := c.postJSON(ctx, "/internal/provider/audio/transcribe", req, &response); err != nil {
+		return GatewayASRResponse{}, err
+	}
+	if response.Error != nil || isProviderFailureStatus(response.Status) {
+		return GatewayASRResponse{}, errorFromGatewayStandard(response.Error)
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) PlanVideo(ctx context.Context, req GatewayVideoPlanRequest) (GatewayVideoPlanResponse, error) {
+	var response GatewayVideoPlanResponse
+	if err := c.postJSON(ctx, "/internal/provider/video/plan", req, &response); err != nil {
+		return GatewayVideoPlanResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) RetryVideoRenderSegment(ctx context.Context, req GatewayVideoRetrySegmentRequest) (GatewayVideoRetrySegmentResponse, error) {
+	var response GatewayVideoRetrySegmentResponse
+	if err := c.postJSON(ctx, "/internal/provider/video/retry-segment", req, &response); err != nil {
+		return GatewayVideoRetrySegmentResponse{}, err
+	}
+	return response, nil
+}
+
 func (c *GatewayClient) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTaskRequest) (GatewayVideoCreateTaskResponse, error) {
-	var response GatewayVideoCreateTaskResponse
-	if err := c.postJSON(ctx, "/internal/provider/video/create-task", req, &response); err != nil {
+	response, err := c.CreateVideoTaskResult(ctx, req)
+	if err != nil {
 		return GatewayVideoCreateTaskResponse{}, err
 	}
-	if isProviderFailureStatus(response.Status) {
+	if response.Error != nil || isProviderFailureStatus(response.Status) {
 		return GatewayVideoCreateTaskResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
 }
 
+func (c *GatewayClient) CreateVideoTaskResult(ctx context.Context, req GatewayVideoCreateTaskRequest) (GatewayVideoCreateTaskResponse, error) {
+	var response GatewayVideoCreateTaskResponse
+	if err := c.postJSON(ctx, "/internal/provider/video/create-task", req, &response); err != nil {
+		return GatewayVideoCreateTaskResponse{}, err
+	}
+	return response, nil
+}
+
 func (c *GatewayClient) PollVideoTask(ctx context.Context, req GatewayVideoPollTaskRequest) (GatewayVideoPollTaskResponse, error) {
+	response, err := c.PollVideoTaskResult(ctx, req)
+	if err != nil {
+		return GatewayVideoPollTaskResponse{}, err
+	}
+	if response.Error != nil || isProviderFailureStatus(response.Status) {
+		return GatewayVideoPollTaskResponse{}, errorFromGatewayStandard(response.Error)
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) PollVideoTaskResult(ctx context.Context, req GatewayVideoPollTaskRequest) (GatewayVideoPollTaskResponse, error) {
 	var response GatewayVideoPollTaskResponse
 	if err := c.postJSON(ctx, "/internal/provider/video/poll-task", req, &response); err != nil {
 		return GatewayVideoPollTaskResponse{}, err
-	}
-	if isProviderFailureStatus(response.Status) {
-		return GatewayVideoPollTaskResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
 }
@@ -86,7 +147,7 @@ func (c *GatewayClient) CancelVideoTask(ctx context.Context, req GatewayVideoCan
 	if err := c.postJSON(ctx, "/internal/provider/video/cancel-task", req, &response); err != nil {
 		return GatewayVideoCancelTaskResponse{}, err
 	}
-	if isProviderFailureStatus(response.Status) {
+	if response.Error != nil || isProviderFailureStatus(response.Status) {
 		return GatewayVideoCancelTaskResponse{}, errorFromGatewayStandard(response.Error)
 	}
 	return response, nil
@@ -177,54 +238,123 @@ func (c *GatewayClient) postStream(ctx context.Context, payload GatewayTextReque
 		}
 		return GatewayTextResponse{}, gatewayHTTPError(resp.StatusCode, responseBody)
 	}
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	event := ""
+	decoder := newSSEDecoder(resp.Body, defaultSSEMaxEventBytes)
 	var completed GatewayTextResponse
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			event = ""
+	lastSequenceByCall := make(map[string]int64)
+	var streamedGeneration int
+	var streamedAttemptSequence int
+	var streamedCallID string
+	for {
+		event, ok, err := decoder.Next()
+		if err != nil {
+			return GatewayTextResponse{}, err
+		}
+		if !ok {
+			break
+		}
+		data := strings.TrimSpace(event.Data)
+		if data == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		switch event {
-		case "provider.delta":
+		switch event.Event {
+		case GatewayTextEventAttemptStarted, GatewayTextEventAttemptFailed:
+			var attempt GatewayTextAttemptEvent
+			if err := json.Unmarshal([]byte(data), &attempt); err != nil || !validGatewayTextAttemptEvent(attempt) {
+				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream attempt event is invalid", ErrValidation)
+			}
+		case GatewayTextEventDelta:
 			var delta GatewayTextDelta
-			if err := json.Unmarshal([]byte(data), &delta); err != nil {
+			if err := json.Unmarshal([]byte(data), &delta); err != nil || !validGatewayTextDelta(delta) {
 				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream delta is invalid", ErrValidation)
 			}
+			if streamedGeneration != 0 && streamedGeneration != delta.AttemptGeneration {
+				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream generation changed after the first delta", ErrValidation)
+			}
+			if streamedCallID != "" && (streamedCallID != delta.ProviderCallID || streamedAttemptSequence != delta.AttemptSequence) {
+				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway changed attempts after emitting a delta", ErrValidation)
+			}
+			lastSequence := lastSequenceByCall[delta.ProviderCallID]
+			if delta.Sequence <= lastSequence {
+				continue
+			}
+			if delta.Sequence != lastSequence+1 {
+				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream delta sequence has a gap", ErrValidation)
+			}
+			streamedGeneration = delta.AttemptGeneration
+			streamedAttemptSequence = delta.AttemptSequence
+			streamedCallID = delta.ProviderCallID
+			lastSequenceByCall[delta.ProviderCallID] = delta.Sequence
 			if onDelta != nil {
 				if err := onDelta(delta); err != nil {
 					return GatewayTextResponse{}, err
 				}
 			}
-		case "provider.completed":
-			if err := json.Unmarshal([]byte(data), &completed); err != nil {
+		case GatewayTextEventCompleted:
+			if err := json.Unmarshal([]byte(data), &completed); err != nil || !validGatewayTextCompletion(completed) {
 				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream completion is invalid", ErrValidation)
 			}
-		case "provider.error":
-			var standard StandardError
-			if err := json.Unmarshal([]byte(data), &standard); err != nil {
+		case GatewayTextEventReplayed:
+			var replay GatewayTextReplayEvent
+			if err := json.Unmarshal([]byte(data), &replay); err != nil || !validGatewayTextReplay(replay) {
+				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream replay is invalid", ErrValidation)
+			}
+			completed = GatewayTextResponse{
+				SchemaVersion:     replay.SchemaVersion,
+				ProviderRequestID: replay.ProviderRequestID,
+				AttemptGeneration: replay.AttemptGeneration,
+				AttemptSequence:   replay.AttemptSequence,
+				ProviderCallID:    replay.ProviderCallID,
+				ModelID:           replay.ModelID,
+				Status:            replay.Status,
+				Output:            replay.Output,
+				Usage:             replay.Usage,
+				LatencyMS:         replay.LatencyMS,
+			}
+		case GatewayTextEventFailed:
+			var failure GatewayTextFailureEvent
+			if err := json.Unmarshal([]byte(data), &failure); err != nil || failure.SchemaVersion != GatewayTextStreamSchemaVersion || failure.Error == nil {
 				return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream error is invalid", ErrValidation)
 			}
-			return GatewayTextResponse{}, errorFromGatewayStandard(&standard)
+			return GatewayTextResponse{}, errorFromGatewayStandard(failure.Error)
+		default:
+			return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream event %q is not supported", ErrValidation, event.Event)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return GatewayTextResponse{}, err
 	}
 	if completed.Status == "" {
 		return GatewayTextResponse{}, fmt.Errorf("%w: provider gateway stream did not complete", ErrValidation)
 	}
 	return completed, nil
+}
+
+func validGatewayTextAttemptEvent(event GatewayTextAttemptEvent) bool {
+	return event.SchemaVersion == GatewayTextStreamSchemaVersion &&
+		strings.TrimSpace(event.ProviderRequestID) != "" &&
+		strings.TrimSpace(event.ProviderCallID) != "" &&
+		event.AttemptGeneration > 0 && event.AttemptSequence > 0 &&
+		strings.TrimSpace(event.Status) != ""
+}
+
+func validGatewayTextDelta(delta GatewayTextDelta) bool {
+	return delta.SchemaVersion == GatewayTextStreamSchemaVersion &&
+		strings.TrimSpace(delta.ProviderRequestID) != "" &&
+		strings.TrimSpace(delta.ProviderCallID) != "" &&
+		delta.AttemptGeneration > 0 && delta.AttemptSequence > 0 && delta.Sequence > 0
+}
+
+func validGatewayTextCompletion(response GatewayTextResponse) bool {
+	return response.SchemaVersion == GatewayTextStreamSchemaVersion &&
+		strings.TrimSpace(response.ProviderRequestID) != "" &&
+		strings.TrimSpace(response.ProviderCallID) != "" &&
+		response.AttemptGeneration > 0 && response.AttemptSequence > 0 &&
+		response.Status == "succeeded"
+}
+
+func validGatewayTextReplay(replay GatewayTextReplayEvent) bool {
+	return replay.SchemaVersion == GatewayTextStreamSchemaVersion &&
+		strings.TrimSpace(replay.ProviderRequestID) != "" &&
+		strings.TrimSpace(replay.ProviderCallID) != "" &&
+		replay.AttemptGeneration > 0 && replay.AttemptSequence > 0 &&
+		replay.Status == "succeeded"
 }
 
 func envValue(key, fallback string) string {

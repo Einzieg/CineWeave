@@ -77,7 +77,7 @@ func (s *Server) listScripts(w http.ResponseWriter, r *http.Request, principal a
 		return
 	}
 	rows, err := s.db.Query(r.Context(), scriptSelectSQL(`
-		WHERE s.project_id = $1
+		WHERE s.project_id = $1 AND COALESCE(s.status, 'active') <> 'archived'
 		ORDER BY s.created_at DESC
 	`), project.ID)
 	if err != nil {
@@ -151,6 +151,12 @@ func (s *Server) createScript(w http.ResponseWriter, r *http.Request, principal 
 	if content != "" {
 		version, err := insertScriptVersionTx(r, tx, project, item.ID, 1, content, contentFormat, req.SourceType, "", "", metadata, principal.UserID)
 		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if _, err := insertScriptEpisodesTx(r, tx, project, item.ID, version.ID, principal.UserID, []scriptEpisodeDraft{
+			defaultScriptEpisodeDraft(req.SourceID, "第 1 集", content, contentFormat, "", "", "", metadata),
+		}); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
@@ -334,6 +340,12 @@ func (s *Server) createScriptVersion(w http.ResponseWriter, r *http.Request, pri
 	}
 	version, err := insertScriptVersionTx(r, tx, project, script.ID, nextVersion, content, contentFormat, req.SourceType, "", "", metadata, principal.UserID)
 	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, version.ID, principal.UserID, []scriptEpisodeDraft{
+		defaultScriptEpisodeDraft(script.SourceID, "第 1 集", content, contentFormat, "", "", "", metadata),
+	}); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -852,6 +864,15 @@ func (s *Server) generateScriptFromAgent(w http.ResponseWriter, r *http.Request,
 		s.writeError(w, r, err)
 		return
 	}
+	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, version.ID, principal.UserID, []scriptEpisodeDraft{
+		defaultScriptEpisodeDraft(&source.ID, "第 1 集", content, "markdown", rendered.PromptVersionID, rendered.RenderedHash, gatewayResp.ProviderCallID, mustRawJSON(map[string]any{
+			"agentRunId": runID,
+			"source":     "script_agent",
+		})),
+	}); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2 WHERE id = $1`, script.ID, version.ID); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -931,8 +952,30 @@ func (s *Server) rewriteScriptFromAgent(w http.ResponseWriter, r *http.Request, 
 		s.writeError(w, r, err)
 		return
 	}
+	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, newVersion.ID, principal.UserID, []scriptEpisodeDraft{
+		defaultScriptEpisodeDraft(script.SourceID, "第 1 集", content, current.ContentFormat, rendered.PromptVersionID, rendered.RenderedHash, gatewayResp.ProviderCallID, mustRawJSON(map[string]any{
+			"agentRunId":        runID,
+			"source":            "script_agent_rewrite",
+			"previousVersionId": current.ID,
+		})),
+	}); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	previousVersionID := ""
 	if req.Activate {
-		if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, newVersion.ID); err != nil {
+		previousVersionID, err = activateScriptVersionTx(r, tx, project, script, newVersion)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "script.version.activated", "script_version", newVersion.ID, mustRawJSON(map[string]any{
+			"scriptId":          script.ID,
+			"versionId":         newVersion.ID,
+			"previousVersionId": nullableMetadataValue(previousVersionID),
+			"source":            "script_agent",
+			"agentRunId":        runID,
+		})); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
@@ -951,10 +994,12 @@ func (s *Server) rewriteScriptFromAgent(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"scriptId":   script.ID,
-		"versionId":  newVersion.ID,
-		"content":    content,
-		"agentRunId": runID,
+		"scriptId":          script.ID,
+		"versionId":         newVersion.ID,
+		"content":           content,
+		"agentRunId":        runID,
+		"activated":         req.Activate,
+		"previousVersionId": nullableMetadataValue(previousVersionID),
 	}, nil)
 }
 
@@ -963,6 +1008,17 @@ type scriptAgentPromptOptions struct {
 	TaskID         string
 	StepID         string
 	IdempotencyKey string
+	Stream         bool
+	OnProgress     func(scriptAgentStreamProgress) error
+}
+
+type scriptAgentStreamProgress struct {
+	RunID          string
+	Delta          string
+	Text           string
+	ProviderCallID string
+	ModelID        string
+	Done           bool
 }
 
 func (s *Server) runScriptAgentPrompt(r *http.Request, principal auth.Principal, project Project, sessionID *string, taskType, templateKey string, variables map[string]any) (string, string, promptsvc.RenderedPrompt, provider.GatewayTextResponse, error) {
@@ -998,7 +1054,7 @@ func (s *Server) runScriptAgentPromptWithOptions(r *http.Request, principal auth
 		return "", "", promptsvc.RenderedPrompt{}, provider.GatewayTextResponse{}, err
 	}
 	gatewayClient := provider.NewGatewayClientFromEnv()
-	resp, err := gatewayClient.GenerateText(r.Context(), provider.GatewayTextRequest{
+	gatewayReq := provider.GatewayTextRequest{
 		OrganizationID:    project.OrganizationID,
 		ProjectID:         project.ID,
 		ModelProfileKey:   project.ScriptModelProfileKey,
@@ -1012,7 +1068,26 @@ func (s *Server) runScriptAgentPromptWithOptions(r *http.Request, principal auth
 		Options: provider.GatewayTextOptions{
 			IdempotencyKey: strings.TrimSpace(options.IdempotencyKey),
 		},
-	})
+	}
+	var streamed strings.Builder
+	var resp provider.GatewayTextResponse
+	if options.Stream {
+		resp, err = gatewayClient.StreamText(r.Context(), gatewayReq, func(delta provider.GatewayTextDelta) error {
+			streamed.WriteString(delta.Text)
+			if options.OnProgress != nil {
+				if err := options.OnProgress(scriptAgentStreamProgress{
+					RunID: runID,
+					Delta: delta.Text,
+					Text:  streamed.String(),
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	} else {
+		resp, err = gatewayClient.GenerateText(r.Context(), gatewayReq)
+	}
 	if err != nil {
 		_, _ = s.db.Exec(r.Context(), `
 			UPDATE agent_runs
@@ -1021,9 +1096,23 @@ func (s *Server) runScriptAgentPromptWithOptions(r *http.Request, principal auth
 		`, runID, err.Error())
 		return "", runID, rendered, provider.GatewayTextResponse{}, err
 	}
-	content := strings.TrimSpace(resp.Output.Text)
+	content := strings.TrimSpace(streamed.String())
+	if content == "" {
+		content = strings.TrimSpace(resp.Output.Text)
+	}
 	if content == "" {
 		content = strings.TrimSpace(string(resp.Output.Raw))
+	}
+	if options.OnProgress != nil {
+		if err := options.OnProgress(scriptAgentStreamProgress{
+			RunID:          runID,
+			Text:           content,
+			ProviderCallID: resp.ProviderCallID,
+			ModelID:        resp.ModelID,
+			Done:           true,
+		}); err != nil {
+			return "", runID, rendered, provider.GatewayTextResponse{}, err
+		}
 	}
 	return content, runID, rendered, resp, nil
 }
@@ -1078,6 +1167,15 @@ func nextScriptVersion(r *http.Request, tx pgx.Tx, scriptID string) (int, error)
 }
 
 func markScriptVersionDownstreamStale(r *http.Request, tx pgx.Tx, projectID, versionID string) error {
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE script_scenes
+		SET stale_state = 'needs_regeneration',
+		    review_status = 'pending',
+		    updated_at = now()
+		WHERE project_id = $1 AND script_version_id = $2 AND deleted_at IS NULL
+	`, projectID, versionID); err != nil {
+		return err
+	}
 	rows, err := tx.Query(r.Context(), `
 		SELECT id::text
 		FROM script_scenes

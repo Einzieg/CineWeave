@@ -8,18 +8,16 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"io"
 	"math"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -34,17 +32,20 @@ const maxGatewayImageBytes int64 = 64 << 20
 
 type ObjectStorage interface {
 	PutBytes(ctx context.Context, key string, body []byte, contentType string) (storage.PutResult, error)
+	PutFile(ctx context.Context, key, filePath, contentType string) (storage.PutResult, error)
 }
 
 type gatewayImageInput struct {
-	Prompt  string
-	Size    string
-	Quality string
-	N       int
+	Prompt      string
+	Size        string
+	AspectRatio string
+	Quality     string
+	N           int
 }
 
 type gatewayImageMedia struct {
 	Body        []byte
+	TempPath    string
 	MimeType    string
 	ByteSize    int64
 	ContentHash string
@@ -57,6 +58,14 @@ type gatewayStoredImage struct {
 	MediaFileID string
 	Output      GatewayImageOutput
 	Media       gatewayImageMedia
+	Layout      gatewayImageLayout
+}
+
+type gatewayImageLayout struct {
+	RequestedAspectRatio string
+	Width                int
+	Height               int
+	Validated            bool
 }
 
 func (s *Service) SetStorage(objectStorage ObjectStorage) {
@@ -71,12 +80,100 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	if err != nil {
 		return GatewayImageResponse{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
 	}
+	req.Input = input
+	requestHash, err := gatewayRequestHash(req)
+	if err != nil {
+		return GatewayImageResponse{}, err
+	}
+	start, err := s.beginProviderRequest(ctx, providerRequestStartInput{
+		OrganizationID: req.OrganizationID,
+		ProjectID:      req.ProjectID,
+		WorkflowRunID:  req.WorkflowRunID,
+		NodeRunID:      req.NodeRunID,
+		TaskType:       TaskTypeImageGenerate,
+		IdempotencyKey: gatewayImageIdempotencyKey(req),
+		RequestHash:    requestHash,
+		Retry:          req.Options.Retry,
+	})
+	if err != nil {
+		return GatewayImageResponse{}, err
+	}
+	if start.Disposition == providerRequestReplay {
+		response, decodeErr := decodeProviderRequestResult[GatewayImageResponse](start.Request)
+		if decodeErr != nil || strings.TrimSpace(response.Status) == "" {
+			response = providerImageStatusResponse(start.Request)
+		}
+		response.ProviderRequestID = start.Request.ID
+		response.AttemptGeneration = start.Request.AttemptGeneration
+		return response, nil
+	}
+	if start.Disposition == providerRequestInProgress {
+		return providerImageStatusResponse(start.Request), nil
+	}
+
+	response, runErr := s.executeGatewayImage(ctx, req, start.Request.ID, start.Request.AttemptGeneration)
+	if runErr != nil {
+		if errors.Is(runErr, ErrValidation) || errors.Is(runErr, pgx.ErrNoRows) {
+			_, code, message, _, _ := normalizedProviderFailure(runErr)
+			standard := standardErrorFromRunError(runErr, code, message)
+			response = GatewayImageResponse{
+				ProviderRequestID: start.Request.ID,
+				AttemptGeneration: start.Request.AttemptGeneration,
+				Status:            "failed",
+				Error:             standard,
+			}
+			if completeErr := s.completeProviderRequest(ctx, start.Request.ID, start.Request.AttemptGeneration, response.Status, response, nil, nil, standard); completeErr != nil {
+				return GatewayImageResponse{}, completeErr
+			}
+			return response, nil
+		}
+		_ = s.markProviderRequestUnknown(context.WithoutCancel(ctx), start.Request.ID, start.Request.AttemptGeneration, runErr)
+		return GatewayImageResponse{}, runErr
+	}
+	response.ProviderRequestID = start.Request.ID
+	response.AttemptGeneration = start.Request.AttemptGeneration
+	artifactIDs := []string{}
+	mediaFileIDs := []string{}
+	if response.Output.ArtifactID != "" {
+		artifactIDs = append(artifactIDs, response.Output.ArtifactID)
+	}
+	if response.Output.MediaFileID != "" {
+		mediaFileIDs = append(mediaFileIDs, response.Output.MediaFileID)
+	}
+	if err := s.completeProviderRequest(ctx, start.Request.ID, start.Request.AttemptGeneration, response.Status, response, artifactIDs, mediaFileIDs, response.Error); err != nil {
+		_ = s.markProviderRequestUnknown(context.WithoutCancel(ctx), start.Request.ID, start.Request.AttemptGeneration, err)
+		return GatewayImageResponse{}, err
+	}
+	return response, nil
+}
+
+func providerImageStatusResponse(request ProviderRequest) GatewayImageResponse {
+	return GatewayImageResponse{
+		ProviderRequestID: request.ID,
+		AttemptGeneration: request.AttemptGeneration,
+		Status:            request.Status,
+		Error:             providerRequestStatusError(request),
+	}
+}
+
+func (s *Service) executeGatewayImage(ctx context.Context, req GatewayImageRequest, providerRequestID string, attemptGeneration int) (GatewayImageResponse, error) {
+	if strings.TrimSpace(req.OrganizationID) == "" {
+		return GatewayImageResponse{}, fmt.Errorf("%w: organizationId is required", ErrValidation)
+	}
+	input, err := normalizeJSON(req.Input, "{}")
+	if err != nil {
+		return GatewayImageResponse{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
+	}
 	imageInput, err := parseGatewayImageInput(input)
 	if err != nil {
 		return GatewayImageResponse{}, err
 	}
 	if s.objectStorage == nil {
 		return GatewayImageResponse{}, fmt.Errorf("%w: object storage is not configured", ErrValidation)
+	}
+	req.References, err = s.hydrateGatewayImageReferences(ctx, req.OrganizationID, req.References)
+	if err != nil {
+		return GatewayImageResponse{}, err
 	}
 	req.Input = input
 
@@ -85,7 +182,7 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 		if err != nil {
 			return GatewayImageResponse{}, err
 		}
-		response, _, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, 1, 1, string(RoutingPriority))
+		response, _, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, 1, 1, string(RoutingPriority), providerRequestID, attemptGeneration)
 		return response, err
 	}
 
@@ -110,7 +207,7 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 		if err != nil {
 			return GatewayImageResponse{}, err
 		}
-		response, attempt, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, i+1, maxAttempts, candidate.RoutingStrategy)
+		response, attempt, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, i+1, maxAttempts, candidate.RoutingStrategy, providerRequestID, attemptGeneration)
 		if err != nil {
 			return GatewayImageResponse{}, err
 		}
@@ -127,17 +224,58 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	return final, nil
 }
 
-func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayImageRequest, imageInput gatewayImageInput, selection gatewayModelSelection, attemptIndex, maxAttempts int, selectedBy string) (GatewayImageResponse, GatewayAttempt, error) {
+func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayImageRequest, imageInput gatewayImageInput, selection gatewayModelSelection, attemptIndex, maxAttempts int, selectedBy, providerRequestID string, attemptGeneration int) (GatewayImageResponse, GatewayAttempt, error) {
 	cfg := parseOpenAICompatibleConfig(selection.Account.Config)
+	isDeclarativeManifest := accountConfigString(selection.Account.Config, "runtime") == "declarative_manifest"
+	selectedReferences, referenceSelectionErr := selectGatewayImageReferences(selection.Model.Capabilities, req.References, !isDeclarativeManifest)
+	attemptReq := req
+	attemptReq.References = selectedReferences
+	attemptImageInput := imageInput
+	normalizedQuality, qualityErr := resolveGatewayImageQuality(imageInput.Quality, selection.Model.Capabilities)
+	if qualityErr == nil && normalizedQuality != imageInput.Quality {
+		attemptImageInput.Quality = normalizedQuality
+		attemptReq.Input = mergeJSONObjects(req.Input, mustJSON(map[string]any{"quality": normalizedQuality}))
+	}
+	requestSnapshot := gatewayImageRequestSnapshot(selection.Model.ModelKey, attemptReq.Input, req.References, selectedReferences)
 	if req.Options.TimeoutMS > 0 {
 		cfg.TimeoutMS = req.Options.TimeoutMS
+	} else if !openAICompatibleConfigHasTimeout(selection.Account.Config) {
+		cfg.TimeoutMS = gatewayImageTimeoutMSFromEnv()
 	}
 	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	callID := uuid.NewString()
-	usage := estimateImageCost(imageInput, selection.Model.Capabilities)
+	usage := estimateImageCost(attemptImageInput, selection.Model.Capabilities)
+	baseCall := RecordCallRequest{
+		ID:                    callID,
+		ProviderRequestID:     providerRequestID,
+		AttemptGeneration:     attemptGeneration,
+		AttemptSequence:       attemptIndex,
+		OrganizationID:        req.OrganizationID,
+		ProjectID:             req.ProjectID,
+		WorkflowRunID:         req.WorkflowRunID,
+		NodeRunID:             req.NodeRunID,
+		ProviderAccountID:     selection.Account.ID,
+		ProviderModelID:       selection.Model.ID,
+		CredentialID:          selection.CredentialID,
+		ModelProfileID:        selection.ModelProfileID,
+		ModelProfileBindingID: selection.ModelProfileBindingID,
+		ModelProfileKey:       selection.ModelProfileKey,
+		PromptVersionID:       req.PromptVersionID,
+		PromptHash:            req.PromptHash,
+		IdempotencyKey:        gatewayImageIdempotencyKey(attemptReq),
+		TaskType:              TaskTypeImageGenerate,
+		ExecutionMode:         "sync",
+		Status:                "running",
+		EstimatedCost:         usage.EstimatedCost,
+		Currency:              usage.Currency,
+		RequestSnapshot:       requestSnapshot,
+	}
+	if _, err := recordCall(ctx, s.db, baseCall); err != nil {
+		return GatewayImageResponse{}, GatewayAttempt{}, err
+	}
 	guardReq := s.gatewayGuardRequest(gatewayGuardRequestInput{
 		OrganizationID: req.OrganizationID,
 		Selection:      selection,
@@ -152,41 +290,26 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 		if !ok {
 			return GatewayImageResponse{}, GatewayAttempt{}, guardErr
 		}
-		call, err := s.recordGatewayImageCall(ctx, selection, req, callID, RecordCallRequest{
-			ID:                    callID,
-			OrganizationID:        req.OrganizationID,
-			ProjectID:             req.ProjectID,
-			WorkflowRunID:         req.WorkflowRunID,
-			NodeRunID:             req.NodeRunID,
-			ProviderAccountID:     selection.Account.ID,
-			ProviderModelID:       selection.Model.ID,
-			CredentialID:          selection.CredentialID,
-			ModelProfileID:        selection.ModelProfileID,
-			ModelProfileBindingID: selection.ModelProfileBindingID,
-			ModelProfileKey:       selection.ModelProfileKey,
-			PromptVersionID:       req.PromptVersionID,
-			PromptHash:            req.PromptHash,
-			IdempotencyKey:        gatewayImageIdempotencyKey(req),
-			TaskType:              TaskTypeImageGenerate,
-			ExecutionMode:         "sync",
-			Status:                "blocked",
-			ErrorCode:             standard.Code,
-			ErrorMessage:          standard.Message,
-			RequestSnapshot:       req.Input,
-			ResponseSnapshot:      blockedResponseSnapshot(standard),
-			NormalizedOutput:      withRoutingNormalizedOutput(blockedNormalizedOutput(standard), selection, attemptIndex, maxAttempts, selectedBy),
-		}, usage, nil, imageInput, imageGenerationResult{})
+		blockedCall := baseCall
+		blockedCall.Status = "blocked"
+		blockedCall.ErrorCode = standard.Code
+		blockedCall.ErrorMessage = standard.Message
+		blockedCall.ResponseSnapshot = blockedResponseSnapshot(standard)
+		blockedCall.NormalizedOutput = withRoutingNormalizedOutput(blockedNormalizedOutput(standard), selection, attemptIndex, maxAttempts, selectedBy)
+		call, err := s.recordGatewayImageCall(ctx, selection, attemptReq, callID, blockedCall, usage, nil, attemptImageInput, imageGenerationResult{})
 		if err != nil {
 			return GatewayImageResponse{}, GatewayAttempt{}, err
 		}
 		attempt := gatewayAttemptFromCall(call, selection, standard, 0)
 		return GatewayImageResponse{
-			ProviderCallID: call.ID,
-			ModelID:        selection.Model.ID,
-			Status:         "blocked",
-			Usage:          GatewayUsage{EstimatedCost: "0.00000000", Currency: usage.Currency},
-			Error:          standard,
-			Attempts:       []GatewayAttempt{attempt},
+			ProviderRequestID: providerRequestID,
+			AttemptGeneration: attemptGeneration,
+			ProviderCallID:    call.ID,
+			ModelID:           selection.Model.ID,
+			Status:            "blocked",
+			Usage:             GatewayUsage{EstimatedCost: "0.00000000", Currency: usage.Currency},
+			Error:             standard,
+			Attempts:          []GatewayAttempt{attempt},
 		}, attempt, nil
 	}
 	providerCallID := ""
@@ -195,9 +318,12 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 	}()
 
 	started := time.Now()
-	var result imageGenerationResult
-	var runErr error
-	if accountConfigString(selection.Account.Config, "runtime") == "declarative_manifest" {
+	result := imageGenerationResult{RequestSnapshot: requestSnapshot}
+	runErr := qualityErr
+	if runErr == nil {
+		runErr = referenceSelectionErr
+	}
+	if runErr == nil && isDeclarativeManifest {
 		manifest, err := s.manifestForAccount(ctx, selection.Account)
 		if err != nil {
 			return GatewayImageResponse{}, GatewayAttempt{}, err
@@ -207,19 +333,26 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 			return GatewayImageResponse{}, GatewayAttempt{}, err
 		}
 		manifestInput := mergeJSONObjects(mustJSON(map[string]any{
-			"prompt":         imageInput.Prompt,
-			"size":           imageInput.Size,
+			"prompt":         attemptImageInput.Prompt,
+			"size":           attemptImageInput.Size,
 			"aspectRatio":    "",
-			"quality":        imageInput.Quality,
+			"quality":        attemptImageInput.Quality,
 			"responseFormat": "url",
-		}), req.Input)
-		manifestResult, err := callManifestEndpointWithContext(callCtx, manifest, selection.Account, selection.Credential, endpointKey, endpoint, manifestInput, imageManifestContext(selection, req.References))
+		}), attemptReq.Input)
+		manifestResult, err := callManifestEndpointWithContext(callCtx, manifest, selection.Account, selection.Credential, endpointKey, endpoint, manifestInput, imageManifestContext(selection, attemptReq.References))
 		runErr = err
 		result = imageResultFromManifest(manifestResult)
-	} else {
-		client := newOpenAICompatibleClient(timeout)
-		result, runErr = client.imageGeneration(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input)
+	} else if runErr == nil {
+		referenceMaterials, err := s.materializeOpenAICompatibleImageReferences(callCtx, selection.Account, attemptReq.References, timeout)
+		if err != nil {
+			runErr = err
+		}
+		if runErr == nil {
+			client := newOpenAICompatibleClient(timeout)
+			result, runErr = client.imageGeneration(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, attemptReq.Input, referenceMaterials...)
+		}
 	}
+	result.RequestSnapshot = requestSnapshot
 	latencyMS := int(time.Since(started).Milliseconds())
 	if result.LatencyMS > latencyMS {
 		latencyMS = result.LatencyMS
@@ -245,16 +378,15 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
 		}
 	} else {
-		media, mediaErr := materializeGatewayImageMedia(callCtx, result, timeout)
+		media, mediaErr := s.materializeGatewayImageMedia(callCtx, selection.Account, result, timeout)
+		defer media.close()
 		if mediaErr == nil {
-			stored, mediaErr = s.storeGatewayImageMedia(callCtx, callID, req, selection, result, media, imageInput)
+			stored, mediaErr = s.storeGatewayImageMedia(callCtx, callID, attemptReq, selection, result, media, attemptImageInput)
 		}
 		if mediaErr != nil {
 			status = "failed"
-			errorCode = CodeMediaDownloadFailed
-			errorMessage = mediaErr.Error()
-			standardError = &StandardError{Code: CodeMediaDownloadFailed, Message: "provider image media could not be stored", Retryable: true}
-			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode})
+			errorCode, errorMessage, standardError = gatewayImageMediaFailure(mediaErr)
+			normalizedOutput = mustJSON(map[string]any{"status": status, "errorCode": errorCode, "errorMessage": errorMessage})
 		} else {
 			output = stored.Output
 			normalizedOutput = mustJSON(output)
@@ -268,41 +400,23 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 	}
 	normalizedOutput = withRoutingNormalizedOutput(normalizedOutput, selection, attemptIndex, maxAttempts, selectedBy)
 
-	call, err := s.recordGatewayImageCall(ctx, selection, req, callID, RecordCallRequest{
-		ID:                    callID,
-		OrganizationID:        req.OrganizationID,
-		ProjectID:             req.ProjectID,
-		WorkflowRunID:         req.WorkflowRunID,
-		NodeRunID:             req.NodeRunID,
-		ProviderAccountID:     selection.Account.ID,
-		ProviderModelID:       selection.Model.ID,
-		CredentialID:          selection.CredentialID,
-		ModelProfileID:        selection.ModelProfileID,
-		ModelProfileBindingID: selection.ModelProfileBindingID,
-		ModelProfileKey:       selection.ModelProfileKey,
-		PromptVersionID:       req.PromptVersionID,
-		PromptHash:            req.PromptHash,
-		LeaseID:               lease.LeaseID,
-		IdempotencyKey:        gatewayImageIdempotencyKey(req),
-		TaskType:              TaskTypeImageGenerate,
-		ExecutionMode:         "sync",
-		Status:                status,
-		LatencyMS:             &latencyMS,
-		EstimatedCost:         usage.EstimatedCost,
-		Currency:              usage.Currency,
-		ErrorCode:             errorCode,
-		ErrorMessage:          errorMessage,
-		UpstreamStatus:        upstreamStatus,
-		UpstreamErrorCode:     upstreamErrorCode,
-		RequestSnapshot:       result.RequestSnapshot,
-		ResponseSnapshot:      responseSnapshot,
-		NormalizedOutput:      normalizedOutput,
-	}, usage, stored, imageInput, result)
+	finalCall := baseCall
+	finalCall.LeaseID = lease.LeaseID
+	finalCall.Status = status
+	finalCall.LatencyMS = &latencyMS
+	finalCall.ErrorCode = errorCode
+	finalCall.ErrorMessage = errorMessage
+	finalCall.UpstreamStatus = upstreamStatus
+	finalCall.UpstreamErrorCode = upstreamErrorCode
+	finalCall.RequestSnapshot = result.RequestSnapshot
+	finalCall.ResponseSnapshot = responseSnapshot
+	finalCall.NormalizedOutput = normalizedOutput
+	call, err := s.recordGatewayImageCall(ctx, selection, attemptReq, callID, finalCall, usage, stored, attemptImageInput, result)
 	if err != nil {
 		return GatewayImageResponse{}, GatewayAttempt{}, err
 	}
 	providerCallID = call.ID
-	if runErr != nil {
+	if status != "succeeded" {
 		s.recordGatewayGuardFailure(ctx, guardReq, errorCode, errorMessage)
 	} else {
 		s.recordGatewayGuardSuccess(ctx, guardReq)
@@ -310,14 +424,16 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 
 	attempt := gatewayAttemptFromCall(call, selection, standardError, latencyMS)
 	return GatewayImageResponse{
-		ProviderCallID: call.ID,
-		ModelID:        selection.Model.ID,
-		Status:         status,
-		Output:         output,
-		Usage:          usage,
-		Error:          standardError,
-		LatencyMS:      latencyMS,
-		Attempts:       []GatewayAttempt{attempt},
+		ProviderRequestID: providerRequestID,
+		AttemptGeneration: attemptGeneration,
+		ProviderCallID:    call.ID,
+		ModelID:           selection.Model.ID,
+		Status:            status,
+		Output:            output,
+		Usage:             usage,
+		Error:             standardError,
+		LatencyMS:         latencyMS,
+		Attempts:          []GatewayAttempt{attempt},
 	}, attempt, nil
 }
 
@@ -376,11 +492,21 @@ func parseGatewayImageInput(input json.RawMessage) (gatewayImageInput, error) {
 	if n > 1 {
 		return gatewayImageInput{}, fmt.Errorf("%w: image.generate only supports n=1 in this version", ErrValidation)
 	}
+	aspectRatio := imageStringOption(decoded, "aspectRatio", "")
+	if aspectRatio == "" {
+		aspectRatio = imageStringOption(decoded, "aspect_ratio", "")
+	}
+	if aspectRatio != "" {
+		if _, ok := parseVideoAspectRatio(aspectRatio); !ok {
+			return gatewayImageInput{}, fmt.Errorf("%w: input.aspectRatio is invalid", ErrValidation)
+		}
+	}
 	return gatewayImageInput{
-		Prompt:  prompt,
-		Size:    imageStringOption(decoded, "size", "1024x1024"),
-		Quality: imageStringOption(decoded, "quality", ""),
-		N:       n,
+		Prompt:      prompt,
+		Size:        imageStringOption(decoded, "size", "1024x1024"),
+		AspectRatio: aspectRatio,
+		Quality:     imageStringOption(decoded, "quality", ""),
+		N:           n,
 	}, nil
 }
 
@@ -450,9 +576,9 @@ func imageResultFromManifest(result manifestRunResult) imageGenerationResult {
 	}
 }
 
-func materializeGatewayImageMedia(ctx context.Context, result imageGenerationResult, timeout time.Duration) (gatewayImageMedia, error) {
+func (s *Service) materializeGatewayImageMedia(ctx context.Context, account Account, result imageGenerationResult, timeout time.Duration) (gatewayImageMedia, error) {
 	if strings.TrimSpace(result.ImageURL) != "" {
-		return downloadGatewayImageURL(ctx, result.ImageURL, result.MimeType, timeout)
+		return s.downloadGatewayImageURL(ctx, account, result.ImageURL, result.MimeType, timeout)
 	}
 	if strings.TrimSpace(result.B64JSON) != "" {
 		return decodeGatewayImageBase64(result.B64JSON, result.MimeType)
@@ -461,14 +587,35 @@ func materializeGatewayImageMedia(ctx context.Context, result imageGenerationRes
 }
 
 func (s *Service) storeGatewayImageMedia(ctx context.Context, callID string, req GatewayImageRequest, selection gatewayModelSelection, result imageGenerationResult, media gatewayImageMedia, input gatewayImageInput) (*gatewayStoredImage, error) {
+	layout := gatewayImageLayout{RequestedAspectRatio: input.AspectRatio}
+	if media.Width != nil {
+		layout.Width = *media.Width
+	}
+	if media.Height != nil {
+		layout.Height = *media.Height
+	}
+	if input.AspectRatio != "" {
+		if err := validateImageOutputLayout(input.AspectRatio, layout.Width, layout.Height); err != nil {
+			return nil, err
+		}
+		layout.Validated = true
+	}
 	storageKey := gatewayImageStorageKey(req.OrganizationID, req.ProjectID, media.MimeType, result.ImageURL)
-	put, err := s.objectStorage.PutBytes(ctx, storageKey, media.Body, media.MimeType)
+	var put storage.PutResult
+	var err error
+	if strings.TrimSpace(media.TempPath) != "" {
+		put, err = s.objectStorage.PutFile(ctx, storageKey, media.TempPath, media.MimeType)
+	} else {
+		put, err = s.objectStorage.PutBytes(ctx, storageKey, media.Body, media.MimeType)
+	}
 	if err != nil {
 		return nil, err
 	}
 	media.ContentHash = put.ContentHash
 	if media.ContentHash == "" {
-		media.ContentHash = sha256ContentHash(media.Body)
+		if len(media.Body) > 0 {
+			media.ContentHash = sha256ContentHash(media.Body)
+		}
 	}
 	if media.ByteSize == 0 {
 		media.ByteSize = put.ByteSize
@@ -482,6 +629,7 @@ func (s *Service) storeGatewayImageMedia(ctx context.Context, callID string, req
 		MimeType:    media.MimeType,
 		Width:       media.Width,
 		Height:      media.Height,
+		AspectRatio: input.AspectRatio,
 		Raw:         result.NormalizedOutput,
 	}
 	return &gatewayStoredImage{
@@ -489,7 +637,23 @@ func (s *Service) storeGatewayImageMedia(ctx context.Context, callID string, req
 		MediaFileID: mediaFileID,
 		Output:      output,
 		Media:       media,
+		Layout:      layout,
 	}, nil
+}
+
+func gatewayImageMediaFailure(err error) (string, string, *StandardError) {
+	return normalizedGatewayMediaFailure(err, "image")
+}
+
+func gatewayImageLayoutMetadata(layout gatewayImageLayout) map[string]any {
+	return map[string]any{
+		"requestedAspectRatio": layout.RequestedAspectRatio,
+		"width":                layout.Width,
+		"height":               layout.Height,
+		"validated":            layout.Validated,
+		"source":               "provider_native",
+		"transformation":       "none",
+	}
 }
 
 func (s *Service) recordGatewayImageCall(ctx context.Context, selection gatewayModelSelection, req GatewayImageRequest, callID string, callReq RecordCallRequest, usage GatewayUsage, stored *gatewayStoredImage, imageInput gatewayImageInput, result imageGenerationResult) (CallLog, error) {
@@ -525,7 +689,7 @@ func (s *Service) recordGatewayImageCall(ctx context.Context, selection gatewayM
 }
 
 func insertGatewayImageArtifact(ctx context.Context, tx pgx.Tx, selection gatewayModelSelection, req GatewayImageRequest, callID string, stored *gatewayStoredImage, input gatewayImageInput) error {
-	metadata := mustJSON(map[string]any{
+	metadataFields := map[string]any{
 		"providerCallId":    callID,
 		"providerModelId":   selection.Model.ID,
 		"mediaFileId":       stored.MediaFileID,
@@ -535,8 +699,16 @@ func insertGatewayImageArtifact(ctx context.Context, tx pgx.Tx, selection gatewa
 		"promptTemplateKey": req.PromptTemplateKey,
 		"promptSource":      req.PromptSource,
 		"size":              input.Size,
+		"aspectRatio":       input.AspectRatio,
 		"quality":           input.Quality,
-	})
+		"referenceCount":    len(req.References),
+		"referenceKeys":     gatewayImageReferenceKeys(req.References),
+		"references":        gatewayImageReferenceSnapshots(req.References),
+	}
+	if input.AspectRatio != "" {
+		metadataFields["layout"] = gatewayImageLayoutMetadata(stored.Layout)
+	}
+	metadata := mustJSON(metadataFields)
 	_, err := tx.Exec(ctx, `
 		INSERT INTO artifacts(
 			id, organization_id, project_id, workflow_run_id, node_run_id, type,
@@ -560,14 +732,18 @@ func insertGatewayImageArtifact(ctx context.Context, tx pgx.Tx, selection gatewa
 }
 
 func insertGatewayImageMediaFile(ctx context.Context, tx pgx.Tx, selection gatewayModelSelection, req GatewayImageRequest, callID string, stored *gatewayStoredImage, result imageGenerationResult) error {
-	metadata := mustJSON(map[string]any{
+	metadataFields := map[string]any{
 		"source":          "provider_gateway",
 		"providerCallId":  callID,
 		"providerModelId": selection.Model.ID,
 		"upstream": map[string]any{
 			"responseType": result.ResponseType,
 		},
-	})
+	}
+	if stored.Layout.RequestedAspectRatio != "" {
+		metadataFields["layout"] = gatewayImageLayoutMetadata(stored.Layout)
+	}
+	metadata := mustJSON(metadataFields)
 	_, err := tx.Exec(ctx, `
 		INSERT INTO media_files(
 			id, organization_id, project_id, artifact_id, storage_key, mime_type,
@@ -603,6 +779,7 @@ func insertImageCostRecord(ctx context.Context, tx pgx.Tx, providerCallID string
 			cost_type, amount, currency, unit, quantity, metadata
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'image.generate', $9::numeric, $10, 'image', 1, $11)
+		ON CONFLICT (provider_call_id) WHERE provider_call_id IS NOT NULL DO NOTHING
 	`,
 		req.OrganizationID,
 		nullString(req.ProjectID),
@@ -701,42 +878,6 @@ func imageCostValue(value any) (float64, bool) {
 	}
 }
 
-func downloadGatewayImageURL(ctx context.Context, rawURL, upstreamMimeType string, timeout time.Duration) (gatewayImageMedia, error) {
-	if err := validateGatewayImageURL(rawURL); err != nil {
-		return gatewayImageMedia{}, err
-	}
-	client := &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return validateGatewayImageURL(req.URL.String())
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return gatewayImageMedia{}, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return gatewayImageMedia{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return gatewayImageMedia{}, fmt.Errorf("provider image download failed: status=%d", resp.StatusCode)
-	}
-	body, err := readLimitedImageBody(resp.Body)
-	if err != nil {
-		return gatewayImageMedia{}, err
-	}
-	mimeType := normalizeMediaType(resp.Header.Get("Content-Type"))
-	if mimeType == "" {
-		mimeType = normalizeMediaType(upstreamMimeType)
-	}
-	if mimeType == "" {
-		mimeType = mimeTypeFromURL(rawURL)
-	}
-	return finalizeGatewayImageMedia(body, mimeType), nil
-}
-
 func decodeGatewayImageBase64(value, upstreamMimeType string) (gatewayImageMedia, error) {
 	value = strings.TrimSpace(value)
 	if strings.HasPrefix(value, "data:") {
@@ -760,18 +901,6 @@ func decodeGatewayImageBase64(value, upstreamMimeType string) (gatewayImageMedia
 	}
 	mimeType := normalizeMediaType(upstreamMimeType)
 	return finalizeGatewayImageMedia(body, mimeType), nil
-}
-
-func readLimitedImageBody(reader io.Reader) ([]byte, error) {
-	limited := io.LimitReader(reader, maxGatewayImageBytes+1)
-	body, err := io.ReadAll(limited)
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(body)) > maxGatewayImageBytes {
-		return nil, fmt.Errorf("provider image exceeds 64MB limit")
-	}
-	return body, nil
 }
 
 func finalizeGatewayImageMedia(body []byte, mimeType string) gatewayImageMedia {
@@ -802,47 +931,6 @@ func imageDimensions(body []byte) (*int, *int) {
 	width := cfg.Width
 	height := cfg.Height
 	return &width, &height
-}
-
-func validateGatewayImageURL(rawURL string) error {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("provider image URL is invalid")
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("provider image URL must use http or https")
-	}
-	if strings.EqualFold(os.Getenv("CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS"), "true") {
-		return nil
-	}
-	host := parsed.Hostname()
-	if strings.EqualFold(host, "localhost") {
-		return fmt.Errorf("provider image URL points to a private host")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateProviderMediaIP(ip) {
-			return fmt.Errorf("provider image URL points to a private address")
-		}
-		return nil
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return fmt.Errorf("provider image URL host could not be resolved")
-	}
-	for _, ip := range ips {
-		if isPrivateProviderMediaIP(ip) {
-			return fmt.Errorf("provider image URL resolves to a private address")
-		}
-	}
-	return nil
-}
-
-func isPrivateProviderMediaIP(ip net.IP) bool {
-	return ip.IsLoopback() ||
-		ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified()
 }
 
 func normalizeMediaType(value string) string {

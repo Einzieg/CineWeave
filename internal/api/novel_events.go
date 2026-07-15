@@ -114,6 +114,8 @@ type scriptNovelChapterContext struct {
 	VolumeIndex  int    `json:"volumeIndex,omitempty"`
 	SectionIndex int    `json:"sectionIndex,omitempty"`
 	Title        string `json:"title"`
+	VolumeTitle  string `json:"volumeTitle,omitempty"`
+	ChapterTitle string `json:"chapterTitle,omitempty"`
 	Content      string `json:"content"`
 }
 
@@ -147,6 +149,10 @@ func (s *Server) extractNovelEvents(w http.ResponseWriter, r *http.Request, prin
 	source, err := s.projectSource(r, project.ID, r.PathValue("sourceId"))
 	if err != nil {
 		s.writeError(w, r, err)
+		return
+	}
+	if source.Status == "archived" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "source is archived", nil, false)
 		return
 	}
 	if source.SourceType != "novel" {
@@ -610,6 +616,10 @@ func (s *Server) generateAdaptationPlan(w http.ResponseWriter, r *http.Request, 
 		s.writeError(w, r, err)
 		return
 	}
+	if source.Status == "archived" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "source is archived", nil, false)
+		return
+	}
 	if source.SourceType != "novel" {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceType must be novel", nil, false)
 		return
@@ -678,26 +688,17 @@ func (s *Server) generateScriptFromAdaptationPlan(w http.ResponseWriter, r *http
 		s.writeError(w, r, err)
 		return
 	}
-	rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "script_from_adaptation_plan", map[string]any{
-		"project": projectPromptVariables(project),
-		"input":   map[string]any{"instruction": strings.TrimSpace(req.Instruction)},
-		"plan":    map[string]any{"id": plan.ID, "title": plan.Title, "content": plan.Content, "structure": string(plan.Structure)},
-		"events":  map[string]any{"items": string(mustMarshal(events))},
-		"novel":   novelContext,
-	}, false)
+	episodeDrafts, providerCallIDs, modelIDs, versionPromptVersionID, versionPromptHash, err := s.generateScriptEpisodeDraftsFromPlan(r, project, plan, req, events, novelContext)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	content := strings.TrimSpace(gatewayResp.Output.Text)
-	if content == "" {
-		content = strings.TrimSpace(string(gatewayResp.Output.Raw))
-	}
+	content := scriptVersionContentFromEpisodeDrafts(episodeDrafts)
 	if content == "" {
 		httpx.WriteError(w, r, http.StatusBadGateway, "PROVIDER_OUTPUT_EMPTY", "provider gateway returned empty script content", nil, false)
 		return
 	}
-	scriptID, versionID, err := s.createScriptFromAdaptationPlan(r, principal, project, plan, req.Title, content, rendered, gatewayResp)
+	scriptID, versionID, err := s.createScriptFromAdaptationPlan(r, principal, project, plan, req.Title, content, episodeDrafts, versionPromptVersionID, versionPromptHash, providerCallIDs, modelIDs)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -706,10 +707,104 @@ func (s *Server) generateScriptFromAdaptationPlan(w http.ResponseWriter, r *http
 		"scriptId":         scriptID,
 		"versionId":        versionID,
 		"adaptationPlanId": plan.ID,
-		"providerCallId":   gatewayResp.ProviderCallID,
-		"modelId":          gatewayResp.ModelID,
+		"providerCallId":   firstString(providerCallIDs),
+		"providerCallIds":  providerCallIDs,
+		"modelId":          firstString(modelIDs),
+		"modelIds":         uniqueNonEmptyStrings(modelIDs),
+		"episodeCount":     len(episodeDrafts),
 		"content":          content,
 	}, nil)
+}
+
+func (s *Server) generateScriptEpisodeDraftsFromPlan(r *http.Request, project Project, plan AdaptationPlan, req generateScriptFromAdaptationPlanRequest, events []NovelEvent, novelContext scriptNovelContext) ([]scriptEpisodeDraft, []string, []string, string, string, error) {
+	if len(novelContext.Chapters) == 0 {
+		rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "script_from_adaptation_plan", map[string]any{
+			"project": projectPromptVariables(project),
+			"input":   map[string]any{"instruction": strings.TrimSpace(req.Instruction)},
+			"plan":    map[string]any{"id": plan.ID, "title": plan.Title, "content": plan.Content, "structure": string(plan.Structure)},
+			"events":  map[string]any{"items": string(mustMarshal(events))},
+			"novel":   novelContext,
+		}, false)
+		if err != nil {
+			return nil, nil, nil, "", "", err
+		}
+		content := strings.TrimSpace(gatewayResp.Output.Text)
+		if content == "" {
+			content = strings.TrimSpace(string(gatewayResp.Output.Raw))
+		}
+		if content == "" {
+			return nil, nil, nil, "", "", newAPIError(http.StatusBadGateway, "PROVIDER_OUTPUT_EMPTY", "provider gateway returned empty script content")
+		}
+		sourceID := optionalStringPtrValue(plan.SourceID)
+		var sourceIDPtr *string
+		if sourceID != "" {
+			sourceIDPtr = &sourceID
+		}
+		return []scriptEpisodeDraft{
+				defaultScriptEpisodeDraft(sourceIDPtr, "第 1 集", content, "markdown", rendered.PromptVersionID, rendered.RenderedHash, gatewayResp.ProviderCallID, mustRawJSON(map[string]any{
+					"source":            "adaptation_plan_to_script",
+					"adaptationPlanId":  plan.ID,
+					"sourceId":          sourceID,
+					"providerCallId":    gatewayResp.ProviderCallID,
+					"modelId":           gatewayResp.ModelID,
+					"promptTemplateKey": rendered.TemplateKey,
+					"promptVersionId":   rendered.PromptVersionID,
+					"promptHash":        rendered.RenderedHash,
+				})),
+			},
+			[]string{gatewayResp.ProviderCallID},
+			[]string{gatewayResp.ModelID},
+			rendered.PromptVersionID,
+			rendered.RenderedHash,
+			nil
+	}
+
+	episodeDrafts := make([]scriptEpisodeDraft, 0, len(novelContext.Chapters))
+	providerCallIDs := make([]string, 0, len(novelContext.Chapters))
+	modelIDs := make([]string, 0, len(novelContext.Chapters))
+	versionPromptVersionID := ""
+	versionPromptHash := ""
+	for i, chapter := range novelContext.Chapters {
+		perChapterContext := scriptNovelContextForSingleChapter(novelContext, chapter)
+		chapterEvents := novelEventsForChapter(events, chapter.ID)
+		instruction := scriptEpisodeGenerationInstruction(req.Instruction, i+1, len(novelContext.Chapters), chapter)
+		rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "script_from_adaptation_plan", map[string]any{
+			"project": projectPromptVariables(project),
+			"input":   map[string]any{"instruction": instruction},
+			"plan":    map[string]any{"id": plan.ID, "title": plan.Title, "content": plan.Content, "structure": string(plan.Structure)},
+			"events":  map[string]any{"items": string(mustMarshal(chapterEvents))},
+			"novel":   perChapterContext,
+		}, false)
+		if err != nil {
+			return nil, nil, nil, "", "", err
+		}
+		content := strings.TrimSpace(gatewayResp.Output.Text)
+		if content == "" {
+			content = strings.TrimSpace(string(gatewayResp.Output.Raw))
+		}
+		if content == "" {
+			return nil, nil, nil, "", "", newAPIError(http.StatusBadGateway, "PROVIDER_OUTPUT_EMPTY", "provider gateway returned empty script content")
+		}
+		if versionPromptVersionID == "" {
+			versionPromptVersionID = rendered.PromptVersionID
+			versionPromptHash = rendered.RenderedHash
+		}
+		providerCallIDs = append(providerCallIDs, gatewayResp.ProviderCallID)
+		modelIDs = append(modelIDs, gatewayResp.ModelID)
+		episodeDrafts = append(episodeDrafts, scriptEpisodeDraftFromNovelChapter(i+1, novelContext.SourceID, chapter, content, rendered.PromptVersionID, rendered.RenderedHash, gatewayResp.ProviderCallID, mustRawJSON(map[string]any{
+			"source":             "adaptation_plan_to_script",
+			"adaptationPlanId":   plan.ID,
+			"sourceId":           novelContext.SourceID,
+			"sourceChapterId":    chapter.ID,
+			"sourceChapterTitle": chapter.Title,
+			"providerCallId":     gatewayResp.ProviderCallID,
+			"modelId":            gatewayResp.ModelID,
+			"promptTemplateKey":  rendered.TemplateKey,
+			"promptVersionId":    rendered.PromptVersionID,
+			"promptHash":         rendered.RenderedHash,
+		})))
+	}
+	return episodeDrafts, providerCallIDs, modelIDs, versionPromptVersionID, versionPromptHash, nil
 }
 
 func (s *Server) requireProjectAccessAny(w http.ResponseWriter, r *http.Request, principal auth.Principal, projectID string, permissions []string) (Project, bool) {
@@ -795,6 +890,43 @@ func (s *Server) scriptNovelContextForPlan(r *http.Request, projectID string, pl
 	return context, nil
 }
 
+func scriptNovelContextForSingleChapter(base scriptNovelContext, chapter scriptNovelChapterContext) scriptNovelContext {
+	next := base
+	next.ChapterIDs = []string{chapter.ID}
+	next.Chapters = []scriptNovelChapterContext{chapter}
+	next.CurrentText = scriptNovelCurrentText(next.Chapters)
+	next.EpisodeNumber = firstPositiveInt(chapter.SectionIndex, chapter.ChapterIndex, 1)
+	if strings.TrimSpace(next.CurrentText) != "" && len([]rune(next.CurrentText)) <= 20000 {
+		next.ReferenceText = next.CurrentText
+	} else {
+		next.ReferenceText = "仅使用当前分集正文进行剧本化；上下文只用于人物和风格一致性。"
+	}
+	return next
+}
+
+func novelEventsForChapter(events []NovelEvent, chapterID string) []NovelEvent {
+	chapterID = strings.TrimSpace(chapterID)
+	if chapterID == "" {
+		return events
+	}
+	items := make([]NovelEvent, 0, len(events))
+	emptyChapterItems := make([]NovelEvent, 0)
+	for _, event := range events {
+		eventChapterID := optionalStringPtrValue(event.ChapterID)
+		if eventChapterID == chapterID {
+			items = append(items, event)
+			continue
+		}
+		if eventChapterID == "" {
+			emptyChapterItems = append(emptyChapterItems, event)
+		}
+	}
+	if len(items) == 0 {
+		return append(items, emptyChapterItems...)
+	}
+	return append(items, emptyChapterItems...)
+}
+
 func (s *Server) scriptNovelChapters(r *http.Request, projectID, sourceID string, chapterIDs []string) ([]NovelChapter, error) {
 	all, err := s.sourceChapters(r, projectID, sourceID)
 	if err != nil {
@@ -828,6 +960,8 @@ func scriptNovelChapterContexts(chapters []NovelChapter) []scriptNovelChapterCon
 			VolumeIndex:  optionalIntValue(chapter.VolumeIndex),
 			SectionIndex: optionalIntValue(chapter.SectionIndex),
 			Title:        novelChapterPromptTitle(chapter),
+			VolumeTitle:  optionalStringPtrValue(chapter.VolumeTitle),
+			ChapterTitle: optionalStringPtrValue(chapter.ChapterTitle),
 			Content:      chapter.Content,
 		})
 	}
@@ -967,7 +1101,7 @@ func (s *Server) insertGeneratedAdaptationPlan(r *http.Request, project Project,
 	return s.adaptationPlan(r, project.ID, planID)
 }
 
-func (s *Server) createScriptFromAdaptationPlan(r *http.Request, principal auth.Principal, project Project, plan AdaptationPlan, requestedTitle, content string, rendered promptsvc.RenderedPrompt, gatewayResp provider.GatewayTextResponse) (string, string, error) {
+func (s *Server) createScriptFromAdaptationPlan(r *http.Request, principal auth.Principal, project Project, plan AdaptationPlan, requestedTitle, content string, episodeDrafts []scriptEpisodeDraft, versionPromptVersionID, versionPromptHash string, providerCallIDs, modelIDs []string) (string, string, error) {
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		return "", "", err
@@ -987,17 +1121,23 @@ func (s *Server) createScriptFromAdaptationPlan(r *http.Request, principal auth.
 		return "", "", err
 	}
 	sourceType := "agent_generated"
-	version, err := insertScriptVersionTx(r, tx, project, script.ID, 1, content, "markdown", &sourceType, rendered.PromptVersionID, rendered.RenderedHash, json.RawMessage(mustMarshal(map[string]any{
+	version, err := insertScriptVersionTx(r, tx, project, script.ID, 1, content, "markdown", &sourceType, versionPromptVersionID, versionPromptHash, json.RawMessage(mustMarshal(map[string]any{
 		"source":           "adaptation_plan_to_script",
 		"adaptationPlanId": plan.ID,
 		"sourceId":         sourceID,
-		"providerCallId":   gatewayResp.ProviderCallID,
-		"modelId":          gatewayResp.ModelID,
-		"promptTemplate":   rendered.TemplateKey,
-		"promptVersionId":  rendered.PromptVersionID,
-		"promptHash":       rendered.RenderedHash,
+		"providerCallId":   firstString(providerCallIDs),
+		"providerCallIds":  providerCallIDs,
+		"modelId":          firstString(modelIDs),
+		"modelIds":         uniqueNonEmptyStrings(modelIDs),
+		"promptTemplate":   "script_from_adaptation_plan",
+		"promptVersionId":  versionPromptVersionID,
+		"promptHash":       versionPromptHash,
+		"episodeCount":     len(episodeDrafts),
 	})), principal.UserID)
 	if err != nil {
+		return "", "", err
+	}
+	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, version.ID, principal.UserID, episodeDrafts); err != nil {
 		return "", "", err
 	}
 	if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {

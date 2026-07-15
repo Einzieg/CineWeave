@@ -48,7 +48,7 @@ func TestSystemSetupFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	var existingUsers int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&existingUsers); err != nil {

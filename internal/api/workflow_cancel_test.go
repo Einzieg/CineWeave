@@ -26,6 +26,15 @@ func TestWorkflowCancel(t *testing.T) {
 	if succeeded.Status != "succeeded" {
 		t.Fatalf("terminal cancel status = %q, want succeeded", succeeded.Status)
 	}
+
+	for _, status := range []string{"partial_succeeded", "skipped"} {
+		workflowID := seed.insertWorkflowRun(t, status)
+		var terminal WorkflowRun
+		doAPISuccess(t, server, http.MethodPost, "/api/workflow-runs/"+workflowID+"/cancel", seed.ownerToken, seed.organizationID, map[string]any{"reason": "too late"}, &terminal)
+		if terminal.Status != status {
+			t.Fatalf("terminal cancel status = %q, want %q", terminal.Status, status)
+		}
+	}
 }
 
 func (s *artifactPreviewSeed) insertWorkflowRun(t *testing.T, status string) string {

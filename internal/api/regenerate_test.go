@@ -33,6 +33,10 @@ func TestRegenerateSceneStoryboardReturnsWorkflowRunID(t *testing.T) {
 	if response.WorkflowRunID == "" || response.WorkflowType != "regenerate_scene_storyboard" || response.TargetID != sceneID || response.Status != "queued" {
 		t.Fatalf("regenerate response = %+v", response)
 	}
+	if temporal.executeCount != 0 {
+		t.Fatalf("HTTP request started Temporal directly: calls=%d", temporal.executeCount)
+	}
+	dispatchWorkflowStartsForTest(t, server)
 	if temporal.executeCount != 1 || temporal.options.TaskQueue != workflows.ScriptTaskQueue {
 		t.Fatalf("temporal call count=%d options=%+v", temporal.executeCount, temporal.options)
 	}

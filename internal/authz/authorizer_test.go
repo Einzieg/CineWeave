@@ -28,7 +28,7 @@ func TestAuthorizerRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	authService := auth.NewService(pool, "authz-test-secret", time.Hour, 24*time.Hour)
 	owner, err := authService.Register(ctx, auth.RegisterRequest{

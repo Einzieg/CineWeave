@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"encoding/json"
 	"time"
 
 	"go.temporal.io/sdk/workflow"
@@ -37,11 +38,12 @@ type ProjectAgentWorkflowState struct {
 }
 
 type ProjectAgentStepDecisionSignal struct {
-	TaskID     string `json:"taskId"`
-	StepID     string `json:"stepId"`
-	ApprovalID string `json:"approvalId,omitempty"`
-	UserID     string `json:"userId"`
-	Note       string `json:"note,omitempty"`
+	TaskID     string          `json:"taskId"`
+	StepID     string          `json:"stepId"`
+	ApprovalID string          `json:"approvalId,omitempty"`
+	UserID     string          `json:"userId"`
+	Note       string          `json:"note,omitempty"`
+	Decision   json.RawMessage `json:"decision,omitempty"`
 }
 
 type ProjectAgentCancelSignal struct {
@@ -61,6 +63,12 @@ func ProjectAgentWorkflow(ctx workflow.Context, input ProjectAgentWorkflowInput)
 	activityOptions := defaultActivityOptions()
 	activityOptions.StartToCloseTimeout = 10 * time.Minute
 	ctx = workflow.WithActivityOptions(ctx, activityOptions)
+	executeActivityOptions := defaultActivityOptions()
+	executeActivityOptions.StartToCloseTimeout = 10 * time.Minute
+	if executeActivityOptions.RetryPolicy != nil {
+		executeActivityOptions.RetryPolicy.MaximumAttempts = 1
+	}
+	executeCtx := workflow.WithActivityOptions(ctx, executeActivityOptions)
 
 	var state ProjectAgentWorkflowState
 	if err := workflow.ExecuteActivity(ctx, projectAgentPlanActivity, input).Get(ctx, &state); err != nil {
@@ -71,7 +79,7 @@ func ProjectAgentWorkflow(ctx workflow.Context, input ProjectAgentWorkflowInput)
 	}
 
 	for {
-		if err := workflow.ExecuteActivity(ctx, projectAgentExecuteReadyStepsActivity, input).Get(ctx, &state); err != nil {
+		if err := workflow.ExecuteActivity(executeCtx, projectAgentExecuteReadyStepsActivity, input).Get(ctx, &state); err != nil {
 			return ProjectAgentWorkflowState{}, err
 		}
 		if projectAgentWorkflowTerminal(state.Status) {

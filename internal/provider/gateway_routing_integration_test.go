@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Einzieg/cineweave/internal/db"
@@ -23,14 +25,13 @@ func TestGatewayRoutingIntegration(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL is required for provider gateway routing integration tests")
 	}
-	t.Setenv("CINEWEAVE_ALLOW_PRIVATE_PROVIDER_MEDIA_URLS", "true")
 
 	ctx := context.Background()
 	pool, err := db.Open(ctx, databaseURL)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	vault, err := NewVault("")
 	if err != nil {
@@ -64,6 +65,128 @@ func TestGatewayRoutingIntegration(t *testing.T) {
 		assertRoutingAttempts(t, resp.Attempts, []string{"failed", "succeeded"}, []string{firstModelID, secondModelID})
 		assertProviderCallStatus(t, ctx, pool, resp.Attempts[0].ProviderCallID, "failed", CodeUpstreamInternalError)
 		assertProviderCallStatus(t, ctx, pool, resp.Attempts[1].ProviderCallID, "succeeded", "")
+	})
+
+	t.Run("binding reasoning level reaches upstream", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var request map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if request["reasoning_effort"] != "high" {
+				t.Errorf("reasoning_effort = %#v, want high", request["reasoning_effort"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]any{"content": "reasoned"}}},
+			})
+		}))
+		defer upstream.Close()
+		orgID, _, modelID := seedGatewayIntegrationData(t, ctx, pool, vault, upstream.URL)
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID) })
+		if _, err := pool.Exec(ctx, `
+			UPDATE provider_model_capabilities
+			SET provider_options_schema = '{"xCapabilities":{"supportsReasoning":true,"supportsReasoningLevels":true,"reasoningLevels":["low","medium","high"]}}'
+			WHERE provider_model_id = $1
+		`, modelID); err != nil {
+			t.Fatalf("configure reasoning capability: %v", err)
+		}
+		profileKey := insertRoutingProfile(t, ctx, pool, orgID, "text_reasoning_default", []string{modelID})
+		if _, err := pool.Exec(ctx, `
+			UPDATE model_profile_bindings b
+			SET runtime_options = '{"reasoningLevel":"high"}'
+			FROM model_profiles p
+			WHERE p.id = b.model_profile_id AND p.organization_id = $1 AND p.profile_key = $2
+		`, orgID, profileKey); err != nil {
+			t.Fatalf("configure binding runtime options: %v", err)
+		}
+
+		service := NewService(pool, vault)
+		service.EnableGatewayRuntime()
+		resp, err := service.GenerateText(ctx, GatewayTextRequest{
+			OrganizationID:  orgID,
+			ModelProfileKey: profileKey,
+			Input:           mustJSON(map[string]any{"prompt": "reason"}),
+		})
+		if err != nil {
+			t.Fatalf("GenerateText: %v", err)
+		}
+		if resp.Status != "succeeded" || resp.Output.Text != "reasoned" {
+			t.Fatalf("text response = %+v", resp)
+		}
+		var requestSnapshot map[string]any
+		if err := pool.QueryRow(ctx, `SELECT request_snapshot FROM provider_call_logs WHERE id = $1`, resp.ProviderCallID).Scan(&requestSnapshot); err != nil {
+			t.Fatalf("load request snapshot: %v", err)
+		}
+		if requestSnapshot["reasoning_effort"] != "high" {
+			t.Fatalf("recorded reasoning_effort = %#v, want high", requestSnapshot["reasoning_effort"])
+		}
+	})
+
+	t.Run("stream fallback before first delta", func(t *testing.T) {
+		var firstCalls atomic.Int64
+		var secondCalls atomic.Int64
+		upstream := httptest.NewServer(streamRoutingMock(t, &firstCalls, &secondCalls, false))
+		defer upstream.Close()
+		orgID, _, firstModelID := seedGatewayIntegrationData(t, ctx, pool, vault, upstream.URL)
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID) })
+		accountID := providerAccountIDForModel(t, ctx, pool, firstModelID)
+		secondModelID := insertProviderModelForRouting(t, ctx, pool, accountID, "gpt-stream-fallback", "text", `["text.stream"]`, `{}`)
+		profileKey := insertRoutingProfile(t, ctx, pool, orgID, "text_stream_pre_delta", []string{firstModelID, secondModelID})
+
+		service := NewService(pool, vault)
+		service.EnableGatewayRuntime()
+		var events []GatewayTextStreamEvent
+		resp, err := service.StreamTextEvents(ctx, GatewayTextRequest{
+			OrganizationID: orgID, ModelProfileKey: profileKey, IdempotencyKey: "stream-pre-delta",
+			Input: mustJSON(map[string]any{"messages": []map[string]string{{"role": "user", "content": "stream"}}}),
+		}, func(event GatewayTextStreamEvent) error {
+			events = append(events, event)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("StreamTextEvents: %v", err)
+		}
+		if resp.Status != "succeeded" || resp.AttemptGeneration != 1 || resp.AttemptSequence != 2 || resp.ModelID != secondModelID || resp.Output.Text != "fallback stream ok" {
+			t.Fatalf("stream response = %+v", resp)
+		}
+		if firstCalls.Load() != 1 || secondCalls.Load() != 1 {
+			t.Fatalf("upstream calls first=%d second=%d, want 1/1", firstCalls.Load(), secondCalls.Load())
+		}
+		assertTextStreamEventIdentity(t, events, resp.ProviderRequestID, resp.ProviderCallID, 1, 2)
+	})
+
+	t.Run("stream never falls back after first delta", func(t *testing.T) {
+		var firstCalls atomic.Int64
+		var secondCalls atomic.Int64
+		upstream := httptest.NewServer(streamRoutingMock(t, &firstCalls, &secondCalls, true))
+		defer upstream.Close()
+		orgID, _, firstModelID := seedGatewayIntegrationData(t, ctx, pool, vault, upstream.URL)
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID) })
+		accountID := providerAccountIDForModel(t, ctx, pool, firstModelID)
+		secondModelID := insertProviderModelForRouting(t, ctx, pool, accountID, "gpt-stream-forbidden-fallback", "text", `["text.stream"]`, `{}`)
+		profileKey := insertRoutingProfile(t, ctx, pool, orgID, "text_stream_post_delta", []string{firstModelID, secondModelID})
+
+		service := NewService(pool, vault)
+		service.EnableGatewayRuntime()
+		var events []GatewayTextStreamEvent
+		resp, err := service.StreamTextEvents(ctx, GatewayTextRequest{
+			OrganizationID: orgID, ModelProfileKey: profileKey, IdempotencyKey: "stream-post-delta",
+			Input: mustJSON(map[string]any{"messages": []map[string]string{{"role": "user", "content": "stream"}}}),
+		}, func(event GatewayTextStreamEvent) error {
+			events = append(events, event)
+			return nil
+		})
+		var standardErr *StandardErrorError
+		if !errors.As(err, &standardErr) || standardErr.Standard.Code != CodeUpstreamStreamTruncated {
+			t.Fatalf("StreamTextEvents error = %v, response=%+v", err, resp)
+		}
+		if firstCalls.Load() != 1 || secondCalls.Load() != 0 || len(resp.Attempts) != 1 {
+			t.Fatalf("post-delta calls first=%d second=%d attempts=%d", firstCalls.Load(), secondCalls.Load(), len(resp.Attempts))
+		}
+		if !hasGatewayTextEvent(events, GatewayTextEventDelta) || !hasGatewayTextEvent(events, GatewayTextEventAttemptFailed) || !hasGatewayTextEvent(events, GatewayTextEventFailed) {
+			t.Fatalf("post-delta events = %+v", gatewayTextEventTypes(events))
+		}
 	})
 
 	t.Run("image guard fallback", func(t *testing.T) {
@@ -154,6 +277,71 @@ func textRoutingMock(t *testing.T) http.Handler {
 		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"fallback text ok"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`))
 	})
+}
+
+func streamRoutingMock(t *testing.T, firstCalls, secondCalls *atomic.Int64, truncateAfterDelta bool) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		model, _ := request["model"].(string)
+		if model == "gpt-integration" {
+			firstCalls.Add(1)
+			if !truncateAfterDelta {
+				w.WriteHeader(http.StatusBadGateway)
+				_, _ = w.Write([]byte(`{"error":{"code":"server_error"}}`))
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+			return
+		}
+		secondCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"fallback stream ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	})
+}
+
+func assertTextStreamEventIdentity(t *testing.T, events []GatewayTextStreamEvent, requestID, acceptedCallID string, generation, attemptSequence int) {
+	t.Helper()
+	var delta *GatewayTextDelta
+	for _, event := range events {
+		if event.Type == GatewayTextEventDelta {
+			delta = event.Delta
+			break
+		}
+	}
+	if delta == nil || delta.SchemaVersion != 2 || delta.ProviderRequestID != requestID || delta.ProviderCallID != acceptedCallID || delta.AttemptGeneration != generation || delta.AttemptSequence != attemptSequence || delta.Sequence != 1 {
+		t.Fatalf("accepted delta identity = %+v events=%v", delta, gatewayTextEventTypes(events))
+	}
+	if !hasGatewayTextEvent(events, GatewayTextEventAttemptFailed) || !hasGatewayTextEvent(events, GatewayTextEventCompleted) {
+		t.Fatalf("stream events = %v", gatewayTextEventTypes(events))
+	}
+}
+
+func hasGatewayTextEvent(events []GatewayTextStreamEvent, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayTextEventTypes(events []GatewayTextStreamEvent) []string {
+	types := make([]string, 0, len(events))
+	for _, event := range events {
+		types = append(types, event.Type)
+	}
+	return types
 }
 
 func imageRoutingMock(t *testing.T) http.Handler {

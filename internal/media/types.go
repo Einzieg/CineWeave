@@ -22,20 +22,24 @@ type ComposeRequest struct {
 	ProjectID      string `json:"projectId"`
 	WorkflowRunID  string `json:"workflowRunId"`
 
-	Clips          []Clip `json:"clips"`
-	AspectRatio    string `json:"aspectRatio"`
-	Resolution     string `json:"resolution"`
-	OutputMimeType string `json:"outputMimeType"`
+	Clips            []Clip `json:"clips"`
+	AspectRatio      string `json:"aspectRatio"`
+	Resolution       string `json:"resolution"`
+	FPSNumerator     int    `json:"fpsNumerator,omitempty"`
+	FPSDenominator   int    `json:"fpsDenominator,omitempty"`
+	OutputMimeType   string `json:"outputMimeType"`
+	OutputStorageKey string `json:"outputStorageKey,omitempty"`
 }
 
 type ComposeResult struct {
-	StorageKey      string  `json:"storageKey"`
-	MimeType        string  `json:"mimeType"`
-	ByteSize        int64   `json:"byteSize"`
-	ContentHash     string  `json:"contentHash"`
-	DurationSeconds float64 `json:"durationSeconds,omitempty"`
-	Width           int     `json:"width,omitempty"`
-	Height          int     `json:"height,omitempty"`
+	StorageKey      string      `json:"storageKey"`
+	MimeType        string      `json:"mimeType"`
+	ByteSize        int64       `json:"byteSize"`
+	ContentHash     string      `json:"contentHash"`
+	DurationSeconds float64     `json:"durationSeconds,omitempty"`
+	Width           int         `json:"width,omitempty"`
+	Height          int         `json:"height,omitempty"`
+	Probe           ProbeResult `json:"probe"`
 }
 
 type ObjectStore interface {

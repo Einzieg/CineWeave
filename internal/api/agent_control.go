@@ -18,7 +18,6 @@ import (
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
-	"go.temporal.io/sdk/client"
 )
 
 type AgentTask struct {
@@ -155,7 +154,13 @@ func (s *Server) createAgentTask(w http.ResponseWriter, r *http.Request, princip
 		}
 		sessionID = trimmed
 	}
-	item, err := scanAgentTask(s.db.QueryRow(r.Context(), `
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	item, err := scanAgentTask(tx.QueryRow(r.Context(), `
 		INSERT INTO agent_tasks(
 			organization_id, project_id, session_id, agent_type, user_goal, mode, status,
 			constraints, plan, summary, created_by
@@ -171,12 +176,22 @@ func (s *Server) createAgentTask(w http.ResponseWriter, r *http.Request, princip
 		return
 	}
 	if s.agentTaskTemporalEnabled() {
-		item, err = s.startAgentTaskWorkflow(r, principal, project, item)
+		if err := s.enqueueAgentTaskWorkflowTx(r.Context(), tx, principal, project, item, projectAgentTemporalWorkflowID(item.ID)); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if s.agentTaskTemporalEnabled() {
+		item, err = s.agentTaskWithDetails(r, project.ID, item.ID)
 		if err != nil {
 			s.writeError(w, r, err)
 			return
 		}
-		httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+		httpx.WriteJSON(w, r, http.StatusAccepted, item, nil)
 		return
 	}
 	item, err = s.planAgentTask(r, principal, project, item)
@@ -247,37 +262,60 @@ func projectAgentTemporalWorkflowID(taskID string) string {
 	return "project-agent-" + taskID
 }
 
+func projectAgentTemporalResumeWorkflowID(taskID string) string {
+	return fmt.Sprintf("%s-resume-%d", projectAgentTemporalWorkflowID(taskID), time.Now().UnixNano())
+}
+
 func (s *Server) startAgentTaskWorkflow(r *http.Request, principal auth.Principal, project Project, task AgentTask) (AgentTask, error) {
-	workflowID := projectAgentTemporalWorkflowID(task.ID)
-	if _, err := s.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
-		ID:        workflowID,
-		TaskQueue: workflows.ScriptTaskQueue,
-	}, workflows.ProjectAgentWorkflow, workflows.ProjectAgentWorkflowInput{
-		OrganizationID: project.OrganizationID,
-		ProjectID:      project.ID,
-		TaskID:         task.ID,
-		UserID:         principal.UserID,
-	}); err != nil {
-		_, _ = s.db.Exec(r.Context(), `
-			UPDATE agent_tasks
-			SET status = 'failed',
-			    temporal_workflow_id = $2,
-			    error_code = 'AGENT_WORKFLOW_START_FAILED',
-			    error_message = $3,
-			    completed_at = now()
-			WHERE id = $1
-		`, task.ID, workflowID, err.Error())
+	return s.startAgentTaskWorkflowWithID(r, principal, project, task, projectAgentTemporalWorkflowID(task.ID))
+}
+
+func (s *Server) startAgentTaskWorkflowWithID(r *http.Request, principal auth.Principal, project Project, task AgentTask, workflowID string) (AgentTask, error) {
+	if s.temporal == nil {
+		return AgentTask{}, apiError{Status: http.StatusServiceUnavailable, Code: "TEMPORAL_UNAVAILABLE", Message: "Temporal client is not configured", Retryable: true}
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
 		return AgentTask{}, err
 	}
-	if _, err := s.db.Exec(r.Context(), `
-		UPDATE agent_tasks
-		SET temporal_workflow_id = $2,
-		    summary = jsonb_set(COALESCE(summary, '{}'::jsonb), '{temporalWorkflowId}', to_jsonb($2::text), true)
-		WHERE id = $1
-	`, task.ID, workflowID); err != nil {
+	defer tx.Rollback(r.Context())
+	if err := s.enqueueAgentTaskWorkflowTx(r.Context(), tx, principal, project, task, workflowID); err != nil {
+		return AgentTask{}, err
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		return AgentTask{}, err
 	}
 	return s.agentTaskWithDetails(r, project.ID, task.ID)
+}
+
+func (s *Server) enqueueAgentTaskWorkflowTx(ctx context.Context, tx pgx.Tx, principal auth.Principal, project Project, task AgentTask, workflowID string) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_tasks
+		SET temporal_workflow_id = $2,
+		    summary = jsonb_set(COALESCE(summary, '{}'::jsonb), '{temporalWorkflowId}', to_jsonb($2::text), true),
+		    updated_at = now()
+		WHERE id = $1
+	`, task.ID, workflowID); err != nil {
+		return err
+	}
+	return s.enqueueWorkflowStartTx(
+		ctx,
+		tx,
+		"",
+		task.ID,
+		project.OrganizationID,
+		project.ID,
+		"project_agent",
+		"project_agent",
+		workflowID,
+		workflows.AgentTaskQueue,
+		workflows.ProjectAgentWorkflowInput{
+			OrganizationID: project.OrganizationID,
+			ProjectID:      project.ID,
+			TaskID:         task.ID,
+			UserID:         principal.UserID,
+		},
+	)
 }
 
 func (s *Server) signalAgentTaskWorkflow(ctx context.Context, task AgentTask, signalName string, payload any) error {
@@ -333,6 +371,7 @@ func (s *Server) planAgentTask(r *http.Request, principal auth.Principal, projec
 		`, task.ID, err.Error())
 		return AgentTask{}, err
 	} else if ok {
+		autoPlan = normalizeStoryboardAgentPlan(autoPlan, task.UserGoal)
 		plan, err := agent.ValidatePlan(autoPlan, registry, 20)
 		if err != nil {
 			_, _ = s.db.Exec(r.Context(), `
@@ -367,7 +406,7 @@ func (s *Server) planAgentTask(r *http.Request, principal auth.Principal, projec
 			"responseFormat": "json",
 		}),
 		Options: provider.GatewayTextOptions{
-			IdempotencyKey: "agent-task-plan:" + task.ID,
+			IdempotencyKey: "agent-task-plan:" + task.ID + ":" + promptHash,
 		},
 	})
 	if err != nil {
@@ -402,6 +441,7 @@ func (s *Server) planAgentTask(r *http.Request, principal auth.Principal, projec
 		`, task.ID, err.Error(), mustMarshal(map[string]any{"rawPlan": rawPlan}))
 		return AgentTask{}, err
 	}
+	parsed = normalizeStoryboardAgentPlan(parsed, task.UserGoal)
 	plan, err := agent.ValidatePlan(parsed, registry, 20)
 	if err != nil {
 		_, _ = s.db.Exec(r.Context(), `
@@ -421,6 +461,86 @@ func (s *Server) planAgentTask(r *http.Request, principal auth.Principal, projec
 		return AgentTask{}, err
 	}
 	return s.agentTaskWithDetails(r, project.ID, task.ID)
+}
+
+func normalizeStoryboardAgentPlan(plan agent.Plan, userGoal string) agent.Plan {
+	containsStoryboard := false
+	for _, step := range plan.Steps {
+		if agentPlanWorkflowType(step) == "script_to_storyboard" {
+			containsStoryboard = true
+			break
+		}
+	}
+	if !containsStoryboard {
+		return plan
+	}
+
+	explicitSceneParse := containsAnyFold(userGoal, "解析场景", "解析剧本", "剧本分场", "拆分场景", "拆场")
+	steps := make([]agent.PlanStep, 0, len(plan.Steps))
+	storyboardStepIndex := -1
+	allEpisodes := false
+	episodeIDs := make([]string, 0)
+	seenEpisodeIDs := map[string]bool{}
+	for _, step := range plan.Steps {
+		workflowType := agentPlanWorkflowType(step)
+		if workflowType == "parse_script_scenes" && !explicitSceneParse {
+			continue
+		}
+		if workflowType != "script_to_storyboard" {
+			steps = append(steps, step)
+			continue
+		}
+		args := rawObject(step.Args)
+		input, _ := args["input"].(map[string]any)
+		ids := stringSliceFromAny(input["scriptEpisodeIds"])
+		if len(ids) == 0 {
+			allEpisodes = true
+		}
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id != "" && !seenEpisodeIDs[id] {
+				seenEpisodeIDs[id] = true
+				episodeIDs = append(episodeIDs, id)
+			}
+		}
+		if storyboardStepIndex < 0 {
+			storyboardStepIndex = len(steps)
+			steps = append(steps, step)
+		}
+	}
+	if storyboardStepIndex >= 0 {
+		args := rawObject(steps[storyboardStepIndex].Args)
+		input, _ := args["input"].(map[string]any)
+		if input == nil {
+			input = map[string]any{}
+		}
+		if allEpisodes {
+			delete(input, "scriptEpisodeIds")
+		} else if len(episodeIDs) > 0 {
+			input["scriptEpisodeIds"] = episodeIDs
+		}
+		args["input"] = input
+		steps[storyboardStepIndex].Args = mustMarshal(args)
+	}
+	plan.Steps = steps
+	return plan
+}
+
+func agentPlanWorkflowType(step agent.PlanStep) string {
+	if step.Tool != "workflow.start" {
+		return ""
+	}
+	return strings.TrimSpace(stringValueFromAny(rawObject(step.Args)["workflowType"]))
+}
+
+func containsAnyFold(value string, candidates ...string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, candidate := range candidates {
+		if strings.Contains(value, strings.ToLower(candidate)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) buildAgentPlannerPrompt(r *http.Request, principal auth.Principal, project Project, task AgentTask, registry *agent.Registry) (string, error) {
@@ -461,6 +581,12 @@ func (s *Server) buildAgentPlannerPrompt(r *http.Request, principal auth.Princip
 	var builder strings.Builder
 	builder.WriteString("你是 CineWeave Project Agent Planner。你的职责是把用户目标拆成受控工具计划，只输出 JSON。\n")
 	builder.WriteString("不要执行工具，不要假装已经完成动作。不要虚构 sourceId、scriptId、workflowRunId、assetId、shotId；缺少 ID 时先安排读取类工具。\n")
+	builder.WriteString("当目标缺少关键偏好、存在多个合理路径或你不确定用户真实意图时，先安排 agent.ask_user。它必须包含一个中文 question、2 到 4 个 options，并设置 allowCustom=true，等待用户选择或自定义下一步。\n")
+	builder.WriteString("用户明确要求删除、归档、覆盖、替换或改写已有数据时，可以使用 source.update/source.delete/source.delete_chapter/script.update_episode/script.delete/asset.delete 等写入工具；如果目标对象不明确，必须先读取列表或询问用户。\n")
+	builder.WriteString("删除小说中的单个分集/章节必须使用 source.delete_chapter，禁止用 source.update 读取并覆盖整本小说。可传真实 sourceId/chapterId，也可传 sourceTitle 与 chapterIndex，或 volumeIndex+sectionIndex；未知 ID 必须省略。计划是静态 JSON，严禁写入 <由上一步返回的ID>、{{sourceId}}、<完整正文> 等占位文本。\n")
+	builder.WriteString("用户要求按自然语言调整现有资产生图提示词时，优先使用 asset.revise_prompt；资产准确名称已知时可直接传 assetName，不要虚构 assetId。只有用户提供了完整替换值时才使用 asset.update。\n")
+	builder.WriteString("生成小说剧本时必须按分集处理：script.generate_from_source 必须提供 chapterIds 或 chapterRange；用户说“1-10集/前十节/第一卷第一节到第十节”时写入 chapterRange。禁止把多个小说分集合并成一个剧本分集；一条小说分集只能对应一条剧本分集。若范围不明确，先用 agent.ask_user 询问。\n")
+	builder.WriteString("生成分镜时直接使用 script_to_storyboard。该工作流会读取活动剧本的 script_episodes，按集串行生成并逐集写库；不要在它之前自动插入 parse_script_scenes，也不要为每集规划多个 workflow.start。需要限定集数时把 scriptEpisodeIds 放进 input。\n")
 	builder.WriteString("JSON 格式必须为：{\"summary\":\"中文摘要\",\"steps\":[{\"tool\":\"工具名\",\"args\":{},\"expectedResult\":\"预期结果\"}]}。\n")
 	builder.WriteString("plan_only 模式只允许产出计划，不代表会执行。权限模式由后端监督器裁决，require_approval 需要人工批准，auto_approve 自动放行写入/工作流/成本步骤，full_access 自动放行管理步骤。\n\n")
 	builder.WriteString("用户目标：\n")
@@ -520,6 +646,9 @@ func (s *Server) persistAgentPlan(r *http.Request, principal auth.Principal, pro
 			decision.Reasons = agentReasonsWithout(decision.Reasons, "approval_required")
 			decision.Reasons = append(decision.Reasons, stateGate.Reason)
 		}
+		if isAgentAskUserTool(step.Tool) && mode != agent.TaskModePlanOnly && decision.Allowed && stateGate.Allowed {
+			decision = forceAgentQuestionDecision(decision)
+		}
 		dryRunOutput := s.agentStepDryRunOutput(r, project, step.Tool, step.Args)
 		if stateGate.Reason != "" || len(stateGate.Details) > 0 {
 			dryRunOutput["stateGate"] = stateGate
@@ -552,16 +681,17 @@ func (s *Server) persistAgentPlan(r *http.Request, principal auth.Principal, pro
 			if _, err := tx.Exec(r.Context(), `
 				INSERT INTO agent_approvals(task_id, step_id, approval_type, status, requested_payload, decision_payload)
 				VALUES ($1, $2, $3, 'pending', $4, '{}'::jsonb)
-			`, task.ID, stepID, string(step.Risk), mustMarshal(map[string]any{
-				"tool":           step.Tool,
-				"risk":           step.Risk,
-				"permission":     tool.Permission,
-				"args":           json.RawMessage(step.Args),
-				"expectedResult": step.ExpectedResult,
-				"decision":       decision,
-				"permissionMode": permissionMode,
-				"dryRunOutput":   dryRunOutput,
-			})); err != nil {
+			`, task.ID, stepID, agentApprovalTypeForStep(step.Tool, step.Risk), mustMarshal(agentApprovalRequestedPayload(
+				step.Tool,
+				step.Risk,
+				tool.Permission,
+				step.Args,
+				step.ExpectedResult,
+				decision,
+				permissionMode,
+				dryRunOutput,
+				nil,
+			))); err != nil {
 				return err
 			}
 		}
@@ -661,6 +791,16 @@ func (s *Server) agentStepDryRunOutput(r *http.Request, project Project, toolNam
 		return map[string]any{"status": "failed", "errorCode": "VALIDATION_FAILED", "errorMessage": "step input must be a JSON object"}
 	}
 	switch toolName {
+	case agentAskUserToolName:
+		question := firstNonEmpty(agentStringArg(args, "question"), "请选择下一步。")
+		return map[string]any{
+			"status":       "waiting_user",
+			"summary":      "助手需要你确认下一步。",
+			"question":     question,
+			"options":      agentQuestionOptions(args["options"]),
+			"allowCustom":  boolValueFromAny(args["allowCustom"]),
+			"approvalType": "question",
+		}
 	case "workflow.start":
 		workflowType, err := s.agentPlannedWorkflowType(r, project, toolName, args)
 		if err != nil {
@@ -785,6 +925,8 @@ func agentStateGateNextActions(decision agentStateGateDecision) []agentToolNextA
 		return []agentToolNextAction{{Label: "提高预算上限或减少目标数量", Reason: "预计成本超过任务预算"}}
 	case "workflow_already_running":
 		return []agentToolNextAction{{Label: "等待当前同类工作流完成或取消它", Tool: "workflow.read_runs", Reason: "已有同类工作流正在运行"}}
+	case "chapter_range_required":
+		return []agentToolNextAction{{Label: "指定分集范围后重试", Tool: "agent.ask_user", Reason: "小说剧本生成必须明确分集范围，避免把多个分集合并成一个剧本分集", Arguments: map[string]any{"example": "chapterRange=1-10集"}}}
 	case "shot_images_not_ready":
 		return []agentToolNextAction{{Label: "先生成缺失镜头图片", Tool: "shot.generate_missing_images", Reason: "镜头视频生成依赖图片完成"}}
 	case "no_target_shots":
@@ -813,6 +955,11 @@ func (s *Server) superviseAgentStepState(r *http.Request, project Project, task 
 	constraints := rawObject(task.Constraints)
 	if !agentConstraintAllowsVideo(constraints) && agentToolMayGenerateVideo(toolName, args) {
 		return fail("video_generation_disabled", "当前任务约束禁止生成视频。", nil)
+	}
+	if toolName == "script.generate_from_source" {
+		if scriptGate := s.superviseScriptGenerateFromSourceStep(r, project, task, args); !scriptGate.Allowed {
+			return scriptGate
+		}
 	}
 	if agentToolRequiresReviewGate(toolName) {
 		openReview, err := s.agentOpenBlockingReviewItems(r, project.ID)
@@ -930,6 +1077,58 @@ func (s *Server) superviseAgentStepState(r *http.Request, project Project, task 
 		}
 	}
 	return ok
+}
+
+func (s *Server) superviseScriptGenerateFromSourceStep(r *http.Request, project Project, task AgentTask, args map[string]any) agentStateGateDecision {
+	fail := func(reason, message string, details map[string]any) agentStateGateDecision {
+		return agentStateGateDecision{Allowed: false, Reason: reason, Message: message, Details: details}
+	}
+	sourceID := agentReferenceStringArg(args, "sourceId")
+	if sourceID == "" {
+		if err := s.db.QueryRow(r.Context(), `
+			SELECT id::text
+			FROM project_sources
+			WHERE project_id = $1 AND COALESCE(status, 'ready') <> 'archived'
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, project.ID).Scan(&sourceID); err != nil {
+			return fail("script_source_unavailable", "未找到可用于生成剧本的来源。", nil)
+		}
+	}
+	source, err := s.projectSource(r, project.ID, sourceID)
+	if err != nil {
+		return fail("script_source_unavailable", err.Error(), map[string]any{"sourceId": sourceID})
+	}
+	if source.SourceType != "novel" {
+		return agentStateGateDecision{Allowed: true}
+	}
+	if len(agentReferenceStringSliceArg(args, "chapterIds")) > 0 {
+		return agentStateGateDecision{Allowed: true}
+	}
+	scopeText := strings.Join([]string{
+		task.UserGoal,
+		agentStringArg(args, "title"),
+		agentStringArg(args, "instruction"),
+		agentStringArg(args, "chapterRange"),
+	}, "\n")
+	if _, ok := parseNovelChapterRangeScope(scopeText); ok {
+		return agentStateGateDecision{Allowed: true}
+	}
+	if _, ok := parseNovelChapterScope(scopeText); ok {
+		return agentStateGateDecision{Allowed: true}
+	}
+	chapterCount, err := s.countNovelChapters(r, project.ID, sourceID)
+	if err != nil {
+		return fail("script_source_unavailable", err.Error(), map[string]any{"sourceId": sourceID})
+	}
+	if chapterCount <= 1 {
+		return agentStateGateDecision{Allowed: true}
+	}
+	return fail("chapter_range_required", "生成多分集小说剧本必须指定分集范围，不能把多个小说分集合并成一个剧本分集。", map[string]any{
+		"sourceId":     sourceID,
+		"chapterCount": chapterCount,
+		"example":      "chapterRange=1-10集",
+	})
 }
 
 func (s *Server) agentProjectCostSpentCents(r *http.Request, projectID string) (float64, error) {
@@ -1050,6 +1249,7 @@ func agentToolReadOnly(toolName string) bool {
 		"script.list",
 		"script.get",
 		"asset.list",
+		"asset.get",
 		"storyboard.list",
 		"workflow.read_runs",
 		"workflow.read_nodes",
@@ -1218,23 +1418,11 @@ func (s *Server) getAgentTask(w http.ResponseWriter, r *http.Request, principal 
 	if !ok {
 		return
 	}
-	item, err := s.agentTask(r, project.ID, r.PathValue("taskId"))
+	item, err := s.agentTaskWithDetails(r, project.ID, r.PathValue("taskId"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	steps, err := s.listAgentTaskSteps(r, item.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	approvals, err := s.listAgentTaskApprovals(r, item.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	item.Steps = steps
-	item.Approvals = approvals
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -1341,6 +1529,26 @@ func (s *Server) resumeAgentTask(w http.ResponseWriter, r *http.Request, princip
 		s.writeError(w, r, err)
 		return
 	}
+	if item.Status == "succeeded" {
+		if _, pending, pendingErr := s.pendingAgentQuestionContinuation(r.Context(), item.ID); pendingErr != nil {
+			s.writeError(w, r, pendingErr)
+			return
+		} else if pending {
+			if _, err := s.db.Exec(r.Context(), `
+				UPDATE agent_tasks
+				SET status = 'queued', completed_at = NULL, error_code = NULL, error_message = NULL
+				WHERE id = $1 AND project_id = $2
+			`, item.ID, project.ID); err != nil {
+				s.writeError(w, r, err)
+				return
+			}
+			item, err = s.agentTask(r, project.ID, item.ID)
+			if err != nil {
+				s.writeError(w, r, err)
+				return
+			}
+		}
+	}
 	resetResult, err := s.resetBlockedAgentStepsForResume(r.Context(), principal, project, item)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -1378,7 +1586,16 @@ func (s *Server) resumeAgentTask(w http.ResponseWriter, r *http.Request, princip
 			TaskID: item.ID,
 			UserID: principal.UserID,
 		}); err != nil {
-			s.writeError(w, r, err)
+			if !isCompletedAgentWorkflowSignalError(err) {
+				s.writeError(w, r, err)
+				return
+			}
+			item, err = s.startAgentTaskWorkflowWithID(r, principal, project, item, projectAgentTemporalResumeWorkflowID(item.ID))
+			if err != nil {
+				s.writeError(w, r, err)
+				return
+			}
+			httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 			return
 		}
 		item, err = s.agentTaskWithDetails(r, project.ID, item.ID)
@@ -1395,6 +1612,14 @@ func (s *Server) resumeAgentTask(w http.ResponseWriter, r *http.Request, princip
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func isCompletedAgentWorkflowSignalError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "workflow execution already completed")
 }
 
 type blockedAgentStepForResume struct {
@@ -1417,7 +1642,7 @@ func (s *Server) resetBlockedAgentStepsForResume(ctx context.Context, principal 
 		SELECT id::text, step_index, tool_name, risk, COALESCE(permission, ''), input, supervisor_decision
 		FROM agent_steps
 		WHERE task_id = $1
-		  AND status = 'blocked'
+		  AND status IN ('blocked', 'failed')
 		ORDER BY step_index ASC
 	`, task.ID)
 	if err != nil {
@@ -1475,6 +1700,9 @@ func (s *Server) resetBlockedAgentStepsForResume(ctx context.Context, principal 
 			decision.Reasons = agentReasonsWithout(decision.Reasons, "approval_required")
 			decision.Reasons = append(decision.Reasons, stateGate.Reason)
 		}
+		if isAgentAskUserTool(step.ToolName) && mode != agent.TaskModePlanOnly && decision.Allowed && stateGate.Allowed {
+			decision = forceAgentQuestionDecision(decision)
+		}
 		dryRunOutput := s.agentStepDryRunOutput(r, project, step.ToolName, step.Input)
 		if stateGate.Reason != "" || len(stateGate.Details) > 0 {
 			dryRunOutput["stateGate"] = stateGate
@@ -1519,17 +1747,17 @@ func (s *Server) resetBlockedAgentStepsForResume(ctx context.Context, principal 
 			if _, err := s.db.Exec(ctx, `
 				INSERT INTO agent_approvals(task_id, step_id, approval_type, status, requested_payload, decision_payload)
 				VALUES ($1, $2, $3, 'pending', $4, '{}'::jsonb)
-			`, task.ID, step.ID, string(tool.Risk), mustMarshal(map[string]any{
-				"tool":           step.ToolName,
-				"risk":           tool.Risk,
-				"permission":     tool.Permission,
-				"args":           json.RawMessage(step.Input),
-				"expectedResult": stringValueFromAny(rawObject(step.SupervisorDecision)["expectedResult"]),
-				"decision":       decision,
-				"permissionMode": permissionMode,
-				"dryRunOutput":   dryRunOutput,
-				"resumed":        true,
-			})); err != nil {
+			`, task.ID, step.ID, agentApprovalTypeForStep(step.ToolName, tool.Risk), mustMarshal(agentApprovalRequestedPayload(
+				step.ToolName,
+				tool.Risk,
+				tool.Permission,
+				step.Input,
+				stringValueFromAny(rawObject(step.SupervisorDecision)["expectedResult"]),
+				decision,
+				permissionMode,
+				dryRunOutput,
+				map[string]any{"resumed": true},
+			))); err != nil {
 				return agentResumeResetResult{}, err
 			}
 		}
@@ -1567,6 +1795,7 @@ func (s *Server) decideAgentStepApproval(w http.ResponseWriter, r *http.Request,
 			ApprovalID: approval.ID,
 			UserID:     principal.UserID,
 			Note:       strings.TrimSpace(req.Note),
+			Decision:   req.Decision,
 		}); err != nil {
 			s.writeError(w, r, err)
 			return
@@ -1649,9 +1878,10 @@ func (s *Server) decideAgentStepApprovalCore(ctx context.Context, principal auth
 		)
 		WHERE id = $1 AND task_id = $2 AND status = 'waiting_approval'
 	`, stepID, taskID, nextStepStatus, mustMarshal(map[string]any{
-		"status":     decision,
-		"approvalId": approval.ID,
-		"decidedBy":  principal.UserID,
+		"status":          decision,
+		"approvalId":      approval.ID,
+		"decidedBy":       principal.UserID,
+		"decisionPayload": json.RawMessage(payload),
 	})); err != nil {
 		return AgentApproval{}, err
 	}
@@ -1736,6 +1966,10 @@ func (s *Server) agentTaskWithDetails(r *http.Request, projectID, taskID string)
 	if err != nil {
 		return AgentTask{}, err
 	}
+	steps, err = s.withAgentWorkflowProgress(r.Context(), projectID, steps)
+	if err != nil {
+		return AgentTask{}, err
+	}
 	approvals, err := s.listAgentTaskApprovals(r, item.ID)
 	if err != nil {
 		return AgentTask{}, err
@@ -1743,6 +1977,134 @@ func (s *Server) agentTaskWithDetails(r *http.Request, projectID, taskID string)
 	item.Steps = steps
 	item.Approvals = approvals
 	return item, nil
+}
+
+func (s *Server) withAgentWorkflowProgress(ctx context.Context, projectID string, steps []AgentStep) ([]AgentStep, error) {
+	for index := range steps {
+		if !agentToolWaitsForWorkflow(steps[index].ToolName) {
+			continue
+		}
+		workflowRunIDs := make([]string, 0, 1)
+		seen := map[string]bool{}
+		var outputValue any
+		if err := json.Unmarshal(steps[index].Output, &outputValue); err != nil {
+			continue
+		}
+		collectAgentWorkflowRunIDs(outputValue, func(id string) {
+			if id == "" || seen[id] {
+				return
+			}
+			seen[id] = true
+			workflowRunIDs = append(workflowRunIDs, id)
+		})
+		if len(workflowRunIDs) == 0 {
+			continue
+		}
+		progressItems := make([]map[string]any, 0, len(workflowRunIDs))
+		for _, workflowRunID := range workflowRunIDs {
+			progress, err := s.agentWorkflowProgress(ctx, projectID, workflowRunID)
+			if err == pgx.ErrNoRows {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			progressItems = append(progressItems, progress)
+		}
+		if len(progressItems) == 0 {
+			continue
+		}
+		output := rawObject(steps[index].Output)
+		data, _ := output["data"].(map[string]any)
+		if data == nil {
+			data = map[string]any{}
+		}
+		data["workflowProgress"] = progressItems[0]
+		if len(progressItems) > 1 {
+			data["workflowProgressItems"] = progressItems
+		}
+		output["data"] = data
+		steps[index].Output = mustMarshal(output)
+	}
+	return steps, nil
+}
+
+func (s *Server) agentWorkflowProgress(ctx context.Context, projectID, workflowRunID string) (map[string]any, error) {
+	var (
+		workflowType     string
+		workflowStatus   string
+		totalNodes       int
+		completedNodes   int
+		nodeID           sql.NullString
+		nodeKey          sql.NullString
+		nodeType         sql.NullString
+		nodeStatus       sql.NullString
+		nodeInput        []byte
+		nodeOutput       []byte
+		nodeErrorCode    sql.NullString
+		nodeErrorMessage sql.NullString
+	)
+	err := s.db.QueryRow(ctx, `
+		SELECT
+			COALESCE(w.input->>'workflowType', ''),
+			w.status,
+			(SELECT count(*) FROM workflow_node_runs n WHERE n.workflow_run_id = w.id),
+			(SELECT count(*) FROM workflow_node_runs n WHERE n.workflow_run_id = w.id AND n.status IN ('succeeded', 'failed', 'cancelled')),
+			n.id::text,
+			n.node_key,
+			n.node_type,
+			n.status,
+			COALESCE(n.input, '{}'::jsonb),
+			COALESCE(n.output, '{}'::jsonb),
+			n.error_code,
+			n.error_message
+		FROM workflow_runs w
+		LEFT JOIN LATERAL (
+			SELECT *
+			FROM workflow_node_runs candidate
+			WHERE candidate.workflow_run_id = w.id
+			ORDER BY CASE WHEN candidate.status IN ('queued', 'running') THEN 0 ELSE 1 END,
+			         candidate.created_at DESC
+			LIMIT 1
+		) n ON true
+		WHERE w.project_id = $1 AND w.id = $2
+	`, projectID, workflowRunID).Scan(
+		&workflowType,
+		&workflowStatus,
+		&totalNodes,
+		&completedNodes,
+		&nodeID,
+		&nodeKey,
+		&nodeType,
+		&nodeStatus,
+		&nodeInput,
+		&nodeOutput,
+		&nodeErrorCode,
+		&nodeErrorMessage,
+	)
+	if err != nil {
+		return nil, err
+	}
+	progress := map[string]any{
+		"workflowRunId":  workflowRunID,
+		"workflowType":   workflowType,
+		"status":         workflowStatus,
+		"totalNodes":     totalNodes,
+		"completedNodes": completedNodes,
+	}
+	if nodeID.Valid {
+		progress["activeNode"] = map[string]any{
+			"id":           nodeID.String,
+			"nodeKey":      nodeKey.String,
+			"nodeType":     nodeType.String,
+			"status":       nodeStatus.String,
+			"input":        rawObject(json.RawMessage(nodeInput)),
+			"output":       rawObject(json.RawMessage(nodeOutput)),
+			"errorCode":    nodeErrorCode.String,
+			"errorMessage": nodeErrorMessage.String,
+		}
+	}
+	return progress, nil
 }
 
 func (s *Server) listAgentTaskSteps(r *http.Request, taskID string) ([]AgentStep, error) {
@@ -1818,7 +2180,9 @@ func (s *Server) cancelAgentTaskWorkflowRuns(r *http.Request, projectID, taskID,
 		)
 		SELECT DISTINCT w.id, w.organization_id, w.project_id, w.template_id, w.temporal_workflow_id,
 		       w.status, w.input, w.output, w.error_code, w.error_message, w.created_by,
-		       w.created_at, w.started_at, w.completed_at, w.cancelled_at
+		       w.created_at, w.started_at, w.completed_at, w.cancelled_at, w.workflow_type,
+		       w.total_items, w.completed_items, w.failed_items, w.revision,
+		       w.attempt_generation, w.root_workflow_run_id, w.retry_of_workflow_run_id, w.updated_at
 		FROM candidates c
 		JOIN workflow_runs w ON w.id::text = c.workflow_run_id
 		WHERE w.project_id = $2

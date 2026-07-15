@@ -16,6 +16,7 @@ var defaultFallbackOn = []string{
 	CodeProviderCircuitOpen,
 	CodeUpstreamTimeout,
 	CodeUpstreamInternalError,
+	CodeUpstreamOutputMismatch,
 	"UPSTREAM_RATE_LIMITED",
 	CodeRateLimited,
 }
@@ -47,6 +48,7 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 			b.priority,
 			b.weight,
 			b.created_at,
+			b.runtime_options,
 			m.id,
 			m.provider_account_id,
 			m.model_key,
@@ -67,7 +69,10 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 		      SELECT 1
 		      FROM provider_model_capabilities c
 		      WHERE c.provider_model_id = m.id
-		        AND c.task_types ? $4
+		        AND (
+		          c.task_types ? $4
+		          OR ($4 = 'video.create_task' AND c.task_types ? 'video.generate')
+		        )
 		    )
 		  )
 		ORDER BY b.priority ASC, b.weight DESC, b.created_at ASC
@@ -81,6 +86,7 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 	for rows.Next() {
 		var candidate RoutingCandidate
 		var fallbackRaw []byte
+		var runtimeOptionsRaw []byte
 		if err := rows.Scan(
 			&candidate.ModelProfileID,
 			&candidate.ModelProfileKey,
@@ -90,6 +96,7 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 			&candidate.Priority,
 			&candidate.Weight,
 			&candidate.createdAt,
+			&runtimeOptionsRaw,
 			&candidate.ProviderModelID,
 			&candidate.ProviderAccountID,
 			&candidate.ModelKey,
@@ -103,6 +110,10 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 			return nil, err
 		}
 		candidate.FallbackStrategy = fallback
+		candidate.RuntimeOptions, err = decodeModelProfileBindingRuntimeOptions(runtimeOptionsRaw)
+		if err != nil {
+			return nil, err
+		}
 		candidate.Capabilities, err = s.listCapabilities(ctx, candidate.ProviderModelID)
 		if err != nil {
 			return nil, err
@@ -203,6 +214,8 @@ func routingModality(req RoutingRequest) string {
 		return "text"
 	case TaskTypeImageGenerate:
 		return "image"
+	case TaskTypeAudioTTS, TaskTypeAudioTranscribe:
+		return "audio"
 	case TaskTypeVideoCreateTask:
 		return "video"
 	default:
@@ -421,6 +434,8 @@ func estimateRoutingCost(req RoutingRequest, capabilities []Capability) float64 
 	case "image":
 		input := gatewayImageInput{Size: req.ImageSize, Quality: req.ImageQuality, N: 1}
 		return decimalValue(estimateImageCost(input, capabilities).EstimatedCost)
+	case "audio":
+		return 0
 	case "video":
 		input := gatewayVideoInput{DurationSeconds: req.VideoDurationSeconds, Resolution: req.VideoResolution}
 		if input.DurationSeconds <= 0 {

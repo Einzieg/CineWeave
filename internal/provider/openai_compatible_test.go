@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,6 +24,15 @@ func TestParseOpenAIModels(t *testing.T) {
 	}
 }
 
+func TestUsesNativeOpenAICompatibleRuntime(t *testing.T) {
+	if !usesNativeOpenAICompatibleRuntime(Account{ConnectorKey: "openai_compatible_custom", Config: json.RawMessage(`{}`)}) {
+		t.Fatal("openai-compatible connector without an explicit runtime should use the native runtime")
+	}
+	if usesNativeOpenAICompatibleRuntime(Account{ConnectorKey: "openai_compatible_custom", Config: json.RawMessage(`{"runtime":"declarative_manifest"}`)}) {
+		t.Fatal("explicit declarative runtime should take precedence over the connector default")
+	}
+}
+
 func TestParseChatCompletionText(t *testing.T) {
 	text, err := parseChatCompletionText([]byte(`{"choices":[{"message":{"content":"pong"}}]}`))
 	if err != nil {
@@ -29,6 +40,25 @@ func TestParseChatCompletionText(t *testing.T) {
 	}
 	if text != "pong" {
 		t.Fatalf("text = %q, want pong", text)
+	}
+}
+
+func TestUpstreamErrorPreservesNestedProviderMessage(t *testing.T) {
+	err := upstreamError(http.StatusBadRequest, []byte(`{
+		"error": {
+			"message": "The generated image may violate our guardrails around violence."
+		}
+	}`))
+	var upstream *UpstreamError
+	if !errors.As(err, &upstream) {
+		t.Fatalf("error = %T %v, want UpstreamError", err, err)
+	}
+	if upstream.Message != "The generated image may violate our guardrails around violence." {
+		t.Fatalf("message = %q", upstream.Message)
+	}
+	standard := NormalizeUpstreamError(upstream)
+	if standard.Code != CodeContentRejected || standard.Message != upstream.Message || standard.Retryable {
+		t.Fatalf("standard = %#v, want non-retryable content rejection with provider message", standard)
 	}
 }
 
@@ -53,6 +83,35 @@ func TestBuildChatCompletionRequestMapsTextOptions(t *testing.T) {
 	responseFormat, ok := request["response_format"].(map[string]any)
 	if !ok || responseFormat["type"] != "json_object" {
 		t.Fatalf("response_format = %#v, want json_object", request["response_format"])
+	}
+}
+
+func TestBuildChatCompletionRequestUsesCompletionTokenLimitForGPT5(t *testing.T) {
+	request, err := buildChatCompletionRequest("openai/gpt-5.5", json.RawMessage(`{"prompt":"hello","maxOutputTokens":3400}`), true)
+	if err != nil {
+		t.Fatalf("buildChatCompletionRequest() error = %v", err)
+	}
+	if request["max_completion_tokens"] != float64(3400) {
+		t.Fatalf("max_completion_tokens = %v, want 3400", request["max_completion_tokens"])
+	}
+	if _, exists := request["max_tokens"]; exists {
+		t.Fatalf("max_tokens should not be sent for GPT-5 models")
+	}
+}
+
+func TestBuildChatCompletionRequestMapsReasoningLevel(t *testing.T) {
+	request, err := buildChatCompletionRequest("openai/o3", json.RawMessage(`{
+		"prompt": "hello",
+		"reasoningLevel": "high"
+	}`), false)
+	if err != nil {
+		t.Fatalf("buildChatCompletionRequest() error = %v", err)
+	}
+	if request["reasoning_effort"] != "high" {
+		t.Fatalf("reasoning_effort = %#v, want high", request["reasoning_effort"])
+	}
+	if _, ok := request["reasoningLevel"]; ok {
+		t.Fatalf("provider request must not contain the canonical input alias: %#v", request)
 	}
 }
 
@@ -191,4 +250,140 @@ func TestOpenAICompatibleStreamChatCompletion(t *testing.T) {
 	if result.Usage.InputTokens != 3 || result.Usage.OutputTokens != 2 || result.Usage.TotalTokens != 5 {
 		t.Fatalf("usage = %+v, want 3/2/5", result.Usage)
 	}
+}
+
+func TestOpenAICompatibleStreamChatCompletionSucceedsWithFinishReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":1,\"total_tokens\":5}}\n\n"))
+	}))
+	defer server.Close()
+
+	baseURL := server.URL + "/v1"
+	account := Account{BaseURL: &baseURL, AuthType: "bearer"}
+	model := Model{ModelKey: "gpt-test"}
+	client := newOpenAICompatibleClient(2 * time.Second)
+	result, err := client.streamChatCompletion(context.Background(), account, model, "sk-test", parseOpenAICompatibleConfig(nil), json.RawMessage(`{"prompt":"hi"}`), nil)
+	if err != nil {
+		t.Fatalf("streamChatCompletion() error = %v", err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("text = %q, want done", result.Text)
+	}
+	if result.Usage.InputTokens != 4 || result.Usage.OutputTokens != 1 || result.Usage.TotalTokens != 5 {
+		t.Fatalf("usage = %+v, want 4/1/5", result.Usage)
+	}
+}
+
+func TestOpenAIStreamTerminalModeUsesModelCapability(t *testing.T) {
+	model := Model{Capabilities: []Capability{{
+		ProviderOptionsSchema: json.RawMessage(`{"xCapabilities":{"streamTerminalMode":"done_marker"}}`),
+	}}}
+	mode := openAIStreamTerminalMode(model)
+	if mode != "done_marker" {
+		t.Fatalf("terminal mode = %q, want done_marker", mode)
+	}
+	if openAIStreamTerminalSatisfied(mode, false, true) {
+		t.Fatal("finish_reason must not satisfy done_marker mode")
+	}
+	if !openAIStreamTerminalSatisfied(mode, true, false) {
+		t.Fatal("[DONE] must satisfy done_marker mode")
+	}
+}
+
+func TestOpenAICompatibleStreamChatCompletionRejectsCleanEOFWithoutTerminal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+	}))
+	defer server.Close()
+
+	baseURL := server.URL + "/v1"
+	account := Account{BaseURL: &baseURL, AuthType: "bearer"}
+	model := Model{ModelKey: "gpt-test"}
+	client := newOpenAICompatibleClient(2 * time.Second)
+	result, err := client.streamChatCompletion(context.Background(), account, model, "sk-test", parseOpenAICompatibleConfig(nil), json.RawMessage(`{"prompt":"hi"}`), nil)
+	if err == nil {
+		t.Fatal("streamChatCompletion() error = nil, want missing terminal error")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("streamChatCompletion() error = %v, want io.ErrUnexpectedEOF", err)
+	}
+	if result.Text != "partial" {
+		t.Fatalf("partial text = %q, want partial", result.Text)
+	}
+	if len(result.ResponseSnapshot) == 0 {
+		t.Fatal("response snapshot is empty, want received chunks preserved")
+	}
+}
+
+func TestOpenAICompatibleStreamChatCompletionReturnsUnexpectedEOF(t *testing.T) {
+	baseURL := "https://provider.example/v1"
+	account := Account{BaseURL: &baseURL, AuthType: "bearer"}
+	model := Model{ModelKey: "gpt-test"}
+	client := openAICompatibleClient{httpClient: &http.Client{Transport: openAIStreamRoundTripper(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: &unexpectedEOFReadCloser{
+				payload: []byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"),
+			},
+		}, nil
+	})}}
+	_, err := client.streamChatCompletion(context.Background(), account, model, "sk-test", parseOpenAICompatibleConfig(nil), json.RawMessage(`{"prompt":"hi"}`), nil)
+	if err == nil {
+		t.Fatal("streamChatCompletion() error = nil, want unexpected EOF")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("streamChatCompletion() error = %v, want io.ErrUnexpectedEOF", err)
+	}
+}
+
+func TestOpenAICompatibleStreamChatCompletionReturnsStreamError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: error\n"))
+		_, _ = w.Write([]byte("data: {\"error\":{\"code\":\"upstream_overloaded\",\"message\":\"try later\"}}\n\n"))
+	}))
+	defer server.Close()
+
+	baseURL := server.URL + "/v1"
+	account := Account{BaseURL: &baseURL, AuthType: "bearer"}
+	model := Model{ModelKey: "gpt-test"}
+	client := newOpenAICompatibleClient(2 * time.Second)
+	_, err := client.streamChatCompletion(context.Background(), account, model, "sk-test", parseOpenAICompatibleConfig(nil), json.RawMessage(`{"prompt":"hi"}`), nil)
+	if err == nil {
+		t.Fatal("streamChatCompletion() error = nil, want upstream error")
+	}
+	var upstream *UpstreamError
+	if !errors.As(err, &upstream) {
+		t.Fatalf("error = %T %v, want UpstreamError", err, err)
+	}
+	if upstream.Code != "upstream_overloaded" {
+		t.Fatalf("upstream code = %q, want upstream_overloaded", upstream.Code)
+	}
+}
+
+type openAIStreamRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f openAIStreamRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type unexpectedEOFReadCloser struct {
+	payload []byte
+	sent    bool
+}
+
+func (r *unexpectedEOFReadCloser) Read(p []byte) (int, error) {
+	if r.sent {
+		return 0, io.ErrUnexpectedEOF
+	}
+	r.sent = true
+	return copy(p, r.payload), io.ErrUnexpectedEOF
+}
+
+func (r *unexpectedEOFReadCloser) Close() error {
+	return nil
 }

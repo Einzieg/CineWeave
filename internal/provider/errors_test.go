@@ -1,6 +1,9 @@
 package provider
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"testing"
 )
@@ -30,5 +33,62 @@ func TestNormalizeHTTPError(t *testing.T) {
 				t.Fatalf("Retryable = %v, want %v", got.Retryable, tt.retryable)
 			}
 		})
+	}
+}
+
+func TestNormalizeUpstreamErrorPreservesSafeClientMessage(t *testing.T) {
+	standard := NormalizeUpstreamError(&UpstreamError{
+		Status:  http.StatusUnprocessableEntity,
+		Message: "The requested image size is unsupported.",
+	})
+	if standard.Code != CodeInvalidRequest || standard.Message != "The requested image size is unsupported." {
+		t.Fatalf("standard = %#v, want upstream client message", standard)
+	}
+}
+
+func TestNormalizeUpstreamErrorDoesNotMisclassifyContentLength(t *testing.T) {
+	standard := NormalizeUpstreamError(&UpstreamError{
+		Status:  http.StatusBadRequest,
+		Message: "request content length exceeds the model limit",
+	})
+	if standard.Code != CodeInvalidRequest || standard.Message != "request content length exceeds the model limit" {
+		t.Fatalf("standard = %#v, want invalid request", standard)
+	}
+}
+
+func TestNormalizeUpstreamErrorDoesNotExposeAuthenticationMessage(t *testing.T) {
+	standard := NormalizeUpstreamError(&UpstreamError{
+		Status:  http.StatusUnauthorized,
+		Message: "API key sk-secret-value is invalid",
+	})
+	if standard.Code != CodeAuthFailed || standard.Message != "provider authentication failed" {
+		t.Fatalf("standard = %#v, want generic authentication error", standard)
+	}
+}
+
+func TestNormalizedProviderFailureClassifiesTransportEOF(t *testing.T) {
+	status, code, message, upstreamStatus, upstreamCode := normalizedProviderFailure(errors.New(`Post "https://example.test/v1/images/generations": EOF`))
+	if status != "failed" || code != CodeUpstreamInternalError || message != "provider connection was interrupted" {
+		t.Fatalf("normalized EOF = status=%s code=%s message=%q", status, code, message)
+	}
+	if upstreamStatus != nil || upstreamCode != "" {
+		t.Fatalf("upstream status/code = %v/%q, want empty", upstreamStatus, upstreamCode)
+	}
+	status, code, message, _, _ = normalizedProviderFailure(io.ErrUnexpectedEOF)
+	if status != "failed" || code != CodeUpstreamStreamTruncated || message != "provider stream ended before a completion marker" {
+		t.Fatalf("normalized unexpected EOF = status=%s code=%s message=%q", status, code, message)
+	}
+	if !standardErrorFromRunError(io.ErrUnexpectedEOF, CodeUpstreamStreamTruncated, "provider stream ended before a completion marker").Retryable {
+		t.Fatalf("unexpected EOF standard error should be retryable")
+	}
+}
+
+func TestNormalizedProviderFailureClassifiesValidation(t *testing.T) {
+	status, code, message, upstreamStatus, upstreamCode := normalizedProviderFailure(fmt.Errorf("%w: public reference URL is required", ErrValidation))
+	if status != "failed" || code != CodeInvalidRequest || message != "provider validation failed: public reference URL is required" {
+		t.Fatalf("normalized validation = status=%s code=%s message=%q", status, code, message)
+	}
+	if upstreamStatus != nil || upstreamCode != "" {
+		t.Fatalf("upstream status/code = %v/%q, want empty", upstreamStatus, upstreamCode)
 	}
 }

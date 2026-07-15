@@ -16,7 +16,7 @@ import (
 func TestExportProjectFinalVideoReusesActiveVersion(t *testing.T) {
 	ctx := context.Background()
 	pool := openWorkflowGatewayIntegrationDB(t, ctx)
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	orgID, userID, projectID, workflowRunID, _, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
@@ -97,9 +97,9 @@ func insertWorkflowFinalVideoVersion(t *testing.T, ctx context.Context, pool *pg
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO final_video_versions(
 			organization_id, project_id, timeline_id, workflow_run_id, version, title, status, artifact_id, media_file_id, storage_key,
-			duration_seconds, resolution, aspect_ratio, compose_settings, metadata, created_by
+			duration_ticks, resolution, aspect_ratio, compose_settings, metadata, created_by
 		)
-		VALUES ($1, $2, $3, $4, 1, 'Final', 'active', $5, $6, $7, 12.5, '720p', '16:9', '{}', '{}', $8)
+		VALUES ($1, $2, $3, $4, 1, 'Final', 'active', $5, $6, $7, 1125000, '720p', '16:9', '{}', '{}', $8)
 		RETURNING id::text
 	`, orgID, projectID, timelineID, workflowRunID, artifactID, mediaFileID, storageKey, userID).Scan(&versionID); err != nil {
 		t.Fatalf("insert final video version: %v", err)

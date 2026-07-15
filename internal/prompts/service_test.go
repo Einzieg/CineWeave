@@ -24,7 +24,7 @@ func TestServiceResolvePriority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	orgID, userID, projectID := seedPromptResolveOrg(t, ctx, pool)
 	t.Cleanup(func() {

@@ -32,13 +32,16 @@ func TestVideoProductionWorkflowGatewayIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	orgID, userID, projectID, workflowRunID, textModelID, imageModelID := seedWorkflowGatewayIntegrationData(t, ctx, pool)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
 	})
 	videoModelID := seedWorkflowVideoProfile(t, ctx, pool, orgID, userID, textModelID)
+	if _, err := pool.Exec(ctx, `UPDATE projects SET video_ratio = '9:16' WHERE id = $1`, projectID); err != nil {
+		t.Fatalf("set project video ratio: %v", err)
+	}
 
 	gateway := httptest.NewServer(mockVideoWorkflowProviderGateway(t, pool, textModelID, imageModelID, videoModelID))
 	defer gateway.Close()
@@ -90,7 +93,7 @@ func TestVideoProductionWorkflowGatewayIntegration(t *testing.T) {
 			t.Fatalf("GenerateShotImage shot %d: %v", shot.ShotIndex, err)
 		}
 		providerCalls.Images = append(providerCalls.Images, imageOutput.ProviderCallID)
-		createOutput, err := activities.CreateShotVideoTask(ctx, CreateShotVideoTaskInput{
+		prepared, err := activities.PrepareShotVideoPrompt(ctx, PrepareShotVideoPromptInput{
 			OrganizationID: input.OrganizationID,
 			ProjectID:      input.ProjectID,
 			WorkflowRunID:  input.WorkflowRunID,
@@ -100,8 +103,31 @@ func TestVideoProductionWorkflowGatewayIntegration(t *testing.T) {
 			ShotNo:         shot.ShotNo,
 			WorkflowPrompt: input.Prompt,
 			Duration:       shot.Duration,
-			AspectRatio:    "16:9",
+			AspectRatio:    "9:16",
 			Resolution:     "720p",
+		})
+		if err != nil {
+			t.Fatalf("PrepareShotVideoPrompt shot %d: %v", shot.ShotIndex, err)
+		}
+		createOutput, err := activities.CreateShotVideoTask(ctx, CreateShotVideoTaskInput{
+			OrganizationID:           input.OrganizationID,
+			ProjectID:                input.ProjectID,
+			WorkflowRunID:            input.WorkflowRunID,
+			CreatedBy:                input.CreatedBy,
+			ShotID:                   shot.ID,
+			ShotIndex:                shot.ShotIndex,
+			ShotNo:                   shot.ShotNo,
+			WorkflowPrompt:           input.Prompt,
+			Duration:                 shot.Duration,
+			AspectRatio:              "16:9",
+			Resolution:               "720p",
+			Prompt:                   prepared.Prompt,
+			NegativePrompt:           prepared.NegativePrompt,
+			PromptHash:               prepared.PromptHash,
+			GenerationProviderCallID: prepared.GenerationProviderCallID,
+			ReviewProviderCallID:     prepared.ReviewProviderCallID,
+			ReviewTemplateKey:        prepared.ReviewTemplateKey,
+			ReviewPromptVersionID:    prepared.ReviewPromptVersion,
 		})
 		if err != nil {
 			t.Fatalf("CreateShotVideoTask shot %d: %v", shot.ShotIndex, err)
@@ -115,6 +141,8 @@ func TestVideoProductionWorkflowGatewayIntegration(t *testing.T) {
 			ShotIndex:           shot.ShotIndex,
 			ShotNo:              shot.ShotNo,
 			NodeRunID:           createOutput.NodeRunID,
+			ExecutionToken:      createOutput.ExecutionToken,
+			AttemptGeneration:   createOutput.AttemptGeneration,
 			ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
 			ExternalTaskID:      createOutput.ExternalTaskID,
 			PollCount:           1,
@@ -134,6 +162,8 @@ func TestVideoProductionWorkflowGatewayIntegration(t *testing.T) {
 			ShotIndex:           shot.ShotIndex,
 			ShotNo:              shot.ShotNo,
 			NodeRunID:           createOutput.NodeRunID,
+			ExecutionToken:      createOutput.ExecutionToken,
+			AttemptGeneration:   createOutput.AttemptGeneration,
 			ProviderAsyncTaskID: createOutput.ProviderAsyncTaskID,
 			ExternalTaskID:      createOutput.ExternalTaskID,
 			PollCount:           2,
@@ -211,13 +241,57 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/internal/provider/models/constraints":
+			var req provider.GatewayModelConstraintsRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode model constraints request: %v", err)
+			}
+			if req.ModelProfileKey != videoGenerationModelProfileKey || req.TaskType != provider.TaskTypeVideoCreateTask || req.Modality != "video" {
+				t.Fatalf("model constraints request = %+v", req)
+			}
+			writeWorkflowGatewayEnvelope(t, w, provider.GatewayModelConstraintsResponse{
+				ModelProfileKey: req.ModelProfileKey,
+				TaskType:        req.TaskType,
+				Modality:        req.Modality,
+				Candidates: []provider.GatewayModelConstraintCandidate{{
+					ProviderModelID: videoModelID,
+					ModelKey:        "video-integration-model",
+					Modality:        "video",
+					Prompt:          provider.PromptLengthConstraint{MaxLength: 4096, Unit: provider.PromptLengthUnitUTF8Bytes},
+				}},
+			})
 		case "/internal/provider/text/generate":
 			var req provider.GatewayTextRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode text request: %v", err)
 			}
-			if req.PromptTemplateKey != promptKeyStoryboardPlanner || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
+			if req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
 				t.Fatalf("text prompt trace = %+v", req)
+			}
+			if req.PromptTemplateKey == promptKeyShotVideoAgent {
+				writeWorkflowGatewayEnvelope(t, w, provider.GatewayTextResponse{
+					ProviderCallID: uuid.NewString(),
+					ModelID:        textModelID,
+					Status:         "succeeded",
+					Output:         provider.GatewayTextOutput{Text: `{"prompt":"Slow cinematic push as the train door opens and sunrise mist drifts across the platform.","negativePrompt":"subtitles, watermark","sourceAnchors":["current shot"]}`},
+					Usage:          provider.GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
+					LatencyMS:      8,
+				})
+				return
+			}
+			if req.PromptTemplateKey == promptKeyShotVideoReviewAgent {
+				writeWorkflowGatewayEnvelope(t, w, provider.GatewayTextResponse{
+					ProviderCallID: uuid.NewString(),
+					ModelID:        textModelID,
+					Status:         "succeeded",
+					Output:         provider.GatewayTextOutput{Text: `{"approved":true,"finalPrompt":"Slow cinematic push as the train door opens and sunrise mist drifts across the platform.","negativePrompt":"subtitles, watermark","issues":[],"changes":[]}`},
+					Usage:          provider.GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"},
+					LatencyMS:      7,
+				})
+				return
+			}
+			if req.PromptTemplateKey != promptKeyStoryboardPlanner {
+				t.Fatalf("unexpected text prompt template = %q", req.PromptTemplateKey)
 			}
 			writeWorkflowGatewayEnvelope(t, w, provider.GatewayTextResponse{
 				ProviderCallID: uuid.NewString(),
@@ -260,6 +334,13 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 			if req.PromptTemplateKey != promptKeyStoryboardImage || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
 				t.Fatalf("image prompt trace = %+v", req)
 			}
+			var imageInput map[string]any
+			if err := json.Unmarshal(req.Input, &imageInput); err != nil {
+				t.Fatalf("decode image input: %v", err)
+			}
+			if imageInput["aspectRatio"] != "9:16" || imageInput["size"] != "1024x1536" {
+				t.Fatalf("image layout = %+v", imageInput)
+			}
 			artifactID, mediaFileID, storageKey := insertMockGatewayMediaArtifact(t, r.Context(), pool, req.OrganizationID, req.ProjectID, req.WorkflowRunID, req.NodeRunID, imageModelID, "generated_image", "image/png", req.PromptTemplateKey, req.PromptVersionID, req.PromptHash, req.PromptSource)
 			writeWorkflowGatewayEnvelope(t, w, provider.GatewayImageResponse{
 				ProviderCallID: uuid.NewString(),
@@ -282,7 +363,7 @@ func mockVideoWorkflowProviderGateway(t *testing.T, pool *pgxpool.Pool, textMode
 			if req.ModelProfileKey != videoGenerationModelProfileKey || req.NodeRunID == "" || len(req.References) != 1 {
 				t.Fatalf("video create request = %+v", req)
 			}
-			if req.PromptTemplateKey != promptKeyStoryboardVideo || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource == "" {
+			if req.PromptTemplateKey != promptKeyShotVideoReviewAgent || req.PromptVersionID == "" || !strings.HasPrefix(req.PromptHash, "sha256:") || req.PromptSource != "agent_reviewed" {
 				t.Fatalf("video prompt trace = %+v", req)
 			}
 			externalTaskID := "external-video-task-" + uuid.NewString()
@@ -433,7 +514,11 @@ func assertVideoWorkflowNodeRuns(t *testing.T, ctx context.Context, pool *pgxpoo
 		}
 		statuses[nodeKey] = status
 	}
-	for _, nodeKey := range []string{nodeGenerateStoryboardTextKey, "generate_shot_image_0", "create_shot_video_0", "generate_shot_image_1", "create_shot_video_1"} {
+	for _, nodeKey := range []string{
+		nodeGenerateStoryboardTextKey,
+		"generate_shot_image_0", "generate_shot_video_prompt_0", "review_shot_video_prompt_0", "create_shot_video_0",
+		"generate_shot_image_1", "generate_shot_video_prompt_1", "review_shot_video_prompt_1", "create_shot_video_1",
+	} {
 		if statuses[nodeKey] != "succeeded" {
 			t.Fatalf("node statuses = %#v", statuses)
 		}
@@ -490,7 +575,7 @@ func assertVideoWorkflowArtifacts(t *testing.T, ctx context.Context, pool *pgxpo
 		case "generated_image":
 			assertPromptTraceMetadata(t, metadata, promptKeyStoryboardImage)
 		case "generated_video":
-			assertPromptTraceMetadata(t, metadata, promptKeyStoryboardVideo)
+			assertPromptTraceMetadata(t, metadata, promptKeyShotVideoReviewAgent)
 		}
 	}
 	for _, artifactType := range []string{"storyboard_json", "generated_image", "generated_video"} {

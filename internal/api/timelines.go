@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -10,25 +12,30 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/production"
+	storyboardtiming "github.com/Einzieg/cineweave/internal/storyboard"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
 )
 
 type ProjectTimeline struct {
-	ID             string          `json:"id"`
-	OrganizationID string          `json:"organizationId"`
-	ProjectID      string          `json:"projectId"`
-	WorkflowRunID  *string         `json:"workflowRunId,omitempty"`
-	Title          string          `json:"title"`
-	Status         string          `json:"status"`
-	AspectRatio    string          `json:"aspectRatio"`
-	Resolution     string          `json:"resolution"`
-	Metadata       json.RawMessage `json:"metadata"`
-	CreatedBy      *string         `json:"createdBy,omitempty"`
-	EditedBy       *string         `json:"editedBy,omitempty"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	UpdatedAt      time.Time       `json:"updatedAt"`
-	EditedAt       *time.Time      `json:"editedAt,omitempty"`
+	ID               string          `json:"id"`
+	OrganizationID   string          `json:"organizationId"`
+	ProjectID        string          `json:"projectId"`
+	WorkflowRunID    *string         `json:"workflowRunId,omitempty"`
+	Title            string          `json:"title"`
+	Status           string          `json:"status"`
+	AspectRatio      string          `json:"aspectRatio"`
+	Resolution       string          `json:"resolution"`
+	TimelineTimebase int64           `json:"timelineTimebase"`
+	FPSNumerator     int             `json:"fpsNumerator"`
+	FPSDenominator   int             `json:"fpsDenominator"`
+	Metadata         json.RawMessage `json:"metadata"`
+	CreatedBy        *string         `json:"createdBy,omitempty"`
+	EditedBy         *string         `json:"editedBy,omitempty"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
+	EditedAt         *time.Time      `json:"editedAt,omitempty"`
 }
 
 type TimelineClip struct {
@@ -43,10 +50,19 @@ type TimelineClip struct {
 	Title                 string          `json:"title"`
 	Enabled               bool            `json:"enabled"`
 	SourceStorageKey      *string         `json:"sourceStorageKey,omitempty"`
+	StartTick             int64           `json:"startTick"`
+	EndTick               int64           `json:"endTick"`
+	DurationTicks         int64           `json:"durationTicks"`
+	SourceDurationTicks   *int64          `json:"sourceDurationTicks,omitempty"`
+	TrimStartTick         int64           `json:"trimStartTick"`
+	TrimEndTick           *int64          `json:"trimEndTick,omitempty"`
+	TimelineTimebase      int64           `json:"timelineTimebase"`
+	FPSNumerator          int             `json:"fpsNumerator"`
+	FPSDenominator        int             `json:"fpsDenominator"`
+	DurationSeconds       float64         `json:"durationSeconds"`
 	SourceDurationSeconds *float64        `json:"sourceDurationSeconds,omitempty"`
 	TrimStartSeconds      float64         `json:"trimStartSeconds"`
 	TrimEndSeconds        *float64        `json:"trimEndSeconds,omitempty"`
-	TargetDurationSeconds *float64        `json:"targetDurationSeconds,omitempty"`
 	Notes                 *string         `json:"notes,omitempty"`
 	Metadata              json.RawMessage `json:"metadata"`
 	CreatedAt             time.Time       `json:"createdAt"`
@@ -67,25 +83,31 @@ type TimelineDetail struct {
 }
 
 type FinalVideoVersion struct {
-	ID              string          `json:"id"`
-	OrganizationID  string          `json:"organizationId"`
-	ProjectID       string          `json:"projectId"`
-	TimelineID      string          `json:"timelineId"`
-	WorkflowRunID   *string         `json:"workflowRunId,omitempty"`
-	Version         int             `json:"version"`
-	Title           string          `json:"title"`
-	Status          string          `json:"status"`
-	ArtifactID      *string         `json:"artifactId,omitempty"`
-	MediaFileID     *string         `json:"mediaFileId,omitempty"`
-	StorageKey      *string         `json:"storageKey,omitempty"`
-	DurationSeconds *float64        `json:"durationSeconds,omitempty"`
-	Resolution      string          `json:"resolution"`
-	AspectRatio     string          `json:"aspectRatio"`
-	ComposeSettings json.RawMessage `json:"composeSettings"`
-	Metadata        json.RawMessage `json:"metadata"`
-	CreatedBy       *string         `json:"createdBy,omitempty"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	PreviewURL      *string         `json:"previewUrl,omitempty"`
+	ID                  string          `json:"id"`
+	OrganizationID      string          `json:"organizationId"`
+	ProjectID           string          `json:"projectId"`
+	TimelineID          string          `json:"timelineId"`
+	WorkflowRunID       *string         `json:"workflowRunId,omitempty"`
+	Version             int             `json:"version"`
+	Title               string          `json:"title"`
+	Status              string          `json:"status"`
+	NativeAudioStatus   string          `json:"nativeAudioStatus"`
+	ProductionReadiness string          `json:"productionReadiness"`
+	ArtifactID          *string         `json:"artifactId,omitempty"`
+	MediaFileID         *string         `json:"mediaFileId,omitempty"`
+	StorageKey          *string         `json:"storageKey,omitempty"`
+	DurationTicks       *int64          `json:"durationTicks,omitempty"`
+	DurationSeconds     *float64        `json:"durationSeconds,omitempty"`
+	TimelineTimebase    int64           `json:"timelineTimebase"`
+	FPSNumerator        int             `json:"fpsNumerator"`
+	FPSDenominator      int             `json:"fpsDenominator"`
+	Resolution          string          `json:"resolution"`
+	AspectRatio         string          `json:"aspectRatio"`
+	ComposeSettings     json.RawMessage `json:"composeSettings"`
+	Metadata            json.RawMessage `json:"metadata"`
+	CreatedBy           *string         `json:"createdBy,omitempty"`
+	CreatedAt           time.Time       `json:"createdAt"`
+	PreviewURL          *string         `json:"previewUrl,omitempty"`
 }
 
 type ComposeTimelineResponse struct {
@@ -101,6 +123,7 @@ func (s *Server) listProjectTimelines(w http.ResponseWriter, r *http.Request, pr
 	}
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, organization_id, project_id, workflow_run_id::text, title, status, aspect_ratio, resolution,
+		       timeline_timebase, fps_numerator, fps_denominator,
 		       metadata, created_by::text, edited_by::text, created_at, updated_at, edited_at
 		FROM project_timelines
 		WHERE project_id = $1
@@ -154,12 +177,18 @@ func (s *Server) createProjectTimeline(w http.ResponseWriter, r *http.Request, p
 
 	var item ProjectTimeline
 	if err := tx.QueryRow(r.Context(), `
-		INSERT INTO project_timelines(organization_id, project_id, title, status, aspect_ratio, resolution, metadata, created_by)
-		VALUES ($1, $2, $3, 'draft', $4, $5, '{}', $6)
+		INSERT INTO project_timelines(
+			organization_id, project_id, title, status, aspect_ratio, resolution,
+			timeline_timebase, fps_numerator, fps_denominator, metadata, created_by
+		)
+		VALUES ($1, $2, $3, 'draft', $4, $5, $6, $7, $8, '{}', $9)
 		RETURNING id, organization_id, project_id, workflow_run_id::text, title, status, aspect_ratio, resolution,
+		          timeline_timebase, fps_numerator, fps_denominator,
 		          metadata, created_by::text, edited_by::text, created_at, updated_at, edited_at
-	`, project.OrganizationID, project.ID, title, aspectRatio, resolution, principal.UserID).Scan(
+	`, project.OrganizationID, project.ID, title, aspectRatio, resolution,
+		project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator, principal.UserID).Scan(
 		&item.ID, &item.OrganizationID, &item.ProjectID, &item.WorkflowRunID, &item.Title, &item.Status, &item.AspectRatio, &item.Resolution,
+		&item.TimelineTimebase, &item.FPSNumerator, &item.FPSDenominator,
 		&item.Metadata, &item.CreatedBy, &item.EditedBy, &item.CreatedAt, &item.UpdatedAt, &item.EditedAt,
 	); err != nil {
 		s.writeError(w, r, err)
@@ -219,6 +248,7 @@ func (s *Server) updateProjectTimeline(w http.ResponseWriter, r *http.Request, p
 		    edited_at = now()
 		WHERE project_id = $1 AND id = $2
 		RETURNING id, organization_id, project_id, workflow_run_id::text, title, status, aspect_ratio, resolution,
+		          timeline_timebase, fps_numerator, fps_denominator,
 		          metadata, created_by::text, edited_by::text, created_at, updated_at, edited_at
 	`, project.ID, r.PathValue("timelineId"), normalizedOptionalString(req.Title), normalizedOptionalString(req.Status),
 		normalizedOptionalString(req.AspectRatio), normalizedOptionalString(req.Resolution), principal.UserID))
@@ -274,27 +304,48 @@ func (s *Server) createTimelineClip(w http.ResponseWriter, r *http.Request, prin
 		return
 	}
 	var req struct {
-		StoryboardShotID      string   `json:"storyboardShotId"`
-		VideoArtifactID       string   `json:"videoArtifactId"`
-		VideoMediaFileID      string   `json:"videoMediaFileId"`
-		ClipIndex             *int     `json:"clipIndex"`
-		Title                 string   `json:"title"`
-		Enabled               *bool    `json:"enabled"`
-		SourceStorageKey      string   `json:"sourceStorageKey"`
-		SourceDurationSeconds *float64 `json:"sourceDurationSeconds"`
-		TrimStartSeconds      *float64 `json:"trimStartSeconds"`
-		TrimEndSeconds        *float64 `json:"trimEndSeconds"`
-		TargetDurationSeconds *float64 `json:"targetDurationSeconds"`
-		Notes                 string   `json:"notes"`
+		StoryboardShotID    string `json:"storyboardShotId"`
+		VideoArtifactID     string `json:"videoArtifactId"`
+		VideoMediaFileID    string `json:"videoMediaFileId"`
+		ClipIndex           *int   `json:"clipIndex"`
+		Title               string `json:"title"`
+		Enabled             *bool  `json:"enabled"`
+		SourceStorageKey    string `json:"sourceStorageKey"`
+		SourceDurationTicks *int64 `json:"sourceDurationTicks"`
+		TrimStartTick       *int64 `json:"trimStartTick"`
+		TrimEndTick         *int64 `json:"trimEndTick"`
+		DurationTicks       *int64 `json:"durationTicks"`
+		Notes               string `json:"notes"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	clipIndex := 0
+	timebase, err := projectTimelineTimebase(timeline)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "INVALID_TIMELINE_TIMEBASE", err.Error(), nil, false)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err := tx.Exec(r.Context(), `SET CONSTRAINTS timeline_clips_timeline_index_unique DEFERRED`); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var clipCount int
+	if err := tx.QueryRow(r.Context(), `SELECT COUNT(*) FROM timeline_clips WHERE timeline_id = $1`, timeline.ID).Scan(&clipCount); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	clipIndex := clipCount
 	if req.ClipIndex != nil {
 		clipIndex = *req.ClipIndex
-	} else if err := s.db.QueryRow(r.Context(), `SELECT COALESCE(MAX(clip_index), -1) + 1 FROM timeline_clips WHERE timeline_id = $1`, timeline.ID).Scan(&clipIndex); err != nil {
-		s.writeError(w, r, err)
+	}
+	if clipIndex < 0 || clipIndex > clipCount {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "clipIndex is outside the timeline range", nil, false)
 		return
 	}
 	enabled := true
@@ -305,26 +356,33 @@ func (s *Server) createTimelineClip(w http.ResponseWriter, r *http.Request, prin
 	videoArtifactID := strings.TrimSpace(req.VideoArtifactID)
 	videoMediaFileID := strings.TrimSpace(req.VideoMediaFileID)
 	sourceStorageKey := strings.TrimSpace(req.SourceStorageKey)
-	sourceDuration := req.SourceDurationSeconds
+	sourceDurationTicks := req.SourceDurationTicks
+	var shotDurationTicks *int64
 	if strings.TrimSpace(req.StoryboardShotID) != "" {
 		var shotTitle sql.NullString
-		var duration sql.NullFloat64
-		if err := s.db.QueryRow(r.Context(), `
+		var mediaDuration sql.NullFloat64
+		var plannedDuration int64
+		if err := tx.QueryRow(r.Context(), `
 			SELECT COALESCE(video_artifact_id::text, ''), COALESCE(video_media_file_id::text, ''),
 			       COALESCE(video_storage_key, mf.storage_key, va.storage_key, ''),
-			       COALESCE(mf.duration_seconds, duration_seconds, 0)::float8,
+			       mf.duration_seconds::float8,
+			       planned_duration_ticks,
 			       COALESCE(title, visual, '')
 			FROM storyboard_shots s
 			LEFT JOIN media_files mf ON mf.id = s.video_media_file_id
 			LEFT JOIN artifacts va ON va.id = s.video_artifact_id
 			WHERE s.project_id = $1 AND s.id = $2 AND s.deleted_at IS NULL
-		`, project.ID, req.StoryboardShotID).Scan(&videoArtifactID, &videoMediaFileID, &sourceStorageKey, &duration, &shotTitle); err != nil {
+		`, project.ID, req.StoryboardShotID).Scan(&videoArtifactID, &videoMediaFileID, &sourceStorageKey, &mediaDuration, &plannedDuration, &shotTitle); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
-		if sourceDuration == nil && duration.Valid {
-			value := duration.Float64
-			sourceDuration = &value
+		shotDurationTicks = &plannedDuration
+		if sourceDurationTicks == nil {
+			value := plannedDuration
+			if mediaDuration.Valid && mediaDuration.Float64 > 0 {
+				value = timebase.QuantizeTickNearest(timebase.SecondsToTicks(mediaDuration.Float64))
+			}
+			sourceDurationTicks = &value
 		}
 		if title == "" && shotTitle.Valid {
 			title = shotTitle.String
@@ -333,22 +391,60 @@ func (s *Server) createTimelineClip(w http.ResponseWriter, r *http.Request, prin
 	if title == "" {
 		title = "镜头片段"
 	}
-	trimStart := 0.0
-	if req.TrimStartSeconds != nil && *req.TrimStartSeconds > 0 {
-		trimStart = *req.TrimStartSeconds
+	trimStartTick := int64(0)
+	if req.TrimStartTick != nil {
+		trimStartTick = *req.TrimStartTick
 	}
-	item, err := scanTimelineClip(s.db.QueryRow(r.Context(), timelineClipReturningSQL(`
+	durationTicks := req.DurationTicks
+	if durationTicks == nil && shotDurationTicks != nil {
+		durationTicks = shotDurationTicks
+	}
+	sourceDurationTicks, trimStartTick, trimEndTick, resolvedDurationTicks, err := resolveTimelineClipTiming(
+		timebase, sourceDurationTicks, trimStartTick, req.TrimEndTick, durationTicks,
+	)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error(), nil, false)
+		return
+	}
+	if clipIndex < clipCount {
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE timeline_clips
+			SET clip_index = clip_index + 1
+			WHERE timeline_id = $1 AND clip_index >= $2
+		`, timeline.ID, clipIndex); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	var clipID string
+	if err := tx.QueryRow(r.Context(), `
 		INSERT INTO timeline_clips(
 			organization_id, project_id, timeline_id, storyboard_shot_id, video_artifact_id, video_media_file_id,
-			clip_index, title, enabled, source_storage_key, source_duration_seconds,
-			trim_start_seconds, trim_end_seconds, target_duration_seconds, notes, metadata
+			clip_index, title, enabled, source_storage_key, source_duration_ticks,
+			trim_start_tick, trim_end_tick, start_tick, end_tick, notes, metadata, manual_override, stale_state, edited_by, edited_at
 		)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
-		        $7, $8, $9, NULLIF($10, ''), $11, $12, $13, $14, NULLIF($15, ''), '{}')
-		RETURNING
-	`), project.OrganizationID, project.ID, timeline.ID, strings.TrimSpace(req.StoryboardShotID), videoArtifactID, videoMediaFileID,
-		clipIndex, title, enabled, sourceStorageKey, nullableFloatPtr(sourceDuration), trimStart, nullableFloatPtr(req.TrimEndSeconds),
-		nullableFloatPtr(req.TargetDurationSeconds), strings.TrimSpace(req.Notes)))
+		        $7, $8, $9, NULLIF($10, ''), $11, $12, $13, 0, $14, NULLIF($15, ''), '{}', true, 'fresh', $16, now())
+		RETURNING id::text
+	`, project.OrganizationID, project.ID, timeline.ID, strings.TrimSpace(req.StoryboardShotID), videoArtifactID, videoMediaFileID,
+		clipIndex, title, enabled, sourceStorageKey, nullableInt64Ptr(sourceDurationTicks), trimStartTick,
+		nullableInt64Ptr(trimEndTick), resolvedDurationTicks, strings.TrimSpace(req.Notes), principal.UserID).Scan(&clipID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := reflowTimelineClipTicks(r.Context(), tx, timeline.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := markTimelineEdited(r.Context(), tx, project.ID, timeline.ID, principal.UserID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	item, err := s.timelineClipByID(r, project.ID, timeline.ID, clipID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -370,6 +466,16 @@ func (s *Server) updateTimelineClip(w http.ResponseWriter, r *http.Request, prin
 	if !decode(w, r, &patch) {
 		return
 	}
+	timeline, err := s.timelineByID(r, project.ID, r.PathValue("timelineId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	timebase, err := projectTimelineTimebase(timeline)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "INVALID_TIMELINE_TIMEBASE", err.Error(), nil, false)
+		return
+	}
 	if raw, ok := patch["title"]; ok {
 		if value, ok := decodePatchString(w, r, raw, "title"); ok {
 			current.Title = value
@@ -384,29 +490,27 @@ func (s *Server) updateTimelineClip(w http.ResponseWriter, r *http.Request, prin
 			return
 		}
 	}
-	if raw, ok := patch["trimStartSeconds"]; ok {
-		if value, ok := decodePatchFloat(w, r, raw, "trimStartSeconds"); ok {
-			if value < 0 {
-				value = 0
-			}
-			current.TrimStartSeconds = value
+	if raw, ok := patch["trimStartTick"]; ok {
+		if value, ok := decodePatchInt64(w, r, raw, "trimStartTick"); ok {
+			current.TrimStartTick = value
 		} else {
 			return
 		}
 	}
-	if raw, ok := patch["trimEndSeconds"]; ok {
-		value, ok := decodePatchNullableFloat(w, r, raw, "trimEndSeconds")
+	if raw, ok := patch["trimEndTick"]; ok {
+		value, ok := decodePatchNullableInt64(w, r, raw, "trimEndTick")
 		if !ok {
 			return
 		}
-		current.TrimEndSeconds = value
+		current.TrimEndTick = value
 	}
-	if raw, ok := patch["targetDurationSeconds"]; ok {
-		value, ok := decodePatchNullableFloat(w, r, raw, "targetDurationSeconds")
+	durationTicks := current.DurationTicks
+	if raw, ok := patch["durationTicks"]; ok {
+		value, ok := decodePatchInt64(w, r, raw, "durationTicks")
 		if !ok {
 			return
 		}
-		current.TargetDurationSeconds = value
+		durationTicks = value
 	}
 	if raw, ok := patch["notes"]; ok {
 		value, ok := decodePatchNullableString(w, r, raw, "notes")
@@ -415,18 +519,50 @@ func (s *Server) updateTimelineClip(w http.ResponseWriter, r *http.Request, prin
 		}
 		current.Notes = value
 	}
-	item, err := scanTimelineClip(s.db.QueryRow(r.Context(), timelineClipReturningSQL(`
+	_, trimStartTick, trimEndTick, durationTicks, err := resolveTimelineClipTiming(
+		timebase, current.SourceDurationTicks, current.TrimStartTick, current.TrimEndTick, &durationTicks,
+	)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error(), nil, false)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err := tx.Exec(r.Context(), `
 		UPDATE timeline_clips
 		SET title = $4,
 		    enabled = $5,
-		    trim_start_seconds = $6,
-		    trim_end_seconds = $7,
-		    target_duration_seconds = $8,
-		    notes = $9
+		    trim_start_tick = $6,
+		    trim_end_tick = $7,
+		    end_tick = start_tick + $8,
+		    notes = $9,
+		    manual_override = true,
+		    stale_state = 'fresh',
+		    edited_by = $10,
+		    edited_at = now()
 		WHERE project_id = $1 AND timeline_id = $2 AND id = $3
-		RETURNING
-	`), project.ID, r.PathValue("timelineId"), r.PathValue("clipId"), current.Title, current.Enabled,
-		current.TrimStartSeconds, nullableFloatPtr(current.TrimEndSeconds), nullableFloatPtr(current.TargetDurationSeconds), nullableStringPtr(current.Notes)))
+	`, project.ID, r.PathValue("timelineId"), r.PathValue("clipId"), current.Title, current.Enabled,
+		trimStartTick, nullableInt64Ptr(trimEndTick), durationTicks, nullableStringPtr(current.Notes), principal.UserID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := reflowTimelineClipTicks(r.Context(), tx, timeline.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := markTimelineEdited(r.Context(), tx, project.ID, timeline.ID, principal.UserID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	item, err := s.timelineClipByID(r, project.ID, timeline.ID, r.PathValue("clipId"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -439,7 +575,13 @@ func (s *Server) deleteTimelineClip(w http.ResponseWriter, r *http.Request, prin
 	if !ok {
 		return
 	}
-	tag, err := s.db.Exec(r.Context(), `
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	tag, err := tx.Exec(r.Context(), `
 		DELETE FROM timeline_clips
 		WHERE project_id = $1 AND timeline_id = $2 AND id = $3
 	`, project.ID, r.PathValue("timelineId"), r.PathValue("clipId"))
@@ -449,6 +591,22 @@ func (s *Server) deleteTimelineClip(w http.ResponseWriter, r *http.Request, prin
 	}
 	if tag.RowsAffected() == 0 {
 		s.writeError(w, r, pgx.ErrNoRows)
+		return
+	}
+	if err := reindexTimelineClips(r.Context(), tx, r.PathValue("timelineId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := reflowTimelineClipTicks(r.Context(), tx, r.PathValue("timelineId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := markTimelineEdited(r.Context(), tx, project.ID, r.PathValue("timelineId"), principal.UserID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"deleted": true, "clipId": r.PathValue("clipId")}, nil)
@@ -496,6 +654,18 @@ func (s *Server) reorderTimelineClips(w http.ResponseWriter, r *http.Request, pr
 			s.writeError(w, r, pgx.ErrNoRows)
 			return
 		}
+	}
+	if err := reindexTimelineClips(r.Context(), tx, r.PathValue("timelineId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := reflowTimelineClipTicks(r.Context(), tx, r.PathValue("timelineId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := markTimelineEdited(r.Context(), tx, project.ID, r.PathValue("timelineId"), principal.UserID); err != nil {
+		s.writeError(w, r, err)
+		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
@@ -620,6 +790,10 @@ func (s *Server) activateFinalVideo(w http.ResponseWriter, r *http.Request, prin
 	if !ok {
 		return
 	}
+	if _, err := s.requireFinalVideoProductionReady(r.Context(), project.ID, r.PathValue("versionId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
@@ -696,10 +870,19 @@ func (s *Server) deleteFinalVideo(w http.ResponseWriter, r *http.Request, princi
 }
 
 func (s *Server) createTimelineClipsFromStoryboard(r *http.Request, tx pgx.Tx, project Project, timelineID string) error {
+	timebase := storyboardtiming.Timebase{
+		TicksPerSecond: project.TimelineTimebase,
+		FPSNumerator:   int64(project.FPSNumerator),
+		FPSDenominator: int64(project.FPSDenominator),
+	}
+	if err := timebase.Validate(); err != nil {
+		return err
+	}
 	rows, err := tx.Query(r.Context(), `
 		SELECT s.id::text, COALESCE(s.video_artifact_id::text, ''), COALESCE(s.video_media_file_id::text, ''),
 		       COALESCE(s.video_storage_key, mf.storage_key, va.storage_key, ''),
-		       COALESCE(mf.duration_seconds, s.duration_seconds, 0)::float8,
+		       mf.duration_seconds::float8,
+		       s.planned_duration_ticks,
 		       COALESCE(s.title, s.visual, '')
 		FROM storyboard_shots s
 		LEFT JOIN media_files mf ON mf.id = s.video_media_file_id
@@ -713,34 +896,71 @@ func (s *Server) createTimelineClipsFromStoryboard(r *http.Request, tx pgx.Tx, p
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	index := 0
+	type sourceShot struct {
+		shotID               string
+		artifactID           string
+		mediaFileID          string
+		storageKey           string
+		title                string
+		mediaDuration        sql.NullFloat64
+		plannedDurationTicks int64
+	}
+	shots := make([]sourceShot, 0)
 	for rows.Next() {
-		var shotID, artifactID, mediaFileID, storageKey, title string
-		var duration sql.NullFloat64
-		if err := rows.Scan(&shotID, &artifactID, &mediaFileID, &storageKey, &duration, &title); err != nil {
+		var shot sourceShot
+		if err := rows.Scan(
+			&shot.shotID,
+			&shot.artifactID,
+			&shot.mediaFileID,
+			&shot.storageKey,
+			&shot.mediaDuration,
+			&shot.plannedDurationTicks,
+			&shot.title,
+		); err != nil {
+			rows.Close()
 			return err
 		}
-		if strings.TrimSpace(title) == "" {
-			title = "镜头片段"
+		shots = append(shots, shot)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	startTick := int64(0)
+	for index, shot := range shots {
+		if strings.TrimSpace(shot.title) == "" {
+			shot.title = "镜头片段"
 		}
+		sourceDurationTicks := shot.plannedDurationTicks
+		if shot.mediaDuration.Valid && shot.mediaDuration.Float64 > 0 {
+			sourceDurationTicks = timebase.QuantizeTickNearest(timebase.SecondsToTicks(shot.mediaDuration.Float64))
+		}
+		if sourceDurationTicks <= 0 {
+			sourceDurationTicks = shot.plannedDurationTicks
+		}
+		endTick := startTick + shot.plannedDurationTicks
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO timeline_clips(
 				organization_id, project_id, timeline_id, storyboard_shot_id, video_artifact_id, video_media_file_id,
-				clip_index, title, enabled, source_storage_key, source_duration_seconds, metadata
+				clip_index, title, enabled, source_storage_key, source_duration_ticks,
+				trim_start_tick, trim_end_tick, start_tick, end_tick, metadata, stale_state
 			)
-			VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, $7, $8, true, $9, $10, '{}')
-		`, project.OrganizationID, project.ID, timelineID, shotID, artifactID, mediaFileID, index, title, storageKey, nullableFloatFromNull(duration)); err != nil {
+			VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, $7, $8, true, $9, $10, 0, $10, $11, $12, '{}', 'fresh')
+		`, project.OrganizationID, project.ID, timelineID, shot.shotID, shot.artifactID, shot.mediaFileID, index, shot.title, shot.storageKey,
+			sourceDurationTicks, startTick, endTick); err != nil {
 			return err
 		}
-		index++
+		startTick = endTick
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Server) timelineByID(r *http.Request, projectID, timelineID string) (ProjectTimeline, error) {
 	return scanProjectTimeline(s.db.QueryRow(r.Context(), `
 		SELECT id, organization_id, project_id, workflow_run_id::text, title, status, aspect_ratio, resolution,
+		       timeline_timebase, fps_numerator, fps_denominator,
 		       metadata, created_by::text, edited_by::text, created_at, updated_at, edited_at
 		FROM project_timelines
 		WHERE project_id = $1 AND id = $2
@@ -753,6 +973,7 @@ func scanProjectTimeline(row rowScan) (ProjectTimeline, error) {
 	var editedAt sql.NullTime
 	err := row.Scan(
 		&item.ID, &item.OrganizationID, &item.ProjectID, &workflowRunID, &item.Title, &item.Status, &item.AspectRatio, &item.Resolution,
+		&item.TimelineTimebase, &item.FPSNumerator, &item.FPSDenominator,
 		&item.Metadata, &createdBy, &editedBy, &item.CreatedAt, &item.UpdatedAt, &editedAt,
 	)
 	item.WorkflowRunID = stringPtrFromNull(workflowRunID)
@@ -766,10 +987,11 @@ func scanProjectTimeline(row rowScan) (ProjectTimeline, error) {
 
 func (s *Server) timelineClips(r *http.Request, projectID, timelineID string) ([]TimelineClip, error) {
 	rows, err := s.db.Query(r.Context(), `
-		SELECT `+timelineClipColumns()+`
-		FROM timeline_clips
-		WHERE project_id = $1 AND timeline_id = $2
-		ORDER BY clip_index ASC
+		SELECT `+timelineClipColumns("c", "t")+`
+		FROM timeline_clips c
+		JOIN project_timelines t ON t.id = c.timeline_id
+		WHERE c.project_id = $1 AND c.timeline_id = $2
+		ORDER BY c.clip_index ASC
 	`, projectID, timelineID)
 	if err != nil {
 		return nil, err
@@ -788,33 +1010,36 @@ func (s *Server) timelineClips(r *http.Request, projectID, timelineID string) ([
 
 func (s *Server) timelineClipByID(r *http.Request, projectID, timelineID, clipID string) (TimelineClip, error) {
 	return scanTimelineClip(s.db.QueryRow(r.Context(), `
-		SELECT `+timelineClipColumns()+`
-		FROM timeline_clips
-		WHERE project_id = $1 AND timeline_id = $2 AND id = $3
+		SELECT `+timelineClipColumns("c", "t")+`
+		FROM timeline_clips c
+		JOIN project_timelines t ON t.id = c.timeline_id
+		WHERE c.project_id = $1 AND c.timeline_id = $2 AND c.id = $3
 	`, projectID, timelineID, clipID))
 }
 
-func timelineClipReturningSQL(prefix string) string {
-	return prefix + timelineClipColumns()
-}
-
-func timelineClipColumns() string {
-	return `
-		id, organization_id, project_id, timeline_id, storyboard_shot_id::text, video_artifact_id::text,
-		video_media_file_id::text, clip_index, title, enabled, source_storage_key,
-		source_duration_seconds::float8, trim_start_seconds::float8, trim_end_seconds::float8,
-		target_duration_seconds::float8, notes, metadata, created_at, updated_at
-	`
+func timelineClipColumns(clipAlias, timelineAlias string) string {
+	return fmt.Sprintf(`
+		%[1]s.id, %[1]s.organization_id, %[1]s.project_id, %[1]s.timeline_id,
+		%[1]s.storyboard_shot_id::text, %[1]s.video_artifact_id::text,
+		%[1]s.video_media_file_id::text, %[1]s.clip_index, %[1]s.title, %[1]s.enabled, %[1]s.source_storage_key,
+		%[1]s.start_tick, %[1]s.end_tick, (%[1]s.end_tick - %[1]s.start_tick),
+		%[1]s.source_duration_ticks, %[1]s.trim_start_tick, %[1]s.trim_end_tick,
+		%[2]s.timeline_timebase, %[2]s.fps_numerator, %[2]s.fps_denominator,
+		%[1]s.notes, %[1]s.metadata, %[1]s.created_at, %[1]s.updated_at
+	`, clipAlias, timelineAlias)
 }
 
 func scanTimelineClip(row rowScan) (TimelineClip, error) {
 	var item TimelineClip
 	var storyboardShotID, artifactID, mediaFileID, storageKey, notes sql.NullString
-	var sourceDuration, trimEnd, targetDuration sql.NullFloat64
+	var sourceDuration, trimEnd sql.NullInt64
 	err := row.Scan(
 		&item.ID, &item.OrganizationID, &item.ProjectID, &item.TimelineID, &storyboardShotID, &artifactID,
 		&mediaFileID, &item.ClipIndex, &item.Title, &item.Enabled, &storageKey,
-		&sourceDuration, &item.TrimStartSeconds, &trimEnd, &targetDuration, &notes, &item.Metadata, &item.CreatedAt, &item.UpdatedAt,
+		&item.StartTick, &item.EndTick, &item.DurationTicks,
+		&sourceDuration, &item.TrimStartTick, &trimEnd,
+		&item.TimelineTimebase, &item.FPSNumerator, &item.FPSDenominator,
+		&notes, &item.Metadata, &item.CreatedAt, &item.UpdatedAt,
 	)
 	item.StoryboardShotID = stringPtrFromNull(storyboardShotID)
 	item.VideoArtifactID = stringPtrFromNull(artifactID)
@@ -822,14 +1047,12 @@ func scanTimelineClip(row rowScan) (TimelineClip, error) {
 	item.SourceStorageKey = stringPtrFromNull(storageKey)
 	item.Notes = stringPtrFromNull(notes)
 	if sourceDuration.Valid {
-		item.SourceDurationSeconds = &sourceDuration.Float64
+		item.SourceDurationTicks = &sourceDuration.Int64
 	}
 	if trimEnd.Valid {
-		item.TrimEndSeconds = &trimEnd.Float64
+		item.TrimEndTick = &trimEnd.Int64
 	}
-	if targetDuration.Valid {
-		item.TargetDurationSeconds = &targetDuration.Float64
-	}
+	item.attachDerivedSeconds()
 	return item, err
 }
 
@@ -876,18 +1099,23 @@ func (s *Server) timelineClipDetails(r *http.Request, projectID, timelineID stri
 
 func (s *Server) finalVideoVersions(r *http.Request, projectID, timelineID string) ([]FinalVideoVersion, error) {
 	query := `
-		SELECT id, organization_id, project_id, timeline_id, workflow_run_id::text, version, title, status,
-		       artifact_id::text, media_file_id::text, storage_key, duration_seconds::float8,
-		       resolution, aspect_ratio, compose_settings, metadata, created_by::text, created_at
-		FROM final_video_versions
-		WHERE project_id = $1
+		SELECT version_row.id, version_row.organization_id, version_row.project_id, version_row.timeline_id,
+		       version_row.workflow_run_id::text, version_row.version, version_row.title, version_row.status,
+		       version_row.artifact_id::text, version_row.media_file_id::text, version_row.storage_key, version_row.duration_ticks,
+		       timeline.timeline_timebase, timeline.fps_numerator, timeline.fps_denominator,
+		       version_row.resolution, version_row.aspect_ratio, version_row.native_audio_status, version_row.production_readiness,
+		       version_row.compose_settings, version_row.metadata,
+		       version_row.created_by::text, version_row.created_at
+		FROM final_video_versions version_row
+		JOIN project_timelines timeline ON timeline.id = version_row.timeline_id
+		WHERE version_row.project_id = $1
 	`
 	args := []any{projectID}
 	if strings.TrimSpace(timelineID) != "" {
-		query += " AND timeline_id = $2"
+		query += " AND version_row.timeline_id = $2"
 		args = append(args, timelineID)
 	}
-	query += " ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'ready' THEN 1 ELSE 2 END, version DESC, created_at DESC"
+	query += " ORDER BY CASE version_row.status WHEN 'active' THEN 0 WHEN 'ready' THEN 1 ELSE 2 END, version_row.version DESC, version_row.created_at DESC"
 	rows, err := s.db.Query(r.Context(), query, args...)
 	if err != nil {
 		return nil, err
@@ -907,11 +1135,16 @@ func (s *Server) finalVideoVersions(r *http.Request, projectID, timelineID strin
 
 func (s *Server) finalVideoVersionByID(r *http.Request, projectID, versionID string) (FinalVideoVersion, error) {
 	item, err := scanFinalVideoVersion(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, timeline_id, workflow_run_id::text, version, title, status,
-		       artifact_id::text, media_file_id::text, storage_key, duration_seconds::float8,
-		       resolution, aspect_ratio, compose_settings, metadata, created_by::text, created_at
-		FROM final_video_versions
-		WHERE project_id = $1 AND id = $2
+		SELECT version_row.id, version_row.organization_id, version_row.project_id, version_row.timeline_id,
+		       version_row.workflow_run_id::text, version_row.version, version_row.title, version_row.status,
+		       version_row.artifact_id::text, version_row.media_file_id::text, version_row.storage_key, version_row.duration_ticks,
+		       timeline.timeline_timebase, timeline.fps_numerator, timeline.fps_denominator,
+		       version_row.resolution, version_row.aspect_ratio, version_row.native_audio_status, version_row.production_readiness,
+		       version_row.compose_settings, version_row.metadata,
+		       version_row.created_by::text, version_row.created_at
+		FROM final_video_versions version_row
+		JOIN project_timelines timeline ON timeline.id = version_row.timeline_id
+		WHERE version_row.project_id = $1 AND version_row.id = $2
 	`, projectID, versionID))
 	if err != nil {
 		return FinalVideoVersion{}, err
@@ -923,10 +1156,12 @@ func (s *Server) finalVideoVersionByID(r *http.Request, projectID, versionID str
 func scanFinalVideoVersion(row rowScan) (FinalVideoVersion, error) {
 	var item FinalVideoVersion
 	var workflowRunID, artifactID, mediaFileID, storageKey, createdBy sql.NullString
-	var duration sql.NullFloat64
+	var duration sql.NullInt64
 	err := row.Scan(
 		&item.ID, &item.OrganizationID, &item.ProjectID, &item.TimelineID, &workflowRunID, &item.Version, &item.Title, &item.Status,
-		&artifactID, &mediaFileID, &storageKey, &duration, &item.Resolution, &item.AspectRatio, &item.ComposeSettings,
+		&artifactID, &mediaFileID, &storageKey, &duration,
+		&item.TimelineTimebase, &item.FPSNumerator, &item.FPSDenominator,
+		&item.Resolution, &item.AspectRatio, &item.NativeAudioStatus, &item.ProductionReadiness, &item.ComposeSettings,
 		&item.Metadata, &createdBy, &item.CreatedAt,
 	)
 	item.WorkflowRunID = stringPtrFromNull(workflowRunID)
@@ -935,7 +1170,9 @@ func scanFinalVideoVersion(row rowScan) (FinalVideoVersion, error) {
 	item.StorageKey = stringPtrFromNull(storageKey)
 	item.CreatedBy = stringPtrFromNull(createdBy)
 	if duration.Valid {
-		item.DurationSeconds = &duration.Float64
+		item.DurationTicks = &duration.Int64
+		seconds := float64(duration.Int64) / float64(item.TimelineTimebase)
+		item.DurationSeconds = &seconds
 	}
 	return item, err
 }
@@ -945,6 +1182,137 @@ func (s *Server) attachFinalVideoPreview(r *http.Request, item *FinalVideoVersio
 		return
 	}
 	item.PreviewURL = s.previewURLForStorageKey(r, *item.StorageKey)
+}
+
+func projectTimelineTimebase(timeline ProjectTimeline) (storyboardtiming.Timebase, error) {
+	timebase := storyboardtiming.Timebase{
+		TicksPerSecond: timeline.TimelineTimebase,
+		FPSNumerator:   int64(timeline.FPSNumerator),
+		FPSDenominator: int64(timeline.FPSDenominator),
+	}
+	return timebase, timebase.Validate()
+}
+
+func resolveTimelineClipTiming(
+	timebase storyboardtiming.Timebase,
+	sourceDurationTicks *int64,
+	trimStartTick int64,
+	trimEndTick *int64,
+	durationTicks *int64,
+) (*int64, int64, *int64, int64, error) {
+	if err := timebase.Validate(); err != nil {
+		return nil, 0, nil, 0, err
+	}
+	if trimStartTick < 0 || !timebase.IsFrameAligned(trimStartTick) {
+		return nil, 0, nil, 0, fmt.Errorf("trimStartTick must be non-negative and frame-aligned")
+	}
+	if sourceDurationTicks != nil {
+		if *sourceDurationTicks <= 0 || !timebase.IsFrameAligned(*sourceDurationTicks) {
+			return nil, 0, nil, 0, fmt.Errorf("sourceDurationTicks must be positive and frame-aligned")
+		}
+		value := *sourceDurationTicks
+		sourceDurationTicks = &value
+	}
+	if trimEndTick == nil && sourceDurationTicks != nil {
+		value := *sourceDurationTicks
+		trimEndTick = &value
+	}
+	if trimEndTick != nil {
+		if *trimEndTick <= trimStartTick || !timebase.IsFrameAligned(*trimEndTick) {
+			return nil, 0, nil, 0, fmt.Errorf("trimEndTick must be after trimStartTick and frame-aligned")
+		}
+		if sourceDurationTicks != nil && *trimEndTick > *sourceDurationTicks {
+			return nil, 0, nil, 0, fmt.Errorf("trimEndTick cannot exceed sourceDurationTicks")
+		}
+		value := *trimEndTick
+		trimEndTick = &value
+	}
+	resolvedDuration := int64(0)
+	if durationTicks != nil {
+		resolvedDuration = *durationTicks
+	} else if trimEndTick != nil {
+		resolvedDuration = *trimEndTick - trimStartTick
+	} else if sourceDurationTicks != nil {
+		resolvedDuration = *sourceDurationTicks - trimStartTick
+	}
+	if resolvedDuration <= 0 || !timebase.IsFrameAligned(resolvedDuration) {
+		return nil, 0, nil, 0, fmt.Errorf("durationTicks must be positive and frame-aligned")
+	}
+	return sourceDurationTicks, trimStartTick, trimEndTick, resolvedDuration, nil
+}
+
+func reindexTimelineClips(ctx context.Context, tx pgx.Tx, timelineID string) error {
+	if _, err := tx.Exec(ctx, `SET CONSTRAINTS timeline_clips_timeline_index_unique DEFERRED`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		WITH ordered AS (
+			SELECT id, ROW_NUMBER() OVER (ORDER BY clip_index, id) - 1 AS next_index
+			FROM timeline_clips
+			WHERE timeline_id = $1
+		)
+		UPDATE timeline_clips clip
+		SET clip_index = ordered.next_index
+		FROM ordered
+		WHERE clip.id = ordered.id
+	`, timelineID)
+	return err
+}
+
+func reflowTimelineClipTicks(ctx context.Context, tx pgx.Tx, timelineID string) error {
+	_, err := tx.Exec(ctx, `
+		WITH durations AS (
+			SELECT id, clip_index, GREATEST(end_tick - start_tick, 1) AS duration_ticks
+			FROM timeline_clips
+			WHERE timeline_id = $1
+		), positioned AS (
+			SELECT id,
+			       COALESCE(SUM(duration_ticks) OVER (
+			         ORDER BY clip_index, id
+			         ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+			       ), 0)::BIGINT AS next_start_tick,
+			       duration_ticks
+			FROM durations
+		)
+		UPDATE timeline_clips clip
+		SET start_tick = positioned.next_start_tick,
+		    end_tick = positioned.next_start_tick + positioned.duration_ticks
+		FROM positioned
+		WHERE clip.id = positioned.id
+	`, timelineID)
+	return err
+}
+
+func markTimelineEdited(ctx context.Context, tx pgx.Tx, projectID, timelineID, userID string) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE project_timelines
+		SET manual_override = true,
+		    stale_state = 'fresh',
+		    edited_by = NULLIF($3, '')::uuid,
+		    edited_at = now(),
+		    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('timingEditedAt', now())
+		WHERE project_id = $1 AND id = $2
+	`, projectID, timelineID, userID); err != nil {
+		return err
+	}
+	return production.MarkFinalVideoStale(ctx, tx, projectID, "")
+}
+
+func (item *TimelineClip) attachDerivedSeconds() {
+	if item == nil || item.TimelineTimebase <= 0 {
+		return
+	}
+	denominator := float64(item.TimelineTimebase)
+	item.DurationSeconds = float64(item.DurationTicks) / denominator
+	item.TrimStartSeconds = float64(item.TrimStartTick) / denominator
+	if item.SourceDurationTicks != nil {
+		value := float64(*item.SourceDurationTicks) / denominator
+		item.SourceDurationSeconds = &value
+	}
+	if item.TrimEndTick != nil {
+		value := float64(*item.TrimEndTick) / denominator
+		item.TrimEndSeconds = &value
+	}
 }
 
 func validTimelineStatus(value string) bool {
@@ -965,18 +1333,11 @@ func defaultAPIString(values ...string) string {
 	return ""
 }
 
-func nullableFloatPtr(value *float64) any {
+func nullableInt64Ptr(value *int64) any {
 	if value == nil {
 		return nil
 	}
 	return *value
-}
-
-func nullableFloatFromNull(value sql.NullFloat64) any {
-	if !value.Valid {
-		return nil
-	}
-	return value.Float64
 }
 
 func nullableStringPtr(value *string) any {
@@ -1015,20 +1376,20 @@ func decodePatchBool(w http.ResponseWriter, r *http.Request, raw json.RawMessage
 	return value, true
 }
 
-func decodePatchFloat(w http.ResponseWriter, r *http.Request, raw json.RawMessage, field string) (float64, bool) {
-	var value float64
+func decodePatchInt64(w http.ResponseWriter, r *http.Request, raw json.RawMessage, field string) (int64, bool) {
+	var value int64
 	if err := json.Unmarshal(raw, &value); err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", field+" must be a number", nil, false)
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", field+" must be an integer", nil, false)
 		return 0, false
 	}
 	return value, true
 }
 
-func decodePatchNullableFloat(w http.ResponseWriter, r *http.Request, raw json.RawMessage, field string) (*float64, bool) {
+func decodePatchNullableInt64(w http.ResponseWriter, r *http.Request, raw json.RawMessage, field string) (*int64, bool) {
 	if isJSONNull(raw) {
 		return nil, true
 	}
-	value, ok := decodePatchFloat(w, r, raw, field)
+	value, ok := decodePatchInt64(w, r, raw, field)
 	if !ok {
 		return nil, false
 	}

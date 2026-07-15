@@ -10,8 +10,8 @@ import { SessionSelector } from "./components/session-selector";
 import { MessageList } from "./components/message-list";
 import { MessageInput } from "./components/message-input";
 import { ASSISTANT_QUICK_ACTIONS } from "./components/quick-actions";
-import { AgentTaskPanel } from "./components/agent-task-panel";
-import type { AgentPermissionMode } from "@/lib/types";
+import { AgentTaskConversationActivity } from "./components/agent-task-panel";
+import type { AgentPermissionMode, AgentTask } from "@/lib/types";
 import { Bot, PanelRightClose } from "lucide-react";
 
 interface AgentDrawerProps {
@@ -35,9 +35,29 @@ export function AgentDrawer({ projectId }: AgentDrawerProps) {
     setAgentType,
   } = useAgentDrawerStore();
 
-  const { messages, isLoading } = useAgentChat(projectId, currentSessionId);
-  const agentTasks = useAgentTasks(projectId, currentSessionId);
+  const agentTasks = useAgentTasks(projectId, currentSessionId, isOpen);
+  const { messages, isLoading } = useAgentChat(projectId, currentSessionId, isOpen, agentTasks.isActive);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>(() => readStoredPermissionMode());
+  const taskActivityKey = agentTasks.task ? agentTaskActivityKey(agentTasks.task) : "";
+  const taskActivity =
+    agentTasks.task || agentTasks.isLoading ? (
+      <AgentTaskConversationActivity
+        projectId={projectId}
+        task={agentTasks.task}
+        isLoading={agentTasks.isLoading}
+        onApproveStep={agentTasks.approveStep}
+        onRejectStep={agentTasks.rejectStep}
+        onCancelTask={agentTasks.cancelTask}
+        onResumeTask={agentTasks.resumeTask}
+        busy={
+          agentTasks.isCreatingTask ||
+          agentTasks.isApprovingStep ||
+          agentTasks.isRejectingStep ||
+          agentTasks.isCancellingTask ||
+          agentTasks.isResumingTask
+        }
+      />
+    ) : null;
 
   useEffect(() => {
     setAgentType("project_agent");
@@ -109,24 +129,8 @@ export function AgentDrawer({ projectId }: AgentDrawerProps) {
         <MessageList
           messages={messages}
           isLoading={isLoading || agentTasks.isCreatingTask}
-          activity={
-            <AgentTaskPanel
-              projectId={projectId}
-              task={agentTasks.task}
-              isLoading={agentTasks.isLoading}
-              onApproveStep={agentTasks.approveStep}
-              onRejectStep={agentTasks.rejectStep}
-              onCancelTask={agentTasks.cancelTask}
-              onResumeTask={agentTasks.resumeTask}
-              busy={
-                agentTasks.isCreatingTask ||
-                agentTasks.isApprovingStep ||
-                agentTasks.isRejectingStep ||
-                agentTasks.isCancellingTask ||
-                agentTasks.isResumingTask
-              }
-            />
-          }
+          activityKey={taskActivityKey}
+          activity={taskActivity}
         />
 
         <div className="shrink-0 border-t px-5 py-4">
@@ -153,4 +157,17 @@ function readStoredPermissionMode(): AgentPermissionMode {
 
 function isAgentPermissionMode(value: unknown): value is AgentPermissionMode {
   return value === "require_approval" || value === "auto_approve" || value === "full_access";
+}
+
+function agentTaskActivityKey(task: AgentTask) {
+  const stepKey = (task.steps || [])
+    .map((step) => {
+      const progress = step.output?.progress;
+      const progressKey = progress && typeof progress === "object" && !Array.isArray(progress)
+        ? `${String(progress.updatedAt || "")}:${String(progress.textLength || "")}:${String(progress.done || "")}`
+        : "";
+      return `${step.id}:${step.status}:${step.updatedAt}:${step.completedAt || ""}:${progressKey}`;
+    })
+    .join("|");
+  return `${task.id}:${task.status}:${task.updatedAt}:${task.completedAt || ""}:${stepKey}`;
 }

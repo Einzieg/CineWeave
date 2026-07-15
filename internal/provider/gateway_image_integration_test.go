@@ -37,7 +37,7 @@ func TestGatewayImageRuntimeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	upstream := httptest.NewServer(openAICompatibleImageMock(t))
 	defer upstream.Close()
@@ -123,6 +123,10 @@ func seedGatewayImageIntegrationData(t *testing.T, ctx context.Context, pool *pg
 	if err := pool.QueryRow(ctx, `INSERT INTO users(email, display_name) VALUES ($1, $2) RETURNING id`, "gateway-image-"+suffix+"@example.test", "Gateway Image Test").Scan(&userID); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
 	if _, err := pool.Exec(ctx, `INSERT INTO organization_members(organization_id, user_id) VALUES ($1, $2)`, orgID, userID); err != nil {
 		t.Fatalf("insert organization member: %v", err)
 	}
@@ -339,6 +343,27 @@ func (s *memoryObjectStorage) PutBytes(ctx context.Context, key string, body []b
 		ContentHash: "sha256:" + hex.EncodeToString(sum[:]),
 		ByteSize:    int64(len(bodyCopy)),
 	}, nil
+}
+
+func (s *memoryObjectStorage) PutFile(ctx context.Context, key, filePath, contentType string) (storage.PutResult, error) {
+	body, err := os.ReadFile(filePath)
+	if err != nil {
+		return storage.PutResult{}, err
+	}
+	return s.PutBytes(ctx, key, body, contentType)
+}
+
+func (s *memoryObjectStorage) GetObject(_ context.Context, key string, maxBytes int64) ([]byte, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	object, ok := s.objects[key]
+	if !ok {
+		return nil, "", fmt.Errorf("object %s was not found", key)
+	}
+	if maxBytes > 0 && int64(len(object.body)) > maxBytes {
+		return nil, "", fmt.Errorf("object %s exceeds maxBytes", key)
+	}
+	return append([]byte(nil), object.body...), object.contentType, nil
 }
 
 func (s *memoryObjectStorage) get(key string) (memoryObject, bool) {

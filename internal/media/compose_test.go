@@ -55,7 +55,7 @@ func TestComposeClipsUploadsFinalVideo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComposeClipsWithStore: %v", err)
 	}
-	if result.StorageKey == "" || result.MimeType != "video/mp4" || result.ByteSize <= 0 || !strings.HasPrefix(result.ContentHash, "sha256:") || result.Width != 1280 || result.Height != 720 {
+	if result.StorageKey == "" || result.MimeType != "video/mp4" || result.ByteSize <= 0 || !strings.HasPrefix(result.ContentHash, "sha256:") || result.Width != 1280 || result.Height != 720 || !result.Probe.HasAudio {
 		t.Fatalf("result = %+v", result)
 	}
 	if _, ok := store.objects[result.StorageKey]; !ok {

@@ -41,22 +41,22 @@ func TestNormalizeStoryboardShotsInvalidJSONFallback(t *testing.T) {
 	}
 }
 
-func TestNormalizeStoryboardShotsMaxThree(t *testing.T) {
+func TestNormalizeStoryboardShotsDoesNotApplyLegacyCountCap(t *testing.T) {
 	shots := NormalizeStoryboardShots([]StoryboardShot{
 		{Visual: "1"},
 		{Visual: "2"},
 		{Visual: "3"},
 		{Visual: "4"},
 	}, "fallback")
-	if len(shots) != 3 {
-		t.Fatalf("len = %d, want 3", len(shots))
+	if len(shots) != 4 {
+		t.Fatalf("len = %d, want all 4 shots", len(shots))
 	}
 }
 
 func TestNormalizeStoryboardShotsPromptFallbacks(t *testing.T) {
 	shots := NormalizeStoryboardShots([]StoryboardShot{{Duration: 20}}, "fallback scene")
 	shot := shots[0]
-	if shot.Duration != maxShotDuration || shot.Visual != "fallback scene" || shot.ImagePrompt != "fallback scene" || shot.VideoPrompt != "fallback scene" {
+	if shot.Duration != 20 || shot.Visual != "fallback scene" || shot.ImagePrompt != "fallback scene" || shot.VideoPrompt != "fallback scene" {
 		t.Fatalf("fallbacks = %+v", shot)
 	}
 }

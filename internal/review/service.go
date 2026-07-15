@@ -46,7 +46,7 @@ func BuildProjectReviewContext(ctx context.Context, db *pgxpool.Pool, projectID 
 	scenes, err := queryJSON(`
 		SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.scene_index, t.id), '[]'::jsonb)
 		FROM (
-			SELECT id, script_id, script_version_id, scene_no, title, summary, review_status, manual_override, stale_state
+			SELECT id, script_id, script_version_id, scene_index, scene_no, title, summary, review_status, manual_override, stale_state
 			FROM script_scenes
 			WHERE project_id = $1
 			LIMIT 80
@@ -71,7 +71,8 @@ func BuildProjectReviewContext(ctx context.Context, db *pgxpool.Pool, projectID 
 	shots, err := queryJSON(`
 		SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.shot_index, t.id), '[]'::jsonb)
 		FROM (
-			SELECT id, script_scene_id, shot_no, visual, duration_seconds, review_status, stale_state,
+			SELECT id, script_scene_id, shot_index, shot_no, visual, start_tick, end_tick,
+			       planned_duration_ticks, review_status, stale_state,
 			       image_status, video_status, image_artifact_id, video_artifact_id
 			FROM storyboard_shots
 			WHERE project_id = $1 AND deleted_at IS NULL
@@ -85,7 +86,7 @@ func BuildProjectReviewContext(ctx context.Context, db *pgxpool.Pool, projectID 
 		SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.created_at, t.id), '[]'::jsonb)
 		FROM (
 			SELECT id, storyboard_shot_id, asset_id, requirement_type, role_in_shot, pose, expression, action,
-			       status, review_status, stale_state, derived_storage_key
+			       status, review_status, stale_state, derived_storage_key, created_at
 			FROM shot_asset_requirements
 			WHERE project_id = $1
 			LIMIT 160

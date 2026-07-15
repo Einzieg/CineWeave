@@ -16,6 +16,13 @@ type novelChapterScope struct {
 	SectionIndex int
 }
 
+type novelChapterRangeScope struct {
+	VolumeIndex       int
+	StartSectionIndex int
+	EndSectionIndex   int
+	Limit             int
+}
+
 type novelChapterScopeCandidate struct {
 	ID            string
 	SourceID      string
@@ -32,6 +39,8 @@ var (
 	sourceScopeNumberPattern  = `[0-9０-９一二两三四五六七八九十百千万亿〇零壹贰叁肆伍陆柒捌玖拾佰仟]+`
 	sourceScopeVolumePattern  = regexp.MustCompile(`(?i)(?:第\s*)?(` + sourceScopeNumberPattern + `)\s*(?:卷|部|篇)|(?:卷|部|篇)\s*(` + sourceScopeNumberPattern + `)`)
 	sourceScopeSectionPattern = regexp.MustCompile(`(?i)(?:第\s*)?(` + sourceScopeNumberPattern + `)\s*(?:章|节|回|幕|集|话)|(?:chapter|scene|episode)\s+([0-9ivxlcdm]+)`)
+	sourceScopeFirstNPattern  = regexp.MustCompile(`(?i)(?:前|头|最初)\s*(` + sourceScopeNumberPattern + `)\s*(?:章|节|回|幕|集|话)`)
+	sourceScopeRangePattern   = regexp.MustCompile(`(?i)(?:第\s*)?(` + sourceScopeNumberPattern + `)\s*(?:章|节|回|幕|集|话)?\s*(?:-|~|～|—|–|至|到)\s*(?:第\s*)?(` + sourceScopeNumberPattern + `)\s*(?:章|节|回|幕|集|话)`)
 )
 
 func parseNovelChapterScope(text string) (novelChapterScope, bool) {
@@ -44,6 +53,58 @@ func parseNovelChapterScope(text string) (novelChapterScope, bool) {
 		SectionIndex: parseSectionOrdinalFromText(text),
 	}
 	return scope, scope.VolumeIndex > 0 || scope.SectionIndex > 0
+}
+
+func parseNovelChapterRangeScope(text string) (novelChapterRangeScope, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return novelChapterRangeScope{}, false
+	}
+	if match := sourceScopeRangePattern.FindStringSubmatch(text); match != nil {
+		start := sourceutil.ParseOrdinalNumber(match[1])
+		end := sourceutil.ParseOrdinalNumber(match[2])
+		if start <= 0 || end <= 0 {
+			return novelChapterRangeScope{}, false
+		}
+		if start > end {
+			start, end = end, start
+		}
+		limit := end - start + 1
+		if limit > 50 {
+			limit = 50
+			end = start + limit - 1
+		}
+		return novelChapterRangeScope{
+			VolumeIndex:       parseVolumeOrdinalFromText(text),
+			StartSectionIndex: start,
+			EndSectionIndex:   end,
+			Limit:             limit,
+		}, true
+	}
+
+	match := sourceScopeFirstNPattern.FindStringSubmatch(text)
+	if match == nil {
+		return novelChapterRangeScope{}, false
+	}
+	limit := 0
+	for _, value := range match[1:] {
+		if parsed := sourceutil.ParseOrdinalNumber(value); parsed > 0 {
+			limit = parsed
+			break
+		}
+	}
+	if limit <= 0 {
+		return novelChapterRangeScope{}, false
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	return novelChapterRangeScope{
+		VolumeIndex:       parseVolumeOrdinalFromText(text),
+		StartSectionIndex: 1,
+		EndSectionIndex:   limit,
+		Limit:             limit,
+	}, true
 }
 
 func parseVolumeOrdinalFromText(text string) int {
@@ -82,6 +143,7 @@ func (s *Server) resolveNovelChapterScope(r *http.Request, projectID, explicitSo
 		JOIN project_sources ps ON ps.id = c.source_id
 		WHERE c.project_id = $1
 		  AND ps.source_type = 'novel'
+		  AND COALESCE(ps.status, 'ready') <> 'archived'
 		  AND ($2 = '' OR c.source_id = $2::uuid)
 		ORDER BY ps.created_at ASC, c.chapter_index ASC
 	`, projectID, explicitSourceID)
@@ -162,6 +224,108 @@ func (s *Server) resolveNovelChapterScope(r *http.Request, projectID, explicitSo
 	return sourceID, chapterIDs, true, nil
 }
 
+func (s *Server) resolveNovelChapterRangeScope(r *http.Request, projectID, explicitSourceID, scopeText string) (string, []string, bool, error) {
+	scope, ok := parseNovelChapterRangeScope(scopeText)
+	if !ok {
+		return "", nil, false, nil
+	}
+	explicitSourceID = strings.TrimSpace(explicitSourceID)
+	rows, err := s.db.Query(r.Context(), `
+		SELECT c.id::text, c.source_id::text, ps.title, c.chapter_index,
+		       c.volume_index, c.section_index,
+		       COALESCE(c.volume_title, ''), COALESCE(c.chapter_title, ''),
+		       ps.created_at
+		FROM novel_chapters c
+		JOIN project_sources ps ON ps.id = c.source_id
+		WHERE c.project_id = $1
+		  AND ps.source_type = 'novel'
+		  AND COALESCE(ps.status, 'ready') <> 'archived'
+		  AND ($2 = '' OR c.source_id = $2::uuid)
+		ORDER BY ps.created_at ASC, c.chapter_index ASC
+	`, projectID, explicitSourceID)
+	if err != nil {
+		return "", nil, true, err
+	}
+	defer rows.Close()
+
+	matches := make([]novelChapterScopeCandidate, 0)
+	for rows.Next() {
+		var item novelChapterScopeCandidate
+		var volumeIndex, sectionIndex sql.NullInt32
+		if err := rows.Scan(
+			&item.ID,
+			&item.SourceID,
+			&item.SourceTitle,
+			&item.ChapterIndex,
+			&volumeIndex,
+			&sectionIndex,
+			&item.VolumeTitle,
+			&item.ChapterTitle,
+			&item.SourceCreated,
+		); err != nil {
+			return "", nil, true, err
+		}
+		item.VolumeIndex = intFromNullInt32(volumeIndex)
+		item.SectionIndex = intFromNullInt32(sectionIndex)
+		if item.VolumeIndex <= 0 {
+			item.VolumeIndex = firstPositiveInt(parseVolumeOrdinalFromText(item.VolumeTitle), parseVolumeOrdinalFromText(item.SourceTitle))
+		}
+		if item.SectionIndex <= 0 {
+			item.SectionIndex = firstPositiveInt(parseSectionOrdinalFromText(item.ChapterTitle), item.ChapterIndex)
+		}
+		if scope.VolumeIndex > 0 && item.VolumeIndex != scope.VolumeIndex {
+			continue
+		}
+		if scope.StartSectionIndex > 0 && item.SectionIndex < scope.StartSectionIndex {
+			continue
+		}
+		if scope.EndSectionIndex > 0 && item.SectionIndex > scope.EndSectionIndex {
+			continue
+		}
+		matches = append(matches, item)
+	}
+	if err := rows.Err(); err != nil {
+		return "", nil, true, err
+	}
+	if len(matches) == 0 {
+		return "", nil, true, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "未找到匹配的分卷分集")
+	}
+
+	sort.SliceStable(matches, func(i, j int) bool {
+		left := matches[i]
+		right := matches[j]
+		if left.VolumeIndex != right.VolumeIndex {
+			return ordinalSortValue(left.VolumeIndex) < ordinalSortValue(right.VolumeIndex)
+		}
+		if left.SectionIndex != right.SectionIndex {
+			return ordinalSortValue(left.SectionIndex) < ordinalSortValue(right.SectionIndex)
+		}
+		if left.ChapterIndex != right.ChapterIndex {
+			return left.ChapterIndex < right.ChapterIndex
+		}
+		if !left.SourceCreated.Equal(right.SourceCreated) {
+			return left.SourceCreated.Before(right.SourceCreated)
+		}
+		return strings.ToLower(left.SourceTitle) < strings.ToLower(right.SourceTitle)
+	})
+
+	sourceID := matches[0].SourceID
+	chapterIDs := make([]string, 0, scope.Limit)
+	for _, item := range matches {
+		if item.SourceID != sourceID {
+			continue
+		}
+		chapterIDs = append(chapterIDs, item.ID)
+		if len(chapterIDs) >= scope.Limit {
+			break
+		}
+	}
+	if len(chapterIDs) == 0 {
+		return "", nil, true, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "未找到匹配的分卷分集")
+	}
+	return sourceID, chapterIDs, true, nil
+}
+
 func (s *Server) sourceIDForNovelChapters(r *http.Request, projectID string, chapterIDs []string) (string, error) {
 	cleanIDs := make([]string, 0, len(chapterIDs))
 	for _, id := range chapterIDs {
@@ -203,6 +367,34 @@ func (s *Server) sourceIDForNovelChapters(r *http.Request, projectID string, cha
 	default:
 		return "", newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "chapterIds must belong to the same source")
 	}
+}
+
+func (s *Server) countNovelChapters(r *http.Request, projectID, sourceID string) (int, error) {
+	var count int
+	err := s.db.QueryRow(r.Context(), `
+		SELECT count(*)
+		FROM novel_chapters c
+		JOIN project_sources ps ON ps.id = c.source_id
+		WHERE c.project_id = $1
+		  AND c.source_id = $2
+		  AND ps.source_type = 'novel'
+		  AND COALESCE(ps.status, 'ready') <> 'archived'
+	`, projectID, sourceID).Scan(&count)
+	return count, err
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func intFromNullInt32(value sql.NullInt32) int {

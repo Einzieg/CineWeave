@@ -320,9 +320,6 @@ func buildAgentProjectGapSummary(status ProductionStatus, workflows agentProject
 	addAction(hasSource && !hasActiveScript && source.EventCount > 0 && source.AdaptationPlanCount == 0, workflowNextAction("generate_adaptation_plan", "生成改编方案", "已有事件但没有改编方案", "generate_adaptation_plan", map[string]any{}))
 	addAction(hasSource && !hasActiveScript, workflowNextAction("source_to_script", "生成并激活剧本", "项目还没有可用于分镜的活动剧本", "source_to_script", map[string]any{}))
 
-	addGap(hasActiveScript && source.ScriptSceneCount == 0, "活动剧本尚未拆分场景")
-	addAction(hasActiveScript && source.ScriptSceneCount == 0, workflowNextAction("parse_script_scenes", "解析剧本场景", "活动剧本没有场景结构", "parse_script_scenes", map[string]any{}))
-
 	addGap(source.PendingEventReviewCount > 0, fmt.Sprintf("%d 个事件待审核", source.PendingEventReviewCount))
 	addGap(source.PendingScriptSceneCount > 0, fmt.Sprintf("%d 个剧本场景待审核", source.PendingScriptSceneCount))
 	addGap(source.StaleScriptSceneCount > 0, fmt.Sprintf("%d 个剧本场景已过期", source.StaleScriptSceneCount))
