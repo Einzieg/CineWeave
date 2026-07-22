@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { localizePlatformError } from "@/lib/error-localization";
 import { contentFormatLabel, sourceTypeLabel, statusLabel, targetFormatLabel } from "@/lib/labels";
+import { currentProjectScript } from "@/lib/scripts";
 import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
 import { useUiStore } from "@/lib/stores/ui-store";
 import { isActiveWorkflowStatus } from "@/lib/workflow-status";
@@ -199,7 +200,7 @@ export function SourcesPage({
     () =>
       scripts.find((script) => script.id === selectedScriptId) ??
       scripts.find((script) => script.id === generatedScriptFocus?.scriptId) ??
-      scripts[0] ??
+      currentProjectScript(scripts) ??
       null,
     [generatedScriptFocus?.scriptId, scripts, selectedScriptId],
   );
@@ -408,7 +409,7 @@ export function SourcesPage({
       toast.success(`资产提取工作流已创建：${run.id.slice(0, 8)}`);
       setActivityOpen(true);
       invalidate([
-        qk.assets(projectId),
+        qk.assetsRoot(projectId),
         qk.workflowRuns(projectId),
         qk.productionStatus(projectId),
         qk.project(projectId),

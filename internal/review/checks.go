@@ -38,10 +38,12 @@ func (r *deterministicRunner) run(ctx context.Context) ([]ReviewItemDraft, error
 func (r *deterministicRunner) checkScripts(ctx context.Context) error {
 	var scriptID, versionID string
 	err := r.db.QueryRow(ctx, `
-		SELECT id::text, current_version_id::text
-		FROM scripts
-		WHERE project_id = $1 AND status = 'active' AND current_version_id IS NOT NULL
-		ORDER BY updated_at DESC, created_at DESC
+		SELECT script.id::text, script.current_version_id::text
+		FROM scripts script
+		JOIN projects project ON project.id = script.project_id
+		WHERE script.project_id = $1 AND script.status = 'active' AND script.current_version_id IS NOT NULL
+		ORDER BY CASE WHEN script.id = project.active_script_id THEN 0 ELSE 1 END,
+		         script.updated_at DESC, script.created_at DESC
 		LIMIT 1
 	`, r.projectID).Scan(&scriptID, &versionID)
 	if err != nil {

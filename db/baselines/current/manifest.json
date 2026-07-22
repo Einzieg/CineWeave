@@ -1,0 +1,228 @@
+{
+  "formatVersion": 1,
+  "headVersion": 44,
+  "migrationCount": 44,
+  "bundleSha256": "8ac09ab2e8ea0b87726f7efe586b6da8c177a66e93489247f9504b47eda01301",
+  "migrations": [
+    {
+      "version": 1,
+      "name": "000001_current_schema.sql",
+      "sha256": "66803ebb991544fb8fa025e62964820f88fd654ed7171f1bd13815646767fdfc"
+    },
+    {
+      "version": 2,
+      "name": "000002_runtime_hardening.sql",
+      "sha256": "b01993fdaf74d6bd341a78668e0fa5c0d9d9d400cd7e6e51d37d4646db32b77c"
+    },
+    {
+      "version": 3,
+      "name": "000003_provider_requests_and_workflow_outbox.sql",
+      "sha256": "f8ae9c5916bd2e1101d3d3a4a4eef9cfc155b9e6b8e4b6913767f4dfc43c910f"
+    },
+    {
+      "version": 4,
+      "name": "000004_asset_batch_runtime.sql",
+      "sha256": "7e8332d774315b554eae72967adcb07742de7fad4060ef945ab0ff02b3fa4dc2"
+    },
+    {
+      "version": 5,
+      "name": "000005_runtime_contract_remediation.sql",
+      "sha256": "72db399014b8fafcaeb2aa022042e167ee277609d5526bc222312aeb01fe1c48"
+    },
+    {
+      "version": 6,
+      "name": "000006_workflow_execution_fencing.sql",
+      "sha256": "250ec105fe706e117b8ac264bd3cc4773a300cf2802a1b1814696b7d24c5a2b4"
+    },
+    {
+      "version": 7,
+      "name": "000007_project_event_contract.sql",
+      "sha256": "064d373d130284dc1b34f44e87bcf5c04afaeddd72b739cddc761ab28cadf959"
+    },
+    {
+      "version": 8,
+      "name": "000008_model_profile_binding_runtime_options.sql",
+      "sha256": "0ce2056f8e983d3877452ea59ba51b4071c25eb06858f1fbe9533dfa1c4abeb2"
+    },
+    {
+      "version": 9,
+      "name": "000009_video_production_profiles_and_generation_fence.sql",
+      "sha256": "bc6342f11ab4785b3a006ffc8ce67cfdfc4011662db9a9d7d296655d77c14ae7"
+    },
+    {
+      "version": 10,
+      "name": "000010_video_production_prompt_contracts.sql",
+      "sha256": "9cf65e41dab21500badd93030f34a66c8a27bc552fa8c4812e1dd6d131292f07"
+    },
+    {
+      "version": 11,
+      "name": "000011_video_production_generation_guards.sql",
+      "sha256": "fd4a644bed8c5af6734fe86c03952080665b7cedc5f5b301bdd9f87d7660479e"
+    },
+    {
+      "version": 12,
+      "name": "000012_single_frame_prompt_contract_runtime.sql",
+      "sha256": "5fbca4f5cb9b54c11b4db38600670185f716d687742da8adeda09d93a0649f61"
+    },
+    {
+      "version": 13,
+      "name": "000013_video_execution_contracts_and_checkpoints.sql",
+      "sha256": "009dc37bf306209d075382ef9b70cca31039ccbb7113ee26ff6b05f375c7afbd"
+    },
+    {
+      "version": 14,
+      "name": "000014_profile_runtime_and_segment_anchors.sql",
+      "sha256": "99f87cb785436826cdb4558e4357f5066d4604fbf5b910a649c9266b7dfac572"
+    },
+    {
+      "version": 15,
+      "name": "000015_first_last_frame_profile_runtime.sql",
+      "sha256": "53286596d39357e42f34e36cf50a7060f49f017240824baf193f54821b71c8dc"
+    },
+    {
+      "version": 16,
+      "name": "000016_multimodal_reference_profile_runtime.sql",
+      "sha256": "a0dc962b29731184426f89b2273b75e8b7e0f7197ab9626581322c76aeeed0f0"
+    },
+    {
+      "version": 17,
+      "name": "000017_storyboard_sheet_profile_runtime.sql",
+      "sha256": "82f6fc919842f094fcaceddc6b6695bfe5c252be9db551108b1a673062738575"
+    },
+    {
+      "version": 18,
+      "name": "000018_remove_legacy_video_production_mode.sql",
+      "sha256": "1125d160c8017a69c16e7d28265d27d0bff5977a89fcddc48b64a87a7f226e0f"
+    },
+    {
+      "version": 19,
+      "name": "000019_generation_consistency_repairs.sql",
+      "sha256": "94b38435df8817d6a34a2190f47862942a86095aad8a9630c9e609ecc4852f50"
+    },
+    {
+      "version": 20,
+      "name": "000020_video_production_rebuild_ownership.sql",
+      "sha256": "0d8df8016f038b9947532bf94f1c9be9cd044fdceba16d0aadee13879093eec3"
+    },
+    {
+      "version": 21,
+      "name": "000021_canonical_asset_baseline_prompt.sql",
+      "sha256": "58a2948bc8d3108fc4cc5bbd76045e69ea6ee573f93863ed6e691a760ae808bd"
+    },
+    {
+      "version": 22,
+      "name": "000022_image_prompt_provider_safety_contract.sql",
+      "sha256": "5abc8791cb25f6df518bb649ce7152c12c6aa891f8337732fb7b34765365d6db"
+    },
+    {
+      "version": 23,
+      "name": "000023_image_prompt_provider_safety_contract_v4.sql",
+      "sha256": "494a681815c67d0c690eed94d3020252dc198d419e54c24fe1624e05bf464206"
+    },
+    {
+      "version": 24,
+      "name": "000024_image_prompt_provider_safety_contract_v5.sql",
+      "sha256": "79a8c71d81dd0bc83227f0436161d9b62cdb49b6d4d9d08021dfce3061e3d25f"
+    },
+    {
+      "version": 25,
+      "name": "000025_video_segment_execution_prompt_hash.sql",
+      "sha256": "6278869edaabf6d0ebb974ecb9acf29b715f3cd24062e5b710c98df139238f81"
+    },
+    {
+      "version": 26,
+      "name": "000026_organization_user_identity.sql",
+      "sha256": "280bcd83e57014948eac36b840604de3df25c57cb1a7911e55ed2c5c0c82a521"
+    },
+    {
+      "version": 27,
+      "name": "000027_organization_members_and_invitations.sql",
+      "sha256": "a8bf8778fa75f59d26793d977f1da62505130577422afcc373cdb6a7913fd8d0"
+    },
+    {
+      "version": 28,
+      "name": "000028_video_prompt_audio_cue_kinds.sql",
+      "sha256": "220261ebf950e166542098b1673fe704956d5e2b46ece67e16a4c17d75b82c4b"
+    },
+    {
+      "version": 29,
+      "name": "000029_video_audio_cue_roundtrip.sql",
+      "sha256": "a3e1125326f55014f8b8955dc39f48cea7e1414812f3013a2412b959671ce67d"
+    },
+    {
+      "version": 30,
+      "name": "000030_video_segment_audio_continuation.sql",
+      "sha256": "e64cc76d74b6ced417e1f7b922d37c9d3e36a0c64f9286a04cb342d92f789092"
+    },
+    {
+      "version": 31,
+      "name": "000031_custom_role_key_uniqueness.sql",
+      "sha256": "a73ec21bb6f48133fa570756304555bb91f54ffe8ccb60fa3c8d8863371e0b8c"
+    },
+    {
+      "version": 32,
+      "name": "000032_auth_security_failures.sql",
+      "sha256": "958edbd3f652d069db132474a8a296d927a3e5aad3583c8ca93d7c687bcc3f1f"
+    },
+    {
+      "version": 33,
+      "name": "000033_organization_invitation_binding_snapshot.sql",
+      "sha256": "461ffd9f87428e86b92a82fce13efd658e8cf0c327c65881ed7575127d8437fe"
+    },
+    {
+      "version": 34,
+      "name": "000034_organization_member_account_management.sql",
+      "sha256": "31c672f3fa1571c5e5c54206db43981d3c6b165884dacff969af22187a79a5a2"
+    },
+    {
+      "version": 35,
+      "name": "000035_system_administration.sql",
+      "sha256": "7e1ea512508d1c4c7f6b87edefd0f1af1e34f70a0c978b32f78e923905a37eeb"
+    },
+    {
+      "version": 36,
+      "name": "000036_provider_model_hard_delete.sql",
+      "sha256": "60250df6734ed98a749cceca64bb7652e9ba2681f657ccc444523cf5702bcc8e"
+    },
+    {
+      "version": 37,
+      "name": "000037_provider_model_deletion_rollback.sql",
+      "sha256": "0781cf81058adf6192cffed0cfeb9458d1348418b67a945908c29ec1c045acde"
+    },
+    {
+      "version": 38,
+      "name": "000038_project_active_script.sql",
+      "sha256": "8c8cbee69a425a00dc51b55a8e8b6d686dcdcb54f1df79d9d71dfa0ecd0114f3"
+    },
+    {
+      "version": 39,
+      "name": "000039_membership_authorization_version.sql",
+      "sha256": "6065ad3dc550c47f6c35bfe685eb6f06cdd3a23d40dbb6e49fd4f63c7f5c8683"
+    },
+    {
+      "version": 40,
+      "name": "000040_video_execution_identity_v2.sql",
+      "sha256": "8721fb5d4a0a147b6a32e4e2ba2079a53e95064d983743ad7ad96e0a48b71d78"
+    },
+    {
+      "version": 41,
+      "name": "000041_provider_multi_credentials.sql",
+      "sha256": "9cf3c103c2ed5b8594618a6d7f949f02a5509c0ebc1020bd6f53101d161af763"
+    },
+    {
+      "version": 42,
+      "name": "000042_source_to_script_generation_staging.sql",
+      "sha256": "a842b61d7f62c6f616a54126ff4acd00edf3ee6d71d6a80ae958031476cf5408"
+    },
+    {
+      "version": 43,
+      "name": "000043_derived_asset_execution_v2.sql",
+      "sha256": "d68597e56ddb1c33436c3bf41473f1c30169b41fa8984e33b35e5964cc3b181c"
+    },
+    {
+      "version": 44,
+      "name": "000044_provider_model_attestation_history.sql",
+      "sha256": "e5ec1b3a48855f238063806946016d19e591e82720b936f7b58ba98a30234650"
+    }
+  ]
+}

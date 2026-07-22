@@ -63,6 +63,27 @@ func TestExtractScriptDialogueLinesSupportsFullyBoldHeadersAndSkipsFields(t *tes
 	}
 }
 
+func TestExtractScriptDialogueLinesSkipsColonTerminatedStageDirections(t *testing.T) {
+	content := `**环境**：夜雨绵密，油灯摇曳。
+
+镜头在两人之间保持距离：方源立于窗前，方正站在门影里。
+
+镜头自方源背后缓缓拉远：少年孤身立于窗前。
+
+**方源**：你退下罢。`
+	lines := ExtractScriptDialogueLines(content)
+	if len(lines) != 1 || lines[0].Speaker != "方源" || lines[0].Text != "你退下罢。" {
+		t.Fatalf("dialogue = %#v, want only the character line", lines)
+	}
+}
+
+func TestExtractScriptDialogueLinesClassifiesParenthesizedInnerVoice(t *testing.T) {
+	lines := ExtractScriptDialogueLines(`**方源（心声）**：这一步不能后退。`)
+	if len(lines) != 1 || lines[0].Speaker != "方源" || lines[0].Delivery != "心声" || lines[0].Kind != "voiceover" {
+		t.Fatalf("dialogue = %#v, want voiceover", lines)
+	}
+}
+
 func TestNormalizeStoryboardDialoguePreservesSpeakerlessSystemAudio(t *testing.T) {
 	lines := NormalizeStoryboardDialogue([]StoryboardDialogueLine{{
 		Kind: "system",
@@ -70,6 +91,21 @@ func TestNormalizeStoryboardDialoguePreservesSpeakerlessSystemAudio(t *testing.T
 	}})
 	if len(lines) != 1 || lines[0].Kind != "system" || lines[0].Text != "一声清越蝉鸣，骤然响彻天地。" {
 		t.Fatalf("system audio = %+v", lines)
+	}
+}
+
+func TestStoryboardAudioPartitionKeepsSystemCuesOutOfSpeech(t *testing.T) {
+	lines := []StoryboardDialogueLine{
+		{Speaker: "方源", Text: "这句必须说出来。", Kind: "dialogue"},
+		{Text: "【音效：山风穿过崖壁】", Kind: "system"},
+	}
+	spoken := SpokenStoryboardDialogue(lines)
+	sounds := NonSpeechStoryboardAudioCues(lines)
+	if len(spoken) != 1 || spoken[0].Text != "这句必须说出来。" {
+		t.Fatalf("spoken dialogue = %+v", spoken)
+	}
+	if len(sounds) != 1 || sounds[0].Kind != "system" {
+		t.Fatalf("non-speech cues = %+v", sounds)
 	}
 }
 
@@ -83,5 +119,63 @@ func TestValidateStoryboardDialogueCoverageRejectsOmissionAndTranslation(t *test
 	shots[0].Dialogue = []StoryboardDialogueLine{{Speaker: "方源", Text: "青山落日，秋月春风。"}}
 	if err := ValidateStoryboardDialogueCoverage(shots, content, required); err != nil {
 		t.Fatalf("valid dialogue rejected: %v", err)
+	}
+}
+
+func TestStoryboardDialogueLineForTimingSpanSplitsVerbatimAtPunctuation(t *testing.T) {
+	text := "魔头，三百年前你侮辱了我，夺走了我的清白之身，杀光我全家，诛了我的九族。从那刻起，我恨不得吃你肉，喝你的血！今天，我要让你生不如死！！"
+	first := storyboardDialogueLineForTimingSpan(StoryboardDialogueLine{
+		Kind: "dialogue", SpanStartTick: 0, SpanEndTick: 9 * 90000, ContinuesToNext: true,
+	}, text, 0, 18*90000)
+	second := storyboardDialogueLineForTimingSpan(StoryboardDialogueLine{
+		Kind: "dialogue", SpanStartTick: 9 * 90000, SpanEndTick: 18 * 90000, ContinuesFromPrevious: true,
+	}, text, 0, 18*90000)
+	if first.Text == text || second.Text == text || first.Text+second.Text != text {
+		t.Fatalf("split dialogue = %q + %q", first.Text, second.Text)
+	}
+	if !strings.ContainsAny(first.Text[len(first.Text)-3:], "，。！？；：,.!?;:") {
+		t.Fatalf("first segment did not end near punctuation: %q", first.Text)
+	}
+}
+
+func TestStoryboardDialogueLineForTimingSpanKeepsSystemCueDescription(t *testing.T) {
+	text := "【音效：凛冽山风穿过崖壁，兵刃轻颤】"
+	line := storyboardDialogueLineForTimingSpan(StoryboardDialogueLine{
+		Kind: "system", SpanStartTick: 0, SpanEndTick: 90000, ContinuesToNext: true,
+	}, text, 0, 2*90000)
+	if line.Text != text {
+		t.Fatalf("system cue = %q", line.Text)
+	}
+}
+
+func TestStoryboardDialogueEquivalentDetectsPromptPlanTextDrift(t *testing.T) {
+	persisted := []StoryboardDialogueLine{{
+		TimingUnitID: "unit-1", Speaker: "正道群雄", Text: "魔头，三百年前你侮辱了我。", Kind: "dialogue",
+		SpanStartTick: 5403750, SpanEndTick: 6296250, ContinuesToNext: true,
+	}}
+	relative := []StoryboardDialogueLine{{
+		TimingUnitID: "unit-1", Speaker: "正道群雄", Text: "魔头，三百年前你侮辱了我。", Kind: "dialogue",
+		SpanStartTick: 0, SpanEndTick: 892500, ContinuesToNext: true,
+	}}
+	if !storyboardDialogueEquivalent(persisted, relative) {
+		t.Fatal("equivalent per-shot dialogue should ignore absolute versus relative ticks")
+	}
+	combined := append([]StoryboardDialogueLine(nil), relative...)
+	combined[0].Text += "从那刻起，我恨不得吃你肉，喝你的血！"
+	if storyboardDialogueEquivalent(persisted, combined) {
+		t.Fatal("full timing-unit text must not match a persisted per-shot dialogue slice")
+	}
+}
+
+func TestVideoPromptContextContractCurrentRequiresActiveMatchingIdentity(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	if !videoPromptContextContractCurrent("active", hash, "sha256:"+hash) {
+		t.Fatal("active context with the same normalized hash should remain executable")
+	}
+	if videoPromptContextContractCurrent("stale", hash, hash) {
+		t.Fatal("stale context must force video prompt regeneration")
+	}
+	if videoPromptContextContractCurrent("active", hash, strings.Repeat("b", 64)) {
+		t.Fatal("context hash drift must force video prompt regeneration")
 	}
 }

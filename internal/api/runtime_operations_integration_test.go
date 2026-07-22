@@ -40,7 +40,7 @@ func TestRuntimeOperationReconciliationIntegration(t *testing.T) {
 	handler := server.Handler()
 	suffix := uuid.NewString()
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
-		Email: "runtime-operation-" + suffix + "@example.test", Password: "Password123!", DisplayName: "Runtime Operation",
+		Email: "runtime-operation-" + suffix + "@example.test", Username: randomStorageSegment(), Password: "Password123!", DisplayName: "Runtime Operation",
 		OrganizationName: "Runtime Operation Org " + suffix,
 	}, httptest.NewRequest(http.MethodPost, "/api/auth/register", nil))
 	if err != nil {

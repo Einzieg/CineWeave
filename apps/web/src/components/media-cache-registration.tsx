@@ -7,12 +7,12 @@ const cacheOwnerKey = "cineweave.media-cache.owner.v1";
 const cacheNamePrefix = "cineweave-media-";
 
 export function MediaCacheRegistration() {
-  const { session, hydrated } = useStudioSession();
+  const { session, hydrated, authorizationReady } = useStudioSession();
   const organizationID = session.organizationId.trim();
   const userID = session.user?.id?.trim() ?? "";
 
   useEffect(() => {
-    if (!hydrated || !window.isSecureContext || !("serviceWorker" in navigator)) return;
+    if (!hydrated || !authorizationReady || !window.isSecureContext || !("serviceWorker" in navigator)) return;
     let cancelled = false;
     const owner = organizationID ? `${organizationID}:${userID || "organization"}` : "";
 
@@ -32,7 +32,7 @@ export function MediaCacheRegistration() {
     return () => {
       cancelled = true;
     };
-  }, [hydrated, organizationID, userID]);
+  }, [authorizationReady, hydrated, organizationID, userID]);
 
   return null;
 }

@@ -34,6 +34,7 @@ const variantByStatus: Record<string, StatusVariant> = {
   needs_edit: "warning",
   needs_regeneration: "warning",
   upstream_changed: "warning",
+  changes_requested: "warning",
   partial: "warning",
   failed: "danger",
   rejected: "danger",

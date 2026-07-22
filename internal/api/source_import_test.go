@@ -296,6 +296,7 @@ func setupSourceImportTest(t *testing.T) (http.Handler, *sourceImportSeed) {
 	suffix := uuid.NewString()
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "source-import-owner-" + suffix + "@example.test",
+		Username:         randomStorageSegment(),
 		Password:         "Password123!",
 		DisplayName:      "Source Import Owner",
 		OrganizationName: "Source Import Org " + suffix,
@@ -306,6 +307,7 @@ func setupSourceImportTest(t *testing.T) (http.Handler, *sourceImportSeed) {
 	}
 	other, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "source-import-other-" + suffix + "@example.test",
+		Username:         randomStorageSegment(),
 		Password:         "Password123!",
 		DisplayName:      "Source Import Other",
 		OrganizationName: "Source Import Other Org " + suffix,

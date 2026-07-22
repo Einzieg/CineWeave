@@ -11,6 +11,7 @@ import (
 
 type RegenerationOptions struct {
 	TargetID            string  `json:"targetId"`
+	AnchorRole          string  `json:"anchorRole,omitempty"`
 	Force               bool    `json:"force"`
 	Duration            float64 `json:"duration"`
 	AspectRatio         string  `json:"aspectRatio"`
@@ -71,7 +72,7 @@ func RegenerateDerivedAssetImageWorkflow(ctx workflow.Context, input TextToStory
 func RegenerateShotImageWorkflow(ctx workflow.Context, input TextToStoryboardInput) (RegenerationOutput, error) {
 	options := resolveRegenerationOptions(input.Input)
 	if workflow.GetVersion(ctx, "regenerate-shot-image-prompt-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
-		if err := prepareSingleShotImagePrompt(ctx, input, options.TargetID, "regenerate_shot_image", options.AspectRatio); err != nil {
+		if err := prepareSingleShotImagePrompt(ctx, input, options.TargetID, options.AnchorRole, "regenerate_shot_image", options.AspectRatio); err != nil {
 			return RegenerationOutput{}, err
 		}
 	}
@@ -83,10 +84,14 @@ func RegenerateShotImageWorkflow(ctx workflow.Context, input TextToStoryboardInp
 		WorkflowRunID:  input.WorkflowRunID,
 		CreatedBy:      input.CreatedBy,
 		ShotID:         options.TargetID,
+		AnchorRole:     options.AnchorRole,
 		WorkflowPrompt: "regenerate_shot_image",
 		AspectRatio:    options.AspectRatio,
 		Force:          options.Force,
 	}).Get(ctx, &image); err != nil {
+		return RegenerationOutput{}, err
+	}
+	if err := finalizeStoryboardSheetImage(ctx, input, image); err != nil {
 		return RegenerationOutput{}, err
 	}
 	output := RegenerationOutput{TargetType: "shot_image", TargetID: options.TargetID, Status: "succeeded", Output: mustJSON(image)}
@@ -162,6 +167,7 @@ func resolveRegenerationOptions(raw json.RawMessage) RegenerationOptions {
 	}
 	var decoded struct {
 		TargetID            string  `json:"targetId"`
+		AnchorRole          string  `json:"anchorRole"`
 		Force               *bool   `json:"force"`
 		Duration            float64 `json:"duration"`
 		AspectRatio         string  `json:"aspectRatio"`
@@ -178,6 +184,7 @@ func resolveRegenerationOptions(raw json.RawMessage) RegenerationOptions {
 	if decoded.TargetID != "" {
 		options.TargetID = decoded.TargetID
 	}
+	options.AnchorRole = strings.TrimSpace(decoded.AnchorRole)
 	if decoded.Force != nil {
 		options.Force = *decoded.Force
 	}

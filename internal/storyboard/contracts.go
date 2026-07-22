@@ -7,6 +7,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 )
 
 var (
@@ -78,20 +80,22 @@ type ShotPlannerOutput struct {
 }
 
 type ShotPlannerSuggestion struct {
-	SuggestionKey        string                        `json:"suggestionKey"`
-	TimingUnitIDs        []string                      `json:"timingUnitIds"`
-	CutAfterTimingUnitID string                        `json:"cutAfterTimingUnitId,omitempty"`
-	CutReason            string                        `json:"cutReason"`
-	Title                string                        `json:"title,omitempty"`
-	Visual               string                        `json:"visual"`
-	Camera               string                        `json:"camera"`
-	Motion               string                        `json:"motion"`
-	Mood                 string                        `json:"mood"`
-	OneTake              bool                          `json:"oneTake,omitempty"`
-	ContinuityGroupKey   string                        `json:"continuityGroupKey,omitempty"`
-	ImagePromptDirection string                        `json:"imagePromptDirection,omitempty"`
-	VideoPromptDirection string                        `json:"videoPromptDirection,omitempty"`
-	AssetRequirements    []ShotPlannerAssetRequirement `json:"assetRequirements,omitempty"`
+	SuggestionKey          string                               `json:"suggestionKey"`
+	TimingUnitIDs          []string                             `json:"timingUnitIds"`
+	CutAfterTimingUnitID   string                               `json:"cutAfterTimingUnitId,omitempty"`
+	CutReason              string                               `json:"cutReason"`
+	Title                  string                               `json:"title,omitempty"`
+	Visual                 string                               `json:"visual"`
+	Camera                 string                               `json:"camera"`
+	Motion                 string                               `json:"motion"`
+	Mood                   string                               `json:"mood"`
+	OneTake                bool                                 `json:"oneTake,omitempty"`
+	ImagePromptDirection   string                               `json:"imagePromptDirection,omitempty"`
+	VideoPromptDirection   string                               `json:"videoPromptDirection,omitempty"`
+	AssetRequirements      []ShotPlannerAssetRequirement        `json:"assetRequirements,omitempty"`
+	PlannedEntryState      videoproduction.ShotState            `json:"plannedEntryState"`
+	PlannedExitState       videoproduction.ShotState            `json:"plannedExitState"`
+	TransitionFromPrevious videoproduction.TransitionSuggestion `json:"transitionFromPrevious"`
 }
 
 type ShotPlannerAssetRequirement struct {
@@ -253,15 +257,111 @@ func ValidateContinuityBlueprint(output ContinuityBlueprintOutput, expectedScene
 }
 
 func ParseShotPlannerOutput(raw, expectedSceneKey string, validTimingUnitIDs []string) (ShotPlannerOutput, error) {
-	var output ShotPlannerOutput
-	if err := decodeStrictJSON(raw, &output); err != nil {
-		return ShotPlannerOutput{}, fmt.Errorf("%w: %v", ErrInvalidShotPlannerOutput, err)
+	output, err := DecodeShotPlannerOutput(raw, validTimingUnitIDs)
+	if err != nil {
+		return ShotPlannerOutput{}, err
 	}
-	output = NormalizeShotPlannerOutput(output, validTimingUnitIDs)
 	if err := ValidateShotPlannerOutput(output, expectedSceneKey, validTimingUnitIDs); err != nil {
 		return ShotPlannerOutput{}, err
 	}
 	return output, nil
+}
+
+// DecodeShotPlannerOutput enforces the JSON schema and applies lossless model
+// normalization without accepting the model's timing coverage as authority.
+// The workflow compiler assigns deterministic slot timing before calling the
+// final validator.
+func DecodeShotPlannerOutput(raw string, validTimingUnitIDs []string) (ShotPlannerOutput, error) {
+	canonicalRaw, err := normalizeShotPlannerJSONShape(raw)
+	if err != nil {
+		return ShotPlannerOutput{}, err
+	}
+	var output ShotPlannerOutput
+	if err := decodeStrictJSON(canonicalRaw, &output); err != nil {
+		return ShotPlannerOutput{}, fmt.Errorf("%w: %v", ErrInvalidShotPlannerOutput, err)
+	}
+	output = NormalizeShotPlannerOutput(output, validTimingUnitIDs)
+	return output, nil
+}
+
+// normalizeShotPlannerJSONShape repairs unambiguous model serialization noise
+// while preserving strict rejection for every other unknown field. Some
+// models attach screenDirection to action or add a descriptive state string
+// to scene/character records even though those facts already belong to the
+// surrounding ShotState action and locked visual. Conflicting values remain
+// invalid, and props[].state is never removed because it is contractual.
+func normalizeShotPlannerJSONShape(raw string) (string, error) {
+	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(raw)))
+	decoder.UseNumber()
+	var document any
+	if err := decoder.Decode(&document); err != nil {
+		return raw, nil
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return raw, nil
+	}
+	root, ok := document.(map[string]any)
+	if !ok {
+		return raw, nil
+	}
+	shots, ok := root["shots"].([]any)
+	if !ok {
+		return raw, nil
+	}
+	changed := false
+	for shotIndex, item := range shots {
+		shot, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, stateField := range []string{"plannedEntryState", "plannedExitState"} {
+			state, ok := shot[stateField].(map[string]any)
+			if !ok {
+				continue
+			}
+			if scene, ok := state["scene"].(map[string]any); ok {
+				if _, exists := scene["state"]; exists {
+					delete(scene, "state")
+					changed = true
+				}
+			}
+			if characters, ok := state["characters"].([]any); ok {
+				for _, characterValue := range characters {
+					character, ok := characterValue.(map[string]any)
+					if !ok {
+						continue
+					}
+					if _, exists := character["state"]; exists {
+						delete(character, "state")
+						changed = true
+					}
+				}
+			}
+			action, ok := state["action"].(map[string]any)
+			if !ok {
+				continue
+			}
+			nested, exists := action["screenDirection"]
+			if !exists {
+				continue
+			}
+			if current, exists := state["screenDirection"]; exists && fmt.Sprint(current) != fmt.Sprint(nested) {
+				return "", fmt.Errorf("%w: shots[%d].%s has conflicting screenDirection values", ErrInvalidShotPlannerOutput, shotIndex, stateField)
+			}
+			state["screenDirection"] = nested
+			delete(action, "screenDirection")
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, nil
+	}
+	canonical, err := json.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("%w: canonicalize screenDirection: %v", ErrInvalidShotPlannerOutput, err)
+	}
+	return string(canonical), nil
 }
 
 // NormalizeShotPlannerOutput repairs lossless model noise without inventing
@@ -292,8 +392,46 @@ func NormalizeShotPlannerOutput(output ShotPlannerOutput, validTimingUnitIDs []s
 			shot.CutAfterTimingUnitID = ""
 		}
 		shot.AssetRequirements = mergeDuplicatePlannerAssetRequirements(shot.AssetRequirements)
+		shot.PlannedEntryState = deduplicatePlannerShotState(shot.PlannedEntryState)
+		shot.PlannedExitState = deduplicatePlannerShotState(shot.PlannedExitState)
 	}
 	return output
+}
+
+// ShotState is an identity set, not an on-screen instance list. Models may
+// repeat a group asset to describe members on both sides of the frame, but
+// downstream continuity and reference selection are keyed by canonical asset
+// ID. Preserve the first, most prominent placement and keep the richer group
+// composition in the shot's visual/action text.
+func deduplicatePlannerShotState(state videoproduction.ShotState) videoproduction.ShotState {
+	characters := make([]videoproduction.CharacterState, 0, len(state.Characters))
+	seenCharacters := make(map[string]bool, len(state.Characters))
+	for _, character := range state.Characters {
+		assetID := strings.TrimSpace(character.AssetID)
+		if assetID != "" && seenCharacters[assetID] {
+			continue
+		}
+		if assetID != "" {
+			seenCharacters[assetID] = true
+		}
+		characters = append(characters, character)
+	}
+	state.Characters = characters
+
+	props := make([]videoproduction.PropState, 0, len(state.Props))
+	seenProps := make(map[string]bool, len(state.Props))
+	for _, prop := range state.Props {
+		assetID := strings.TrimSpace(prop.AssetID)
+		if assetID != "" && seenProps[assetID] {
+			continue
+		}
+		if assetID != "" {
+			seenProps[assetID] = true
+		}
+		props = append(props, prop)
+	}
+	state.Props = props
+	return state
 }
 
 func mergeDuplicatePlannerAssetRequirements(items []ShotPlannerAssetRequirement) []ShotPlannerAssetRequirement {
@@ -364,6 +502,18 @@ func ValidateShotPlannerOutput(output ShotPlannerOutput, expectedSceneKey string
 				return fmt.Errorf("%w: suggestion %s contains a duplicate asset requirement", ErrInvalidShotPlannerOutput, shot.SuggestionKey)
 			}
 			seenAssets[key] = true
+		}
+	}
+	return nil
+}
+
+func ValidateShotStatePlannerOutput(output ShotPlannerOutput) error {
+	for _, shot := range output.Shots {
+		if err := videoproduction.ValidateShotState(shot.PlannedEntryState); err != nil {
+			return fmt.Errorf("%w: suggestion %s plannedEntryState: %v", ErrInvalidShotPlannerOutput, shot.SuggestionKey, err)
+		}
+		if err := videoproduction.ValidateShotState(shot.PlannedExitState); err != nil {
+			return fmt.Errorf("%w: suggestion %s plannedExitState: %v", ErrInvalidShotPlannerOutput, shot.SuggestionKey, err)
 		}
 	}
 	return nil

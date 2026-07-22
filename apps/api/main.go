@@ -44,6 +44,9 @@ func main() {
 		config.Duration("CINEWEAVE_ACCESS_TOKEN_TTL", 2*time.Hour),
 		config.Duration("CINEWEAVE_REFRESH_TOKEN_TTL", 30*24*time.Hour),
 	)
+	if err := authService.ConfigureTrustedProxies(config.Get("CINEWEAVE_TRUSTED_PROXY_CIDRS", "")); err != nil {
+		log.Fatal(err)
+	}
 	credentialVault, err := provider.NewVaultFromEnv()
 	if err != nil {
 		log.Fatal(err)

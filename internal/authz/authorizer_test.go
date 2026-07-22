@@ -33,6 +33,7 @@ func TestAuthorizerRBAC(t *testing.T) {
 	authService := auth.NewService(pool, "authz-test-secret", time.Hour, 24*time.Hour)
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "authz-owner-" + uuid.NewString() + "@example.test",
+		Username:         "owner-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12],
 		Password:         "Password123!",
 		DisplayName:      "Authz Owner",
 		OrganizationName: "Authz Org " + uuid.NewString(),
@@ -46,6 +47,7 @@ func TestAuthorizerRBAC(t *testing.T) {
 
 	viewer, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "authz-viewer-" + uuid.NewString() + "@example.test",
+		Username:         "viewer-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12],
 		Password:         "Password123!",
 		DisplayName:      "Authz Viewer",
 		OrganizationName: "Authz Viewer Org " + uuid.NewString(),
@@ -66,8 +68,8 @@ func TestAuthorizerRBAC(t *testing.T) {
 	}
 	var projectID string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO projects(organization_id, workspace_id, name, created_by)
-		VALUES ($1, $2, 'Authz Project', $3)
+		INSERT INTO projects(organization_id, workspace_id, name, created_by, video_production_state)
+		VALUES ($1, $2, 'Authz Project', $3, 'unconfigured')
 		RETURNING id
 	`, owner.OrganizationID, workspaceID, owner.User.ID).Scan(&projectID); err != nil {
 		t.Fatalf("insert project: %v", err)
@@ -84,6 +86,9 @@ func TestAuthorizerRBAC(t *testing.T) {
 		t.Fatal("viewer without role unexpectedly read project")
 	}
 	bindRole(t, ctx, pool, owner.OrganizationID, "project_viewer", "user", viewer.User.ID, "", "project", "", "", projectID, owner.User.ID)
+	if err := authorizer.Authorize(ctx, auth.Principal{UserID: viewer.User.ID, OrganizationID: viewer.OrganizationID}, PermissionProjectRead, Resource{ProjectID: projectID}); err == nil {
+		t.Fatal("access token scoped to another organization unexpectedly authorized target project")
+	}
 	if err := authorizer.Authorize(ctx, viewerPrincipal, PermissionProjectRead, Resource{ProjectID: projectID}); err != nil {
 		t.Fatalf("project_viewer project.read: %v", err)
 	}
@@ -129,6 +134,7 @@ func registerUserInOrg(t *testing.T, ctx context.Context, pool *pgxpool.Pool, au
 	t.Helper()
 	resp, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "authz-user-" + uuid.NewString() + "@example.test",
+		Username:         "user-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12],
 		Password:         "Password123!",
 		DisplayName:      "Authz User",
 		OrganizationName: "Authz Temp Org " + uuid.NewString(),

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"strings"
@@ -12,6 +13,19 @@ import (
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	storyboardtiming "github.com/Einzieg/cineweave/internal/storyboard"
 )
+
+type UpdateShotAssetRequirementRequest struct {
+	AssetID         *string `json:"assetId"`
+	RequirementType *string `json:"requirementType"`
+	Costume         *string `json:"costume"`
+	Pose            *string `json:"pose"`
+	Expression      *string `json:"expression"`
+	Action          *string `json:"action"`
+	CameraRelation  *string `json:"cameraRelation"`
+	SceneState      *string `json:"sceneState"`
+	PropState       *string `json:"propState"`
+	Prompt          *string `json:"prompt"`
+}
 
 func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
@@ -532,54 +546,96 @@ func (s *Server) unlinkStoryboardShotMedia(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) updateShotAssetRequirement(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
-	current, err := s.shotAssetRequirement(r, project.ID, r.PathValue("requirementId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	var req struct {
-		Costume        *string `json:"costume"`
-		Pose           *string `json:"pose"`
-		Expression     *string `json:"expression"`
-		Action         *string `json:"action"`
-		CameraRelation *string `json:"cameraRelation"`
-		SceneState     *string `json:"sceneState"`
-		PropState      *string `json:"propState"`
-		Prompt         *string `json:"prompt"`
-	}
+	var req UpdateShotAssetRequirementRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	item, err := s.updateShotAssetRequirementCore(r.Context(), project, principal.UserID, "user", r.PathValue("requirementId"), req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) updateShotAssetRequirementCore(ctx context.Context, project Project, userID, source, requirementID string, req UpdateShotAssetRequirementRequest) (ShotAssetRequirement, error) {
+	if !hasShotAssetRequirementPatch(req) {
+		return ShotAssetRequirement{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "至少需要提供一个镜头资产需求字段")
+	}
+	current, err := scanShotAssetRequirement(s.db.QueryRow(ctx, shotAssetRequirementSelectSQL(`
+		WHERE r.project_id = $1
+		  AND r.id = $2
+		  AND r.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
+	`), project.ID, requirementID))
+	if err != nil {
+		return ShotAssetRequirement{}, err
+	}
+	if strings.TrimSpace(current.StaleState) == "upstream_changed" {
+		return ShotAssetRequirement{}, newAPIError(http.StatusConflict, "STORYBOARD_REGENERATION_REQUIRED", "镜头资产需求的上游分镜已变化，请先重新生成或确认分镜")
+	}
+	targetAssetID := current.AssetID
+	if req.AssetID != nil {
+		targetAssetID = strings.TrimSpace(*req.AssetID)
+		if targetAssetID == "" {
+			return ShotAssetRequirement{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "assetId 不能为空")
+		}
+	}
+	targetRequirementType := strings.TrimSpace(current.RequirementType)
+	if req.RequirementType != nil {
+		targetRequirementType = strings.TrimSpace(*req.RequirementType)
+		if targetRequirementType == "" {
+			return ShotAssetRequirement{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "requirementType 不能为空")
+		}
+	}
+	var targetAssetType, targetAssetStatus, targetAssetStaleState string
+	if err := s.db.QueryRow(ctx, `
+		SELECT asset_type, status, stale_state
+		FROM canonical_assets
+		WHERE project_id = $1 AND id = $2
+	`, project.ID, targetAssetID).Scan(&targetAssetType, &targetAssetStatus, &targetAssetStaleState); err != nil {
+		return ShotAssetRequirement{}, err
+	}
+	if strings.TrimSpace(targetAssetStatus) == "archived" {
+		return ShotAssetRequirement{}, newAPIError(http.StatusConflict, "CANONICAL_ASSET_ARCHIVED", "不能关联已归档的核心资产")
+	}
+	if strings.TrimSpace(targetAssetStaleState) != "" && strings.TrimSpace(targetAssetStaleState) != "fresh" {
+		return ShotAssetRequirement{}, newAPIError(http.StatusConflict, "CANONICAL_ASSET_STALE", "关联核心资产已过期，需要先更新资产")
+	}
+	if !strings.HasPrefix(targetRequirementType, strings.TrimSpace(targetAssetType)+"_") {
+		return ShotAssetRequirement{}, newAPIError(http.StatusUnprocessableEntity, "SHOT_ASSET_REQUIREMENT_TYPE_MISMATCH", "镜头资产需求类型与核心资产类型不匹配")
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return ShotAssetRequirement{}, err
+	}
+	defer tx.Rollback(ctx)
 	var updatedID string
-	if err := tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		UPDATE shot_asset_requirements
-		SET costume = CASE WHEN $3 THEN NULLIF($4, '') ELSE costume END,
-		    pose = CASE WHEN $5 THEN NULLIF($6, '') ELSE pose END,
-		    expression = CASE WHEN $7 THEN NULLIF($8, '') ELSE expression END,
-		    action = CASE WHEN $9 THEN NULLIF($10, '') ELSE action END,
-		    camera_relation = CASE WHEN $11 THEN NULLIF($12, '') ELSE camera_relation END,
-		    scene_state = CASE WHEN $13 THEN NULLIF($14, '') ELSE scene_state END,
-		    prop_state = CASE WHEN $15 THEN NULLIF($16, '') ELSE prop_state END,
-		    prompt = CASE WHEN $17 THEN NULLIF($18, '') ELSE prompt END,
+		SET asset_id = $3,
+		    requirement_type = $4,
+		    costume = CASE WHEN $5 THEN NULLIF($6, '') ELSE costume END,
+		    pose = CASE WHEN $7 THEN NULLIF($8, '') ELSE pose END,
+		    expression = CASE WHEN $9 THEN NULLIF($10, '') ELSE expression END,
+		    action = CASE WHEN $11 THEN NULLIF($12, '') ELSE action END,
+		    camera_relation = CASE WHEN $13 THEN NULLIF($14, '') ELSE camera_relation END,
+		    scene_state = CASE WHEN $15 THEN NULLIF($16, '') ELSE scene_state END,
+		    prop_state = CASE WHEN $17 THEN NULLIF($18, '') ELSE prop_state END,
+		    prompt = CASE WHEN $19 THEN NULLIF($20, '') ELSE prompt END,
 		    review_status = 'pending',
 		    manual_override = true,
 		    stale_state = 'needs_regeneration',
-		    edited_by = $19,
+		    edited_by = $21,
 		    edited_at = now(),
 		    updated_at = now()
 		WHERE project_id = $1 AND id = $2
+		  AND production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
 		RETURNING id
-	`, project.ID, current.ID,
+	`, project.ID, current.ID, targetAssetID, targetRequirementType,
 		req.Costume != nil, trimPtr(req.Costume),
 		req.Pose != nil, trimPtr(req.Pose),
 		req.Expression != nil, trimPtr(req.Expression),
@@ -588,58 +644,66 @@ func (s *Server) updateShotAssetRequirement(w http.ResponseWriter, r *http.Reque
 		req.SceneState != nil, trimPtr(req.SceneState),
 		req.PropState != nil, trimPtr(req.PropState),
 		req.Prompt != nil, trimPtr(req.Prompt),
-		principal.UserID).Scan(&updatedID); err != nil {
-		s.writeError(w, r, err)
-		return
+		userID).Scan(&updatedID); err != nil {
+		return ShotAssetRequirement{}, err
 	}
-	item, err := scanShotAssetRequirement(tx.QueryRow(r.Context(), shotAssetRequirementSelectSQL(`
+	item, err := scanShotAssetRequirement(tx.QueryRow(ctx, shotAssetRequirementSelectSQL(`
 		WHERE r.project_id = $1 AND r.id = $2
 	`), project.ID, updatedID))
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotAssetRequirement{}, err
 	}
-	if err := production.MarkRequirementDownstreamStale(r.Context(), tx, project.ID, current.ID); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := production.MarkRequirementDownstreamStale(ctx, tx, project.ID, current.ID); err != nil {
+		return ShotAssetRequirement{}, err
 	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, stringValue(current.WorkflowRunID)); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := production.MarkFinalVideoStale(ctx, tx, project.ID, stringValue(current.WorkflowRunID)); err != nil {
+		return ShotAssetRequirement{}, err
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "shot_asset_requirement.updated", "shot_asset_requirement", item.ID, mustRawJSON(map[string]any{
-		"requirementId":  item.ID,
-		"shotId":         item.StoryboardShotID,
-		"manualOverride": item.ManualOverride,
-		"staleState":     item.StaleState,
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "shot_asset_requirement.updated", "shot_asset_requirement", item.ID, mustRawJSON(map[string]any{
+		"requirementId":   item.ID,
+		"shotId":          item.StoryboardShotID,
+		"assetId":         item.AssetID,
+		"requirementType": item.RequirementType,
+		"manualOverride":  item.ManualOverride,
+		"staleState":      item.StaleState,
+		"source":          strings.TrimSpace(source),
 	})); err != nil {
-		s.writeError(w, r, err)
+		return ShotAssetRequirement{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ShotAssetRequirement{}, err
+	}
+	return item, nil
+}
+
+func (s *Server) skipShotAssetRequirement(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
+	if !ok {
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	item, err := s.skipShotAssetRequirementCore(r.Context(), project, principal.UserID, "user", "", r.PathValue("requirementId"))
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
-func (s *Server) skipShotAssetRequirement(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
-	if !ok {
-		return
-	}
-	current, err := s.shotAssetRequirement(r, project.ID, r.PathValue("requirementId"))
+func (s *Server) skipShotAssetRequirementCore(ctx context.Context, project Project, userID, source, reason, requirementID string) (ShotAssetRequirement, error) {
+	current, err := scanShotAssetRequirement(s.db.QueryRow(ctx, shotAssetRequirementSelectSQL(`
+		WHERE r.project_id = $1
+		  AND r.id = $2
+		  AND r.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
+	`), project.ID, requirementID))
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotAssetRequirement{}, err
 	}
-	tx, err := s.db.Begin(r.Context())
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotAssetRequirement{}, err
 	}
-	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
 		UPDATE shot_asset_requirements
 		SET status = 'skipped',
 		    review_status = 'approved',
@@ -647,36 +711,45 @@ func (s *Server) skipShotAssetRequirement(w http.ResponseWriter, r *http.Request
 		    manual_override = true,
 		    edited_by = $3,
 		    edited_at = now(),
+		    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
+		      'skipReason', NULLIF($4, ''),
+		      'skipSource', NULLIF($5, ''),
+		      'skippedAt', now()
+		    )),
 		    updated_at = now()
 		WHERE project_id = $1 AND id = $2
-	`, project.ID, current.ID, principal.UserID); err != nil {
-		s.writeError(w, r, err)
-		return
+		  AND production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
+	`, project.ID, current.ID, userID, strings.TrimSpace(reason), strings.TrimSpace(source)); err != nil {
+		return ShotAssetRequirement{}, err
 	}
-	item, err := scanShotAssetRequirement(tx.QueryRow(r.Context(), shotAssetRequirementSelectSQL(`
+	item, err := scanShotAssetRequirement(tx.QueryRow(ctx, shotAssetRequirementSelectSQL(`
 		WHERE r.project_id = $1 AND r.id = $2
 	`), project.ID, current.ID))
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotAssetRequirement{}, err
 	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, stringValue(current.WorkflowRunID)); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := production.MarkFinalVideoStale(ctx, tx, project.ID, stringValue(current.WorkflowRunID)); err != nil {
+		return ShotAssetRequirement{}, err
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "shot_asset_requirement.skipped", "shot_asset_requirement", item.ID, mustRawJSON(map[string]any{
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "shot_asset_requirement.skipped", "shot_asset_requirement", item.ID, mustRawJSON(map[string]any{
 		"requirementId": item.ID,
 		"shotId":        item.StoryboardShotID,
 		"status":        item.Status,
+		"source":        strings.TrimSpace(source),
+		"reason":        strings.TrimSpace(reason),
 	})); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotAssetRequirement{}, err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := tx.Commit(ctx); err != nil {
+		return ShotAssetRequirement{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+	return item, nil
+}
+
+func hasShotAssetRequirementPatch(req UpdateShotAssetRequirementRequest) bool {
+	return req.AssetID != nil || req.RequirementType != nil || req.Costume != nil || req.Pose != nil ||
+		req.Expression != nil || req.Action != nil || req.CameraRelation != nil || req.SceneState != nil ||
+		req.PropState != nil || req.Prompt != nil
 }
 
 func trimPtr(value *string) string {

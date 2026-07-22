@@ -318,6 +318,36 @@ func TestOpenAICompatibleStreamChatCompletionRejectsCleanEOFWithoutTerminal(t *t
 	}
 }
 
+func TestOpenAICompatibleStreamChatCompletionRejectsIncompleteStructuredOutputAfterDone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"shots\\\":[{\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	baseURL := server.URL + "/v1"
+	account := Account{BaseURL: &baseURL, AuthType: "bearer"}
+	model := Model{ModelKey: "gpt-test"}
+	client := newOpenAICompatibleClient(2 * time.Second)
+	result, err := client.streamChatCompletion(
+		context.Background(), account, model, "sk-test", parseOpenAICompatibleConfig(nil),
+		json.RawMessage(`{"prompt":"plan shots","responseFormat":"json"}`), nil,
+	)
+	if err == nil {
+		t.Fatal("streamChatCompletion() error = nil, want incomplete structured output error")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("streamChatCompletion() error = %v, want io.ErrUnexpectedEOF", err)
+	}
+	if result.Text != `{"shots":[{` {
+		t.Fatalf("partial text = %q, want truncated JSON preserved", result.Text)
+	}
+	if len(result.ResponseSnapshot) == 0 {
+		t.Fatal("response snapshot is empty, want received chunks preserved")
+	}
+}
+
 func TestOpenAICompatibleStreamChatCompletionReturnsUnexpectedEOF(t *testing.T) {
 	baseURL := "https://provider.example/v1"
 	account := Account{BaseURL: &baseURL, AuthType: "bearer"}

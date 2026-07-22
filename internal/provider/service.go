@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/provider/outbound"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -233,6 +234,79 @@ func (s *Service) GetAccount(ctx context.Context, organizationID, accountID stri
 	return scanAccount(row)
 }
 
+func (s *Service) ListCredentials(ctx context.Context, organizationID, accountID, status string) ([]Credential, error) {
+	if _, err := s.GetAccount(ctx, organizationID, accountID); err != nil {
+		return nil, err
+	}
+	status, err := normalizeCredentialStatusFilter(status)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(ctx, credentialSelect(`
+		WHERE pc.organization_id = $1
+		  AND pc.provider_account_id = $2
+		  AND ($3 = 'all' OR pc.status = $3)
+		ORDER BY pc.is_active DESC, pc.credential_key, pc.created_at DESC
+	`), organizationID, accountID, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]Credential, 0)
+	for rows.Next() {
+		item, err := scanCredential(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Service) GetCredential(ctx context.Context, organizationID, accountID, credentialID string) (Credential, error) {
+	row := s.db.QueryRow(ctx, credentialSelect(`
+		WHERE pc.organization_id = $1
+		  AND pc.provider_account_id = $2
+		  AND pc.id = $3
+	`), organizationID, accountID, credentialID)
+	return scanCredential(row)
+}
+
+func (s *Service) CreateCredential(ctx context.Context, organizationID, accountID, userID string, req CreateCredentialRequest) (Credential, error) {
+	credentialKey := strings.TrimSpace(req.CredentialKey)
+	if credentialKey == "" || len(req.Credential) == 0 {
+		return Credential{}, fmt.Errorf("%w: credentialKey and credential are required", ErrValidation)
+	}
+	if len([]rune(credentialKey)) > 120 {
+		return Credential{}, fmt.Errorf("%w: credentialKey is too long", ErrValidation)
+	}
+	credentialType := strings.TrimSpace(req.CredentialType)
+	if credentialType == "" {
+		credentialType = "api_key"
+	}
+	if _, err := s.GetAccount(ctx, organizationID, accountID); err != nil {
+		return Credential{}, err
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Credential{}, err
+	}
+	defer tx.Rollback(ctx)
+	credentialID, err := s.insertCredential(ctx, tx, organizationID, accountID, userID, credentialKey, credentialType, req.Credential)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return Credential{}, fmt.Errorf("%w: an active credential with this key already exists", ErrConflict)
+		}
+		return Credential{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Credential{}, err
+	}
+	return s.GetCredential(ctx, organizationID, accountID, credentialID)
+}
+
 func (s *Service) UpdateAccount(ctx context.Context, organizationID, accountID string, req UpdateAccountRequest) (Account, error) {
 	current, err := s.GetAccount(ctx, organizationID, accountID)
 	if err != nil {
@@ -348,33 +422,97 @@ func (s *Service) RotateCredential(ctx context.Context, organizationID, accountI
 	if credentialKey == "" {
 		credentialKey = "default"
 	}
-	if _, err := s.GetAccount(ctx, organizationID, accountID); err != nil {
-		return Account{}, err
-	}
-
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return Account{}, err
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE provider_credentials
-		SET is_active = false, status = 'rotated', rotated_at = now()
+	var credentialID string
+	if err := s.db.QueryRow(ctx, `
+		SELECT id
+		FROM provider_credentials
 		WHERE organization_id = $1
 		  AND provider_account_id = $2
 		  AND credential_key = $3
 		  AND is_active = true
-	`, organizationID, accountID, credentialKey); err != nil {
+	`, organizationID, accountID, credentialKey).Scan(&credentialID); err != nil {
 		return Account{}, err
 	}
-	if _, err := s.insertCredential(ctx, tx, organizationID, accountID, userID, credentialKey, "api_key", req.Credential); err != nil {
-		return Account{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if _, err := s.RotateCredentialByID(ctx, organizationID, accountID, credentialID, userID, req); err != nil {
 		return Account{}, err
 	}
 	return s.GetAccount(ctx, organizationID, accountID)
+}
+
+func (s *Service) RotateCredentialByID(ctx context.Context, organizationID, accountID, credentialID, userID string, req RotateCredentialRequest) (Credential, error) {
+	if len(req.Credential) == 0 {
+		return Credential{}, fmt.Errorf("%w: credential is required", ErrValidation)
+	}
+	if _, err := s.GetAccount(ctx, organizationID, accountID); err != nil {
+		return Credential{}, err
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Credential{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var credentialKey, credentialType string
+	var active bool
+	if err := tx.QueryRow(ctx, `
+		SELECT credential_key, credential_type, is_active
+		FROM provider_credentials
+		WHERE organization_id = $1
+		  AND provider_account_id = $2
+		  AND id = $3
+		FOR UPDATE
+	`, organizationID, accountID, credentialID).Scan(&credentialKey, &credentialType, &active); err != nil {
+		return Credential{}, err
+	}
+	if !active {
+		return Credential{}, fmt.Errorf("%w: credential is not active", ErrValidation)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE provider_credentials
+		SET is_active = false, status = 'rotated', rotated_at = now()
+		WHERE id = $1
+	`, credentialID); err != nil {
+		return Credential{}, err
+	}
+	newCredentialID, err := s.insertCredential(ctx, tx, organizationID, accountID, userID, credentialKey, credentialType, req.Credential)
+	if err != nil {
+		return Credential{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO provider_credential_models(
+			provider_credential_id, provider_model_id, is_available,
+			last_discovered_at, created_at, updated_at
+		)
+		SELECT $1, provider_model_id, is_available, last_discovered_at, now(), now()
+		FROM provider_credential_models
+		WHERE provider_credential_id = $2
+		ON CONFLICT (provider_credential_id, provider_model_id) DO NOTHING
+	`, newCredentialID, credentialID); err != nil {
+		return Credential{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Credential{}, err
+	}
+	return s.GetCredential(ctx, organizationID, accountID, newCredentialID)
+}
+
+func (s *Service) RevokeCredential(ctx context.Context, organizationID, accountID, credentialID string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE provider_credentials
+		SET is_active = false, status = 'revoked'
+		WHERE organization_id = $1
+		  AND provider_account_id = $2
+		  AND id = $3
+		  AND is_active = true
+	`, organizationID, accountID, credentialID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Service) ListModels(ctx context.Context, organizationID, accountID, status string) ([]Model, error) {
@@ -437,18 +575,20 @@ func (s *Service) CreateModel(ctx context.Context, organizationID, accountID str
 		return Model{}, err
 	}
 	capability := req.Capabilities
-	if preset, ok, err := s.lookupModelCapabilityPreset(ctx, s.db, modelKey); err != nil {
-		return Model{}, err
-	} else if ok {
-		if displayName == "" || strings.EqualFold(displayName, modelKey) {
-			displayName = preset.DisplayName
+	if capability == nil {
+		if preset, ok, err := s.lookupModelCapabilityPreset(ctx, s.db, modelKey); err != nil {
+			return Model{}, err
+		} else if ok {
+			if displayName == "" || strings.EqualFold(displayName, modelKey) {
+				displayName = preset.DisplayName
+			}
+			modality = preset.Modality
+			input := preset.capabilityInput()
+			capability = &input
+		} else {
+			input := defaultCapabilityInput(modality)
+			capability = &input
 		}
-		modality = preset.Modality
-		input := preset.capabilityInput()
-		capability = &input
-	} else if capability == nil {
-		input := defaultCapabilityInput(modality)
-		capability = &input
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -536,18 +676,6 @@ func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID strin
 		return Model{}, fmt.Errorf("%w: modelKey, displayName, and modality are required", ErrValidation)
 	}
 	capability := req.Capabilities
-	if capability == nil {
-		if preset, ok, err := s.lookupModelCapabilityPreset(ctx, s.db, modelKey); err != nil {
-			return Model{}, err
-		} else if ok {
-			if displayName == "" || strings.EqualFold(displayName, modelKey) {
-				displayName = preset.DisplayName
-			}
-			modality = preset.Modality
-			input := preset.capabilityInput()
-			capability = &input
-		}
-	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -561,7 +689,7 @@ func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID strin
 		WHERE id = $1
 	`, modelID, modelKey, displayName, modality, status); err != nil {
 		if isUniqueViolation(err) {
-			return Model{}, fmt.Errorf("%w: provider model already exists", ErrConflict)
+			return Model{}, ErrModelAlreadyExists
 		}
 		return Model{}, err
 	}
@@ -600,19 +728,38 @@ func (s *Service) DeleteModel(ctx context.Context, organizationID, modelID strin
 	}
 	defer tx.Rollback(ctx)
 
-	tag, err := tx.Exec(ctx, `
-		UPDATE provider_models m
-		SET status = 'disabled'
-		FROM provider_accounts a
-		WHERE a.id = m.provider_account_id
-		  AND a.organization_id = $1
+	if err := tx.QueryRow(ctx, `
+		SELECT m.id
+		FROM provider_models m
+		JOIN provider_accounts a ON a.id = m.provider_account_id
+		WHERE a.organization_id = $1
 		  AND m.id = $2
-	`, organizationID, modelID)
-	if err != nil {
+		FOR UPDATE
+	`, organizationID, modelID).Scan(&modelID); err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+	var activeTaskCount, activeLeaseCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)
+		   FROM provider_async_tasks
+		   WHERE provider_model_id = $1
+		     AND status IN ('queued', 'running', 'cancelling')),
+		  (SELECT count(*)
+		   FROM provider_leases
+		   WHERE provider_model_id = $1
+		     AND status = 'active'
+		     AND expires_at > now())
+	`, modelID).Scan(&activeTaskCount, &activeLeaseCount); err != nil {
+		return err
+	}
+	if activeTaskCount > 0 || activeLeaseCount > 0 {
+		return fmt.Errorf(
+			"%w: tasks=%d leases=%d",
+			ErrModelInUse,
+			activeTaskCount,
+			activeLeaseCount,
+		)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE provider_call_logs c
@@ -636,6 +783,9 @@ func (s *Service) DeleteModel(ctx context.Context, organizationID, modelID strin
 		DELETE FROM model_profile_bindings
 		WHERE provider_model_id = $1
 	`, modelID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM provider_models WHERE id = $1`, modelID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -910,11 +1060,63 @@ func (s *Service) DeleteModelProfileBinding(ctx context.Context, organizationID,
 }
 
 func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID string) (ModelDiscoveryResult, error) {
+	if !s.gatewayConfigured() {
+		if err := s.requireGatewayOrDirectFallback(); err != nil {
+			return ModelDiscoveryResult{}, err
+		}
+	}
+	credentials, err := s.ListCredentials(ctx, organizationID, accountID, "active")
+	if err != nil {
+		return ModelDiscoveryResult{}, err
+	}
+	if len(credentials) == 0 {
+		return ModelDiscoveryResult{}, fmt.Errorf("%w: provider account has no active credentials", ErrValidation)
+	}
+
+	result := ModelDiscoveryResult{Models: []DiscoveredModel{}, Unsupported: []any{}}
+	seenModels := make(map[string]struct{})
+	for _, credential := range credentials {
+		discovered, err := s.DiscoverModelsForCredential(ctx, organizationID, accountID, credential.ID)
+		if err != nil {
+			return ModelDiscoveryResult{}, err
+		}
+		for _, model := range discovered.Models {
+			modelKey := strings.TrimSpace(model.ModelKey)
+			if _, seen := seenModels[modelKey]; seen {
+				continue
+			}
+			seenModels[modelKey] = struct{}{}
+			result.Models = append(result.Models, model)
+		}
+		result.Unsupported = append(result.Unsupported, discovered.Unsupported...)
+		result.Sync.DiscoveredCount += discovered.Sync.DiscoveredCount
+		result.Sync.CreatedCount += discovered.Sync.CreatedCount
+		result.Sync.ExistingCount += discovered.Sync.ExistingCount
+		result.Sync.SkippedDisabledCount += discovered.Sync.SkippedDisabledCount
+		result.Sync.IgnoredCount += discovered.Sync.IgnoredCount
+	}
+	return result, nil
+}
+
+func (s *Service) DiscoverModelsForCredential(ctx context.Context, organizationID, accountID, credentialID string) (ModelDiscoveryResult, error) {
+	if !s.gatewayConfigured() {
+		if err := s.requireGatewayOrDirectFallback(); err != nil {
+			return ModelDiscoveryResult{}, err
+		}
+	}
+	credentialSummary, err := s.GetCredential(ctx, organizationID, accountID, credentialID)
+	if err != nil {
+		return ModelDiscoveryResult{}, err
+	}
+	if !credentialSummary.IsActive || credentialSummary.Status != "active" {
+		return ModelDiscoveryResult{}, fmt.Errorf("%w: credential is not active", ErrValidation)
+	}
 	if s.gatewayConfigured() {
 		var response GatewayDiscoverModelsResponse
 		if err := s.postGatewayJSON(ctx, "/internal/provider/models/discover", GatewayDiscoverModelsRequest{
 			OrganizationID: organizationID,
 			AccountID:      accountID,
+			CredentialID:   credentialID,
 		}, &response); err != nil {
 			return ModelDiscoveryResult{}, err
 		}
@@ -922,12 +1124,16 @@ func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID 
 			return ModelDiscoveryResult{}, errorFromGatewayStandard(response.Error)
 		}
 		result := ModelDiscoveryResult{
-			Models:      response.Models,
-			Unsupported: response.Unsupported,
+			CredentialID:  credentialID,
+			CredentialKey: credentialSummary.CredentialKey,
+			Models:        response.Models,
+			Unsupported:   response.Unsupported,
 		}
-		if err := s.syncDiscoveredModels(ctx, organizationID, accountID, result.Models); err != nil {
+		syncResult, err := s.syncDiscoveredModelsForCredentialWithSummary(ctx, organizationID, accountID, credentialID, result.Models)
+		if err != nil {
 			return ModelDiscoveryResult{}, err
 		}
+		result.Sync = syncResult
 		return result, nil
 	}
 	if err := s.requireGatewayOrDirectFallback(); err != nil {
@@ -937,7 +1143,7 @@ func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID 
 	if err != nil {
 		return ModelDiscoveryResult{}, err
 	}
-	credential, _, err := s.activeCredentialPayload(ctx, organizationID, accountID)
+	credential, _, err := s.activeCredentialPayloadByID(ctx, organizationID, accountID, credentialID)
 	if err != nil {
 		return ModelDiscoveryResult{}, err
 	}
@@ -951,20 +1157,31 @@ func (s *Service) DiscoverModels(ctx context.Context, organizationID, accountID 
 	if err != nil {
 		return ModelDiscoveryResult{}, err
 	}
-	if err := s.syncDiscoveredModels(ctx, organizationID, accountID, result.Models); err != nil {
+	result.CredentialID = credentialID
+	result.CredentialKey = credentialSummary.CredentialKey
+	syncResult, err := s.syncDiscoveredModelsForCredentialWithSummary(ctx, organizationID, accountID, credentialID, result.Models)
+	if err != nil {
 		return ModelDiscoveryResult{}, err
 	}
+	result.Sync = syncResult
 	return result, nil
 }
 
 func (s *Service) syncDiscoveredModels(ctx context.Context, organizationID, accountID string, models []DiscoveredModel) error {
-	if len(models) == 0 {
-		return nil
-	}
+	_, err := s.syncDiscoveredModelsWithSummary(ctx, organizationID, accountID, models)
+	return err
+}
+
+func (s *Service) syncDiscoveredModelsWithSummary(ctx context.Context, organizationID, accountID string, models []DiscoveredModel) (ModelDiscoverySync, error) {
+	return s.syncDiscoveredModelsForCredentialWithSummary(ctx, organizationID, accountID, "", models)
+}
+
+func (s *Service) syncDiscoveredModelsForCredentialWithSummary(ctx context.Context, organizationID, accountID, credentialID string, models []DiscoveredModel) (ModelDiscoverySync, error) {
+	summary := ModelDiscoverySync{DiscoveredCount: len(models)}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return err
+		return ModelDiscoverySync{}, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -977,22 +1194,78 @@ func (s *Service) syncDiscoveredModels(ctx context.Context, organizationID, acco
 			  AND id = $2
 		)
 	`, organizationID, accountID).Scan(&accountExists); err != nil {
-		return err
+		return ModelDiscoverySync{}, err
 	}
 	if !accountExists {
-		return pgx.ErrNoRows
+		return ModelDiscoverySync{}, pgx.ErrNoRows
 	}
+	if credentialID != "" {
+		var credentialActive bool
+		if err := tx.QueryRow(ctx, `
+			SELECT is_active AND status = 'active'
+			FROM provider_credentials
+			WHERE organization_id = $1
+			  AND provider_account_id = $2
+			  AND id = $3
+		`, organizationID, accountID, credentialID).Scan(&credentialActive); err != nil {
+			return ModelDiscoverySync{}, err
+		}
+		if !credentialActive {
+			return ModelDiscoverySync{}, fmt.Errorf("%w: credential is not active", ErrValidation)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE provider_credential_models
+			SET is_available = false,
+			    last_discovered_at = now(),
+			    updated_at = now()
+			WHERE provider_credential_id = $1
+		`, credentialID); err != nil {
+			return ModelDiscoverySync{}, err
+		}
+	}
+
+	existingStatuses := map[string]string{}
+	existingRows, err := tx.Query(ctx, `
+		SELECT model_key, status
+		FROM provider_models
+		WHERE provider_account_id = $1
+	`, accountID)
+	if err != nil {
+		return ModelDiscoverySync{}, err
+	}
+	for existingRows.Next() {
+		var modelKey, status string
+		if err := existingRows.Scan(&modelKey, &status); err != nil {
+			existingRows.Close()
+			return ModelDiscoverySync{}, err
+		}
+		existingStatuses[modelKey] = status
+	}
+	if err := existingRows.Err(); err != nil {
+		existingRows.Close()
+		return ModelDiscoverySync{}, err
+	}
+	existingRows.Close()
 
 	seen := map[string]struct{}{}
 	for _, discovered := range models {
 		modelKey := strings.TrimSpace(discovered.ModelKey)
 		if modelKey == "" {
+			summary.IgnoredCount++
 			continue
 		}
 		if _, ok := seen[modelKey]; ok {
+			summary.IgnoredCount++
 			continue
 		}
 		seen[modelKey] = struct{}{}
+		if status, exists := existingStatuses[modelKey]; !exists {
+			summary.CreatedCount++
+		} else if status == "disabled" {
+			summary.SkippedDisabledCount++
+		} else {
+			summary.ExistingCount++
+		}
 
 		displayName := strings.TrimSpace(discovered.DisplayName)
 		if displayName == "" {
@@ -1000,20 +1273,18 @@ func (s *Service) syncDiscoveredModels(ctx context.Context, organizationID, acco
 		}
 		modality := normalizeDiscoveredModality(discovered.Modality)
 		capability := defaultCapabilityInput(modality)
-		presetMatched := false
 		if preset, ok, err := s.lookupModelCapabilityPreset(ctx, tx, modelKey); err != nil {
-			return err
+			return ModelDiscoverySync{}, err
 		} else if ok {
 			if displayName == "" || strings.EqualFold(displayName, modelKey) {
 				displayName = preset.DisplayName
 			}
 			modality = preset.Modality
 			capability = preset.capabilityInput()
-			presetMatched = true
 		}
 		capability, err = normalizeCapabilityInput(capability)
 		if err != nil {
-			return err
+			return ModelDiscoverySync{}, err
 		}
 		status := "active"
 
@@ -1038,7 +1309,7 @@ func (s *Service) syncDiscoveredModels(ctx context.Context, organizationID, acco
 				updated_at = CASE WHEN provider_models.status <> 'disabled' THEN now() ELSE provider_models.updated_at END
 			RETURNING id
 		`, accountID, modelKey, displayName, modality, status).Scan(&modelID); err != nil {
-			return err
+			return ModelDiscoverySync{}, err
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO provider_model_capabilities(
@@ -1049,44 +1320,44 @@ func (s *Service) syncDiscoveredModels(ctx context.Context, organizationID, acco
 				SELECT 1 FROM provider_model_capabilities WHERE provider_model_id = $1
 			)
 		`, modelID, capability.TaskTypes, capability.InputLimits, capability.OutputLimits, capability.QualityTiers, capability.ProviderOptionsSchema, capability.PricingPolicy); err != nil {
-			return err
+			return ModelDiscoverySync{}, err
 		}
-		if presetMatched {
+		if _, err := tx.Exec(ctx, `
+			UPDATE provider_model_capabilities c
+			SET task_types = CASE WHEN c.task_types IS NULL OR c.task_types IN ('[]'::jsonb, '{}'::jsonb) THEN $2 ELSE c.task_types END,
+			    input_limits = CASE WHEN c.input_limits IS NULL OR c.input_limits = '{}'::jsonb THEN $3 ELSE c.input_limits END,
+			    output_limits = CASE WHEN c.output_limits IS NULL OR c.output_limits = '{}'::jsonb THEN $4 ELSE c.output_limits END,
+			    quality_tiers = CASE WHEN c.quality_tiers IS NULL OR c.quality_tiers IN ('[]'::jsonb, '{}'::jsonb) THEN $5 ELSE c.quality_tiers END,
+			    provider_options_schema = CASE WHEN c.provider_options_schema IS NULL OR c.provider_options_schema = '{}'::jsonb THEN $6 ELSE c.provider_options_schema END,
+			    pricing_policy = CASE WHEN c.pricing_policy IS NULL OR c.pricing_policy = '{}'::jsonb THEN $7 ELSE c.pricing_policy END
+			FROM provider_models m
+			WHERE c.provider_model_id = m.id
+			  AND c.provider_model_id = $1
+			  AND m.status <> 'disabled'
+		`, modelID, capability.TaskTypes, capability.InputLimits, capability.OutputLimits, capability.QualityTiers, capability.ProviderOptionsSchema, capability.PricingPolicy); err != nil {
+			return ModelDiscoverySync{}, err
+		}
+		if credentialID != "" {
 			if _, err := tx.Exec(ctx, `
-				UPDATE provider_model_capabilities c
-				SET task_types = $2,
-				    input_limits = $3,
-				    output_limits = $4,
-				    quality_tiers = $5,
-				    provider_options_schema = $6,
-				    pricing_policy = $7
-				FROM provider_models m
-				WHERE c.provider_model_id = m.id
-				  AND c.provider_model_id = $1
-				  AND m.status <> 'disabled'
-			`, modelID, capability.TaskTypes, capability.InputLimits, capability.OutputLimits, capability.QualityTiers, capability.ProviderOptionsSchema, capability.PricingPolicy); err != nil {
-				return err
-			}
-		} else {
-			if _, err := tx.Exec(ctx, `
-				UPDATE provider_model_capabilities c
-				SET task_types = $2
-				FROM provider_models m
-				WHERE c.provider_model_id = m.id
-				  AND c.provider_model_id = $1
-				  AND m.status <> 'disabled'
-				  AND (
-				    c.task_types IS NULL
-				    OR c.task_types = '[]'::jsonb
-				    OR c.task_types = '{}'::jsonb
-				  )
-			`, modelID, capability.TaskTypes); err != nil {
-				return err
+				INSERT INTO provider_credential_models(
+					provider_credential_id, provider_model_id, is_available,
+					last_discovered_at, created_at, updated_at
+				)
+				VALUES ($1, $2, true, now(), now(), now())
+				ON CONFLICT (provider_credential_id, provider_model_id) DO UPDATE SET
+					is_available = true,
+					last_discovered_at = now(),
+					updated_at = now()
+			`, credentialID, modelID); err != nil {
+				return ModelDiscoverySync{}, err
 			}
 		}
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return ModelDiscoverySync{}, err
+	}
+	return summary, nil
 }
 
 func normalizeListStatusFilter(value string) (string, error) {
@@ -1099,6 +1370,19 @@ func normalizeListStatusFilter(value string) (string, error) {
 		return status, nil
 	default:
 		return "", fmt.Errorf("%w: invalid status filter", ErrValidation)
+	}
+}
+
+func normalizeCredentialStatusFilter(value string) (string, error) {
+	status := strings.TrimSpace(value)
+	if status == "" {
+		return "active", nil
+	}
+	switch status {
+	case "active", "rotated", "revoked", "expired", "all":
+		return status, nil
+	default:
+		return "", fmt.Errorf("%w: invalid credential status filter", ErrValidation)
 	}
 }
 
@@ -1169,7 +1453,7 @@ func (s *Service) RecordProviderModelTest(ctx context.Context, organizationID, u
 	if err != nil {
 		return ProviderTestResult{}, err
 	}
-	credential, credentialID, err := s.activeCredentialPayload(ctx, organizationID, model.ProviderAccountID)
+	credential, credentialID, err := s.credentialPayloadForModel(ctx, organizationID, model.ProviderAccountID, model.ID)
 	if err != nil {
 		return ProviderTestResult{}, err
 	}
@@ -1316,9 +1600,14 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 
 	switch testType {
 	case "connection_test", "auth_test", "model_discovery_test":
+		credentialID, err := s.credentialIDForModel(ctx, organizationID, model.ProviderAccountID, model.ID)
+		if err != nil {
+			return ProviderTestResult{}, err
+		}
 		gatewayReq := GatewayDiscoverModelsRequest{
 			OrganizationID: organizationID,
 			AccountID:      model.ProviderAccountID,
+			CredentialID:   credentialID,
 			TestType:       testType,
 			IdempotencyKey: req.IdempotencyKey,
 		}
@@ -1449,14 +1738,25 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 			normalizedOutput = mustJSON(gatewayResp.Output)
 		}
 	case "video_generation_test":
+		projectID := stringFieldFromJSON(input, "projectId")
+		if projectID == "" {
+			return ProviderTestResult{}, fmt.Errorf("%w: projectId is required for video_generation_test", ErrValidation)
+		}
+		production, err := videoproduction.LoadActiveContextForOrganization(ctx, s.db, organizationID, projectID)
+		if err != nil {
+			return ProviderTestResult{}, err
+		}
 		createReq := GatewayVideoCreateTaskRequest{
-			OrganizationID:  organizationID,
-			ProjectID:       stringFieldFromJSON(input, "projectId"),
-			WorkflowRunID:   stringFieldFromJSON(input, "workflowRunId"),
-			NodeRunID:       stringFieldFromJSON(input, "nodeRunId"),
-			ProviderModelID: modelID,
-			IdempotencyKey:  req.IdempotencyKey,
-			Input:           input,
+			OrganizationID:                 organizationID,
+			ProjectID:                      projectID,
+			ProductionGenerationID:         production.Generation.ID,
+			VideoProductionBindingID:       production.Binding.ID,
+			VideoProductionBindingRevision: production.Binding.Revision,
+			WorkflowRunID:                  stringFieldFromJSON(input, "workflowRunId"),
+			NodeRunID:                      stringFieldFromJSON(input, "nodeRunId"),
+			ProviderModelID:                modelID,
+			IdempotencyKey:                 req.IdempotencyKey,
+			Input:                          input,
 		}
 		var createResp GatewayVideoCreateTaskResponse
 		if err := s.postGatewayJSON(ctx, "/internal/provider/video/create-task", createReq, &createResp); err != nil {
@@ -1487,11 +1787,14 @@ func (s *Service) recordProviderModelTestViaGateway(ctx context.Context, organiz
 		}
 		for attempt := 0; attempt < maxPolls; attempt++ {
 			pollReq := GatewayVideoPollTaskRequest{
-				OrganizationID:      organizationID,
-				ProviderAsyncTaskID: createResp.ProviderAsyncTaskID,
-				ProjectID:           createReq.ProjectID,
-				WorkflowRunID:       createReq.WorkflowRunID,
-				NodeRunID:           createReq.NodeRunID,
+				OrganizationID:                 organizationID,
+				ProviderAsyncTaskID:            createResp.ProviderAsyncTaskID,
+				ProjectID:                      createReq.ProjectID,
+				ProductionGenerationID:         createReq.ProductionGenerationID,
+				VideoProductionBindingID:       createReq.VideoProductionBindingID,
+				VideoProductionBindingRevision: createReq.VideoProductionBindingRevision,
+				WorkflowRunID:                  createReq.WorkflowRunID,
+				NodeRunID:                      createReq.NodeRunID,
 			}
 			var pollResp GatewayVideoPollTaskResponse
 			if err := s.postGatewayJSON(ctx, "/internal/provider/video/poll-task", pollReq, &pollResp); err != nil {
@@ -1703,7 +2006,13 @@ func (s *Service) RecordCall(ctx context.Context, req RecordCallRequest) (CallLo
 		}
 	}
 	if req.CredentialID == "" {
-		credentialID, err := s.activeCredentialID(ctx, req.OrganizationID, req.ProviderAccountID)
+		var credentialID string
+		var err error
+		if req.ProviderModelID != "" {
+			credentialID, err = s.credentialIDForModel(ctx, req.OrganizationID, req.ProviderAccountID, req.ProviderModelID)
+		} else {
+			credentialID, err = s.activeCredentialID(ctx, req.OrganizationID, req.ProviderAccountID)
+		}
 		if err != nil && err != pgx.ErrNoRows {
 			return CallLog{}, err
 		}
@@ -1717,7 +2026,7 @@ func (s *Service) ListCallLogs(ctx context.Context, organizationID string, filte
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			id, provider_request_id, attempt_generation, attempt_sequence,
-			organization_id, project_id, workflow_run_id, node_run_id,
+			organization_id, project_id, production_generation_id, workflow_run_id, node_run_id,
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
 			task_type, execution_mode, status,
@@ -1904,27 +2213,108 @@ func (s *Service) activeCredentialID(ctx context.Context, organizationID, accoun
 		WHERE organization_id = $1
 		  AND provider_account_id = $2
 		  AND is_active = true
-		ORDER BY created_at DESC
+		  AND status = 'active'
+		ORDER BY credential_key, created_at DESC
 		LIMIT 1
 	`, organizationID, accountID).Scan(&credentialID)
 	return credentialID, err
 }
 
 func (s *Service) activeCredentialPayload(ctx context.Context, organizationID, accountID string) (map[string]any, string, error) {
-	var credentialID string
-	var encrypted []byte
-	err := s.db.QueryRow(ctx, `
-		SELECT id, encrypted_payload
-		FROM provider_credentials
-		WHERE organization_id = $1
-		  AND provider_account_id = $2
-		  AND is_active = true
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, organizationID, accountID).Scan(&credentialID, &encrypted)
+	credentialID, err := s.activeCredentialID(ctx, organizationID, accountID)
 	if err != nil {
 		return nil, "", err
 	}
+	return s.activeCredentialPayloadByID(ctx, organizationID, accountID, credentialID)
+}
+
+func (s *Service) credentialIDForModel(ctx context.Context, organizationID, accountID, modelID string) (string, error) {
+	var credentialID string
+	err := s.db.QueryRow(ctx, `
+		SELECT pc.id
+		FROM provider_credential_models pcm
+		JOIN provider_credentials pc ON pc.id = pcm.provider_credential_id
+		JOIN provider_models pm ON pm.id = pcm.provider_model_id
+		WHERE pc.organization_id = $1
+		  AND pc.provider_account_id = $2
+		  AND pm.provider_account_id = $2
+		  AND pm.id = $3
+		  AND pc.is_active = true
+		  AND pc.status = 'active'
+		  AND pcm.is_available = true
+		ORDER BY pc.credential_key, pc.created_at DESC
+		LIMIT 1
+	`, organizationID, accountID, modelID).Scan(&credentialID)
+	if err == nil {
+		return credentialID, nil
+	}
+	if err != pgx.ErrNoRows {
+		return "", err
+	}
+
+	var hasDiscoveryMapping bool
+	if err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM provider_credential_models pcm
+			JOIN provider_credentials pc ON pc.id = pcm.provider_credential_id
+			WHERE pc.organization_id = $1
+			  AND pc.provider_account_id = $2
+			  AND pcm.provider_model_id = $3
+		)
+	`, organizationID, accountID, modelID).Scan(&hasDiscoveryMapping); err != nil {
+		return "", err
+	}
+	if hasDiscoveryMapping {
+		return "", fmt.Errorf("%w: provider model is not available for any active credential", ErrValidation)
+	}
+	return s.activeCredentialID(ctx, organizationID, accountID)
+}
+
+func (s *Service) credentialPayloadForModel(ctx context.Context, organizationID, accountID, modelID string) (map[string]any, string, error) {
+	credentialID, err := s.credentialIDForModel(ctx, organizationID, accountID, modelID)
+	if err != nil {
+		return nil, "", err
+	}
+	return s.activeCredentialPayloadByID(ctx, organizationID, accountID, credentialID)
+}
+
+func (s *Service) activeCredentialPayloadByID(ctx context.Context, organizationID, accountID, credentialID string) (map[string]any, string, error) {
+	var encrypted []byte
+	err := s.db.QueryRow(ctx, `
+		SELECT encrypted_payload
+		FROM provider_credentials
+		WHERE organization_id = $1
+		  AND provider_account_id = $2
+		  AND id = $3
+		  AND is_active = true
+		  AND status = 'active'
+	`, organizationID, accountID, credentialID).Scan(&encrypted)
+	if err != nil {
+		return nil, "", err
+	}
+	return s.decryptCredentialPayload(credentialID, encrypted)
+}
+
+// credentialPayloadByID resolves the exact historical credential. It is used
+// by long-running provider tasks that must keep the credential identity chosen
+// at task creation even after the logical credential is rotated.
+func (s *Service) credentialPayloadByID(ctx context.Context, organizationID, accountID, credentialID string) (map[string]any, string, error) {
+	var encrypted []byte
+	err := s.db.QueryRow(ctx, `
+		SELECT encrypted_payload
+		FROM provider_credentials
+		WHERE organization_id = $1
+		  AND provider_account_id = $2
+		  AND id = $3
+	`, organizationID, accountID, credentialID).Scan(&encrypted)
+	if err != nil {
+		return nil, "", err
+	}
+	return s.decryptCredentialPayload(credentialID, encrypted)
+}
+
+func (s *Service) decryptCredentialPayload(credentialID string, encrypted []byte) (map[string]any, string, error) {
 	decrypted, err := s.vault.Decrypt(encrypted)
 	if err != nil {
 		return nil, "", err
@@ -1994,6 +2384,12 @@ func accountSelect(suffix string) string {
 				ORDER BY pc.created_at DESC
 				LIMIT 1
 			) AS credential_preview,
+			(
+				SELECT count(*)
+				FROM provider_credentials pc
+				WHERE pc.provider_account_id = a.id
+				  AND pc.is_active = true
+			) AS credential_count,
 			a.created_by,
 			a.created_at,
 			a.updated_at
@@ -2018,6 +2414,7 @@ func scanAccount(row rowScanner) (Account, error) {
 		&item.Status,
 		&config,
 		&preview,
+		&item.CredentialCount,
 		&item.CreatedBy,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -2029,6 +2426,64 @@ func scanAccount(row rowScanner) (Account, error) {
 		item.CredentialPreview = &preview.String
 	}
 	item.Config = rawOrDefault(config, "{}")
+	return item, err
+}
+
+func credentialSelect(suffix string) string {
+	return `
+		SELECT
+			pc.id,
+			pc.organization_id,
+			pc.provider_account_id,
+			pc.credential_key,
+			pc.credential_type,
+			pc.masked_preview,
+			pc.status,
+			pc.is_active,
+			(
+				SELECT count(*)
+				FROM provider_credential_models pcm
+				WHERE pcm.provider_credential_id = pc.id
+				  AND pcm.is_available = true
+			) AS available_model_count,
+			(
+				SELECT max(pcm.last_discovered_at)
+				FROM provider_credential_models pcm
+				WHERE pcm.provider_credential_id = pc.id
+			) AS last_discovered_at,
+			pc.created_by,
+			pc.created_at,
+			pc.expires_at,
+			pc.rotated_at
+		FROM provider_credentials pc
+	` + suffix
+}
+
+func scanCredential(row rowScanner) (Credential, error) {
+	var item Credential
+	var preview, createdBy sql.NullString
+	var lastDiscoveredAt, expiresAt, rotatedAt sql.NullTime
+	err := row.Scan(
+		&item.ID,
+		&item.OrganizationID,
+		&item.ProviderAccountID,
+		&item.CredentialKey,
+		&item.CredentialType,
+		&preview,
+		&item.Status,
+		&item.IsActive,
+		&item.AvailableModelCount,
+		&lastDiscoveredAt,
+		&createdBy,
+		&item.CreatedAt,
+		&expiresAt,
+		&rotatedAt,
+	)
+	item.MaskedPreview = preview.String
+	item.CreatedBy = stringPtr(createdBy)
+	item.LastDiscoveredAt = timePtr(lastDiscoveredAt)
+	item.ExpiresAt = timePtr(expiresAt)
+	item.RotatedAt = timePtr(rotatedAt)
 	return item, err
 }
 
@@ -2247,6 +2702,9 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 	if req.AttemptSequence <= 0 {
 		req.AttemptSequence = 1
 	}
+	if (strings.TrimSpace(req.OperationItemID) == "") != (req.OperationItemAttempt <= 0) {
+		return CallLog{}, fmt.Errorf("%w: operationItemId and operationItemAttempt must be provided together", ErrValidation)
+	}
 	requestSnapshot, err := SanitizeRawJSON(req.RequestSnapshot, "{}")
 	if err != nil {
 		return CallLog{}, fmt.Errorf("%w: requestSnapshot must be valid JSON", ErrValidation)
@@ -2276,7 +2734,9 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 		INSERT INTO provider_call_logs(
 			id,
 			provider_request_id, attempt_generation, attempt_sequence,
-			organization_id, project_id, workflow_run_id, node_run_id,
+			organization_id, project_id, production_generation_id,
+			operation_id, operation_item_id, operation_item_attempt, video_render_plan_id, video_render_segment_id,
+			workflow_run_id, node_run_id,
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
 			prompt_version_id, prompt_hash,
@@ -2290,7 +2750,9 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 		VALUES (
 			COALESCE(NULLIF(@id, '')::uuid, gen_random_uuid()),
 			NULLIF(@provider_request_id, '')::uuid, @attempt_generation, @attempt_sequence,
-			@organization_id, NULLIF(@project_id, '')::uuid, NULLIF(@workflow_run_id, '')::uuid, NULLIF(@node_run_id, '')::uuid,
+			@organization_id, NULLIF(@project_id, '')::uuid, NULLIF(@production_generation_id, '')::uuid,
+			NULLIF(@operation_id, '')::uuid, NULLIF(@operation_item_id, '')::uuid, NULLIF(@operation_item_attempt, 0), NULLIF(@video_render_plan_id, '')::uuid, NULLIF(@video_render_segment_id, '')::uuid,
+			NULLIF(@workflow_run_id, '')::uuid, NULLIF(@node_run_id, '')::uuid,
 			@provider_account_id, NULLIF(@provider_model_id, '')::uuid, NULLIF(@credential_id, '')::uuid,
 			NULLIF(@model_profile_id, '')::uuid, NULLIF(@model_profile_binding_id, '')::uuid, NULLIF(@model_profile_key, ''),
 			NULLIF(@prompt_version_id, '')::uuid, NULLIF(@prompt_hash, ''),
@@ -2308,6 +2770,12 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			attempt_sequence = EXCLUDED.attempt_sequence,
 			organization_id = EXCLUDED.organization_id,
 			project_id = EXCLUDED.project_id,
+			production_generation_id = COALESCE(EXCLUDED.production_generation_id, provider_call_logs.production_generation_id),
+			operation_id = COALESCE(EXCLUDED.operation_id, provider_call_logs.operation_id),
+			operation_item_id = COALESCE(EXCLUDED.operation_item_id, provider_call_logs.operation_item_id),
+			operation_item_attempt = COALESCE(EXCLUDED.operation_item_attempt, provider_call_logs.operation_item_attempt),
+			video_render_plan_id = COALESCE(EXCLUDED.video_render_plan_id, provider_call_logs.video_render_plan_id),
+			video_render_segment_id = COALESCE(EXCLUDED.video_render_segment_id, provider_call_logs.video_render_segment_id),
 			workflow_run_id = EXCLUDED.workflow_run_id,
 			node_run_id = EXCLUDED.node_run_id,
 			provider_account_id = EXCLUDED.provider_account_id,
@@ -2344,7 +2812,7 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			completed_at = EXCLUDED.completed_at
 		RETURNING
 			id, provider_request_id, attempt_generation, attempt_sequence,
-			organization_id, project_id, workflow_run_id, node_run_id,
+			organization_id, project_id, production_generation_id, workflow_run_id, node_run_id,
 			provider_account_id, provider_model_id, credential_id,
 			model_profile_id, model_profile_binding_id, model_profile_key,
 			task_type, execution_mode, status,
@@ -2360,6 +2828,12 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 		"attempt_sequence":           req.AttemptSequence,
 		"organization_id":            req.OrganizationID,
 		"project_id":                 strings.TrimSpace(req.ProjectID),
+		"production_generation_id":   strings.TrimSpace(req.ProductionGenerationID),
+		"operation_id":               strings.TrimSpace(req.OperationID),
+		"operation_item_id":          strings.TrimSpace(req.OperationItemID),
+		"operation_item_attempt":     req.OperationItemAttempt,
+		"video_render_plan_id":       strings.TrimSpace(req.ExecutionPlanID),
+		"video_render_segment_id":    strings.TrimSpace(req.RenderSegmentID),
 		"workflow_run_id":            strings.TrimSpace(req.WorkflowRunID),
 		"node_run_id":                strings.TrimSpace(req.NodeRunID),
 		"provider_account_id":        req.ProviderAccountID,
@@ -2399,7 +2873,7 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 func scanCallLog(row rowScanner) (CallLog, error) {
 	var item CallLog
 	var providerRequestID sql.NullString
-	var projectID, workflowRunID, nodeRunID, providerModelID, credentialID sql.NullString
+	var projectID, productionGenerationID, workflowRunID, nodeRunID, providerModelID, credentialID sql.NullString
 	var modelProfileID, modelProfileBindingID, modelProfileKey sql.NullString
 	var errorCode, errorMessage, upstreamErrorCode sql.NullString
 	var estimatedCost, currency sql.NullString
@@ -2414,6 +2888,7 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 		&item.AttemptSequence,
 		&item.OrganizationID,
 		&projectID,
+		&productionGenerationID,
 		&workflowRunID,
 		&nodeRunID,
 		&item.ProviderAccountID,
@@ -2448,6 +2923,7 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 	)
 	item.ProviderRequestID = stringPtr(providerRequestID)
 	item.ProjectID = stringPtr(projectID)
+	item.ProductionGenerationID = stringPtr(productionGenerationID)
 	item.WorkflowRunID = stringPtr(workflowRunID)
 	item.NodeRunID = stringPtr(nodeRunID)
 	item.ProviderModelID = stringPtr(providerModelID)
@@ -2624,6 +3100,13 @@ func stringPtr(value sql.NullString) *string {
 		return nil
 	}
 	return &value.String
+}
+
+func timePtr(value sql.NullTime) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	return &value.Time
 }
 
 func nullString(value string) any {

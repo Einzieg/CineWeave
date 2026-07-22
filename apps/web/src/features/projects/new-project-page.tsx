@@ -18,6 +18,7 @@ import { projectHref } from "@/lib/routes";
 import { useApiQuery } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { cn } from "@/lib/utils";
+import type { VideoProductionProfileKey } from "@/lib/types";
 import {
   buildManualStyleOptions,
   DEFAULT_DIRECTOR_MANUAL_KEY,
@@ -45,11 +46,16 @@ const ratioOptions: Array<{ value: string; label: string; hint: string; icon: Lu
   { value: "1:1", label: "方形", hint: "1:1", icon: Square },
 ];
 
-const productionModeOptions = [
-  { value: "silent_video", title: "完整视频链路", description: "资产、分镜、镜头视频与成片串联", icon: Clapperboard },
-  { value: "storyboard_only", title: "仅生成分镜", description: "先完成剧本分场与分镜设计", icon: Layers },
-  { value: "assets_only", title: "仅生成资产", description: "先提取角色、场景、道具资产", icon: ImageIcon },
-  { value: "custom", title: "自定义生产", description: "按项目需要调整后续生产步骤", icon: Monitor },
+const videoProductionProfileOptions: Array<{
+  value: VideoProductionProfileKey;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+}> = [
+  { value: "single_frame_i2v", title: "图生视频模式", description: "每个镜头使用自己的权威首帧生成视频", icon: Clapperboard },
+  { value: "first_last_frame", title: "首尾帧衔接模式", description: "使用同镜头计划首尾帧约束动作过程", icon: Layers },
+  { value: "multimodal_reference", title: "多模态参考模式", description: "使用角色、场景、道具和多媒体语义参考", icon: ImageIcon },
+  { value: "storyboard_sheet", title: "分镜板模式", description: "使用同一镜头多时间点分镜板生成视频", icon: Monitor },
 ];
 
 const qualityOptions = [
@@ -69,7 +75,7 @@ function NewProjectContent() {
     contentType: "剧本创作",
     videoRatio: "9:16",
     imageQuality: "standard",
-    productionMode: "silent_video",
+    videoProductionProfileKey: "single_frame_i2v" as VideoProductionProfileKey,
     artStyle: defaultArtStyle,
     directorManualTemplateKey: DEFAULT_DIRECTOR_MANUAL_KEY,
     directorManualPromptVersionId: "",
@@ -82,8 +88,23 @@ function NewProjectContent() {
     key: qk.projectManualTemplates(),
     queryFn: (activeSession) => studioApi.listProjectManualTemplates(activeSession).then((response) => response.items),
   });
+  const { data: videoProductionProfileVersions = [], isLoading: videoProductionProfilesLoading } = useApiQuery({
+    key: qk.videoProductionProfiles(),
+    queryFn: (activeSession) => studioApi.listVideoProductionProfiles(activeSession).then((response) => response.items),
+  });
   const directorManualOptions = useMemo(() => buildManualStyleOptions(manualTemplates, "director"), [manualTemplates]);
   const visualManualOptions = useMemo(() => buildManualStyleOptions(manualTemplates, "visual"), [manualTemplates]);
+  const videoProductionProfileCards = useMemo(() => videoProductionProfileOptions.map((option) => {
+    const profile = videoProductionProfileVersions
+      .filter((candidate) => candidate.profileKey === option.value)
+      .sort((left, right) => right.version - left.version)[0];
+    return {
+      ...option,
+      available: profile?.available === true,
+      description: profile?.description || option.description,
+      version: profile?.version,
+    };
+  }), [videoProductionProfileVersions]);
 
   async function submit() {
     setError("");
@@ -96,20 +117,25 @@ function NewProjectContent() {
       setError("项目名称不能为空。");
       return;
     }
+    if (!videoProductionProfileCards.some((option) => option.value === form.videoProductionProfileKey && option.available)) {
+      setError("所选视频生产方案当前不可用，请刷新后重试。");
+      return;
+    }
     setBusy(true);
     try {
       const project = await studioApi.createProject(session, {
         workspaceId,
         name: form.name,
-        description: form.description || null,
+        description: form.description || undefined,
         projectType: form.projectType,
         contentType: form.contentType,
         videoRatio: form.videoRatio,
         artStyle: form.artStyle,
-        directorManualPromptVersionId: form.directorManualPromptVersionId || null,
-        visualManualPromptVersionId: form.visualManualPromptVersionId || null,
+        directorManualPromptVersionId: form.directorManualPromptVersionId || undefined,
+        visualManualPromptVersionId: form.visualManualPromptVersionId || undefined,
         imageQuality: form.imageQuality,
-        productionMode: form.productionMode,
+        videoProductionProfileKey: form.videoProductionProfileKey,
+        compatibilityPolicy: "strict",
         settings: projectSettingsFromForm(form),
       });
       router.push(projectHref(project.id) as Route);
@@ -206,17 +232,20 @@ function NewProjectContent() {
 
       <ConfigSection title="生产方式">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {productionModeOptions.map((option) => (
-            <ProductionModeCard
+          {videoProductionProfileCards.map((option) => (
+            <VideoProductionProfileCard
               key={option.value}
-              selected={form.productionMode === option.value}
+              selected={form.videoProductionProfileKey === option.value}
+              disabled={!option.available}
               icon={option.icon}
               title={option.title}
               description={option.description}
-              onClick={() => setForm({ ...form, productionMode: option.value })}
+              version={option.version}
+              onClick={() => option.available && setForm({ ...form, videoProductionProfileKey: option.value })}
             />
           ))}
         </div>
+        {videoProductionProfilesLoading ? <div className="text-xs text-muted-foreground">正在读取可用生产方案</div> : null}
         <div className="flex flex-wrap items-center gap-3 pt-1">
           <div className="text-sm font-medium">图片质量</div>
           {qualityOptions.map((option) => (
@@ -311,25 +340,31 @@ function SegmentButton({
   );
 }
 
-function ProductionModeCard({
+function VideoProductionProfileCard({
   selected,
   icon: Icon,
   title,
   description,
+  version,
+  disabled,
   onClick,
 }: {
   selected: boolean;
   icon: LucideIcon;
   title: string;
   description: string;
+  version?: number;
+  disabled: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       className={cn(
         "flex min-h-24 flex-col items-start gap-2 rounded-lg border bg-muted/40 p-4 text-left transition hover:border-primary/60",
         selected && "border-primary bg-primary/10 text-primary shadow-sm",
+        disabled && "cursor-not-allowed opacity-55",
       )}
       onClick={onClick}
     >
@@ -338,7 +373,7 @@ function ProductionModeCard({
           <Icon className="size-4" />
           {title}
         </span>
-        {selected ? <Check className="size-4" /> : null}
+        {selected ? <Check className="size-4" /> : disabled ? <span className="text-xs font-normal text-muted-foreground">暂不可用</span> : version ? <span className="text-xs font-normal text-muted-foreground">v{version}</span> : null}
       </div>
       <span className={cn("text-xs", selected ? "text-primary/80" : "text-muted-foreground")}>{description}</span>
     </button>

@@ -280,6 +280,411 @@ func TestSourceToScriptNovelPathUsesEventsAndPlanIntegration(t *testing.T) {
 	}
 }
 
+func TestPrepareSourceToScriptAppendsSecondChapterToCurrentScriptIntegration(t *testing.T) {
+	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
+		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run novel adaptation integration tests")
+	}
+	ctx := context.Background()
+	pool := openNovelAdaptationTestDB(t, ctx)
+	t.Cleanup(pool.Close)
+
+	orgID, userID, projectID, workflowRunID, _, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
+	var sourceID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO project_sources(organization_id, project_id, source_type, title, content, content_format, status, created_by)
+		VALUES ($1, $2, 'novel', 'Sequential Novel', 'chapter one\nchapter two', 'plain_text', 'ready', $3)
+		RETURNING id::text
+	`, orgID, projectID, userID).Scan(&sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	var chapterOneID, chapterTwoID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO novel_chapters(
+			organization_id, project_id, source_id, chapter_index, volume_index, section_index,
+			volume_title, chapter_title, content, event_state
+		)
+		VALUES ($1, $2, $3, 1, 1, 1, '第一卷', '第一节', 'first chapter text', 'pending')
+		RETURNING id::text
+	`, orgID, projectID, sourceID).Scan(&chapterOneID); err != nil {
+		t.Fatalf("insert first chapter: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO novel_chapters(
+			organization_id, project_id, source_id, chapter_index, volume_index, section_index,
+			volume_title, chapter_title, content, event_state
+		)
+		VALUES ($1, $2, $3, 2, 1, 2, '第一卷', '第二节', 'second chapter text', 'pending')
+		RETURNING id::text
+	`, orgID, projectID, sourceID).Scan(&chapterTwoID); err != nil {
+		t.Fatalf("insert second chapter: %v", err)
+	}
+
+	var scriptID, versionID, firstEpisodeID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO scripts(organization_id, project_id, source_id, title, status, created_by)
+		VALUES ($1, $2, $3, 'Current Script', 'active', $4)
+		RETURNING id::text
+	`, orgID, projectID, sourceID, userID).Scan(&scriptID); err != nil {
+		t.Fatalf("insert script: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO script_versions(
+			organization_id, project_id, script_id, version_no, version, content,
+			content_format, status, source_type, metadata, created_by
+		)
+		VALUES ($1, $2, $3, 1, 1, 'episode one', 'markdown', 'active', 'agent_generated', '{}', $4)
+		RETURNING id::text
+	`, orgID, projectID, scriptID, userID).Scan(&versionID); err != nil {
+		t.Fatalf("insert script version: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO script_episodes(
+			organization_id, project_id, script_id, script_version_id, source_id, source_chapter_id,
+			episode_index, volume_index, section_index, volume_title, episode_title, content, created_by
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, 1, 1, 1, '第一卷', '第一节', 'episode one', $7)
+		RETURNING id::text
+	`, orgID, projectID, scriptID, versionID, sourceID, chapterOneID, userID).Scan(&firstEpisodeID); err != nil {
+		t.Fatalf("insert first episode: %v", err)
+	}
+	var firstSceneID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO script_scenes(
+			organization_id, project_id, script_id, script_version_id, script_episode_id,
+			scene_index, scene_no, title, content, created_by
+		)
+		VALUES ($1, $2, $3, $4, $5, 1, 1, 'Episode One Scene', 'scene content', $6)
+		RETURNING id::text
+	`, orgID, projectID, scriptID, versionID, firstEpisodeID, userID).Scan(&firstSceneID); err != nil {
+		t.Fatalf("insert first scene: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scripts SET current_version_id = $2 WHERE id = $1`, scriptID, versionID); err != nil {
+		t.Fatalf("activate script version: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE projects SET active_script_id = $2 WHERE id = $1`, projectID, scriptID); err != nil {
+		t.Fatalf("set current project script: %v", err)
+	}
+
+	activities := NewActivities(pool, nil, nil)
+	plan, err := activities.PrepareScriptFromSource(ctx, PrepareScriptFromSourceInput{GenerateScriptFromSourceInput: GenerateScriptFromSourceInput{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		WorkflowRunID:  workflowRunID,
+		CreatedBy:      userID,
+		SourceID:       sourceID,
+		ChapterIDs:     []string{chapterTwoID},
+		IdempotencyKey: "append-second-chapter",
+	}})
+	if err != nil {
+		t.Fatalf("PrepareScriptFromSource: %v", err)
+	}
+	if plan.ScriptID != scriptID || plan.GenerationID == "" || plan.BaseScriptVersionID != versionID || plan.ScriptVersionID != "" {
+		t.Fatalf("plan did not freeze the current script without publishing a version: %+v", plan)
+	}
+	if plan.PreviousScriptVersionID != versionID || plan.PreviousActiveScriptID != scriptID {
+		t.Fatalf("plan previous identities = %+v", plan)
+	}
+	if plan.EpisodeTotal != 1 || plan.SeriesEpisodeTotal != 2 || SourceToScriptEpisodeNumber(plan, 0) != 2 {
+		t.Fatalf("plan episode identity = %+v", plan)
+	}
+	var scriptCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM scripts WHERE project_id = $1`, projectID).Scan(&scriptCount); err != nil {
+		t.Fatalf("count scripts: %v", err)
+	}
+	if scriptCount != 1 {
+		t.Fatalf("script count = %d, want 1", scriptCount)
+	}
+	var preparedCurrentVersionID, preparedActiveScriptID string
+	if err := pool.QueryRow(ctx, `SELECT current_version_id::text FROM scripts WHERE id = $1`, scriptID).Scan(&preparedCurrentVersionID); err != nil {
+		t.Fatalf("load current version after prepare: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT active_script_id::text FROM projects WHERE id = $1`, projectID).Scan(&preparedActiveScriptID); err != nil {
+		t.Fatalf("load active script after prepare: %v", err)
+	}
+	if preparedCurrentVersionID != versionID || preparedActiveScriptID != scriptID {
+		t.Fatalf("prepare changed active identities: version=%s script=%s", preparedCurrentVersionID, preparedActiveScriptID)
+	}
+	var preparedVersionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_versions WHERE script_id = $1`, scriptID).Scan(&preparedVersionCount); err != nil {
+		t.Fatalf("count versions after prepare: %v", err)
+	}
+	if preparedVersionCount != 1 {
+		t.Fatalf("version count after prepare = %d, want 1", preparedVersionCount)
+	}
+
+	var queuedRaw json.RawMessage
+	if err := pool.QueryRow(ctx, `
+		SELECT input
+		FROM workflow_node_runs
+		WHERE workflow_run_id = $1 AND node_type = $2
+	`, workflowRunID, SourceToScriptEpisodeNodeType).Scan(&queuedRaw); err != nil {
+		t.Fatalf("load queued episode: %v", err)
+	}
+	var queued GenerateSourceScriptEpisodeInput
+	if err := json.Unmarshal(queuedRaw, &queued); err != nil {
+		t.Fatalf("decode queued episode: %v", err)
+	}
+	if queued.EpisodeIndex != 2 || queued.EpisodeTotal != 2 || queued.Chapter.ID != chapterTwoID {
+		t.Fatalf("queued episode = %+v", queued)
+	}
+
+	output := stageSourceToScriptEpisodeSuccess(t, ctx, pool, activities, queued, plan, userID, "episode two")
+	if output.EpisodeIndex != 2 || output.ScriptID != scriptID || output.GenerationResultID == "" {
+		t.Fatalf("staged output = %+v", output)
+	}
+	var formalEpisodeCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_episodes WHERE script_id = $1`, scriptID).Scan(&formalEpisodeCount); err != nil {
+		t.Fatalf("count episodes before finalize: %v", err)
+	}
+	if formalEpisodeCount != 1 {
+		t.Fatalf("formal episode count before finalize = %d, want 1", formalEpisodeCount)
+	}
+	var originalEpisodeCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_episodes WHERE script_version_id = $1 AND id = $2`, versionID, firstEpisodeID).Scan(&originalEpisodeCount); err != nil {
+		t.Fatalf("count original episode: %v", err)
+	}
+	if originalEpisodeCount != 1 {
+		t.Fatalf("original episode count = %d, want 1", originalEpisodeCount)
+	}
+
+	finalized, err := activities.FinalizeScriptFromSource(ctx, GenerateScriptFromSourceInput{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		WorkflowRunID:  workflowRunID,
+		CreatedBy:      userID,
+		SourceID:       sourceID,
+	}, plan, SourceToScriptFinalization{RequestedEpisodeCount: 1, CompletedEpisodeCount: 1})
+	if err != nil {
+		t.Fatalf("FinalizeScriptFromSource: %v", err)
+	}
+	if finalized.Status != "succeeded" || finalized.ScriptVersionID == "" || finalized.ScriptVersionID == versionID || finalized.EpisodeCount != 2 {
+		t.Fatalf("finalized output = %+v", finalized)
+	}
+	type episodeIdentity struct {
+		id        string
+		index     int
+		chapterID string
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT id::text, episode_index, source_chapter_id::text
+		FROM script_episodes
+		WHERE script_version_id = $1
+		ORDER BY episode_index
+	`, finalized.ScriptVersionID)
+	if err != nil {
+		t.Fatalf("list finalized episodes: %v", err)
+	}
+	identities := make([]episodeIdentity, 0, 2)
+	for rows.Next() {
+		var item episodeIdentity
+		if err := rows.Scan(&item.id, &item.index, &item.chapterID); err != nil {
+			rows.Close()
+			t.Fatalf("scan finalized episode: %v", err)
+		}
+		identities = append(identities, item)
+	}
+	rows.Close()
+	if len(identities) != 2 || identities[0].id == firstEpisodeID || identities[0].index != 1 || identities[0].chapterID != chapterOneID || identities[1].index != 2 || identities[1].chapterID != chapterTwoID {
+		t.Fatalf("episode identities = %+v", identities)
+	}
+	var currentVersionID, sceneStaleState string
+	if err := pool.QueryRow(ctx, `SELECT current_version_id::text FROM scripts WHERE id = $1`, scriptID).Scan(&currentVersionID); err != nil {
+		t.Fatalf("load activated version: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT stale_state FROM script_scenes WHERE id = $1`, firstSceneID).Scan(&sceneStaleState); err != nil {
+		t.Fatalf("load previous scene stale state: %v", err)
+	}
+	if currentVersionID != finalized.ScriptVersionID || sceneStaleState != "needs_regeneration" {
+		t.Fatalf("activation result: version=%s sceneStaleState=%s", currentVersionID, sceneStaleState)
+	}
+	replayed, err := activities.FinalizeScriptFromSource(ctx, GenerateScriptFromSourceInput{
+		OrganizationID: orgID, ProjectID: projectID, WorkflowRunID: workflowRunID,
+		CreatedBy: userID, SourceID: sourceID,
+	}, plan, SourceToScriptFinalization{RequestedEpisodeCount: 1, CompletedEpisodeCount: 1})
+	if err != nil {
+		t.Fatalf("replay FinalizeScriptFromSource: %v", err)
+	}
+	if replayed.ScriptVersionID != finalized.ScriptVersionID {
+		t.Fatalf("replayed version = %s, want %s", replayed.ScriptVersionID, finalized.ScriptVersionID)
+	}
+	var finalizedVersionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_versions WHERE script_id = $1`, scriptID).Scan(&finalizedVersionCount); err != nil {
+		t.Fatalf("count versions after replay: %v", err)
+	}
+	if finalizedVersionCount != 2 {
+		t.Fatalf("version count after replay = %d, want 2", finalizedVersionCount)
+	}
+}
+
+func TestFinalizeSourceToScriptKeepsPreviousProjectScriptWhenAllEpisodesFailIntegration(t *testing.T) {
+	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
+		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run novel adaptation integration tests")
+	}
+	ctx := context.Background()
+	pool := openNovelAdaptationTestDB(t, ctx)
+	t.Cleanup(pool.Close)
+
+	orgID, userID, projectID, workflowRunID, _, _ := seedWorkflowGatewayIntegrationData(t, ctx, pool)
+	var sourceID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO project_sources(organization_id, project_id, source_type, title, content, content_format, status, created_by)
+		VALUES ($1, $2, 'brief', 'Failed Draft Source', 'source content', 'plain_text', 'ready', $3)
+		RETURNING id::text
+	`, orgID, projectID, userID).Scan(&sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	var previousScriptID, previousVersionID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO scripts(organization_id, project_id, source_id, title, status, created_by)
+		VALUES ($1, $2, $3, 'Previous Script', 'active', $4)
+		RETURNING id::text
+	`, orgID, projectID, sourceID, userID).Scan(&previousScriptID); err != nil {
+		t.Fatalf("insert previous script: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO script_versions(
+			organization_id, project_id, script_id, version_no, version, content,
+			content_format, status, source_type, metadata, created_by
+		)
+		VALUES ($1, $2, $3, 1, 1, 'previous content', 'markdown', 'active', 'manual', '{}', $4)
+		RETURNING id::text
+	`, orgID, projectID, previousScriptID, userID).Scan(&previousVersionID); err != nil {
+		t.Fatalf("insert previous version: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scripts SET current_version_id = $2 WHERE id = $1`, previousScriptID, previousVersionID); err != nil {
+		t.Fatalf("set previous current version: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE projects SET active_script_id = $2 WHERE id = $1`, projectID, previousScriptID); err != nil {
+		t.Fatalf("set previous project script: %v", err)
+	}
+
+	activities := NewActivities(pool, nil, nil)
+	input := GenerateScriptFromSourceInput{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		WorkflowRunID:   workflowRunID,
+		CreatedBy:       userID,
+		SourceID:        sourceID,
+		CreateNewScript: true,
+		IdempotencyKey:  "all-episodes-fail",
+	}
+	plan, err := activities.PrepareScriptFromSource(ctx, PrepareScriptFromSourceInput{GenerateScriptFromSourceInput: input})
+	if err != nil {
+		t.Fatalf("PrepareScriptFromSource: %v", err)
+	}
+	if plan.ScriptID == previousScriptID || plan.PreviousActiveScriptID != previousScriptID {
+		t.Fatalf("prepared plan = %+v", plan)
+	}
+	queued := loadQueuedSourceToScriptEpisode(t, ctx, pool, workflowRunID, plan.Chapters[0])
+	if err := activities.FailSourceScriptEpisode(ctx, FailSourceScriptEpisodeInput{
+		Episode: queued, ErrorCode: "UPSTREAM_TIMEOUT", ErrorMessage: "provider timed out",
+	}); err != nil {
+		t.Fatalf("persist failed episode staging result: %v", err)
+	}
+
+	output, err := activities.FinalizeScriptFromSource(ctx, input, plan, SourceToScriptFinalization{
+		RequestedEpisodeCount: 1,
+		FailedEpisodeCount:    1,
+	})
+	if err != nil {
+		t.Fatalf("FinalizeScriptFromSource: %v", err)
+	}
+	if output.Status != "failed" || output.CompletedItems != 0 || output.FailedItems != 1 {
+		t.Fatalf("failed output = %+v", output)
+	}
+	var activeScriptID, draftStatus, previousCurrentVersionID string
+	if err := pool.QueryRow(ctx, `SELECT active_script_id::text FROM projects WHERE id = $1`, projectID).Scan(&activeScriptID); err != nil {
+		t.Fatalf("load active project script: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM scripts WHERE id = $1`, plan.ScriptID).Scan(&draftStatus); err != nil {
+		t.Fatalf("load failed draft status: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT current_version_id::text FROM scripts WHERE id = $1`, previousScriptID).Scan(&previousCurrentVersionID); err != nil {
+		t.Fatalf("load previous current version: %v", err)
+	}
+	if activeScriptID != previousScriptID || previousCurrentVersionID != previousVersionID || draftStatus != "draft" {
+		t.Fatalf("failed generation changed current script: active=%s previousVersion=%s draftStatus=%s", activeScriptID, previousCurrentVersionID, draftStatus)
+	}
+	var failedDraftVersionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_versions WHERE script_id = $1`, plan.ScriptID).Scan(&failedDraftVersionCount); err != nil {
+		t.Fatalf("count failed draft versions: %v", err)
+	}
+	if failedDraftVersionCount != 0 {
+		t.Fatalf("failed draft version count = %d, want 0", failedDraftVersionCount)
+	}
+}
+
+func loadQueuedSourceToScriptEpisode(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workflowRunID string,
+	chapter SourceToScriptChapterRef,
+) GenerateSourceScriptEpisodeInput {
+	t.Helper()
+	var raw json.RawMessage
+	if err := pool.QueryRow(ctx, `
+		SELECT input
+		FROM workflow_node_runs
+		WHERE workflow_run_id = $1 AND node_key = $2
+	`, workflowRunID, SourceToScriptEpisodeNodeKey(chapter.ID, chapter.ManifestOrdinal)).Scan(&raw); err != nil {
+		t.Fatalf("load queued source-to-script episode: %v", err)
+	}
+	var queued GenerateSourceScriptEpisodeInput
+	if err := json.Unmarshal(raw, &queued); err != nil {
+		t.Fatalf("decode queued source-to-script episode: %v", err)
+	}
+	return queued
+}
+
+func stageSourceToScriptEpisodeSuccess(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	activities Activities,
+	queued GenerateSourceScriptEpisodeInput,
+	plan SourceToScriptPlan,
+	createdBy string,
+	content string,
+) SourceScriptEpisodeOutput {
+	t.Helper()
+	execution, err := StartNodeRun(ctx, pool, NodeRunInput{
+		OrganizationID: queued.OrganizationID, ProjectID: queued.ProjectID, WorkflowRunID: queued.WorkflowRunID,
+		NodeKey:  SourceToScriptEpisodeNodeKey(queued.Chapter.ID, queued.EpisodeIndex),
+		NodeType: SourceToScriptEpisodeNodeType, Input: mustJSON(queued), AttemptGeneration: queued.AttemptGeneration,
+	})
+	if err != nil {
+		t.Fatalf("start source-to-script episode node: %v", err)
+	}
+	generation, item, err := activities.loadSourceToScriptGenerationItem(ctx, queued)
+	if err != nil {
+		t.Fatalf("load frozen source-to-script generation item: %v", err)
+	}
+	var agentRunID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_runs(organization_id, project_id, agent_type, task_type, status, input, created_by, started_at)
+		VALUES ($1, $2, 'script_agent', 'generate_script', 'running', '{}', NULLIF($3, '')::uuid, now())
+		RETURNING id::text
+	`, queued.OrganizationID, queued.ProjectID, createdBy).Scan(&agentRunID); err != nil {
+		t.Fatalf("insert source-to-script agent run: %v", err)
+	}
+	renderedHash := "sha256:" + sourceToScriptTextHash(queued.ItemKey+":"+content)
+	output, err := activities.storeSourceScriptGenerationResult(
+		ctx, queued, generation, item, execution,
+		promptsvc.RenderedPrompt{
+			TemplateKey: plan.PromptTemplateKey, PromptVersionID: plan.PromptVersionID,
+			RenderedHash: renderedHash, Source: "integration_test",
+		},
+		provider.GatewayTextResponse{ModelID: plan.ProviderModelID},
+		agentRunID,
+		content,
+	)
+	if err != nil {
+		t.Fatalf("store staged source-to-script result: %v", err)
+	}
+	return output
+}
+
 type novelAdaptationSeed struct {
 	orgID         string
 	userID        string

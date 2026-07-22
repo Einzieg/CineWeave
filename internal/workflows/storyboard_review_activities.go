@@ -73,7 +73,7 @@ func (a Activities) ReviewStoryboardPlan(ctx context.Context, input ReviewStoryb
 	if err != nil {
 		return ReviewStoryboardPlanOutput{}, a.failStoryboardReview(ctx, input, nodeExecution, codeActivityFailed, err.Error())
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return ReviewStoryboardPlanOutput{}, a.failStoryboardReview(ctx, input, nodeExecution, codeActivityFailed, err.Error())
 	}

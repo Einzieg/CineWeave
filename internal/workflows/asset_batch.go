@@ -54,18 +54,18 @@ func (v AssetBatchVisualSnapshot) promptVariables() map[string]any {
 }
 
 type AssetBatchProjectSnapshot struct {
-	Revision              int64                             `json:"revision"`
-	AspectRatio           string                            `json:"aspectRatio"`
-	VideoRatio            string                            `json:"videoRatio"`
-	ArtStyle              string                            `json:"artStyle"`
-	ImageQuality          string                            `json:"imageQuality"`
-	ProductionMode        string                            `json:"productionMode"`
-	ScriptModelProfileKey string                            `json:"scriptModelProfileKey"`
-	ImageModelProfileKey  string                            `json:"imageModelProfileKey"`
-	PromptTemplateKey     string                            `json:"promptTemplateKey"`
-	PromptVersionID       string                            `json:"promptVersionId"`
-	ManualBindings        []AssetBatchManualBindingSnapshot `json:"manualBindings"`
-	ModelBindings         []AssetBatchModelBindingSnapshot  `json:"modelBindings"`
+	Revision                  int64                             `json:"revision"`
+	AspectRatio               string                            `json:"aspectRatio"`
+	VideoRatio                string                            `json:"videoRatio"`
+	ArtStyle                  string                            `json:"artStyle"`
+	ImageQuality              string                            `json:"imageQuality"`
+	VideoProductionProfileKey string                            `json:"videoProductionProfileKey"`
+	ScriptModelProfileKey     string                            `json:"scriptModelProfileKey"`
+	ImageModelProfileKey      string                            `json:"imageModelProfileKey"`
+	PromptTemplateKey         string                            `json:"promptTemplateKey"`
+	PromptVersionID           string                            `json:"promptVersionId"`
+	ManualBindings            []AssetBatchManualBindingSnapshot `json:"manualBindings"`
+	ModelBindings             []AssetBatchModelBindingSnapshot  `json:"modelBindings"`
 }
 
 type AssetBatchManualBindingSnapshot struct {
@@ -103,26 +103,38 @@ func (p AssetBatchProjectSnapshot) ProviderModelID(profileKey string) string {
 func (p AssetBatchProjectSnapshot) promptVariables(projectID string) map[string]any {
 	return map[string]any{
 		"id": projectID, "aspectRatio": p.AspectRatio, "videoRatio": p.VideoRatio,
-		"artStyle": p.ArtStyle, "imageQuality": p.ImageQuality, "productionMode": p.ProductionMode,
+		"artStyle": p.ArtStyle, "imageQuality": p.ImageQuality, "videoProductionProfileKey": p.VideoProductionProfileKey,
 	}
 }
 
 type AssetBatchItemSnapshot struct {
-	AssetID           string                           `json:"assetId"`
-	AssetType         string                           `json:"assetType"`
-	Name              string                           `json:"name"`
-	Description       string                           `json:"description"`
-	Profile           json.RawMessage                  `json:"profile"`
-	BasePrompt        string                           `json:"basePrompt,omitempty"`
-	ConsistencyPrompt string                           `json:"consistencyPrompt,omitempty"`
-	NegativePrompt    string                           `json:"negativePrompt,omitempty"`
-	VisualTraits      json.RawMessage                  `json:"visualTraits"`
-	ManualOverride    bool                             `json:"manualOverride"`
-	Revision          int64                            `json:"revision"`
-	PromptRevision    int64                            `json:"promptRevision"`
-	SceneContext      string                           `json:"sceneContext,omitempty"`
-	Visual            AssetBatchVisualSnapshot         `json:"visual"`
-	References        []provider.GatewayImageReference `json:"references,omitempty"`
+	AssetID           string                            `json:"assetId"`
+	AssetType         string                            `json:"assetType"`
+	Name              string                            `json:"name"`
+	Description       string                            `json:"description"`
+	Profile           json.RawMessage                   `json:"profile"`
+	BasePrompt        string                            `json:"basePrompt,omitempty"`
+	ConsistencyPrompt string                            `json:"consistencyPrompt,omitempty"`
+	NegativePrompt    string                            `json:"negativePrompt,omitempty"`
+	VisualTraits      json.RawMessage                   `json:"visualTraits"`
+	ManualOverride    bool                              `json:"manualOverride"`
+	Revision          int64                             `json:"revision"`
+	PromptRevision    int64                             `json:"promptRevision"`
+	SceneContext      string                            `json:"sceneContext,omitempty"`
+	Visual            AssetBatchVisualSnapshot          `json:"visual"`
+	References        []provider.GatewayImageReference  `json:"references,omitempty"`
+	RecoveredImage    *AssetBatchRecoveredImageSnapshot `json:"recoveredImage,omitempty"`
+}
+
+type AssetBatchRecoveredImageSnapshot struct {
+	SourceWorkflowRunID string `json:"sourceWorkflowRunId"`
+	SourceNodeRunID     string `json:"sourceNodeRunId"`
+	ProviderCallID      string `json:"providerCallId"`
+	ProviderModelID     string `json:"providerModelId"`
+	PromptHash          string `json:"promptHash"`
+	ArtifactID          string `json:"artifactId"`
+	MediaFileID         string `json:"mediaFileId"`
+	StorageKey          string `json:"storageKey"`
 }
 
 type AssetBatchWorkflowInput struct {
@@ -169,6 +181,7 @@ type AssetBatchWorkflowOutput struct {
 	CompletedItems int                    `json:"completedItems"`
 	FailedItems    int                    `json:"failedItems"`
 	CancelledItems int                    `json:"cancelledItems"`
+	ActiveItems    int                    `json:"activeItems,omitempty"`
 	Items          []AssetBatchItemOutput `json:"items"`
 }
 
@@ -355,15 +368,38 @@ func finalizeAssetBatchAfterCancellation(ctx workflow.Context, input AssetBatchW
 }
 
 func workflowExecutionError(err error) (string, string) {
+	if err == nil {
+		return codeActivityFailed, "任务步骤执行失败"
+	}
+	var workflowErr workflowError
+	if errors.As(err, &workflowErr) {
+		code := strings.TrimSpace(workflowErr.Code)
+		if code == "" {
+			code = codeActivityFailed
+		}
+		message := strings.TrimSpace(workflowErr.Message)
+		if message == "" {
+			message = "任务步骤执行失败"
+		}
+		return code, message
+	}
 	var applicationError *temporal.ApplicationError
 	if errors.As(err, &applicationError) {
 		code := strings.TrimSpace(applicationError.Type())
 		if code == "" {
 			code = codeActivityFailed
 		}
-		return code, applicationError.Error()
+		message := strings.TrimSpace(applicationError.Message())
+		if message == "" {
+			message = strings.TrimSpace(applicationError.Error())
+		}
+		return code, message
 	}
-	return codeActivityFailed, err.Error()
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		message = "任务步骤执行失败"
+	}
+	return codeActivityFailed, message
 }
 
 func (a Activities) GenerateAssetCardBatchItem(ctx context.Context, input AssetBatchItemActivityInput) (AssetBatchItemOutput, error) {
@@ -379,7 +415,9 @@ func (a Activities) GenerateAssetCardBatchItem(ctx context.Context, input AssetB
 	if replay, ok, err := a.assetBatchItemReplay(ctx, nodeExecution.NodeRunID); err != nil {
 		return AssetBatchItemOutput{}, err
 	} else if ok {
-		_ = CompleteNodeRun(ctx, a.db, nodeExecution, mustJSON(replay))
+		if err := CompleteNodeRun(ctx, a.db, nodeExecution, mustJSON(replay)); err != nil {
+			return AssetBatchItemOutput{}, err
+		}
 		return replay, nil
 	}
 	if err := a.ensureAssetSnapshotCurrent(ctx, batch.ProjectID, item); err != nil {
@@ -391,19 +429,23 @@ func (a Activities) GenerateAssetCardBatchItem(ctx context.Context, input AssetB
 	if providerModelID == "" {
 		return AssetBatchItemOutput{}, a.failAssetBatchActivity(ctx, nodeExecution, workflowError{Code: "MODEL_PROFILE_NOT_CONFIGURED", Message: "script model snapshot has no active provider model"})
 	}
+	canonicalSource := assetprompts.BuildCanonicalCardSource(item.AssetType, item.Description, item.VisualTraits, item.SceneContext)
 	variables := map[string]any{
 		"project": batch.Project.promptVariables(batch.ProjectID), "visualContext": item.Visual.promptVariables(),
 		"asset": map[string]any{
 			"id": item.AssetID, "assetType": item.AssetType, "name": item.Name,
-			"description": assetprompts.RuntimePromptField(item.Description, 1200), "visualTraits": item.VisualTraits,
+			"description": canonicalSource.Description, "visualTraits": canonicalSource.VisualTraits,
+			"canonicalBaselinePolicy": map[string]any{
+				"stableIdentityOnly": true, "transientStateTarget": "shot_derived_asset",
+			},
 		},
-		"scenes":             assetprompts.RuntimePromptField(item.SceneContext, assetprompts.RuntimeAssetSceneContextMaxRunes),
+		"scenes":             canonicalSource.SceneContext,
 		"validationFeedback": "", "previousRejectedDraft": map[string]any{},
 	}
 	var rendered promptsvc.RenderedPrompt
 	var response provider.GatewayTextResponse
 	var draft assetprompts.CardDraft
-	for attempt := 1; attempt <= 2; attempt++ {
+	for attempt := 1; attempt <= 3; attempt++ {
 		rendered, err = a.renderWorkflowPromptVersion(ctx, batch.OrganizationID, batch.ProjectID, batch.Project.PromptTemplateKey, batch.Project.PromptVersionID, variables)
 		if err != nil {
 			return AssetBatchItemOutput{}, a.failAssetBatchActivity(ctx, nodeExecution, err)
@@ -425,9 +467,12 @@ func (a Activities) GenerateAssetCardBatchItem(ctx context.Context, input AssetB
 			err = assetprompts.ValidateGeneratedCardStyle(item.Visual.StyleSlug, draft.BasePrompt, draft.ConsistencyPrompt)
 		}
 		if err == nil {
+			err = assetprompts.ValidateCanonicalAssetBaseline(item.AssetType, draft.BasePrompt, draft.ConsistencyPrompt)
+		}
+		if err == nil {
 			break
 		}
-		if attempt == 2 {
+		if attempt == 3 {
 			return AssetBatchItemOutput{}, a.failAssetBatchActivity(ctx, nodeExecution, workflowError{Code: "ASSET_CARD_VISUAL_CONTRACT_FAILED", Message: err.Error()})
 		}
 		variables["validationFeedback"] = err.Error()
@@ -453,7 +498,9 @@ func (a Activities) GenerateCanonicalAssetImageBatchItem(ctx context.Context, in
 	if replay, ok, err := a.assetBatchItemReplay(ctx, nodeExecution.NodeRunID); err != nil {
 		return AssetBatchItemOutput{}, err
 	} else if ok {
-		_ = CompleteNodeRun(ctx, a.db, nodeExecution, mustJSON(replay))
+		if err := CompleteNodeRun(ctx, a.db, nodeExecution, mustJSON(replay)); err != nil {
+			return AssetBatchItemOutput{}, err
+		}
 		return replay, nil
 	}
 	if strings.TrimSpace(item.BasePrompt) == "" || strings.TrimSpace(item.ConsistencyPrompt) == "" {
@@ -490,23 +537,45 @@ func (a Activities) GenerateCanonicalAssetImageBatchItem(ctx context.Context, in
 	rendered.RenderedText = assetprompts.RuntimeImagePrompt(rendered.RenderedText)
 	rendered.RenderedHash = promptsvc.HashText(rendered.RenderedText)
 	idempotencyKey := assetBatchProviderKey(batch, item, 1)
-	response, err := a.gateway.GenerateImage(ctx, provider.GatewayImageRequest{
-		OrganizationID: batch.OrganizationID, ProjectID: batch.ProjectID, WorkflowRunID: batch.WorkflowRunID, NodeRunID: nodeExecution.NodeRunID,
-		ModelProfileKey: batch.Project.ImageModelProfileKey, ProviderModelID: providerModelID, PromptTemplateKey: rendered.TemplateKey,
-		PromptVersionID: rendered.PromptVersionID, PromptHash: rendered.RenderedHash, PromptSource: rendered.Source,
-		IdempotencyKey: idempotencyKey, Options: provider.GatewayImageOptions{IdempotencyKey: idempotencyKey},
-		Input:      mustJSON(assetprompts.CanonicalImageInput(rendered.RenderedText, item.AssetType, batch.Project.ImageQuality)),
-		References: item.References,
-	})
-	if err != nil {
-		a.markAssetBatchImageFailed(ctx, batch.ProjectID, nodeExecution, item, err)
-		return AssetBatchItemOutput{}, a.failAssetBatchActivity(ctx, nodeExecution, workflowErrorFromProvider(err, codeActivityFailed))
+	response, recovered := recoveredAssetBatchImage(item, providerModelID, rendered.RenderedHash)
+	if !recovered {
+		response, err = a.generateProviderImage(ctx, nodeExecution, provider.GatewayImageRequest{
+			OrganizationID: batch.OrganizationID, ProjectID: batch.ProjectID, WorkflowRunID: batch.WorkflowRunID, NodeRunID: nodeExecution.NodeRunID,
+			ModelProfileKey: batch.Project.ImageModelProfileKey, ProviderModelID: providerModelID, PromptTemplateKey: rendered.TemplateKey,
+			PromptVersionID: rendered.PromptVersionID, PromptHash: rendered.RenderedHash, PromptSource: rendered.Source,
+			IdempotencyKey: idempotencyKey, Options: provider.GatewayImageOptions{IdempotencyKey: idempotencyKey},
+			Input:      mustJSON(assetprompts.CanonicalImageInput(rendered.RenderedText, item.AssetType, batch.Project.ImageQuality)),
+			References: item.References,
+		})
+		if err != nil {
+			a.markAssetBatchImageFailed(ctx, batch.ProjectID, nodeExecution, item, err)
+			return AssetBatchItemOutput{}, a.failAssetBatchActivity(ctx, nodeExecution, workflowErrorFromProvider(err, codeActivityFailed))
+		}
 	}
 	output, err := a.applyAssetImageBatchResult(ctx, batch, item, nodeExecution, rendered, response)
 	if err != nil {
 		return AssetBatchItemOutput{}, a.failAssetBatchActivity(ctx, nodeExecution, err)
 	}
 	return output, nil
+}
+
+func recoveredAssetBatchImage(item AssetBatchItemSnapshot, providerModelID, promptHash string) (provider.GatewayImageResponse, bool) {
+	recovered := item.RecoveredImage
+	if recovered == nil || recovered.ProviderModelID != providerModelID || recovered.PromptHash != promptHash ||
+		strings.TrimSpace(recovered.ProviderCallID) == "" || strings.TrimSpace(recovered.ArtifactID) == "" ||
+		strings.TrimSpace(recovered.MediaFileID) == "" || strings.TrimSpace(recovered.StorageKey) == "" {
+		return provider.GatewayImageResponse{}, false
+	}
+	return provider.GatewayImageResponse{
+		Status:         "succeeded",
+		ProviderCallID: recovered.ProviderCallID,
+		ModelID:        recovered.ProviderModelID,
+		Output: provider.GatewayImageOutput{
+			ArtifactID:  recovered.ArtifactID,
+			MediaFileID: recovered.MediaFileID,
+			StorageKey:  recovered.StorageKey,
+		},
+	}, true
 }
 
 func (a Activities) renderWorkflowPromptVersion(ctx context.Context, organizationID, projectID, templateKey, versionID string, variables map[string]any) (promptsvc.RenderedPrompt, error) {
@@ -586,9 +655,9 @@ func (a Activities) failAssetBatchActivity(ctx context.Context, execution NodeEx
 	if isWorkflowWriteFenced(cause) {
 		return discardWorkflowResult(ctx, a.db, execution, cause.Error())
 	}
-	code, message := workflowExecutionError(cause)
+	code, message := workflowErrorFields(cause, codeActivityFailed)
 	_ = FailNodeRun(ctx, a.db, execution, code, message)
-	return temporal.NewNonRetryableApplicationError(message, code, cause)
+	return newWorkflowApplicationError(cause, code, message)
 }
 
 func (a Activities) assetBatchItemReplay(ctx context.Context, nodeRunID string) (AssetBatchItemOutput, bool, error) {
@@ -686,7 +755,7 @@ func (a Activities) applyAssetCardBatchResult(
 		`, item.AssetID, batch.ProjectID, draft.Profile, draft.BasePrompt, draft.ConsistencyPrompt, draft.NegativePrompt, mustJSON(provenance)); err != nil {
 			return AssetBatchItemOutput{}, err
 		}
-		if err := production.MarkAssetDownstreamStale(ctx, tx, batch.ProjectID, item.AssetID); err != nil {
+		if err := production.MarkAssetProductionMaterialStale(ctx, tx, batch.ProjectID, item.AssetID); err != nil {
 			return AssetBatchItemOutput{}, err
 		}
 		if err := production.MarkFinalVideoStale(ctx, tx, batch.ProjectID, ""); err != nil {
@@ -771,6 +840,11 @@ func (a Activities) applyAssetImageBatchResult(
 	metadata["promptHash"] = rendered.RenderedHash
 	metadata["batchOutput"] = output
 	metadata["resultState"] = resultState
+	if recovered := item.RecoveredImage; recovered != nil && recovered.ProviderCallID == response.ProviderCallID {
+		metadata["reusedProviderResult"] = true
+		metadata["sourceWorkflowRunId"] = recovered.SourceWorkflowRunID
+		metadata["sourceNodeRunId"] = recovered.SourceNodeRunID
+	}
 	var referenceID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO asset_references(
@@ -812,6 +886,9 @@ func (a Activities) applyAssetImageBatchResult(
 			    updated_at = now()
 			WHERE id = $1 AND project_id = $2
 		`, item.AssetID, batch.ProjectID, response.Output.ArtifactID, response.Output.MediaFileID, response.Output.StorageKey, shouldPrimary); err != nil {
+			return AssetBatchItemOutput{}, err
+		}
+		if err := production.MarkAssetProductionMaterialStale(ctx, tx, batch.ProjectID, item.AssetID); err != nil {
 			return AssetBatchItemOutput{}, err
 		}
 	}
@@ -874,7 +951,6 @@ func (a Activities) markAssetBatchImageFailed(ctx context.Context, projectID str
 	_, _ = a.db.Exec(ctx, `
 		UPDATE canonical_assets
 		SET status = 'image_failed',
-		    revision = revision + 1,
 		    metadata = COALESCE(metadata, '{}'::jsonb)
 		               || jsonb_build_object('imageFailedReason', $5::text, 'imageFailedAt', now()),
 		    updated_at = now()
@@ -905,9 +981,18 @@ func (a Activities) CompleteAssetBatchWorkflow(
 	if _, err := lockWorkflowRunContext(ctx, tx, input.WorkflowRunID); err != nil {
 		return AssetBatchWorkflowOutput{}, err
 	}
+	if err := reconcileAssetBatchRequestedTerminals(ctx, tx, input, requested); err != nil {
+		return AssetBatchWorkflowOutput{}, err
+	}
 	output, err := loadAssetBatchOutput(ctx, tx, input)
 	if err != nil {
 		return AssetBatchWorkflowOutput{}, err
+	}
+	if output.ActiveItems > 0 {
+		return output, temporal.NewApplicationError(
+			fmt.Sprintf("asset batch still has %d active item(s)", output.ActiveItems),
+			"ASSET_BATCH_ITEMS_ACTIVE",
+		)
 	}
 	if requested.Status == "cancelled" {
 		output.Status = "cancelled"
@@ -951,6 +1036,79 @@ func (a Activities) CompleteAssetBatchWorkflow(
 	return output, nil
 }
 
+func reconcileAssetBatchRequestedTerminals(
+	ctx context.Context,
+	tx pgx.Tx,
+	input AssetBatchWorkflowInput,
+	requested AssetBatchWorkflowOutput,
+) error {
+	for _, item := range requested.Items {
+		status, eventType, code, message := "", "", strings.TrimSpace(item.ErrorCode), strings.TrimSpace(item.ErrorMessage)
+		switch item.Status {
+		case "failed", "conflict_skipped":
+			status, eventType = "failed", "workflow.node.failed"
+			if code == "" {
+				code = codeActivityFailed
+			}
+			if message == "" {
+				message = "asset batch item failed"
+			}
+		case "cancelled":
+			status, eventType = "cancelled", "workflow.node.cancelled"
+			if code == "" {
+				code = "USER_CANCELLED"
+			}
+			if message == "" {
+				message = "asset batch item was cancelled"
+			}
+		default:
+			continue
+		}
+		if strings.TrimSpace(item.AssetID) == "" {
+			continue
+		}
+
+		var nodeRunID, nodeKey string
+		var nodeRevision int64
+		err := tx.QueryRow(ctx, `
+			UPDATE workflow_node_runs
+			SET status = $3,
+			    output = $4,
+			    error_code = NULLIF($5, ''),
+			    error_message = NULLIF($6, ''),
+			    completed_at = COALESCE(completed_at, now()),
+			    revision = revision + 1,
+			    updated_at = now()
+			WHERE workflow_run_id = $1
+			  AND node_key = $2
+			  AND status IN ('pending', 'queued', 'running', 'waiting_review', 'cancelling')
+			RETURNING id::text, node_key, revision
+		`, input.WorkflowRunID, AssetBatchNodeKey(input.Operation, item.AssetID), status, mustJSON(item), code, message).Scan(
+			&nodeRunID, &nodeKey, &nodeRevision,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, eventType, "workflow_node_run", nodeRunID, mustJSON(map[string]any{
+			"workflowRunId": input.WorkflowRunID,
+			"nodeRunId":     nodeRunID,
+			"nodeKey":       nodeKey,
+			"assetId":       item.AssetID,
+			"status":        status,
+			"code":          code,
+			"message":       message,
+			"revision":      nodeRevision,
+			"reconciledBy":  "asset_batch_parent",
+		})); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func loadAssetBatchOutput(ctx context.Context, tx pgx.Tx, input AssetBatchWorkflowInput) (AssetBatchWorkflowOutput, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT status, input, output, COALESCE(error_code, ''), COALESCE(error_message, '')
@@ -990,12 +1148,24 @@ func loadAssetBatchOutput(ctx context.Context, tx pgx.Tx, input AssetBatchWorkfl
 			output.FailedItems++
 		case "cancelled":
 			output.CancelledItems++
+		default:
+			output.ActiveItems++
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return AssetBatchWorkflowOutput{}, err
 	}
+	if missingItems := output.TotalItems - len(output.Items); missingItems > 0 {
+		output.ActiveItems += missingItems
+	}
+	classifyAssetBatchOutput(&output)
+	return output, nil
+}
+
+func classifyAssetBatchOutput(output *AssetBatchWorkflowOutput) {
 	switch {
+	case output.ActiveItems > 0:
+		output.Status = "running"
 	case output.CancelledItems > 0 && output.CompletedItems == 0 && output.FailedItems == 0:
 		output.Status = "cancelled"
 	case output.FailedItems == 0 && output.CancelledItems == 0:
@@ -1005,5 +1175,4 @@ func loadAssetBatchOutput(ctx context.Context, tx pgx.Tx, input AssetBatchWorkfl
 	default:
 		output.Status = "partial_succeeded"
 	}
-	return output, nil
 }

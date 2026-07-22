@@ -194,7 +194,7 @@ func RenderMarkdown(snapshot ProjectSnapshot) string {
 	var builder strings.Builder
 	builder.WriteString("# " + name + "\n\n")
 	builder.WriteString("导出时间：" + snapshot.ExportedAt + "\n\n")
-	writeObjectSection(&builder, "项目设定", project, []string{"description", "project_type", "content_type", "video_ratio", "art_style", "production_mode"})
+	writeObjectSection(&builder, "项目设定", project, []string{"description", "project_type", "content_type", "video_ratio", "art_style"})
 	writeListSection(&builder, "小说事件", snapshot.Events, []string{"sequence_no", "title", "summary"})
 	writeListSection(&builder, "改编计划", snapshot.AdaptationPlans, []string{"title", "status", "content"})
 	writeListSection(&builder, "剧本", snapshot.Scripts, []string{"title", "status", "current_content"})

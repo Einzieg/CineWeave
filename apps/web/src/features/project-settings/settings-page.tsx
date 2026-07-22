@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Edit2, Loader2, Plus, Save, Trash2, Volume2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { Edit2, Loader2, Plus, RefreshCcw, Save, Trash2, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import { Surface, SectionTitle } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
@@ -14,10 +15,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { ErrorPanel } from "@/components/shared/error-panel";
-import { useApiQuery, useApiMutation, useInvalidateKeys } from "@/lib/query/use-api";
+import { orgScopedKey, useApiQuery, useApiMutation, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
-import { studioApi } from "@/lib/api-client";
-import type { CharacterVoiceProfile, Project } from "@/lib/types";
+import { StudioApiError, studioApi } from "@/lib/api-client";
+import { useStudioSession } from "@/lib/session";
+import {
+  applyProjectBasicSaveFailure,
+  applyProjectBasicSaveSuccess,
+  beginProjectBasicSubmission,
+  editProjectBasicField,
+  projectBasicValues,
+  synchronizeProjectBasicSnapshot,
+  type ProjectBasicFormState,
+  type ProjectBasicSubmission,
+} from "@/lib/project-basic-form-state";
+import type { CharacterVoiceProfile, Project, VideoProductionConfigurationInput } from "@/lib/types";
 import {
   buildManualStyleOptions,
   DEFAULT_DIRECTOR_MANUAL_KEY,
@@ -26,6 +38,7 @@ import {
   withToonflowSetting,
   type ManualStyleOption,
 } from "@/features/projects/manual-style-selector";
+import { VideoProductionRebuildDialog } from "@/features/project-settings/video-production-rebuild-dialog";
 
 const defaultArtStyle = "写实电影感";
 
@@ -59,7 +72,17 @@ const emptyVoiceDraft: VoiceDraft = {
   isDefault: false,
 };
 
+function basicSnapshotFromProject(project: Project) {
+  return {
+    name: project.name ?? "",
+    description: project.description ?? "",
+    revision: project.revision,
+  };
+}
+
 export function ProjectSettingsPage({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
+  const { session } = useStudioSession();
   const { data: project, isLoading } = useApiQuery({
     key: qk.project(projectId),
     queryFn: (session) => studioApi.getProject(session, projectId),
@@ -73,8 +96,8 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
     queryFn: (session) => studioApi.listProjectManualBindings(session, projectId).then((response) => response.items),
   });
   const { data: characterAssets = [] } = useApiQuery({
-    key: qk.assets(projectId),
-    queryFn: (session) => studioApi.listCanonicalAssets(session, projectId).then((response) => response.items.filter((asset) => asset.assetType === "character")),
+    key: qk.assets(projectId, { status: "active", assetType: "character" }),
+    queryFn: (session) => studioApi.listCanonicalAssets(session, projectId, { status: "active", assetType: "character" }).then((response) => response.items),
   });
   const { data: modelProfiles = [] } = useApiQuery({
     key: qk.modelProfiles(),
@@ -86,56 +109,81 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
   });
 
   const [draft, setDraft] = useState<Partial<Project>>({});
+  const [basicFormState, setBasicFormState] = useState<ProjectBasicFormState | null>(null);
   const [manualDraft, setManualDraft] = useState<ManualDraft>({});
   const [error, setError] = useState("");
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
+  const [rebuildDialogOpen, setRebuildDialogOpen] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraft>(emptyVoiceDraft);
   const invalidateKeys = useInvalidateKeys();
 
-  const form = project ? { ...project, ...draft } : null;
+  const effectiveBasicFormState = useMemo(
+    () => project ? synchronizeProjectBasicSnapshot(basicFormState, basicSnapshotFromProject(project)) : null,
+    [basicFormState, project],
+  );
+  const basicValues = effectiveBasicFormState ? projectBasicValues(effectiveBasicFormState) : null;
+  const form = project ? {
+    ...project,
+    ...draft,
+    name: basicValues?.name ?? project.name,
+    description: basicValues?.description ?? project.description,
+  } : null;
+  const hasUnsavedChanges = Boolean(
+    effectiveBasicFormState?.dirtyFields.length
+      || Object.keys(draft).length
+      || Object.keys(manualDraft).length,
+  );
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) {
+      return;
+    }
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [hasUnsavedChanges]);
   const directorTemplates = useMemo(() => buildManualStyleOptions(manualTemplates, "director"), [manualTemplates]);
   const visualTemplates = useMemo(() => buildManualStyleOptions(manualTemplates, "visual"), [manualTemplates]);
 
-  const saveMutation = useApiMutation({
-    mutationFn: async (session, data: { project: Partial<Project>; manuals: ManualDraft }) => {
-      const expectedRevision = data.project.revision ?? project?.revision;
-      if (expectedRevision === undefined) {
-        throw new Error("项目版本不可用，请刷新后重试");
-      }
-      const updated = await studioApi.updateProject(session, projectId, {
-        name: data.project.name || "",
-        description: data.project.description || null,
-        projectType: data.project.projectType || "",
-        contentType: data.project.contentType || "",
-        videoRatio: data.project.videoRatio || "16:9",
-        artStyle: data.project.artStyle || "",
-        imageQuality: data.project.imageQuality || "standard",
-        productionMode: data.project.productionMode || "silent_video",
-        imageModelProfileKey: data.project.imageModelProfileKey || null,
-        videoModelProfileKey: data.project.videoModelProfileKey || null,
-        scriptModelProfileKey: data.project.scriptModelProfileKey || null,
-        ttsModelProfileKey: data.project.ttsModelProfileKey || "tts_generation_default",
-        asrModelProfileKey: data.project.asrModelProfileKey || "audio_transcription_default",
-        audioStrategy: data.project.audioStrategy || "native_av",
-        audioRequirement: data.project.audioRequirement || "preferred",
-        directorManualPromptVersionId: data.manuals.directorPromptVersionId || null,
-        visualManualPromptVersionId: data.manuals.visualPromptVersionId || null,
-        settings: data.project.settings ?? {},
-        expectedRevision,
+  const saveBasicMutation = useApiMutation({
+    mutationFn: async (session, submission: ProjectBasicSubmission) => {
+      return studioApi.updateProject(session, projectId, {
+        name: submission.values.name,
+        description: submission.values.description,
+        expectedRevision: submission.baseRevision,
       });
-      return updated;
     },
-    onSuccess: () => {
-      setDraft({});
-      setManualDraft({});
+    onSuccess: (updatedProject, submission) => {
+      queryClient.setQueryData(orgScopedKey(session.organizationId, qk.project(projectId)), updatedProject);
+      setBasicFormState((current) => current
+        ? applyProjectBasicSaveSuccess(current, submission, basicSnapshotFromProject(updatedProject))
+        : synchronizeProjectBasicSnapshot(null, basicSnapshotFromProject(updatedProject)));
       setError("");
-      toast.success("项目设置已保存");
-      invalidateKeys([qk.project(projectId), qk.projectManualBindings(projectId)]);
+      toast.success("基本信息已保存");
     },
-    onError: (err) => {
+    onError: (err, submission) => {
+      setBasicFormState((current) => current ? applyProjectBasicSaveFailure(current, submission) : current);
+      if (err instanceof StudioApiError && err.code === "PROJECT_REVISION_CONFLICT") {
+        invalidateKeys([qk.project(projectId)]);
+      }
       setError(err instanceof Error ? err.message : "保存失败");
     },
   });
+
+  function submitBasicSettings() {
+    if (!effectiveBasicFormState) {
+      return;
+    }
+    const started = beginProjectBasicSubmission(effectiveBasicFormState, crypto.randomUUID());
+    if (!started) {
+      return;
+    }
+    setBasicFormState(started.state);
+    saveBasicMutation.mutate(started.submission);
+  }
 
   const saveVoiceMutation = useApiMutation({
     mutationFn: (session, data: VoiceDraft) => {
@@ -179,7 +227,7 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
     );
   }
 
-  if (!form) {
+  if (!form || !project) {
     return <div>项目不存在</div>;
   }
 
@@ -189,6 +237,27 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
   const selectedVisualTemplateKey = manualDraft.visualTemplateKey ?? visualBinding?.templateKey ?? DEFAULT_VISUAL_MANUAL_KEY;
   const ttsProfiles = modelProfiles.filter((profile) => profile.status !== "disabled" && (profile.purpose === "audio_tts" || profile.profileKey.includes("tts")));
   const asrProfiles = modelProfiles.filter((profile) => profile.status !== "disabled" && (profile.purpose === "audio_transcription" || profile.profileKey.includes("transcription") || profile.profileKey.includes("asr")));
+  const targetConfiguration: VideoProductionConfigurationInput = {
+    projectType: form.projectType ?? "",
+    contentType: form.contentType ?? "",
+    aspectRatio: form.aspectRatio ?? form.videoRatio ?? "16:9",
+    videoRatio: form.videoRatio ?? form.aspectRatio ?? "16:9",
+    artStyle: form.artStyle ?? defaultArtStyle,
+    directorManualPromptVersionId: manualDraft.directorPromptVersionId ?? directorBinding?.promptVersionId,
+    visualManualPromptVersionId: manualDraft.visualPromptVersionId ?? visualBinding?.promptVersionId,
+    imageModelProfileKey: form.imageModelProfileKey ?? "image_generation_default",
+    videoModelProfileKey: form.videoModelProfileKey ?? "video_generation_default",
+    scriptModelProfileKey: form.scriptModelProfileKey ?? "script_agent_default",
+    ttsModelProfileKey: form.ttsModelProfileKey ?? "tts_generation_default",
+    asrModelProfileKey: form.asrModelProfileKey ?? "audio_transcription_default",
+    audioStrategy: form.audioStrategy ?? "native_av",
+    audioRequirement: form.audioRequirement ?? "preferred",
+    imageQuality: form.imageQuality ?? "standard",
+    timelineTimebase: form.timelineTimebase ?? 90000,
+    fpsNumerator: form.fpsNumerator ?? 24,
+    fpsDenominator: form.fpsDenominator ?? 1,
+    settings: form.settings ?? {},
+  };
 
   function selectManual(option: ManualStyleOption) {
     if (option.kind === "director") {
@@ -233,12 +302,40 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
   return (
     <div className="space-y-4">
       <Surface>
-        <SectionTitle title="项目设置" description="这些字段会被后续任务和提示词读取。" />
+        <SectionTitle title="基本信息" />
         <div className="grid gap-4 p-5 md:grid-cols-2">
         <div className="space-y-2">
           <Label>项目名称</Label>
-          <Input value={form.name ?? ""} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+          <Input
+            value={form.name ?? ""}
+            onChange={(event) => effectiveBasicFormState && setBasicFormState(editProjectBasicField(effectiveBasicFormState, "name", event.target.value))}
+          />
         </div>
+        <div className="space-y-2 md:col-span-2">
+          <Label>项目简介</Label>
+          <Textarea
+            rows={3}
+            value={form.description ?? ""}
+            onChange={(event) => effectiveBasicFormState && setBasicFormState(editProjectBasicField(effectiveBasicFormState, "description", event.target.value))}
+          />
+        </div>
+        <div className="md:col-span-2">
+          <ErrorPanel message={error} />
+          <Button
+            onClick={submitBasicSettings}
+            disabled={saveBasicMutation.isPending || !effectiveBasicFormState?.dirtyFields.length}
+            className="mt-4"
+          >
+            {saveBasicMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            保存基本信息
+          </Button>
+        </div>
+        </div>
+      </Surface>
+
+      <Surface>
+        <SectionTitle title="视频生产配置" />
+        <div className="grid gap-4 p-5 md:grid-cols-2">
         <div className="space-y-2">
           <Label>项目类型</Label>
           <Input value={form.projectType ?? ""} onChange={(e) => setDraft({ ...draft, projectType: e.target.value })} />
@@ -249,7 +346,7 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
         </div>
         <div className="space-y-2">
           <Label>视频比例</Label>
-          <Input value={form.videoRatio ?? ""} onChange={(e) => setDraft({ ...draft, videoRatio: e.target.value })} />
+          <Input value={form.videoRatio ?? ""} onChange={(e) => setDraft({ ...draft, videoRatio: e.target.value, aspectRatio: e.target.value })} />
         </div>
         <div className="space-y-2">
           <Label>画风风格</Label>
@@ -257,11 +354,34 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
         </div>
         <div className="space-y-2">
           <Label>图片质量</Label>
-          <Input value={form.imageQuality ?? ""} onChange={(e) => setDraft({ ...draft, imageQuality: e.target.value })} />
+          <Select value={form.imageQuality ?? "standard"} onValueChange={(value) => setDraft({ ...draft, imageQuality: value })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="standard">标准</SelectItem>
+              <SelectItem value="hd">高清</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-        <div className="space-y-2">
-          <Label>生产模式</Label>
-          <Input value={form.productionMode ?? ""} onChange={(e) => setDraft({ ...draft, productionMode: e.target.value })} />
+        <div className="space-y-2 md:col-span-2">
+          <Label>视频生产方案</Label>
+          <div className="flex min-h-14 flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{form.videoProductionBinding?.profileName ?? "图生视频模式"}</span>
+                <Badge variant="outline">v{form.videoProductionBinding?.profileVersion ?? 1}</Badge>
+                <Badge variant="secondary">第 {form.productionGeneration?.generationNo ?? 1} 代</Badge>
+                {form.videoProductionLocked ? <Badge variant="destructive">重建中</Badge> : null}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                绑定修订 {form.videoProductionBinding?.revision ?? 1}
+                {form.productionGeneration?.id ? ` · 生产代 ${form.productionGeneration.id.slice(0, 8)}` : ""}
+              </div>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={() => setRebuildDialogOpen(true)}>
+              <RefreshCcw className="h-4 w-4" />
+              {form.videoProductionLocked ? "查看重建进度" : "重建或切换方案"}
+            </Button>
+          </div>
         </div>
         <div className="space-y-2">
           <Label>音频生产策略</Label>
@@ -305,10 +425,6 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-2 md:col-span-2">
-          <Label>项目简介</Label>
-          <Textarea rows={3} value={form.description ?? ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
-        </div>
         <div className="grid gap-4 md:col-span-2 xl:grid-cols-2">
           <ManualStyleSelector
             title="视觉手册"
@@ -326,14 +442,25 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
           />
         </div>
         <div className="md:col-span-2">
-          <ErrorPanel message={error} />
-          <Button onClick={() => saveMutation.mutate({ project: form, manuals: manualDraft })} disabled={saveMutation.isPending} className="mt-4">
-            {saveMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-            保存设置
+          <Button onClick={() => setRebuildDialogOpen(true)}>
+            <RefreshCcw className="mr-2 h-4 w-4" />
+            {form.videoProductionLocked ? "查看重建进度" : "分析影响并应用"}
           </Button>
         </div>
         </div>
       </Surface>
+
+      <VideoProductionRebuildDialog
+        projectId={projectId}
+        project={project}
+        targetConfiguration={targetConfiguration}
+        open={rebuildDialogOpen}
+        onOpenChange={setRebuildDialogOpen}
+        onConfigurationApplied={() => {
+          setDraft({});
+          setManualDraft({});
+        }}
+      />
 
       <Surface>
         <div className="flex items-center justify-between gap-4 border-b p-5">

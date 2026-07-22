@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
@@ -231,6 +232,38 @@ func TestSetPrimaryAssetReferenceClearsOtherPrimaries(t *testing.T) {
 		t.Fatalf("set-primary response = %+v", response)
 	}
 	assertOnlyPrimaryReference(t, seed, assetID, first.ID)
+}
+
+func TestListCanonicalAssetsIncludesReferencePreviewURLs(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	assetID := seed.insertCanonicalAsset(t, "character", "Lin Chu", "approved", "")
+	var created AssetReference
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID+"/references", seed.ownerToken, seed.organizationID, map[string]any{
+		"title":         "primary",
+		"storageKey":    "refs/list-preview.png",
+		"mimeType":      "image/png",
+		"referenceType": "uploaded",
+		"setPrimary":    true,
+	}, &created)
+
+	var response struct {
+		Items []CanonicalAsset `json:"items"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/canonical-assets?includePreviewUrl=true&previewExpiresSeconds=120", seed.ownerToken, seed.organizationID, nil, &response)
+	if len(response.Items) != 1 || response.Items[0].ID != assetID {
+		t.Fatalf("canonical asset list = %+v", response.Items)
+	}
+	if len(response.Items[0].References) != 1 || response.Items[0].References[0].PreviewURL == nil {
+		t.Fatalf("canonical asset references = %+v", response.Items[0].References)
+	}
+	if !strings.Contains(*response.Items[0].References[0].PreviewURL, "localhost:9000") {
+		t.Fatalf("preview URL = %q", *response.Items[0].References[0].PreviewURL)
+	}
+	if response.Items[0].References[0].PreviewExpiresAt == nil || !response.Items[0].References[0].PreviewExpiresAt.After(time.Now()) {
+		t.Fatalf("preview expires at = %v", response.Items[0].References[0].PreviewExpiresAt)
+	}
 }
 
 func TestDeleteAssetReferenceArchivesWithoutDeletingMedia(t *testing.T) {

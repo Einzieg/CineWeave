@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,7 +46,7 @@ func TestAssetBatchCreateRetryAndRevisionConflict(t *testing.T) {
 	handler := server.Handler()
 	suffix := uuid.NewString()
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
-		Email: "asset-batch-" + suffix + "@example.test", Password: "Password123!", DisplayName: "Asset Batch",
+		Email: "asset-batch-" + suffix + "@example.test", Username: randomStorageSegment(), Password: "Password123!", DisplayName: "Asset Batch",
 		OrganizationName: "Asset Batch Org " + suffix,
 	}, httptest.NewRequest(http.MethodPost, "/api/auth/register", nil))
 	if err != nil {
@@ -199,7 +200,7 @@ func TestSourceToScriptRetryCreatesNewGenerationForFailedEpisodes(t *testing.T) 
 	handler := server.Handler()
 	suffix := uuid.NewString()
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
-		Email: "source-script-retry-" + suffix + "@example.test", Password: "Password123!", DisplayName: "Source Script Retry",
+		Email: "source-script-retry-" + suffix + "@example.test", Username: randomStorageSegment(), Password: "Password123!", DisplayName: "Source Script Retry",
 		OrganizationName: "Source Script Retry Org " + suffix,
 	}, httptest.NewRequest(http.MethodPost, "/api/auth/register", nil))
 	if err != nil {
@@ -216,14 +217,64 @@ func TestSourceToScriptRetryCreatesNewGenerationForFailedEpisodes(t *testing.T) 
 	sourceID := uuid.NewString()
 	scriptID := uuid.NewString()
 	versionID := uuid.NewString()
+	generationID := uuid.NewString()
 	chapterIDs := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
+	var sourceRevision, scriptRevision int64
+	var sourceHash string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO project_sources(
+			id, organization_id, project_id, source_type, title, content, content_format, status, created_by
+		)
+		VALUES ($1, $2, $3, 'novel', 'Retry Novel', 'chapter one\nchapter seventy-four\nchapter one hundred twenty', 'plain_text', 'processed', $4)
+		RETURNING content_revision, content_hash
+	`, sourceID, owner.OrganizationID, project.ID, owner.User.ID).Scan(&sourceRevision, &sourceHash); err != nil {
+		t.Fatalf("insert retry source: %v", err)
+	}
+	manifestOrdinals := []int{1, 74, 120}
+	for index, chapterID := range chapterIDs {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO novel_chapters(
+				id, organization_id, project_id, source_id, chapter_index, volume_index, section_index,
+				volume_title, chapter_title, content, event_state
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'completed')
+		`, chapterID, owner.OrganizationID, project.ID, sourceID, manifestOrdinals[index], index+1, manifestOrdinals[index],
+			fmt.Sprintf("第%d卷", index+1), fmt.Sprintf("第%d节", manifestOrdinals[index]), fmt.Sprintf("source chapter %d", manifestOrdinals[index])); err != nil {
+			t.Fatalf("insert retry chapter %d: %v", index, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO scripts(id, organization_id, project_id, source_id, title, status, created_by)
+		VALUES ($1, $2, $3, $4, 'Retry Script', 'active', $5)
+	`, scriptID, owner.OrganizationID, project.ID, sourceID, owner.User.ID); err != nil {
+		t.Fatalf("insert retry script: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO script_versions(
+			id, organization_id, project_id, script_id, version_no, version, content,
+			content_format, status, source_type, metadata, created_by
+		)
+		VALUES ($1, $2, $3, $4, 1, 1, 'base script', 'markdown', 'active', 'agent_generated', '{}', $5)
+	`, versionID, owner.OrganizationID, project.ID, scriptID, owner.User.ID); err != nil {
+		t.Fatalf("insert retry script version: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		UPDATE scripts SET current_version_id = $2 WHERE id = $1 RETURNING revision
+	`, scriptID, versionID).Scan(&scriptRevision); err != nil {
+		t.Fatalf("activate retry script version: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE projects SET active_script_id = $2 WHERE id = $1`, project.ID, scriptID); err != nil {
+		t.Fatalf("set retry active script: %v", err)
+	}
 	plan := workflows.SourceToScriptPlan{
+		GenerationID: generationID, RootGenerationID: generationID, AttemptGeneration: 1,
 		SourceID: sourceID, SourceType: "novel", SourceTitle: "Retry Novel", ScriptID: scriptID,
-		ScriptVersionID: versionID, Title: "Retry Script", EpisodeTotal: 3,
+		BaseScriptVersionID: versionID, PreviousScriptVersionID: versionID,
+		ExpectedScriptRevision: scriptRevision, Title: "Retry Script", EpisodeTotal: 3, SeriesEpisodeTotal: 120,
 		Chapters: []workflows.SourceToScriptChapterRef{
-			{ID: chapterIDs[0], ChapterIndex: 1, Title: "第一节"},
-			{ID: chapterIDs[1], ChapterIndex: 2, Title: "第二节"},
-			{ID: chapterIDs[2], ChapterIndex: 3, Title: "第三节"},
+			{ID: chapterIDs[0], ItemKey: chapterIDs[0], ManifestOrdinal: 1, ChapterIndex: 1, Title: "第一节"},
+			{ID: chapterIDs[1], ItemKey: chapterIDs[1], ManifestOrdinal: 74, ChapterIndex: 74, Title: "第七十四节"},
+			{ID: chapterIDs[2], ItemKey: chapterIDs[2], ManifestOrdinal: 120, ChapterIndex: 120, Title: "第一百二十节"},
 		},
 	}
 	options := workflows.SourceToScriptOptions{SourceID: sourceID, ChapterIDs: chapterIDs, Instruction: "faithful", MaxConcurrency: 2}
@@ -235,49 +286,59 @@ func TestSourceToScriptRetryCreatesNewGenerationForFailedEpisodes(t *testing.T) 
 		INSERT INTO workflow_runs(
 			organization_id, project_id, temporal_workflow_id, workflow_type, status,
 			input, output, created_by, total_items, completed_items, failed_items, attempt_generation,
-			completed_at, terminalized_at, settled_at
+			completed_at, terminalized_at, settled_at, production_generation_id,
+			video_production_binding_id, video_production_binding_revision
 		)
 		VALUES ($1, $2, 'source-script-retry-original-' || gen_random_uuid()::text, 'source_to_script', 'partial_succeeded',
-		        $3, '{}', $4, 3, 2, 1, 1, now(), now(), now())
+		        $3, '{}', $4, 3, 2, 1, 1, now(), now(), now(), $5, $6, $7)
 		RETURNING id::text
-	`, owner.OrganizationID, project.ID, originalInput, owner.User.ID).Scan(&originalID); err != nil {
+	`, owner.OrganizationID, project.ID, originalInput, owner.User.ID,
+		project.ProductionGeneration.ID, project.VideoProductionBinding.ID, project.VideoProductionBinding.Revision).Scan(&originalID); err != nil {
 		t.Fatalf("insert original workflow: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE workflow_runs SET root_workflow_run_id = id WHERE id = $1`, originalID); err != nil {
 		t.Fatalf("set original root: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
+		INSERT INTO source_to_script_generations(
+			id, organization_id, project_id, workflow_run_id, attempt_generation,
+			source_id, source_type, source_revision, source_content_hash, source_snapshot_hash,
+			script_id, expected_active_script_id, expected_current_version_id, expected_script_revision,
+			base_script_version_id, prompt_template_key, prompt_content_hash, model_profile_key,
+			project_snapshot, manual_bindings, model_bindings, manifest, manifest_hash,
+			status, idempotency_key, created_by
+		)
+		VALUES (
+			$1, $2, $3, $4, 1,
+			$5, 'novel', $6, $7, $8,
+			$9, $9, $10, $11,
+			$10, 'script_agent_generate', $12, 'script_default',
+			'{}', '[]', '[]', $13, $14,
+			'partial_succeeded', 'retry-fixture', $15
+		)
+	`, generationID, owner.OrganizationID, project.ID, originalID, sourceID, sourceRevision, sourceHash,
+		strings.Repeat("a", 64), scriptID, versionID, scriptRevision, "sha256:"+strings.Repeat("b", 64),
+		mustRawJSON(map[string]any{"schemaVersion": 1, "sourceId": sourceID, "scriptId": scriptID}),
+		strings.Repeat("c", 64), owner.User.ID); err != nil {
+		t.Fatalf("insert source-to-script generation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
 		INSERT INTO workflow_node_runs(
 			organization_id, project_id, workflow_run_id, node_key, node_type, status,
-			input, output, attempt_generation, started_at, completed_at
+			input, output, attempt_generation, started_at, completed_at, production_generation_id
 		)
-		VALUES ($1, $2, $3, $4, 'workflow.script_prepare', 'succeeded', '{}', $5, 1, now(), now())
-	`, owner.OrganizationID, project.ID, originalID, workflows.SourceToScriptPrepareNodeKey, mustRawJSON(plan)); err != nil {
+		VALUES ($1, $2, $3, $4, 'workflow.script_prepare', 'succeeded', '{}', $5, 1, now(), now(), $6)
+	`, owner.OrganizationID, project.ID, originalID, workflows.SourceToScriptPrepareNodeKey, mustRawJSON(plan), project.ProductionGeneration.ID); err != nil {
 		t.Fatalf("insert prepare node: %v", err)
 	}
-	for index, chapter := range plan.Chapters {
-		status := "succeeded"
-		if index == 1 {
-			status = "failed"
-		}
-		episode := workflows.GenerateSourceScriptEpisodeInput{
-			OrganizationID: owner.OrganizationID, ProjectID: project.ID, WorkflowRunID: originalID,
-			CreatedBy: owner.User.ID, SourceID: sourceID, ScriptID: scriptID, ScriptVersionID: versionID,
-			Instruction: options.Instruction, EpisodeIndex: index + 1, EpisodeTotal: 3, Chapter: chapter, AttemptGeneration: 1,
-		}
-		if _, err := pool.Exec(ctx, `
-			INSERT INTO workflow_node_runs(
-				organization_id, project_id, workflow_run_id, node_key, node_type, status,
-				input, output, attempt_generation, started_at, completed_at, error_code, error_message
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', 1, now(), now(),
-			        CASE WHEN $6 = 'failed' THEN 'UPSTREAM_TIMEOUT' ELSE NULL END,
-			        CASE WHEN $6 = 'failed' THEN 'episode timed out' ELSE NULL END)
-		`, owner.OrganizationID, project.ID, originalID,
-			workflows.SourceToScriptEpisodeNodeKey(chapter.ID, index+1), workflows.SourceToScriptEpisodeNodeType,
-			status, mustRawJSON(episode)); err != nil {
-			t.Fatalf("insert episode node %d: %v", index+1, err)
-		}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO script_episode_generation_results(
+			organization_id, project_id, workflow_run_id, generation_id, attempt_generation,
+			source_id, source_chapter_id, item_key, status, error_code, error_message, provenance
+		)
+		VALUES ($1, $2, $3, $4, 1, $5, $6, $7, 'failed', 'UPSTREAM_TIMEOUT', 'episode timed out', '{}')
+	`, owner.OrganizationID, project.ID, originalID, generationID, sourceID, chapterIDs[1], chapterIDs[1]); err != nil {
+		t.Fatalf("insert failed staging result: %v", err)
 	}
 	var retry WorkflowRun
 	doAPISuccess(t, handler, http.MethodPost, "/api/workflow-runs/"+originalID+"/retry-failed", owner.AccessToken, owner.OrganizationID, map[string]any{
@@ -289,19 +350,15 @@ func TestSourceToScriptRetryCreatesNewGenerationForFailedEpisodes(t *testing.T) 
 	if retry.RootWorkflowRunID == nil || *retry.RootWorkflowRunID != originalID || retry.RetryOfWorkflowRunID == nil || *retry.RetryOfWorkflowRunID != originalID {
 		t.Fatalf("retry chain root=%v retryOf=%v", retry.RootWorkflowRunID, retry.RetryOfWorkflowRunID)
 	}
-	var nodeInput []byte
+	var retryEpisodeNodeCount int
 	if err := pool.QueryRow(ctx, `
-		SELECT input FROM workflow_node_runs
+		SELECT count(*) FROM workflow_node_runs
 		WHERE workflow_run_id = $1 AND node_type = $2
-	`, retry.ID, workflows.SourceToScriptEpisodeNodeType).Scan(&nodeInput); err != nil {
-		t.Fatalf("load retry episode node: %v", err)
+	`, retry.ID, workflows.SourceToScriptEpisodeNodeType).Scan(&retryEpisodeNodeCount); err != nil {
+		t.Fatalf("count retry episode nodes: %v", err)
 	}
-	var retriedEpisode workflows.GenerateSourceScriptEpisodeInput
-	if err := json.Unmarshal(nodeInput, &retriedEpisode); err != nil {
-		t.Fatalf("decode retry episode node: %v", err)
-	}
-	if retriedEpisode.EpisodeIndex != 2 || retriedEpisode.Chapter.ID != chapterIDs[1] || retriedEpisode.AttemptGeneration != 2 {
-		t.Fatalf("retried episode = %+v", retriedEpisode)
+	if retryEpisodeNodeCount != 0 {
+		t.Fatalf("retry episode node count = %d, want 0 before the new prepare snapshot", retryEpisodeNodeCount)
 	}
 	var snapshot []byte
 	if err := pool.QueryRow(ctx, `SELECT snapshot FROM workflow_input_snapshots WHERE workflow_run_id = $1`, retry.ID).Scan(&snapshot); err != nil {
@@ -311,8 +368,15 @@ func TestSourceToScriptRetryCreatesNewGenerationForFailedEpisodes(t *testing.T) 
 	if err := json.Unmarshal(snapshot, &startInput); err != nil {
 		t.Fatalf("decode retry snapshot: %v", err)
 	}
-	if startInput.SourceToScriptState == nil || len(startInput.SourceToScriptState.EpisodeIndexes) != 1 || startInput.SourceToScriptState.EpisodeIndexes[0] != 1 || startInput.SourceToScriptState.AttemptGeneration != 2 {
+	if startInput.SourceToScriptState == nil || startInput.SourceToScriptState.Initialized || startInput.SourceToScriptState.AttemptGeneration != 2 {
 		t.Fatalf("retry state = %+v", startInput.SourceToScriptState)
+	}
+	var retryOptions workflows.SourceToScriptOptions
+	if err := json.Unmarshal(startInput.Input, &retryOptions); err != nil {
+		t.Fatalf("decode retry options: %v", err)
+	}
+	if len(retryOptions.ChapterIDs) != 1 || retryOptions.ChapterIDs[0] != chapterIDs[1] || retryOptions.TargetScriptID != scriptID {
+		t.Fatalf("retry options = %+v, want exact failed chapter %s", retryOptions, chapterIDs[1])
 	}
 	var operationStatus, idempotencyStatus string
 	if err := pool.QueryRow(ctx, `
@@ -366,7 +430,7 @@ func TestAssetBatchSnapshotSerializesConcurrentPromptManualModelAndRatioMutation
 	handler := server.Handler()
 	suffix := uuid.NewString()
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
-		Email: "asset-snapshot-" + suffix + "@example.test", Password: "Password123!", DisplayName: "Asset Snapshot",
+		Email: "asset-snapshot-" + suffix + "@example.test", Username: randomStorageSegment(), Password: "Password123!", DisplayName: "Asset Snapshot",
 		OrganizationName: "Asset Snapshot Org " + suffix,
 	}, httptest.NewRequest(http.MethodPost, "/api/auth/register", nil))
 	if err != nil {

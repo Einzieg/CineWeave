@@ -42,6 +42,7 @@ func TestPrompts(t *testing.T) {
 	suffix := uuid.NewString()
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "prompt-owner-" + suffix + "@example.test",
+		Username:         randomStorageSegment(),
 		Password:         "Password123!",
 		DisplayName:      "Prompt Owner",
 		OrganizationName: "Prompt Org " + suffix,
@@ -54,6 +55,7 @@ func TestPrompts(t *testing.T) {
 	})
 	member, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "prompt-member-" + suffix + "@example.test",
+		Username:         randomStorageSegment(),
 		Password:         "Password123!",
 		DisplayName:      "Prompt Member",
 		OrganizationName: "Prompt Member Org " + suffix,

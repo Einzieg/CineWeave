@@ -63,7 +63,7 @@ export function useProjectEvents(projectId: string) {
         qk.productionStatus(projectId),
         qk.workflowRuns(projectId),
         qk.artifacts(projectId),
-        qk.assets(projectId),
+        qk.assetsRoot(projectId),
         qk.requirements(projectId),
         qk.agentTasks(projectId),
         qk.shotProductionPrefix(projectId),

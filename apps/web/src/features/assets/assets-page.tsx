@@ -1,6 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
+import NextImage from "next/image";
 import { useMemo, useRef, useState } from "react";
 import { orgScopedKey, useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
@@ -19,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Check, ExternalLink, Image as ImageIcon, Loader2, MapPin, Package, RefreshCw, Save, Star, Trash2, Upload, User, Wand2, X } from "lucide-react";
+import { Check, ExternalLink, Image as ImageIcon, ListChecks, Loader2, MapPin, Package, RefreshCw, Save, Star, Trash2, Upload, User, Wand2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { artifactTypeLabel, assetReferenceTypeLabel, assetTypeLabel, requirementTypeLabel, statusLabel } from "@/lib/labels";
@@ -72,6 +73,13 @@ type SaveAssetDraftPayload = {
 };
 
 const assetDraftFields: AssetDraftField[] = ["name", "description", "basePrompt", "consistencyPrompt", "negativePrompt", "lockReference"];
+const assetPreviewExpiresSeconds = 900;
+const activeAssetListShape = { status: "active" as const };
+const activeAssetPreviewShape = {
+  status: "active" as const,
+  includePreviewUrl: true,
+  previewExpiresSeconds: assetPreviewExpiresSeconds,
+};
 
 const emptyAssetDraft: AssetDraft = {
   name: "",
@@ -109,6 +117,7 @@ export function AssetsPage({
   const [referenceUploadFile, setReferenceUploadFile] = useState<File | null>(null);
   const [generatingRequirementIds, setGeneratingRequirementIds] = useState<string[]>([]);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const failedAssetPreviewUrlsRef = useRef(new Set<string>());
   const invalidate = useInvalidateKeys();
   const pollingFallback = useProjectPollingFallback(projectId);
   const setActivityOpen = useUiStore((state) => state.setActivityOpen);
@@ -118,10 +127,22 @@ export function AssetsPage({
     queryFn: (session) => studioApi.getProject(session, projectId),
   });
 
-  const { data: assets = [], isLoading } = useApiQuery({
-    key: qk.assets(projectId),
-    queryFn: (session) => studioApi.listCanonicalAssets(session, projectId).then((response) => response.items || []),
+  const { data: assetMetadata = [], isLoading } = useApiQuery({
+    key: qk.assets(projectId, activeAssetListShape),
+    queryFn: (session) => studioApi.listCanonicalAssets(session, projectId, activeAssetListShape).then((response) => response.items || []),
   });
+  const { data: assetPreviewProjection = [] } = useApiQuery({
+    key: qk.assetPreviews(projectId, activeAssetPreviewShape),
+    queryFn: (session) => studioApi.listCanonicalAssets(session, projectId, activeAssetPreviewShape).then((response) => response.items || []),
+    staleTime: 10 * 60 * 1000,
+  });
+  const assets = useMemo(() => {
+    const previewByAssetId = new Map(assetPreviewProjection.map((asset) => [asset.id, asset]));
+    return assetMetadata.map((asset) => {
+      const preview = previewByAssetId.get(asset.id);
+      return preview?.references ? { ...asset, references: preview.references } : asset;
+    });
+  }, [assetMetadata, assetPreviewProjection]);
   const { data: requirements = [], isLoading: requirementsLoading } = useApiQuery({
     key: qk.requirements(projectId),
     queryFn: (session) => studioApi.listShotAssetRequirements(session, projectId).then((response) => response.items || []),
@@ -140,7 +161,7 @@ export function AssetsPage({
   const selectedAssetFromList = useMemo(() => assets.find((asset) => asset.id === selectedAssetId) ?? null, [assets, selectedAssetId]);
   const { data: selectedAssetDetail } = useApiQuery({
     key: qk.asset(projectId, selectedAssetId ?? ""),
-    queryFn: (activeSession) => studioApi.getCanonicalAsset(activeSession, projectId, selectedAssetId!, true),
+    queryFn: (activeSession) => studioApi.getCanonicalAsset(activeSession, projectId, selectedAssetId!),
     enabled: !!selectedAssetId,
   });
   const selectedAsset = selectedAssetDetail?.id === selectedAssetId ? selectedAssetDetail : selectedAssetFromList;
@@ -156,6 +177,33 @@ export function AssetsPage({
   const activeImageAssetIds = useMemo(
     () => assetIdsForBatchRuns(activeAssetBatchRuns.filter((run) => run.workflowType === "batch_generate_asset_images")),
     [activeAssetBatchRuns],
+  );
+  const activeDerivedAssetRun = useMemo(
+    () => workflowRuns.some((run) => run.workflowType === "batch_generate_derived_asset_images" && isActiveWorkflowStatus(run.status)),
+    [workflowRuns],
+  );
+  const pendingRequirementIds = useMemo(
+    () => requirements.filter((item) => (item.reviewStatus || "pending") === "pending").map((item) => item.id),
+    [requirements],
+  );
+  const needsEditRequirementCount = useMemo(
+    () => requirements.filter((item) => item.reviewStatus === "needs_edit").length,
+    [requirements],
+  );
+  const approvedMissingRequirementIds = useMemo(
+    () =>
+      requirements
+        .filter(
+          (item) =>
+            item.reviewStatus === "approved" &&
+            item.status !== "image_running" &&
+            item.status !== "skipped" &&
+            !item.derivedArtifactId &&
+            !item.derivedMediaFileId &&
+            !item.derivedStorageKey,
+        )
+        .map((item) => item.id),
+    [requirements],
   );
   const busyAssetIds = useMemo(() => new Set([...activePromptAssetIds, ...activeImageAssetIds]), [activeImageAssetIds, activePromptAssetIds]);
   const filteredAssets = useMemo(
@@ -199,8 +247,8 @@ export function AssetsPage({
   );
   const activeAssetDraftConflict = assetDraftConflict?.assetId === selectedAsset?.id ? assetDraftConflict : null;
   const { data: selectedReferences = [] } = useApiQuery({
-    key: qk.assetReferences(projectId, selectedAsset?.id ?? ""),
-    queryFn: (session) => studioApi.listAssetReferences(session, projectId, selectedAsset!.id, true).then((response) => response.items || []),
+    key: qk.assetReferences(projectId, selectedAsset?.id ?? "", true, assetPreviewExpiresSeconds),
+    queryFn: (session) => studioApi.listAssetReferences(session, projectId, selectedAsset!.id, true, assetPreviewExpiresSeconds).then((response) => response.items || []),
     enabled: !!selectedAsset,
   });
   const { data: archiveImpact, isLoading: archiveImpactLoading } = useApiQuery({
@@ -223,9 +271,20 @@ export function AssetsPage({
     queryClient.setQueryData<CanonicalAsset>(orgScopedKey(session.organizationId, qk.asset(projectId, asset.id)), (current) =>
       current ? { ...current, ...asset } : asset,
     );
-    queryClient.setQueryData<CanonicalAsset[]>(orgScopedKey(session.organizationId, qk.assets(projectId)), (current) =>
+    queryClient.setQueryData<CanonicalAsset[]>(orgScopedKey(session.organizationId, qk.assets(projectId, activeAssetListShape)), (current) =>
       current?.map((item) => (item.id === asset.id ? { ...item, ...asset } : item)),
     );
+  };
+
+  const refreshAssetPreviewOnce = (failedUrl: string) => {
+    if (failedAssetPreviewUrlsRef.current.has(failedUrl)) {
+      return;
+    }
+    failedAssetPreviewUrlsRef.current.add(failedUrl);
+    void queryClient.invalidateQueries({
+      queryKey: orgScopedKey(session.organizationId, qk.assetPreviews(projectId, activeAssetPreviewShape)),
+      exact: true,
+    });
   };
 
   const generateCardMutation = useApiMutation({
@@ -240,7 +299,7 @@ export function AssetsPage({
     onSuccess: (run) => {
       toast.success("资产提示词任务已进入队列");
       setActivityOpen(true);
-      invalidate([qk.workflowRuns(projectId), qk.workflowNodes(run.id), qk.assets(projectId), qk.productionStatus(projectId)]);
+      invalidate([qk.workflowRuns(projectId), qk.workflowNodes(run.id), qk.assetsRoot(projectId), qk.productionStatus(projectId)]);
     },
     onError: (error) => toast.error("生成失败：" + error.message),
   });
@@ -257,7 +316,7 @@ export function AssetsPage({
     onSuccess: (run) => {
       toast.success("资产图片任务已进入队列");
       setActivityOpen(true);
-      invalidate([qk.workflowRuns(projectId), qk.workflowNodes(run.id), qk.assets(projectId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
+      invalidate([qk.workflowRuns(projectId), qk.workflowNodes(run.id), qk.assetsRoot(projectId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
     },
     onError: (error) => toast.error("生成失败：" + error.message),
   });
@@ -269,7 +328,7 @@ export function AssetsPage({
       setAssetDraftState(null);
       setAssetDraftConflict(null);
       toast.success("资产已保存");
-      invalidate([qk.assets(projectId), qk.productionStatus(projectId)]);
+      invalidate([qk.assetsRoot(projectId), qk.productionStatus(projectId)]);
     },
     onError: (error) => {
       if (error instanceof AssetDraftConflictError) {
@@ -295,7 +354,7 @@ export function AssetsPage({
       if (selectedAssetId === asset.id) {
         setSelectedAssetId(null);
       }
-      invalidate([qk.assets(projectId), qk.requirements(projectId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
+      invalidate([qk.assetsRoot(projectId), qk.requirements(projectId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
     },
     onError: (error) => toast.error("归档失败：" + error.message),
   });
@@ -339,7 +398,7 @@ export function AssetsPage({
       if (uploadInputRef.current) {
         uploadInputRef.current.value = "";
       }
-      invalidate([qk.assets(projectId), qk.assetReferences(projectId, payload.assetId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
+      invalidate([qk.assetsRoot(projectId), qk.assetReferencesRoot(projectId, payload.assetId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
     },
     onError: (error) => toast.error("上传失败：" + error.message),
   });
@@ -349,7 +408,7 @@ export function AssetsPage({
       studioApi.setPrimaryAssetReference(session, projectId, payload.assetId, payload.referenceId),
     onSuccess: (_response, payload) => {
       toast.success("主图已更新");
-      invalidate([qk.assets(projectId), qk.assetReferences(projectId, payload.assetId), qk.productionStatus(projectId)]);
+      invalidate([qk.assetsRoot(projectId), qk.assetReferencesRoot(projectId, payload.assetId), qk.productionStatus(projectId)]);
     },
     onError: (error) => toast.error("设置失败：" + error.message),
   });
@@ -359,16 +418,23 @@ export function AssetsPage({
       studioApi.deleteAssetReference(session, projectId, payload.assetId, payload.referenceId),
     onSuccess: (_response, payload) => {
       toast.success("参考图已解绑");
-      invalidate([qk.assets(projectId), qk.assetReferences(projectId, payload.assetId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
+      invalidate([qk.assetsRoot(projectId), qk.assetReferencesRoot(projectId, payload.assetId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
     },
     onError: (error) => toast.error("解绑失败：" + error.message),
   });
 
   const generateRequirementMutation = useApiMutation({
     mutationFn: (session, requirementId: string) => studioApi.generateDerivedAssetImage(session, projectId, requirementId),
-    onSuccess: () => {
-      toast.success("派生图像生成已启动");
-      invalidate([qk.requirements(projectId), qk.assets(projectId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
+    onSuccess: (result) => {
+      toast.success("派生图像任务已创建");
+      invalidate([
+        qk.workflowRuns(projectId),
+        qk.workflowDerivedAssetBatch(result.workflowRun.id),
+        qk.requirements(projectId),
+        qk.assetsRoot(projectId),
+        qk.artifacts(projectId),
+        qk.productionStatus(projectId),
+      ]);
     },
     onError: (error) => toast.error("生成失败：" + error.message),
   });
@@ -415,6 +481,44 @@ export function AssetsPage({
       invalidate([qk.requirements(projectId), qk.productionStatus(projectId)]);
     },
     onError: (error) => toast.error("保存失败：" + error.message),
+  });
+
+  const batchReviewRequirementsMutation = useApiMutation({
+    mutationFn: (session, requirementIds: string[]) =>
+      studioApi.batchReviewShotAssetRequirements(session, projectId, {
+        requirementIds,
+        reviewStatus: "approved",
+        note: "按结构化规则批量校验镜头资产需求",
+      }),
+    onSuccess: (result) => {
+      if (result.blockedCount > 0) {
+        toast.warning(`已确认 ${result.approvedCount} 个需求，${result.blockedCount} 个需修改`);
+      } else {
+        toast.success(`已确认 ${result.approvedCount} 个镜头资产需求`);
+      }
+      invalidate([qk.requirements(projectId), qk.productionStatus(projectId)]);
+    },
+    onError: (error) => toast.error("批量审核失败：" + error.message),
+  });
+
+  const generateDerivedAssetBatchMutation = useApiMutation({
+    mutationFn: (session, requirementIds: string[]) =>
+      studioApi.runProductionAction(session, projectId, {
+        action: "generate_derived_asset_images",
+        options: { requirementIds, maxConcurrency: 5, force: false },
+      }),
+    onSuccess: (run) => {
+      toast.success("镜头衍生资产任务已进入队列");
+      setActivityOpen(true);
+      invalidate([
+        qk.workflowRuns(projectId),
+        qk.workflowNodes(run.workflowRunId),
+        qk.workflowDerivedAssetBatch(run.workflowRunId),
+        qk.requirements(projectId),
+        qk.productionStatus(projectId),
+      ]);
+    },
+    onError: (error) => toast.error("创建任务失败：" + error.message),
   });
 
   const getAssetIcon = (type: string) => {
@@ -616,7 +720,8 @@ export function AssetsPage({
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filteredAssets.map((asset) => {
               const Icon = getAssetIcon(asset.assetType);
-              const previewUrl = assetPreviewUrl(asset, selectedAsset?.id === asset.id ? selectedReferences : undefined, artifactPreviewById);
+              const previewReferences = selectedAsset?.id === asset.id && selectedReferences.length > 0 ? selectedReferences : asset.references;
+              const previewUrl = assetPreviewUrl(asset, previewReferences, artifactPreviewById);
               const isSelectedForBatch = selectedAssetIdSet.has(asset.id);
               const isPromptReady = assetPromptReady(asset);
               const isGeneratingThisCard = generatingCardAssetIds.has(asset.id);
@@ -649,9 +754,10 @@ export function AssetsPage({
                     {previewUrl ? (
                       <PreviewImageButton
                         alt={asset.name}
-                        className="h-full w-full"
+                        className="relative h-full w-full"
                         description={asset.description}
                         imageClassName="h-full w-full object-cover"
+                        onLoadError={refreshAssetPreviewOnce}
                         onOpenImage={(preview) => setImagePreview(preview)}
                         src={previewUrl}
                         title={asset.name}
@@ -687,7 +793,7 @@ export function AssetsPage({
                         disabled={isGeneratingThisCard || isGeneratingThisImage}
                       >
                         {isGeneratingThisCard ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Wand2 className="mr-1 h-3 w-3" />}
-                        {isGeneratingThisCard ? "生成中" : "卡片"}
+                        {isGeneratingThisCard ? "生成提示词中" : isPromptReady ? "重新生成提示词" : "生成提示词"}
                       </Button>
                       <Button
                         size="sm"
@@ -700,7 +806,13 @@ export function AssetsPage({
                         disabled={isGeneratingThisImage || isGeneratingThisCard || !isPromptReady}
                       >
                         {isGeneratingThisImage ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <ImageIcon className="mr-1 h-3 w-3" />}
-                        {isGeneratingThisImage ? "生成中" : isPromptReady ? "图像" : "先生成提示词"}
+                        {isGeneratingThisImage
+                          ? "生成图片中"
+                          : !isPromptReady
+                            ? "请先生成提示词"
+                            : assetHasGeneratedImage(asset)
+                              ? "重新生成图片"
+                              : "生成图片"}
                       </Button>
                     </div>
                   </div>
@@ -717,6 +829,32 @@ export function AssetsPage({
               <p className="text-sm text-muted-foreground">暂无镜头资产需求</p>
             </div>
           )}
+          {!requirementsLoading && requirements.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-background p-3">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant="secondary">待确认 {pendingRequirementIds.length}</Badge>
+                <Badge variant={needsEditRequirementCount > 0 ? "destructive" : "secondary"}>需修改 {needsEditRequirementCount}</Badge>
+                <Badge variant="outline">可生成 {approvedMissingRequirementIds.length}</Badge>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => batchReviewRequirementsMutation.mutate(pendingRequirementIds)}
+                  disabled={pendingRequirementIds.length === 0 || batchReviewRequirementsMutation.isPending}
+                >
+                  {batchReviewRequirementsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+                  {batchReviewRequirementsMutation.isPending ? "正在校验" : "批量校验并确认"}
+                </Button>
+                <Button
+                  onClick={() => generateDerivedAssetBatchMutation.mutate(approvedMissingRequirementIds)}
+                  disabled={approvedMissingRequirementIds.length === 0 || activeDerivedAssetRun || generateDerivedAssetBatchMutation.isPending}
+                >
+                  {activeDerivedAssetRun || generateDerivedAssetBatchMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
+                  {activeDerivedAssetRun || generateDerivedAssetBatchMutation.isPending ? "生成中" : "生成已确认衍生图"}
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="grid gap-3">
             {requirements.map((requirement) => {
               const previewUrl = requirementPreviewUrl(requirement, artifactPreviewById);
@@ -727,7 +865,7 @@ export function AssetsPage({
                     {previewUrl ? (
                       <PreviewImageButton
                         alt={requirement.assetName || requirement.assetId}
-                        className="h-full w-full"
+                        className="relative h-full w-full"
                         description={requirement.prompt || requirement.action || requirement.roleInShot || undefined}
                         imageClassName="h-full w-full object-cover"
                         onOpenImage={(preview) => setImagePreview(preview)}
@@ -763,9 +901,9 @@ export function AssetsPage({
                         <X className="mr-1 h-3.5 w-3.5" />
                         需修改
                       </Button>
-                      <Button size="sm" onClick={() => generateRequirementImage(requirement.id)} disabled={isGeneratingThisRequirement}>
+                      <Button size="sm" onClick={() => generateRequirementImage(requirement.id)} disabled={isGeneratingThisRequirement || requirement.reviewStatus !== "approved"}>
                         {isGeneratingThisRequirement ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
-                        {isGeneratingThisRequirement ? "生成中" : "生成图像"}
+                        {isGeneratingThisRequirement ? "生成中" : requirement.reviewStatus === "approved" ? "生成图像" : "先确认"}
                       </Button>
                     </div>
                     <RequirementProvenance requirement={requirement} />
@@ -1055,11 +1193,11 @@ function AssetDetailPanel({
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={onGenerateCard} disabled={isGeneratingCard || isGeneratingImage}>
               {isGeneratingCard ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              {isGeneratingCard ? "生成中" : "重生成卡片"}
+              {isGeneratingCard ? "生成提示词中" : assetDraftPromptReady(draft) ? "重新生成提示词" : "生成提示词"}
             </Button>
             <Button variant="outline" onClick={onGenerateImage} disabled={isSaving || isGeneratingImage || isGeneratingCard || !canGenerateImage}>
               {isGeneratingImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
-              {isGeneratingImage ? "生成中" : "重生成图像"}
+              {isGeneratingImage ? "生成图片中" : assetHasGeneratedImage(asset) ? "重新生成图片" : "生成图片"}
             </Button>
             <Button onClick={onSave} disabled={isSaving || isGeneratingCard || isGeneratingImage || !canSave || !hasUnsavedChanges}>
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -1166,7 +1304,7 @@ function AssetDetailPanel({
           {selectedPreview ? (
             <PreviewImageButton
               alt={asset.name}
-              className="w-full"
+              className="relative aspect-square w-full"
               description={asset.description}
               imageClassName="aspect-square w-full object-cover"
               onOpenImage={onOpenImage}
@@ -1216,7 +1354,7 @@ function AssetDetailPanel({
                     {reference.previewUrl ? (
                       <PreviewImageButton
                         alt={reference.title || "参考图"}
-                        className="h-full w-full"
+                        className="relative h-full w-full"
                         description={reference.prompt || undefined}
                         imageClassName="h-full w-full object-cover"
                         onOpenImage={onOpenImage}
@@ -1290,7 +1428,7 @@ function GeneratedImageHistory({ references, onOpenImage }: { references: AssetR
                   {reference.previewUrl ? (
                     <PreviewImageButton
                       alt={reference.title || "生图版本"}
-                      className="h-full w-full"
+                      className="relative h-full w-full"
                       description={reference.prompt || undefined}
                       imageClassName="h-full w-full object-cover"
                       onOpenImage={onOpenImage}
@@ -1555,6 +1693,7 @@ function PreviewImageButton({
   description,
   className,
   imageClassName,
+  onLoadError,
   onOpenImage,
 }: {
   src: string;
@@ -1563,18 +1702,27 @@ function PreviewImageButton({
   description?: string;
   className?: string;
   imageClassName?: string;
+  onLoadError?: (src: string) => void;
   onOpenImage: (preview: ImagePreview) => void;
 }) {
   return (
     <button
       type="button"
-      className={cn("block overflow-hidden text-left", className)}
+      className={cn("relative block overflow-hidden text-left", className)}
       onClick={(event) => {
         event.stopPropagation();
         onOpenImage({ src, title, description });
       }}
     >
-      <img alt={alt} className={cn("transition duration-150 hover:scale-[1.02]", imageClassName)} src={src} />
+      <NextImage
+        alt={alt}
+        fill
+        className={cn("transition duration-150 hover:scale-[1.02]", imageClassName)}
+        onError={() => onLoadError?.(src)}
+        sizes="(max-width: 768px) 100vw, 420px"
+        src={src}
+        unoptimized
+      />
     </button>
   );
 }
@@ -1587,8 +1735,8 @@ function ImagePreviewDialog({ preview, onClose }: { preview: ImagePreview | null
           <DialogTitle>{preview?.title ?? "图片预览"}</DialogTitle>
         </DialogHeader>
         {preview ? (
-          <div className="max-h-[calc(100vh-8rem)] overflow-auto bg-muted">
-            <img alt={preview.title} className="mx-auto h-auto max-h-[calc(100vh-8rem)] w-auto max-w-full object-contain" src={preview.src} />
+          <div className="relative h-[calc(100vh-8rem)] min-h-64 bg-muted">
+            <NextImage alt={preview.title} className="object-contain" fill sizes="100vw" src={preview.src} unoptimized />
           </div>
         ) : null}
         {preview?.description ? <div className="border-t px-4 py-3 text-sm text-muted-foreground">{preview.description}</div> : null}
@@ -1605,7 +1753,7 @@ function ArtifactPreview({ artifact, onOpenImage }: { artifact: Artifact; onOpen
     return (
       <PreviewImageButton
         alt={artifactTypeLabel(artifact.type)}
-        className="w-full"
+        className="relative aspect-video w-full"
         description={formatArtifactSummary(artifact)}
         imageClassName="aspect-video w-full bg-muted object-cover"
         onOpenImage={onOpenImage}
@@ -1641,11 +1789,24 @@ function formatDateTime(value: string) {
 }
 
 function assetPreviewUrl(asset: CanonicalAsset, references: CanonicalAsset["references"], artifacts: Map<string, string>) {
-  const primaryReference = references?.find((reference) => reference.isPrimary && reference.previewUrl) ?? references?.find((reference) => reference.previewUrl);
-  return primaryReference?.previewUrl
-    ?? idPreview(asset.primaryReferenceArtifactId, artifacts)
+  const primaryReference = references?.find((reference) => reference.isPrimary);
+  const primaryPreview = referencePreviewUrl(primaryReference, artifacts);
+  if (primaryPreview) {
+    return primaryPreview;
+  }
+  for (const reference of references ?? []) {
+    const preview = referencePreviewUrl(reference, artifacts);
+    if (preview) {
+      return preview;
+    }
+  }
+  return idPreview(asset.primaryReferenceArtifactId, artifacts)
     ?? idPreview(asset.referenceArtifactId, artifacts)
     ?? "";
+}
+
+function referencePreviewUrl(reference: AssetReference | undefined, artifacts: Map<string, string>) {
+  return reference?.previewUrl ?? idPreview(reference?.artifactId, artifacts);
 }
 
 function requirementPreviewUrl(requirement: ShotAssetRequirement, artifacts: Map<string, string>) {

@@ -138,6 +138,9 @@ func ReconcileExpiredWorkflowCancellations(ctx context.Context, pool *pgxpool.Po
 		if _, _, err := cancelWorkflowRunTx(ctx, tx, item.WorkflowRunID, output, reason, "CANCELLATION_DEADLINE_EXCEEDED"); err != nil {
 			return 0, err
 		}
+		if err := cancelEpisodeVideoProductionCheckpointsForWorkflowTx(ctx, tx, item.WorkflowRunID, reason); err != nil {
+			return 0, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err

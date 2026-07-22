@@ -49,6 +49,9 @@ func (a *Authorizer) Authorize(ctx context.Context, principal auth.Principal, pe
 	if resolved.OrganizationID == "" {
 		return AccessError{Permission: permission, Resource: resolved}
 	}
+	if strings.TrimSpace(principal.OrganizationID) == "" || resolved.OrganizationID != principal.OrganizationID {
+		return AccessError{Permission: permission, Resource: resolved}
+	}
 	var member bool
 	if err := a.DB.QueryRow(ctx, `
 		SELECT EXISTS(

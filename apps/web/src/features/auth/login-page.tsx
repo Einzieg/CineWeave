@@ -14,8 +14,8 @@ import { sessionFromAuthResponse, useStudioSession } from "@/lib/session";
 
 export function LoginPage() {
   const router = useRouter();
-  const { hydrated, ready, setSession } = useStudioSession();
-  const [email, setEmail] = useState("");
+  const { hydrated, ready, setPendingOrganizationSelection, setSession } = useStudioSession();
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [loadingState, setLoadingState] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -56,11 +56,19 @@ export function LoginPage() {
     setError("");
     setBusy(true);
     try {
-      const response = await studioApi.login({ email, password });
+      const response = await studioApi.login({ identifier, password });
+      if (response.requiresOrganizationSelection) {
+        setPendingOrganizationSelection({
+          token: response.organizationSelectionToken,
+          organizations: response.organizations,
+        });
+        router.replace(selectionPath() as Route);
+        return;
+      }
       setSession(sessionFromAuthResponse(response));
-      router.replace(nextPath() as Route);
+      router.replace((response.user.username ? nextPath() : usernamePath()) as Route);
     } catch (cause) {
-      setError(cause instanceof StudioApiError ? "邮箱或密码不正确。" : "登录失败，请稍后重试。");
+      setError(cause instanceof StudioApiError ? cause.message : "登录失败，请稍后重试。");
     } finally {
       setBusy(false);
     }
@@ -81,13 +89,12 @@ export function LoginPage() {
     <AuthPageShell title="登录影织" description="进入你的 AI 视频创作工作台。">
       <form className="grid gap-4" onSubmit={submit}>
         <div className="grid gap-2">
-          <Label htmlFor="email">邮箱</Label>
+          <Label htmlFor="identifier">用户名或邮箱</Label>
           <Input
-            id="email"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            id="identifier"
+            autoComplete="username"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
             required
           />
         </div>
@@ -125,4 +132,14 @@ function nextPath() {
     return "/projects";
   }
   return value;
+}
+
+function selectionPath() {
+  const next = nextPath();
+  return next === "/projects" ? "/select-organization" : `/select-organization?next=${encodeURIComponent(next)}`;
+}
+
+function usernamePath() {
+  const next = nextPath();
+  return next === "/projects" ? "/set-username" : `/set-username?next=${encodeURIComponent(next)}`;
 }

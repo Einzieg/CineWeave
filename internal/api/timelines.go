@@ -14,6 +14,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/production"
 	storyboardtiming "github.com/Einzieg/cineweave/internal/storyboard"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
 )
@@ -127,6 +128,7 @@ func (s *Server) listProjectTimelines(w http.ResponseWriter, r *http.Request, pr
 		       metadata, created_by::text, edited_by::text, created_at, updated_at, edited_at
 		FROM project_timelines
 		WHERE project_id = $1
+		  AND production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
 		ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END, created_at DESC
 		LIMIT 100
 	`, project.ID)
@@ -174,19 +176,25 @@ func (s *Server) createProjectTimeline(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	defer tx.Rollback(r.Context())
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
 
 	var item ProjectTimeline
 	if err := tx.QueryRow(r.Context(), `
 		INSERT INTO project_timelines(
 			organization_id, project_id, title, status, aspect_ratio, resolution,
-			timeline_timebase, fps_numerator, fps_denominator, metadata, created_by
+			timeline_timebase, fps_numerator, fps_denominator, metadata, created_by,
+			production_generation_id
 		)
-		VALUES ($1, $2, $3, 'draft', $4, $5, $6, $7, $8, '{}', $9)
+		VALUES ($1, $2, $3, 'draft', $4, $5, $6, $7, $8, '{}', $9, $10)
 		RETURNING id, organization_id, project_id, workflow_run_id::text, title, status, aspect_ratio, resolution,
 		          timeline_timebase, fps_numerator, fps_denominator,
 		          metadata, created_by::text, edited_by::text, created_at, updated_at, edited_at
 	`, project.OrganizationID, project.ID, title, aspectRatio, resolution,
-		project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator, principal.UserID).Scan(
+		project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator, principal.UserID, productionContext.Generation.ID).Scan(
 		&item.ID, &item.OrganizationID, &item.ProjectID, &item.WorkflowRunID, &item.Title, &item.Status, &item.AspectRatio, &item.Resolution,
 		&item.TimelineTimebase, &item.FPSNumerator, &item.FPSDenominator,
 		&item.Metadata, &item.CreatedBy, &item.EditedBy, &item.CreatedAt, &item.UpdatedAt, &item.EditedAt,
@@ -238,7 +246,18 @@ func (s *Server) updateProjectTimeline(w http.ResponseWriter, r *http.Request, p
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "timeline status is invalid", nil, false)
 		return
 	}
-	item, err := scanProjectTimeline(s.db.QueryRow(r.Context(), `
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
+	item, err := scanProjectTimeline(tx.QueryRow(r.Context(), `
 		UPDATE project_timelines
 		SET title = COALESCE($3, title),
 		    status = COALESCE($4, status),
@@ -246,13 +265,17 @@ func (s *Server) updateProjectTimeline(w http.ResponseWriter, r *http.Request, p
 		    resolution = COALESCE($6, resolution),
 		    edited_by = $7,
 		    edited_at = now()
-		WHERE project_id = $1 AND id = $2
+		WHERE project_id = $1 AND id = $2 AND production_generation_id = $8
 		RETURNING id, organization_id, project_id, workflow_run_id::text, title, status, aspect_ratio, resolution,
 		          timeline_timebase, fps_numerator, fps_denominator,
 		          metadata, created_by::text, edited_by::text, created_at, updated_at, edited_at
 	`, project.ID, r.PathValue("timelineId"), normalizedOptionalString(req.Title), normalizedOptionalString(req.Status),
-		normalizedOptionalString(req.AspectRatio), normalizedOptionalString(req.Resolution), principal.UserID))
+		normalizedOptionalString(req.AspectRatio), normalizedOptionalString(req.Resolution), principal.UserID, productionContext.Generation.ID))
 	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -264,13 +287,28 @@ func (s *Server) deleteProjectTimeline(w http.ResponseWriter, r *http.Request, p
 	if !ok {
 		return
 	}
-	tag, err := s.db.Exec(r.Context(), `DELETE FROM project_timelines WHERE project_id = $1 AND id = $2`, project.ID, r.PathValue("timelineId"))
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
+	tag, err := tx.Exec(r.Context(), `DELETE FROM project_timelines WHERE project_id = $1 AND id = $2 AND production_generation_id = $3`, project.ID, r.PathValue("timelineId"), productionContext.Generation.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
 		s.writeError(w, r, pgx.ErrNoRows)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"deleted": true}, nil)
@@ -331,6 +369,11 @@ func (s *Server) createTimelineClip(w http.ResponseWriter, r *http.Request, prin
 		return
 	}
 	defer tx.Rollback(r.Context())
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
 	if _, err := tx.Exec(r.Context(), `SET CONSTRAINTS timeline_clips_timeline_index_unique DEFERRED`); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -421,14 +464,15 @@ func (s *Server) createTimelineClip(w http.ResponseWriter, r *http.Request, prin
 		INSERT INTO timeline_clips(
 			organization_id, project_id, timeline_id, storyboard_shot_id, video_artifact_id, video_media_file_id,
 			clip_index, title, enabled, source_storage_key, source_duration_ticks,
-			trim_start_tick, trim_end_tick, start_tick, end_tick, notes, metadata, manual_override, stale_state, edited_by, edited_at
+			trim_start_tick, trim_end_tick, start_tick, end_tick, notes, metadata, manual_override, stale_state, edited_by, edited_at,
+			production_generation_id
 		)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
-		        $7, $8, $9, NULLIF($10, ''), $11, $12, $13, 0, $14, NULLIF($15, ''), '{}', true, 'fresh', $16, now())
+		        $7, $8, $9, NULLIF($10, ''), $11, $12, $13, 0, $14, NULLIF($15, ''), '{}', true, 'fresh', $16, now(), $17)
 		RETURNING id::text
 	`, project.OrganizationID, project.ID, timeline.ID, strings.TrimSpace(req.StoryboardShotID), videoArtifactID, videoMediaFileID,
 		clipIndex, title, enabled, sourceStorageKey, nullableInt64Ptr(sourceDurationTicks), trimStartTick,
-		nullableInt64Ptr(trimEndTick), resolvedDurationTicks, strings.TrimSpace(req.Notes), principal.UserID).Scan(&clipID); err != nil {
+		nullableInt64Ptr(trimEndTick), resolvedDurationTicks, strings.TrimSpace(req.Notes), principal.UserID, productionContext.Generation.ID).Scan(&clipID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -532,6 +576,11 @@ func (s *Server) updateTimelineClip(w http.ResponseWriter, r *http.Request, prin
 		return
 	}
 	defer tx.Rollback(r.Context())
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE timeline_clips
 		SET title = $4,
@@ -544,9 +593,9 @@ func (s *Server) updateTimelineClip(w http.ResponseWriter, r *http.Request, prin
 		    stale_state = 'fresh',
 		    edited_by = $10,
 		    edited_at = now()
-		WHERE project_id = $1 AND timeline_id = $2 AND id = $3
+		WHERE project_id = $1 AND timeline_id = $2 AND id = $3 AND production_generation_id = $11
 	`, project.ID, r.PathValue("timelineId"), r.PathValue("clipId"), current.Title, current.Enabled,
-		trimStartTick, nullableInt64Ptr(trimEndTick), durationTicks, nullableStringPtr(current.Notes), principal.UserID); err != nil {
+		trimStartTick, nullableInt64Ptr(trimEndTick), durationTicks, nullableStringPtr(current.Notes), principal.UserID, productionContext.Generation.ID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -581,10 +630,15 @@ func (s *Server) deleteTimelineClip(w http.ResponseWriter, r *http.Request, prin
 		return
 	}
 	defer tx.Rollback(r.Context())
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
 	tag, err := tx.Exec(r.Context(), `
 		DELETE FROM timeline_clips
-		WHERE project_id = $1 AND timeline_id = $2 AND id = $3
-	`, project.ID, r.PathValue("timelineId"), r.PathValue("clipId"))
+		WHERE project_id = $1 AND timeline_id = $2 AND id = $3 AND production_generation_id = $4
+	`, project.ID, r.PathValue("timelineId"), r.PathValue("clipId"), productionContext.Generation.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -636,6 +690,11 @@ func (s *Server) reorderTimelineClips(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	defer tx.Rollback(r.Context())
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
 	if _, err := tx.Exec(r.Context(), `SET CONSTRAINTS timeline_clips_timeline_index_unique DEFERRED`); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -644,8 +703,8 @@ func (s *Server) reorderTimelineClips(w http.ResponseWriter, r *http.Request, pr
 		tag, err := tx.Exec(r.Context(), `
 			UPDATE timeline_clips
 			SET clip_index = $4
-			WHERE project_id = $1 AND timeline_id = $2 AND id = $3
-		`, project.ID, r.PathValue("timelineId"), item.ClipID, item.ClipIndex)
+			WHERE project_id = $1 AND timeline_id = $2 AND id = $3 AND production_generation_id = $5
+		`, project.ID, r.PathValue("timelineId"), item.ClipID, item.ClipIndex, productionContext.Generation.ID)
 		if err != nil {
 			s.writeError(w, r, err)
 			return
@@ -800,11 +859,16 @@ func (s *Server) activateFinalVideo(w http.ResponseWriter, r *http.Request, prin
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `UPDATE final_video_versions SET status = 'ready' WHERE project_id = $1 AND status = 'active' AND id <> $2`, project.ID, r.PathValue("versionId")); err != nil {
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE final_video_versions SET status = 'ready' WHERE project_id = $1 AND status = 'active' AND id <> $2 AND production_generation_id = $3`, project.ID, r.PathValue("versionId"), productionContext.Generation.ID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	tag, err := tx.Exec(r.Context(), `UPDATE final_video_versions SET status = 'active' WHERE project_id = $1 AND id = $2`, project.ID, r.PathValue("versionId"))
+	tag, err := tx.Exec(r.Context(), `UPDATE final_video_versions SET status = 'active' WHERE project_id = $1 AND id = $2 AND production_generation_id = $3`, project.ID, r.PathValue("versionId"), productionContext.Generation.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -849,11 +913,16 @@ func (s *Server) deleteFinalVideo(w http.ResponseWriter, r *http.Request, princi
 		return
 	}
 	defer tx.Rollback(r.Context())
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
 	if _, err := tx.Exec(r.Context(), `UPDATE projects SET active_final_video_version_id = NULL WHERE id = $1 AND active_final_video_version_id = $2`, project.ID, r.PathValue("versionId")); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	tag, err := tx.Exec(r.Context(), `DELETE FROM final_video_versions WHERE project_id = $1 AND id = $2`, project.ID, r.PathValue("versionId"))
+	tag, err := tx.Exec(r.Context(), `DELETE FROM final_video_versions WHERE project_id = $1 AND id = $2 AND production_generation_id = $3`, project.ID, r.PathValue("versionId"), productionContext.Generation.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -878,6 +947,14 @@ func (s *Server) createTimelineClipsFromStoryboard(r *http.Request, tx pgx.Tx, p
 	if err := timebase.Validate(); err != nil {
 		return err
 	}
+	var productionGenerationID string
+	if err := tx.QueryRow(r.Context(), `
+		SELECT production_generation_id::text
+		FROM project_timelines
+		WHERE id = $1 AND project_id = $2
+	`, timelineID, project.ID).Scan(&productionGenerationID); err != nil {
+		return err
+	}
 	rows, err := tx.Query(r.Context(), `
 		SELECT s.id::text, COALESCE(s.video_artifact_id::text, ''), COALESCE(s.video_media_file_id::text, ''),
 		       COALESCE(s.video_storage_key, mf.storage_key, va.storage_key, ''),
@@ -888,11 +965,12 @@ func (s *Server) createTimelineClipsFromStoryboard(r *http.Request, tx pgx.Tx, p
 		LEFT JOIN media_files mf ON mf.id = s.video_media_file_id
 		LEFT JOIN artifacts va ON va.id = s.video_artifact_id
 		WHERE s.project_id = $1
+		  AND s.production_generation_id = $2
 		  AND s.deleted_at IS NULL
 		  AND (COALESCE(s.video_status, '') = 'succeeded' OR COALESCE(s.status, '') = 'video_succeeded')
 		  AND COALESCE(s.video_storage_key, mf.storage_key, va.storage_key, '') <> ''
 		ORDER BY s.shot_index ASC
-	`, project.ID)
+	`, project.ID, productionGenerationID)
 	if err != nil {
 		return err
 	}
@@ -945,11 +1023,12 @@ func (s *Server) createTimelineClipsFromStoryboard(r *http.Request, tx pgx.Tx, p
 			INSERT INTO timeline_clips(
 				organization_id, project_id, timeline_id, storyboard_shot_id, video_artifact_id, video_media_file_id,
 				clip_index, title, enabled, source_storage_key, source_duration_ticks,
-				trim_start_tick, trim_end_tick, start_tick, end_tick, metadata, stale_state
+				trim_start_tick, trim_end_tick, start_tick, end_tick, metadata, stale_state,
+				production_generation_id
 			)
-			VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, $7, $8, true, $9, $10, 0, $10, $11, $12, '{}', 'fresh')
+			VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, $7, $8, true, $9, $10, 0, $10, $11, $12, '{}', 'fresh', $13)
 		`, project.OrganizationID, project.ID, timelineID, shot.shotID, shot.artifactID, shot.mediaFileID, index, shot.title, shot.storageKey,
-			sourceDurationTicks, startTick, endTick); err != nil {
+			sourceDurationTicks, startTick, endTick, productionGenerationID); err != nil {
 			return err
 		}
 		startTick = endTick
@@ -964,6 +1043,7 @@ func (s *Server) timelineByID(r *http.Request, projectID, timelineID string) (Pr
 		       metadata, created_by::text, edited_by::text, created_at, updated_at, edited_at
 		FROM project_timelines
 		WHERE project_id = $1 AND id = $2
+		  AND production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
 	`, projectID, timelineID))
 }
 
@@ -985,12 +1065,24 @@ func scanProjectTimeline(row rowScan) (ProjectTimeline, error) {
 	return item, err
 }
 
+func lockActiveVideoProductionContext(ctx context.Context, tx pgx.Tx, projectID string) (videoproduction.Context, error) {
+	active, err := videoproduction.LoadActiveContext(ctx, tx, projectID)
+	if err != nil {
+		return videoproduction.Context{}, err
+	}
+	return videoproduction.AssertWritableTx(
+		ctx, tx, projectID, active.Generation.ID, active.Binding.ID, active.Binding.Revision,
+	)
+}
+
 func (s *Server) timelineClips(r *http.Request, projectID, timelineID string) ([]TimelineClip, error) {
 	rows, err := s.db.Query(r.Context(), `
 		SELECT `+timelineClipColumns("c", "t")+`
 		FROM timeline_clips c
 		JOIN project_timelines t ON t.id = c.timeline_id
 		WHERE c.project_id = $1 AND c.timeline_id = $2
+		  AND c.production_generation_id = t.production_generation_id
+		  AND t.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
 		ORDER BY c.clip_index ASC
 	`, projectID, timelineID)
 	if err != nil {
@@ -1014,6 +1106,8 @@ func (s *Server) timelineClipByID(r *http.Request, projectID, timelineID, clipID
 		FROM timeline_clips c
 		JOIN project_timelines t ON t.id = c.timeline_id
 		WHERE c.project_id = $1 AND c.timeline_id = $2 AND c.id = $3
+		  AND c.production_generation_id = t.production_generation_id
+		  AND t.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
 	`, projectID, timelineID, clipID))
 }
 
@@ -1109,6 +1203,8 @@ func (s *Server) finalVideoVersions(r *http.Request, projectID, timelineID strin
 		FROM final_video_versions version_row
 		JOIN project_timelines timeline ON timeline.id = version_row.timeline_id
 		WHERE version_row.project_id = $1
+		  AND version_row.production_generation_id = timeline.production_generation_id
+		  AND timeline.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
 	`
 	args := []any{projectID}
 	if strings.TrimSpace(timelineID) != "" {
@@ -1145,6 +1241,8 @@ func (s *Server) finalVideoVersionByID(r *http.Request, projectID, versionID str
 		FROM final_video_versions version_row
 		JOIN project_timelines timeline ON timeline.id = version_row.timeline_id
 		WHERE version_row.project_id = $1 AND version_row.id = $2
+		  AND version_row.production_generation_id = timeline.production_generation_id
+		  AND timeline.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
 	`, projectID, versionID))
 	if err != nil {
 		return FinalVideoVersion{}, err

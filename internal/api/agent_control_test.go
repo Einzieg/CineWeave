@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -75,6 +76,7 @@ func TestAgentToolsAndTasksAPI(t *testing.T) {
 		t.Fatal("agent tools list is empty")
 	}
 	assertAgentToolListed(t, tools.Items, "project.read_summary", "read", false)
+	assertAgentToolListed(t, tools.Items, "project.clear_production_content", "destructive", true)
 	assertAgentToolListed(t, tools.Items, "agent.ask_user", "draft", true)
 	assertAgentToolListed(t, tools.Items, "source.update", "write", true)
 	assertAgentToolListed(t, tools.Items, "source.delete", "destructive", true)
@@ -82,6 +84,8 @@ func TestAgentToolsAndTasksAPI(t *testing.T) {
 	assertAgentToolListed(t, tools.Items, "script.update_episode", "write", true)
 	assertAgentToolListed(t, tools.Items, "script.delete", "destructive", true)
 	assertAgentToolListed(t, tools.Items, "asset.delete", "destructive", true)
+	assertAgentToolListed(t, tools.Items, "asset.batch_generate_prompts", "workflow", true)
+	assertAgentToolListed(t, tools.Items, "asset.batch_generate_images", "workflow", true)
 	assertAgentToolListed(t, tools.Items, "workflow.start", "workflow", true)
 	assertAgentToolListed(t, tools.Items, "provider.update_account", "admin", true)
 	assertAgentToolListed(t, tools.Items, "provider.update_model", "admin", true)
@@ -92,7 +96,7 @@ func TestAgentToolsAndTasksAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("project agent registry: %v", err)
 	}
-	for _, name := range []string{"project.read_summary", "workflow.start", "script.create_version"} {
+	for _, name := range []string{"project.read_summary", "workflow.start", "script.create_version", "asset.batch_generate_prompts", "asset.batch_generate_images"} {
 		tool, ok := registry.Get(name)
 		if !ok || tool.Execute == nil {
 			t.Fatalf("registry tool %s execute = %v, exists=%v", name, tool.Execute, ok)
@@ -163,6 +167,42 @@ func TestAgentToolsAndTasksAPI(t *testing.T) {
 	}
 	assertWorkflowStatus(t, seed, linkedWorkflowID, "cancelling")
 
+	explicitCancelTaskID := seed.insertAgentTask(t, "running")
+	explicitLinkedWorkflowID := seed.insertWorkflowRun(t, "running")
+	seed.apiServer.temporal = &fakeTemporalClient{signalErr: errors.New("workflow execution already completed")}
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE agent_tasks SET temporal_workflow_id = 'completed-project-agent-workflow' WHERE id = $1
+	`, explicitCancelTaskID); err != nil {
+		t.Fatalf("set completed agent temporal workflow: %v", err)
+	}
+	seed.insertAgentStepWithOutput(
+		t,
+		explicitCancelTaskID,
+		1,
+		"shot.generate_missing_videos",
+		"workflow",
+		"succeeded",
+		`{"status":"succeeded","childWorkflowRunIds":["`+explicitLinkedWorkflowID+`"],"data":{"workflowRunId":"`+explicitLinkedWorkflowID+`"}}`,
+	)
+	var explicitCancelled AgentTask
+	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/agent/tasks/"+explicitCancelTaskID+"/cancel", seed.ownerToken, seed.organizationID, nil, &explicitCancelled)
+	if explicitCancelled.Status != "cancelled" {
+		t.Fatalf("explicit child workflow cancellation task = %+v", explicitCancelled)
+	}
+	assertWorkflowStatus(t, seed, explicitLinkedWorkflowID, "cancelling")
+	var cancelledGenerationID, cancelledBindingID string
+	var cancelledBindingRevision int64
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT production_generation_id::text, video_production_binding_id::text, video_production_binding_revision
+		FROM workflow_runs
+		WHERE id = $1
+	`, explicitLinkedWorkflowID).Scan(&cancelledGenerationID, &cancelledBindingID, &cancelledBindingRevision); err != nil {
+		t.Fatalf("load cancelled workflow production identity: %v", err)
+	}
+	if cancelledGenerationID == "" || cancelledBindingID == "" || cancelledBindingRevision < 1 {
+		t.Fatalf("cancelled workflow production identity = %q / %q / %d", cancelledGenerationID, cancelledBindingID, cancelledBindingRevision)
+	}
+
 	resumableID := seed.insertAgentTask(t, "failed")
 	approveStepID := seed.insertAgentStep(t, resumableID, 1, "workflow.start", "workflow", "waiting_approval")
 	seed.insertAgentApproval(t, resumableID, approveStepID, "workflow")
@@ -186,6 +226,31 @@ func TestAgentToolsAndTasksAPI(t *testing.T) {
 	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/agent/tasks/"+resumableID+"/resume", seed.ownerToken, seed.organizationID, nil, &resumed)
 	if resumed.Status != "queued" || resumed.ErrorCode != nil || resumed.CompletedAt != nil {
 		t.Fatalf("resumed task = %+v", resumed)
+	}
+}
+
+func TestAgentGoalEffectClassification(t *testing.T) {
+	tests := []struct {
+		name       string
+		goal       string
+		write      bool
+		clearScope bool
+	}{
+		{name: "clear production", goal: "清空当前项目除小说原文外的内容", write: true, clearScope: true},
+		{name: "confirmed clear", goal: "彻底删除全部生产内容，保留小说原文", write: true, clearScope: true},
+		{name: "diagnose deletion", goal: "检查为什么删除剧本失败", write: false},
+		{name: "read status", goal: "查看当前项目状态", write: false},
+		{name: "explicit update", goal: "请修改第一集剧本", write: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := agentGoalRequiresWriteEffect(test.goal); got != test.write {
+				t.Fatalf("agentGoalRequiresWriteEffect(%q) = %v, want %v", test.goal, got, test.write)
+			}
+			if got := agentGoalRequestsProductionContentClear(test.goal); got != test.clearScope {
+				t.Fatalf("agentGoalRequestsProductionContentClear(%q) = %v, want %v", test.goal, got, test.clearScope)
+			}
+		})
 	}
 }
 
@@ -603,6 +668,46 @@ func TestProjectAgentDoesNotResumeNextStepWhileChildWorkflowRuns(t *testing.T) {
 	}
 }
 
+func TestProjectAgentWaitsForImagePromptChildWorkflow(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	server := New(seed.pool, seed.authService, nil, nil, nil)
+	project, err := seed.apiServer.project(requestWithContext(seed.ctx), seed.projectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	taskID := seed.insertAgentTaskWithGoal(t, "running", "生成第二集镜头图片提示词")
+	workflowRunID := seed.insertWorkflowRunWithType(t, "batch_generate_shot_image_prompts", "running")
+	seed.insertAgentStepWithOutput(t, taskID, 1, "shot.generate_image_prompts", "workflow", "succeeded", string(mustMarshal(agentToolResult{
+		Name:                "shot.generate_image_prompts",
+		Status:              "succeeded",
+		ChildWorkflowRunIDs: []string{workflowRunID},
+		Data: map[string]any{
+			"workflowRunId": workflowRunID,
+			"workflowType":  "batch_generate_shot_image_prompts",
+			"status":        "running",
+		},
+	})))
+
+	updated, err := server.executeAgentTaskReadySteps(requestWithContext(seed.ctx), auth.Principal{UserID: seed.ownerUserID, OrganizationID: seed.organizationID}, project, taskID)
+	if err != nil {
+		t.Fatalf("execute ready steps: %v", err)
+	}
+	if updated.Status != "running" {
+		t.Fatalf("task status = %s, want running", updated.Status)
+	}
+	var summary struct {
+		WaitingForWorkflowRuns []agentPendingWorkflowRun `json:"waitingForWorkflowRuns"`
+	}
+	if err := json.Unmarshal(updated.Summary, &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if len(summary.WaitingForWorkflowRuns) != 1 || summary.WaitingForWorkflowRuns[0].ID != workflowRunID {
+		t.Fatalf("waiting runs = %#v, want %s", summary.WaitingForWorkflowRuns, workflowRunID)
+	}
+}
+
 func TestProjectAgentWaitsForActiveNodesWhenWorkflowRunLooksComplete(t *testing.T) {
 	_, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
@@ -704,6 +809,13 @@ func TestProjectAgentStopsWhenChildWorkflowFails(t *testing.T) {
 	}
 	taskID := seed.insertAgentTaskWithGoal(t, "running", "生成1-10集剧本后再列出资产")
 	workflowRunID := seed.insertWorkflowRunWithType(t, "source_to_script", "failed")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE workflow_runs
+		SET error_code = 'UPSTREAM_TIMEOUT', error_message = '视频任务在上游排队超时'
+		WHERE id = $1
+	`, workflowRunID); err != nil {
+		t.Fatalf("set workflow failure: %v", err)
+	}
 	seed.insertAgentStepWithOutput(t, taskID, 1, "script.generate_from_source", "write", "succeeded", string(mustMarshal(agentToolResult{
 		Name:   "script.generate_from_source",
 		Status: "succeeded",
@@ -719,7 +831,7 @@ func TestProjectAgentStopsWhenChildWorkflowFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute ready steps: %v", err)
 	}
-	if updated.Status != "failed" || updated.ErrorCode == nil || *updated.ErrorCode != "CHILD_WORKFLOW_FAILED" {
+	if updated.Status != "failed" || updated.ErrorCode == nil || *updated.ErrorCode != "UPSTREAM_TIMEOUT" || updated.ErrorMessage == nil || *updated.ErrorMessage != "视频任务在上游排队超时" {
 		t.Fatalf("task = %+v, want child workflow failure", updated)
 	}
 	assertAgentStepStatus(t, seed, assetStepID, "planned")
@@ -1394,6 +1506,75 @@ func TestAgentTaskCompletionSummaryCollectsTrace(t *testing.T) {
 	assertTraceContains(t, trace, "modelIds", "model-b")
 }
 
+func TestAgentTaskCompletionSummaryReplacesWaitingWorkflowState(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	taskID := seed.insertAgentTask(t, "succeeded")
+	workflowRunID := seed.insertWorkflowRun(t, "succeeded")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE workflow_runs
+		SET total_items = 1, completed_items = 1, failed_items = 0,
+		    input = jsonb_build_object('workflowType', 'batch_generate_shot_videos')
+		WHERE id = $1
+	`, workflowRunID); err != nil {
+		t.Fatalf("prepare completed workflow: %v", err)
+	}
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE agent_tasks
+		SET summary = jsonb_build_object(
+		  'summary', '已启动生产任务，正在等待 1 个工作流完成。',
+		  'waitingForWorkflowRuns', jsonb_build_array(jsonb_build_object('id', $2::text, 'status', 'running'))
+		)
+		WHERE id = $1
+	`, taskID, workflowRunID); err != nil {
+		t.Fatalf("prepare waiting summary: %v", err)
+	}
+	seed.insertAgentStepWithOutput(t, taskID, 1, "shot.generate_missing_videos", "costed", "succeeded", string(mustMarshal(agentToolResult{
+		Name:                "generate_missing_videos",
+		Label:               "生成缺失视频",
+		Status:              "succeeded",
+		Summary:             "已启动视频生成。",
+		ChildWorkflowRunIDs: []string{workflowRunID},
+	})))
+
+	item, err := seed.apiServer.agentTaskWithDetails(requestWithContext(seed.ctx), seed.projectID, taskID)
+	if err != nil {
+		t.Fatalf("read task details: %v", err)
+	}
+	if !json.Valid(item.Summary) {
+		t.Fatalf("task summary is invalid JSON: %s", string(item.Summary))
+	}
+	var summaryRaw json.RawMessage
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT summary FROM agent_tasks WHERE id = $1`, taskID).Scan(&summaryRaw); err != nil {
+		t.Fatalf("read task summary: %v", err)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal(summaryRaw, &summary); err != nil {
+		t.Fatalf("decode task summary: %v", err)
+	}
+	if got := stringValueFromAny(summary["summary"]); got != "生产任务已完成：1 个工作流，共完成 1 项。" {
+		t.Fatalf("summary = %q", got)
+	}
+	waiting, ok := summary["waitingForWorkflowRuns"].([]any)
+	if !ok || len(waiting) != 0 {
+		t.Fatalf("waiting workflows = %#v", summary["waitingForWorkflowRuns"])
+	}
+	completed, ok := summary["completedWorkflowRuns"].([]any)
+	if !ok || len(completed) != 1 {
+		t.Fatalf("completed workflows = %#v", summary["completedWorkflowRuns"])
+	}
+}
+
+func TestAgentCompletedWorkflowSummaryReportsPartialCompletion(t *testing.T) {
+	got := agentCompletedWorkflowSummary([]agentCompletedWorkflowRun{
+		{Status: "partial_succeeded", CompletedItems: 30, FailedItems: 1},
+	})
+	if got != "生产任务部分完成：1 个工作流，成功 30 项，失败 1 项。" {
+		t.Fatalf("summary = %q", got)
+	}
+}
+
 func TestProjectAgentScriptGenerateAndRewriteRequireApproval(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
@@ -1708,6 +1889,23 @@ func TestProjectAgentCreativeUpdateToolsRequireApproval(t *testing.T) {
 	}
 	if shotVisual != "Agent edited shot visual" {
 		t.Fatalf("shot visual = %q", shotVisual)
+	}
+	var eventAggregateType, eventAggregateID, eventEntityType, eventEntityID string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT aggregate_type, aggregate_id::text, payload->>'entityType', payload->>'entityId'
+		FROM events
+		WHERE event_type = 'agent.target.updated'
+		  AND payload->>'agentTaskId' = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, shotTask.ID).Scan(&eventAggregateType, &eventAggregateID, &eventEntityType, &eventEntityID); err != nil {
+		t.Fatalf("read agent target event: %v", err)
+	}
+	if eventAggregateType != "agent_task" || eventAggregateID != shotTask.ID {
+		t.Fatalf("event aggregate = %s/%s, want agent_task/%s", eventAggregateType, eventAggregateID, shotTask.ID)
+	}
+	if eventEntityType != "storyboard_shot" || eventEntityID != shotID {
+		t.Fatalf("event target = %s/%s, want storyboard_shot/%s", eventEntityType, eventEntityID, shotID)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Einzieg/cineweave/internal/authz"
@@ -53,6 +54,22 @@ func TestProductionStatusHelpers(t *testing.T) {
 	}
 	if _, _, _, ok := regenerationWorkflow("unknown"); ok {
 		t.Fatalf("unknown regeneration target should be rejected")
+	}
+}
+
+func TestGenerateDerivedAssetImagesCannotBypassDurableCommand(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/projects/project/production/actions", nil)
+	_, err := (&Server{}).productionActionWorkflowCore(request, Project{}, "generate_derived_asset_images", ProductionActionRequest{
+		Options: map[string]any{
+			"scriptEpisodeId": "episode-2",
+			"requirementIds":  []any{"requirement-1"},
+			"shotIds":         []any{"shot-1"},
+			"maxConcurrency":  7,
+		},
+	})
+	apiErr, ok := err.(apiError)
+	if !ok || apiErr.Code != "DERIVED_ASSET_COMMAND_REQUIRED" {
+		t.Fatalf("error = %#v, want DERIVED_ASSET_COMMAND_REQUIRED", err)
 	}
 }
 

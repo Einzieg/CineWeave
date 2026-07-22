@@ -234,7 +234,7 @@ func (a Activities) ParseScriptScenes(ctx context.Context, input ParseScriptScen
 	if err != nil {
 		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return ParseScriptScenesOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -356,7 +356,7 @@ func (a Activities) RegenerateScriptScene(ctx context.Context, input RegenerateS
 	if err != nil {
 		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return ScriptSceneRecord{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}

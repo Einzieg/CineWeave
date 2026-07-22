@@ -37,6 +37,42 @@ func TestDefaultRegistryContainsCoreTools(t *testing.T) {
 	}
 }
 
+func TestDefaultRegistryDeclaresChildWorkflowTools(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("default registry: %v", err)
+	}
+	for _, name := range []string{
+		"workflow.start",
+		"script.generate_from_source",
+		"asset.batch_generate_prompts",
+		"asset.batch_generate_images",
+		"shot.generate_image_prompts",
+		"shot.generate_video_prompts",
+		"shot.generate_missing_images",
+		"shot.generate_missing_videos",
+		"shot.cancel_running_videos",
+		"timeline.compose",
+	} {
+		tool, ok := registry.Get(name)
+		if !ok {
+			t.Fatalf("expected tool %s", name)
+		}
+		if !tool.StartsWorkflow {
+			t.Errorf("%s StartsWorkflow = false, want true", name)
+		}
+	}
+	for _, name := range []string{"shot.status", "workflow.cancel", "final_video.activate", "storyboard.reorder"} {
+		tool, ok := registry.Get(name)
+		if !ok {
+			t.Fatalf("expected tool %s", name)
+		}
+		if tool.StartsWorkflow {
+			t.Errorf("%s StartsWorkflow = true, want false", name)
+		}
+	}
+}
+
 func TestRegistryRejectsDuplicateTools(t *testing.T) {
 	_, err := NewRegistry(
 		AgentTool{Name: "project.read_summary", Risk: ToolRiskRead},

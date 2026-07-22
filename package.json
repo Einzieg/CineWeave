@@ -9,8 +9,17 @@
     "lint": "pnpm --filter @cineweave/web lint",
     "typecheck": "pnpm --filter @cineweave/web typecheck",
     "test": "node scripts/test.mjs",
+    "release:check": "pwsh -NoProfile -File scripts/release-check.ps1",
     "compose:infra": "docker compose --profile infra up -d",
     "compose:full": "docker compose --profile full up -d",
     "compose:down": "docker compose down --remove-orphans"
+  },
+  "pnpm": {
+    "overrides": {
+      "brace-expansion@1.1.15": "1.1.16",
+      "brace-expansion@5.0.6": "5.0.7",
+      "postcss": "8.5.22",
+      "sharp": "0.35.0"
+    }
   }
 }

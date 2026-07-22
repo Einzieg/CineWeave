@@ -43,6 +43,7 @@ func TestProviderLimitPolicyAPI(t *testing.T) {
 	suffix := uuid.NewString()
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "provider-limit-owner-" + suffix + "@example.test",
+		Username:         randomStorageSegment(),
 		Password:         "Password123!",
 		DisplayName:      "Provider Limit Owner",
 		OrganizationName: "Provider Limit Org " + suffix,
@@ -55,6 +56,7 @@ func TestProviderLimitPolicyAPI(t *testing.T) {
 	})
 	member, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "provider-limit-member-" + suffix + "@example.test",
+		Username:         randomStorageSegment(),
 		Password:         "Password123!",
 		DisplayName:      "Provider Limit Member",
 		OrganizationName: "Provider Limit Member Org " + suffix,

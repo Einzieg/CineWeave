@@ -67,6 +67,7 @@ type fakeTemporalClient struct {
 	options      client.StartWorkflowOptions
 	workflow     any
 	args         []any
+	signalErr    error
 }
 
 func (c *fakeTemporalClient) ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow interface{}, args ...interface{}) (client.WorkflowRun, error) {
@@ -82,7 +83,7 @@ func (c *fakeTemporalClient) CancelWorkflow(ctx context.Context, workflowID stri
 }
 
 func (c *fakeTemporalClient) SignalWorkflow(ctx context.Context, workflowID string, runID string, signalName string, arg interface{}) error {
-	return nil
+	return c.signalErr
 }
 
 type fakeWorkflowRun struct {

@@ -29,7 +29,10 @@ export function nextProductionAction(status: ProductionStatus) {
     case "storyboard":
       return "generate_storyboard";
     case "shot_assets":
-      return status.stages.shotAssets.missingDerivedImageCount > 0 && status.stages.shotAssets.pendingReviewCount === 0 ? "generate_derived_asset_images" : "analyze_shot_assets";
+      if (status.stages.shotAssets.approvedMissingDerivedImageCount > 0) {
+        return "generate_derived_asset_images";
+      }
+      return status.stages.shotAssets.requirementCount === 0 ? "analyze_shot_assets" : "";
     case "shot_images":
       return "generate_shot_images";
     case "shot_videos":
@@ -75,7 +78,7 @@ export function productionRefreshKeys(projectId: string) {
     qk.project(projectId),
     qk.productionStatus(projectId),
     qk.workflowRuns(projectId),
-    qk.assets(projectId),
+    qk.assetsRoot(projectId),
     qk.requirements(projectId),
     qk.artifacts(projectId),
     qk.timelines(projectId),

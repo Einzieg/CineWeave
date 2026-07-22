@@ -56,26 +56,36 @@ type ScriptRecord struct {
 }
 
 type ProjectProductionSettings struct {
-	ID                    string `json:"id"`
-	ProjectType           string `json:"projectType"`
-	ContentType           string `json:"contentType"`
-	AspectRatio           string `json:"aspectRatio"`
-	VideoRatio            string `json:"videoRatio"`
-	ArtStyle              string `json:"artStyle"`
-	DirectorManual        string `json:"directorManual"`
-	VisualManual          string `json:"visualManual"`
-	ImageModelProfileKey  string `json:"imageModelProfileKey"`
-	VideoModelProfileKey  string `json:"videoModelProfileKey"`
-	ScriptModelProfileKey string `json:"scriptModelProfileKey"`
-	TTSModelProfileKey    string `json:"ttsModelProfileKey"`
-	ASRModelProfileKey    string `json:"asrModelProfileKey"`
-	AudioStrategy         string `json:"audioStrategy"`
-	AudioRequirement      string `json:"audioRequirement"`
-	ImageQuality          string `json:"imageQuality"`
-	ProductionMode        string `json:"productionMode"`
-	TimelineTimebase      int64  `json:"timelineTimebase"`
-	FPSNumerator          int    `json:"fpsNumerator"`
-	FPSDenominator        int    `json:"fpsDenominator"`
+	ID                                               string   `json:"id"`
+	ProjectType                                      string   `json:"projectType"`
+	ContentType                                      string   `json:"contentType"`
+	AspectRatio                                      string   `json:"aspectRatio"`
+	VideoRatio                                       string   `json:"videoRatio"`
+	ArtStyle                                         string   `json:"artStyle"`
+	DirectorManual                                   string   `json:"directorManual"`
+	VisualManual                                     string   `json:"visualManual"`
+	ImageModelProfileKey                             string   `json:"imageModelProfileKey"`
+	VideoModelProfileKey                             string   `json:"videoModelProfileKey"`
+	ScriptModelProfileKey                            string   `json:"scriptModelProfileKey"`
+	TTSModelProfileKey                               string   `json:"ttsModelProfileKey"`
+	ASRModelProfileKey                               string   `json:"asrModelProfileKey"`
+	AudioStrategy                                    string   `json:"audioStrategy"`
+	AudioRequirement                                 string   `json:"audioRequirement"`
+	ImageQuality                                     string   `json:"imageQuality"`
+	VideoProductionProfileKey                        string   `json:"videoProductionProfileKey"`
+	VideoProductionProfileVersionID                  string   `json:"videoProductionProfileVersionId"`
+	VideoProductionProfileVersion                    int      `json:"videoProductionProfileVersion"`
+	VideoProductionProfileHash                       string   `json:"videoProductionProfileHash"`
+	VideoProductionInputContract                     string   `json:"videoProductionInputContract"`
+	VideoProductionRequiredInitialInputContract      string   `json:"videoProductionRequiredInitialInputContract"`
+	VideoProductionAllowedContinuationInputContracts []string `json:"videoProductionAllowedContinuationInputContracts"`
+	VideoProductionCompatibilityPolicy               string   `json:"videoProductionCompatibilityPolicy"`
+	VideoProductionBindingID                         string   `json:"videoProductionBindingId"`
+	VideoProductionBindingRevision                   int64    `json:"videoProductionBindingRevision"`
+	ProductionGenerationID                           string   `json:"productionGenerationId"`
+	TimelineTimebase                                 int64    `json:"timelineTimebase"`
+	FPSNumerator                                     int      `json:"fpsNumerator"`
+	FPSDenominator                                   int      `json:"fpsDenominator"`
 }
 
 type ScriptAssetCandidate struct {
@@ -282,26 +292,10 @@ func ScriptToAssetsWorkflow(ctx workflow.Context, input TextToStoryboardInput) (
 func ScriptToStoryboardWorkflow(ctx workflow.Context, input TextToStoryboardInput) (ScriptStoryboardOutput, error) {
 	options := resolveScriptProductionOptions(input.Input)
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
-	imageCtx := workflow.WithActivityOptions(ctx, providerImageActivityOptions())
 	output, err := generateScriptStoryboardEpisodes(ctx, input, options)
 	if err != nil {
 		recordScriptStoryboardWorkflowFailure(ctx, input, err)
 		return ScriptStoryboardOutput{}, err
-	}
-	if options.GenerateDerivedAssets {
-		for _, requirement := range output.Requirements {
-			var derived GenerateDerivedAssetImageOutput
-			if err := workflow.ExecuteActivity(imageCtx, "GenerateDerivedAssetImage", GenerateDerivedAssetImageInput{
-				OrganizationID: input.OrganizationID,
-				ProjectID:      input.ProjectID,
-				WorkflowRunID:  input.WorkflowRunID,
-				CreatedBy:      input.CreatedBy,
-				RequirementID:  requirement.ID,
-			}).Get(imageCtx, &derived); err != nil {
-				recordScriptStoryboardWorkflowFailure(ctx, input, err)
-				return ScriptStoryboardOutput{}, err
-			}
-		}
 	}
 	if err := workflow.ExecuteActivity(ctx, "CompleteScriptStoryboardWorkflow", input, output).Get(ctx, nil); err != nil {
 		recordScriptStoryboardWorkflowFailure(ctx, input, err)
@@ -441,20 +435,6 @@ func ScriptDrivenVideoProduction(ctx workflow.Context, input TextToStoryboardInp
 	if err != nil {
 		return VideoProductionOutput{}, err
 	}
-	if scriptOptions.GenerateDerivedAssets {
-		for _, requirement := range storyboard.Requirements {
-			var derived GenerateDerivedAssetImageOutput
-			if err := workflow.ExecuteActivity(imageCtx, "GenerateDerivedAssetImage", GenerateDerivedAssetImageInput{
-				OrganizationID: input.OrganizationID,
-				ProjectID:      input.ProjectID,
-				WorkflowRunID:  input.WorkflowRunID,
-				CreatedBy:      input.CreatedBy,
-				RequirementID:  requirement.ID,
-			}).Get(imageCtx, &derived); err != nil {
-				return VideoProductionOutput{}, err
-			}
-		}
-	}
 	var shots []StoryboardShotRecord
 	if err := workflow.ExecuteActivity(ctx, "ListStoryboardShots", ListStoryboardShotsInput{
 		OrganizationID: input.OrganizationID,
@@ -514,6 +494,9 @@ func ScriptDrivenVideoProduction(ctx workflow.Context, input TextToStoryboardInp
 			}
 		} else {
 			image = imageResults[index].Output
+		}
+		if err := finalizeStoryboardSheetImage(ctx, input, image); err != nil {
+			return VideoProductionOutput{}, err
 		}
 		if image.ProviderCallID != "" {
 			providerCalls.Images = append(providerCalls.Images, image.ProviderCallID)
@@ -584,7 +567,7 @@ func (a Activities) AnalyzeScriptAssets(ctx context.Context, input AnalyzeScript
 	if err != nil {
 		return ScriptAssetsOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return ScriptAssetsOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -668,7 +651,7 @@ func (a Activities) PrepareScriptStoryboard(ctx context.Context, input PrepareSc
 	if err != nil {
 		return ScriptStoryboardPlan{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return ScriptStoryboardPlan{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -786,7 +769,7 @@ func (a Activities) GenerateStoryboardFromScript(ctx context.Context, input Gene
 		input.EpisodeIndex = episode.EpisodeIndex
 		input.EpisodeTitle = episode.EpisodeTitle
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return ScriptStoryboardOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -1414,19 +1397,19 @@ func defaultRequirementType(assetType string) string {
 
 func (p ProjectProductionSettings) asPromptVariables() map[string]any {
 	return map[string]any{
-		"id":               p.ID,
-		"projectType":      p.ProjectType,
-		"contentType":      p.ContentType,
-		"aspectRatio":      p.AspectRatio,
-		"videoRatio":       p.VideoRatio,
-		"artStyle":         p.ArtStyle,
-		"directorManual":   p.DirectorManual,
-		"visualManual":     p.VisualManual,
-		"imageQuality":     p.ImageQuality,
-		"productionMode":   p.ProductionMode,
-		"timelineTimebase": p.TimelineTimebase,
-		"fpsNumerator":     p.FPSNumerator,
-		"fpsDenominator":   p.FPSDenominator,
+		"id":                        p.ID,
+		"projectType":               p.ProjectType,
+		"contentType":               p.ContentType,
+		"aspectRatio":               p.AspectRatio,
+		"videoRatio":                p.VideoRatio,
+		"artStyle":                  p.ArtStyle,
+		"directorManual":            p.DirectorManual,
+		"visualManual":              p.VisualManual,
+		"imageQuality":              p.ImageQuality,
+		"videoProductionProfileKey": p.VideoProductionProfileKey,
+		"timelineTimebase":          p.TimelineTimebase,
+		"fpsNumerator":              p.FPSNumerator,
+		"fpsDenominator":            p.FPSDenominator,
 	}
 }
 
@@ -1455,11 +1438,17 @@ type GenerateDerivedAssetImageInput struct {
 }
 
 type GenerateDerivedAssetImageOutput struct {
-	RequirementID    string `json:"requirementId"`
-	ProviderCallID   string `json:"providerCallId,omitempty"`
-	ImageArtifactID  string `json:"imageArtifactId,omitempty"`
-	ImageMediaFileID string `json:"imageMediaFileId,omitempty"`
-	ImageStorageKey  string `json:"imageStorageKey,omitempty"`
+	RequirementID     string `json:"requirementId"`
+	ProviderCallID    string `json:"providerCallId,omitempty"`
+	ModelID           string `json:"modelId,omitempty"`
+	PromptTemplateKey string `json:"promptTemplateKey,omitempty"`
+	PromptVersionID   string `json:"promptVersionId,omitempty"`
+	PromptHash        string `json:"promptHash,omitempty"`
+	PromptSource      string `json:"promptSource,omitempty"`
+	RenderedPrompt    string `json:"renderedPrompt,omitempty"`
+	ImageArtifactID   string `json:"imageArtifactId,omitempty"`
+	ImageMediaFileID  string `json:"imageMediaFileId,omitempty"`
+	ImageStorageKey   string `json:"imageStorageKey,omitempty"`
 }
 
 func (a Activities) GenerateCanonicalAssetImage(ctx context.Context, input GenerateCanonicalAssetImageInput) (_ GenerateCanonicalAssetImageOutput, err error) {
@@ -1471,7 +1460,7 @@ func (a Activities) GenerateCanonicalAssetImage(ctx context.Context, input Gener
 	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.AssetID) == "" {
 		return GenerateCanonicalAssetImageOutput{}, fmt.Errorf("organizationId, projectId, workflowRunId, and assetId are required")
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return GenerateCanonicalAssetImageOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -1528,7 +1517,7 @@ func (a Activities) GenerateCanonicalAssetImage(ctx context.Context, input Gener
 	if a.gateway == nil {
 		return GenerateCanonicalAssetImageOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
-	gatewayResp, err := a.gateway.GenerateImage(ctx, provider.GatewayImageRequest{
+	gatewayResp, err := a.generateProviderImage(ctx, nodeRunID, provider.GatewayImageRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -1567,7 +1556,7 @@ func (a Activities) GenerateDerivedAssetImage(ctx context.Context, input Generat
 	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.RequirementID) == "" {
 		return GenerateDerivedAssetImageOutput{}, fmt.Errorf("organizationId, projectId, workflowRunId, and requirementId are required")
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return GenerateDerivedAssetImageOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -1595,6 +1584,12 @@ func (a Activities) GenerateDerivedAssetImage(ctx context.Context, input Generat
 	if err != nil {
 		return GenerateDerivedAssetImageOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
 	}
+	rendered, err = a.withToonflowVisualPrompt(ctx, project, rendered, asset.AssetType, true)
+	if err != nil {
+		return GenerateDerivedAssetImageOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
+	}
+	rendered.RenderedText = assetprompts.RuntimeImagePrompt(rendered.RenderedText)
+	rendered.RenderedHash = promptsvc.HashText(rendered.RenderedText)
 	nodeRunID, err = StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
 		ProjectID:      input.ProjectID,
@@ -1624,15 +1619,18 @@ func (a Activities) GenerateDerivedAssetImage(ctx context.Context, input Generat
 		return GenerateDerivedAssetImageOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
 	refs := make([]provider.GatewayImageReference, 0, 1)
-	if asset.ReferenceArtifactID != "" || asset.ReferenceStorageKey != "" {
+	baseArtifactID := firstNonEmptyString(asset.PrimaryReferenceArtifactID, asset.ReferenceArtifactID)
+	baseStorageKey := firstNonEmptyString(asset.PrimaryReferenceStorageKey, asset.ReferenceStorageKey)
+	if baseArtifactID != "" || baseStorageKey != "" {
 		refs = append(refs, provider.GatewayImageReference{
 			Type:       "image",
 			AssetID:    asset.ID,
-			ArtifactID: asset.ReferenceArtifactID,
-			StorageKey: asset.ReferenceStorageKey,
+			ArtifactID: baseArtifactID,
+			StorageKey: baseStorageKey,
+			Metadata:   mustJSON(map[string]any{"source": "canonical_asset_primary_reference"}),
 		})
 	}
-	gatewayResp, err := a.gateway.GenerateImage(ctx, provider.GatewayImageRequest{
+	gatewayResp, err := a.generateProviderImage(ctx, nodeRunID, provider.GatewayImageRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -1644,7 +1642,7 @@ func (a Activities) GenerateDerivedAssetImage(ctx context.Context, input Generat
 		PromptSource:      rendered.Source,
 		Input: mustJSON(map[string]any{
 			"prompt":  rendered.RenderedText,
-			"size":    "1024x1024",
+			"size":    storyboardImageSizeForAspectRatio(firstNonEmptyString(project.AspectRatio, project.VideoRatio)),
 			"n":       1,
 			"quality": project.ImageQuality,
 		}),
@@ -1655,11 +1653,17 @@ func (a Activities) GenerateDerivedAssetImage(ctx context.Context, input Generat
 		return GenerateDerivedAssetImageOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowErrorFromProvider(err, codeActivityFailed))
 	}
 	output := GenerateDerivedAssetImageOutput{
-		RequirementID:    input.RequirementID,
-		ProviderCallID:   gatewayResp.ProviderCallID,
-		ImageArtifactID:  gatewayResp.Output.ArtifactID,
-		ImageMediaFileID: gatewayResp.Output.MediaFileID,
-		ImageStorageKey:  gatewayResp.Output.StorageKey,
+		RequirementID:     input.RequirementID,
+		ProviderCallID:    gatewayResp.ProviderCallID,
+		ModelID:           gatewayResp.ModelID,
+		PromptTemplateKey: rendered.TemplateKey,
+		PromptVersionID:   rendered.PromptVersionID,
+		PromptHash:        rendered.RenderedHash,
+		PromptSource:      rendered.Source,
+		RenderedPrompt:    rendered.RenderedText,
+		ImageArtifactID:   gatewayResp.Output.ArtifactID,
+		ImageMediaFileID:  gatewayResp.Output.MediaFileID,
+		ImageStorageKey:   gatewayResp.Output.StorageKey,
 	}
 	if err := a.completeDerivedAssetImage(ctx, input, nodeRunID, output); err != nil {
 		return GenerateDerivedAssetImageOutput{}, err

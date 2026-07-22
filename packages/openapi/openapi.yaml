@@ -82,6 +82,70 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/system/organizations:
+    get:
+      operationId: listSystemOrganizations
+      description: Lists every organization. Requires a live system administrator account.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        "200":
+          description: Global organization directory
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemOrganizationListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createSystemOrganization
+      description: Creates an organization, its default workspace, and an initial direct owner. Requires a live system administrator account.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSystemOrganizationRequest"
+      responses:
+        "201":
+          description: Organization created by a system administrator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedSystemOrganizationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/auth/register:
     post:
       operationId: register
@@ -104,6 +168,28 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/auth/register-with-invitation:
+    post:
+      operationId: registerWithInvitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterWithInvitationRequest"
+      responses:
+        "201":
+          description: Registered user, accepted invitation, and target organization session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/auth/login:
     post:
       operationId: login
@@ -115,12 +201,54 @@ paths:
               $ref: "#/components/schemas/LoginRequest"
       responses:
         "200":
-          description: Authenticated session
+          description: Authenticated session or organization selection challenge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/auth/select-organization:
+    post:
+      operationId: selectOrganization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SelectOrganizationRequest"
+      responses:
+        "200":
+          description: Session for the selected organization
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthEnvelope"
         "401":
+          $ref: "#/components/responses/Error"
+  /api/auth/switch-organization:
+    post:
+      operationId: switchOrganization
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SwitchOrganizationRequest"
+      responses:
+        "200":
+          description: Rotated current-device session for the target organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
           $ref: "#/components/responses/Error"
   /api/auth/refresh:
     post:
@@ -156,6 +284,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/auth/password-reset/complete:
+    post:
+      operationId: completePasswordReset
+      description: Consumes a one-time organization-issued reset token and sets a new password. The token is never accepted from a query parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompletePasswordResetRequest"
+      responses:
+        "200":
+          description: Password reset completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "410":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/auth/me:
     get:
       operationId: getCurrentUser
@@ -169,6 +318,112 @@ paths:
               schema:
                 $ref: "#/components/schemas/MeEnvelope"
         "401":
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateCurrentUserProfile
+      description: Updates display name and avatar only; username and email remain immutable here.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: Updated current user profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/auth/me/username:
+    post:
+      operationId: setInitialUsername
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username:
+                  $ref: "#/components/schemas/Username"
+      responses:
+        "200":
+          description: Username set for a historical account
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/User"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/organization-invitations/resolve:
+    post:
+      operationId: resolveOrganizationInvitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveInvitationRequest"
+      responses:
+        "200":
+          description: Masked invitation summary
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationInvitationEnvelope"
+        "410":
+          $ref: "#/components/responses/Error"
+  /api/organization-invitations/accept:
+    post:
+      operationId: acceptOrganizationInvitation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptInvitationRequest"
+      responses:
+        "200":
+          description: Invitation accepted and target organization session issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "410":
           $ref: "#/components/responses/Error"
   /api/provider-webhooks/{providerAccountId}/{webhookSecret}:
     post:
@@ -215,27 +470,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OrganizationListEnvelope"
-    post:
-      operationId: createOrganization
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [name]
-              properties:
-                name:
-                  type: string
-      responses:
-        "201":
-          description: Created organization
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OrganizationEnvelope"
   /api/organizations/{organizationId}:
     get:
       operationId: getOrganization
@@ -253,6 +487,333 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateOrganization
+      description: Updates the organization name. The slug is immutable in this phase.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+      responses:
+        "200":
+          description: Updated organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/organizations/{organizationId}/leave:
+    post:
+      operationId: leaveOrganization
+      description: Removes the current member's access relationships and revokes organization sessions. The last direct owner cannot leave.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: Current member left the organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/organizations/{organizationId}/audit-logs:
+    get:
+      operationId: listOrganizationAuditLogs
+      description: Requires audit.read. Records are retained for the organization lifetime and contain no plaintext invitation, password, or session tokens.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: resourceType
+          in: query
+          schema:
+            type: string
+        - name: actorUserId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        "200":
+          description: Paginated organization audit records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationAuditLogListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/organizations/{organizationId}/members:
+    get:
+      operationId: listOrganizationMembers
+      description: Requires member.read on the selected organization.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, disabled, removed]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        "200":
+          description: Paginated organization members with effective access sources
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/organizations/{organizationId}/members/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/UserId"
+    get:
+      operationId: getOrganizationMember
+      description: Requires member.read on the selected organization.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Organization member detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateOrganizationMemberStatus
+      description: Requires member.manage; supports active and disabled transitions only.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationMemberRequest"
+      responses:
+        "200":
+          description: Updated organization member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: removeOrganizationMember
+      description: Requires member.manage and clears organization access relationships.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Member removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/organizations/{organizationId}/members/{userId}/profile:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/UserId"
+    patch:
+      operationId: updateOrganizationMemberProfile
+      description: Requires member.manage. Updates display name or avatar only when the account belongs exclusively to this organization; username and email remain immutable.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: Updated organization member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/organizations/{organizationId}/members/{userId}/password-reset:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/UserId"
+    post:
+      operationId: issueOrganizationMemberPasswordReset
+      description: Requires member.manage. Invalidates the old password and all sessions, then returns a one-time 30-minute token only for an account that belongs exclusively to this organization. A non-owner cannot reset a direct owner's account.
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: One-time password reset token; returned only once
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberPasswordResetEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/organizations/{organizationId}/invitations:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    get:
+      operationId: listOrganizationInvitations
+      description: Requires member.read on the selected organization.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        "200":
+          description: Organization invitations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationInvitationListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createOrganizationInvitation
+      description: Requires member.manage; optional bindings additionally require role.manage on each resource.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganizationInvitationRequest"
+      responses:
+        "201":
+          description: Invitation created; plaintext invitationToken is returned only once
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationInvitationEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/organizations/{organizationId}/invitations/{invitationId}:
+    delete:
+      operationId: revokeOrganizationInvitation
+      description: Requires member.manage on the selected organization.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - name: invitationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Invitation revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "410":
           $ref: "#/components/responses/Error"
   /api/workspaces:
     get:
@@ -454,6 +1015,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TeamMemberEnvelope"
+  /api/teams/{teamId}/impact:
+    get:
+      operationId: getTeamImpact
+      description: Requires team.manage and returns active members and role bindings affected by disabling the team.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Team disable impact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamImpactEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
   /api/teams/{teamId}/members/{userId}:
     delete:
       operationId: removeTeamMember
@@ -495,6 +1078,138 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RoleListEnvelope"
+    post:
+      operationId: createCustomRole
+      description: Creates an organization-owned custom role after scope whitelist and grant-authority validation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomRoleRequest"
+      responses:
+        "201":
+          description: Created custom role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/roles/{roleId}:
+    get:
+      operationId: getRole
+      description: Requires role.read and returns permissions plus current binding count.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: roleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Role detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateCustomRole
+      description: Updates an organization custom role. System roles are immutable and scope cannot change while bindings exist.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: roleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCustomRoleRequest"
+      responses:
+        "200":
+          description: Updated custom role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteCustomRole
+      description: Deletes an unused organization custom role. System roles and roles with bindings are protected.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: roleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Custom role deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/roles/{roleId}/impact:
+    get:
+      operationId: getRoleImpact
+      description: Returns binding and affected-user counts before custom-role permission or deletion changes.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: roleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Role usage impact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleImpactEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /api/permissions:
     get:
       operationId: listPermissions
@@ -518,6 +1233,44 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/OrganizationHeader"
+        - name: subjectType
+          in: query
+          schema:
+            type: string
+            enum: [user, team]
+        - name: subjectId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: resourceType
+          in: query
+          schema:
+            type: string
+            enum: [organization, workspace, project]
+        - name: resourceId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: roleId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
       responses:
         "200":
           description: Role bindings
@@ -546,7 +1299,7 @@ paths:
   /api/role-bindings/{roleBindingId}:
     delete:
       operationId: deleteRoleBinding
-      description: Requires role.manage and cannot delete the caller's last org_owner binding.
+      description: Requires role.manage and cannot remove the organization's last active direct owner binding.
       security:
         - bearerAuth: []
       parameters:
@@ -615,6 +1368,7 @@ paths:
                 $ref: "#/components/schemas/ProjectEnvelope"
     patch:
       operationId: updateProject
+      description: Updates basic project information only. Production configuration changes require impact analysis and a video production rebuild.
       security:
         - bearerAuth: []
       parameters:
@@ -632,6 +1386,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProjectEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
     delete:
       operationId: deleteProject
       security:
@@ -645,6 +1401,183 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/video-production-profiles:
+    get:
+      operationId: listVideoProductionProfiles
+      description: Lists the latest published version of each video production profile. Reserved profiles are visible but not executable.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Video production profiles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoProductionProfileListEnvelope"
+  /api/projects/{projectId}/video-production-profile:
+    get:
+      operationId: getProjectVideoProductionProfile
+      description: Requires project.read. Returns the immutable active binding and production generation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Active project video production profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectVideoProductionProfileEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/video-production-profile/compatibility:
+    get:
+      operationId: getProjectVideoProductionCompatibility
+      description: Requires project.read. Evaluates the selected profile against active business video model bindings and capability snapshots.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: targetProfileKey
+          in: query
+          schema:
+            $ref: "#/components/schemas/VideoProductionProfileKey"
+        - name: targetProfileVersion
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Profile and model compatibility
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoProductionCompatibilityEnvelope"
+  /api/projects/{projectId}/video-production/rebuild-impact:
+    post:
+      operationId: getProjectVideoProductionRebuildImpact
+      description: Requires project.read. Evaluates a complete target production configuration and produces a content-bound impact token that must be approved unchanged by the rebuild request.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VideoProductionRebuildImpactRequest"
+      responses:
+        "200":
+          description: Rebuild impact and model compatibility
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoProductionRebuildImpactEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/video-production/rebuilds:
+    post:
+      operationId: createProjectVideoProductionRebuild
+      description: Requires project.video_production.rebuild. Archives the active production generation and rebuilds each script episode storyboard under a new immutable binding and configuration snapshot. Images and videos are not generated automatically.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVideoProductionRebuildRequest"
+      responses:
+        "202":
+          description: Rebuild accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoProductionRebuildEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/video-production/rebuilds/current:
+    get:
+      operationId: getCurrentProjectVideoProductionRebuild
+      description: Requires project.read. Returns the active or actionable rebuild that owns the current production transition. Returns null when no rebuild requires monitoring or retry.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Current rebuild or null
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentVideoProductionRebuildEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/video-production/rebuilds/{rebuildId}:
+    get:
+      operationId: getProjectVideoProductionRebuild
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/VideoProductionRebuildId"
+      responses:
+        "200":
+          description: Video production rebuild
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoProductionRebuildEnvelope"
+  /api/projects/{projectId}/video-production/rebuilds/{rebuildId}/items:
+    get:
+      operationId: listProjectVideoProductionRebuildItems
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/VideoProductionRebuildId"
+      responses:
+        "200":
+          description: Per-episode rebuild items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoProductionRebuildItemListEnvelope"
+  /api/projects/{projectId}/video-production/rebuilds/{rebuildId}/retry-failed:
+    post:
+      operationId: retryFailedProjectVideoProductionRebuildItems
+      description: Requires project.video_production.rebuild. Starts a new attempt for failed episode items only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/VideoProductionRebuildId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      responses:
+        "202":
+          description: Failed-item retry accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoProductionRebuildEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/project-manual-templates:
     get:
       operationId: listProjectManualTemplates
@@ -848,6 +1781,8 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
@@ -1569,6 +2504,7 @@ paths:
           in: query
           schema:
             type: boolean
+            default: false
         - name: previewExpiresSeconds
           in: query
           schema:
@@ -1605,6 +2541,115 @@ paths:
               schema:
                 $ref: "#/components/schemas/ShotProductionActionResponseEnvelope"
         "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/video-prompts/generate-batch:
+    post:
+      operationId: generateVideoPromptsBatch
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShotProductionBatchRequest"
+      responses:
+        "202":
+          description: Video prompt batch workflow queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotProductionActionResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/shot-videos/generate-batch:
+    post:
+      operationId: generateShotVideosBatch
+      description: Executes only approved immutable video prompt and render plans. Missing or stale plans are returned as failed items and never trigger prompt generation implicitly.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShotProductionBatchRequest"
+      responses:
+        "202":
+          description: Episode-scoped shot video workflow queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotProductionActionResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/video-prompts/{promptPlanId}/approve:
+    post:
+      operationId: approveVideoPromptPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: promptPlanId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRevisionRequest"
+      responses:
+        "200":
+          description: Approved video prompt plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoPromptPlanReviewEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/video-prompts/{promptPlanId}/reject:
+    post:
+      operationId: rejectVideoPromptPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: promptPlanId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRevisionRequest"
+      responses:
+        "200":
+          description: Rejected video prompt plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoPromptPlanReviewEnvelope"
+        "409":
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
@@ -1731,6 +2776,12 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
       responses:
         "200":
           description: Project sources
@@ -2983,6 +4034,27 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
+        - name: filter[type]
+          in: query
+          schema:
+            type: string
+        - name: includePreviewUrl
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: previewExpiresSeconds
+          in: query
+          schema:
+            type: integer
+            default: 900
+            maximum: 3600
       responses:
         "200":
           description: Canonical assets
@@ -3072,6 +4144,13 @@ paths:
           in: query
           schema:
             type: boolean
+            default: false
+        - name: previewExpiresSeconds
+          in: query
+          schema:
+            type: integer
+            default: 900
+            maximum: 3600
       responses:
         "200":
           description: Canonical asset detail
@@ -3191,6 +4270,13 @@ paths:
           in: query
           schema:
             type: boolean
+            default: false
+        - name: previewExpiresSeconds
+          in: query
+          schema:
+            type: integer
+            default: 900
+            maximum: 3600
       responses:
         "200":
           description: Asset references
@@ -3348,6 +4434,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ShotAssetRequirementListEnvelope"
+  /api/projects/{projectId}/shot-asset-requirements/review-batch:
+    post:
+      operationId: batchReviewShotAssetRequirements
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: includePreviewUrl
+          in: query
+          description: Include short-lived signed preview URLs for ready asset references.
+          schema:
+            type: boolean
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchReviewShotAssetRequirementsRequest"
+      responses:
+        "200":
+          description: Batch review report for the active production generation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchReviewShotAssetRequirementsEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/shot-asset-requirements/{requirementId}:
     patch:
       operationId: updateShotAssetRequirement
@@ -3373,6 +4490,8 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/shot-asset-requirements/{requirementId}/generate-image:
@@ -3383,13 +4502,22 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/RequirementId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        "200":
-          description: Generated derived asset image
+        "202":
+          description: Durable derived asset workflow accepted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DerivedAssetImageResultEnvelope"
+                $ref: "#/components/schemas/DerivedAssetBatchCommandResultEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/shot-asset-requirements/{requirementId}/review:
     post:
       operationId: reviewShotAssetRequirement
@@ -3594,6 +4722,305 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StoryboardShotDetailEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/state:
+    get:
+      operationId: getStoryboardShotState
+      summary: List immutable state revisions for a storyboard shot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "200":
+          description: Planned entry, planned exit, and observed exit state revisions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardShotStateListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/state/replan:
+    post:
+      operationId: replanStoryboardShotState
+      summary: Replan the complete episode containing the selected shot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "202":
+          description: Episode storyboard replanning workflow accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegenerateResponseEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/transition:
+    get:
+      operationId: getStoryboardShotTransition
+      summary: Get the active transition and revision history for a storyboard shot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "200":
+          description: Active transition and immutable history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardShotTransitionListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateStoryboardShotTransition
+      summary: Create a deterministically classified transition revision
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateStoryboardShotTransitionRequest"
+      responses:
+        "200":
+          description: New active transition revision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardShotTransitionEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/anchors:
+    get:
+      operationId: listStoryboardShotAnchors
+      summary: List visual anchor revisions and review state
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "200":
+          description: Visual anchor revisions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotVisualAnchorListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/anchors/generate:
+    post:
+      operationId: generateStoryboardShotAnchor
+      summary: Generate a new profile anchor revision
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                anchorRole:
+                  type: string
+                  enum: [planned_first_frame, planned_last_frame, storyboard_sheet, storyboard_panel]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "202":
+          description: Anchor generation workflow accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnchorGenerationEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/anchors/{anchorId}/approve:
+    post:
+      operationId: approveStoryboardShotAnchor
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+        - $ref: "#/components/parameters/AnchorId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRevisionRequest"
+      responses:
+        "200":
+          description: Approved visual anchor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotVisualAnchorEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/anchors/{anchorId}/reject:
+    post:
+      operationId: rejectStoryboardShotAnchor
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+        - $ref: "#/components/parameters/AnchorId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRevisionRequest"
+      responses:
+        "200":
+          description: Rejected visual anchor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotVisualAnchorEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/reference-pack:
+    get:
+      operationId: getStoryboardShotReferencePack
+      summary: Get the active typed reference pack and history
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+        - name: purpose
+          in: query
+          schema:
+            type: string
+            enum: [anchor, video]
+            default: anchor
+      responses:
+        "200":
+          description: Reference pack, selected references, and history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShotReferencePackEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/storyboard-sheet:
+    get:
+      operationId: getStoryboardShotStoryboardSheet
+      summary: Get the active storyboard sheet manifest, ordered panels, and history
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "200":
+          description: Storyboard sheet diagnostic graph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardSheetEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/video-prompt-plan:
+    get:
+      operationId: getStoryboardShotVideoPromptPlan
+      summary: Get approved video prompt plan, prompt context, and history
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "200":
+          description: Video prompt plan diagnostic graph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoPromptPlanListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/video-prompt-plan/revisions:
+    post:
+      operationId: createManualVideoPromptPlanRevision
+      summary: Create an approved immutable manual revision from the active prompt plan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateManualVideoPromptPlanRevisionRequest"
+      responses:
+        "201":
+          description: Approved manual prompt plan revision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoPromptPlanEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/storyboard-shots/{shotId}/video-render-plan:
+    get:
+      operationId: getStoryboardShotVideoRenderPlan
+      summary: Get the active compiled video render plan with immutable provenance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ShotId"
+      responses:
+        "200":
+          description: Active video render plan and segment execution state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoRenderPlanEnvelope"
         "403":
           $ref: "#/components/responses/Error"
         "404":
@@ -4059,6 +5486,44 @@ paths:
                 $ref: "#/components/schemas/WorkflowNodeRunListEnvelope"
         "404":
           $ref: "#/components/responses/Error"
+  /api/workflow-runs/{workflowRunId}/video-production:
+    get:
+      operationId: getWorkflowVideoProductionActivity
+      summary: Get episode, batch, shot, provider task, and media transfer progress
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowRunId"
+      responses:
+        "200":
+          description: Durable video production checkpoint hierarchy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowVideoProductionActivityEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/workflow-runs/{workflowRunId}/derived-asset-batch:
+    get:
+      operationId: getWorkflowDerivedAssetBatch
+      summary: Get the durable derived asset request workset and execution attempts
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowRunId"
+      responses:
+        "200":
+          description: Durable derived asset batch projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DerivedAssetBatchProjectionEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /api/workflow-runs/{workflowRunId}/shots:
     get:
       operationId: listWorkflowRunShots
@@ -4432,6 +5897,104 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderAccountEnvelope"
+  /api/providers/accounts/{accountId}/credentials:
+    get:
+      operationId: listProviderCredentials
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+        - name: filter[status]
+          in: query
+          description: Credential status filter. Defaults to active.
+          schema:
+            type: string
+            enum: [active, rotated, revoked, expired, all]
+            default: active
+      responses:
+        "200":
+          description: Provider credentials with masked previews and discovered model counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCredentialListEnvelope"
+    post:
+      operationId: createProviderCredential
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProviderCredentialRequest"
+      responses:
+        "201":
+          description: Created provider credential
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCredentialEnvelope"
+  /api/providers/accounts/{accountId}/credentials/{credentialId}/rotate:
+    post:
+      operationId: rotateProviderCredentialById
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+        - $ref: "#/components/parameters/CredentialId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotateCredentialRequest"
+      responses:
+        "200":
+          description: Rotated provider credential
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCredentialEnvelope"
+  /api/providers/accounts/{accountId}/credentials/{credentialId}:
+    delete:
+      operationId: revokeProviderCredential
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+        - $ref: "#/components/parameters/CredentialId"
+      responses:
+        "200":
+          description: Revoked provider credential
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+  /api/providers/accounts/{accountId}/credentials/{credentialId}/discover-models:
+    post:
+      operationId: discoverProviderCredentialModels
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/AccountId"
+        - $ref: "#/components/parameters/CredentialId"
+      responses:
+        "200":
+          description: Models available to the selected provider credential
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelDiscoveryResultEnvelope"
+        "502":
+          $ref: "#/components/responses/Error"
   /api/providers/accounts/{accountId}/discover-models:
     post:
       operationId: discoverProviderModels
@@ -4516,6 +6079,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderModelEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
     delete:
       operationId: deleteProviderModel
       security:
@@ -4525,11 +6090,17 @@ paths:
         - $ref: "#/components/parameters/ModelId"
       responses:
         "200":
-          description: Disabled provider model
+          description: Permanently deleted provider model
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+        "409":
+          description: Provider model still has active asynchronous tasks or leases
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
   /api/providers/models/{modelId}/test:
     post:
       operationId: testProviderModel
@@ -4557,6 +6128,89 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderTestResultEnvelope"
+  /api/providers/models/{modelId}/video-capability-attestations:
+    get:
+      operationId: listProviderModelVideoCapabilityAttestations
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ModelId"
+      responses:
+        "200":
+          description: Current video capability variants and attestation history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoCapabilityAttestationListEnvelope"
+    post:
+      operationId: createProviderModelVideoCapabilityAttestation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ModelId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVideoCapabilityAttestationRequest"
+      responses:
+        "201":
+          description: Video capability attestation decision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoCapabilityAttestationEnvelope"
+  /api/providers/models/{modelId}/video-capability-attestations/{attestationId}/revoke:
+    post:
+      operationId: revokeProviderModelVideoCapabilityAttestation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ModelId"
+        - name: attestationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeVideoCapabilityAttestationRequest"
+      responses:
+        "200":
+          description: Revoked video capability attestation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoCapabilityAttestationEnvelope"
+  /api/providers/models/{modelId}/video-capabilities/verify:
+    post:
+      operationId: verifyProviderModelVideoCapabilities
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ModelId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyVideoCapabilityRequest"
+      responses:
+        "201":
+          description: Verified video capability attestation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoCapabilityAttestationEnvelope"
   /api/providers/manifests/validate:
     post:
       operationId: validateProviderManifest
@@ -5439,8 +7093,22 @@ components:
       schema:
         type: string
         format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     ProjectId:
       name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    VideoProductionRebuildId:
+      name: rebuildId
       in: path
       required: true
       schema:
@@ -5511,6 +7179,13 @@ components:
         format: uuid
     ShotId:
       name: shotId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AnchorId:
+      name: anchorId
       in: path
       required: true
       schema:
@@ -5600,6 +7275,13 @@ components:
       schema:
         type: string
         format: uuid
+    CredentialId:
+      name: credentialId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     ModelId:
       name: modelId
       in: path
@@ -5654,6 +7336,14 @@ components:
       required: false
       schema:
         type: string
+        maxLength: 200
+    RequiredIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
         maxLength: 200
   responses:
     Error:
@@ -5733,11 +7423,13 @@ components:
           type: boolean
     RegisterRequest:
       type: object
-      required: [email, password]
+      required: [email, username, password]
       properties:
         email:
           type: string
           format: email
+        username:
+          $ref: "#/components/schemas/Username"
         password:
           type: string
           minLength: 8
@@ -5781,13 +7473,66 @@ components:
         - $ref: "#/components/schemas/AuthToken"
     LoginRequest:
       type: object
-      required: [email, password]
+      required: [identifier, password]
       properties:
+        identifier:
+          type: string
+          description: Username or email address
+        password:
+          type: string
+    CompletePasswordResetRequest:
+      type: object
+      required: [resetToken, password]
+      properties:
+        resetToken:
+          type: string
+        password:
+          type: string
+          minLength: 8
+          maxLength: 72
+    RegisterWithInvitationRequest:
+      type: object
+      required: [invitationToken, email, username, password]
+      properties:
+        invitationToken:
+          type: string
         email:
           type: string
           format: email
+        username:
+          $ref: "#/components/schemas/Username"
         password:
           type: string
+          minLength: 8
+        displayName:
+          type: string
+    ResolveInvitationRequest:
+      type: object
+      required: [invitationToken]
+      properties:
+        invitationToken:
+          type: string
+    AcceptInvitationRequest:
+      allOf:
+        - $ref: "#/components/schemas/ResolveInvitationRequest"
+    SelectOrganizationRequest:
+      type: object
+      required: [organizationSelectionToken, organizationId]
+      properties:
+        organizationSelectionToken:
+          type: string
+        organizationId:
+          type: string
+          format: uuid
+    SwitchOrganizationRequest:
+      type: object
+      required: [refreshToken, organizationId]
+      properties:
+        refreshToken:
+          type: string
+        organizationId:
+          type: string
+          format: uuid
     RefreshRequest:
       type: object
       required: [refreshToken]
@@ -5801,6 +7546,15 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/AuthToken"
+    LoginEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              oneOf:
+                - $ref: "#/components/schemas/AuthToken"
+                - $ref: "#/components/schemas/OrganizationSelectionChallenge"
     MeEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -5808,6 +7562,7 @@ components:
           properties:
             data:
               type: object
+              required: [user, organizationId, organizations, membership, permissions]
               properties:
                 user:
                   $ref: "#/components/schemas/User"
@@ -5817,6 +7572,17 @@ components:
                 workspaceId:
                   type: string
                   format: uuid
+                organizations:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/OrganizationChoice"
+                membership:
+                  $ref: "#/components/schemas/OrganizationMember"
+                permissions:
+                  type: array
+                  description: Effective management permissions in the current organization context.
+                  items:
+                    type: string
     AuthToken:
       type: object
       required: [accessToken, expiresIn, refreshToken, user]
@@ -5845,8 +7611,296 @@ components:
         email:
           type: string
           format: email
+        username:
+          $ref: "#/components/schemas/Username"
         displayName:
           type: string
+        avatarUrl:
+          type: string
+          format: uri
+        systemAdministrator:
+          type: boolean
+          description: Whether the active user has live platform-level administration access.
+    UpdateProfileRequest:
+      type: object
+      minProperties: 1
+      properties:
+        displayName:
+          type: string
+          maxLength: 100
+        avatarUrl:
+          type: string
+          maxLength: 2048
+    Username:
+      type: string
+      minLength: 3
+      maxLength: 32
+      pattern: '^[A-Za-z0-9](?:[A-Za-z0-9_-]{1,30}[A-Za-z0-9])?$'
+    OrganizationChoice:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    OrganizationSelectionChallenge:
+      type: object
+      required: [requiresOrganizationSelection, organizationSelectionToken, organizations]
+      properties:
+        requiresOrganizationSelection:
+          type: boolean
+          enum: [true]
+        organizationSelectionToken:
+          type: string
+        organizations:
+          type: array
+          minItems: 2
+          items:
+            $ref: "#/components/schemas/OrganizationChoice"
+    MemberTeamSummary:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    MemberRoleSummary:
+      type: object
+      required: [bindingId, roleId, roleKey, roleName, resourceType, resourceId, viaTeam]
+      properties:
+        bindingId:
+          type: string
+          format: uuid
+        roleId:
+          type: string
+          format: uuid
+        roleKey:
+          type: string
+        roleName:
+          type: string
+        resourceType:
+          type: string
+          enum: [organization, workspace, project]
+        resourceId:
+          type: string
+          format: uuid
+        viaTeam:
+          type: boolean
+        teamId:
+          type: string
+          format: uuid
+        teamName:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    OrganizationMember:
+      type: object
+      required: [organizationId, user, status, accountManagementAllowed, createdAt, updatedAt, teams, roles]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        user:
+          $ref: "#/components/schemas/User"
+        status:
+          type: string
+          enum: [active, disabled, removed]
+        accountManagementAllowed:
+          type: boolean
+          description: True only when the non-removed account membership belongs exclusively to this organization.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        disabledAt:
+          type: string
+          format: date-time
+        removedAt:
+          type: string
+          format: date-time
+        teams:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemberTeamSummary"
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemberRoleSummary"
+    UpdateOrganizationMemberRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [active, disabled]
+    MemberPasswordReset:
+      type: object
+      required: [userId, resetToken, expiresAt]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        resetToken:
+          type: string
+          description: Returned only once and stored only as a hash by the server.
+        expiresAt:
+          type: string
+          format: date-time
+    InvitationBinding:
+      type: object
+      required: [roleId, resourceType]
+      properties:
+        roleId:
+          type: string
+          format: uuid
+        resourceType:
+          type: string
+          enum: [organization, workspace, project]
+        organizationId:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+    CreateOrganizationInvitationRequest:
+      type: object
+      required: [email, baseRoleId]
+      properties:
+        email:
+          type: string
+          format: email
+        baseRoleId:
+          type: string
+          format: uuid
+        expiresInDays:
+          type: integer
+          minimum: 1
+          maximum: 30
+          default: 7
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvitationBinding"
+    OrganizationInvitation:
+      type: object
+      required: [id, organizationId, email, status, baseRoleId, expiresAt, invitedBy, createdAt, updatedAt, bindings]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          description: Full email is returned only to member.read callers; public resolve returns a masked value.
+        status:
+          type: string
+          enum: [pending, accepted, revoked, expired]
+        baseRoleId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        acceptedAt:
+          type: string
+          format: date-time
+        acceptedBy:
+          type: string
+          format: uuid
+        invitedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvitationBinding"
+        invitationToken:
+          type: string
+          description: Returned only once by the create endpoint.
+        requiresRegistration:
+          type: boolean
+        organizationName:
+          type: string
+    OrganizationMemberEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/OrganizationMember"
+    OrganizationMemberListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items, page, pageSize, total]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/OrganizationMember"
+                page:
+                  type: integer
+                pageSize:
+                  type: integer
+                total:
+                  type: integer
+    MemberPasswordResetEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/MemberPasswordReset"
+    OrganizationInvitationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/OrganizationInvitation"
+    OrganizationInvitationListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items, page, pageSize, total]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/OrganizationInvitation"
+                page:
+                  type: integer
+                  minimum: 1
+                pageSize:
+                  type: integer
+                  minimum: 1
+                total:
+                  type: integer
+                  minimum: 0
     Organization:
       type: object
       required: [id, name, slug, createdAt]
@@ -5861,6 +7915,143 @@ components:
         createdAt:
           type: string
           format: date-time
+    CreateSystemOrganizationRequest:
+      type: object
+      required: [name, ownerIdentifier]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        workspaceName:
+          type: string
+          maxLength: 100
+          default: 默认工作区
+        ownerIdentifier:
+          type: string
+          minLength: 1
+          maxLength: 320
+          description: Exact username or email address of an existing active user.
+    SystemOrganization:
+      type: object
+      required: [id, name, slug, createdAt, activeMemberCount, workspaceCount, projectCount, ownerCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        activeMemberCount:
+          type: integer
+          minimum: 0
+        workspaceCount:
+          type: integer
+          minimum: 0
+        projectCount:
+          type: integer
+          minimum: 0
+        ownerCount:
+          type: integer
+          minimum: 0
+    SystemOrganizationList:
+      type: object
+      required: [items, page, pageSize, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SystemOrganization"
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    CreatedSystemOrganization:
+      type: object
+      required: [organization, initialOwner, defaultWorkspaceId]
+      properties:
+        organization:
+          $ref: "#/components/schemas/SystemOrganization"
+        initialOwner:
+          $ref: "#/components/schemas/User"
+        defaultWorkspaceId:
+          type: string
+          format: uuid
+    AuditActor:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        displayName:
+          type: string
+        avatarUrl:
+          type: string
+          format: uri
+    OrganizationAuditLog:
+      type: object
+      required: [id, organizationId, action, resourceType, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        actorUserId:
+          type: string
+          format: uuid
+        actor:
+          $ref: "#/components/schemas/AuditActor"
+        action:
+          type: string
+        resourceType:
+          type: string
+        resourceId:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    OrganizationAuditLogListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items, page, pageSize, total, retentionPolicy]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/OrganizationAuditLog"
+                page:
+                  type: integer
+                pageSize:
+                  type: integer
+                total:
+                  type: integer
+                retentionPolicy:
+                  type: string
+                  enum: [organization_lifetime]
     Workspace:
       type: object
       required: [id, organizationId, name, createdAt]
@@ -5916,12 +8107,6 @@ components:
           type: string
           format: uuid
           nullable: true
-        directorManualPromptVersionId:
-          type: string
-          format: uuid
-        visualManualPromptVersionId:
-          type: string
-          format: uuid
         imageModelProfileKey:
           type: string
           default: image_generation_default
@@ -5954,6 +8139,11 @@ components:
           format: int64
           minimum: 1
           readOnly: true
+        activeScriptId:
+          type: string
+          format: uuid
+          nullable: true
+          readOnly: true
         activeFinalVideoVersionId:
           type: string
           format: uuid
@@ -5963,9 +8153,21 @@ components:
         imageQuality:
           type: string
           default: standard
-        productionMode:
+        videoProductionBinding:
+          allOf:
+            - $ref: "#/components/schemas/ProjectVideoProductionBinding"
+          readOnly: true
+        productionGeneration:
+          allOf:
+            - $ref: "#/components/schemas/ProductionGeneration"
+          readOnly: true
+        videoProductionState:
           type: string
-          default: silent_video
+          enum: [storyboard_required, ready, rebuilding, blocked, reconfiguration_required]
+          readOnly: true
+        videoProductionLocked:
+          type: boolean
+          readOnly: true
         timelineTimebase:
           type: integer
           format: int64
@@ -5984,6 +8186,319 @@ components:
         updatedAt:
           type: string
           format: date-time
+    VideoProductionProfileKey:
+      type: string
+      enum: [single_frame_i2v, first_last_frame, multimodal_reference, storyboard_sheet]
+    VideoProductionProfileVersion:
+      type: object
+      required: [id, profileId, profileKey, profileName, strategyFamily, description, version, lifecycleState, implementationState, configuration, capabilityRequirements, promptContract, inputContractVersion, configurationHash, promptContractHash, createdAt, available]
+      properties:
+        id: {type: string, format: uuid}
+        profileId: {type: string, format: uuid}
+        profileKey:
+          $ref: "#/components/schemas/VideoProductionProfileKey"
+        profileName: {type: string}
+        strategyFamily: {type: string}
+        description: {type: string}
+        version: {type: integer, minimum: 1}
+        lifecycleState:
+          type: string
+          enum: [draft, published, retired]
+        implementationState:
+          type: string
+          enum: [available, reserved]
+        configuration:
+          type: object
+          additionalProperties: true
+        capabilityRequirements:
+          type: object
+          additionalProperties: true
+        promptContract:
+          type: object
+          additionalProperties: true
+        inputContractVersion: {type: string}
+        configurationHash: {type: string}
+        promptContractHash: {type: string}
+        createdAt: {type: string, format: date-time}
+        publishedAt: {type: string, format: date-time, nullable: true}
+        retiredAt: {type: string, format: date-time, nullable: true}
+        available: {type: boolean}
+    ProjectVideoProductionBinding:
+      type: object
+      required: [id, projectId, profileVersionId, profileKey, profileName, profileVersion, lifecycleState, implementationState, status, compatibilityPolicy, overrides, profileSnapshot, profileSnapshotHash, revision, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        profileVersionId: {type: string, format: uuid}
+        profileKey:
+          $ref: "#/components/schemas/VideoProductionProfileKey"
+        profileName: {type: string}
+        profileVersion: {type: integer, minimum: 1}
+        lifecycleState: {type: string, enum: [draft, published, retired]}
+        implementationState: {type: string, enum: [available, reserved]}
+        status: {type: string, enum: [active, superseded]}
+        compatibilityPolicy: {type: string, enum: [strict, compatible_fallback]}
+        overrides: {type: object, additionalProperties: true}
+        profileSnapshot: {type: object, additionalProperties: true}
+        profileSnapshotHash: {type: string}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        supersededAt: {type: string, format: date-time, nullable: true}
+    ProductionGeneration:
+      type: object
+      required: [id, organizationId, projectId, bindingId, generationNo, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        bindingId: {type: string, format: uuid}
+        generationNo: {type: integer, format: int64, minimum: 1}
+        status: {type: string, enum: [active, superseded]}
+        sourceGenerationId: {type: string, format: uuid, nullable: true}
+        rebuildId: {type: string, format: uuid, nullable: true}
+        createdAt: {type: string, format: date-time}
+        activatedAt: {type: string, format: date-time, nullable: true}
+        supersededAt: {type: string, format: date-time, nullable: true}
+    ProductionManualBindingSnapshot:
+      type: object
+      required: [promptVersionId, templateKey, contentHash]
+      properties:
+        promptVersionId: {type: string, format: uuid}
+        templateKey: {type: string}
+        contentHash: {type: string}
+    ProductionConfigurationSnapshot:
+      type: object
+      required: [schemaVersion, projectType, contentType, aspectRatio, videoRatio, artStyle, directorManual, visualManual, imageModelProfileKey, videoModelProfileKey, scriptModelProfileKey, ttsModelProfileKey, asrModelProfileKey, audioStrategy, audioRequirement, imageQuality, timelineTimebase, fpsNumerator, fpsDenominator, settings, manualBindings]
+      properties:
+        schemaVersion: {type: integer, enum: [2]}
+        projectType: {type: string}
+        contentType: {type: string}
+        aspectRatio: {type: string}
+        videoRatio: {type: string}
+        artStyle: {type: string}
+        directorManual: {type: string}
+        visualManual: {type: string}
+        imageModelProfileKey: {type: string}
+        videoModelProfileKey: {type: string}
+        scriptModelProfileKey: {type: string}
+        ttsModelProfileKey: {type: string}
+        asrModelProfileKey: {type: string}
+        audioStrategy: {type: string, enum: [native_av, hybrid, tts_postdub]}
+        audioRequirement: {type: string, enum: [preferred, required, disabled]}
+        imageQuality: {type: string}
+        timelineTimebase: {type: integer, format: int64, minimum: 1}
+        fpsNumerator: {type: integer, minimum: 1}
+        fpsDenominator: {type: integer, minimum: 1}
+        settings: {type: object, additionalProperties: true}
+        manualBindings:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ProductionManualBindingSnapshot"
+    VideoProductionConfigurationInput:
+      type: object
+      required: [projectType, contentType, aspectRatio, videoRatio, artStyle, imageModelProfileKey, videoModelProfileKey, scriptModelProfileKey, ttsModelProfileKey, asrModelProfileKey, audioStrategy, audioRequirement, imageQuality, timelineTimebase, fpsNumerator, fpsDenominator, settings]
+      properties:
+        projectType: {type: string}
+        contentType: {type: string}
+        aspectRatio: {type: string}
+        videoRatio: {type: string}
+        artStyle: {type: string}
+        directorManualPromptVersionId: {type: string, format: uuid}
+        visualManualPromptVersionId: {type: string, format: uuid}
+        imageModelProfileKey: {type: string}
+        videoModelProfileKey: {type: string}
+        scriptModelProfileKey: {type: string}
+        ttsModelProfileKey: {type: string}
+        asrModelProfileKey: {type: string}
+        audioStrategy: {type: string, enum: [native_av, hybrid, tts_postdub]}
+        audioRequirement: {type: string, enum: [preferred, required, disabled]}
+        imageQuality: {type: string}
+        timelineTimebase: {type: integer, format: int64, minimum: 1}
+        fpsNumerator: {type: integer, minimum: 1}
+        fpsDenominator: {type: integer, minimum: 1}
+        settings: {type: object, additionalProperties: true}
+    VideoProductionCompatibilityIssue:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string}
+        message: {type: string}
+    VideoProductionModelCapability:
+      type: object
+      required: [taskTypes, providerOptionsSchema]
+      properties:
+        taskTypes:
+          type: array
+          items: {type: string}
+        providerOptionsSchema:
+          type: object
+          additionalProperties: true
+    VideoProductionModelCompatibility:
+      type: object
+      required: [compatible, issues]
+      properties:
+        compatible: {type: boolean}
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoProductionCompatibilityIssue"
+    VideoProductionCompatibilityCandidate:
+      type: object
+      required: [modelProfileBindingId, modelProfileId, modelProfileKey, modelProfileName, providerAccountId, providerAccountName, providerModelId, providerModelKey, providerModelName, priority, weight, capability, compatibility]
+      properties:
+        modelProfileBindingId: {type: string, format: uuid}
+        modelProfileId: {type: string, format: uuid}
+        modelProfileKey: {type: string}
+        modelProfileName: {type: string}
+        providerAccountId: {type: string, format: uuid}
+        providerAccountName: {type: string}
+        providerModelId: {type: string, format: uuid}
+        providerModelKey: {type: string}
+        providerModelName: {type: string}
+        priority: {type: integer}
+        weight: {type: integer}
+        capability:
+          $ref: "#/components/schemas/VideoProductionModelCapability"
+        compatibility:
+          $ref: "#/components/schemas/VideoProductionModelCompatibility"
+    VideoProductionCompatibility:
+      type: object
+      required: [profile, modelProfileKey, nativeAudioRequired, compatible, executable, issues, candidates]
+      properties:
+        profile:
+          $ref: "#/components/schemas/VideoProductionProfileVersion"
+        modelProfileKey: {type: string}
+        nativeAudioRequired: {type: boolean}
+        compatible: {type: boolean}
+        executable: {type: boolean}
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoProductionCompatibilityIssue"
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoProductionCompatibilityCandidate"
+    VideoProductionRebuildImpact:
+      type: object
+      required: [projectId, expectedProjectRevision, sourceBindingId, sourceBindingRevision, sourceGenerationId, sourceGenerationNo, targetProfileVersionId, targetProfileKey, targetProfileVersion, reason, targetConfiguration, targetConfigurationHash, episodes, counts, impactToken]
+      properties:
+        projectId: {type: string, format: uuid}
+        expectedProjectRevision: {type: integer, format: int64, minimum: 1}
+        sourceBindingId: {type: string, format: uuid}
+        sourceBindingRevision: {type: integer, format: int64, minimum: 1}
+        sourceGenerationId: {type: string, format: uuid}
+        sourceGenerationNo: {type: integer, format: int64, minimum: 1}
+        targetProfileVersionId: {type: string, format: uuid}
+        targetProfileKey:
+          $ref: "#/components/schemas/VideoProductionProfileKey"
+        targetProfileVersion: {type: integer, minimum: 1}
+        reason: {type: string, enum: [profile_change, configuration_change, profile_and_configuration_change]}
+        targetConfiguration:
+          $ref: "#/components/schemas/ProductionConfigurationSnapshot"
+        targetConfigurationHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        episodes:
+          type: array
+          items:
+            type: object
+            required: [scriptEpisodeId, episodeOrdinal, scriptEpisodeRevision, scriptEpisodeContentHash]
+            properties:
+              scriptEpisodeId: {type: string, format: uuid}
+              episodeOrdinal: {type: integer, minimum: 1}
+              scriptEpisodeRevision: {type: integer, format: int64, minimum: 1}
+              scriptEpisodeContentHash: {type: string}
+              sourceStoryboardPlanId: {type: string, format: uuid, nullable: true}
+        counts:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+        impactToken:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    VideoProductionRebuild:
+      type: object
+      required: [id, organizationId, projectId, sourceBindingId, sourceGenerationId, sourceVideoProductionState, targetProfileVersionId, status, reason, targetConfiguration, targetConfigurationHash, impactSnapshot, impactToken, expectedProjectRevision, episodeCount, retainedAssetCount, idempotencyKey, requestedBy, requestedAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        sourceBindingId: {type: string, format: uuid}
+        sourceGenerationId: {type: string, format: uuid}
+        sourceVideoProductionState:
+          type: string
+          enum: [unconfigured, storyboard_required, ready, rebuilding, blocked, reconfiguration_required]
+        targetProfileVersionId: {type: string, format: uuid}
+        targetBindingId: {type: string, format: uuid, nullable: true}
+        targetGenerationId: {type: string, format: uuid, nullable: true}
+        status:
+          type: string
+          enum: [planned, approved, running, partial_succeeded, storyboard_required, succeeded, failed, cancelled]
+        reason: {type: string}
+        targetConfiguration:
+          $ref: "#/components/schemas/ProductionConfigurationSnapshot"
+        targetConfigurationHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        impactSnapshot: {type: object, additionalProperties: true}
+        impactToken: {type: string}
+        expectedProjectRevision: {type: integer, format: int64}
+        episodeCount: {type: integer, minimum: 0}
+        retainedAssetCount: {type: integer, minimum: 0}
+        workflowRunId: {type: string, format: uuid, nullable: true}
+        idempotencyKey: {type: string}
+        requestedBy: {type: string, format: uuid}
+        requestedAt: {type: string, format: date-time}
+        approvedAt: {type: string, format: date-time, nullable: true}
+        startedAt: {type: string, format: date-time, nullable: true}
+        completedAt: {type: string, format: date-time, nullable: true}
+        failureCode: {type: string, nullable: true}
+        failureMessage: {type: string, nullable: true}
+    VideoProductionRebuildItem:
+      type: object
+      required: [id, rebuildId, projectId, scriptEpisodeId, episodeOrdinal, scriptEpisodeRevision, scriptEpisodeContentHash, status, checkpoint, attemptCount]
+      properties:
+        id: {type: string, format: uuid}
+        rebuildId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        scriptEpisodeId: {type: string, format: uuid}
+        episodeOrdinal: {type: integer, minimum: 1}
+        scriptEpisodeRevision: {type: integer, format: int64, minimum: 1}
+        scriptEpisodeContentHash: {type: string}
+        sourceStoryboardPlanId: {type: string, format: uuid, nullable: true}
+        targetStoryboardPlanId: {type: string, format: uuid, nullable: true}
+        workflowRunId: {type: string, format: uuid, nullable: true}
+        status: {type: string, enum: [pending, running, succeeded, failed, skipped]}
+        checkpoint: {type: object, additionalProperties: true}
+        attemptCount: {type: integer, minimum: 0}
+        startedAt: {type: string, format: date-time, nullable: true}
+        completedAt: {type: string, format: date-time, nullable: true}
+        failureCode: {type: string, nullable: true}
+        failureMessage: {type: string, nullable: true}
+    VideoProductionRebuildImpactRequest:
+      type: object
+      required: [targetProfileKey, targetConfiguration]
+      properties:
+        targetProfileKey:
+          $ref: "#/components/schemas/VideoProductionProfileKey"
+        targetProfileVersion: {type: integer, minimum: 1}
+        targetConfiguration:
+          $ref: "#/components/schemas/VideoProductionConfigurationInput"
+    CreateVideoProductionRebuildRequest:
+      type: object
+      required: [expectedProjectRevision, targetProfileKey, targetConfiguration, impactToken]
+      properties:
+        expectedProjectRevision: {type: integer, format: int64, minimum: 1}
+        targetProfileKey:
+          $ref: "#/components/schemas/VideoProductionProfileKey"
+        targetProfileVersion: {type: integer, minimum: 1}
+        targetConfiguration:
+          $ref: "#/components/schemas/VideoProductionConfigurationInput"
+        impactToken:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
     ProjectManualBinding:
       type: object
       required: [id, organizationId, projectId, manualKind, promptVersionId, templateId, templateKey, templateName, version, status, contentHash, createdAt, updatedAt]
@@ -6202,7 +8717,7 @@ components:
           $ref: "#/components/schemas/CreatedScriptSummary"
     Script:
       type: object
-      required: [id, organizationId, projectId, title, status, createdAt, updatedAt]
+      required: [id, organizationId, projectId, title, status, isCurrent, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -6221,6 +8736,9 @@ components:
         status:
           type: string
           enum: [draft, active, archived]
+        isCurrent:
+          type: boolean
+          readOnly: true
         currentVersionId:
           type: string
           format: uuid
@@ -7162,6 +9680,10 @@ components:
           type: string
         previewUrl:
           type: string
+          format: uri
+        previewExpiresAt:
+          type: string
+          format: date-time
         prompt:
           type: string
         promptVersionId:
@@ -7227,6 +9749,10 @@ components:
         assetId:
           type: string
           format: uuid
+        assetType:
+          type: string
+        assetName:
+          type: string
         requirementType:
           type: string
         roleInShot:
@@ -7278,6 +9804,105 @@ components:
         updatedAt:
           type: string
           format: date-time
+    BatchReviewShotAssetRequirementsRequest:
+      type: object
+      required: [reviewStatus]
+      properties:
+        requirementIds:
+          type: array
+          maxItems: 1000
+          items:
+            type: string
+            format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        reviewStatus:
+          type: string
+          enum: [approved, needs_edit, rejected]
+        note:
+          type: string
+    ShotAssetRequirementReviewIssue:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ShotAssetRequirementReviewItem:
+      type: object
+      required: [requirementId, storyboardShotId, shotNo, assetId, assetType, assetName, requirementType, status, previousReviewStatus, reviewStatus, eligible, issues, warnings, updatedAt]
+      properties:
+        requirementId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        shotNo:
+          type: integer
+        assetId:
+          type: string
+          format: uuid
+        assetType:
+          type: string
+          enum: [character, scene, prop]
+        assetName:
+          type: string
+        requirementType:
+          type: string
+        status:
+          type: string
+        previousReviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        reviewStatus:
+          $ref: "#/components/schemas/ReviewStatus"
+        eligible:
+          type: boolean
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShotAssetRequirementReviewIssue"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShotAssetRequirementReviewIssue"
+        updatedAt:
+          type: string
+          format: date-time
+    BatchReviewShotAssetRequirementsResponse:
+      type: object
+      required: [validationVersion, requestedStatus, totalItems, eligibleCount, blockedCount, approvedCount, needsEditCount, rejectedCount, unchangedCount, notFoundIds, items]
+      properties:
+        validationVersion:
+          type: string
+        requestedStatus:
+          type: string
+          enum: [approved, needs_edit, rejected]
+        totalItems:
+          type: integer
+        eligibleCount:
+          type: integer
+        blockedCount:
+          type: integer
+        approvedCount:
+          type: integer
+        needsEditCount:
+          type: integer
+        rejectedCount:
+          type: integer
+        unchangedCount:
+          type: integer
+        notFoundIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShotAssetRequirementReviewItem"
     StoryboardShotRequirementDetail:
       allOf:
         - $ref: "#/components/schemas/ShotAssetRequirement"
@@ -7637,6 +10262,566 @@ components:
         updatedAt:
           type: string
           format: date-time
+    EpisodeVideoProductionProviderTask:
+      type: object
+      required: [id, status, pollCount, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        externalTaskId:
+          type: string
+        pollCount:
+          type: integer
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        requestHash:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    EpisodeVideoProductionSegment:
+      type: object
+      required: [id, segmentIndex, status, requestedDurationSeconds, providerTasks]
+      properties:
+        id:
+          type: string
+          format: uuid
+        segmentIndex:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+        inputContractKey:
+          type: string
+        requestedDurationSeconds:
+          type: number
+          format: double
+        providerTasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/EpisodeVideoProductionProviderTask"
+    EpisodeVideoProductionItem:
+      type: object
+      required: [id, batchId, storyboardShotId, shotNo, shotTitle, shotStateHash, executionIdentityVersion, mediaStatus, status, attempt, revision, errorDetail, metadata, createdAt, updatedAt, segments]
+      properties:
+        id:
+          type: string
+          format: uuid
+        batchId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        shotNo:
+          type: integer
+        shotTitle:
+          type: string
+        shotStateHash:
+          type: string
+        executionIdentityVersion:
+          type: integer
+          enum: [1, 2]
+          description: Immutable execution identity contract used by this item attempt.
+        predecessorVideoRenderPlanId:
+          type: string
+          format: uuid
+          description: Prior plan retained only as provenance; it is never executed by this item.
+        referencePackId:
+          type: string
+          format: uuid
+        referencePackStatus:
+          type: string
+        videoPromptPlanId:
+          type: string
+          format: uuid
+        videoPromptPlanStatus:
+          type: string
+        videoPromptPlanRevision:
+          type: integer
+        videoRenderPlanId:
+          type: string
+          format: uuid
+        videoRenderPlanStatus:
+          type: string
+        providerAsyncTaskId:
+          type: string
+          format: uuid
+        providerAsyncTaskStatus:
+          type: string
+        externalTaskId:
+          type: string
+        providerPollCount:
+          type: integer
+        providerErrorCode:
+          type: string
+        providerErrorMessage:
+          type: string
+        anchorId:
+          type: string
+          format: uuid
+        anchorStatus:
+          type: string
+        anchorReviewStatus:
+          type: string
+        mediaStatus:
+          type: string
+          enum: [pending, transferring, stored, failed]
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelling, cancelled, discarded]
+        attempt:
+          type: integer
+        revision:
+          type: integer
+          format: int64
+        errorCode:
+          type: string
+        errorDetail:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/EpisodeVideoProductionSegment"
+    EpisodeVideoProductionBatch:
+      type: object
+      required: [id, checkpointId, ordinal, dependencySnapshotHash, status, attempt, totalItems, succeededItems, failedItems, cancelledItems, revision, metadata, createdAt, updatedAt, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+        checkpointId:
+          type: string
+          format: uuid
+        ordinal:
+          type: integer
+        dependencySnapshotHash:
+          type: string
+        workflowRunId:
+          type: string
+          format: uuid
+        temporalWorkflowId:
+          type: string
+        temporalRunId:
+          type: string
+        status:
+          type: string
+        attempt:
+          type: integer
+        totalItems:
+          type: integer
+        succeededItems:
+          type: integer
+        failedItems:
+          type: integer
+        cancelledItems:
+          type: integer
+        revision:
+          type: integer
+          format: int64
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/EpisodeVideoProductionItem"
+    EpisodeVideoProductionCheckpoint:
+      type: object
+      required: [id, productionGenerationId, videoProductionBindingId, videoProductionBindingRevision, scriptEpisodeId, episodeIndex, episodeTitle, profileVersionId, profileSnapshotHash, temporalWorkflowId, status, nextBatchOrdinal, revision, metadata, createdAt, updatedAt, batches]
+      properties:
+        id:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        videoProductionBindingId:
+          type: string
+          format: uuid
+        videoProductionBindingRevision:
+          type: integer
+          format: int64
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        episodeIndex:
+          type: integer
+        episodeTitle:
+          type: string
+        profileVersionId:
+          type: string
+          format: uuid
+        profileSnapshotHash:
+          type: string
+        temporalWorkflowId:
+          type: string
+        temporalRunId:
+          type: string
+        status:
+          type: string
+        nextBatchOrdinal:
+          type: integer
+        revision:
+          type: integer
+          format: int64
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        batches:
+          type: array
+          items:
+            $ref: "#/components/schemas/EpisodeVideoProductionBatch"
+    WorkflowVideoProductionActivity:
+      type: object
+      required: [workflowRunId, checkpoints, totalItems, succeededItems, failedItems, activeItems]
+      properties:
+        workflowRunId:
+          type: string
+          format: uuid
+        checkpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/EpisodeVideoProductionCheckpoint"
+        totalItems:
+          type: integer
+        succeededItems:
+          type: integer
+        failedItems:
+          type: integer
+        activeItems:
+          type: integer
+    WorkflowVideoProductionActivityEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/WorkflowVideoProductionActivity"
+    DerivedAssetExecutionProjection:
+      type: object
+      required: [id, nodeRunId, nodeKey, attemptNo, status, revision, diagnostic, lateResultCount, lateResultDiagnostics, createdAt, productionGenerationId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        nodeKey:
+          type: string
+        attemptNo:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        providerRequestId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        selectedCredentialId:
+          type: string
+          format: uuid
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        diagnostic:
+          type: object
+          additionalProperties: true
+        lateResultCount:
+          type: integer
+          minimum: 0
+        lateResultDiagnostics:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        productionGenerationId:
+          type: string
+          format: uuid
+    DerivedAssetRequestItemProjection:
+      type: object
+      required: [id, inputOrdinal, originalId, disposition, dispositionDetail, retryable, inputSnapshot, inputHash, status, revision, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        inputOrdinal:
+          type: integer
+          minimum: 1
+        originalId:
+          type: string
+        requirementId:
+          type: string
+          format: uuid
+        duplicateOfRequestItemId:
+          type: string
+          format: uuid
+        rootRequestItemId:
+          type: string
+          format: uuid
+        retryOfRequestItemId:
+          type: string
+          format: uuid
+        disposition:
+          type: string
+          enum: [executable, review_required, not_found, generation_mismatch, already_running, duplicate, skipped]
+        dispositionDetail:
+          type: object
+          additionalProperties: true
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        retryable:
+          type: boolean
+        inputSnapshot:
+          type: object
+          additionalProperties: true
+        inputHash:
+          type: string
+        status:
+          type: string
+        currentAttemptId:
+          type: string
+          format: uuid
+        currentAttemptNo:
+          type: integer
+          minimum: 1
+        revision:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        execution:
+          $ref: "#/components/schemas/DerivedAssetExecutionProjection"
+    DerivedAssetBatchProjection:
+      type: object
+      required: [id, organizationId, projectId, workflowRunId, productionGenerationId, videoProductionBindingId, videoProductionBindingRevision, retryDepth, requestMode, filters, filtersHash, selectorCandidateCount, selectorSkippedCount, idempotencyKey, requestHash, status, revision, totalItems, executableItems, reviewRequiredItems, notFoundItems, generationMismatchItems, alreadyRunningItems, duplicateItems, skippedItems, pendingItems, queuedItems, runningItems, succeededItems, failedRetryableItems, failedTerminalItems, cancelledItems, discardedItems, createdAt, updatedAt, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        videoProductionBindingId:
+          type: string
+          format: uuid
+        videoProductionBindingRevision:
+          type: integer
+          format: int64
+        rootBatchId:
+          type: string
+          format: uuid
+        retryOfBatchId:
+          type: string
+          format: uuid
+        retryDepth:
+          type: integer
+          minimum: 0
+        requestMode:
+          type: string
+          enum: [explicit, select_all, retry]
+        filters:
+          type: object
+          additionalProperties: true
+        filtersHash:
+          type: string
+        selectorCandidateCount:
+          type: integer
+          minimum: 0
+        selectorSkippedCount:
+          type: integer
+          minimum: 0
+        idempotencyKey:
+          type: string
+        requestHash:
+          type: string
+        status:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        totalItems:
+          type: integer
+          minimum: 0
+        executableItems:
+          type: integer
+          minimum: 0
+        reviewRequiredItems:
+          type: integer
+          minimum: 0
+        notFoundItems:
+          type: integer
+          minimum: 0
+        generationMismatchItems:
+          type: integer
+          minimum: 0
+        alreadyRunningItems:
+          type: integer
+          minimum: 0
+        duplicateItems:
+          type: integer
+          minimum: 0
+        skippedItems:
+          type: integer
+          minimum: 0
+        pendingItems:
+          type: integer
+          minimum: 0
+        queuedItems:
+          type: integer
+          minimum: 0
+        runningItems:
+          type: integer
+          minimum: 0
+        succeededItems:
+          type: integer
+          minimum: 0
+        failedRetryableItems:
+          type: integer
+          minimum: 0
+        failedTerminalItems:
+          type: integer
+          minimum: 0
+        cancelledItems:
+          type: integer
+          minimum: 0
+        discardedItems:
+          type: integer
+          minimum: 0
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DerivedAssetRequestItemProjection"
+    DerivedAssetBatchCommandResult:
+      type: object
+      required: [batch, workflowRun]
+      properties:
+        batch:
+          $ref: "#/components/schemas/DerivedAssetBatchProjection"
+        workflowRun:
+          $ref: "#/components/schemas/WorkflowRun"
+        idempotentReplay:
+          type: boolean
+        operationId:
+          type: string
+          format: uuid
+    DerivedAssetBatchProjectionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/DerivedAssetBatchProjection"
+    DerivedAssetBatchCommandResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/DerivedAssetBatchCommandResult"
     TextToStoryboardOutput:
       type: object
       required: [storyboardArtifactId, providerCalls]
@@ -8309,9 +11494,6 @@ components:
         shotGroupId:
           type: string
           format: uuid
-        continuityGroupId:
-          type: string
-          format: uuid
         oneTake:
           type: boolean
         timingRevision:
@@ -8702,7 +11884,7 @@ components:
               type: integer
               minimum: 1
               maximum: 16
-              description: Maximum concurrent tasks. Image, image-prompt, video-prompt, and independent video continuity groups default to 5. Video groups are capped at 8, prompt actions at 12, and image actions at 16; shots inside one continuity group remain sequential.
+              description: Maximum concurrent tasks. Image, image-prompt, video-prompt, and independent scene/reset video batches default to 5. Video batches are capped at 8, prompt actions at 12, and image actions at 16; segments of the same storyboard shot remain sequential.
             force:
               type: boolean
             aspectRatio:
@@ -8713,6 +11895,35 @@ components:
               type: number
               format: double
           additionalProperties: true
+    ShotProductionBatchRequest:
+      type: object
+      properties:
+        scriptEpisodeId:
+          type: string
+          format: uuid
+          description: Restrict target selection to the active storyboard plan for this episode.
+        workflowRunId:
+          type: string
+          format: uuid
+        shotIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        force:
+          type: boolean
+        maxConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 10
+        resolution:
+          type: string
+        pollIntervalSeconds:
+          type: integer
+          minimum: 1
+        maxPolls:
+          type: integer
+          minimum: 1
     ShotProductionActionResponse:
       type: object
       required: [action, workflowRunId, status, workflowType, targetShotIds]
@@ -8957,6 +12168,783 @@ components:
         videoPreviewUrl:
           type: string
           format: uri
+    ReviewRevisionRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+    CreateManualVideoPromptPlanRevisionRequest:
+      type: object
+      required: [expectedRevision, renderedPrompt]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+        renderedPrompt:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+    UpdateStoryboardShotTransitionRequest:
+      type: object
+      required: [expectedRevision, transitionType]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+        transitionType:
+          type: string
+          enum: [match_action_cut, same_scene_cut, camera_cut, subject_change, scene_cut, time_jump, montage_cut, unclassified]
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        reason:
+          type: string
+    StoryboardShotStateVersion:
+      type: object
+      required: [id, productionGenerationId, storyboardShotId, stateRole, revision, status, state, stateHash, sourceType, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        stateRole:
+          type: string
+          enum: [planned_entry, planned_exit, observed_exit]
+        revision:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [draft, approved, rejected, stale]
+        state:
+          type: object
+          additionalProperties: true
+        stateHash:
+          type: string
+        sourceType:
+          type: string
+        sourceId:
+          type: string
+          format: uuid
+        promptVersionId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        approvedAt:
+          type: string
+          format: date-time
+    StoryboardShotTransition:
+      type: object
+      required: [id, productionGenerationId, storyboardPlanId, targetShotId, transitionType, tailPolicy, anchorPolicy, carryConstraints, resetConstraints, confidence, revision, status, reviewStatus, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        storyboardPlanId:
+          type: string
+          format: uuid
+        sourceShotId:
+          type: string
+          format: uuid
+        targetShotId:
+          type: string
+          format: uuid
+        transitionType:
+          type: string
+          enum: [match_action_cut, same_scene_cut, camera_cut, subject_change, scene_cut, time_jump, montage_cut, unclassified]
+        tailPolicy:
+          type: string
+          enum: [soft, none]
+        anchorPolicy:
+          type: string
+          enum: [new_anchor, match_action_anchor, independent_anchor]
+        carryConstraints:
+          type: array
+          items:
+            type: string
+        resetConstraints:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        revision:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [active, superseded, stale]
+        reviewStatus:
+          type: string
+          enum: [pending, approved, rejected, needs_edit]
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ShotVisualAnchor:
+      type: object
+      required: [id, productionGenerationId, storyboardShotId, anchorRole, revision, status, reviewStatus, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        shotStateVersionId:
+          type: string
+          format: uuid
+        anchorRole:
+          type: string
+          enum: [planned_first_frame, planned_last_frame, storyboard_sheet, storyboard_panel, observed_tail_frame, continuity_hint]
+        revision:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [draft, generating, ready, failed, stale, archived]
+        reviewStatus:
+          type: string
+          enum: [pending, approved, rejected, needs_edit]
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        previewUrl:
+          type: string
+          format: uri
+        previewExpiresAt:
+          type: string
+          format: date-time
+        prompt:
+          type: string
+        promptVersionId:
+          type: string
+          format: uuid
+        promptHash:
+          type: string
+        providerCallId:
+          type: string
+          format: uuid
+        modelId:
+          type: string
+          format: uuid
+        referencePackId:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ShotReferencePack:
+      type: object
+      required: [id, productionGenerationId, storyboardShotId, purpose, profileSnapshotHash, shotStateHash, capabilitySnapshotHash, manifest, manifestHash, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        purpose:
+          type: string
+          enum: [anchor, video]
+        profileSnapshotHash:
+          type: string
+        shotStateHash:
+          type: string
+        capabilitySnapshotHash:
+          type: string
+        manifest:
+          type: object
+          additionalProperties: true
+        manifestHash:
+          type: string
+        status:
+          type: string
+          enum: [active, stale, archived]
+        createdAt:
+          type: string
+          format: date-time
+    ShotReferencePackItem:
+      type: object
+      required: [id, referenceKey, role, mediaType, semantics, required, priority, sourceType, contentHash, metadata]
+      properties:
+        id:
+          type: string
+          format: uuid
+        referenceKey:
+          type: string
+        role:
+          type: string
+        mediaType:
+          type: string
+          enum: [image, video, audio]
+        semantics:
+          type: string
+        required:
+          type: boolean
+        priority:
+          type: integer
+        sourceType:
+          type: string
+        sourceId:
+          type: string
+          format: uuid
+        assetId:
+          type: string
+          format: uuid
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        previewUrl:
+          type: string
+          format: uri
+        contentHash:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    StoryboardSheetManifest:
+      type: object
+      required: [id, productionGenerationId, storyboardShotId, sheetAnchorId, revision, contractVersion, plannedDurationTicks, timelineTimebase, videoAspectRatio, sheetAspectRatio, gridRows, gridColumns, panelCount, entryStateHash, exitStateHash, manifest, manifestHash, status, reviewStatus, reviewerOutput, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        sheetAnchorId:
+          type: string
+          format: uuid
+        sheetPreviewUrl:
+          type: string
+          format: uri
+        revision:
+          type: integer
+          minimum: 1
+        contractVersion:
+          type: string
+        plannedDurationTicks:
+          type: integer
+          format: int64
+        timelineTimebase:
+          type: integer
+          format: int64
+        videoAspectRatio:
+          type: string
+        sheetAspectRatio:
+          type: string
+        gridRows:
+          type: integer
+          minimum: 1
+        gridColumns:
+          type: integer
+          minimum: 1
+        panelCount:
+          type: integer
+          minimum: 3
+          maximum: 6
+        entryStateHash:
+          type: string
+        exitStateHash:
+          type: string
+        manifest:
+          type: object
+          additionalProperties: true
+        manifestHash:
+          type: string
+        status:
+          type: string
+          enum: [draft, processing, ready, failed, stale, archived]
+        reviewStatus:
+          type: string
+          enum: [pending, approved, rejected, needs_edit]
+        reviewerPromptVersionId:
+          type: string
+          format: uuid
+        reviewerProviderCallId:
+          type: string
+          format: uuid
+        reviewerModelId:
+          type: string
+          format: uuid
+        reviewerOutput:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        reviewedAt:
+          type: string
+          format: date-time
+    StoryboardSheetPanel:
+      type: object
+      required: [id, productionGenerationId, storyboardShotId, manifestId, visualAnchorId, ordinal, gridRow, gridColumn, timeTick, normalizedPosition, stage, actionStage, expectedState, expectedStateHash, status, reviewStatus, crop, metadata, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        manifestId:
+          type: string
+          format: uuid
+        visualAnchorId:
+          type: string
+          format: uuid
+        ordinal:
+          type: integer
+          minimum: 1
+        gridRow:
+          type: integer
+          minimum: 0
+        gridColumn:
+          type: integer
+          minimum: 0
+        timeTick:
+          type: integer
+          format: int64
+        normalizedPosition:
+          type: integer
+          minimum: 0
+          maximum: 1000
+        stage:
+          type: string
+        actionStage:
+          type: string
+        expectedState:
+          type: object
+          additionalProperties: true
+        expectedStateHash:
+          type: string
+        status:
+          type: string
+          enum: [planned, cropped, failed, stale, archived]
+        reviewStatus:
+          type: string
+          enum: [pending, approved, rejected, needs_edit]
+        artifactId:
+          type: string
+          format: uuid
+        mediaFileId:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        previewUrl:
+          type: string
+          format: uri
+        contentHash:
+          type: string
+        crop:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    PromptContextPlan:
+      type: object
+      required: [id, productionGenerationId, videoProductionBindingId, videoProductionBindingRevision, storyboardPlanId, storyboardShotId, scriptEpisodeId, revision, status, episodeContinuityDigest, currentSceneScript, adjacentSceneSummaries, currentShotState, verbatimDialogueCues, modelContextLimit, modelPromptLimit, budgetAllocation, sourceHashes, planHash, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        videoProductionBindingId:
+          type: string
+          format: uuid
+        videoProductionBindingRevision:
+          type: integer
+          format: int64
+        storyboardPlanId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        scriptEpisodeId:
+          type: string
+          format: uuid
+        scriptSceneId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+        status:
+          type: string
+          enum: [active, stale, archived]
+        episodeContinuityDigest:
+          type: string
+        currentSceneScript:
+          type: string
+        adjacentSceneSummaries:
+          type: array
+          items: {}
+        currentShotState:
+          type: object
+          additionalProperties: true
+        verbatimDialogueCues:
+          type: array
+          items: {}
+        modelContextLimit:
+          type: integer
+        modelPromptLimit:
+          type: integer
+        budgetAllocation:
+          type: object
+          additionalProperties: true
+        sourceHashes:
+          type: object
+          additionalProperties: true
+        planHash:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        staleAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: string
+          format: date-time
+    VideoPromptPlan:
+      type: object
+      required: [id, productionGenerationId, videoProductionBindingId, videoProductionBindingRevision, profileVersionId, storyboardShotId, promptContextPlanId, promptVersionId, revision, status, renderedPrompt, promptHash, promptContextPlanHash, profileSnapshotHash, shotStateHash, referencePackHash, capabilitySnapshotHash, inputContractVersion, dialogueCues, nativeAudioRequired, audioStrategy, audioRequirement, reviewerOutput, metadata, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        videoProductionBindingId:
+          type: string
+          format: uuid
+        videoProductionBindingRevision:
+          type: integer
+          format: int64
+        profileVersionId:
+          type: string
+          format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        promptContextPlanId:
+          type: string
+          format: uuid
+        promptVersionId:
+          type: string
+          format: uuid
+        reviewerPromptVersionId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        nodeRunId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        reviewerProviderCallId:
+          type: string
+          format: uuid
+        providerModelId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [draft, generating, reviewing, approved, rejected, failed, stale, archived]
+        renderedPrompt:
+          type: string
+        promptHash:
+          type: string
+        promptContextPlanHash:
+          type: string
+        profileSnapshotHash:
+          type: string
+        shotStateHash:
+          type: string
+        transitionHash:
+          type: string
+        referencePackHash:
+          type: string
+        capabilitySnapshotHash:
+          type: string
+        inputContractVersion:
+          type: string
+        dialogueCues:
+          type: array
+          items: {}
+        nativeAudioRequired:
+          type: boolean
+        audioStrategy:
+          type: string
+          enum: [native_av, hybrid, tts_postdub]
+        audioRequirement:
+          type: string
+          enum: [preferred, required, disabled]
+        reviewerOutput:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        reviewedAt:
+          type: string
+          format: date-time
+        approvedAt:
+          type: string
+          format: date-time
+        staleAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: string
+          format: date-time
+    StoryboardShotStateListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/StoryboardShotStateVersion"
+    StoryboardShotTransitionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/StoryboardShotTransition"
+    StoryboardShotTransitionListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                active:
+                  $ref: "#/components/schemas/StoryboardShotTransition"
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/StoryboardShotTransition"
+    ShotVisualAnchorEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ShotVisualAnchor"
+    ShotVisualAnchorListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ShotVisualAnchor"
+    AnchorGenerationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [anchorId, anchorRole, workflowRunId, status, workflowType]
+              properties:
+                anchorId:
+                  type: string
+                  format: uuid
+                anchorRole:
+                  type: string
+                  enum: [planned_first_frame, planned_last_frame, storyboard_sheet, storyboard_panel]
+                workflowRunId:
+                  type: string
+                  format: uuid
+                status:
+                  type: string
+                workflowType:
+                  type: string
+    ShotReferencePackEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items, history]
+              properties:
+                pack:
+                  $ref: "#/components/schemas/ShotReferencePack"
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ShotReferencePackItem"
+                history:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ShotReferencePack"
+    StoryboardSheetEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [panels, history]
+              properties:
+                active:
+                  $ref: "#/components/schemas/StoryboardSheetManifest"
+                manifest:
+                  $ref: "#/components/schemas/StoryboardSheetManifest"
+                panels:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/StoryboardSheetPanel"
+                history:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/StoryboardSheetManifest"
+    VideoPromptPlanListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                active:
+                  $ref: "#/components/schemas/VideoPromptPlan"
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/VideoPromptPlan"
+                contextPlan:
+                  $ref: "#/components/schemas/PromptContextPlan"
+    VideoPromptPlanEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/VideoPromptPlan"
+    VideoPromptPlanReviewEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [id, storyboardShotId, revision, status]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                storyboardShotId:
+                  type: string
+                  format: uuid
+                revision:
+                  type: integer
+                status:
+                  type: string
+                  enum: [approved, rejected]
     CreateVideoRenderPlanRequest:
       type: object
       properties:
@@ -9087,11 +13075,28 @@ components:
           format: date-time
     VideoRenderPlan:
       type: object
-      required: [id, storyboardShotId, providerAccountId, providerModelId, modelFamily, variantKey, capabilitySnapshot, capabilitySnapshotHash, status, active, targetDurationTicks, targetDurationFrames, targetDurationSeconds, timelineTimebase, fpsNumerator, fpsDenominator, taskType, referenceMode, aspectRatio, resolution, audioStrategy, audioRequirement, nativeAudioStatus, productionReadiness, expiresAt, createdAt, updatedAt, segments]
+      required: [id, productionGenerationId, videoProductionBindingId, videoProductionBindingRevision, profileVersionId, productionProfileSnapshot, productionProfileSnapshotHash, storyboardShotId, providerAccountId, modelFamily, variantKey, capabilitySnapshot, capabilitySnapshotHash, transitionSnapshot, dialogueCues, nativeAudioRequired, status, active, targetDurationTicks, targetDurationFrames, targetDurationSeconds, timelineTimebase, fpsNumerator, fpsDenominator, taskType, referenceMode, aspectRatio, resolution, audioStrategy, audioRequirement, nativeAudioStatus, productionReadiness, metadata, expiresAt, createdAt, updatedAt, segments]
       properties:
         id:
           type: string
           format: uuid
+        productionGenerationId:
+          type: string
+          format: uuid
+        videoProductionBindingId:
+          type: string
+          format: uuid
+        videoProductionBindingRevision:
+          type: integer
+          format: int64
+        profileVersionId:
+          type: string
+          format: uuid
+        productionProfileSnapshot:
+          type: object
+          additionalProperties: true
+        productionProfileSnapshotHash:
+          type: string
         storyboardPlanId:
           type: string
           format: uuid
@@ -9152,6 +13157,9 @@ components:
         productionReadiness:
           type: string
           enum: [ready, preview_only, partial, blocked]
+        metadata:
+          type: object
+          additionalProperties: true
         expiresAt:
           type: string
           format: date-time
@@ -10496,7 +14504,7 @@ components:
             type: string
     ProductionShotAssetsStage:
       type: object
-      required: [status, requirementCount, characterRequirementCount, sceneRequirementCount, propRequirementCount, derivedImageCount, missingDerivedImageCount, approvedCount, pendingReviewCount, manualOverrideCount, staleRequirementCount, summary]
+      required: [status, requirementCount, characterRequirementCount, sceneRequirementCount, propRequirementCount, derivedImageCount, missingDerivedImageCount, approvedMissingDerivedImageCount, approvedCount, pendingReviewCount, reviewPendingCount, needsEditCount, rejectedCount, manualOverrideCount, staleRequirementCount, summary]
       properties:
         status:
           $ref: "#/components/schemas/ProductionStageStatus"
@@ -10512,9 +14520,17 @@ components:
           type: integer
         missingDerivedImageCount:
           type: integer
+        approvedMissingDerivedImageCount:
+          type: integer
         approvedCount:
           type: integer
         pendingReviewCount:
+          type: integer
+        reviewPendingCount:
+          type: integer
+        needsEditCount:
+          type: integer
+        rejectedCount:
           type: integer
         manualOverrideCount:
           type: integer
@@ -10608,6 +14624,11 @@ components:
           type: string
         note:
           type: string
+        operationId:
+          type: string
+          format: uuid
+        derivedAssets:
+          $ref: "#/components/schemas/DerivedAssetBatchProjection"
     RegenerateRequest:
       type: object
       required: [targetType]
@@ -10638,6 +14659,11 @@ components:
           type: string
         workflowType:
           type: string
+        operationId:
+          type: string
+          format: uuid
+        derivedAssets:
+          $ref: "#/components/schemas/DerivedAssetBatchProjection"
     ReviewRequest:
       type: object
       required: [reviewStatus]
@@ -10811,6 +14837,20 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Organization"
+    SystemOrganizationListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/SystemOrganizationList"
+    CreatedSystemOrganizationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CreatedSystemOrganization"
     WorkspaceEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -10849,6 +14889,87 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Project"
+    VideoProductionProfileListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/VideoProductionProfileVersion"
+    ProjectVideoProductionProfileEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [profile, binding, productionGeneration, state, locked]
+              properties:
+                profile:
+                  $ref: "#/components/schemas/VideoProductionProfileVersion"
+                binding:
+                  $ref: "#/components/schemas/ProjectVideoProductionBinding"
+                productionGeneration:
+                  $ref: "#/components/schemas/ProductionGeneration"
+                state:
+                  type: string
+                  enum: [storyboard_required, ready, rebuilding, blocked, reconfiguration_required]
+                locked: {type: boolean}
+    VideoProductionCompatibilityEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/VideoProductionCompatibility"
+    VideoProductionRebuildImpactEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [impact, compatibility]
+              properties:
+                impact:
+                  $ref: "#/components/schemas/VideoProductionRebuildImpact"
+                compatibility:
+                  $ref: "#/components/schemas/VideoProductionCompatibility"
+    VideoProductionRebuildEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/VideoProductionRebuild"
+    CurrentVideoProductionRebuildEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              oneOf:
+                - $ref: "#/components/schemas/VideoProductionRebuild"
+                - type: "null"
+    VideoProductionRebuildItemListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/VideoProductionRebuildItem"
     ProjectManualBindingEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -11549,6 +15670,13 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/ShotAssetRequirement"
+    BatchReviewShotAssetRequirementsEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/BatchReviewShotAssetRequirementsResponse"
     ScriptAgentResultEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -11583,19 +15711,6 @@ components:
               properties:
                 asset:
                   $ref: "#/components/schemas/CanonicalAsset"
-                providerCallId:
-                  type: string
-                  format: uuid
-    DerivedAssetImageResultEnvelope:
-      allOf:
-        - $ref: "#/components/schemas/Envelope"
-        - type: object
-          properties:
-            data:
-              type: object
-              properties:
-                requirement:
-                  $ref: "#/components/schemas/ShotAssetRequirement"
                 providerCallId:
                   type: string
                   format: uuid
@@ -12034,7 +16149,7 @@ components:
           type: string
     ProviderAccount:
       type: object
-      required: [id, organizationId, connectorId, connectorKey, name, authType, status, config, createdBy, createdAt, updatedAt]
+      required: [id, organizationId, connectorId, connectorKey, name, authType, status, config, credentialCount, createdBy, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -12059,6 +16174,9 @@ components:
           type: object
         credentialPreview:
           type: string
+        credentialCount:
+          type: integer
+          minimum: 0
         createdBy:
           type: string
           format: uuid
@@ -12066,6 +16184,48 @@ components:
           type: string
           format: date-time
         updatedAt:
+          type: string
+          format: date-time
+    ProviderCredential:
+      type: object
+      required: [id, organizationId, providerAccountId, credentialKey, credentialType, maskedPreview, status, isActive, availableModelCount, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        credentialKey:
+          type: string
+        credentialType:
+          type: string
+        maskedPreview:
+          type: string
+        status:
+          type: string
+          enum: [active, rotated, revoked, expired]
+        isActive:
+          type: boolean
+        availableModelCount:
+          type: integer
+          minimum: 0
+        lastDiscoveredAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        rotatedAt:
           type: string
           format: date-time
     CreateProviderAccountRequest:
@@ -12111,6 +16271,19 @@ components:
       properties:
         credentialKey:
           type: string
+        credential:
+          type: object
+          additionalProperties: true
+    CreateProviderCredentialRequest:
+      type: object
+      required: [credentialKey, credential]
+      properties:
+        credentialKey:
+          type: string
+          maxLength: 120
+        credentialType:
+          type: string
+          default: api_key
         credential:
           type: object
           additionalProperties: true
@@ -12312,9 +16485,51 @@ components:
           type: boolean
         supportsVideoReference:
           type: boolean
+    VideoInputSlot:
+      type: object
+      required: [role, mediaType, semantics, min, max, ordered]
+      properties:
+        role:
+          type: string
+        mediaType:
+          type: string
+          enum: [image, video, audio, text]
+        semantics:
+          type: string
+        min:
+          type: integer
+          minimum: 0
+        max:
+          type: integer
+          minimum: 0
+        ordered:
+          type: boolean
+    VideoInputContract:
+      type: object
+      required: [contractKey, requestMode, slots, mutuallyExclusiveRoles, supportsStoryboardSheetReference, supportsVideoExtension]
+      properties:
+        contractKey:
+          type: string
+          enum: [text_only, first_frame, first_last_frames, semantic_references, first_frame_plus_references, storyboard_sheet_reference, video_reference, video_extension]
+        requestMode:
+          type: string
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoInputSlot"
+        mutuallyExclusiveRoles:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+        supportsStoryboardSheetReference:
+          type: boolean
+        supportsVideoExtension:
+          type: boolean
     VideoGenerationVariant:
       type: object
-      required: [variantKey, when, duration, frameRate, nativeAudio, continuation]
+      required: [variantKey, when, duration, frameRate, nativeAudio, continuation, inputContract, verificationStatus]
       properties:
         variantKey:
           type: string
@@ -12342,6 +16557,12 @@ components:
           $ref: "#/components/schemas/VideoNativeAudioCapability"
         continuation:
           $ref: "#/components/schemas/VideoContinuationCapability"
+        inputContract:
+          $ref: "#/components/schemas/VideoInputContract"
+        continuationInputContracts:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoInputContract"
         requestModes:
           type: array
           items:
@@ -12356,6 +16577,9 @@ components:
           format: date-time
         capabilityVersion:
           type: string
+        verificationStatus:
+          type: string
+          enum: [official, tested, inferred, unknown]
     ProviderCapability:
       type: object
       required: [id, providerModelId, taskTypes, inputLimits, outputLimits, qualityTiers, providerOptionsSchema, pricingPolicy, createdAt]
@@ -12415,6 +16639,102 @@ components:
         updatedAt:
           type: string
           format: date-time
+    VideoCapabilityAttestation:
+      type: object
+      required: [id, organizationId, providerModelId, variantKey, capabilitySnapshotHash, verificationStatus, evidenceType, evidence, decision, reason, decidedAt, currentSnapshot, active, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        providerModelId: {type: string, format: uuid}
+        variantKey: {type: string}
+        capabilitySnapshotHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        verificationStatus:
+          type: string
+          enum: [official, tested, inferred, unknown]
+        evidenceType:
+          type: string
+          enum: [official_documentation, adapter_contract_test, controlled_probe, administrator_review]
+        evidence:
+          type: object
+          additionalProperties: true
+        decision:
+          type: string
+          enum: [approved, rejected]
+        reason: {type: string}
+        decidedBy: {type: string, format: uuid}
+        decidedAt: {type: string, format: date-time}
+        supersedesAttestationId: {type: string, format: uuid}
+        revokedBy: {type: string, format: uuid}
+        revokedAt: {type: string, format: date-time}
+        currentSnapshot: {type: boolean}
+        active: {type: boolean}
+        createdAt: {type: string, format: date-time}
+    VideoCapabilityVariantStatus:
+      type: object
+      required: [variantKey, capabilitySnapshotHash, verificationStatus, initialInputContract, continuationInputContracts, nativeAudio, duration]
+      properties:
+        variantKey: {type: string}
+        capabilitySnapshotHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        verificationStatus:
+          type: string
+          enum: [official, tested, inferred, unknown]
+        source: {type: string}
+        sourceUrl: {type: string, format: uri}
+        verifiedAt: {type: string, format: date-time}
+        initialInputContract:
+          $ref: "#/components/schemas/VideoInputContract"
+        continuationInputContracts:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoInputContract"
+        nativeAudio:
+          $ref: "#/components/schemas/VideoNativeAudioCapability"
+        duration:
+          $ref: "#/components/schemas/VideoDurationCapability"
+        currentAttestation:
+          $ref: "#/components/schemas/VideoCapabilityAttestation"
+    VideoCapabilityAttestationList:
+      type: object
+      required: [variants, attestations]
+      properties:
+        variants:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoCapabilityVariantStatus"
+        attestations:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoCapabilityAttestation"
+    CreateVideoCapabilityAttestationRequest:
+      type: object
+      required: [variantKey, capabilitySnapshotHash, decision, reason]
+      properties:
+        variantKey: {type: string}
+        capabilitySnapshotHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        decision:
+          type: string
+          enum: [approved, rejected]
+        reason: {type: string, minLength: 1}
+        evidence:
+          type: object
+          additionalProperties: true
+    VerifyVideoCapabilityRequest:
+      type: object
+      required: [variantKey, capabilitySnapshotHash, verificationMode]
+      properties:
+        variantKey: {type: string}
+        capabilitySnapshotHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        verificationMode:
+          type: string
+          enum: [adapter_contract_test, controlled_probe]
+        providerTestRunId: {type: string, format: uuid}
+        reason: {type: string}
+    RevokeVideoCapabilityAttestationRequest:
+      type: object
+      required: [capabilitySnapshotHash, reason]
+      properties:
+        capabilitySnapshotHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        reason: {type: string, minLength: 1}
     CapabilityInput:
       type: object
       properties:
@@ -12588,8 +16908,13 @@ components:
           type: string
     ModelDiscoveryResult:
       type: object
-      required: [models, unsupported]
+      required: [models, unsupported, sync]
       properties:
+        credentialId:
+          type: string
+          format: uuid
+        credentialKey:
+          type: string
         models:
           type: array
           items:
@@ -12597,6 +16922,27 @@ components:
         unsupported:
           type: array
           items: {}
+        sync:
+          $ref: "#/components/schemas/ModelDiscoverySync"
+    ModelDiscoverySync:
+      type: object
+      required: [discoveredCount, createdCount, existingCount, skippedDisabledCount, ignoredCount]
+      properties:
+        discoveredCount:
+          type: integer
+          minimum: 0
+        createdCount:
+          type: integer
+          minimum: 0
+        existingCount:
+          type: integer
+          minimum: 0
+        skippedDisabledCount:
+          type: integer
+          minimum: 0
+        ignoredCount:
+          type: integer
+          minimum: 0
     PromptVersionSummary:
       type: object
       required: [id, version, status, contentHash]
@@ -13501,9 +17847,25 @@ components:
       type: object
       required: [type]
       properties:
+        referenceKey:
+          type: string
+        role:
+          type: string
+        required:
+          type: boolean
+        priority:
+          type: integer
         type:
           type: string
           enum: [image, video, audio]
+        semantics:
+          type: string
+        sourceType:
+          type: string
+        sourceId:
+          type: string
+        sourceVersion:
+          type: string
         assetId:
           type: string
           format: uuid
@@ -13520,12 +17882,69 @@ components:
           type: string
         mimeType:
           type: string
+        contentHash:
+          type: string
+          pattern: '^(sha256:)?[0-9a-f]{64}$'
+        generatedAt:
+          type: string
+          format: date-time
         metadata:
           type: object
           additionalProperties: true
+    VideoReferenceManifestItemV2:
+      type: object
+      required: [order, referenceKey, role, required, priority, mediaType, sourceType, sourceVersion, contentHash]
+      properties:
+        order: {type: integer, minimum: 0}
+        referenceKey: {type: string}
+        role: {type: string}
+        required: {type: boolean}
+        priority: {type: integer}
+        mediaType:
+          type: string
+          enum: [image, video, audio]
+        semantics: {type: string}
+        sourceType: {type: string}
+        sourceId: {type: string}
+        sourceVersion: {type: string}
+        assetId: {type: string, format: uuid}
+        artifactId: {type: string, format: uuid}
+        mediaFileId: {type: string, format: uuid}
+        contentHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        generatedAt: {type: string, format: date-time}
+    VideoReferenceManifestV2:
+      type: object
+      required: [schemaVersion, contractKey, capabilitySnapshotHash, items]
+      properties:
+        schemaVersion:
+          type: integer
+          enum: [2]
+        contractKey:
+          type: string
+          enum: [text_only, first_frame, first_last_frames, semantic_references, first_frame_plus_references, storyboard_sheet_reference, video_reference, video_extension]
+        capabilitySnapshotHash:
+          type: string
+          pattern: '^(sha256:)?[0-9a-f]{64}$'
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoReferenceManifestItemV2"
+    GatewayVideoDialogueSpan:
+      type: object
+      required: [speaker, text, startTick, endTick]
+      properties:
+        timingUnitId: {type: string}
+        speaker: {type: string}
+        text: {type: string}
+        delivery: {type: string}
+        kind: {type: string}
+        startTick: {type: integer, format: int64, minimum: 0}
+        endTick: {type: integer, format: int64, minimum: 1}
+        continuesFromPrevious: {type: boolean}
+        continuesToNext: {type: boolean}
     GatewayVideoPlanRequest:
       type: object
-      required: [organizationId, projectId, storyboardShotId, taskType, targetDurationTicks, timelineTimebase, fpsNumerator, fpsDenominator, audioStrategy, audioRequirement, hasDialogue, referenceMode, aspectRatio, resolution]
+      required: [organizationId, projectId, productionGenerationId, videoProductionBindingId, videoProductionBindingRevision, productionProfileVersionId, productionProfileSnapshotHash, compatibilityPolicy, requiredInitialInputContract, inputContractVersion, shotStateRevision, shotStateHash, referencePackId, referencePackHash, promptContextPlanId, promptContextPlanHash, videoPromptPlanId, storyboardShotId, taskType, targetDurationTicks, timelineTimebase, fpsNumerator, fpsDenominator, audioStrategy, audioRequirement, nativeAudioRequired, hasDialogue, referenceMode, aspectRatio, resolution]
       properties:
         organizationId:
           type: string
@@ -13533,6 +17952,30 @@ components:
         projectId:
           type: string
           format: uuid
+        productionGenerationId: {type: string, format: uuid}
+        videoProductionBindingId: {type: string, format: uuid}
+        videoProductionBindingRevision: {type: integer, format: int64, minimum: 1}
+        productionProfileVersionId: {type: string, format: uuid}
+        productionProfileSnapshotHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        compatibilityPolicy:
+          type: string
+          enum: [strict, compatible]
+        requiredInitialInputContract:
+          type: string
+        allowedContinuationInputContracts:
+          type: array
+          items:
+            type: string
+        inputContractVersion: {type: string}
+        shotStateRevision: {type: integer, minimum: 1}
+        shotStateHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        transitionHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        referencePackId: {type: string, format: uuid}
+        referencePackHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        promptContextPlanId: {type: string, format: uuid}
+        promptContextPlanHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        videoPromptPlanId: {type: string, format: uuid}
+        nativeAudioRequired: {type: boolean}
         workflowRunId:
           type: string
           format: uuid
@@ -13604,9 +18047,13 @@ components:
         previousExecutionPlanId:
           type: string
           format: uuid
+        dialogueSpans:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayVideoDialogueSpan"
     GatewayVideoPlanSegment:
       type: object
-      required: [segmentId, segmentIndex, plannedStartTick, plannedEndTick, plannedDurationTicks, requestedDurationSeconds, continuityMode]
+      required: [segmentId, segmentIndex, plannedStartTick, plannedEndTick, plannedDurationTicks, plannedDurationSeconds, requestedDurationSeconds, continuityMode, inputContractKey, inputContractHash]
       properties:
         segmentId:
           type: string
@@ -13623,17 +18070,29 @@ components:
         plannedDurationTicks:
           type: integer
           format: int64
+        plannedDurationSeconds:
+          type: number
+          exclusiveMinimum: 0
         requestedDurationSeconds:
           type: number
           exclusiveMinimum: 0
         continuityMode:
           type: string
+        inputContractKey:
+          type: string
+        inputContractHash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
         trimEndTick:
           type: integer
           format: int64
+        dialogueSpans:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayVideoDialogueSpan"
     GatewayVideoPlanResponse:
       type: object
-      required: [executionPlanId, providerModelId, providerAccountId, modelFamily, variantKey, capabilitySnapshot, capabilitySnapshotHash, expiresAt, audioStrategy, audioRequirement, nativeAudioStatus, productionReadiness, segments]
+      required: [executionPlanId, providerModelId, providerAccountId, modelFamily, variantKey, capabilitySnapshot, capabilitySnapshotHash, initialInputContractSnapshot, initialInputContractHash, capabilityAttestationId, productionProfileVersionId, productionProfileSnapshotHash, compatibilityPolicy, shotStateRevision, shotStateHash, referencePackId, referencePackHash, promptContextPlanId, promptContextPlanHash, videoPromptPlanId, nativeAudioRequired, timelineTimebase, fpsNumerator, fpsDenominator, expiresAt, audioStrategy, audioRequirement, nativeAudioStatus, productionReadiness, segments]
       properties:
         executionPlanId:
           type: string
@@ -13652,6 +18111,34 @@ components:
           $ref: "#/components/schemas/VideoGenerationVariant"
         capabilitySnapshotHash:
           type: string
+        transitionSnapshot:
+          type: object
+          additionalProperties: true
+        dialogueCues:
+          type: array
+          items: {}
+        initialInputContractSnapshot:
+          $ref: "#/components/schemas/VideoInputContract"
+        initialInputContractHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        continuationInputContractSnapshot:
+          $ref: "#/components/schemas/VideoInputContract"
+        continuationInputContractHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        capabilityAttestationId: {type: string, format: uuid}
+        productionProfileVersionId: {type: string, format: uuid}
+        productionProfileSnapshotHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        compatibilityPolicy: {type: string}
+        shotStateRevision: {type: integer, minimum: 1}
+        shotStateHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        transitionHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        referencePackId: {type: string, format: uuid}
+        referencePackHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        promptContextPlanId: {type: string, format: uuid}
+        promptContextPlanHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        videoPromptPlanId: {type: string, format: uuid}
+        nativeAudioRequired: {type: boolean}
+        timelineTimebase: {type: integer, format: int64}
+        fpsNumerator: {type: integer, format: int64}
+        fpsDenominator: {type: integer, format: int64}
         expiresAt:
           type: string
           format: date-time
@@ -13746,6 +18233,30 @@ components:
         projectId:
           type: string
           format: uuid
+        storyboardShotId:
+          type: string
+          format: uuid
+        productionGenerationId: {type: string, format: uuid}
+        videoProductionBindingId: {type: string, format: uuid}
+        videoProductionBindingRevision: {type: integer, format: int64, minimum: 1}
+        productionProfileVersionId: {type: string, format: uuid}
+        productionProfileSnapshotHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        inputContractKey: {type: string}
+        inputContractHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        inputContractVersion: {type: string}
+        shotStateRevision: {type: integer, minimum: 1}
+        shotStateHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        transitionHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        referencePackId: {type: string, format: uuid}
+        referencePackHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        promptContextPlanId: {type: string, format: uuid}
+        promptContextPlanHash: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+        videoPromptPlanId: {type: string, format: uuid}
+        nativeAudioRequired: {type: boolean}
+        dialogueCues:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayVideoDialogueSpan"
         workflowRunId:
           type: string
           format: uuid
@@ -13774,6 +18285,20 @@ components:
           type: string
         idempotencyKey:
           type: string
+        executionPlanId:
+          type: string
+          format: uuid
+        renderSegmentId:
+          type: string
+          format: uuid
+        capabilitySnapshotHash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        referenceManifest:
+          $ref: "#/components/schemas/VideoReferenceManifestV2"
+        referenceManifestHash:
+          type: string
+          pattern: '^(sha256:)?[0-9a-f]{64}$'
         input:
           type: object
           required: [prompt]
@@ -14052,6 +18577,9 @@ components:
         accountId:
           type: string
           format: uuid
+        credentialId:
+          type: string
+          format: uuid
         testType:
           type: string
         idempotencyKey:
@@ -14112,7 +18640,7 @@ components:
           enum: [text, image, video, audio, embedding, multimodal]
     GatewayModelConstraintCandidate:
       type: object
-      required: [providerModelId, modelKey, modality, prompt]
+      required: [providerModelId, modelKey, modality, prompt, references, nativeAudio]
       properties:
         providerModelId:
           type: string
@@ -14123,6 +18651,58 @@ components:
           type: string
         prompt:
           $ref: "#/components/schemas/PromptLengthConstraint"
+        contextWindow:
+          type: integer
+          minimum: 0
+        references:
+          $ref: "#/components/schemas/ReferenceConstraint"
+        nativeAudio:
+          $ref: "#/components/schemas/NativeAudioConstraint"
+    ReferenceConstraint:
+      type: object
+      required: [supported, maxReferences, maxImageReferences, maxVideoReferences, maxAudioReferences, supportsFirstFrame, supportsLastFrame, supportsStoryboardSheetReference, supportsSemanticReferenceImages, supportsVideoReference, supportsAudioReference, inputContracts]
+      properties:
+        supported:
+          type: boolean
+        maxReferences:
+          type: integer
+          minimum: 0
+        maxImageReferences:
+          type: integer
+          minimum: 0
+        maxVideoReferences:
+          type: integer
+          minimum: 0
+        maxAudioReferences:
+          type: integer
+          minimum: 0
+        supportsFirstFrame:
+          type: boolean
+        supportsLastFrame:
+          type: boolean
+        supportsStoryboardSheetReference:
+          type: boolean
+        supportsSemanticReferenceImages:
+          type: boolean
+        supportsVideoReference:
+          type: boolean
+        supportsAudioReference:
+          type: boolean
+        inputContracts:
+          type: array
+          items:
+            type: string
+    NativeAudioConstraint:
+      type: object
+      required: [support, supportsDialogue, supportsLipSync]
+      properties:
+        support:
+          type: string
+          enum: ["true", "false", unknown]
+        supportsDialogue:
+          type: boolean
+        supportsLipSync:
+          type: boolean
     GatewayModelConstraintsResponse:
       type: object
       required: [modelProfileKey, taskType, modality, candidates]
@@ -14662,6 +19242,25 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/ProviderAccount"
+    ProviderCredentialEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProviderCredential"
+    ProviderCredentialListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ProviderCredential"
     ProviderModelEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -14681,6 +19280,20 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/ProviderModel"
+    VideoCapabilityAttestationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/VideoCapabilityAttestation"
+    VideoCapabilityAttestationListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/VideoCapabilityAttestationList"
     ProviderTestResultEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -14871,7 +19484,7 @@ components:
               $ref: "#/components/schemas/ProviderWebhookResult"
     Team:
       type: object
-      required: [id, organizationId, name, status, createdAt]
+      required: [id, organizationId, name, status, createdAt, memberCount, bindingCount]
       properties:
         id:
           type: string
@@ -14895,9 +19508,15 @@ components:
         updatedAt:
           type: string
           format: date-time
+        memberCount:
+          type: integer
+          minimum: 0
+        bindingCount:
+          type: integer
+          minimum: 0
     TeamMember:
       type: object
-      required: [teamId, userId, status, createdAt]
+      required: [teamId, userId, status, createdAt, user]
       properties:
         teamId:
           type: string
@@ -14914,6 +19533,21 @@ components:
         createdAt:
           type: string
           format: date-time
+        user:
+          $ref: "#/components/schemas/User"
+    TeamImpact:
+      type: object
+      required: [teamId, activeMemberCount, activeBindingCount]
+      properties:
+        teamId:
+          type: string
+          format: uuid
+        activeMemberCount:
+          type: integer
+          minimum: 0
+        activeBindingCount:
+          type: integer
+          minimum: 0
     Role:
       type: object
       required: [id, roleKey, name, scope, isSystem, createdAt]
@@ -14941,6 +19575,88 @@ components:
         updatedAt:
           type: string
           format: date-time
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Permission"
+        bindingCount:
+          type: integer
+          minimum: 0
+    CreateCustomRoleRequest:
+      type: object
+      required: [roleKey, name, scope, permissionKeys]
+      properties:
+        roleKey:
+          type: string
+          minLength: 3
+          maxLength: 64
+          pattern: '^[a-z][a-z0-9_]{2,63}$'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        scope:
+          type: string
+          enum: [organization, workspace, project]
+        permissionKeys:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+    UpdateCustomRoleRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        scope:
+          type: string
+          enum: [organization, workspace, project]
+        permissionKeys:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+    RoleImpact:
+      type: object
+      required: [roleId, bindingCount, directUserCount, teamCount, affectedUserCount, organizationBindings, workspaceBindings, projectBindings, permissionKeys]
+      properties:
+        roleId:
+          type: string
+          format: uuid
+        bindingCount:
+          type: integer
+          minimum: 0
+        directUserCount:
+          type: integer
+          minimum: 0
+        teamCount:
+          type: integer
+          minimum: 0
+        affectedUserCount:
+          type: integer
+          minimum: 0
+        organizationBindings:
+          type: integer
+          minimum: 0
+        workspaceBindings:
+          type: integer
+          minimum: 0
+        projectBindings:
+          type: integer
+          minimum: 0
+        permissionKeys:
+          type: array
+          items:
+            type: string
     Permission:
       type: object
       required: [permissionKey, name, description, createdAt]
@@ -14972,6 +19688,8 @@ components:
           format: uuid
         roleKey:
           type: string
+        roleName:
+          type: string
         subjectType:
           type: string
           enum: [user, team]
@@ -14981,6 +19699,8 @@ components:
         subjectTeamId:
           type: string
           format: uuid
+        subjectName:
+          type: string
         resourceType:
           type: string
           enum: [organization, workspace, project]
@@ -14993,6 +19713,11 @@ components:
         resourceProjectId:
           type: string
           format: uuid
+        resourceName:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
         createdBy:
           type: string
           format: uuid
@@ -15018,6 +19743,13 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Team"
+    TeamImpactEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/TeamImpact"
     TeamMemberEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -15049,6 +19781,20 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Role"
+    RoleEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/Role"
+    RoleImpactEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/RoleImpact"
     PermissionListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -15075,11 +19821,18 @@ components:
           properties:
             data:
               type: object
+              required: [items, page, pageSize, total]
               properties:
                 items:
                   type: array
                   items:
                     $ref: "#/components/schemas/RoleBinding"
+                page:
+                  type: integer
+                pageSize:
+                  type: integer
+                total:
+                  type: integer
     CreateTeamRequest:
       type: object
       required: [name]
@@ -15136,6 +19889,9 @@ components:
         resourceProjectId:
           type: string
           format: uuid
+        expiresAt:
+          type: string
+          format: date-time
     CreateWorkspaceRequest:
       type: object
       required: [name]
@@ -15166,10 +19922,6 @@ components:
           type: string
           default: "16:9"
         artStyle:
-          type: string
-        directorManual:
-          type: string
-        visualManual:
           type: string
         directorManualPromptVersionId:
           type: string
@@ -15203,9 +19955,17 @@ components:
         imageQuality:
           type: string
           default: standard
-        productionMode:
+        videoProductionProfileKey:
+          allOf:
+            - $ref: "#/components/schemas/VideoProductionProfileKey"
+          default: single_frame_i2v
+        videoProductionProfileVersion:
+          type: integer
+          minimum: 1
+        compatibilityPolicy:
           type: string
-          default: silent_video
+          enum: [strict, compatible_fallback]
+          default: strict
         timelineTimebase:
           type: integer
           format: int64
@@ -15351,6 +20111,10 @@ components:
           items:
             type: object
             properties:
+              id:
+                type: string
+                format: uuid
+                description: Existing chapter identity to retain while editing or reordering chapters.
               chapterIndex:
                 type: integer
               volumeIndex:
@@ -15933,6 +20697,11 @@ components:
     UpdateShotAssetRequirementRequest:
       type: object
       properties:
+        assetId:
+          type: string
+          format: uuid
+        requirementType:
+          type: string
         costume:
           type: string
         pose:
@@ -16066,7 +20835,7 @@ components:
           format: uuid
         workflowType:
           type: string
-          enum: [video_production, text_to_storyboard, extract_novel_events, generate_adaptation_plan, adaptation_plan_to_script, source_to_script, parse_script_scenes, script_to_assets, script_to_storyboard, script_to_video, full_production, regenerate_canonical_asset_image, regenerate_derived_asset_image, regenerate_shot_image, regenerate_shot_video, regenerate_final_video, regenerate_script_scene, regenerate_scene_storyboard]
+          enum: [video_production, text_to_storyboard, extract_novel_events, generate_adaptation_plan, adaptation_plan_to_script, source_to_script, parse_script_scenes, script_to_assets, script_to_storyboard, script_episode_timing, script_to_video, full_production, compose_timeline]
           default: video_production
           description: video_production keeps the prompt-only path unless input.scriptId is provided.
         prompt:
@@ -16093,6 +20862,10 @@ components:
               items:
                 type: string
                 format: uuid
+            scriptEpisodeId:
+              type: string
+              format: uuid
+              description: Optional exact script episode scope for supported episode workflows.
             chapterIds:
               type: array
               items:
@@ -16107,9 +20880,8 @@ components:
             maxConcurrency:
               type: integer
               minimum: 1
-              maximum: 4
-              default: 2
-              description: Bounded source_to_script episode generation concurrency.
+              maximum: 16
+              description: Bounded concurrency. source_to_script defaults to 2.
             maxImageConcurrency:
               type: integer
               minimum: 1
@@ -16164,51 +20936,8 @@ components:
           type: string
         description:
           type: string
-        projectType:
-          type: string
-        contentType:
-          type: string
-        aspectRatio:
-          type: string
-        videoRatio:
-          type: string
-        artStyle:
-          type: string
-        directorManual:
-          type: string
-        visualManual:
-          type: string
-        imageModelProfileKey:
-          type: string
-        videoModelProfileKey:
-          type: string
-        scriptModelProfileKey:
-          type: string
-        ttsModelProfileKey:
-          type: string
-        asrModelProfileKey:
-          type: string
-        audioStrategy:
-          type: string
-          enum: [native_av, hybrid, tts_postdub]
-        audioRequirement:
-          type: string
-          enum: [preferred, required, disabled]
-        imageQuality:
-          type: string
-        productionMode:
-          type: string
-        timelineTimebase:
-          type: integer
-          format: int64
-        fpsNumerator:
-          type: integer
-        fpsDenominator:
-          type: integer
         expectedRevision:
           type: integer
           format: int64
           minimum: 1
           description: Optional optimistic concurrency revision. A stale value returns PROJECT_REVISION_CONFLICT.
-        settings:
-          type: object

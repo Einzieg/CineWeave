@@ -1,13 +1,16 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
+	"github.com/jackc/pgx/v5"
 )
 
 type ShotProductionStatus struct {
@@ -109,6 +112,17 @@ type ShotProductionActionResponse struct {
 	TargetShotIDs []string `json:"targetShotIds"`
 }
 
+type ShotProductionBatchRequest struct {
+	ScriptEpisodeID     string   `json:"scriptEpisodeId"`
+	WorkflowRunID       string   `json:"workflowRunId"`
+	ShotIDs             []string `json:"shotIds"`
+	Force               *bool    `json:"force,omitempty"`
+	MaxConcurrency      int      `json:"maxConcurrency,omitempty"`
+	Resolution          string   `json:"resolution,omitempty"`
+	PollIntervalSeconds int      `json:"pollIntervalSeconds,omitempty"`
+	MaxPolls            int      `json:"maxPolls,omitempty"`
+}
+
 func (s *Server) getShotProductionStatus(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectRead)
 	if !ok {
@@ -135,6 +149,66 @@ func (s *Server) runShotProductionAction(w http.ResponseWriter, r *http.Request,
 	if !decode(w, r, &req) {
 		return
 	}
+	s.runShotProductionActionRequest(w, r, principal, req)
+}
+
+func (s *Server) generateVideoPromptsBatch(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	s.runShotProductionBatchRequest(w, r, principal, true)
+}
+
+func (s *Server) generateShotVideosBatch(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	s.runShotProductionBatchRequest(w, r, principal, false)
+}
+
+func (s *Server) runShotProductionBatchRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal auth.Principal,
+	promptBatch bool,
+) {
+	var batch ShotProductionBatchRequest
+	if !decode(w, r, &batch) {
+		return
+	}
+	action := "generate_missing_videos"
+	if promptBatch {
+		action = "generate_video_prompts"
+	}
+	if len(batch.ShotIDs) > 0 {
+		if promptBatch {
+			action = "generate_selected_video_prompts"
+		} else {
+			action = "generate_selected_videos"
+		}
+	}
+	options := map[string]any{}
+	if batch.Force != nil {
+		options["force"] = *batch.Force
+	}
+	if batch.MaxConcurrency > 0 {
+		options["maxConcurrency"] = batch.MaxConcurrency
+	}
+	if value := strings.TrimSpace(batch.Resolution); value != "" {
+		options["resolution"] = value
+	}
+	if batch.PollIntervalSeconds > 0 {
+		options["pollIntervalSeconds"] = batch.PollIntervalSeconds
+	}
+	if batch.MaxPolls > 0 {
+		options["maxPolls"] = batch.MaxPolls
+	}
+	s.runShotProductionActionRequest(w, r, principal, ShotProductionActionRequest{
+		Action: action, ScriptEpisodeID: batch.ScriptEpisodeID, WorkflowRunID: batch.WorkflowRunID,
+		ShotIDs: batch.ShotIDs, Options: options,
+	})
+}
+
+func (s *Server) runShotProductionActionRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal auth.Principal,
+	req ShotProductionActionRequest,
+) {
 	req.Action = strings.TrimSpace(req.Action)
 	if req.Options == nil {
 		req.Options = map[string]any{}
@@ -147,12 +221,13 @@ func (s *Server) runShotProductionAction(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
+	scriptSceneID, workflowRunID, scriptEpisodeID := shotProductionScopeFilters(req)
 	status, err := s.loadShotProductionStatusForEpisode(
 		r,
 		project.ID,
-		req.ScriptSceneID,
-		req.WorkflowRunID,
-		req.ScriptEpisodeID,
+		scriptSceneID,
+		workflowRunID,
+		scriptEpisodeID,
 		"",
 		false,
 	)
@@ -165,6 +240,7 @@ func (s *Server) runShotProductionAction(w http.ResponseWriter, r *http.Request,
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, errorCode, shotProductionActionErrorMessage(errorCode), nil, false)
 		return
 	}
+	scriptEpisodeID = shotProductionTargetEpisodeID(req, status.Shots, targets)
 	workflowType, workflowFunc, _ := shotProductionWorkflowForAction(req.Action)
 	input := map[string]any{
 		"action":         req.Action,
@@ -174,7 +250,7 @@ func (s *Server) runShotProductionAction(w http.ResponseWriter, r *http.Request,
 		"resolution":     firstNonEmptyString(shotProductionOptionString(req.Options, "resolution"), "720p"),
 		"maxConcurrency": shotProductionMaxConcurrency(req.Action, req.Options),
 	}
-	if scriptEpisodeID := strings.TrimSpace(req.ScriptEpisodeID); scriptEpisodeID != "" {
+	if scriptEpisodeID != "" {
 		input["scriptEpisodeId"] = scriptEpisodeID
 	}
 	if value := shotProductionOptionFloat(req.Options, "duration", 0); value > 0 {
@@ -186,11 +262,13 @@ func (s *Server) runShotProductionAction(w http.ResponseWriter, r *http.Request,
 	if value := shotProductionOptionInt(req.Options, "maxPolls", 0); value > 0 {
 		input["maxPolls"] = value
 	}
-	run, ok := s.startProjectWorkflow(w, r, principal, project, workflowType, input, workflowFunc)
-	if !ok {
-		return
-	}
-	if err := s.markShotProductionQueued(r, req.Action, run.ID, targets); err != nil {
+	run, err := s.startProjectWorkflowCoreWithHook(
+		r.Context(), principal, project, workflowType, input, workflowFunc,
+		func(ctx context.Context, tx pgx.Tx, run WorkflowRun) error {
+			return markShotProductionQueuedTx(ctx, tx, req.Action, run.ID, targets)
+		},
+	)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -208,20 +286,34 @@ func (s *Server) loadShotProductionStatus(r *http.Request, projectID, scriptScen
 }
 
 func (s *Server) loadShotProductionStatusForEpisode(r *http.Request, projectID, scriptSceneID, workflowRunID, scriptEpisodeID, storyboardPlanID string, includePreviewURL bool) (ShotProductionStatus, error) {
-	if err := s.reconcileTerminalShotImageStates(r, projectID); err != nil {
-		return ShotProductionStatus{}, err
-	}
-	var aspectRatio string
+	return s.loadShotProductionStatusForEpisodeGeneration(r, projectID, scriptSceneID, workflowRunID, scriptEpisodeID, storyboardPlanID, "", includePreviewURL)
+}
+
+func (s *Server) loadShotProductionStatusForEpisodeGeneration(r *http.Request, projectID, scriptSceneID, workflowRunID, scriptEpisodeID, storyboardPlanID, generationID string, includePreviewURL bool) (ShotProductionStatus, error) {
+	var aspectRatio, activeGenerationID string
 	if err := s.db.QueryRow(r.Context(), `
-		SELECT COALESCE(NULLIF(BTRIM(video_ratio), ''), NULLIF(BTRIM(aspect_ratio), ''), '16:9')
+		SELECT COALESCE(NULLIF(BTRIM(video_ratio), ''), NULLIF(BTRIM(aspect_ratio), ''), '16:9'),
+		       active_video_production_generation_id::text
 		FROM projects
 		WHERE id = $1
-	`, projectID).Scan(&aspectRatio); err != nil {
+	`, projectID).Scan(&aspectRatio, &activeGenerationID); err != nil {
+		return ShotProductionStatus{}, err
+	}
+	if strings.TrimSpace(generationID) == "" {
+		generationID = activeGenerationID
+	} else if generationID != activeGenerationID {
+		return ShotProductionStatus{}, videoproduction.NewError(videoproduction.CodeGenerationMismatch, "项目视频生产代已切换，请刷新后重试", false)
+	}
+	if err := s.reconcileTerminalShotImageStates(r, projectID, generationID); err != nil {
+		return ShotProductionStatus{}, err
+	}
+	if err := s.reconcileTerminalShotVideoStates(r, projectID, generationID); err != nil {
 		return ShotProductionStatus{}, err
 	}
 	rows, err := s.db.Query(r.Context(), `
 		`+storyboardShotSelectSQL(`
 		WHERE s.project_id = $1
+		  AND s.production_generation_id = $6
 		  AND s.deleted_at IS NULL
 		  AND ($2 = '' OR s.script_scene_id = $2::uuid)
 		  AND ($3 = '' OR s.workflow_run_id = $3::uuid)
@@ -235,6 +327,7 @@ func (s *Server) loadShotProductionStatusForEpisode(r *http.Request, projectID, 
 		      FROM storyboard_plans active_plan
 		      WHERE active_plan.id = s.storyboard_plan_id
 		        AND active_plan.project_id = s.project_id
+		        AND active_plan.production_generation_id = $6
 		        AND active_plan.active = true
 		        AND active_plan.status = 'ready'
 		    )
@@ -244,13 +337,14 @@ func (s *Server) loadShotProductionStatusForEpisode(r *http.Request, projectID, 
 		        SELECT 1
 		        FROM storyboard_plans project_active_plan
 		        WHERE project_active_plan.project_id = s.project_id
+		          AND project_active_plan.production_generation_id = $6
 		          AND project_active_plan.active = true
 		          AND project_active_plan.status = 'ready'
 		      )
 		    )
 		  )
 		ORDER BY s.episode_index ASC NULLS LAST, s.episode_shot_index ASC NULLS LAST, COALESCE(sc.scene_no, 0), s.shot_index ASC
-	`), projectID, strings.TrimSpace(scriptSceneID), strings.TrimSpace(workflowRunID), strings.TrimSpace(scriptEpisodeID), strings.TrimSpace(storyboardPlanID))
+	`), projectID, strings.TrimSpace(scriptSceneID), strings.TrimSpace(workflowRunID), strings.TrimSpace(scriptEpisodeID), strings.TrimSpace(storyboardPlanID), generationID)
 	if err != nil {
 		return ShotProductionStatus{}, err
 	}
@@ -284,7 +378,7 @@ func normalizeShotProductionPublicNumber(shot *StoryboardShot, publicIndexByScop
 	publicIndexByScope[scope] = publicIndex + 1
 }
 
-func (s *Server) reconcileTerminalShotImageStates(r *http.Request, projectID string) error {
+func (s *Server) reconcileTerminalShotImageStates(r *http.Request, projectID, generationID string) error {
 	_, err := s.db.Exec(r.Context(), `
 		UPDATE storyboard_shots s
 		SET image_status = 'failed',
@@ -301,11 +395,12 @@ func (s *Server) reconcileTerminalShotImageStates(r *http.Request, projectID str
 		    updated_at = now()
 		FROM workflow_runs image_run
 		WHERE s.project_id = $1
+		  AND s.production_generation_id = $2
 		  AND s.deleted_at IS NULL
 		  AND image_run.id = s.image_workflow_run_id
 		  AND s.image_status IN ('queued', 'running')
 		  AND image_run.status IN ('succeeded', 'failed', 'cancelled')
-	`, projectID)
+	`, projectID, generationID)
 	if err != nil {
 		return err
 	}
@@ -318,11 +413,12 @@ func (s *Server) reconcileTerminalShotImageStates(r *http.Request, projectID str
 		    updated_at = now()
 		FROM workflow_runs w
 		WHERE s.project_id = $1
+		  AND s.production_generation_id = $2
 		  AND s.deleted_at IS NULL
 		  AND s.image_prompt_workflow_run_id = w.id
 		  AND s.image_prompt_status IN ('queued', 'running')
 		  AND w.status IN ('succeeded', 'failed', 'cancelled')
-	`, projectID)
+	`, projectID, generationID)
 	return err
 }
 
@@ -496,11 +592,12 @@ func selectShotProductionTargets(req ShotProductionActionRequest, shots []ShotPr
 		}
 	}
 	out := make([]string, 0)
+	forceVideoPrompts := req.Action == "generate_video_prompts" && shotProductionOptionBool(req.Options, "force", false)
 	for _, shot := range shots {
 		if len(requested) > 0 && !containsString(requested, shot.ID) {
 			continue
 		}
-		if shotProductionActionMatches(req.Action, shot) {
+		if shotProductionActionMatches(req.Action, shot) || (forceVideoPrompts && shot.CanGenerateVideoPrompt) {
 			out = append(out, shot.ID)
 		}
 	}
@@ -508,6 +605,40 @@ func selectShotProductionTargets(req ShotProductionActionRequest, shots []ShotPr
 		return nil, "NO_TARGET_SHOTS"
 	}
 	return out, ""
+}
+
+func shotProductionScopeFilters(req ShotProductionActionRequest) (scriptSceneID, workflowRunID, scriptEpisodeID string) {
+	if len(cleanShotProductionIDs(req.ShotIDs)) > 0 {
+		// Explicit shot IDs are the authoritative scope. Secondary identifiers are
+		// redundant hints and may be stale or model-generated.
+		return "", "", ""
+	}
+	return strings.TrimSpace(req.ScriptSceneID), strings.TrimSpace(req.WorkflowRunID), strings.TrimSpace(req.ScriptEpisodeID)
+}
+
+func shotProductionTargetEpisodeID(req ShotProductionActionRequest, shots []ShotProductionShot, targets []string) string {
+	if len(cleanShotProductionIDs(req.ShotIDs)) == 0 {
+		return strings.TrimSpace(req.ScriptEpisodeID)
+	}
+	targetSet := make(map[string]struct{}, len(targets))
+	for _, id := range targets {
+		targetSet[id] = struct{}{}
+	}
+	episodeID := ""
+	for _, shot := range shots {
+		if _, ok := targetSet[shot.ID]; !ok || shot.ScriptEpisodeID == nil {
+			continue
+		}
+		current := strings.TrimSpace(*shot.ScriptEpisodeID)
+		if current == "" {
+			continue
+		}
+		if episodeID != "" && episodeID != current {
+			return ""
+		}
+		episodeID = current
+	}
+	return episodeID
 }
 
 func shotProductionActionMatches(action string, shot ShotProductionShot) bool {
@@ -542,7 +673,7 @@ func shotProductionWorkflowForAction(action string) (string, any, bool) {
 	case "generate_missing_images", "regenerate_stale_images", "regenerate_failed_images", "generate_selected_images":
 		return "batch_generate_shot_images", workflows.BatchGenerateShotImagesWorkflow, true
 	case "generate_missing_videos", "regenerate_stale_videos", "regenerate_failed_videos", "generate_selected_videos":
-		return "batch_generate_shot_videos", workflows.BatchGenerateShotVideosWorkflow, true
+		return "batch_generate_shot_videos", workflows.EpisodeBatchGenerateShotVideosWorkflow, true
 	case "generate_video_prompts", "generate_selected_video_prompts":
 		return "batch_generate_shot_video_prompts", workflows.BatchGenerateShotVideoPromptsWorkflow, true
 	case "cancel_running_videos":
@@ -592,13 +723,24 @@ func shotProductionImageAction(action string) bool {
 	}
 }
 
-func (s *Server) markShotProductionQueued(r *http.Request, action, workflowRunID string, shotIDs []string) error {
+func markShotProductionQueuedTx(ctx context.Context, tx pgx.Tx, action, workflowRunID string, shotIDs []string) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflow_runs
+		SET total_items = $2,
+		    completed_items = 0,
+		    failed_items = 0,
+		    revision = revision + 1,
+		    updated_at = now()
+		WHERE id = $1
+	`, workflowRunID, len(shotIDs)); err != nil {
+		return err
+	}
 	if action == "cancel_running_videos" {
 		return nil
 	}
 	switch {
 	case shotProductionImagePromptAction(action):
-		_, err := s.db.Exec(r.Context(), `
+		_, err := tx.Exec(ctx, `
 			UPDATE storyboard_shots
 			SET image_prompt_status = 'queued',
 			    image_prompt_error_code = NULL,
@@ -610,7 +752,7 @@ func (s *Server) markShotProductionQueued(r *http.Request, action, workflowRunID
 		`, workflowRunID, shotIDs)
 		return err
 	case shotProductionVideoPromptAction(action):
-		_, err := s.db.Exec(r.Context(), `
+		_, err := tx.Exec(ctx, `
 			UPDATE storyboard_shots
 			SET video_prompt_status = 'queued',
 			    video_prompt_error_code = NULL,
@@ -622,7 +764,7 @@ func (s *Server) markShotProductionQueued(r *http.Request, action, workflowRunID
 		`, workflowRunID, shotIDs)
 		return err
 	case strings.Contains(action, "_images"):
-		_, err := s.db.Exec(r.Context(), `
+		_, err := tx.Exec(ctx, `
 			UPDATE storyboard_shots
 			SET image_status = 'queued',
 			    image_error_code = NULL,
@@ -633,7 +775,7 @@ func (s *Server) markShotProductionQueued(r *http.Request, action, workflowRunID
 		`, workflowRunID, shotIDs)
 		return err
 	case strings.Contains(action, "_videos"):
-		_, err := s.db.Exec(r.Context(), `
+		_, err := tx.Exec(ctx, `
 			UPDATE storyboard_shots
 			SET video_status = 'queued',
 			    video_error_code = NULL,

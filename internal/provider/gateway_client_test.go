@@ -2,12 +2,26 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestNormalizeGatewayTransportErrorMapsDeadlineToProviderTimeout(t *testing.T) {
+	err := normalizeGatewayTransportError(context.DeadlineExceeded)
+	standard, ok := StandardErrorFromError(err)
+	if !ok || standard.Code != CodeUpstreamTimeout || !standard.Retryable {
+		t.Fatalf("normalized error = %#v, ok=%v", standard, ok)
+	}
+
+	cancelled := normalizeGatewayTransportError(context.Canceled)
+	if !errors.Is(cancelled, context.Canceled) {
+		t.Fatalf("cancellation = %v, want context.Canceled", cancelled)
+	}
+}
 
 func TestGatewayClientStreamTextV2CollectsAndDeduplicatesDeltas(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

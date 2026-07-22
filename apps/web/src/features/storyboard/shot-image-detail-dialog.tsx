@@ -3,7 +3,7 @@
 import NextImage from "next/image";
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Check, Image as ImageIcon, Link2Off, Loader2, Maximize2, Plus, RefreshCw, Save, Search, Sparkles, Video, X } from "lucide-react";
+import { Check, GitBranch, Image as ImageIcon, Layers3, Link2Off, Loader2, Maximize2, Plus, RefreshCw, Save, Search, Sparkles, Video, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,15 +16,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { studioApi } from "@/lib/api-client";
 import { cssAspectRatio } from "@/lib/aspect-ratio";
 import { localizePlatformError } from "@/lib/error-localization";
-import { assetTypeLabel, statusLabel } from "@/lib/labels";
+import { assetTypeLabel, modalityLabel, shotAnchorRoleLabel, shotReferenceRoleLabel, shotReferenceSemanticsLabel, shotStateRoleLabel, shotTransitionTypeLabel, statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import { wholeSecondDuration } from "@/lib/timing";
 import { cn } from "@/lib/utils";
-import type { StoryboardShotDetail, StoryboardShotImageReferenceOption } from "@/lib/types";
+import type { ShotReferencePackResponse, ShotVisualAnchor, StoryboardSheetResponse, StoryboardShotDetail, StoryboardShotImageReferenceOption, StoryboardShotStateResponse, StoryboardShotTransitionResponse } from "@/lib/types";
 
 type ReferenceMode = "auto" | "custom" | "none";
+type PlannedAnchorRole = "planned_first_frame" | "planned_last_frame" | "storyboard_sheet";
 
 type ImageDraft = {
   shotId: string;
@@ -36,6 +37,9 @@ type ImageDraft = {
 
 const EMPTY_DRAFT: ImageDraft = { shotId: "", promptRevision: "", imagePrompt: "", referenceMode: "auto", referenceKeys: [] };
 const ASSET_TYPE_FILTERS = ["all", "character", "scene", "prop"] as const;
+const SINGLE_ANCHOR_ROLES: PlannedAnchorRole[] = ["planned_first_frame"];
+const FIRST_LAST_ANCHOR_ROLES: PlannedAnchorRole[] = ["planned_first_frame", "planned_last_frame"];
+const STORYBOARD_SHEET_ANCHOR_ROLES: PlannedAnchorRole[] = ["storyboard_sheet"];
 
 export function ShotImageDetailDialog({
   projectId,
@@ -59,6 +63,16 @@ export function ShotImageDetailDialog({
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   const [assetSearch, setAssetSearch] = useState("");
   const [assetTypeFilter, setAssetTypeFilter] = useState<(typeof ASSET_TYPE_FILTERS)[number]>("all");
+  const [selectedAnchorRole, setSelectedAnchorRole] = useState<PlannedAnchorRole>("planned_first_frame");
+  const { data: project } = useApiQuery({
+    key: qk.project(projectId),
+    queryFn: (session) => studioApi.getProject(session, projectId),
+    enabled: open && !!projectId,
+  });
+  const profileKey = project?.videoProductionBinding?.profileKey ?? "single_frame_i2v";
+  const firstLastProfile = profileKey === "first_last_frame";
+  const storyboardSheetProfile = profileKey === "storyboard_sheet";
+  const managedAnchorProfile = firstLastProfile || storyboardSheetProfile;
   const { data: detail, isLoading } = useApiQuery({
     key: qk.shotDetail(projectId, shotId || "none"),
     queryFn: (session) => studioApi.getStoryboardShotDetail(session, projectId, shotId),
@@ -73,6 +87,47 @@ export function ShotImageDetailDialog({
         || promptStatus === "running"
       ) ? 5000 : false;
     },
+  });
+  const { data: shotStates } = useApiQuery({
+    key: qk.shotState(projectId, shotId || "none"),
+    queryFn: (session) => studioApi.getStoryboardShotState(session, projectId, shotId),
+    enabled: open && !!shotId,
+  });
+  const { data: shotTransition } = useApiQuery({
+    key: qk.shotTransition(projectId, shotId || "none"),
+    queryFn: (session) => studioApi.getStoryboardShotTransition(session, projectId, shotId),
+    enabled: open && !!shotId,
+  });
+  const { data: shotAnchors } = useApiQuery({
+    key: qk.shotAnchors(projectId, shotId || "none"),
+    queryFn: (session) => studioApi.listStoryboardShotAnchors(session, projectId, shotId),
+    enabled: open && !!shotId,
+    refetchInterval: (query) => pollingFallback && open && query.state.data?.items.some((anchor) => anchor.status === "generating") ? 5000 : false,
+  });
+  const { data: referencePack } = useApiQuery({
+    key: qk.shotReferencePack(projectId, shotId || "none", "anchor"),
+    queryFn: (session) => studioApi.getStoryboardShotReferencePack(session, projectId, shotId, "anchor"),
+    enabled: open && !!shotId,
+  });
+  const { data: storyboardSheet } = useApiQuery({
+    key: qk.shotStoryboardSheet(projectId, shotId || "none"),
+    queryFn: (session) => studioApi.getStoryboardShotStoryboardSheet(session, projectId, shotId),
+    enabled: open && !!shotId && storyboardSheetProfile,
+  });
+  const requiredAnchorRoles = firstLastProfile
+    ? FIRST_LAST_ANCHOR_ROLES
+    : storyboardSheetProfile
+      ? STORYBOARD_SHEET_ANCHOR_ROLES
+      : SINGLE_ANCHOR_ROLES;
+  const currentAnchors = useMemo(
+    () => requiredAnchorRoles.map((role) => latestAnchorForRole(shotAnchors?.items ?? [], role)).filter((anchor): anchor is ShotVisualAnchor => !!anchor),
+    [requiredAnchorRoles, shotAnchors?.items],
+  );
+  const activeAnchorRole: PlannedAnchorRole = storyboardSheetProfile ? "storyboard_sheet" : selectedAnchorRole;
+  const selectedAnchor = latestAnchorForRole(shotAnchors?.items ?? [], activeAnchorRole);
+  const requiredAnchorsApproved = requiredAnchorRoles.every((role) => {
+    const anchor = latestAnchorForRole(shotAnchors?.items ?? [], role);
+    return anchor?.status === "ready" && anchor.reviewStatus === "approved" && !!anchor.previewUrl;
   });
 
   const detailPromptRevision = detail ? imagePromptRevision(detail) : "";
@@ -112,6 +167,13 @@ export function ShotImageDetailDialog({
   const refresh = () => {
     invalidate([
       qk.shotDetail(projectId, shotId),
+      qk.shotState(projectId, shotId),
+      qk.shotTransition(projectId, shotId),
+      qk.shotAnchors(projectId, shotId),
+      qk.shotReferencePack(projectId, shotId, "anchor"),
+      qk.shotStoryboardSheet(projectId, shotId),
+      qk.shotVideoPromptPlan(projectId, shotId),
+      qk.shotRenderPlan(projectId, shotId),
       qk.shotProductionPrefix(projectId),
       qk.workflowRuns(projectId),
       qk.productionStatus(projectId),
@@ -189,6 +251,40 @@ export function ShotImageDetailDialog({
     onError: (error) => toast.error("启动失败：" + error.message),
   });
 
+  const anchorGenerateMutation = useApiMutation({
+    mutationFn: (session, anchorRole: PlannedAnchorRole) => studioApi.generateStoryboardShotAnchor(session, projectId, shotId, anchorRole),
+    onSuccess: (_result, anchorRole) => {
+      toast.success(`${shotAnchorRoleLabel(anchorRole)}生成任务已创建`);
+      refresh();
+    },
+    onError: (error) => toast.error("生成失败：" + error.message),
+  });
+
+  const anchorReviewMutation = useApiMutation({
+    mutationFn: (session, input: { anchor: ShotVisualAnchor; decision: "approve" | "reject" }) => studioApi.reviewStoryboardShotAnchor(
+      session,
+      projectId,
+      shotId,
+      input.anchor.id,
+      input.decision,
+      { expectedRevision: input.anchor.revision, reason: input.decision === "reject" ? "人工审核未通过" : "人工确认视觉锚点" },
+    ),
+    onSuccess: (_anchor, input) => {
+      toast.success(input.decision === "approve" ? "视觉锚点已确认" : "视觉锚点已拒绝");
+      refresh();
+    },
+    onError: (error) => toast.error("审核失败：" + error.message),
+  });
+
+  const stateReplanMutation = useApiMutation({
+    mutationFn: (session) => studioApi.replanStoryboardShotState(session, projectId, shotId),
+    onSuccess: () => {
+      toast.success("本集分镜重新规划任务已创建");
+      refresh();
+    },
+    onError: (error) => toast.error("重新规划失败：" + error.message),
+  });
+
   function setReferenceMode(mode: ReferenceMode) {
     if (mode !== "custom") setAssetPickerOpen(false);
     setDraft((current) => ({
@@ -240,10 +336,27 @@ export function ShotImageDetailDialog({
         ) : (
           <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,.85fr)] lg:overflow-hidden">
             <div className="p-5 lg:min-h-0 lg:overflow-y-auto">
+              {firstLastProfile ? (
+                <AnchorRoleSelector
+                  roles={requiredAnchorRoles}
+                  anchors={currentAnchors}
+                  selectedRole={selectedAnchorRole}
+                  onSelect={setSelectedAnchorRole}
+                  onOpen={(url, title) => setLargePreview({ url, title })}
+                />
+              ) : null}
               <CurrentImage
                 detail={detail}
+                anchor={managedAnchorProfile ? selectedAnchor : undefined}
+                anchorRole={activeAnchorRole}
                 onOpen={(url, title) => setLargePreview({ url, title })}
               />
+              {storyboardSheetProfile ? (
+                <StoryboardSheetPanel
+                  data={storyboardSheet}
+                  onOpen={(url, title) => setLargePreview({ url, title })}
+                />
+              ) : null}
 
               {detail.shot.imageErrorMessage ? (
                 <div role="alert" className="mt-4 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -258,41 +371,73 @@ export function ShotImageDetailDialog({
               ) : null}
 
               <div className="mt-4 flex flex-wrap gap-2">
-                <Button onClick={() => generateMutation.mutate()} disabled={!canGenerate || imageRunning || promptRunning || generateMutation.isPending || saveMutation.isPending}>
-                  {imageRunning || generateMutation.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                  {imageRunning ? "生成中" : detail.shot.imageArtifactId ? "重新生成" : "生成图片"}
-                </Button>
-                <Button variant="outline" onClick={() => promptMutation.mutate()} disabled={!referencesValid || imageRunning || promptRunning || promptMutation.isPending || generateMutation.isPending || saveMutation.isPending}>
-                  {promptRunning || promptMutation.isPending ? <Loader2 className="animate-spin" /> : <Sparkles />}
-                  {promptRunning ? "提示词生成中" : detail.shot.imagePrompt ? "重新生成提示词" : "生成提示词"}
-                </Button>
+                {managedAnchorProfile ? (
+                  <Button
+                    onClick={() => anchorGenerateMutation.mutate(activeAnchorRole)}
+                    disabled={!referencesValid || selectedAnchor?.status === "generating" || anchorGenerateMutation.isPending || saveMutation.isPending}
+                  >
+                    {selectedAnchor?.status === "generating" || anchorGenerateMutation.isPending ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                    {selectedAnchor?.status === "generating"
+                      ? "生成中"
+                      : selectedAnchor?.artifactId
+                        ? `重新生成${shotAnchorRoleLabel(activeAnchorRole)}`
+                        : `生成${shotAnchorRoleLabel(activeAnchorRole)}`}
+                  </Button>
+                ) : (
+                  <>
+                    <Button onClick={() => generateMutation.mutate()} disabled={!canGenerate || imageRunning || promptRunning || generateMutation.isPending || saveMutation.isPending}>
+                      {imageRunning || generateMutation.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                      {imageRunning ? "生成中" : detail.shot.imageArtifactId ? "重新生成" : "生成图片"}
+                    </Button>
+                    <Button variant="outline" onClick={() => promptMutation.mutate()} disabled={!referencesValid || imageRunning || promptRunning || promptMutation.isPending || generateMutation.isPending || saveMutation.isPending}>
+                      {promptRunning || promptMutation.isPending ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                      {promptRunning ? "提示词生成中" : detail.shot.imagePrompt ? "重新生成提示词" : "生成提示词"}
+                    </Button>
+                  </>
+                )}
                 <Button variant="outline" onClick={() => saveMutation.mutate()} disabled={!referencesValid || promptRunning || saveMutation.isPending || generateMutation.isPending}>
                   {saveMutation.isPending ? <Loader2 className="animate-spin" /> : <Save />}
                   保存设置
                 </Button>
-                <Button variant="outline" onClick={() => videoMutation.mutate()} disabled={!detail.shot.imageArtifactId || videoMutation.isPending || detail.shot.videoStatus === "queued" || detail.shot.videoStatus === "running"}>
+                <Button variant="outline" onClick={() => videoMutation.mutate()} disabled={!(managedAnchorProfile ? requiredAnchorsApproved : detail.shot.imageArtifactId) || videoMutation.isPending || detail.shot.videoStatus === "queued" || detail.shot.videoStatus === "running"}>
                   {videoMutation.isPending ? <Loader2 className="animate-spin" /> : <Video />}
                   生成视频
                 </Button>
-                <Button variant="outline" onClick={() => unlinkMutation.mutate()} disabled={!detail.shot.imageArtifactId || unlinkMutation.isPending || imageRunning}>
-                  {unlinkMutation.isPending ? <Loader2 className="animate-spin" /> : <Link2Off />}
-                  解绑图片
-                </Button>
+                {!managedAnchorProfile ? (
+                  <Button variant="outline" onClick={() => unlinkMutation.mutate()} disabled={!detail.shot.imageArtifactId || unlinkMutation.isPending || imageRunning}>
+                    {unlinkMutation.isPending ? <Loader2 className="animate-spin" /> : <Link2Off />}
+                    解绑图片
+                  </Button>
+                ) : null}
               </div>
 
               <ImageGenerationHistory
                 detail={detail}
                 onOpen={(url, title) => setLargePreview({ url, title })}
               />
+
+              <ShotContinuityPanel
+                states={shotStates}
+                transition={shotTransition}
+                anchors={shotAnchors?.items ?? []}
+                referencePack={referencePack}
+                reviewPending={anchorReviewMutation.isPending}
+                replanPending={stateReplanMutation.isPending}
+                onReview={(anchor, decision) => anchorReviewMutation.mutate({ anchor, decision })}
+                onReplan={() => stateReplanMutation.mutate()}
+                onOpen={(url, title) => setLargePreview({ url, title })}
+                profileKey={profileKey}
+              />
             </div>
 
             <div className="border-t bg-muted/10 p-5 lg:min-h-0 lg:overflow-y-auto lg:border-l lg:border-t-0">
               <section className="space-y-2">
-                <Label htmlFor="shot-image-prompt">镜头图提示词</Label>
+                <Label htmlFor="shot-image-prompt">{managedAnchorProfile ? `${shotAnchorRoleLabel(activeAnchorRole)}提示词` : "镜头图提示词"}</Label>
                 <Textarea
                   id="shot-image-prompt"
                   className="min-h-52 resize-y leading-6"
-                  value={draft.imagePrompt}
+                  value={managedAnchorProfile ? selectedAnchor?.prompt ?? "" : draft.imagePrompt}
+                  readOnly={managedAnchorProfile}
                   onChange={(event) => setDraft((current) => ({ ...current, imagePrompt: event.target.value }))}
                 />
               </section>
@@ -430,13 +575,60 @@ export function ShotImageDetailDialog({
   );
 }
 
-function CurrentImage({ detail, onOpen }: { detail: StoryboardShotDetail; onOpen: (url: string, title: string) => void }) {
-  const previewUrl = detail.imagePreviewUrl || detail.shot.imagePreviewUrl;
+function AnchorRoleSelector({
+  roles,
+  anchors,
+  selectedRole,
+  onSelect,
+  onOpen,
+}: {
+  roles: PlannedAnchorRole[];
+  anchors: ShotVisualAnchor[];
+  selectedRole: PlannedAnchorRole;
+  onSelect: (role: PlannedAnchorRole) => void;
+  onOpen: (url: string, title: string) => void;
+}) {
+  return (
+    <div className="mb-4 grid gap-2 sm:grid-cols-2">
+      {roles.map((role) => {
+        const anchor = latestAnchorForRole(anchors, role);
+        const selected = selectedRole === role;
+        return (
+          <div key={role} className={cn("grid grid-cols-[72px_1fr] gap-3 rounded-md border p-2 transition-colors", selected && "border-primary bg-primary/[0.03]")}>
+            <button
+              type="button"
+              className="relative h-14 overflow-hidden rounded bg-muted"
+              disabled={!anchor?.previewUrl}
+              onClick={() => anchor?.previewUrl && onOpen(anchor.previewUrl, shotAnchorRoleLabel(role))}
+            >
+              {anchor?.previewUrl
+                ? <NextImage src={anchor.previewUrl} alt={shotAnchorRoleLabel(role)} fill unoptimized sizes="72px" className="object-cover" />
+                : <span className="grid h-full place-items-center"><ImageIcon className="size-5 text-muted-foreground/50" /></span>}
+            </button>
+            <button type="button" className="min-w-0 text-left" onClick={() => onSelect(role)}>
+              <span className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm font-medium">{shotAnchorRoleLabel(role)}</span>
+                {anchor ? <Badge variant="outline">{statusLabel(anchor.status)}</Badge> : <Badge variant="secondary">待生成</Badge>}
+              </span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {anchor ? `版本 ${anchor.revision} · ${statusLabel(anchor.reviewStatus)}` : "未生成"}
+              </span>
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CurrentImage({ detail, anchor, anchorRole, onOpen }: { detail: StoryboardShotDetail; anchor?: ShotVisualAnchor; anchorRole: PlannedAnchorRole; onOpen: (url: string, title: string) => void }) {
+  const previewUrl = anchor?.previewUrl || (anchorRole === "planned_first_frame" ? detail.imagePreviewUrl || detail.shot.imagePreviewUrl : undefined);
+  const title = anchor ? shotAnchorRoleLabel(anchor.anchorRole) : detail.shot.title || "分镜图片";
   return (
     <div className="group relative overflow-hidden rounded-md bg-muted" style={{ aspectRatio: cssAspectRatio(detail.aspectRatio) }}>
       {previewUrl ? (
-        <button type="button" className="relative h-full w-full" onClick={() => onOpen(previewUrl, detail.shot.title || "分镜图片")}>
-          <NextImage src={previewUrl} alt={detail.shot.title || "分镜图片"} fill unoptimized sizes="(max-width: 1024px) 100vw, 760px" className="object-contain" />
+        <button type="button" className="relative h-full w-full" onClick={() => onOpen(previewUrl, title)}>
+          <NextImage src={previewUrl} alt={title} fill unoptimized sizes="(max-width: 1024px) 100vw, 760px" className="object-contain" />
           <span className="absolute bottom-3 right-3 grid size-9 place-items-center rounded-full bg-black/65 text-white opacity-0 transition-opacity group-hover:opacity-100"><Maximize2 className="size-4" /></span>
         </button>
       ) : (
@@ -444,6 +636,75 @@ function CurrentImage({ detail, onOpen }: { detail: StoryboardShotDetail; onOpen
       )}
     </div>
   );
+}
+
+function StoryboardSheetPanel({ data, onOpen }: { data?: StoryboardSheetResponse; onOpen: (url: string, title: string) => void }) {
+  const manifest = data?.manifest;
+  if (!manifest) {
+    return <div className="mt-4 rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">尚未生成分镜板</div>;
+  }
+  return (
+    <section className="mt-5 border-t pt-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold">分镜板画格</h3>
+          <Badge variant="outline">{manifest.gridRows} × {manifest.gridColumns}</Badge>
+          <Badge variant={manifest.reviewStatus === "approved" ? "default" : "secondary"}>{statusLabel(manifest.reviewStatus)}</Badge>
+        </div>
+        {manifest.sheetPreviewUrl ? (
+          <Button type="button" size="sm" variant="outline" onClick={() => onOpen(manifest.sheetPreviewUrl!, "完整分镜板")}>
+            <Maximize2 />查看整板
+          </Button>
+        ) : null}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {(data?.panels ?? []).map((panel) => (
+          <div key={panel.id} className="overflow-hidden rounded-md border bg-background">
+            <button
+              type="button"
+              className="relative block w-full bg-muted"
+              style={{ aspectRatio: cssAspectRatio(manifest.videoAspectRatio) }}
+              disabled={!panel.previewUrl}
+              onClick={() => panel.previewUrl && onOpen(panel.previewUrl, `画格 ${panel.ordinal}`)}
+            >
+              {panel.previewUrl
+                ? <NextImage src={panel.previewUrl} alt={`分镜板画格 ${panel.ordinal}`} fill unoptimized sizes="(max-width: 640px) 50vw, 220px" className="object-cover" />
+                : <span className="grid h-full place-items-center"><ImageIcon className="size-5 text-muted-foreground/50" /></span>}
+            </button>
+            <div className="px-2 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium">画格 {panel.ordinal}</span>
+                <Badge variant={panel.reviewStatus === "approved" ? "default" : "outline"}>{statusLabel(panel.reviewStatus)}</Badge>
+              </div>
+              <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+                {storyboardPanelStageLabel(panel.stage)} · {Math.round(panel.timeTick / Math.max(manifest.timelineTimebase, 1))} 秒
+                {panel.actionStage ? ` · ${panel.actionStage}` : ""}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <details className="mt-3 text-xs text-muted-foreground">
+        <summary className="cursor-pointer">版本与审核溯源</summary>
+        <div className="mt-2 grid gap-1 break-all leading-5">
+          <span>Manifest 版本 {manifest.revision} · {shortHash(manifest.manifestHash)}</span>
+          <span>契约 {manifest.contractVersion} · 历史 {data?.history.length ?? 0}</span>
+          {manifest.reviewerProviderCallId ? <span>审核调用 {manifest.reviewerProviderCallId}</span> : null}
+        </div>
+      </details>
+    </section>
+  );
+}
+
+function storyboardPanelStageLabel(stage: string) {
+  switch (stage) {
+    case "entry": return "起始";
+    case "early": return "前段";
+    case "middle": return "中段";
+    case "late": return "后段";
+    case "exit": return "结束";
+    default: return stage;
+  }
 }
 
 function ReferenceOptionCard({ option, checked, disabled, onCheckedChange, onOpen }: { option: StoryboardShotImageReferenceOption; checked: boolean; disabled: boolean; onCheckedChange: (checked: boolean) => void; onOpen: () => void }) {
@@ -510,6 +771,163 @@ function ImageGenerationHistory({ detail, onOpen }: { detail: StoryboardShotDeta
       )}
     </section>
   );
+}
+
+function ShotContinuityPanel({
+  states,
+  transition,
+  anchors,
+  referencePack,
+  reviewPending,
+  replanPending,
+  onReview,
+  onReplan,
+  onOpen,
+  profileKey,
+}: {
+  states?: StoryboardShotStateResponse;
+  transition?: StoryboardShotTransitionResponse;
+  anchors: ShotVisualAnchor[];
+  referencePack?: ShotReferencePackResponse;
+  reviewPending: boolean;
+  replanPending: boolean;
+  onReview: (anchor: ShotVisualAnchor, decision: "approve" | "reject") => void;
+  onReplan: () => void;
+  onOpen: (url: string, title: string) => void;
+  profileKey: string;
+}) {
+  const currentStates = (states?.items ?? []).filter((item, index, all) => all.findIndex((candidate) => candidate.stateRole === item.stateRole) === index);
+  const plannedRoles: PlannedAnchorRole[] = profileKey === "first_last_frame"
+    ? ["planned_first_frame", "planned_last_frame"]
+    : profileKey === "storyboard_sheet"
+      ? ["storyboard_sheet"]
+      : ["planned_first_frame"];
+  const currentAnchors = plannedRoles.map((role) => latestAnchorForRole(anchors, role)).filter((anchor): anchor is ShotVisualAnchor => !!anchor);
+  const pairApproved = profileKey === "first_last_frame" && plannedRoles.every((role) => {
+    const anchor = latestAnchorForRole(anchors, role);
+    return anchor?.status === "ready" && anchor.reviewStatus === "approved";
+  });
+  return (
+    <section className="mt-6 border-t pt-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold"><GitBranch className="size-4" />镜头连续性</h3>
+        <Button type="button" size="sm" variant="outline" onClick={onReplan} disabled={replanPending}>
+          {replanPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          重新规划本集
+        </Button>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {currentStates.map((state) => (
+          <div key={state.id} className="rounded-md border px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium">{shotStateRoleLabel(state.stateRole)}</span>
+              <Badge variant="outline">{statusLabel(state.status)}</Badge>
+            </div>
+            <div className="mt-2 text-[11px] text-muted-foreground">版本 {state.revision} · {shortHash(state.stateHash)}</div>
+          </div>
+        ))}
+      </div>
+
+      {transition?.active ? (
+        <div className="mt-3 rounded-md border px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">{shotTransitionTypeLabel(transition.active.transitionType)}</Badge>
+            <Badge variant="outline">{statusLabel(transition.active.reviewStatus)}</Badge>
+            <span className="text-xs text-muted-foreground">置信度 {Math.round(transition.active.confidence * 100)}%</span>
+          </div>
+          <details className="mt-2 text-xs">
+            <summary className="cursor-pointer text-muted-foreground">转场约束与历史</summary>
+            <div className="mt-2 grid gap-1 leading-5">
+              <span>保留：{transition.active.carryConstraints.join("、") || "无"}</span>
+              <span>重置：{transition.active.resetConstraints.join("、") || "无"}</span>
+              <span>版本：{transition.active.revision} / 历史 {transition.items.length}</span>
+            </div>
+          </details>
+        </div>
+      ) : null}
+
+      {currentAnchors.length > 0 ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {currentAnchors.map((anchor) => (
+            <div key={anchor.id} className="grid gap-3 rounded-md border p-3 sm:grid-cols-[96px_1fr]">
+              <button
+                type="button"
+                className="relative h-20 overflow-hidden rounded bg-muted"
+                disabled={!anchor.previewUrl}
+                onClick={() => anchor.previewUrl && onOpen(anchor.previewUrl, shotAnchorRoleLabel(anchor.anchorRole))}
+              >
+                {anchor.previewUrl
+                  ? <NextImage src={anchor.previewUrl} alt={shotAnchorRoleLabel(anchor.anchorRole)} fill unoptimized sizes="96px" className="object-cover" />
+                  : <span className="grid h-full place-items-center"><ImageIcon className="size-6 text-muted-foreground/50" /></span>}
+              </button>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium">{shotAnchorRoleLabel(anchor.anchorRole)}</span>
+                  <Badge variant="outline">{statusLabel(anchor.status)}</Badge>
+                  <Badge variant={anchor.reviewStatus === "approved" ? "default" : "secondary"}>{statusLabel(anchor.reviewStatus)}</Badge>
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">版本 {anchor.revision}{anchor.promptHash ? ` · ${shortHash(anchor.promptHash)}` : ""}</div>
+                {profileKey !== "first_last_frame" && profileKey !== "storyboard_sheet" && anchor.status === "ready" && anchor.reviewStatus !== "approved" ? (
+                  <div className="mt-3 flex gap-2">
+                    <Button type="button" size="sm" onClick={() => onReview(anchor, "approve")} disabled={reviewPending}>
+                      {reviewPending ? <Loader2 className="animate-spin" /> : <Check />}
+                      确认锚点
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => onReview(anchor, "reject")} disabled={reviewPending}>
+                      <X />拒绝
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {profileKey === "first_last_frame" ? (
+        <div className={cn("mt-3 rounded-md border px-3 py-2 text-xs", pairApproved ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700" : "text-muted-foreground")}>
+          {pairApproved ? "首尾帧契约审核已通过" : "首帧和尾帧生成完成后将自动进行一致性与动作可达性审核"}
+        </div>
+      ) : null}
+
+      {referencePack?.pack ? (
+        <details className="mt-3 rounded-md border px-3 py-2">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-medium">
+            <span className="flex items-center gap-2"><Layers3 className="size-4" />引用包</span>
+            <span className="text-muted-foreground">{referencePack.items.length} 项 · {statusLabel(referencePack.pack.status)}</span>
+          </summary>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {referencePack.items.map((reference) => (
+              <div key={reference.id} className="grid grid-cols-[52px_1fr] gap-2 rounded border p-2">
+                <button type="button" className="relative h-12 overflow-hidden rounded bg-muted" disabled={!reference.previewUrl} onClick={() => reference.previewUrl && onOpen(reference.previewUrl, shotReferenceRoleLabel(reference.role))}>
+                  {reference.previewUrl ? <NextImage src={reference.previewUrl} alt={shotReferenceRoleLabel(reference.role)} fill unoptimized sizes="52px" className="object-cover" /> : <span className="grid h-full place-items-center"><ImageIcon className="size-4 text-muted-foreground/50" /></span>}
+                </button>
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-medium">{shotReferenceRoleLabel(reference.role)}</div>
+                  <div className="mt-1 truncate text-[11px] text-muted-foreground">{reference.required ? "必需" : "可选"} · {modalityLabel(reference.mediaType)} · {shotReferenceSemanticsLabel(reference.semantics)} · {shortHash(reference.contentHash)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function shortHash(value: string) {
+  const normalized = value.replace(/^sha256:/, "");
+  return normalized.length > 12 ? `${normalized.slice(0, 12)}…` : normalized;
+}
+
+function latestAnchorForRole(anchors: ShotVisualAnchor[], role: PlannedAnchorRole) {
+  return anchors
+    .filter((anchor) => anchor.anchorRole === role)
+    .sort((left, right) => {
+      const leftActive = left.status === "archived" || left.status === "stale" ? 0 : 1;
+      const rightActive = right.status === "archived" || right.status === "stale" ? 0 : 1;
+      return rightActive - leftActive || right.revision - left.revision;
+    })[0];
 }
 
 function ModeButton({ active, disabled, onClick, children }: { active: boolean; disabled?: boolean; onClick: () => void; children: ReactNode }) {

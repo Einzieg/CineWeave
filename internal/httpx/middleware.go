@@ -2,8 +2,11 @@ package httpx
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 )
 
@@ -29,6 +32,26 @@ func RequestIDFromContext(ctx context.Context) string {
 	return requestID
 }
 
+func WithRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(
+					r.Context(),
+					"http handler panic",
+					"requestId", RequestIDFromContext(r.Context()),
+					"method", r.Method,
+					"path", r.URL.Path,
+					"panic", fmt.Sprint(recovered),
+					"stack", string(debug.Stack()),
+				)
+				WriteError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "服务器内部错误，请稍后重试", nil, false)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 func WithCORS(next http.Handler) http.Handler {
 	allowedOrigins := corsAllowedOrigins()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +59,7 @@ func WithCORS(next http.Handler) http.Handler {
 		if originAllowed(origin, allowedOrigins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Organization-Id, X-Request-Id, Last-Event-ID")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Cache-Control, Content-Type, X-Organization-Id, X-Request-Id, Last-Event-ID")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, X-CineWeave-Stream-High-Watermark")
 		}

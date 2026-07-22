@@ -1,5 +1,8 @@
 param(
   [switch]$MigrationOnly,
+  [switch]$ProviderModelDeleteOnly,
+  [switch]$SourceToScriptOnly,
+  [switch]$DerivedAssetOnly,
   [switch]$KeepEnvironment
 )
 
@@ -83,7 +86,7 @@ try {
 
   Invoke-GoContainer -Integration -Arguments @(
     'go', 'test', '-count=1', './internal/dbmigrate',
-    '-run', '^TestEmptyDatabaseUpDownUpProducesStableSchema$'
+    '-run', '^(TestEmptyDatabaseUpDownUpProducesStableSchema|TestConsolidatedBaselineMatchesMigrationChain)$'
   )
   if ($MigrationOnly) {
     Write-Host 'Migration roundtrip passed in an isolated PostgreSQL container.'
@@ -95,7 +98,36 @@ try {
   Invoke-GoContainer -Arguments @('go', 'run', './cmd/cineweave-migrate', 'verify')
   Invoke-GoContainer -Arguments @('go', 'run', './cmd/cineweave-seed', 'verify')
 
-$integrationTests = '^(TestProjectEventLogSharesOutboxTransactionAndSupportsDurableCatchup|TestProviderRequestIdempotencyIntegration|TestProviderTextStreamV2RetryAndReplayIdentityIntegration|TestProviderVideoCreateIdempotencyIntegration|TestGatewayRoutingIntegration|TestUpdateModelProfileBinding|TestAssetBatchCreateRetryAndRevisionConflict|TestSourceToScriptRetryCreatesNewGenerationForFailedEpisodes|TestRuntimeOperationReconciliationIntegration|TestCreateWorkflowRunPersistsIdempotencyWithOutbox|TestWorkflowStartOutboxRecoversExpiredLeaseAndAlreadyStarted|TestRestartedNodeRotatesExecutionTokenAndFencesStaleAttempt|TestCancelledWorkflowRunRejectsLateTerminalTransition|TestCancellationReconcilerTerminalizesStuckProviderTask)$'
+  if ($ProviderModelDeleteOnly) {
+    Invoke-GoContainer -Integration -Arguments @(
+      'go', 'test', '-count=1', './internal/provider',
+      '-run', '^(TestDeleteModelHardDeletesAndAllowsRecreate|TestDeleteModelRejectsActiveRuntimeWork)$'
+    )
+    Write-Host 'Provider model hard-delete migration and integration tests passed.'
+    return
+  }
+
+  if ($SourceToScriptOnly) {
+    $sourceToScriptTests = '^(TestSourceToScriptRetryCreatesNewGenerationForFailedEpisodes|TestPrepareSourceToScriptAppendsSecondChapterToCurrentScriptIntegration|TestFinalizeSourceToScriptKeepsPreviousProjectScriptWhenAllEpisodesFailIntegration|TestSourceToScriptMixedFailureKeepsFallbackEpisodeAndActivatesCompleteVersionIntegration|TestSourceToScriptMissingFailedEpisodeCreatesUnactivatedPartialVersionIntegration|TestSourceToScriptRejectsSourceAndScriptChangesBeforePublicationIntegration|TestSourceToScriptManifestReindexesAfterChapterDeletionWithoutDroppingRetainedEpisodeIntegration)$'
+    Invoke-GoContainer -Integration -Arguments @(
+      'go', 'test', '-count=1', './internal/api', './internal/workflows',
+      '-run', $sourceToScriptTests
+    )
+    Write-Host 'Source-to-script migration and integration tests passed.'
+    return
+  }
+
+  if ($DerivedAssetOnly) {
+    $derivedAssetTests = '^(TestDerivedAssetBatchCommandPersistsFullWorksetAndRetry|TestDerivedAssetBatchAggregateApprovedAndReviewRequiredIsPartialIntegration|TestDerivedAssetExecutionRejectsStaleIdentityBeforeProviderIntegration|TestDerivedAssetLateProviderResultAfterGenerationSwitchIsDiscardedIntegration|TestDerivedAssetExecutionLeaseCASDoesNotStealUnexpiredLeaseIntegration|TestDerivedAssetExecutionFailureSynchronizesImmutableRequestOutcomeIntegration|TestDerivedAssetReconcilerRecoversEveryDurableStageIntegration|TestDerivedAssetCommitIsIdempotentAndLateResultCannotOverwriteRequirementIntegration|TestDerivedAssetBatchTerminalAggregateCountsNotFoundDuplicateAndSkippedIntegration|TestDerivedAssetRetryLineageKeepsOriginalFailureImmutableIntegration)$'
+    Invoke-GoContainer -Integration -Arguments @(
+      'go', 'test', '-count=1', './internal/api', './internal/workflows',
+      '-run', $derivedAssetTests
+    )
+    Write-Host 'Derived-asset V2 migration and integration tests passed.'
+    return
+  }
+
+$integrationTests = '^(TestProjectEventLogSharesOutboxTransactionAndSupportsDurableCatchup|TestProviderRequestIdempotencyIntegration|TestProviderTextStreamV2RetryAndReplayIdentityIntegration|TestProviderVideoCreateIdempotencyIntegration|TestGatewayRoutingIntegration|TestDeleteModelHardDeletesAndAllowsRecreate|TestUpdateModelProfileBinding|TestDeleteModelRejectsActiveRuntimeWork|TestAssetBatchCreateRetryAndRevisionConflict|TestDerivedAssetBatchCommandPersistsFullWorksetAndRetry|TestDerivedAssetBatchAggregateApprovedAndReviewRequiredIsPartialIntegration|TestDerivedAssetExecutionRejectsStaleIdentityBeforeProviderIntegration|TestDerivedAssetLateProviderResultAfterGenerationSwitchIsDiscardedIntegration|TestDerivedAssetExecutionLeaseCASDoesNotStealUnexpiredLeaseIntegration|TestDerivedAssetExecutionFailureSynchronizesImmutableRequestOutcomeIntegration|TestDerivedAssetReconcilerRecoversEveryDurableStageIntegration|TestDerivedAssetCommitIsIdempotentAndLateResultCannotOverwriteRequirementIntegration|TestDerivedAssetBatchTerminalAggregateCountsNotFoundDuplicateAndSkippedIntegration|TestDerivedAssetRetryLineageKeepsOriginalFailureImmutableIntegration|TestSourceToScriptRetryCreatesNewGenerationForFailedEpisodes|TestPrepareSourceToScriptAppendsSecondChapterToCurrentScriptIntegration|TestFinalizeSourceToScriptKeepsPreviousProjectScriptWhenAllEpisodesFailIntegration|TestRuntimeOperationReconciliationIntegration|TestCreateWorkflowRunPersistsIdempotencyWithOutbox|TestWorkflowStartOutboxRecoversExpiredLeaseAndAlreadyStarted|TestRestartedNodeRotatesExecutionTokenAndFencesStaleAttempt|TestCancelledWorkflowRunRejectsLateTerminalTransition|TestCancellationReconcilerTerminalizesStuckProviderTask)$'
   Invoke-GoContainer -Integration -Arguments @(
     'go', 'test', '-count=1',
     './apps/realtime', './internal/provider', './internal/api', './internal/workflows',

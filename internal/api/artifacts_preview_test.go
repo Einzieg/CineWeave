@@ -50,6 +50,30 @@ func TestArtifactPreviewSecurity(t *testing.T) {
 	}
 }
 
+func TestProjectListIncludesUnconfiguredProject(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	var response struct {
+		Items []Project `json:"items"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/projects", seed.ownerToken, seed.organizationID, nil, &response)
+
+	for _, project := range response.Items {
+		if project.ID != seed.projectID {
+			continue
+		}
+		if project.VideoProductionState != "unconfigured" {
+			t.Fatalf("video production state = %q, want unconfigured", project.VideoProductionState)
+		}
+		if project.VideoProductionBinding != nil || project.ProductionGeneration != nil {
+			t.Fatalf("unconfigured project unexpectedly has production context: %#v", project)
+		}
+		return
+	}
+	t.Fatalf("unconfigured project %s is missing from project list", seed.projectID)
+}
+
 type artifactPreviewSeed struct {
 	ctx                 context.Context
 	pool                *pgxpool.Pool
@@ -98,6 +122,7 @@ func setupArtifactPreviewTest(t *testing.T) (http.Handler, *artifactPreviewSeed)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	ownerResp, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "preview-owner-" + suffix + "@example.test",
+		Username:         randomStorageSegment(),
 		Password:         "Password123!",
 		DisplayName:      "Preview Owner",
 		OrganizationName: "Preview Org " + suffix,
@@ -107,6 +132,7 @@ func setupArtifactPreviewTest(t *testing.T) (http.Handler, *artifactPreviewSeed)
 	}
 	otherResp, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "preview-other-" + suffix + "@example.test",
+		Username:         randomStorageSegment(),
 		Password:         "Password123!",
 		DisplayName:      "Preview Other",
 		OrganizationName: "Other Org " + suffix,
@@ -131,8 +157,11 @@ func setupArtifactPreviewTest(t *testing.T) (http.Handler, *artifactPreviewSeed)
 		t.Fatalf("insert workspace: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO projects(organization_id, workspace_id, name, created_by)
-		VALUES ($1, $2, 'Preview Project', $3)
+		INSERT INTO projects(
+			organization_id, workspace_id, name, created_by,
+			video_production_state
+		)
+		VALUES ($1, $2, 'Preview Project', $3, 'unconfigured')
 		RETURNING id
 	`, seed.organizationID, seed.workspaceID, seed.ownerUserID).Scan(&seed.projectID); err != nil {
 		t.Fatalf("insert project: %v", err)

@@ -21,6 +21,7 @@ type InvalidationHandler =
   | "provider"
   | "review"
   | "storyboard"
+  | "videoExecution"
   | "workflow";
 
 // This map intentionally lives outside the generated catalog. Adding a new
@@ -37,6 +38,7 @@ export const projectEventInvalidation = {
   "agent.task.blocked": "agent",
   "agent.task.child_workflow_failed": "agent",
   "agent.task.continued": "agent",
+  "agent.task.workflow_recovery_planned": "agent",
   "agent.task.question_continued": "agent",
   "agent.task.waiting_workflow": "agent",
   "artifact.created": "artifact",
@@ -56,6 +58,15 @@ export const projectEventInvalidation = {
   "audio.tts.prepared": "audio",
   "audio.tts.timing_revision.created": "audio",
   "canonical_asset.archived": "asset",
+  "derived_asset.batch.completed": "asset",
+  "derived_asset.batch.created": "asset",
+  "derived_asset.batch.reconciled": "asset",
+  "derived_asset.item.discarded": "asset",
+  "derived_asset.item.failed": "asset",
+  "derived_asset.item.media_ready": "asset",
+  "derived_asset.item.provider_succeeded": "asset",
+  "derived_asset.item.started": "asset",
+  "derived_asset.item.succeeded": "asset",
   "final_video.activated": "final",
   "media.compose.completed": "final",
   "media.compose.failed": "final",
@@ -65,13 +76,17 @@ export const projectEventInvalidation = {
   "project.export.completed": "export",
   "project.export.failed": "export",
   "project.frame_rate.changed": "project",
+  "project.production_content.cleared": "project",
   "project.review.completed": "review",
   "project.video_ratio.changed": "project",
   "provider.video.task.cancel_failed": "provider",
   "provider.video.task.cancelled": "provider",
+  "provider.model_capability.attested": "provider",
+  "provider.model_capability.revoked": "provider",
   "provider.webhook.received": "provider",
   "review.fix.applied": "review",
   "script.archived": "content",
+  "script.episode.generation.staged": "content",
   "script.episode.generated": "content",
   "script.episode.updated": "content",
   "script.generated": "content",
@@ -115,7 +130,12 @@ export const projectEventInvalidation = {
   "storyboard.segment.running": "progress",
   "storyboard.segment.succeeded": "storyboard",
   "storyboard.shot.cancelled": "storyboard",
-  "storyboard.shot.continuity_frame.extracted": "storyboard",
+  "storyboard.shot.anchor.completed": "storyboard",
+  "storyboard.shot.anchor.failed": "storyboard",
+  "storyboard.shot.anchor.reviewed": "storyboard",
+  "storyboard.shot.anchor.started": "storyboard",
+  "storyboard.shot.continuity.rejected": "storyboard",
+  "storyboard.shot.segment_tail_anchor.extracted": "storyboard",
   "storyboard.shot.created": "storyboard",
   "storyboard.shot.deleted": "storyboard",
   "storyboard.shot.image.completed": "storyboard",
@@ -125,8 +145,17 @@ export const projectEventInvalidation = {
   "storyboard.shot.image_prompt.reviewed": "storyboard",
   "storyboard.shot.image_prompt.running": "storyboard",
   "storyboard.shot.media.unlinked": "storyboard",
+  "storyboard.shot.observed_exit.reviewed": "storyboard",
+  "storyboard.shot.panel_manifest.compiled": "storyboard",
+  "storyboard.shot.reference_pack.compiled": "storyboard",
   "storyboard.shot.render_plan.created": "storyboard",
+  "storyboard.shot.render_plan.execution_cloned": "storyboard",
   "storyboard.shot.updated": "storyboard",
+  "storyboard.shot.state.planned": "storyboard",
+  "storyboard.shot.storyboard_sheet.cropped": "storyboard",
+  "storyboard.shot.storyboard_sheet.reviewed": "storyboard",
+  "storyboard.shot.transition.planned": "storyboard",
+  "storyboard.shot.transition.updated": "storyboard",
   "storyboard.shot.video.completed": "storyboard",
   "storyboard.shot.video.composed": "storyboard",
   "storyboard.shot.video.created": "storyboard",
@@ -146,7 +175,32 @@ export const projectEventInvalidation = {
   "storyboard.timing.completed": "storyboard",
   "storyboard.timing.reused": "storyboard",
   "storyboard.timing.started": "storyboard",
+  "video.production.binding.created": "project",
+  "video.production.binding.superseded": "project",
   "video.production.blueprint.created": "storyboard",
+  "video.production.generation.activated": "project",
+  "video.production.generation.superseded": "project",
+  "video.production.batch.failed": "videoExecution",
+  "video.production.batch.partial_succeeded": "videoExecution",
+  "video.production.batch.started": "videoExecution",
+  "video.production.checkpoint.committed": "videoExecution",
+  "video.production.checkpoint.reconciled": "videoExecution",
+  "video.production.checkpoint.failed": "videoExecution",
+  "video.production.item.cancelled": "videoExecution",
+  "video.production.item.completed": "videoExecution",
+  "video.production.item.failed": "videoExecution",
+  "video.production.item.started": "videoExecution",
+  "video.production.rebuild.completed": "project",
+  "video.production.rebuild.failed": "project",
+  "video.production.rebuild.item.completed": "storyboard",
+  "video.production.rebuild.item.failed": "storyboard",
+  "video.production.rebuild.item.started": "storyboard",
+  "video.production.rebuild.partial": "project",
+  "video.production.rebuild.requested": "project",
+  "video.production.rebuild.started": "project",
+  "video.production.rebuild.storyboard_required": "project",
+  "video.render_plan.compiled": "storyboard",
+  "video.render_plan.stale": "storyboard",
   "workflow.node.cancelled": "workflow",
   "workflow.node.completed": "workflow",
   "workflow.node.failed": "workflow",
@@ -164,6 +218,12 @@ export const projectEventInvalidation = {
 } as const satisfies Record<ProjectEventName, InvalidationHandler>;
 
 const knownProjectEventNames = new Set<string>(projectEventNames);
+const terminalWorkflowEventNames = new Set<string>([
+  "workflow.run.completed",
+  "workflow.run.failed",
+  "workflow.run.partial_succeeded",
+  "workflow.run.cancelled",
+]);
 
 export function keysForProjectEvent(
   eventType: string,
@@ -175,15 +235,41 @@ export function keysForProjectEvent(
   }
   const handler = projectEventInvalidation[eventType as ProjectEventName];
   const workflowRunId = stringPayload(payload, "workflowRunId");
+  const workflowType = stringPayload(payload, "workflowType");
   const taskId = stringPayload(payload, "agentTaskId");
   const sessionId = stringPayload(payload, "sessionId");
   const scriptEpisodeId = firstStringPayload(payload, "scriptEpisodeId", "episodeId");
   const shotId = firstStringPayload(payload, "storyboardShotId", "shotId");
   const assetId = firstStringPayload(payload, "assetId", "canonicalAssetId");
   const scriptId = stringPayload(payload, "scriptId");
+  const providerModelId = stringPayload(payload, "providerModelId");
+  const rebuildId = stringPayload(payload, "rebuildId");
   const keys: QueryKey[] = [];
 
-  if ((eventType === "script.episode.generated" || eventType === "script.episode.updated") && scriptId) {
+  if (eventType === "project.production_content.cleared") {
+    return uniqueQueryKeys([
+      qk.project(projectId),
+      qk.productionStatus(projectId),
+      qk.sources(projectId),
+      qk.scripts(projectId),
+      qk.scriptDetailsPrefix(projectId),
+      qk.scriptVersionsPrefix(projectId),
+      qk.scriptEpisodesPrefix(projectId),
+      qk.scriptScenesPrefix(projectId),
+      qk.assetsRoot(projectId),
+      qk.requirements(projectId),
+      qk.shotProductionPrefix(projectId),
+      qk.artifacts(projectId),
+      qk.timelines(projectId),
+      qk.finalVideos(projectId),
+      qk.exports(projectId),
+      qk.reviewRuns(projectId),
+      qk.reviewItemsPrefix(projectId),
+      qk.workflowRuns(projectId),
+    ]);
+  }
+
+  if ((eventType === "script.episode.generation.staged" || eventType === "script.episode.generated" || eventType === "script.episode.updated") && scriptId) {
     return uniqueQueryKeys([
       qk.scripts(projectId),
       qk.script(projectId, scriptId),
@@ -209,6 +295,9 @@ export function keysForProjectEvent(
         qk.productionStatus(projectId),
         ...(workflowRunId ? [qk.workflowNodes(workflowRunId)] : []),
       );
+      if (terminalWorkflowEventNames.has(eventType)) {
+        keys.push(...keysForTerminalWorkflowRun(projectId, workflowType, payload));
+      }
       break;
     case "progress":
       if (workflowRunId) keys.push(qk.workflowNodes(workflowRunId));
@@ -218,10 +307,12 @@ export function keysForProjectEvent(
       break;
     case "asset":
       keys.push(
-        qk.assets(projectId),
+        qk.assetsRoot(projectId),
         qk.requirements(projectId),
         qk.artifacts(projectId),
         qk.productionStatus(projectId),
+        qk.workflowRuns(projectId),
+        ...(workflowRunId ? [qk.workflowDerivedAssetBatch(workflowRunId)] : []),
         ...(assetId ? [qk.assetReferences(projectId, assetId)] : []),
       );
       break;
@@ -252,10 +343,37 @@ export function keysForProjectEvent(
         qk.workflowRuns(projectId),
         qk.artifacts(projectId),
         ...(shotId
-          ? [qk.shotDetail(projectId, shotId), qk.shotRenderPlan(projectId, shotId), qk.nativeAudioReviews(projectId, shotId)]
+          ? [
+              qk.shotDetail(projectId, shotId),
+              qk.shotState(projectId, shotId),
+              qk.shotTransition(projectId, shotId),
+              qk.shotAnchors(projectId, shotId),
+              qk.shotReferencePack(projectId, shotId, "anchor"),
+              qk.shotReferencePack(projectId, shotId, "video"),
+              qk.shotStoryboardSheet(projectId, shotId),
+              qk.shotVideoPromptPlan(projectId, shotId),
+              qk.shotRenderPlan(projectId, shotId),
+              qk.nativeAudioReviews(projectId, shotId),
+            ]
           : []),
       );
       break;
+    case "videoExecution": {
+      if (workflowRunId) keys.push(qk.workflowVideoProduction(workflowRunId));
+      const itemTerminal = eventType === "video.production.item.completed"
+        || eventType === "video.production.item.failed"
+        || eventType === "video.production.item.cancelled";
+      const aggregateChanged = eventType !== "video.production.item.started";
+      if (aggregateChanged) keys.push(qk.workflowRuns(projectId));
+      if (itemTerminal && shotId) {
+        keys.push(
+          qk.shotDetail(projectId, shotId),
+          qk.shotRenderPlan(projectId, shotId),
+          qk.shotVideoPromptPlan(projectId, shotId),
+        );
+      }
+      break;
+    }
     case "final":
       keys.push(qk.finalVideos(projectId), qk.timelines(projectId), qk.productionStatus(projectId), qk.artifacts(projectId));
       break;
@@ -267,10 +385,49 @@ export function keysForProjectEvent(
       break;
     case "provider":
       keys.push(qk.shotProductionPrefix(projectId), qk.workflowRuns(projectId), qk.productionStatus(projectId));
+      if (providerModelId) keys.push(qk.providerModelVideoCapabilities(providerModelId));
       break;
     case "project":
-      keys.push(qk.project(projectId), qk.projectManualBindings(projectId), qk.productionStatus(projectId));
+      keys.push(
+        qk.project(projectId),
+        qk.projectManualBindings(projectId),
+        qk.projectVideoProductionProfile(projectId),
+        qk.shotProductionPrefix(projectId),
+        qk.workflowRuns(projectId),
+        qk.productionStatus(projectId),
+      );
+      if (rebuildId) {
+        keys.push(
+          qk.projectVideoProductionRebuild(projectId, rebuildId),
+          qk.projectVideoProductionRebuildItems(projectId, rebuildId),
+        );
+      }
       break;
+  }
+  return uniqueQueryKeys(keys);
+}
+
+export function keysForTerminalWorkflowRun(
+  projectId: string,
+  workflowType: string,
+  payload: Record<string, unknown> = {},
+): QueryKey[] {
+  const normalizedWorkflowType = workflowType.trim().toLowerCase();
+  if (normalizedWorkflowType !== "batch_generate_asset_cards" && normalizedWorkflowType !== "batch_generate_asset_images") {
+    return [];
+  }
+
+  const keys: QueryKey[] = [
+    qk.assetsRoot(projectId),
+    qk.requirements(projectId),
+    qk.shotProductionPrefix(projectId),
+    qk.productionStatus(projectId),
+  ];
+  if (normalizedWorkflowType === "batch_generate_asset_images") {
+    keys.push(qk.artifacts(projectId));
+    for (const assetId of workflowAssetIds(payload)) {
+      keys.push(qk.assetReferences(projectId, assetId));
+    }
   }
   return uniqueQueryKeys(keys);
 }
@@ -285,6 +442,17 @@ function firstStringPayload(payload: Record<string, unknown>, ...keys: string[])
     if (value) return value;
   }
   return "";
+}
+
+function workflowAssetIds(payload: Record<string, unknown>): string[] {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const ids = new Set<string>();
+  for (const item of items) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const assetId = stringPayload(item as Record<string, unknown>, "assetId");
+    if (assetId) ids.add(assetId);
+  }
+  return [...ids];
 }
 
 function uniqueQueryKeys(keys: QueryKey[]): QueryKey[] {
@@ -321,6 +489,20 @@ export function toastForProjectEvent(eventType: string, payload: Record<string, 
       return { kind: "error", text: "项目导出失败" };
     case "project.review.completed":
       return { kind: "success", text: "项目审阅完成" };
+    case "project.production_content.cleared":
+      return { kind: "success", text: "已保留小说原文并清空生产内容" };
+    case "video.production.rebuild.partial":
+      return { kind: "success", text: "视频生产方案重建部分完成" };
+    case "video.production.rebuild.storyboard_required":
+      return { kind: "error", text: "视频生产方案重建后仍有分集待处理" };
+    case "video.production.rebuild.completed":
+      return { kind: "success", text: "视频生产方案重建完成" };
+    case "video.production.rebuild.failed":
+      return { kind: "error", text: "视频生产方案重建失败" };
+    case "storyboard.shot.anchor.failed":
+      return { kind: "error", text: "镜头首帧生成失败" };
+    case "storyboard.shot.continuity.rejected":
+      return { kind: "error", text: "镜头连续性审核未通过" };
     default:
       return null;
   }

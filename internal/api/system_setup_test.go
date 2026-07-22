@@ -70,6 +70,7 @@ func TestSystemSetupFlow(t *testing.T) {
 	var setup auth.TokenResponse
 	doAPISuccess(t, server, http.MethodPost, "/api/system/setup", "", "", map[string]any{
 		"email":            "setup-admin@example.test",
+		"username":         "setup-admin",
 		"password":         "Password123!",
 		"displayName":      "管理员",
 		"organizationName": "影织工作室",
@@ -86,9 +87,20 @@ func TestSystemSetupFlow(t *testing.T) {
 	if setup.AccessToken == "" || setup.RefreshToken == "" || setup.OrganizationID == "" || setup.WorkspaceID == "" || setup.User.ID == "" {
 		t.Fatalf("setup response missing session fields: %+v", setup)
 	}
+	if !setup.User.SystemAdministrator {
+		t.Fatal("first setup user was not marked as a system administrator")
+	}
+	var systemAdministrator bool
+	if err := pool.QueryRow(ctx, `SELECT is_system_admin FROM users WHERE id = $1`, setup.User.ID).Scan(&systemAdministrator); err != nil {
+		t.Fatalf("read setup administrator flag: %v", err)
+	}
+	if !systemAdministrator {
+		t.Fatal("setup administrator flag was not persisted")
+	}
 
 	assertAPIErrorCode(t, server, http.MethodPost, "/api/system/setup", "", "", map[string]any{
 		"email":            "second-admin@example.test",
+		"username":         "second-admin",
 		"password":         "Password123!",
 		"displayName":      "Second",
 		"organizationName": "Second Org",
@@ -111,11 +123,14 @@ func TestSystemSetupFlow(t *testing.T) {
 		t.Fatalf("setup did not create an org owner binding")
 	}
 
-	login, err := authService.Login(ctx, auth.LoginRequest{Email: "setup-admin@example.test", Password: "Password123!"}, httptest.NewRequest(http.MethodPost, "/api/auth/login", nil))
+	login, err := authService.Login(ctx, auth.LoginRequest{Identifier: "setup-admin", Password: "Password123!"}, httptest.NewRequest(http.MethodPost, "/api/auth/login", nil))
 	if err != nil {
 		t.Fatalf("login after setup: %v", err)
 	}
-	if login.OrganizationID != setup.OrganizationID || login.WorkspaceID != setup.WorkspaceID {
+	if login.TokenResponse == nil || login.OrganizationID != setup.OrganizationID || login.WorkspaceID != setup.WorkspaceID {
 		t.Fatalf("login session = %+v, setup = %+v", login, setup)
+	}
+	if !login.User.SystemAdministrator {
+		t.Fatal("login response did not preserve system administrator status")
 	}
 }

@@ -16,6 +16,7 @@ const (
 	providerTextGatewayTimeoutMS = 10 * 60 * 1000
 	providerTextHeartbeatTimeout = 45 * time.Second
 	providerTextHeartbeatEvery   = 10 * time.Second
+	providerRequestPollInterval  = 2 * time.Second
 )
 
 func providerTextGatewayOptions() provider.GatewayTextOptions {
@@ -29,12 +30,29 @@ func providerTextActivityOptions() workflow.ActivityOptions {
 	return options
 }
 
+func shotImagePromptReviewActivityOptions() workflow.ActivityOptions {
+	options := defaultActivityOptions()
+	// One logical shot may require up to three generate/review rounds. Keep the
+	// deadline scoped to this supervised loop instead of widening every text
+	// activity in the worker.
+	options.StartToCloseTimeout = 45 * time.Minute
+	options.HeartbeatTimeout = providerTextHeartbeatTimeout
+	// The activity contains its own bounded three-round correction state machine.
+	// Replaying the whole activity would multiply those rounds and duplicate
+	// already completed provider work; failed items are retried explicitly by
+	// the batch workflow instead.
+	if options.RetryPolicy != nil {
+		options.RetryPolicy.MaximumAttempts = 1
+	}
+	return options
+}
+
 func providerImageActivityOptions() workflow.ActivityOptions {
 	options := defaultActivityOptions()
-	// The Gateway client may wait up to eleven minutes for image providers.
-	// Keep Temporal's activity deadline outside that window so the activity can
-	// persist the terminal provider result before Temporal schedules a retry.
-	options.StartToCloseTimeout = 15 * time.Minute
+	// The Gateway owns a bounded twenty-minute request budget across all image
+	// fallback candidates. Leave enough time for response persistence and error
+	// normalization before Temporal schedules a retry.
+	options.StartToCloseTimeout = 25 * time.Minute
 	options.HeartbeatTimeout = providerTextHeartbeatTimeout
 	return options
 }
@@ -107,6 +125,41 @@ func (a Activities) generateProviderText(ctx context.Context, execution NodeExec
 		return a.gateway.GenerateText(ctx, req)
 	}
 	return provider.GatewayTextResponse{}, err
+}
+
+func (a Activities) generateProviderImage(ctx context.Context, execution NodeExecution, req provider.GatewayImageRequest) (provider.GatewayImageResponse, error) {
+	if !execution.valid() || strings.TrimSpace(req.NodeRunID) != execution.NodeRunID {
+		return provider.GatewayImageResponse{}, ErrWorkflowWriteFenced
+	}
+	stopHeartbeat := startWorkflowActivityHeartbeat(ctx, map[string]any{
+		"nodeRunId": execution.NodeRunID,
+		"phase":     "provider_image_generate",
+	})
+	defer stopHeartbeat()
+
+	for {
+		response, err := a.gateway.GenerateImage(ctx, req)
+		if err == nil {
+			return response, nil
+		}
+		standard, ok := provider.StandardErrorFromError(err)
+		if !ok || standard.Code != provider.CodeProviderRequestInProgress {
+			return provider.GatewayImageResponse{}, err
+		}
+		delay := providerRequestPollInterval
+		if standard.RetryAfterMs > 0 {
+			delay = time.Duration(standard.RetryAfterMs) * time.Millisecond
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return provider.GatewayImageResponse{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func startProviderTextHeartbeat(ctx context.Context, nodeRunID string) func() {

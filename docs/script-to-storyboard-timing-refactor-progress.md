@@ -83,7 +83,7 @@
 | 时间 | 项目 | 证据 |
 | --- | --- | --- |
 | 2026-07-12 | 执行前基线 | `go test ./internal/workflows ./internal/provider` 通过 |
-| 2026-07-12 | P0-1/P0-2 | `go test ./internal/workflows -run TestStoryboardDurationRegressionFixtureDocumentsLegacyClamp -count=1` 通过；fixture 断言 410 秒被旧逻辑截为 240 秒 |
+| 2026-07-12 | P0-1/P0-2 | `go test ./internal/workflows -run TestStoryboardDurationRegressionFixturePreservesLongShots -count=1` 通过；fixture 断言 410 秒长镜头时长在规范化和入库度量中无损保留 |
 | 2026-07-12 | P0-3 | Storyboard artifact metadata、事件和 node output 写入 raw/planned/stored duration；定向 workflow 测试通过 |
 | 2026-07-12 | P0-4 | `000056_video_media_observability` 增加结构化观测字段；Gateway 使用 FFprobe 记录 requested/provider/actual duration、帧率、帧数与音频流；`go test ./internal/media ./internal/provider ./internal/workflows` 和真实 PostgreSQL Gateway 集成测试通过 |
 | 2026-07-12 | P1-2 至 P1-5 | 新增 `internal/storyboard`；覆盖普通 3.5、慢 3、快 4 字/秒、显式停顿、动作范围、并行块取最大值、90k/24 FPS、合法切点、DP 拆镜和跨镜头 span 守恒；`go test ./internal/storyboard -count=1` 通过 |

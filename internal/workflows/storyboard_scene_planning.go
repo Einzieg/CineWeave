@@ -10,7 +10,7 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/provider"
 	storyboardpkg "github.com/Einzieg/cineweave/internal/storyboard"
-	"github.com/google/uuid"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 	"go.temporal.io/sdk/temporal"
 )
@@ -39,23 +39,29 @@ type PlanStoryboardSceneInput struct {
 }
 
 type PlannedStoryboardShot struct {
-	ID                   string                       `json:"id"`
-	ShotOrdinal          int                          `json:"shotOrdinal"`
-	StartTick            int64                        `json:"startTick"`
-	EndTick              int64                        `json:"endTick"`
-	DurationTicks        int64                        `json:"durationTicks"`
-	Title                string                       `json:"title,omitempty"`
-	Visual               string                       `json:"visual"`
-	Camera               string                       `json:"camera,omitempty"`
-	Motion               string                       `json:"motion,omitempty"`
-	Mood                 string                       `json:"mood,omitempty"`
-	OneTake              bool                         `json:"oneTake"`
-	TimingSpans          []storyboardpkg.TimingSpan   `json:"timingSpans"`
-	ScriptDialogue       []StoryboardDialogueLine     `json:"scriptDialogue"`
-	ContinuityGroupID    string                       `json:"continuityGroupId,omitempty"`
-	ImagePromptDirection string                       `json:"imagePromptDirection,omitempty"`
-	VideoPromptDirection string                       `json:"videoPromptDirection,omitempty"`
-	AssetRequirements    []ShotAssetRequirementRecord `json:"assetRequirements,omitempty"`
+	ID                   string                             `json:"id"`
+	ShotOrdinal          int                                `json:"shotOrdinal"`
+	StartTick            int64                              `json:"startTick"`
+	EndTick              int64                              `json:"endTick"`
+	DurationTicks        int64                              `json:"durationTicks"`
+	Title                string                             `json:"title,omitempty"`
+	Visual               string                             `json:"visual"`
+	Camera               string                             `json:"camera,omitempty"`
+	Motion               string                             `json:"motion,omitempty"`
+	Mood                 string                             `json:"mood,omitempty"`
+	OneTake              bool                               `json:"oneTake"`
+	TimingSpans          []storyboardpkg.TimingSpan         `json:"timingSpans"`
+	ScriptDialogue       []StoryboardDialogueLine           `json:"scriptDialogue"`
+	ImagePromptDirection string                             `json:"imagePromptDirection,omitempty"`
+	VideoPromptDirection string                             `json:"videoPromptDirection,omitempty"`
+	AssetRequirements    []ShotAssetRequirementRecord       `json:"assetRequirements,omitempty"`
+	PlannedEntryState    videoproduction.ShotState          `json:"plannedEntryState"`
+	PlannedExitState     videoproduction.ShotState          `json:"plannedExitState"`
+	Transition           videoproduction.ShotTransition     `json:"transitionFromPrevious"`
+	EntryStateHash       string                             `json:"entryStateHash"`
+	ExitStateHash        string                             `json:"exitStateHash"`
+	TransitionHash       string                             `json:"transitionHash"`
+	ContractReview       videoproduction.ShotContractReview `json:"contractReview"`
 }
 
 type PlanStoryboardSceneOutput struct {
@@ -123,7 +129,7 @@ func (a Activities) PlanStoryboardScene(ctx context.Context, input PlanStoryboar
 	if len(units) == 0 || len(blocks) == 0 {
 		return PlanStoryboardSceneOutput{}, fmt.Errorf("scene has no timing units")
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return PlanStoryboardSceneOutput{}, err
 	}
@@ -181,6 +187,10 @@ func (a Activities) PlanStoryboardScene(ctx context.Context, input PlanStoryboar
 	if err != nil {
 		return PlanStoryboardSceneOutput{}, err
 	}
+	rendered, err = applyProfileStoryboardPlannerContract(rendered, project.VideoProductionProfileKey)
+	if err != nil {
+		return PlanStoryboardSceneOutput{}, err
+	}
 	nodeExecution, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
 		ProjectID:      input.ProjectID,
@@ -231,12 +241,15 @@ func (a Activities) PlanStoryboardScene(ctx context.Context, input PlanStoryboar
 	for _, unit := range units {
 		validUnitIDs = append(validUnitIDs, unit.Unit.ID)
 	}
-	plannerOutput, err := storyboardpkg.ParseShotPlannerOutput(stripJSONFence(gatewayResp.Output.Text), input.SceneKey, validUnitIDs)
+	plannerOutput, err := storyboardpkg.DecodeShotPlannerOutput(stripJSONFence(gatewayResp.Output.Text), validUnitIDs)
 	if err != nil {
 		return PlanStoryboardSceneOutput{}, a.failStoryboardSceneActivity(ctx, input, nodeExecution, provider.CodeInvalidRequest, err.Error())
 	}
 	plannerOutput, err = alignPlannerOutputToShotSlots(plannerOutput, shots)
 	if err != nil {
+		return PlanStoryboardSceneOutput{}, a.failStoryboardSceneActivity(ctx, input, nodeExecution, provider.CodeInvalidRequest, err.Error())
+	}
+	if err := storyboardpkg.ValidateShotPlannerOutput(plannerOutput, input.SceneKey, validUnitIDs); err != nil {
 		return PlanStoryboardSceneOutput{}, a.failStoryboardSceneActivity(ctx, input, nodeExecution, provider.CodeInvalidRequest, err.Error())
 	}
 	plannerOutput = filterUnknownPlannerAssetReferences(plannerOutput, assets)
@@ -246,8 +259,17 @@ func (a Activities) PlanStoryboardScene(ctx context.Context, input PlanStoryboar
 	if err := validateShotPlannerImageDialogueIsolation(plannerOutput, units); err != nil {
 		return PlanStoryboardSceneOutput{}, a.failStoryboardSceneActivity(ctx, input, nodeExecution, provider.CodeInvalidRequest, err.Error())
 	}
-	planned := materializeSceneShotCreatives(shots, units, plannerOutput, input.StoryboardPlanID)
-	output, err := a.storeStoryboardScenePlan(ctx, input, record, nodeExecution, rendered.PromptVersionID, rendered.RenderedHash, gatewayResp, plannerOutput, planned)
+	if err := storyboardpkg.ValidateShotStatePlannerOutput(plannerOutput); err != nil {
+		return PlanStoryboardSceneOutput{}, a.failStoryboardSceneActivity(ctx, input, nodeExecution, provider.CodeInvalidRequest, err.Error())
+	}
+	planned := materializeSceneShotCreatives(shots, units, plannerOutput)
+	planned, err = compileProfilePlannedShotContracts(
+		planned, plannerOutput, assets, project.VideoProductionProfileKey, project.TimelineTimebase,
+	)
+	if err != nil {
+		return PlanStoryboardSceneOutput{}, a.failStoryboardSceneActivity(ctx, input, nodeExecution, provider.CodeInvalidRequest, err.Error())
+	}
+	output, err := a.storeStoryboardScenePlan(ctx, input, record, project.VideoProductionProfileKey, nodeExecution, rendered.PromptVersionID, rendered.RenderedHash, gatewayResp, plannerOutput, planned)
 	if err != nil {
 		return PlanStoryboardSceneOutput{}, a.failStoryboardSceneActivity(ctx, input, nodeExecution, codeActivityFailed, err.Error())
 	}
@@ -481,7 +503,6 @@ func materializeSceneShotCreatives(
 	shots []storyboardpkg.ShotDraft,
 	units []sceneTimingUnitRecord,
 	planner storyboardpkg.ShotPlannerOutput,
-	planID string,
 ) []PlannedStoryboardShot {
 	unitByID := make(map[string]sceneTimingUnitRecord, len(units))
 	for _, unit := range units {
@@ -493,10 +514,6 @@ func materializeSceneShotCreatives(
 		visual := strings.TrimSpace(suggestion.Visual)
 		if visual == "" {
 			visual = fallbackShotVisual(shot, unitByID)
-		}
-		continuityGroupID := ""
-		if strings.TrimSpace(suggestion.ContinuityGroupKey) != "" {
-			continuityGroupID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(planID+":"+suggestion.ContinuityGroupKey)).String()
 		}
 		result = append(result, PlannedStoryboardShot{
 			ShotOrdinal:          shot.Ordinal,
@@ -511,10 +528,11 @@ func materializeSceneShotCreatives(
 			OneTake:              shot.OneTake || suggestion.OneTake,
 			TimingSpans:          shot.Spans,
 			ScriptDialogue:       dialogueForShot(shot, unitByID),
-			ContinuityGroupID:    continuityGroupID,
 			ImagePromptDirection: strings.TrimSpace(suggestion.ImagePromptDirection),
 			VideoPromptDirection: strings.TrimSpace(suggestion.VideoPromptDirection),
 			AssetRequirements:    plannerShotAssetRequirements(suggestion.AssetRequirements),
+			PlannedEntryState:    suggestion.PlannedEntryState,
+			PlannedExitState:     suggestion.PlannedExitState,
 		})
 	}
 	return result
@@ -547,7 +565,7 @@ func dialogueForShot(shot storyboardpkg.ShotDraft, units map[string]sceneTimingU
 		if !ok || !isSpeechUnitType(record.Unit.Type) {
 			continue
 		}
-		lines = append(lines, StoryboardDialogueLine{
+		line := StoryboardDialogueLine{
 			TimingUnitID:          record.Unit.ID,
 			Speaker:               record.Unit.Speaker,
 			Text:                  record.Unit.SourceText,
@@ -559,7 +577,10 @@ func dialogueForShot(shot storyboardpkg.ShotDraft, units map[string]sceneTimingU
 			SourceEndOffset:       record.SourceEndOffset,
 			ContinuesFromPrevious: span.StartTick > record.Unit.StartTick,
 			ContinuesToNext:       span.EndTick < record.Unit.EndTick,
-		})
+		}
+		lines = append(lines, storyboardDialogueLineForTimingSpan(
+			line, record.Unit.SourceText, record.Unit.StartTick, record.Unit.EndTick,
+		))
 	}
 	return lines
 }
@@ -572,6 +593,7 @@ func (a Activities) storeStoryboardScenePlan(
 	ctx context.Context,
 	input PlanStoryboardSceneInput,
 	record scenePlanningRecord,
+	profileKey string,
 	nodeExecution NodeExecution,
 	promptVersionID, promptHash string,
 	gatewayResp provider.GatewayTextResponse,
@@ -583,7 +605,8 @@ func (a Activities) storeStoryboardScenePlan(
 		return PlanStoryboardSceneOutput{}, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, nodeExecution); err != nil {
+	runCtx, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, nodeExecution)
+	if err != nil {
 		return PlanStoryboardSceneOutput{}, err
 	}
 	var currentStatus string
@@ -602,9 +625,11 @@ func (a Activities) storeStoryboardScenePlan(
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM storyboard_shots
 		WHERE storyboard_plan_id = $1 AND metadata->>'sceneKey' = $2
-	`, input.StoryboardPlanID, input.SceneKey); err != nil {
+		  AND production_generation_id = $3
+	`, input.StoryboardPlanID, input.SceneKey, runCtx.ProductionGenerationID); err != nil {
 		return PlanStoryboardSceneOutput{}, err
 	}
+	previousShotID := ""
 	for shotIndex := range shots {
 		shot := &shots[shotIndex]
 		var shotID string
@@ -614,20 +639,20 @@ func (a Activities) storeStoryboardScenePlan(
 				script_episode_id, episode_index, episode_shot_index, storyboard_plan_id, script_scene_id,
 				shot_index, shot_no, title, visual, camera, motion, mood, script_dialogue,
 				start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source,
-				timing_confidence, duration_locked, continuity_group_id, one_take, timing_revision,
-				status, review_status, stale_state, metadata
+				timing_confidence, duration_locked, one_take, timing_revision,
+				status, review_status, stale_state, metadata, production_generation_id
 			)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, NULLIF($9, '')::uuid,
 			        $10, NULL, NULLIF($11, ''), $12, NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''), $16,
-			        $17, $18, $19, $19, 'rule_estimated', $20, false, NULLIF($21, '')::uuid, $22, 1,
-			        'storyboard_ready', 'pending', 'fresh', $23)
+			        $17, $18, $19, $19, 'rule_estimated', $20, false, $21, 1,
+			        'storyboard_ready', 'pending', 'fresh', $22, $23)
 			RETURNING id::text
 		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, input.ScriptID, input.ScriptVersionID,
 			input.ScriptEpisodeID, record.EpisodeIndex, input.StoryboardPlanID, record.ScriptSceneID,
 			record.SceneOrdinal*10_000+shot.ShotOrdinal,
 			shot.Title, shot.Visual, shot.Camera, shot.Motion, shot.Mood, mustJSON(shot.ScriptDialogue),
 			shot.StartTick, shot.EndTick, shot.DurationTicks, sceneShotTimingConfidence(*shot, record),
-			shot.ContinuityGroupID, shot.OneTake, mustJSON(map[string]any{
+			shot.OneTake, mustJSON(map[string]any{
 				"scenePlanId":            input.ScenePlanID,
 				"sceneKey":               input.SceneKey,
 				"sceneOrdinal":           input.SceneOrdinal,
@@ -638,10 +663,14 @@ func (a Activities) storeStoryboardScenePlan(
 				"plannerProviderCallId":  gatewayResp.ProviderCallID,
 				"imagePromptDirection":   shot.ImagePromptDirection,
 				"videoPromptDirection":   shot.VideoPromptDirection,
-			})).Scan(&shotID); err != nil {
+			}), runCtx.ProductionGenerationID).Scan(&shotID); err != nil {
 			return PlanStoryboardSceneOutput{}, err
 		}
 		shot.ID = shotID
+		if err := a.storeProfileShotContractsTx(ctx, tx, input, record, runCtx, nodeExecution, gatewayResp, promptVersionID, profileKey, previousShotID, *shot); err != nil {
+			return PlanStoryboardSceneOutput{}, err
+		}
+		previousShotID = shotID
 		for spanOrdinal, span := range shot.TimingSpans {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO storyboard_shot_timing_spans(
@@ -659,11 +688,12 @@ func (a Activities) storeStoryboardScenePlan(
 				INSERT INTO shot_asset_requirements(
 					organization_id, project_id, workflow_run_id, storyboard_shot_id, asset_id,
 					requirement_type, role_in_shot, costume, pose, expression, action,
-					camera_relation, scene_state, prop_state, status, stale_state, metadata
+					camera_relation, scene_state, prop_state, status, stale_state, metadata,
+					production_generation_id
 				)
 				VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''),
 				        NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''),
-				        NULLIF($13, ''), NULLIF($14, ''), 'pending', 'fresh', $15)
+				        NULLIF($13, ''), NULLIF($14, ''), 'pending', 'fresh', $15, $16)
 			`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, shotID, requirement.AssetID,
 				requirement.RequirementType, requirement.RoleInShot, requirement.Costume,
 				requirement.Pose, requirement.Expression, requirement.Action,
@@ -672,7 +702,7 @@ func (a Activities) storeStoryboardScenePlan(
 					"source": "storyboard_scene_planner", "sceneKey": input.SceneKey,
 					"retryGeneration": input.RetryGeneration, "assetName": requirement.AssetName,
 					"assetType": requirement.AssetType,
-				})); err != nil {
+				}), runCtx.ProductionGenerationID); err != nil {
 				return PlanStoryboardSceneOutput{}, err
 			}
 		}

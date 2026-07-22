@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -114,47 +116,15 @@ func (s *Server) listProjectManualBindings(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) bindProjectManual(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
+	_, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
 	if !ok {
 		return
 	}
-	kind := normalizeProjectManualKind(r.PathValue("manualKind"))
-	if kind == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "manualKind is invalid", nil, false)
-		return
-	}
-	var req struct {
-		PromptVersionID string `json:"promptVersionId"`
-	}
-	if !decode(w, r, &req) {
-		return
-	}
-	req.PromptVersionID = strings.TrimSpace(req.PromptVersionID)
-	if req.PromptVersionID == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "promptVersionId is required", nil, false)
-		return
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	bindingID, _, err := s.bindProjectManualTx(r.Context(), tx, project.OrganizationID, project.ID, kind, req.PromptVersionID, principal.UserID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	item, err := s.projectManualBinding(r.Context(), bindingID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+	s.writeVideoProductionError(w, r, videoproduction.NewError(
+		videoproduction.CodeConfigurationRebuildRequired,
+		"项目手册属于视频生产配置，必须先分析影响并确认换代",
+		false,
+	))
 }
 
 func (s *Server) bindDefaultProjectManualTx(ctx context.Context, tx pgx.Tx, organizationID, projectID, manualKind, createdBy string) (string, error) {
@@ -193,7 +163,7 @@ func (s *Server) bindProjectManualTx(ctx context.Context, tx pgx.Tx, organizatio
 	if _, err := lockProjectConfigurationTx(ctx, tx, projectID, organizationID); err != nil {
 		return "", "", err
 	}
-	version, err := s.projectManualVersionTx(ctx, tx, promptVersionID)
+	version, err := s.projectManualVersionTx(ctx, tx, organizationID, promptVersionID)
 	if err != nil {
 		return "", "", err
 	}
@@ -234,7 +204,7 @@ func (s *Server) bindProjectManualTx(ctx context.Context, tx pgx.Tx, organizatio
 	return bindingID, version.Content, nil
 }
 
-func (s *Server) projectManualVersionTx(ctx context.Context, tx pgx.Tx, promptVersionID string) (projectManualVersion, error) {
+func (s *Server) projectManualVersionTx(ctx context.Context, tx pgx.Tx, organizationID, promptVersionID string) (projectManualVersion, error) {
 	var item projectManualVersion
 	err := tx.QueryRow(ctx, `
 		SELECT pv.id::text, pt.id::text, pt.template_key, pt.name, pt.purpose,
@@ -242,7 +212,9 @@ func (s *Server) projectManualVersionTx(ctx context.Context, tx pgx.Tx, promptVe
 		FROM prompt_versions pv
 		JOIN prompt_templates pt ON pt.id = COALESCE(pv.template_id, pv.prompt_template_id)
 		WHERE pv.id = $1
-	`, promptVersionID).Scan(
+		  AND pt.status = 'active'
+		  AND (pt.organization_id IS NULL OR pt.organization_id = NULLIF($2, '')::uuid)
+	`, promptVersionID, organizationID).Scan(
 		&item.PromptVersionID,
 		&item.TemplateID,
 		&item.TemplateKey,
@@ -253,6 +225,9 @@ func (s *Server) projectManualVersionTx(ctx context.Context, tx pgx.Tx, promptVe
 		&item.Content,
 		&item.ContentHash,
 	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return projectManualVersion{}, newAPIError(http.StatusUnprocessableEntity, "MANUAL_VERSION_NOT_AVAILABLE", "所选项目手册版本不可用")
+	}
 	return item, err
 }
 

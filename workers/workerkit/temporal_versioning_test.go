@@ -34,7 +34,7 @@ func TestResolveTemporalWorkerVersionUsesImmutableReleaseID(t *testing.T) {
 func TestResolveTemporalWorkerVersionRejectsMissingOrMutableProductionRelease(t *testing.T) {
 	t.Setenv("CINEWEAVE_ENV", "production")
 	t.Setenv("CINEWEAVE_RELEASE_ID", "")
-	t.Setenv("CINEWEAVE_BUILD_ID", "legacy-build")
+	t.Setenv("CINEWEAVE_BUILD_ID", "previous-build")
 	if _, err := resolveTemporalWorkerVersion("script-worker"); err == nil || !strings.Contains(err.Error(), "CINEWEAVE_RELEASE_ID is required") {
 		t.Fatalf("expected missing release error, got %v", err)
 	}

@@ -8,19 +8,19 @@ import (
 	"testing"
 )
 
-func TestExtractContinuityTailFrameUploadsPNG(t *testing.T) {
+func TestExtractVideoTailFrameUploadsPNG(t *testing.T) {
 	requireFFmpeg(t)
 	tempDir := t.TempDir()
 	sourcePath := filepath.Join(tempDir, "source.mp4")
 	writeTestClip(t, sourcePath, "testsrc2=size=160x90:rate=24")
 	store := newComposeMemoryStore(t, map[string]string{"videos/source.mp4": sourcePath})
 
-	result, err := ExtractContinuityTailFrame(context.Background(), ContinuityFrameRequest{
+	result, err := ExtractVideoTailFrame(context.Background(), VideoTailFrameRequest{
 		SourceStorageKey: "videos/source.mp4",
 		OutputStorageKey: "continuity/tail-frame.png",
 	}, store)
 	if err != nil {
-		t.Fatalf("ExtractContinuityTailFrame: %v", err)
+		t.Fatalf("ExtractVideoTailFrame: %v", err)
 	}
 	if result.MimeType != "image/png" || result.ByteSize <= 0 || result.ContentHash == "" || result.Width != 160 || result.Height != 90 || result.FrameTimeSeconds <= 0 {
 		t.Fatalf("result = %+v", result)

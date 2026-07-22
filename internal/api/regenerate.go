@@ -20,11 +20,13 @@ type RegenerateRequest struct {
 }
 
 type RegenerateResponse struct {
-	TargetType    string `json:"targetType"`
-	TargetID      string `json:"targetId"`
-	WorkflowRunID string `json:"workflowRunId"`
-	Status        string `json:"status"`
-	WorkflowType  string `json:"workflowType"`
+	TargetType    string                       `json:"targetType"`
+	TargetID      string                       `json:"targetId"`
+	WorkflowRunID string                       `json:"workflowRunId"`
+	Status        string                       `json:"status"`
+	WorkflowType  string                       `json:"workflowType"`
+	OperationID   string                       `json:"operationId,omitempty"`
+	DerivedAssets *DerivedAssetBatchProjection `json:"derivedAssets,omitempty"`
 }
 
 func (s *Server) regenerateCreativeObject(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -49,6 +51,26 @@ func (s *Server) regenerateCreativeObject(w http.ResponseWriter, r *http.Request
 	}
 	resolvedTargetID, ok := s.requireRegenerationTarget(w, r, project.ID, targetType, targetID)
 	if !ok {
+		return
+	}
+	if targetType == "derived_asset_image" {
+		result, err := s.createDerivedAssetBatchRun(r.Context(), principal, project, DerivedAssetBatchCreateOptions{
+			Mode:                    derivedAssetBatchModeExplicit,
+			RequirementIDs:          []string{resolvedTargetID},
+			MaxConcurrency:          1,
+			Force:                   true,
+			ExpectedProjectRevision: project.Revision,
+			IdempotencyKey:          idempotencyKey(r, ""),
+		})
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		httpx.WriteJSON(w, r, http.StatusAccepted, RegenerateResponse{
+			TargetType: targetType, TargetID: resolvedTargetID, WorkflowRunID: result.WorkflowRun.ID,
+			Status: result.WorkflowRun.Status, WorkflowType: derivedAssetBatchWorkflowType,
+			OperationID: result.OperationID, DerivedAssets: &result.Batch,
+		}, nil)
 		return
 	}
 	options := map[string]any{

@@ -16,9 +16,13 @@
 - 在独立 `cineweave_migrations` schema 中记录版本、方向、内容 hash、耗时、release ID 和失败摘要；发现已应用版本内容漂移时拒绝启动。
 - Prompt Registry、Provider Catalog、模型能力、项目手册和 RBAC 默认值由 `cmd/cineweave-seed` 幂等加载。
 - 生产环境禁止 destructive down；生产回滚使用前向修复和 expand/contract。
+- 已经应用到数据库的迁移文件及内容 hash 永久不可改写。发布前的“迁移整合”不再通过重编号或删除历史文件完成。
+- `db/baselines/current` 是从全部嵌入迁移的 Up 段确定性生成的单文件发布基线与 hash 清单，只用于发布审计、空库对照和后续基线切换输入；已有数据库仍必须使用 `cmd/cineweave-migrate`。
+- 每次新增迁移后运行 `go run ./cmd/cineweave-migration-bundle generate`，根测试通过 `verify` 阻止遗漏或手工修改基线。
 
 ## 后果
 
 - T2 已通过受控快照后重建开发数据库完成切换。
 - 旧迁移文件不再是运行时输入，但可通过 Git 历史审计。
 - 系统内置内容可以独立于 schema 版本更新，并通过稳定 key 和 content hash 管理。
+- 当前发布链 `000001-000044` 保持完整，因此现有数据库、Provider 配置和历史生产记录无需为了整理迁移而重建。

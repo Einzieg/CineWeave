@@ -20,10 +20,11 @@ import { statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
+import { currentProjectScript } from "@/lib/scripts";
 import type { FinalVideoVersion, ProjectTimeline, ShotProductionShot } from "@/lib/types";
 
 type ShotAction = "generate_image_prompts" | "generate_video_prompts" | "generate_missing_images" | "generate_missing_videos" | "regenerate_failed_images" | "regenerate_failed_videos" | "cancel_running_videos";
-type EpisodeShotAction = { action: ShotAction; scriptEpisodeId: string };
+type EpisodeShotAction = { action: ShotAction; scriptEpisodeId: string; force?: boolean };
 
 export function VideoPage({ projectId }: { projectId: string }) {
   const invalidate = useInvalidateKeys();
@@ -37,10 +38,7 @@ export function VideoPage({ projectId }: { projectId: string }) {
     key: qk.scripts(projectId),
     queryFn: (session) => studioApi.listScripts(session, projectId).then((response) => response.items || []),
   });
-  const activeScript = useMemo(
-    () => scripts.find((script) => script.status === "active" && script.currentVersionId) ?? scripts.find((script) => script.currentVersionId) ?? null,
-    [scripts],
-  );
+  const activeScript = useMemo(() => currentProjectScript(scripts), [scripts]);
   const activeVersionId = activeScript?.currentVersionId ?? activeScript?.currentVersion?.id ?? "";
   const { data: loadedEpisodes = [], isLoading: episodesLoading } = useApiQuery({
     key: qk.scriptEpisodes(projectId, activeScript?.id ?? "none", activeVersionId || "none"),
@@ -101,11 +99,30 @@ export function VideoPage({ projectId }: { projectId: string }) {
   const canCompose = !!projectSummary && projectSummary.total > 0 && projectSummary.videoSucceeded === projectSummary.total && projectSummary.running === 0;
 
   const actionMutation = useApiMutation({
-    mutationFn: (session, request: EpisodeShotAction) =>
-      studioApi.runShotProductionAction(session, projectId, {
+    mutationFn: (session, request: EpisodeShotAction) => {
+      if (request.action === "generate_video_prompts") {
+        return studioApi.generateVideoPromptsBatch(session, projectId, {
+          scriptEpisodeId: request.scriptEpisodeId,
+          force: request.force,
+        });
+      }
+      if (request.action === "generate_missing_videos") {
+        return studioApi.generateShotVideosBatch(session, projectId, {
+          scriptEpisodeId: request.scriptEpisodeId,
+        });
+      }
+      if (request.action === "regenerate_failed_videos") {
+        return studioApi.generateShotVideosBatch(session, projectId, {
+          scriptEpisodeId: request.scriptEpisodeId,
+          shotIds: shots.filter((shot) => shot.canRetryVideo).map((shot) => shot.id),
+          force: true,
+        });
+      }
+      return studioApi.runShotProductionAction(session, projectId, {
         action: request.action,
         scriptEpisodeId: request.scriptEpisodeId,
-      }),
+      });
+    },
     onSuccess: (response) => {
       const actionLabel = response.action === "generate_image_prompts"
         ? "图片提示词"
@@ -192,9 +209,9 @@ export function VideoPage({ projectId }: { projectId: string }) {
     if (nextEpisode) selectEpisode(nextEpisode.id);
   }
 
-  function runEpisodeAction(action: ShotAction) {
+  function runEpisodeAction(action: ShotAction, force = false) {
     if (!effectiveEpisodeId) return;
-    actionMutation.mutate({ action, scriptEpisodeId: effectiveEpisodeId });
+    actionMutation.mutate({ action, scriptEpisodeId: effectiveEpisodeId, force });
   }
 
   return (
@@ -247,8 +264,16 @@ export function VideoPage({ projectId }: { projectId: string }) {
             onClick={() => runEpisodeAction("generate_video_prompts")}
             disabled={actionMutation.isPending || !summary || pendingVideoPromptCount === 0}
           >
-            {actionMutation.isPending && actionMutation.variables?.action === "generate_video_prompts" ? <Loader2 className="animate-spin" /> : <Sparkles />}
+            {actionMutation.isPending && actionMutation.variables?.action === "generate_video_prompts" && !actionMutation.variables.force ? <Loader2 className="animate-spin" /> : <Sparkles />}
             {summary?.videoPromptRunning ? `生成视频提示词 (${summary.videoPromptRunning} 运行中)` : pendingVideoPromptCount > 0 ? `一键生成视频提示词 (${pendingVideoPromptCount})` : "提示词已全部就绪"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => runEpisodeAction("generate_video_prompts", true)}
+            disabled={actionMutation.isPending || !summary || summary.total === 0 || summary.videoPromptRunning > 0}
+          >
+            {actionMutation.isPending && actionMutation.variables?.action === "generate_video_prompts" && actionMutation.variables.force ? <Loader2 className="animate-spin" /> : <RefreshCcw />}
+            重新生成本集提示词
           </Button>
           <Button
             onClick={() => runEpisodeAction("generate_missing_images")}

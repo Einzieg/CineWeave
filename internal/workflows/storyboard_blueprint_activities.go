@@ -65,7 +65,7 @@ func (a Activities) BuildEpisodeContinuityBlueprint(ctx context.Context, input B
 	} else if ok {
 		return existing, nil
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return ContinuityBlueprintActivityOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
 	}
@@ -194,7 +194,8 @@ func (a Activities) storeContinuityBlueprintAndPlan(
 		return ContinuityBlueprintActivityOutput{}, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+	runCtx, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution)
+	if err != nil {
 		return ContinuityBlueprintActivityOutput{}, err
 	}
 	nodeRunID := execution.NodeRunID
@@ -247,9 +248,10 @@ func (a Activities) storeContinuityBlueprintAndPlan(
 		INSERT INTO storyboard_plans(
 			organization_id, project_id, script_id, script_version_id, script_episode_id,
 			timing_analysis_id, revision, status, pacing_profile, target_duration_ticks,
-			estimated_shot_count, actual_shot_count, active, stale_state, metadata, created_by
+			estimated_shot_count, actual_shot_count, active, stale_state, metadata, created_by,
+			production_generation_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'planning', $8, $9, $10, 0, false, 'fresh', $11, NULLIF($12, '')::uuid)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'planning', $8, $9, $10, 0, false, 'fresh', $11, NULLIF($12, '')::uuid, $13)
 		RETURNING id::text
 	`, input.OrganizationID, input.ProjectID, input.ScriptID, input.ScriptVersionID, input.ScriptEpisodeID,
 		input.Timing.AnalysisID, planRevision, mustJSON(map[string]any{"key": defaultStoryboardPacingProfile(input.PacingProfile)}),
@@ -257,7 +259,7 @@ func (a Activities) storeContinuityBlueprintAndPlan(
 			"workflowRunId":     input.WorkflowRunID,
 			"blueprintId":       blueprintID,
 			"blueprintRevision": blueprintRevision,
-		}), input.CreatedBy).Scan(&planID); err != nil {
+		}), input.CreatedBy, runCtx.ProductionGenerationID).Scan(&planID); err != nil {
 		return ContinuityBlueprintActivityOutput{}, err
 	}
 	timingSceneByKey := make(map[string]storyboardpkg.AnalyzedTimingScene, len(input.Timing.Scenes))

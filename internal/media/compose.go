@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/Einzieg/cineweave/internal/storage"
 )
 
 const (
@@ -17,10 +15,6 @@ const (
 )
 
 var ErrNoVideoClips = errors.New("NO_VIDEO_CLIPS_TO_COMPOSE")
-
-func ComposeClips(ctx context.Context, req ComposeRequest, storageClient *storage.Client) (ComposeResult, error) {
-	return ComposeClipsWithStore(ctx, req, storageClient)
-}
 
 func ComposeClipsWithStore(ctx context.Context, req ComposeRequest, objectStore ObjectStore) (ComposeResult, error) {
 	if len(req.Clips) == 0 {

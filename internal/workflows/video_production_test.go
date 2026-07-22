@@ -113,6 +113,13 @@ func TestVideoProductionWorkflowPollsUntilSucceeded(t *testing.T) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, input ListStoryboardShotsInput) ([]StoryboardShotRecord, error) {
 		return shots, nil
 	}, activity.RegisterOptions{Name: "ListStoryboardShots"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input ResolveShotAnchorWorkItemsInput) ([]ShotAnchorWorkItem, error) {
+		items := make([]ShotAnchorWorkItem, 0, len(input.ShotIDs))
+		for index, shotID := range input.ShotIDs {
+			items = append(items, ShotAnchorWorkItem{ShotID: shotID, ShotIndex: index, ShotNo: index + 1, AnchorRole: "planned_first_frame"})
+		}
+		return items, nil
+	}, activity.RegisterOptions{Name: "ResolveShotAnchorWorkItems"})
 	env.RegisterActivityWithOptions(func(_ context.Context, input EnsurePreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
 		output := preparedVideoPlanTestOutput(input.ShotID, "plan-"+input.ShotID, "segment-"+input.ShotID, "reviewed "+input.ShotID)
 		output.Plan.CapabilitySnapshotHash = "sha256:capability"

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Einzieg/cineweave/internal/production"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/jackc/pgx/v5"
@@ -28,37 +29,43 @@ const (
 const SourceToScriptPrepareNodeKey = nodePrepareScriptFromSourceKey
 
 type SourceToScriptOptions struct {
-	SourceID       string   `json:"sourceId"`
-	ChapterIDs     []string `json:"chapterIds,omitempty"`
-	Instruction    string   `json:"instruction,omitempty"`
-	Title          string   `json:"title,omitempty"`
-	MaxConcurrency int      `json:"maxConcurrency,omitempty"`
-	AgentTaskID    string   `json:"agentTaskId,omitempty"`
-	AgentStepID    string   `json:"agentStepId,omitempty"`
-	IdempotencyKey string   `json:"idempotencyKey,omitempty"`
+	SourceID        string   `json:"sourceId"`
+	TargetScriptID  string   `json:"scriptId,omitempty"`
+	CreateNewScript bool     `json:"createNewScript,omitempty"`
+	ChapterIDs      []string `json:"chapterIds,omitempty"`
+	Instruction     string   `json:"instruction,omitempty"`
+	Title           string   `json:"title,omitempty"`
+	MaxConcurrency  int      `json:"maxConcurrency,omitempty"`
+	AgentTaskID     string   `json:"agentTaskId,omitempty"`
+	AgentStepID     string   `json:"agentStepId,omitempty"`
+	IdempotencyKey  string   `json:"idempotencyKey,omitempty"`
 }
 
 type ProjectSourceRecord struct {
-	ID            string `json:"id"`
-	SourceType    string `json:"sourceType"`
-	Title         string `json:"title"`
-	Content       string `json:"content"`
-	ContentFormat string `json:"contentFormat"`
-	Status        string `json:"status"`
+	ID              string `json:"id"`
+	SourceType      string `json:"sourceType"`
+	Title           string `json:"title"`
+	Content         string `json:"content"`
+	ContentFormat   string `json:"contentFormat"`
+	Status          string `json:"status"`
+	ContentRevision int64  `json:"contentRevision"`
+	ContentHash     string `json:"contentHash"`
 }
 
 type GenerateScriptFromSourceInput struct {
-	OrganizationID string   `json:"organizationId"`
-	ProjectID      string   `json:"projectId"`
-	WorkflowRunID  string   `json:"workflowRunId"`
-	CreatedBy      string   `json:"createdBy"`
-	SourceID       string   `json:"sourceId"`
-	ChapterIDs     []string `json:"chapterIds,omitempty"`
-	Instruction    string   `json:"instruction,omitempty"`
-	Title          string   `json:"title,omitempty"`
-	AgentTaskID    string   `json:"agentTaskId,omitempty"`
-	AgentStepID    string   `json:"agentStepId,omitempty"`
-	IdempotencyKey string   `json:"idempotencyKey,omitempty"`
+	OrganizationID  string   `json:"organizationId"`
+	ProjectID       string   `json:"projectId"`
+	WorkflowRunID   string   `json:"workflowRunId"`
+	CreatedBy       string   `json:"createdBy"`
+	SourceID        string   `json:"sourceId"`
+	TargetScriptID  string   `json:"scriptId,omitempty"`
+	CreateNewScript bool     `json:"createNewScript,omitempty"`
+	ChapterIDs      []string `json:"chapterIds,omitempty"`
+	Instruction     string   `json:"instruction,omitempty"`
+	Title           string   `json:"title,omitempty"`
+	AgentTaskID     string   `json:"agentTaskId,omitempty"`
+	AgentStepID     string   `json:"agentStepId,omitempty"`
+	IdempotencyKey  string   `json:"idempotencyKey,omitempty"`
 }
 
 type SourceToScriptOutput struct {
@@ -77,18 +84,37 @@ type SourceToScriptOutput struct {
 	CompletedItems   int      `json:"completedItems"`
 	FailedItems      int      `json:"failedItems"`
 	FailedEpisodes   []int    `json:"failedEpisodes,omitempty"`
+	MissingItems     int      `json:"missingItems,omitempty"`
+	Activated        bool     `json:"activated"`
 	Content          string   `json:"content"`
 }
 
 type SourceToScriptPlan struct {
-	SourceID        string                     `json:"sourceId"`
-	SourceType      string                     `json:"sourceType"`
-	SourceTitle     string                     `json:"sourceTitle"`
-	ScriptID        string                     `json:"scriptId"`
-	ScriptVersionID string                     `json:"scriptVersionId"`
-	Title           string                     `json:"title"`
-	EpisodeTotal    int                        `json:"episodeTotal"`
-	Chapters        []SourceToScriptChapterRef `json:"chapters,omitempty"`
+	GenerationID            string                     `json:"generationId"`
+	RootGenerationID        string                     `json:"rootGenerationId"`
+	AttemptGeneration       int                        `json:"attemptGeneration"`
+	SourceID                string                     `json:"sourceId"`
+	SourceType              string                     `json:"sourceType"`
+	SourceTitle             string                     `json:"sourceTitle"`
+	SourceRevision          int64                      `json:"sourceRevision"`
+	SourceContentHash       string                     `json:"sourceContentHash"`
+	SourceSnapshotHash      string                     `json:"sourceSnapshotHash"`
+	ManifestHash            string                     `json:"manifestHash"`
+	ScriptID                string                     `json:"scriptId"`
+	ScriptVersionID         string                     `json:"scriptVersionId,omitempty"`
+	BaseScriptVersionID     string                     `json:"baseScriptVersionId,omitempty"`
+	ExpectedScriptRevision  int64                      `json:"expectedScriptRevision"`
+	PreviousScriptVersionID string                     `json:"previousScriptVersionId,omitempty"`
+	PreviousActiveScriptID  string                     `json:"previousActiveScriptId,omitempty"`
+	PromptTemplateKey       string                     `json:"promptTemplateKey"`
+	PromptVersionID         string                     `json:"promptVersionId"`
+	PromptContentHash       string                     `json:"promptContentHash"`
+	ModelProfileKey         string                     `json:"modelProfileKey"`
+	ProviderModelID         string                     `json:"providerModelId"`
+	Title                   string                     `json:"title"`
+	EpisodeTotal            int                        `json:"episodeTotal"`
+	SeriesEpisodeTotal      int                        `json:"seriesEpisodeTotal,omitempty"`
+	Chapters                []SourceToScriptChapterRef `json:"chapters,omitempty"`
 }
 
 type SourceToScriptWorkflowState struct {
@@ -103,12 +129,16 @@ type SourceToScriptWorkflowState struct {
 }
 
 type SourceToScriptChapterRef struct {
-	ID           string `json:"id,omitempty"`
-	ChapterIndex int    `json:"chapterIndex,omitempty"`
-	VolumeIndex  int    `json:"volumeIndex,omitempty"`
-	SectionIndex int    `json:"sectionIndex,omitempty"`
-	VolumeTitle  string `json:"volumeTitle,omitempty"`
-	Title        string `json:"title,omitempty"`
+	ID              string `json:"id,omitempty"`
+	ItemKey         string `json:"itemKey"`
+	ManifestOrdinal int    `json:"manifestOrdinal"`
+	ChapterIndex    int    `json:"chapterIndex,omitempty"`
+	VolumeIndex     int    `json:"volumeIndex,omitempty"`
+	SectionIndex    int    `json:"sectionIndex,omitempty"`
+	VolumeTitle     string `json:"volumeTitle,omitempty"`
+	Title           string `json:"title,omitempty"`
+	ContentRevision int64  `json:"contentRevision"`
+	ContentHash     string `json:"contentHash"`
 }
 
 type PrepareScriptFromSourceInput struct {
@@ -121,30 +151,36 @@ type GenerateSourceScriptEpisodeInput struct {
 	WorkflowRunID     string                   `json:"workflowRunId"`
 	CreatedBy         string                   `json:"createdBy"`
 	SourceID          string                   `json:"sourceId"`
+	GenerationID      string                   `json:"generationId"`
+	ItemKey           string                   `json:"itemKey"`
 	ScriptID          string                   `json:"scriptId"`
-	ScriptVersionID   string                   `json:"scriptVersionId"`
+	ScriptVersionID   string                   `json:"scriptVersionId,omitempty"`
 	Instruction       string                   `json:"instruction,omitempty"`
 	EpisodeIndex      int                      `json:"episodeIndex"`
 	EpisodeTotal      int                      `json:"episodeTotal"`
+	BatchIndex        int                      `json:"batchIndex,omitempty"`
+	BatchTotal        int                      `json:"batchTotal,omitempty"`
 	Chapter           SourceToScriptChapterRef `json:"chapter,omitempty"`
 	AttemptGeneration int                      `json:"attemptGeneration"`
 }
 
 type SourceScriptEpisodeOutput struct {
-	SourceID        string `json:"sourceId"`
-	SourceChapterID string `json:"sourceChapterId,omitempty"`
-	ScriptID        string `json:"scriptId"`
-	ScriptVersionID string `json:"scriptVersionId"`
-	EpisodeID       string `json:"episodeId"`
-	EpisodeIndex    int    `json:"episodeIndex"`
-	EpisodeTitle    string `json:"episodeTitle"`
-	AgentRunID      string `json:"agentRunId,omitempty"`
-	ProviderCallID  string `json:"providerCallId,omitempty"`
-	ModelID         string `json:"modelId,omitempty"`
-	PromptVersionID string `json:"promptVersionId,omitempty"`
-	PromptHash      string `json:"promptHash,omitempty"`
-	Content         string `json:"content,omitempty"`
-	Skipped         bool   `json:"skipped,omitempty"`
+	SourceID           string `json:"sourceId"`
+	SourceChapterID    string `json:"sourceChapterId,omitempty"`
+	ScriptID           string `json:"scriptId"`
+	ScriptVersionID    string `json:"scriptVersionId,omitempty"`
+	GenerationID       string `json:"generationId"`
+	GenerationResultID string `json:"generationResultId"`
+	EpisodeID          string `json:"episodeId,omitempty"`
+	EpisodeIndex       int    `json:"episodeIndex"`
+	EpisodeTitle       string `json:"episodeTitle"`
+	AgentRunID         string `json:"agentRunId,omitempty"`
+	ProviderCallID     string `json:"providerCallId,omitempty"`
+	ModelID            string `json:"modelId,omitempty"`
+	PromptVersionID    string `json:"promptVersionId,omitempty"`
+	PromptHash         string `json:"promptHash,omitempty"`
+	Content            string `json:"content,omitempty"`
+	Skipped            bool   `json:"skipped,omitempty"`
 }
 
 type SourceToScriptFinalization struct {
@@ -187,17 +223,19 @@ func SourceToScriptWorkflow(ctx workflow.Context, input TextToStoryboardInput) (
 	}
 	if !state.Initialized {
 		if err := workflow.ExecuteActivity(prepareCtx, "PrepareScriptFromSource", PrepareScriptFromSourceInput{GenerateScriptFromSourceInput: GenerateScriptFromSourceInput{
-			OrganizationID: input.OrganizationID,
-			ProjectID:      input.ProjectID,
-			WorkflowRunID:  input.WorkflowRunID,
-			CreatedBy:      input.CreatedBy,
-			SourceID:       options.SourceID,
-			ChapterIDs:     options.ChapterIDs,
-			Instruction:    options.Instruction,
-			Title:          options.Title,
-			AgentTaskID:    options.AgentTaskID,
-			AgentStepID:    options.AgentStepID,
-			IdempotencyKey: options.IdempotencyKey,
+			OrganizationID:  input.OrganizationID,
+			ProjectID:       input.ProjectID,
+			WorkflowRunID:   input.WorkflowRunID,
+			CreatedBy:       input.CreatedBy,
+			SourceID:        options.SourceID,
+			TargetScriptID:  options.TargetScriptID,
+			CreateNewScript: options.CreateNewScript,
+			ChapterIDs:      options.ChapterIDs,
+			Instruction:     options.Instruction,
+			Title:           options.Title,
+			AgentTaskID:     options.AgentTaskID,
+			AgentStepID:     options.AgentStepID,
+			IdempotencyKey:  options.IdempotencyKey,
 		}}).Get(ctx, &state.Plan); err != nil {
 			return SourceToScriptOutput{}, err
 		}
@@ -237,17 +275,19 @@ func SourceToScriptWorkflow(ctx workflow.Context, input TextToStoryboardInput) (
 
 	var output SourceToScriptOutput
 	if err := workflow.ExecuteActivity(finalizeCtx, "FinalizeScriptFromSource", GenerateScriptFromSourceInput{
-		OrganizationID: input.OrganizationID,
-		ProjectID:      input.ProjectID,
-		WorkflowRunID:  input.WorkflowRunID,
-		CreatedBy:      input.CreatedBy,
-		SourceID:       options.SourceID,
-		ChapterIDs:     options.ChapterIDs,
-		Instruction:    options.Instruction,
-		Title:          options.Title,
-		AgentTaskID:    options.AgentTaskID,
-		AgentStepID:    options.AgentStepID,
-		IdempotencyKey: options.IdempotencyKey,
+		OrganizationID:  input.OrganizationID,
+		ProjectID:       input.ProjectID,
+		WorkflowRunID:   input.WorkflowRunID,
+		CreatedBy:       input.CreatedBy,
+		SourceID:        options.SourceID,
+		TargetScriptID:  options.TargetScriptID,
+		CreateNewScript: options.CreateNewScript,
+		ChapterIDs:      options.ChapterIDs,
+		Instruction:     options.Instruction,
+		Title:           options.Title,
+		AgentTaskID:     options.AgentTaskID,
+		AgentStepID:     options.AgentStepID,
+		IdempotencyKey:  options.IdempotencyKey,
 	}, plan, SourceToScriptFinalization{
 		RequestedEpisodeCount: len(state.EpisodeIndexes),
 		CompletedEpisodeCount: state.CompletedEpisodeCount,
@@ -293,11 +333,15 @@ func runSourceScriptEpisodePage(
 				WorkflowRunID:     input.WorkflowRunID,
 				CreatedBy:         input.CreatedBy,
 				SourceID:          plan.SourceID,
+				GenerationID:      plan.GenerationID,
+				ItemKey:           chapter.ItemKey,
 				ScriptID:          plan.ScriptID,
-				ScriptVersionID:   plan.ScriptVersionID,
+				ScriptVersionID:   plan.BaseScriptVersionID,
 				Instruction:       options.Instruction,
-				EpisodeIndex:      planIndex + 1,
-				EpisodeTotal:      maxInt(1, plan.EpisodeTotal),
+				EpisodeIndex:      SourceToScriptEpisodeNumber(plan, planIndex),
+				EpisodeTotal:      SourceToScriptSeriesEpisodeTotal(plan),
+				BatchIndex:        planIndex + 1,
+				BatchTotal:        maxInt(1, plan.EpisodeTotal),
 				Chapter:           chapter,
 				AttemptGeneration: attemptGeneration,
 			}
@@ -358,6 +402,27 @@ func validateSourceToScriptEpisodeIndexes(indexes []int, episodeTotal int) error
 	return nil
 }
 
+// SourceToScriptEpisodeNumber returns the durable series ordinal for a selected chapter.
+// A generation batch may contain only chapter 2 (or any sparse subset), so the batch
+// position must never be used as the persisted episode number.
+func SourceToScriptEpisodeNumber(plan SourceToScriptPlan, planIndex int) int {
+	if planIndex >= 0 && planIndex < len(plan.Chapters) && plan.Chapters[planIndex].ManifestOrdinal > 0 {
+		return plan.Chapters[planIndex].ManifestOrdinal
+	}
+	return planIndex + 1
+}
+
+func SourceToScriptSeriesEpisodeTotal(plan SourceToScriptPlan) int {
+	total := plan.SeriesEpisodeTotal
+	for index := range plan.Chapters {
+		total = maxInt(total, SourceToScriptEpisodeNumber(plan, index))
+	}
+	if total <= 0 {
+		total = plan.EpisodeTotal
+	}
+	return maxInt(1, total)
+}
+
 func SourceToScriptEpisodeNodeKey(sourceChapterID string, episodeIndex int) string {
 	return nodeKeyForID(nodeGenerateScriptFromSourceKey, firstNonEmptyString(strings.TrimSpace(sourceChapterID), strconv.Itoa(episodeIndex)))
 }
@@ -374,20 +439,24 @@ func queueSourceScriptEpisodeNodesTx(ctx context.Context, tx pgx.Tx, input Gener
 		}
 		episode := GenerateSourceScriptEpisodeInput{
 			OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
-			CreatedBy: input.CreatedBy, SourceID: plan.SourceID, ScriptID: plan.ScriptID,
-			ScriptVersionID: plan.ScriptVersionID, Instruction: input.Instruction,
-			EpisodeIndex: planIndex + 1, EpisodeTotal: maxInt(1, plan.EpisodeTotal), Chapter: chapter,
+			CreatedBy: input.CreatedBy, SourceID: plan.SourceID, GenerationID: plan.GenerationID,
+			ItemKey: chapter.ItemKey, ScriptID: plan.ScriptID,
+			ScriptVersionID: plan.BaseScriptVersionID, Instruction: input.Instruction,
+			EpisodeIndex: SourceToScriptEpisodeNumber(plan, planIndex), EpisodeTotal: SourceToScriptSeriesEpisodeTotal(plan),
+			BatchIndex: planIndex + 1, BatchTotal: maxInt(1, plan.EpisodeTotal), Chapter: chapter,
 			AttemptGeneration: attemptGeneration,
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO workflow_node_runs(
 				organization_id, project_id, workflow_run_id, node_key, node_type,
-				status, input, output, attempt_generation
+				status, input, output, attempt_generation, production_generation_id
 			)
-			VALUES ($1, $2, $3, $4, $7, 'queued', $5, '{}', $6)
+			SELECT $1, $2, $3, $4, $7, 'queued', $5, '{}', $6, run.production_generation_id
+			FROM workflow_runs run
+			WHERE run.id = $3 AND run.project_id = $2
 			ON CONFLICT (workflow_run_id, node_key) DO NOTHING
 		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID,
-			SourceToScriptEpisodeNodeKey(chapter.ID, planIndex+1), mustJSON(episode), attemptGeneration, SourceToScriptEpisodeNodeType); err != nil {
+			SourceToScriptEpisodeNodeKey(chapter.ID, episode.EpisodeIndex), mustJSON(episode), attemptGeneration, SourceToScriptEpisodeNodeType); err != nil {
 			return err
 		}
 	}
@@ -457,10 +526,32 @@ func (a Activities) FailSourceScriptEpisode(ctx context.Context, input FailSourc
 		}
 		return err
 	}
-	return FailNodeRunWithOutput(ctx, a.db, execution, code, message, mustJSON(map[string]any{
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := lockNodeBusinessWrite(ctx, tx, episode.WorkflowRunID, execution); err != nil {
+		return err
+	}
+	if err := storeSourceScriptGenerationFailureTx(ctx, tx, episode, code, message); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE source_to_script_generations
+		SET status = CASE WHEN status = 'prepared' THEN 'running' ELSE status END
+		WHERE id = $1 AND workflow_run_id = $2 AND status IN ('prepared', 'running')
+	`, episode.GenerationID, episode.WorkflowRunID); err != nil {
+		return err
+	}
+	if _, err := failNodeRunTx(ctx, tx, execution, code, message, mustJSON(map[string]any{
+		"generationId": episode.GenerationID, "itemKey": episode.ItemKey,
 		"episodeIndex": episode.EpisodeIndex, "sourceChapterId": episode.Chapter.ID,
 		"errorCode": code, "errorMessage": message,
-	}))
+	})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func isTerminalSourceScriptNodeStatus(status string) bool {
@@ -477,6 +568,63 @@ func (a Activities) PrepareScriptFromSource(ctx context.Context, input PrepareSc
 	if err := validateSourceToScriptInput(input.GenerateScriptFromSourceInput); err != nil {
 		return SourceToScriptPlan{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: provider.CodeInvalidRequest, Message: err.Error()})
 	}
+	if existing, ok, err := a.completedSourceToScriptPlan(ctx, input.WorkflowRunID); err != nil {
+		return SourceToScriptPlan{}, err
+	} else if ok {
+		return existing, nil
+	}
+	execution, err := StartNodeRun(ctx, a.db, NodeRunInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
+		NodeKey:        nodePrepareScriptFromSourceKey,
+		NodeType:       "workflow.script_prepare",
+		Input: mustJSON(map[string]any{
+			"sourceId": input.SourceID, "scriptId": input.TargetScriptID,
+			"createNewScript": input.CreateNewScript, "chapterIds": input.ChapterIDs,
+			"idempotencyKey": input.IdempotencyKey,
+		}),
+	})
+	if err != nil {
+		if existing, ok, replayErr := a.completedSourceToScriptPlan(ctx, input.WorkflowRunID); replayErr == nil && ok {
+			return existing, nil
+		}
+		return SourceToScriptPlan{}, err
+	}
+	plan, err := a.prepareScriptFromSourceGeneration(ctx, input, execution)
+	if err != nil {
+		code, message := workflowErrorFields(err, codeActivityFailed)
+		_ = FailNodeRun(ctx, a.db, execution, code, message)
+		return SourceToScriptPlan{}, err
+	}
+	return plan, nil
+}
+
+func (a Activities) completedSourceToScriptPlan(ctx context.Context, workflowRunID string) (SourceToScriptPlan, bool, error) {
+	var raw json.RawMessage
+	err := a.db.QueryRow(ctx, `
+		SELECT output
+		FROM workflow_node_runs
+		WHERE workflow_run_id = $1 AND node_key = $2 AND status = 'succeeded'
+	`, workflowRunID, nodePrepareScriptFromSourceKey).Scan(&raw)
+	if err == pgx.ErrNoRows {
+		return SourceToScriptPlan{}, false, nil
+	}
+	if err != nil {
+		return SourceToScriptPlan{}, false, err
+	}
+	var plan SourceToScriptPlan
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return SourceToScriptPlan{}, false, err
+	}
+	return plan, true, nil
+}
+
+func (a Activities) prepareScriptFromSourceLegacy(ctx context.Context, input PrepareScriptFromSourceInput) (SourceToScriptPlan, error) {
+	baseInput := TextToStoryboardInput{OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID, Prompt: "source_to_script", CreatedBy: input.CreatedBy}
+	if err := validateSourceToScriptInput(input.GenerateScriptFromSourceInput); err != nil {
+		return SourceToScriptPlan{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: provider.CodeInvalidRequest, Message: err.Error()})
+	}
 	source, err := a.projectSourceRecord(ctx, input.ProjectID, input.SourceID)
 	if err != nil {
 		return SourceToScriptPlan{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
@@ -486,15 +634,33 @@ func (a Activities) PrepareScriptFromSource(ctx context.Context, input PrepareSc
 	}
 
 	chapterRefs := []SourceToScriptChapterRef{}
+	seriesEpisodeTotal := 1
 	if source.SourceType == "novel" {
-		chapters, err := a.loadNovelChapters(ctx, input.ProjectID, input.SourceID, input.ChapterIDs)
+		allChapters, err := a.loadNovelChapters(ctx, input.ProjectID, input.SourceID, nil)
 		if err != nil {
 			return SourceToScriptPlan{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
+		}
+		for _, chapter := range allChapters {
+			seriesEpisodeTotal = maxInt(seriesEpisodeTotal, chapter.ChapterIndex)
+		}
+		chapters := allChapters
+		chapterIDs := normalizeStringSlice(input.ChapterIDs)
+		if len(chapterIDs) > 0 {
+			selected := make(map[string]struct{}, len(chapterIDs))
+			for _, chapterID := range chapterIDs {
+				selected[chapterID] = struct{}{}
+			}
+			chapters = make([]novelChapterRecord, 0, len(chapterIDs))
+			for _, chapter := range allChapters {
+				if _, ok := selected[chapter.ID]; ok {
+					chapters = append(chapters, chapter)
+				}
+			}
 		}
 		if len(chapters) == 0 {
 			return SourceToScriptPlan{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: provider.CodeInvalidRequest, Message: "source has no chapters to generate"})
 		}
-		if len(input.ChapterIDs) > 0 && len(chapters) != len(normalizeStringSlice(input.ChapterIDs)) {
+		if len(chapterIDs) > 0 && len(chapters) != len(chapterIDs) {
 			return SourceToScriptPlan{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: provider.CodeInvalidRequest, Message: "chapterIds do not match source chapters"})
 		}
 		chapterRefs = sourceToScriptChapterRefs(chapters)
@@ -506,9 +672,11 @@ func (a Activities) PrepareScriptFromSource(ctx context.Context, input PrepareSc
 		NodeKey:        nodePrepareScriptFromSourceKey,
 		NodeType:       "workflow.script_prepare",
 		Input: mustJSON(map[string]any{
-			"sourceId":       input.SourceID,
-			"chapterIds":     input.ChapterIDs,
-			"idempotencyKey": input.IdempotencyKey,
+			"sourceId":        input.SourceID,
+			"scriptId":        input.TargetScriptID,
+			"createNewScript": input.CreateNewScript,
+			"chapterIds":      input.ChapterIDs,
+			"idempotencyKey":  input.IdempotencyKey,
 		}),
 	})
 	if err != nil {
@@ -523,23 +691,49 @@ func (a Activities) PrepareScriptFromSource(ctx context.Context, input PrepareSc
 	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, nodeExecution); err != nil {
 		return SourceToScriptPlan{}, err
 	}
+	var activeScriptID string
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(active_script_id::text, '')
+		FROM projects
+		WHERE id = $1 AND organization_id = $2
+		FOR UPDATE
+	`, input.ProjectID, input.OrganizationID).Scan(&activeScriptID); err != nil {
+		return SourceToScriptPlan{}, err
+	}
 
 	title := strings.TrimSpace(input.Title)
 	if title == "" {
 		title = strings.TrimSpace(source.Title) + " 改编剧本"
 	}
-	scriptID, versionID, existing, err := a.sourceScriptDraftForIdempotency(ctx, tx, input.ProjectID, input.IdempotencyKey)
+	scriptID, versionID, existing, err := a.sourceScriptDraftForIdempotency(ctx, tx, input.ProjectID, source.ID, input.IdempotencyKey)
 	if err != nil {
 		return SourceToScriptPlan{}, err
 	}
-	if !existing {
+	reusedScript := existing
+	previousScriptVersionID := ""
+	if !existing && !input.CreateNewScript {
+		var found bool
+		scriptID, versionID, title, found, err = reusableSourceScriptTx(ctx, tx, input.ProjectID, source.ID, input.TargetScriptID, activeScriptID)
+		if err != nil {
+			return SourceToScriptPlan{}, err
+		}
+		reusedScript = found
+		if found {
+			previousScriptVersionID = versionID
+			versionID, err = forkSourceScriptVersionTx(ctx, tx, input.GenerateScriptFromSourceInput, source, scriptID, versionID, chapterRefs)
+			if err != nil {
+				return SourceToScriptPlan{}, err
+			}
+		}
+	}
+	if !existing && !reusedScript {
 		title, err = uniqueScriptTitle(ctx, tx, input.ProjectID, title)
 		if err != nil {
 			return SourceToScriptPlan{}, err
 		}
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO scripts(organization_id, project_id, source_id, title, status, created_by)
-			VALUES ($1, $2, $3, $4, 'active', NULLIF($5, '')::uuid)
+			VALUES ($1, $2, $3, $4, 'draft', NULLIF($5, '')::uuid)
 			RETURNING id::text
 		`, input.OrganizationID, input.ProjectID, source.ID, title, input.CreatedBy).Scan(&scriptID); err != nil {
 			return SourceToScriptPlan{}, err
@@ -567,8 +761,12 @@ func (a Activities) PrepareScriptFromSource(ctx context.Context, input PrepareSc
 		if _, err := tx.Exec(ctx, `UPDATE scripts SET current_version_id = $2 WHERE id = $1`, scriptID, versionID); err != nil {
 			return SourceToScriptPlan{}, err
 		}
-	} else {
-		if err := tx.QueryRow(ctx, `SELECT title FROM scripts WHERE project_id = $1 AND id = $2`, input.ProjectID, scriptID).Scan(&title); err != nil {
+	} else if existing {
+		if err := tx.QueryRow(ctx, `
+			SELECT title, COALESCE(current_version_id::text, '')
+			FROM scripts
+			WHERE project_id = $1 AND id = $2
+		`, input.ProjectID, scriptID).Scan(&title, &previousScriptVersionID); err != nil {
 			return SourceToScriptPlan{}, err
 		}
 	}
@@ -581,24 +779,31 @@ func (a Activities) PrepareScriptFromSource(ctx context.Context, input PrepareSc
 		return SourceToScriptPlan{}, err
 	}
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "script.generation.prepared", "script", scriptID, mustJSON(map[string]any{
-		"scriptId":        scriptID,
-		"scriptVersionId": versionID,
-		"sourceId":        source.ID,
-		"workflowRunId":   input.WorkflowRunID,
-		"episodeTotal":    maxInt(1, len(chapterRefs)),
-		"idempotent":      existing,
+		"scriptId":                scriptID,
+		"scriptVersionId":         versionID,
+		"sourceId":                source.ID,
+		"workflowRunId":           input.WorkflowRunID,
+		"episodeTotal":            maxInt(1, len(chapterRefs)),
+		"seriesEpisodeTotal":      seriesEpisodeTotal,
+		"idempotent":              existing,
+		"reusedScript":            reusedScript,
+		"previousActiveScriptId":  activeScriptID,
+		"previousScriptVersionId": previousScriptVersionID,
 	})); err != nil {
 		return SourceToScriptPlan{}, err
 	}
 	plan := SourceToScriptPlan{
-		SourceID:        source.ID,
-		SourceType:      source.SourceType,
-		SourceTitle:     source.Title,
-		ScriptID:        scriptID,
-		ScriptVersionID: versionID,
-		Title:           title,
-		EpisodeTotal:    maxInt(1, len(chapterRefs)),
-		Chapters:        chapterRefs,
+		SourceID:                source.ID,
+		SourceType:              source.SourceType,
+		SourceTitle:             source.Title,
+		ScriptID:                scriptID,
+		ScriptVersionID:         versionID,
+		PreviousScriptVersionID: previousScriptVersionID,
+		PreviousActiveScriptID:  activeScriptID,
+		Title:                   title,
+		EpisodeTotal:            maxInt(1, len(chapterRefs)),
+		SeriesEpisodeTotal:      seriesEpisodeTotal,
+		Chapters:                chapterRefs,
 	}
 	if err := queueSourceScriptEpisodeNodesTx(ctx, tx, input.GenerateScriptFromSourceInput, plan); err != nil {
 		return SourceToScriptPlan{}, err
@@ -613,10 +818,10 @@ func (a Activities) PrepareScriptFromSource(ctx context.Context, input PrepareSc
 }
 
 func (a Activities) GenerateSourceScriptEpisode(ctx context.Context, input GenerateSourceScriptEpisodeInput) (SourceScriptEpisodeOutput, error) {
-	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.SourceID) == "" || strings.TrimSpace(input.ScriptID) == "" || strings.TrimSpace(input.ScriptVersionID) == "" {
-		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: provider.CodeInvalidRequest, Message: "organizationId, projectId, workflowRunId, sourceId, scriptId, and scriptVersionId are required"})
+	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.SourceID) == "" || strings.TrimSpace(input.GenerationID) == "" || strings.TrimSpace(input.ScriptID) == "" {
+		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: provider.CodeInvalidRequest, Message: "organizationId, projectId, workflowRunId, sourceId, generationId, and scriptId are required"})
 	}
-	if existing, ok, err := a.completedSourceScriptEpisode(ctx, input); err != nil {
+	if existing, ok, err := a.completedSourceScriptGenerationResult(ctx, input); err != nil {
 		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: codeActivityFailed, Message: err.Error()})
 	} else if ok {
 		existing.Content = ""
@@ -625,57 +830,56 @@ func (a Activities) GenerateSourceScriptEpisode(ctx context.Context, input Gener
 		}
 		return existing, nil
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	generation, generationItem, err := a.loadSourceToScriptGenerationItem(ctx, input)
 	if err != nil {
 		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	source, err := a.projectSourceRecord(ctx, input.ProjectID, input.SourceID)
-	if err != nil {
-		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: codeActivityFailed, Message: err.Error()})
+	if err := a.ensureSourceToScriptGenerationItemCurrent(ctx, generation, generationItem); err != nil {
+		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(err)
 	}
-	if source.Status == "archived" {
-		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: provider.CodeInvalidRequest, Message: "archived source cannot be used for script generation"})
+	project := generation.Project
+	source := ProjectSourceRecord{
+		ID: generation.SourceID, SourceType: generation.SourceType,
+		Title: generation.Manifest.SourceTitle, Content: generationItem.SourceContent,
+		ContentFormat: "plain_text", Status: "processing",
+		ContentRevision: generation.SourceRevision, ContentHash: generation.SourceContentHash,
 	}
 
-	promptKey := promptKeyScriptAgentGenerate
+	promptKey := generation.PromptTemplateKey
 	sourceVariables := map[string]any{
 		"id":         source.ID,
 		"title":      source.Title,
 		"sourceType": source.SourceType,
-		"content":    source.Content,
+		"content":    generationItem.SourceContent,
 	}
 	instruction := strings.TrimSpace(input.Instruction)
-	episodeTitle := strings.TrimSpace(source.Title)
-	sourceChapterID := ""
-	if source.SourceType == "brief" {
-		promptKey = promptKeyBriefToScript
-	}
+	sourceChapterID := generationItem.SourceChapterID
+	sourceChapterContent := generationItem.SourceContent
 	if source.SourceType == "novel" {
-		sourceChapterID = strings.TrimSpace(input.Chapter.ID)
-		if sourceChapterID == "" {
-			return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: provider.CodeInvalidRequest, Message: "chapter id is required for novel script episode generation"})
+		chapterContext := scriptNovelChapterContext{
+			ID: sourceChapterID, ChapterIndex: generationItem.ManifestOrdinal,
+			VolumeIndex: generationItem.VolumeIndex, SectionIndex: generationItem.SectionIndex,
+			Title: generationItem.ChapterTitle, Content: generationItem.SourceContent,
 		}
-		chapters, err := a.loadNovelChapters(ctx, input.ProjectID, input.SourceID, []string{sourceChapterID})
-		if err != nil {
-			return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: codeActivityFailed, Message: err.Error()})
-		}
-		if len(chapters) != 1 {
-			return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: provider.CodeInvalidRequest, Message: "chapterId does not match source chapter"})
-		}
-		chapterContext := workflowScriptNovelChapterContexts(chapters)[0]
-		episodeTitle = chapterContext.Title
 		instruction = workflowScriptEpisodeInstruction(input.Instruction, input.EpisodeIndex, input.EpisodeTotal, chapterContext)
 		sourceVariables["content"] = workflowScriptNovelCurrentText([]scriptNovelChapterContext{chapterContext})
 		sourceVariables["chapterIds"] = []string{chapterContext.ID}
 		sourceVariables["chapters"] = []scriptNovelChapterContext{chapterContext}
 	}
-	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKey, map[string]any{
+	rendered, err := a.renderWorkflowPromptVersion(ctx, input.OrganizationID, input.ProjectID, promptKey, generation.PromptVersionID, map[string]any{
 		"project": project.asPromptVariables(),
 		"source":  sourceVariables,
 		"input":   map[string]any{"instruction": instruction},
 	})
 	if err != nil {
 		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(err)
+	}
+	if normalizePromptContentHash(rendered.ContentHash) != generation.PromptContentHash {
+		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: codeSourceToScriptReplanRequired, Message: "剧本 Prompt 版本内容已变化，请重新创建任务"})
+	}
+	baseRendered := rendered
+	if source.SourceType == "novel" {
+		rendered = sourceScriptFidelityPrompt(baseRendered, 1, nil)
 	}
 	nodeRunID, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
@@ -684,17 +888,18 @@ func (a Activities) GenerateSourceScriptEpisode(ctx context.Context, input Gener
 		NodeKey:        SourceToScriptEpisodeNodeKey(sourceChapterID, input.EpisodeIndex),
 		NodeType:       SourceToScriptEpisodeNodeType,
 		Input: mustJSON(map[string]any{
-			"sourceId":          input.SourceID,
-			"sourceChapterId":   sourceChapterID,
-			"scriptId":          input.ScriptID,
-			"scriptVersionId":   input.ScriptVersionID,
-			"episodeIndex":      input.EpisodeIndex,
-			"episodeTotal":      input.EpisodeTotal,
-			"modelProfileKey":   project.ScriptModelProfileKey,
-			"promptTemplateKey": rendered.TemplateKey,
-			"promptVersionId":   rendered.PromptVersionID,
-			"promptHash":        rendered.RenderedHash,
-			"promptSource":      rendered.Source,
+			"sourceId":            input.SourceID,
+			"sourceChapterId":     sourceChapterID,
+			"scriptId":            input.ScriptID,
+			"generationId":        generation.ID,
+			"baseScriptVersionId": generation.BaseScriptVersionID,
+			"episodeIndex":        input.EpisodeIndex,
+			"episodeTotal":        input.EpisodeTotal,
+			"modelProfileKey":     project.ScriptModelProfileKey,
+			"promptTemplateKey":   rendered.TemplateKey,
+			"promptVersionId":     rendered.PromptVersionID,
+			"promptHash":          rendered.RenderedHash,
+			"promptSource":        rendered.Source,
 		}),
 		AttemptGeneration: input.AttemptGeneration,
 	})
@@ -712,11 +917,6 @@ func (a Activities) GenerateSourceScriptEpisode(ctx context.Context, input Gener
 	if err != nil {
 		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	if err := a.ensureModelProfileConfigured(ctx, input.OrganizationID, project.ScriptModelProfileKey, []string{"text", "multimodal"}); err != nil {
-		code, message := workflowErrorFields(err, codeActivityFailed)
-		_ = a.failAgentRun(ctx, agentRunID, code, message)
-		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(err)
-	}
 	if a.gateway == nil {
 		err := workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"}
 		_ = a.failAgentRun(ctx, agentRunID, err.Code, err.Message)
@@ -727,44 +927,69 @@ func (a Activities) GenerateSourceScriptEpisode(ctx context.Context, input Gener
 		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	logicalNodeKey := SourceToScriptEpisodeNodeKey(sourceChapterID, input.EpisodeIndex)
-	idempotencyKey := stableProviderRequestKey(
-		"source-script",
-		executionIdentity,
-		logicalNodeKey,
-		strings.Join([]string{input.SourceID, sourceChapterID, rendered.RenderedHash}, ":"),
-	)
-	gatewayResp, err := a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
-		OrganizationID:    input.OrganizationID,
-		ProjectID:         input.ProjectID,
-		WorkflowRunID:     input.WorkflowRunID,
-		NodeRunID:         nodeRunID.NodeRunID,
-		ModelProfileKey:   project.ScriptModelProfileKey,
-		PromptTemplateKey: rendered.TemplateKey,
-		PromptVersionID:   rendered.PromptVersionID,
-		PromptHash:        rendered.RenderedHash,
-		PromptSource:      rendered.Source,
-		IdempotencyKey:    idempotencyKey,
-		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText}),
-		Options: provider.GatewayTextOptions{
-			TimeoutMS: providerTextGatewayTimeoutMS, IdempotencyKey: idempotencyKey,
-		},
-	})
-	if err != nil {
-		cause := workflowErrorFromProvider(err, codeActivityFailed)
-		code, message := workflowErrorFields(cause, codeActivityFailed)
-		_ = a.failAgentRun(ctx, agentRunID, code, message)
-		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(cause)
+	maxAttempts := 1
+	if source.SourceType == "novel" {
+		maxAttempts = sourceScriptFidelityMaxAttempts
 	}
-	content := strings.TrimSpace(gatewayResp.Output.Text)
-	if content == "" {
-		content = strings.TrimSpace(string(gatewayResp.Output.Raw))
+	var gatewayResp provider.GatewayTextResponse
+	var content string
+	var fidelityErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if source.SourceType == "novel" && attempt > 1 {
+			rendered = sourceScriptFidelityPrompt(baseRendered, attempt, fidelityErr)
+		}
+		idempotencyKey := stableProviderRequestKey(
+			"source-script",
+			executionIdentity,
+			logicalNodeKey,
+			strings.Join([]string{input.SourceID, sourceChapterID, rendered.RenderedHash, strconv.Itoa(attempt)}, ":"),
+		)
+		gatewayResp, err = a.generateProviderText(ctx, nodeRunID, provider.GatewayTextRequest{
+			OrganizationID:    input.OrganizationID,
+			ProjectID:         input.ProjectID,
+			WorkflowRunID:     input.WorkflowRunID,
+			NodeRunID:         nodeRunID.NodeRunID,
+			ModelProfileKey:   project.ScriptModelProfileKey,
+			ProviderModelID:   generation.ProviderModelID,
+			PromptTemplateKey: rendered.TemplateKey,
+			PromptVersionID:   rendered.PromptVersionID,
+			PromptHash:        rendered.RenderedHash,
+			PromptSource:      rendered.Source,
+			IdempotencyKey:    idempotencyKey,
+			Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText}),
+			Options: provider.GatewayTextOptions{
+				TimeoutMS: providerTextGatewayTimeoutMS, IdempotencyKey: idempotencyKey,
+			},
+		})
+		if err != nil {
+			cause := workflowErrorFromProvider(err, codeActivityFailed)
+			code, message := workflowErrorFields(cause, codeActivityFailed)
+			_ = a.failAgentRun(ctx, agentRunID, code, message)
+			return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(cause)
+		}
+		content = strings.TrimSpace(gatewayResp.Output.Text)
+		if content == "" {
+			content = strings.TrimSpace(string(gatewayResp.Output.Raw))
+		}
+		if content == "" {
+			err := workflowError{Code: provider.CodeInvalidRequest, Message: "provider gateway returned empty script content"}
+			_ = a.failAgentRun(ctx, agentRunID, err.Code, err.Message)
+			return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(err)
+		}
+		if source.SourceType != "novel" {
+			break
+		}
+		fidelityErr = validateNovelScriptFidelity(sourceChapterContent, content)
+		if fidelityErr == nil {
+			break
+		}
+		if attempt == maxAttempts {
+			err := workflowError{Code: provider.CodeInvalidRequest, Message: fmt.Sprintf("小说剧本在 %d 轮生成后仍未通过忠实度校验：%s", maxAttempts, fidelityErr.Error())}
+			_ = a.failAgentRun(ctx, agentRunID, err.Code, err.Message)
+			return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(err)
+		}
 	}
-	if content == "" {
-		err := workflowError{Code: provider.CodeInvalidRequest, Message: "provider gateway returned empty script content"}
-		_ = a.failAgentRun(ctx, agentRunID, err.Code, err.Message)
-		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(err)
-	}
-	output, err := a.upsertGeneratedScriptEpisodeFromSource(ctx, input, source, nodeRunID, sourceChapterID, episodeTitle, rendered, gatewayResp, agentRunID, content)
+	output, err := a.storeSourceScriptGenerationResult(ctx, input, generation, generationItem, nodeRunID, rendered, gatewayResp, agentRunID, content)
 	if err != nil {
 		return SourceScriptEpisodeOutput{}, sourceScriptEpisodeActivityError(workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -774,6 +999,59 @@ func (a Activities) GenerateSourceScriptEpisode(ctx context.Context, input Gener
 }
 
 func (a Activities) FinalizeScriptFromSource(ctx context.Context, input GenerateScriptFromSourceInput, plan SourceToScriptPlan, finalization SourceToScriptFinalization) (SourceToScriptOutput, error) {
+	if existing, ok, err := a.completedSourceToScriptOutput(ctx, input.WorkflowRunID); err != nil {
+		return SourceToScriptOutput{}, err
+	} else if ok {
+		return existing, nil
+	}
+	execution, err := StartNodeRun(ctx, a.db, NodeRunInput{
+		OrganizationID: input.OrganizationID,
+		ProjectID:      input.ProjectID,
+		WorkflowRunID:  input.WorkflowRunID,
+		NodeKey:        nodeFinalizeScriptFromSourceKey,
+		NodeType:       "workflow.script_finalize",
+		Input: mustJSON(map[string]any{
+			"generationId": plan.GenerationID, "sourceId": plan.SourceID,
+			"scriptId": plan.ScriptID, "baseScriptVersionId": plan.BaseScriptVersionID,
+			"requestedEpisodeCount": finalization.RequestedEpisodeCount,
+			"completedEpisodeCount": finalization.CompletedEpisodeCount,
+			"failedEpisodeCount":    finalization.FailedEpisodeCount,
+		}),
+	})
+	if err != nil {
+		if existing, ok, replayErr := a.completedSourceToScriptOutput(ctx, input.WorkflowRunID); replayErr == nil && ok {
+			return existing, nil
+		}
+		return SourceToScriptOutput{}, err
+	}
+	output, err := a.finalizeScriptFromSourceGeneration(ctx, input, plan, finalization, execution)
+	if err != nil {
+		return SourceToScriptOutput{}, err
+	}
+	return output, nil
+}
+
+func (a Activities) completedSourceToScriptOutput(ctx context.Context, workflowRunID string) (SourceToScriptOutput, bool, error) {
+	var raw json.RawMessage
+	err := a.db.QueryRow(ctx, `
+		SELECT output
+		FROM workflow_node_runs
+		WHERE workflow_run_id = $1 AND node_key = $2 AND status = 'succeeded'
+	`, workflowRunID, nodeFinalizeScriptFromSourceKey).Scan(&raw)
+	if err == pgx.ErrNoRows {
+		return SourceToScriptOutput{}, false, nil
+	}
+	if err != nil {
+		return SourceToScriptOutput{}, false, err
+	}
+	var output SourceToScriptOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return SourceToScriptOutput{}, false, err
+	}
+	return output, true, nil
+}
+
+func (a Activities) finalizeScriptFromSourceLegacy(ctx context.Context, input GenerateScriptFromSourceInput, plan SourceToScriptPlan, finalization SourceToScriptFinalization) (SourceToScriptOutput, error) {
 	baseInput := TextToStoryboardInput{OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID, Prompt: "source_to_script", CreatedBy: input.CreatedBy}
 	nodeExecution, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
@@ -873,12 +1151,57 @@ func (a Activities) FinalizeScriptFromSource(ctx context.Context, input Generate
 		mustJSON(failedEpisodes), firstStringValue(providerCallIDs), mustJSON(providerCallIDs), firstStringValue(modelIDs), mustJSON(modelIDs)); err != nil {
 		return SourceToScriptOutput{}, err
 	}
-	scriptStatus := "draft"
-	if generatedEpisodeCount > 0 {
-		scriptStatus = "active"
-	}
-	if _, err := tx.Exec(ctx, `UPDATE scripts SET status = $4, current_version_id = $2, updated_at = now() WHERE project_id = $1 AND id = $3`, input.ProjectID, plan.ScriptVersionID, plan.ScriptID, scriptStatus); err != nil {
-		return SourceToScriptOutput{}, err
+	activated := false
+	projectActivated := false
+	if finalization.CompletedEpisodeCount > 0 {
+		var currentVersionID string
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(current_version_id::text, '')
+			FROM scripts
+			WHERE project_id = $1 AND id = $2
+			FOR UPDATE
+		`, input.ProjectID, plan.ScriptID).Scan(&currentVersionID); err != nil {
+			return SourceToScriptOutput{}, err
+		}
+		if currentVersionID != plan.ScriptVersionID && currentVersionID != plan.PreviousScriptVersionID {
+			return SourceToScriptOutput{}, newWorkflowApplicationError(
+				workflowError{Code: "SCRIPT_VERSION_CONFLICT", Message: "剧本版本已发生变化，生成结果未覆盖用户的新版本"},
+				"SCRIPT_VERSION_CONFLICT",
+				"剧本版本已发生变化，生成结果未覆盖用户的新版本",
+			)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE scripts
+			SET status = 'active', current_version_id = $2, updated_at = now()
+			WHERE project_id = $1 AND id = $3
+		`, input.ProjectID, plan.ScriptVersionID, plan.ScriptID); err != nil {
+			return SourceToScriptOutput{}, err
+		}
+		activated = true
+		tag, err := tx.Exec(ctx, `
+			UPDATE projects
+			SET active_script_id = $2, updated_at = now()
+			WHERE id = $1
+			  AND organization_id = $4
+			  AND (
+			    active_script_id IS NOT DISTINCT FROM NULLIF($3, '')::uuid
+			    OR active_script_id = $2
+			  )
+		`, input.ProjectID, plan.ScriptID, plan.PreviousActiveScriptID, input.OrganizationID)
+		if err != nil {
+			return SourceToScriptOutput{}, err
+		}
+		projectActivated = tag.RowsAffected() > 0
+		if plan.PreviousScriptVersionID != "" && plan.PreviousScriptVersionID != plan.ScriptVersionID {
+			if err := production.MarkScriptVersionDownstreamStale(ctx, tx, input.ProjectID, plan.PreviousScriptVersionID); err != nil {
+				return SourceToScriptOutput{}, err
+			}
+		}
+		if projectActivated {
+			if err := production.MarkFinalVideoStale(ctx, tx, input.ProjectID, ""); err != nil {
+				return SourceToScriptOutput{}, err
+			}
+		}
 	}
 	sourceStatus := "processing"
 	if status == "succeeded" {
@@ -906,15 +1229,17 @@ func (a Activities) FinalizeScriptFromSource(ctx context.Context, input Generate
 		Content:         content,
 	}
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "script.generated", "script", plan.ScriptID, mustJSON(map[string]any{
-		"scriptId":        plan.ScriptID,
-		"scriptVersionId": plan.ScriptVersionID,
-		"sourceId":        plan.SourceID,
-		"workflowRunId":   input.WorkflowRunID,
-		"status":          status,
-		"episodeCount":    generatedEpisodeCount,
-		"completedItems":  finalization.CompletedEpisodeCount,
-		"failedItems":     finalization.FailedEpisodeCount,
-		"failedEpisodes":  failedEpisodes,
+		"scriptId":         plan.ScriptID,
+		"scriptVersionId":  plan.ScriptVersionID,
+		"sourceId":         plan.SourceID,
+		"workflowRunId":    input.WorkflowRunID,
+		"status":           status,
+		"episodeCount":     generatedEpisodeCount,
+		"completedItems":   finalization.CompletedEpisodeCount,
+		"failedItems":      finalization.FailedEpisodeCount,
+		"failedEpisodes":   failedEpisodes,
+		"activated":        activated,
+		"projectActivated": projectActivated,
 	})); err != nil {
 		return SourceToScriptOutput{}, err
 	}
@@ -929,15 +1254,23 @@ func (a Activities) FinalizeScriptFromSource(ctx context.Context, input Generate
 
 func sourceToScriptFinalStatus(episodeTotal, generatedEpisodeCount int, finalization SourceToScriptFinalization) string {
 	if finalization.FailedEpisodeCount > 0 {
-		if generatedEpisodeCount > 0 || finalization.CompletedEpisodeCount > 0 {
+		if finalization.CompletedEpisodeCount > 0 {
 			return "partial_succeeded"
 		}
 		return "failed"
 	}
-	if generatedEpisodeCount >= maxInt(1, episodeTotal) {
+	requestedEpisodeCount := finalization.RequestedEpisodeCount
+	if requestedEpisodeCount <= 0 {
+		requestedEpisodeCount = maxInt(1, episodeTotal)
+	}
+	completedEpisodeCount := finalization.CompletedEpisodeCount
+	if finalization.RequestedEpisodeCount <= 0 && completedEpisodeCount == 0 {
+		completedEpisodeCount = minInt(generatedEpisodeCount, requestedEpisodeCount)
+	}
+	if completedEpisodeCount >= requestedEpisodeCount {
 		return "succeeded"
 	}
-	if generatedEpisodeCount > 0 {
+	if completedEpisodeCount > 0 {
 		return "partial_succeeded"
 	}
 	return "failed"
@@ -985,7 +1318,7 @@ func sourceToScriptChapterRefs(chapters []novelChapterRecord) []SourceToScriptCh
 	return out
 }
 
-func (a Activities) sourceScriptDraftForIdempotency(ctx context.Context, tx pgx.Tx, projectID, idempotencyKey string) (string, string, bool, error) {
+func (a Activities) sourceScriptDraftForIdempotency(ctx context.Context, tx pgx.Tx, projectID, sourceID, idempotencyKey string) (string, string, bool, error) {
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if idempotencyKey == "" {
 		return "", "", false, nil
@@ -998,11 +1331,12 @@ func (a Activities) sourceScriptDraftForIdempotency(ctx context.Context, tx pgx.
 		WHERE sv.project_id = $1
 		  AND sv.metadata->>'source' = 'source_to_script'
 		  AND sv.metadata->>'idempotencyKey' = $2
+		  AND s.source_id = $3
 		  AND COALESCE(s.status, 'active') <> 'archived'
 		  AND COALESCE(sv.status, 'active') <> 'archived'
 		ORDER BY sv.created_at DESC
 		LIMIT 1
-	`, projectID, idempotencyKey).Scan(&scriptID, &versionID)
+	`, projectID, idempotencyKey, sourceID).Scan(&scriptID, &versionID)
 	if err == pgx.ErrNoRows {
 		return "", "", false, nil
 	}
@@ -1010,6 +1344,182 @@ func (a Activities) sourceScriptDraftForIdempotency(ctx context.Context, tx pgx.
 		return "", "", false, err
 	}
 	return scriptID, versionID, true, nil
+}
+
+func reusableSourceScriptTx(ctx context.Context, tx pgx.Tx, projectID, sourceID, targetScriptID, activeScriptID string) (string, string, string, bool, error) {
+	load := func(scriptID string) (string, string, string, bool, error) {
+		scriptID = strings.TrimSpace(scriptID)
+		if scriptID == "" {
+			return "", "", "", false, nil
+		}
+		var id, versionID, title string
+		err := tx.QueryRow(ctx, `
+			SELECT s.id::text, sv.id::text, s.title
+			FROM scripts s
+			JOIN script_versions sv ON sv.id = s.current_version_id AND sv.script_id = s.id
+			WHERE s.project_id = $1
+			  AND s.source_id = $2
+			  AND s.id = $3
+			  AND COALESCE(s.status, 'active') <> 'archived'
+			  AND COALESCE(sv.status, 'active') <> 'archived'
+		`, projectID, sourceID, scriptID).Scan(&id, &versionID, &title)
+		if err == pgx.ErrNoRows {
+			return "", "", "", false, nil
+		}
+		if err != nil {
+			return "", "", "", false, err
+		}
+		return id, versionID, title, true, nil
+	}
+
+	if strings.TrimSpace(targetScriptID) != "" {
+		scriptID, versionID, title, found, err := load(targetScriptID)
+		if err != nil {
+			return "", "", "", false, err
+		}
+		if !found {
+			return "", "", "", false, newWorkflowApplicationError(
+				workflowError{Code: provider.CodeInvalidRequest, Message: "target script is not the active script for this source"},
+				provider.CodeInvalidRequest,
+				"target script is not the active script for this source",
+			)
+		}
+		return scriptID, versionID, title, true, nil
+	}
+
+	if scriptID, versionID, title, found, err := load(activeScriptID); err != nil || found {
+		return scriptID, versionID, title, found, err
+	}
+
+	var scriptID, versionID, title string
+	err := tx.QueryRow(ctx, `
+		SELECT s.id::text, sv.id::text, s.title
+		FROM scripts s
+		JOIN script_versions sv ON sv.id = s.current_version_id AND sv.script_id = s.id
+		WHERE s.project_id = $1
+		  AND s.source_id = $2
+		  AND COALESCE(s.status, 'active') <> 'archived'
+		  AND COALESCE(sv.status, 'active') <> 'archived'
+		ORDER BY s.updated_at DESC, s.created_at DESC, s.id
+		LIMIT 1
+	`, projectID, sourceID).Scan(&scriptID, &versionID, &title)
+	if err == pgx.ErrNoRows {
+		return "", "", "", false, nil
+	}
+	if err != nil {
+		return "", "", "", false, err
+	}
+	return scriptID, versionID, title, true, nil
+}
+
+func forkSourceScriptVersionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	input GenerateScriptFromSourceInput,
+	source ProjectSourceRecord,
+	scriptID string,
+	baseVersionID string,
+	chapters []SourceToScriptChapterRef,
+) (string, error) {
+	var lockedCurrentVersionID string
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(current_version_id::text, '')
+		FROM scripts
+		WHERE project_id = $1 AND id = $2
+		FOR UPDATE
+	`, input.ProjectID, scriptID).Scan(&lockedCurrentVersionID); err != nil {
+		return "", err
+	}
+	if lockedCurrentVersionID != baseVersionID {
+		return "", newWorkflowApplicationError(
+			workflowError{Code: "SCRIPT_VERSION_CONFLICT", Message: "剧本版本已发生变化，请基于最新版本重新生成"},
+			"SCRIPT_VERSION_CONFLICT",
+			"剧本版本已发生变化，请基于最新版本重新生成",
+		)
+	}
+
+	var nextVersion int
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(MAX(COALESCE(version, version_no)), 0) + 1
+		FROM script_versions
+		WHERE script_id = $1
+	`, scriptID).Scan(&nextVersion); err != nil {
+		return "", err
+	}
+	targetChapterIDs := make([]string, 0, len(chapters))
+	targetEpisodeIndexes := make([]int32, 0, maxInt(1, len(chapters)))
+	for index, chapter := range chapters {
+		if strings.TrimSpace(chapter.ID) != "" {
+			targetChapterIDs = append(targetChapterIDs, chapter.ID)
+		}
+		episodeIndex := chapter.ChapterIndex
+		if episodeIndex <= 0 {
+			episodeIndex = index + 1
+		}
+		targetEpisodeIndexes = append(targetEpisodeIndexes, int32(episodeIndex))
+	}
+	if source.SourceType != "novel" {
+		targetEpisodeIndexes = []int32{1}
+	}
+
+	var versionID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO script_versions(
+			organization_id, project_id, script_id, version_no, version, content,
+			content_format, status, source_type, prompt_version_id, prompt_hash, metadata, created_by
+		)
+		SELECT organization_id, project_id, script_id, $4, $4, content,
+		       content_format, 'active', source_type, NULL, NULL,
+		       COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+		         'source', 'source_to_script',
+		         'sourceId', $5::text,
+		         'sourceType', $6::text,
+		         'sourceTitle', $7::text,
+		         'sourceChapterIds', $8::jsonb,
+		         'agentTaskId', NULLIF($9, ''),
+		         'agentStepId', NULLIF($10, ''),
+		         'idempotencyKey', NULLIF($11, ''),
+		         'generationStatus', 'running',
+		         'baseVersionId', $3::text,
+		         'createdAt', now()
+		       ),
+		       NULLIF($12, '')::uuid
+		FROM script_versions
+		WHERE project_id = $1 AND script_id = $2 AND id = $3::uuid
+		RETURNING id::text
+	`, input.ProjectID, scriptID, baseVersionID, nextVersion, source.ID, source.SourceType, source.Title,
+		mustJSON(targetChapterIDs), input.AgentTaskID, input.AgentStepID, input.IdempotencyKey, input.CreatedBy).Scan(&versionID); err != nil {
+		return "", err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO script_episodes(
+			organization_id, project_id, script_id, script_version_id, source_id, source_chapter_id,
+			episode_index, volume_index, section_index, volume_title, episode_title, content, content_format,
+			prompt_version_id, prompt_hash, provider_call_id, review_status, manual_override, stale_state,
+			metadata, created_by, edited_by, edited_at
+		)
+		SELECT organization_id, project_id, script_id, $3, source_id, source_chapter_id,
+		       episode_index, volume_index, section_index, volume_title, episode_title, content, content_format,
+		       prompt_version_id, prompt_hash, provider_call_id, review_status, manual_override, stale_state,
+		       COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+		         'copiedFromVersionId', $2::text,
+		         'copiedFromEpisodeId', id
+		       ),
+		       created_by, edited_by, edited_at
+		FROM script_episodes
+		WHERE project_id = $1
+		  AND script_version_id = $2::uuid
+		  AND NOT (episode_index = ANY($4::int[]))
+		  AND (
+		    cardinality($5::text[]) = 0
+		    OR source_chapter_id IS NULL
+		    OR NOT (source_chapter_id::text = ANY($5::text[]))
+		  )
+	`, input.ProjectID, baseVersionID, versionID, targetEpisodeIndexes, targetChapterIDs); err != nil {
+		return "", err
+	}
+	return versionID, nil
 }
 
 func (a Activities) completedSourceScriptEpisode(ctx context.Context, input GenerateSourceScriptEpisodeInput) (SourceScriptEpisodeOutput, bool, error) {
@@ -1099,9 +1609,17 @@ func (a Activities) upsertGeneratedScriptEpisodeFromSource(ctx context.Context, 
 		"modelId":            gatewayResp.ModelID,
 		"sourceChapterId":    sourceChapterID,
 		"sourceChapterTitle": episodeTitle,
+		"batchIndex":         input.BatchIndex,
+		"batchTotal":         input.BatchTotal,
 	})
+	conflictTarget := "(script_version_id, episode_index)"
+	conflictIdentityUpdate := "source_chapter_id = COALESCE(script_episodes.source_chapter_id, EXCLUDED.source_chapter_id),"
+	if strings.TrimSpace(sourceChapterID) != "" {
+		conflictTarget = "(script_version_id, source_chapter_id) WHERE source_chapter_id IS NOT NULL"
+		conflictIdentityUpdate = "episode_index = EXCLUDED.episode_index, source_chapter_id = EXCLUDED.source_chapter_id,"
+	}
 	var episodeID string
-	if err := tx.QueryRow(ctx, `
+	query := fmt.Sprintf(`
 		INSERT INTO script_episodes(
 			organization_id, project_id, script_id, script_version_id, source_id, source_chapter_id,
 			episode_index, volume_index, section_index, volume_title, episode_title, content, content_format,
@@ -1114,9 +1632,9 @@ func (a Activities) upsertGeneratedScriptEpisodeFromSource(ctx context.Context, 
 			(SELECT id FROM provider_call_logs WHERE id = NULLIF($15, '')::uuid),
 			'pending', 'fresh', $16, NULLIF($17, '')::uuid
 		)
-		ON CONFLICT (script_version_id, episode_index) DO UPDATE SET
+		ON CONFLICT %s DO UPDATE SET
 			source_id = EXCLUDED.source_id,
-			source_chapter_id = COALESCE(script_episodes.source_chapter_id, EXCLUDED.source_chapter_id),
+			%s
 			volume_index = EXCLUDED.volume_index,
 			section_index = EXCLUDED.section_index,
 			volume_title = EXCLUDED.volume_title,
@@ -1131,7 +1649,8 @@ func (a Activities) upsertGeneratedScriptEpisodeFromSource(ctx context.Context, 
 			metadata = COALESCE(script_episodes.metadata, '{}'::jsonb) || EXCLUDED.metadata,
 			updated_at = now()
 		RETURNING id::text
-	`, input.OrganizationID, input.ProjectID, input.ScriptID, input.ScriptVersionID, source.ID, sourceChapterID,
+	`, conflictTarget, conflictIdentityUpdate)
+	if err := tx.QueryRow(ctx, query, input.OrganizationID, input.ProjectID, input.ScriptID, input.ScriptVersionID, source.ID, sourceChapterID,
 		episodeIndex, volumeIndex, sectionIndex, volumeTitle, episodeTitle, strings.TrimSpace(content),
 		rendered.PromptVersionID, rendered.RenderedHash, gatewayResp.ProviderCallID, metadata, input.CreatedBy).Scan(&episodeID); err != nil {
 		return SourceScriptEpisodeOutput{}, err
@@ -1269,7 +1788,7 @@ func (a Activities) GenerateScriptFromSource(ctx context.Context, input Generate
 	if err := validateSourceToScriptInput(input); err != nil {
 		return SourceToScriptOutput{}, err
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return SourceToScriptOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -1453,6 +1972,7 @@ func resolveSourceToScriptOptions(raw json.RawMessage) SourceToScriptOptions {
 	}
 	_ = json.Unmarshal(raw, &options)
 	options.SourceID = strings.TrimSpace(options.SourceID)
+	options.TargetScriptID = strings.TrimSpace(options.TargetScriptID)
 	options.Instruction = strings.TrimSpace(options.Instruction)
 	options.Title = strings.TrimSpace(options.Title)
 	options.ChapterIDs = normalizeStringSlice(options.ChapterIDs)
@@ -1466,16 +1986,23 @@ func validateSourceToScriptInput(input GenerateScriptFromSourceInput) error {
 	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.SourceID) == "" {
 		return fmt.Errorf("organizationId, projectId, workflowRunId, and sourceId are required")
 	}
+	if input.CreateNewScript && strings.TrimSpace(input.TargetScriptID) != "" {
+		return fmt.Errorf("scriptId and createNewScript cannot be used together")
+	}
 	return nil
 }
 
 func (a Activities) projectSourceRecord(ctx context.Context, projectID, sourceID string) (ProjectSourceRecord, error) {
 	var item ProjectSourceRecord
 	err := a.db.QueryRow(ctx, `
-		SELECT id::text, source_type, title, content, content_format, COALESCE(status, 'ready')
+		SELECT id::text, source_type, title, content, content_format, COALESCE(status, 'ready'),
+		       content_revision, content_hash
 		FROM project_sources
 		WHERE project_id = $1 AND id = $2
-	`, projectID, sourceID).Scan(&item.ID, &item.SourceType, &item.Title, &item.Content, &item.ContentFormat, &item.Status)
+	`, projectID, sourceID).Scan(
+		&item.ID, &item.SourceType, &item.Title, &item.Content, &item.ContentFormat, &item.Status,
+		&item.ContentRevision, &item.ContentHash,
+	)
 	return item, err
 }
 
@@ -1560,6 +2087,9 @@ func (a Activities) createGeneratedScriptFromSource(ctx context.Context, input G
 		return SourceToScriptOutput{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE scripts SET current_version_id = $2 WHERE id = $1`, scriptID, versionID); err != nil {
+		return SourceToScriptOutput{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE projects SET active_script_id = $2, updated_at = now() WHERE id = $1`, input.ProjectID, scriptID); err != nil {
 		return SourceToScriptOutput{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE project_sources SET status = 'processed' WHERE id = $1`, source.ID); err != nil {

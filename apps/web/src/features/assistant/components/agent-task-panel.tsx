@@ -256,9 +256,10 @@ export function AgentTaskConversationActivity({
   const completedCount = steps.filter((step) => step.status === "succeeded").length;
   const waitingCount = steps.filter((step) => step.status === "waiting_approval").length;
   const failedCount = steps.filter((step) => ["failed", "blocked"].includes(step.status)).length;
+  const taskError = task?.errorMessage ? localizePlatformError(task.errorMessage, task.errorCode) : "";
   const summary = task
     ? stringValue(task.summary?.summary) ||
-      (task.errorMessage ? localizePlatformError(task.errorMessage, task.errorCode) : "") ||
+      taskError ||
       "任务已创建。"
     : "正在读取任务";
 
@@ -287,6 +288,7 @@ export function AgentTaskConversationActivity({
         </div>
 
         <div className="mt-2 break-words text-xs text-muted-foreground">{summary}</div>
+        {taskError && taskError !== summary ? <div className="mt-1 break-words text-xs text-destructive">失败原因：{taskError}</div> : null}
 
         {activeProgress ? <StreamProgress progress={activeProgress} /> : null}
 
@@ -351,6 +353,7 @@ function ResultSummary({ task }: { task: AgentTask }) {
   const waiting = steps.filter((step) => step.status === "waiting_approval").length;
   const summary = stringValue(task.summary?.summary);
   const permissionMode = stringValue(task.constraints?.permissionMode);
+  const taskError = task.errorMessage ? localizePlatformError(task.errorMessage, task.errorCode) : "";
 
   return (
     <div className="w-full min-w-0 max-w-full rounded-md border bg-muted/30 px-3 py-2">
@@ -362,8 +365,9 @@ function ResultSummary({ task }: { task: AgentTask }) {
       </div>
       {task.temporalWorkflowId ? <TechnicalDetails items={[["后台任务", shortID(task.temporalWorkflowId)]]} /> : null}
       <div className="mt-2 break-words text-xs text-muted-foreground">
-        {summary || (task.errorMessage ? localizePlatformError(task.errorMessage, task.errorCode) : "任务已创建。")}
+        {summary || taskError || "任务已创建。"}
       </div>
+      {taskError && taskError !== summary ? <div className="mt-1 break-words text-xs text-destructive">失败原因：{taskError}</div> : null}
     </div>
   );
 }
@@ -614,6 +618,9 @@ type StepWorkflowProgress = {
     nodeKey: string;
     nodeType: string;
     status: string;
+    shotId: string;
+    shotNo: number;
+    anchorRole: string;
     episodeIndex: number;
     episodeTotal: number;
     episodeTitle: string;
@@ -652,14 +659,17 @@ function StreamProgress({ progress }: { progress: StepStreamProgress }) {
 function WorkflowProgress({ progress }: { progress: StepWorkflowProgress }) {
   const node = progress.activeNode;
   const active = ["pending", "queued", "running", "cancelling"].includes(progress.status);
+  const nodeStage = workflowNodeStageLabel(node?.nodeType || "", node?.nodeKey || "");
   return (
     <div className="mt-2 min-w-0 overflow-hidden rounded-md border border-primary/20 bg-primary/5 p-2">
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
         {active ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
         <span className="font-medium text-primary">后台任务</span>
         <Badge variant="outline">{stepStatusLabel(progress.status)}</Badge>
-        {node?.episodeTotal ? <Badge variant="outline">第 {node.episodeIndex}/{node.episodeTotal} 集</Badge> : null}
+        {node?.shotNo ? <Badge variant="outline">第 {node.shotNo} 个分镜</Badge> : null}
+        {!node?.shotNo && node?.episodeTotal ? <Badge variant="outline">第 {node.episodeIndex}/{node.episodeTotal} 集</Badge> : null}
         {node?.episodeTitle ? <Badge variant="outline" className="max-w-full truncate">{node.episodeTitle}</Badge> : null}
+        {nodeStage ? <Badge variant="outline">{nodeStage}</Badge> : null}
         <Badge variant="outline">节点 {progress.completedNodes}/{progress.totalNodes}</Badge>
       </div>
       {node?.partialText ? (
@@ -667,7 +677,9 @@ function WorkflowProgress({ progress }: { progress: StepWorkflowProgress }) {
           {node.partialText}
         </pre>
       ) : node?.status === "running" ? (
-        <div className="mt-2 text-xs text-muted-foreground">正在处理当前分集</div>
+        <div className="mt-2 text-xs text-muted-foreground">
+          {node?.shotNo && nodeStage ? `正在处理第 ${node.shotNo} 个分镜 · ${nodeStage}` : "正在处理当前任务"}
+        </div>
       ) : null}
       {node?.errorMessage ? <div className="mt-2 text-xs text-destructive">{localizePlatformError(node.errorMessage, node.errorCode)}</div> : null}
     </div>
@@ -943,6 +955,8 @@ function toolLabel(tool: string) {
     "asset.get": "读取资产卡",
     "asset.update": "更新资产",
     "asset.revise_prompt": "修订资产提示词",
+    "asset.batch_generate_prompts": "批量生成资产提示词",
+    "asset.batch_generate_images": "批量生成资产图片",
     "asset.delete": "删除资产",
     "storyboard.list": "列出分镜",
     "storyboard.update_shot": "更新分镜",
@@ -969,6 +983,7 @@ function toolLabel(tool: string) {
     "workflow.start": "启动工作流",
     "workflow.cancel": "取消工作流",
     "shot.status": "镜头状态",
+    "shot.generate_image_prompts": "生成图片提示词",
     "shot.generate_missing_images": "生成缺失图片",
     "shot.generate_missing_videos": "生成缺失视频",
     "shot.cancel_running_videos": "取消镜头视频",
@@ -1122,6 +1137,9 @@ function stepWorkflowProgress(step: AgentStep): StepWorkflowProgress | null {
             nodeKey: stringValue(activeNode.nodeKey),
             nodeType: stringValue(activeNode.nodeType),
             status: stringValue(activeNode.status),
+            shotId: stringValue(nodeInput?.shotId),
+            shotNo: numberValue(nodeInput?.shotNo),
+            anchorRole: stringValue(nodeInput?.anchorRole),
             episodeIndex: numberValue(nodeInput?.episodeIndex),
             episodeTotal: numberValue(nodeInput?.episodeTotal),
             episodeTitle: stringValue(nodeInput?.episodeTitle),
@@ -1133,6 +1151,14 @@ function stepWorkflowProgress(step: AgentStep): StepWorkflowProgress | null {
         }
       : {}),
   };
+}
+
+function workflowNodeStageLabel(nodeType: string, nodeKey: string) {
+  if (nodeType === "agent.image_prompt.generate" || nodeKey.startsWith("generate_shot_image_prompt_")) return "图片提示词生成";
+  if (nodeType === "agent.image_prompt.review" || nodeKey.startsWith("review_shot_image_prompt_")) return "图片提示词审核";
+  if (nodeType === "agent.video_prompt.generate" || nodeKey.startsWith("generate_shot_video_prompt_")) return "视频提示词生成";
+  if (nodeType === "agent.video_prompt.review" || nodeKey.startsWith("review_shot_video_prompt_")) return "视频提示词审核";
+  return "";
 }
 
 function stepDisplayStatus(step: AgentStep, workflowProgress: StepWorkflowProgress | null) {

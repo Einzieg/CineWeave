@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	mediapkg "github.com/Einzieg/cineweave/internal/media"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/google/uuid"
 )
 
@@ -76,17 +77,24 @@ func (a Activities) ComposeEpisodeAudioMix(ctx context.Context, input ComposeEpi
 	if !ok {
 		return ComposeEpisodeAudioMixOutput{}, fmt.Errorf("object storage does not support audio mixing")
 	}
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
+	if err != nil {
+		return ComposeEpisodeAudioMixOutput{}, err
+	}
 	var timebase, durationTicks int64
 	var audioConfigurationRevision int
-	var audioStrategy string
 	if err := a.db.QueryRow(ctx, `
-		SELECT analysis.timeline_timebase, analysis.estimated_duration_ticks, project.audio_strategy,
+		SELECT analysis.timeline_timebase, analysis.estimated_duration_ticks,
 		       project.audio_configuration_revision
 		FROM script_timing_analyses analysis JOIN projects project ON project.id = analysis.project_id
 		WHERE analysis.organization_id = $1 AND analysis.project_id = $2 AND analysis.script_episode_id = $3 AND analysis.id = $4 AND analysis.status = 'ready'
-	`, input.OrganizationID, input.ProjectID, input.ScriptEpisodeID, input.TimingAnalysisID).Scan(&timebase, &durationTicks, &audioStrategy, &audioConfigurationRevision); err != nil {
+	`, input.OrganizationID, input.ProjectID, input.ScriptEpisodeID, input.TimingAnalysisID).Scan(&timebase, &durationTicks, &audioConfigurationRevision); err != nil {
 		return ComposeEpisodeAudioMixOutput{}, err
 	}
+	if timebase != project.TimelineTimebase {
+		return ComposeEpisodeAudioMixOutput{}, fmt.Errorf("%s: timing analysis belongs to a different production configuration", videoproduction.CodeGenerationMismatch)
+	}
+	audioStrategy := project.AudioStrategy
 	if input.AudioConfigurationRevision <= 0 {
 		input.AudioConfigurationRevision = audioConfigurationRevision
 	}

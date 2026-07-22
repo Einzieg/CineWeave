@@ -11,8 +11,8 @@ import (
 
 func TestProviderImageActivityTimeoutOutlivesGatewayClient(t *testing.T) {
 	options := providerImageActivityOptions()
-	if options.StartToCloseTimeout != 15*time.Minute {
-		t.Fatalf("StartToCloseTimeout = %s, want 15m", options.StartToCloseTimeout)
+	if options.StartToCloseTimeout != 25*time.Minute {
+		t.Fatalf("StartToCloseTimeout = %s, want 25m", options.StartToCloseTimeout)
 	}
 	if options.HeartbeatTimeout != providerTextHeartbeatTimeout {
 		t.Fatalf("HeartbeatTimeout = %s, want %s", options.HeartbeatTimeout, providerTextHeartbeatTimeout)

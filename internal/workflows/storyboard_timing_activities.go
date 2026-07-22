@@ -118,7 +118,7 @@ func (a Activities) AnalyzeEpisodeTiming(ctx context.Context, input AnalyzeEpiso
 		return existing, nil
 	}
 
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return TimingAnalysisActivityOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
 	}
@@ -126,7 +126,7 @@ func (a Activities) AnalyzeEpisodeTiming(ctx context.Context, input AnalyzeEpiso
 	if err != nil {
 		return TimingAnalysisActivityOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
 	}
-	if reusable, ok, err := a.reusableTimingAnalysisOutput(ctx, input, episode); err != nil {
+	if reusable, ok, err := a.reusableTimingAnalysisOutput(ctx, input, episode, project); err != nil {
 		return TimingAnalysisActivityOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, err)
 	} else if ok {
 		reuseExecution, err := StartNodeRun(ctx, a.db, NodeRunInput{
@@ -436,13 +436,12 @@ func (a Activities) existingTimingAnalysisOutput(ctx context.Context, workflowRu
 	return output, output.AnalysisID != "", nil
 }
 
-func (a Activities) reusableTimingAnalysisOutput(ctx context.Context, input AnalyzeEpisodeTimingInput, episode ScriptStoryboardEpisodeRecord) (TimingAnalysisActivityOutput, bool, error) {
+func (a Activities) reusableTimingAnalysisOutput(ctx context.Context, input AnalyzeEpisodeTimingInput, episode ScriptStoryboardEpisodeRecord, project ProjectProductionSettings) (TimingAnalysisActivityOutput, bool, error) {
 	var raw json.RawMessage
 	err := a.db.QueryRow(ctx, `
 		SELECT analysis.metadata->'activityOutput'
 		FROM script_timing_analyses analysis
 		JOIN script_episodes episode ON episode.id = analysis.script_episode_id
-		JOIN projects project ON project.id = analysis.project_id
 		WHERE analysis.project_id = $1
 		  AND analysis.script_id = $2
 		  AND analysis.script_version_id = $3
@@ -450,9 +449,9 @@ func (a Activities) reusableTimingAnalysisOutput(ctx context.Context, input Anal
 		  AND analysis.status = 'ready'
 		  AND analysis.method_version = 'semantic-agent-batched+deterministic-v2'
 		  AND analysis.target_duration_ticks IS NOT DISTINCT FROM $6::bigint
-		  AND analysis.timeline_timebase = project.timeline_timebase
-		  AND analysis.fps_numerator = project.fps_numerator
-		  AND analysis.fps_denominator = project.fps_denominator
+		  AND analysis.timeline_timebase = $7
+		  AND analysis.fps_numerator = $8
+		  AND analysis.fps_denominator = $9
 		  AND (
 		    analysis.metadata->>'sourceHash' = $5
 		    OR (
@@ -464,7 +463,8 @@ func (a Activities) reusableTimingAnalysisOutput(ctx context.Context, input Anal
 		ORDER BY analysis.revision DESC
 		LIMIT 1
 	`, input.ProjectID, input.ScriptID, input.ScriptVersionID, input.ScriptEpisodeID,
-		timingSourceHash(episode.Content), nullableInt64PtrWorkflow(input.TargetDurationTicks)).Scan(&raw)
+		timingSourceHash(episode.Content), nullableInt64PtrWorkflow(input.TargetDurationTicks),
+		project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator).Scan(&raw)
 	if err == pgx.ErrNoRows {
 		return TimingAnalysisActivityOutput{}, false, nil
 	}

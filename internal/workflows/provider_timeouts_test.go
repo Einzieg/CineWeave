@@ -72,3 +72,32 @@ func TestGenerateProviderTextMayFallbackBeforeFirstDelta(t *testing.T) {
 		t.Fatalf("response=%+v generateCalls=%d", response, generateCalls.Load())
 	}
 }
+
+func TestGenerateProviderImageWaitsForInProgressRequestReplay(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/provider/image/generate" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			fmt.Fprint(w, `{"data":{"status":"running","providerRequestId":"request-1","error":{"code":"PROVIDER_REQUEST_IN_PROGRESS","message":"request is running","retryable":true,"retryAfterMs":1}}}`)
+			return
+		}
+		fmt.Fprint(w, `{"data":{"status":"succeeded","providerRequestId":"request-1","providerCallId":"call-1","modelId":"model-1","output":{"artifactId":"artifact-1","mediaFileId":"media-1","storageKey":"images/result.png"}}}`)
+	}))
+	defer server.Close()
+
+	activities := Activities{gateway: &provider.GatewayClient{BaseURL: server.URL, Client: server.Client()}}
+	execution := NodeExecution{NodeRunID: "node-1", ExecutionToken: "token-1", AttemptGeneration: 1}
+	response, err := activities.generateProviderImage(context.Background(), execution, provider.GatewayImageRequest{
+		OrganizationID: "org", NodeRunID: execution.NodeRunID, IdempotencyKey: "image-1",
+	})
+	if err != nil {
+		t.Fatalf("generate provider image: %v", err)
+	}
+	if calls.Load() != 2 || response.ProviderCallID != "call-1" || response.Output.ArtifactID != "artifact-1" {
+		t.Fatalf("calls=%d response=%+v", calls.Load(), response)
+	}
+}

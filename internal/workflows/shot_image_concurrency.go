@@ -17,9 +17,11 @@ type shotImageGenerationRequest struct {
 	ShotID         string
 	ShotIndex      int
 	ShotNo         int
+	AnchorRole     string
 	WorkflowPrompt string
 	AspectRatio    string
 	Force          bool
+	FailureScope   string
 }
 
 type shotImageGenerationResult struct {
@@ -53,9 +55,11 @@ func generateShotImagesConcurrently(
 			ProjectID:      input.ProjectID,
 			WorkflowRunID:  input.WorkflowRunID,
 			CreatedBy:      input.CreatedBy,
+			FailureScope:   request.FailureScope,
 			ShotID:         request.ShotID,
 			ShotIndex:      request.ShotIndex,
 			ShotNo:         request.ShotNo,
+			AnchorRole:     request.AnchorRole,
 			WorkflowPrompt: request.WorkflowPrompt,
 			AspectRatio:    request.AspectRatio,
 			Force:          request.Force,
@@ -78,7 +82,10 @@ func generateShotImagesConcurrently(
 	}
 	for inFlight > 0 {
 		selector.Select(ctx)
-		if err := ctx.Err(); err != nil {
+		// A failed activity may be exposed by the Temporal workflow context. It is
+		// still an item result and must not terminate the remaining batch. Only an
+		// explicit workflow cancellation stops scheduling new work.
+		if err := ctx.Err(); isWorkflowCancellationError(err) {
 			return nil, err
 		}
 		for nextIndex < len(requests) && inFlight < limit {

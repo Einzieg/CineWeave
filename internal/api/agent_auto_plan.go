@@ -96,7 +96,7 @@ func firstExecutableAutoProductionAction(actions []agentProjectNextAction) (agen
 			continue
 		}
 		switch action.Tool {
-		case "workflow.start", "shot.generate_missing_images", "shot.generate_missing_videos", "timeline.compose", "provider.list_status", "review.list_items":
+		case "workflow.start", "shot.generate_missing_images", "shot.generate_missing_videos", "timeline.compose", "provider.list_status", "review.list_items", "shot_asset.review_requirements", "shot_asset.list_requirements":
 			if action.Arguments == nil {
 				action.Arguments = map[string]any{}
 			}

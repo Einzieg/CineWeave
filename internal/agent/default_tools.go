@@ -41,6 +41,11 @@ func DefaultTools() []AgentTool {
 			"assetId":   stringSchema("资产 ID；与 assetName 至少提供一个。"),
 			"assetName": stringSchema("资产准确名称；与 assetId 至少提供一个。"),
 		}, false)),
+		readTool("shot_asset.list_requirements", "镜头资产需求", "列出当前生产代的镜头资产需求、衍生图状态和结构化校验问题。", authz.PermissionAssetRead, objectSchema(map[string]any{
+			"scriptEpisodeId": stringSchema("可选剧本分集 ID；提供后只返回该分集的镜头资产需求。"),
+			"reviewStatus":    enumSchema("审核状态筛选。", []string{"all", "pending", "approved", "needs_edit", "rejected"}),
+			"limit":           integerSchema("返回数量。", 1, 1000),
+		}, false)),
 		readTool("storyboard.list", "分镜列表", "列出分镜镜头和生产状态摘要。", authz.PermissionProjectRead, limitSchema()),
 		readTool("workflow.read_runs", "任务列表", "读取最近 workflow runs。", authz.PermissionWorkflowRead, limitSchema()),
 		readTool("workflow.read_nodes", "任务节点", "读取指定 workflow 的节点运行详情。", authz.PermissionWorkflowRead, workflowRunSchema()),
@@ -52,6 +57,10 @@ func DefaultTools() []AgentTool {
 			"expiresSeconds": integerSchema("预览 URL 有效秒数。", 60, 86400),
 		}, "artifactId")),
 		readTool("provider.list_status", "供应商状态", "读取供应商、模型、限额、熔断和成本摘要。", authz.PermissionProviderRead, emptyObjectSchema()),
+		destructiveTool("project.clear_production_content", "清空生产内容", "清空项目中除小说原文及其分卷分集外的生产内容。该操作会创建新的空白生产代，移除剧本、事件、改编计划、资产、分镜、时间线、成片和审阅数据；供应商、模型、项目设置及手册绑定保持不变。", authz.PermissionProjectDelete, objectSchemaRequired(map[string]any{
+			"confirmation": enumSchema("必须明确确认保留小说原文。", []string{"preserve_novel_sources"}),
+			"reason":       stringSchema("清空原因。"),
+		}, "confirmation")),
 
 		draftTool("review.run", "运行审阅", "运行 deterministic review 和可选 agent review。", authz.PermissionProjectRead, objectSchema(map[string]any{
 			"reviewType":                 enumSchema("审阅类型。", []string{"project", "workflow", "asset", "storyboard", "timeline", "final_video"}),
@@ -98,13 +107,16 @@ func DefaultTools() []AgentTool {
 				"metadata":      objectSchema(nil, false),
 			}, false),
 		}, "episodeId", "patch"), true),
-		writeTool("script.generate_from_source", "生成剧本", "从来源分集逐集生成剧本版本；小说必须按 chapterIds 或 chapterRange 明确范围，一条小说分集只生成一条剧本分集。", authz.PermissionScriptWrite, objectSchema(map[string]any{
-			"sourceId":     stringSchema("来源 ID。为空时使用项目最新未归档来源。"),
-			"planId":       stringSchema("改编计划 ID。"),
-			"title":        stringSchema("剧本标题。"),
-			"instruction":  stringSchema("生成要求。"),
-			"chapterIds":   arraySchema("要改编的小说分集 ID 列表。每个 ID 会生成独立剧本分集。", stringSchema("小说分集 ID。")),
-			"chapterRange": stringSchema("自然语言分集范围，例如：第一卷1-10节、1-10集、前十节。"),
+		asyncWriteTool("script.generate_from_source", "生成剧本", "从来源分集逐集生成剧本；默认追加或更新来源对应的项目当前剧本，一条小说分集只对应一条剧本分集。只有用户明确要求另一版剧本时才设置 createNewScript。", authz.PermissionScriptWrite, objectSchema(map[string]any{
+			"sourceId":        stringSchema("来源 ID。为空时使用项目最新未归档来源。"),
+			"scriptId":        stringSchema("要追加分集的现有剧本 ID。为空时使用该来源对应的项目当前剧本。"),
+			"createNewScript": booleanSchema("是否显式创建另一套剧本。不能与 scriptId 同时使用。"),
+			"planId":          stringSchema("改编计划 ID。"),
+			"title":           stringSchema("仅新建剧本时使用的标题。"),
+			"instruction":     stringSchema("生成要求。"),
+			"chapterIds":      arraySchema("要改编的小说分集 ID 列表。每个 ID 会生成独立剧本分集。", stringSchema("小说分集 ID。")),
+			"chapterRange":    stringSchema("自然语言分集范围，例如：第一卷1-10节、1-10集、前十节。"),
+			"maxConcurrency":  integerSchema("分集并发数，范围 1-4。", 1, 4),
 		}, false), true),
 		writeTool("script.rewrite", "改写剧本", "改写剧本并创建新版本。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
 			"scriptId":    stringSchema("剧本 ID。"),
@@ -148,6 +160,41 @@ func DefaultTools() []AgentTool {
 				"basePrompt", "consistencyPrompt", "negativePrompt",
 			})),
 		}, "instruction"), true),
+		childWorkflowTool("asset.batch_generate_prompts", "批量生成资产提示词", "使用不可变项目与视觉手册快照，并发生成指定核心资产的完整提示词；单项失败不会终止整批。", authz.PermissionAssetGenerate, objectSchemaRequired(map[string]any{
+			"assetIds":       arraySchema("目标核心资产 ID，最多 500 个。", stringSchema("核心资产 ID。")),
+			"maxConcurrency": integerSchema("最大并发。", 1, 16),
+			"force":          booleanSchema("是否强制重新生成已就绪提示词。"),
+		}, "assetIds")),
+		childWorkflowTool("asset.batch_generate_images", "批量生成资产图片", "使用不可变项目、视觉手册、模型和提示词快照，并发生成指定核心资产参考图；支持部分完成和失败项独立重试。", authz.PermissionAssetGenerate, objectSchemaRequired(map[string]any{
+			"assetIds":       arraySchema("目标核心资产 ID，最多 500 个。", stringSchema("核心资产 ID。")),
+			"maxConcurrency": integerSchema("最大并发。", 1, 16),
+			"force":          booleanSchema("是否强制重新生成已有参考图。"),
+		}, "assetIds")),
+		writeTool("shot_asset.review_requirements", "审核镜头资产需求", "按当前生产代批量校验并审核镜头资产需求。请求批准时只会批准结构化校验通过的需求，未通过项会转为需修改并返回原因。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+			"requirementIds":  arraySchema("目标需求 ID；为空时处理全部待审核需求。", stringSchema("镜头资产需求 ID。")),
+			"scriptEpisodeId": stringSchema("可选剧本分集 ID；提供后只审核该分集内匹配的需求。"),
+			"reviewStatus":    enumSchema("目标审核状态。", []string{"approved", "needs_edit", "rejected"}),
+			"note":            stringSchema("审核说明。"),
+		}, "reviewStatus"), true),
+		writeTool("shot_asset.update_requirement", "修正镜头资产需求", "修正当前生产代中的单个镜头资产需求。可重新关联核心资产、修正需求类型和补充镜头状态；保存后必须重新审核。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+			"requirementId": stringSchema("镜头资产需求 ID。"),
+			"patch": objectSchema(map[string]any{
+				"assetId":         stringSchema("重新关联的核心资产 ID。"),
+				"requirementType": stringSchema("与资产类型匹配的需求类型，例如 character_appearance、scene_environment、prop_state。"),
+				"costume":         stringSchema("角色服装状态。"),
+				"pose":            stringSchema("角色姿态。"),
+				"expression":      stringSchema("角色表情。"),
+				"action":          stringSchema("镜头动作。"),
+				"cameraRelation":  stringSchema("资产与机位、景别或构图的关系。"),
+				"sceneState":      stringSchema("场景在当前镜头中的状态。"),
+				"propState":       stringSchema("道具在当前镜头中的状态。"),
+				"prompt":          stringSchema("镜头衍生资产提示词。"),
+			}, false),
+		}, "requirementId", "patch"), true),
+		destructiveTool("shot_asset.skip_requirement", "跳过镜头资产需求", "确认某项镜头资产需求不应参与当前镜头生产时，将其标记为跳过并保留审计记录。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+			"requirementId": stringSchema("镜头资产需求 ID。"),
+			"reason":        stringSchema("跳过原因。"),
+		}, "requirementId", "reason")),
 		destructiveTool("source.delete", "删除原文", "归档原文并阻止其继续作为生产入口。", authz.PermissionSourceWrite, objectSchemaRequired(map[string]any{
 			"sourceId": stringSchema("原文 ID。"),
 			"reason":   stringSchema("删除原因。"),
@@ -186,23 +233,50 @@ func DefaultTools() []AgentTool {
 			"fixId": stringSchema("Review fix ID。"),
 		}, "fixId"), true),
 
-		workflowTool("workflow.start", "启动任务", "启动受控 workflow。", authz.PermissionWorkflowRun, objectSchemaRequired(map[string]any{
-			"workflowType": enumSchema("Workflow 类型。", []string{"extract_novel_events", "generate_adaptation_plan", "adaptation_plan_to_script", "source_to_script", "parse_script_scenes", "script_to_assets", "script_to_storyboard", "script_to_video", "full_production", "compose_timeline"}),
+		childWorkflowTool("workflow.start", "启动任务", "启动受控 workflow。", authz.PermissionWorkflowRun, objectSchemaRequired(map[string]any{
+			"workflowType": enumSchema("Workflow 类型。", []string{"extract_novel_events", "generate_adaptation_plan", "adaptation_plan_to_script", "source_to_script", "parse_script_scenes", "script_to_assets", "script_to_storyboard", "batch_generate_derived_asset_images", "script_to_video", "full_production", "compose_timeline"}),
 			"input":        objectSchema(nil, false),
 		}, "workflowType")),
 		workflowTool("workflow.cancel", "取消任务", "取消运行中的 workflow。", authz.PermissionWorkflowCancel, objectSchemaRequired(map[string]any{
 			"workflowRunId": stringSchema("Workflow run ID。"),
 			"reason":        stringSchema("取消原因。"),
 		}, "workflowRunId")),
-		workflowTool("shot.status", "镜头状态", "读取镜头生产状态。", authz.PermissionWorkflowRead, limitSchema()),
-		workflowTool("shot.generate_missing_images", "生成缺失图片", "为缺图镜头启动图片生成。", authz.PermissionWorkflowRun, objectSchema(map[string]any{
-			"maxConcurrency": integerSchema("最大并发。", 1, 16),
+		workflowTool("shot.status", "镜头状态", "读取镜头生产状态。", authz.PermissionWorkflowRead, objectSchema(map[string]any{
+			"scriptEpisodeId": stringSchema("可选剧本分集 ID；提供后只读取该分集当前激活分镜方案。"),
+			"scriptSceneId":   stringSchema("可选剧本场景 ID。"),
+			"workflowRunId":   stringSchema("可选来源工作流 ID。"),
+			"limit":           integerSchema("最大返回数量。", 1, 200),
 		}, false)),
-		workflowTool("shot.generate_missing_videos", "生成缺失视频", "为缺视频镜头启动视频生成。", authz.PermissionWorkflowRun, objectSchema(map[string]any{
-			"maxConcurrency": integerSchema("最大并发。", 1, 8),
+		childWorkflowTool("shot.generate_image_prompts", "生成图片提示词", "为指定或缺少图片提示词的镜头并发生成提示词。", authz.PermissionWorkflowRun, objectSchema(map[string]any{
+			"shotIds":         arraySchema("目标镜头 ID；为空时选择所有缺少图片提示词的镜头。", stringSchema("镜头 ID。")),
+			"scriptEpisodeId": stringSchema("可选剧本分集 ID；提供后只处理该分集当前激活分镜方案。"),
+			"scriptSceneId":   stringSchema("可选剧本场景 ID。"),
+			"workflowRunId":   stringSchema("可选来源工作流 ID。"),
+			"maxConcurrency":  integerSchema("最大并发。", 1, 16),
 		}, false)),
-		workflowTool("shot.cancel_running_videos", "取消镜头视频", "取消运行中的镜头视频任务。", authz.PermissionWorkflowCancel, emptyObjectSchema()),
-		workflowTool("timeline.compose", "合成时间线", "触发时间线合成。", authz.PermissionWorkflowRun, objectSchema(map[string]any{
+		childWorkflowTool("shot.generate_video_prompts", "生成视频提示词", "为指定或缺少已审核契约的镜头并发生成并审核视频提示词。", authz.PermissionWorkflowRun, objectSchema(map[string]any{
+			"shotIds":         arraySchema("目标镜头 ID；为空时选择所有缺少可执行提示词的镜头。", stringSchema("镜头 ID。")),
+			"scriptEpisodeId": stringSchema("可选剧本分集 ID；提供后只处理该分集当前激活分镜方案。"),
+			"scriptSceneId":   stringSchema("可选剧本场景 ID。"),
+			"workflowRunId":   stringSchema("可选来源工作流 ID。"),
+			"maxConcurrency":  integerSchema("最大并发。", 1, 16),
+		}, false)),
+		childWorkflowTool("shot.generate_missing_images", "生成缺失图片", "为缺图镜头启动图片生成。", authz.PermissionWorkflowRun, objectSchema(map[string]any{
+			"shotIds":         arraySchema("可选目标镜头 ID。", stringSchema("镜头 ID。")),
+			"scriptEpisodeId": stringSchema("可选剧本分集 ID；提供后只处理该分集当前激活分镜方案。"),
+			"scriptSceneId":   stringSchema("可选剧本场景 ID。"),
+			"workflowRunId":   stringSchema("可选来源工作流 ID。"),
+			"maxConcurrency":  integerSchema("最大并发。", 1, 16),
+		}, false)),
+		childWorkflowTool("shot.generate_missing_videos", "生成缺失视频", "为缺视频镜头启动视频生成。", authz.PermissionWorkflowRun, objectSchema(map[string]any{
+			"shotIds":         arraySchema("可选目标镜头 ID。", stringSchema("镜头 ID。")),
+			"scriptEpisodeId": stringSchema("可选剧本分集 ID；提供后只处理该分集当前激活分镜方案。"),
+			"scriptSceneId":   stringSchema("可选剧本场景 ID。"),
+			"workflowRunId":   stringSchema("可选来源工作流 ID。"),
+			"maxConcurrency":  integerSchema("最大并发。", 1, 8),
+		}, false)),
+		childWorkflowTool("shot.cancel_running_videos", "取消镜头视频", "取消运行中的镜头视频任务。", authz.PermissionWorkflowCancel, emptyObjectSchema()),
+		childWorkflowTool("timeline.compose", "合成时间线", "触发时间线合成。", authz.PermissionWorkflowRun, objectSchema(map[string]any{
 			"timelineId": stringSchema("时间线 ID。"),
 		}, false)),
 		workflowTool("final_video.activate", "激活成片", "激活最终视频版本。", authz.PermissionProjectWrite, objectSchemaRequired(map[string]any{
@@ -248,6 +322,22 @@ func DefaultTools() []AgentTool {
 				"capabilities": objectSchema(nil, false),
 			}, false),
 		}, "modelId", "patch")),
+		adminTool("provider.attest_video_capability", "审批视频模型能力", "批准或拒绝当前视频模型能力快照；仅用于当前模型和当前能力 hash。", authz.PermissionProviderManage, objectSchemaRequired(map[string]any{
+			"modelId":                stringSchema("供应商模型 ID。"),
+			"variantKey":             stringSchema("视频能力变体 key。"),
+			"capabilitySnapshotHash": stringSchema("当前能力快照 hash。"),
+			"decision":               enumSchema("审批结论。", []string{"approved", "rejected"}),
+			"reason":                 stringSchema("审批原因。"),
+			"evidence":               objectSchema(nil, false),
+		}, "modelId", "variantKey", "capabilitySnapshotHash", "decision", "reason")),
+		adminTool("provider.verify_video_capability", "验证视频模型能力", "通过 Adapter 契约测试验证当前视频模型能力快照。", authz.PermissionProviderManage, objectSchemaRequired(map[string]any{
+			"modelId":                stringSchema("供应商模型 ID。"),
+			"variantKey":             stringSchema("视频能力变体 key。"),
+			"capabilitySnapshotHash": stringSchema("当前能力快照 hash。"),
+			"verificationMode":       enumSchema("验证方式。", []string{"adapter_contract_test"}),
+			"providerTestRunId":      stringSchema("可选供应商测试运行 ID。"),
+			"reason":                 stringSchema("验证原因。"),
+		}, "modelId", "variantKey", "capabilitySnapshotHash", "verificationMode")),
 		adminTool("prompt.create_version", "创建提示词版本", "创建 prompt version。", authz.PermissionPromptManage, objectSchemaRequired(map[string]any{
 			"templateId":      stringSchema("Prompt template ID。"),
 			"title":           stringSchema("版本标题。"),
@@ -277,6 +367,18 @@ func writeTool(name, label, description, permission string, schema json.RawMessa
 
 func workflowTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
 	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskWorkflow, Permission: permission, InputSchema: schema, RequiresApproval: true}
+}
+
+func childWorkflowTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
+	tool := workflowTool(name, label, description, permission, schema)
+	tool.StartsWorkflow = true
+	return tool
+}
+
+func asyncWriteTool(name, label, description, permission string, schema json.RawMessage, requiresApproval bool) AgentTool {
+	tool := writeTool(name, label, description, permission, schema, requiresApproval)
+	tool.StartsWorkflow = true
+	return tool
 }
 
 func destructiveTool(name, label, description, permission string, schema json.RawMessage) AgentTool {

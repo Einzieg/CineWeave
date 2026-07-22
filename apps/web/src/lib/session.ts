@@ -1,11 +1,33 @@
 "use client";
 
-import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { AuthResponse, StudioSession } from "./types";
+import type { AuthResponse, PendingOrganizationSelection, StudioSession } from "./types";
+import {
+  authorizationSessionKey,
+  hasLoadedPermission,
+  isAuthorizationBootstrapReady,
+  normalizeSession,
+  restorePersistedSession,
+  toPersistedSession,
+} from "./session-policy";
+
+export { authorizationGuardState, authorizationSessionKey } from "./session-policy";
 
 const sessionKey = "cineweave.session.v2";
-const legacySessionKey = "cineweave.studio.session.v1";
+
+export type AuthorizationBootstrapStatus = "idle" | "loading" | "ready" | "error";
+
+type AuthorizationBootstrapState = {
+  status: AuthorizationBootstrapStatus;
+  sessionKey: string;
+  error: string;
+};
+
+type AuthorizationSnapshot = Pick<StudioSession, "user" | "membership" | "permissions"> & {
+  organizationId?: string;
+  workspaceId?: string;
+};
 
 export const emptySession: StudioSession = {
   accessToken: "",
@@ -33,11 +55,9 @@ export function readStoredSession(): StudioSession {
   try {
     const raw = window.localStorage.getItem(sessionKey);
     if (!raw) {
-      window.localStorage.removeItem(legacySessionKey);
       return emptySession;
     }
-    const parsed = JSON.parse(raw) as Partial<StudioSession>;
-    return normalizeSession(parsed);
+    return restorePersistedSession(JSON.parse(raw));
   } catch {
     return emptySession;
   }
@@ -47,8 +67,7 @@ export function writeStoredSession(session: StudioSession) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(sessionKey, JSON.stringify(session));
-  window.localStorage.removeItem(legacySessionKey);
+  window.localStorage.setItem(sessionKey, JSON.stringify(toPersistedSession(session)));
 }
 
 export function clearStoredSession() {
@@ -56,7 +75,6 @@ export function clearStoredSession() {
     return;
   }
   window.localStorage.removeItem(sessionKey);
-  window.localStorage.removeItem(legacySessionKey);
 }
 
 type StudioSessionController = ReturnType<typeof useStudioSessionState>;
@@ -65,36 +83,138 @@ const StudioSessionContext = createContext<StudioSessionController | null>(null)
 
 function useStudioSessionState() {
   const [session, setSessionState] = useState<StudioSession>(emptySession);
+  const sessionRef = useRef<StudioSession>(emptySession);
+  const [authorizationBootstrap, setAuthorizationBootstrapState] = useState<AuthorizationBootstrapState>({
+    status: "idle",
+    sessionKey: "",
+    error: "",
+  });
+  const authorizationBootstrapRef = useRef(authorizationBootstrap);
+  const [pendingOrganizationSelection, setPendingOrganizationSelectionState] = useState<PendingOrganizationSelection | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
+    const stored = readStoredSession();
+    sessionRef.current = stored;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSessionState(readStoredSession());
+    setSessionState(stored);
+    const bootstrap = idleAuthorizationBootstrap(stored);
+    authorizationBootstrapRef.current = bootstrap;
+    setAuthorizationBootstrapState(bootstrap);
     setHydrated(true);
   }, []);
 
   const setSession = useCallback((next: StudioSession) => {
     const normalized = normalizeSession(next);
+    sessionRef.current = normalized;
     setSessionState(normalized);
     writeStoredSession(normalized);
+    const bootstrap = idleAuthorizationBootstrap(normalized);
+    authorizationBootstrapRef.current = bootstrap;
+    setAuthorizationBootstrapState(bootstrap);
+    setPendingOrganizationSelectionState(null);
+  }, []);
+
+  const setPendingOrganizationSelection = useCallback((next: PendingOrganizationSelection | null) => {
+    setPendingOrganizationSelectionState(next);
   }, []);
 
   const updateSession = useCallback((patch: Partial<StudioSession>) => {
-    setSessionState((current) => {
-      const next = normalizeSession({ ...current, ...patch });
-      writeStoredSession(next);
-      return next;
-    });
+    const current = sessionRef.current;
+    const next = normalizeSession({ ...current, ...patch });
+    sessionRef.current = next;
+    setSessionState(next);
+    writeStoredSession(next);
+    if (authorizationSessionKey(current) !== authorizationSessionKey(next)) {
+      const bootstrap = idleAuthorizationBootstrap(next);
+      authorizationBootstrapRef.current = bootstrap;
+      setAuthorizationBootstrapState(bootstrap);
+    }
   }, []);
 
   const clearSession = useCallback(() => {
+    sessionRef.current = emptySession;
     setSessionState(emptySession);
+    const bootstrap = idleAuthorizationBootstrap(emptySession);
+    authorizationBootstrapRef.current = bootstrap;
+    setAuthorizationBootstrapState(bootstrap);
+    setPendingOrganizationSelectionState(null);
     clearStoredSession();
   }, []);
 
-  const ready = useMemo(() => Boolean(session.accessToken.trim() && session.organizationId.trim()), [session.accessToken, session.organizationId]);
+  const beginAuthorizationBootstrap = useCallback((expectedSessionKey: string) => {
+    if (!expectedSessionKey || authorizationSessionKey(sessionRef.current) !== expectedSessionKey) {
+      return false;
+    }
+    const current = authorizationBootstrapRef.current;
+    if (current.sessionKey === expectedSessionKey && (current.status === "loading" || current.status === "ready")) {
+      return false;
+    }
+    const next = { status: "loading" as const, sessionKey: expectedSessionKey, error: "" };
+    authorizationBootstrapRef.current = next;
+    setAuthorizationBootstrapState(next);
+    return true;
+  }, []);
 
-  return { session, hydrated, ready, setSession, updateSession, clearSession };
+  const completeAuthorizationBootstrap = useCallback((expectedSessionKey: string, snapshot: AuthorizationSnapshot) => {
+    const current = sessionRef.current;
+    if (!expectedSessionKey || authorizationSessionKey(current) !== expectedSessionKey) {
+      return false;
+    }
+    const next = normalizeSession({
+      ...current,
+      organizationId: snapshot.organizationId || current.organizationId,
+      workspaceId: snapshot.workspaceId ?? current.workspaceId,
+      user: snapshot.user,
+      membership: snapshot.membership,
+      permissions: snapshot.permissions,
+    });
+    sessionRef.current = next;
+    setSessionState(next);
+    writeStoredSession(next);
+    const bootstrap = { status: "ready" as const, sessionKey: expectedSessionKey, error: "" };
+    authorizationBootstrapRef.current = bootstrap;
+    setAuthorizationBootstrapState(bootstrap);
+    return true;
+  }, []);
+
+  const failAuthorizationBootstrap = useCallback((expectedSessionKey: string, error: string) => {
+    if (!expectedSessionKey || authorizationSessionKey(sessionRef.current) !== expectedSessionKey) {
+      return false;
+    }
+    const bootstrap = { status: "error" as const, sessionKey: expectedSessionKey, error };
+    authorizationBootstrapRef.current = bootstrap;
+    setAuthorizationBootstrapState(bootstrap);
+    return true;
+  }, []);
+
+  const retryAuthorizationBootstrap = useCallback(() => {
+    const bootstrap = idleAuthorizationBootstrap(sessionRef.current);
+    authorizationBootstrapRef.current = bootstrap;
+    setAuthorizationBootstrapState(bootstrap);
+  }, []);
+
+  const ready = useMemo(() => Boolean(session.accessToken.trim() && session.organizationId.trim()), [session.accessToken, session.organizationId]);
+  const authorizationReady = isAuthorizationBootstrapReady(session, authorizationBootstrap);
+
+  return {
+    session,
+    hydrated,
+    ready,
+    authorizationStatus: authorizationBootstrap.status,
+    authorizationSessionKey: authorizationBootstrap.sessionKey,
+    authorizationError: authorizationBootstrap.error,
+    authorizationReady,
+    pendingOrganizationSelection,
+    setPendingOrganizationSelection,
+    setSession,
+    updateSession,
+    clearSession,
+    beginAuthorizationBootstrap,
+    completeAuthorizationBootstrap,
+    failAuthorizationBootstrap,
+    retryAuthorizationBootstrap,
+  };
 }
 
 export function StudioSessionProvider({ children }: { children: ReactNode }) {
@@ -122,13 +242,14 @@ export function useBindCurrentProject(projectId?: string) {
   }, [hydrated, projectId, session.currentProjectId, updateSession]);
 }
 
-function normalizeSession(session: Partial<StudioSession>): StudioSession {
+export function sessionHasPermission(session: StudioSession, permission: string) {
+  return hasLoadedPermission(session, permission);
+}
+
+function idleAuthorizationBootstrap(session: StudioSession): AuthorizationBootstrapState {
   return {
-    accessToken: String(session.accessToken ?? ""),
-    refreshToken: String(session.refreshToken ?? ""),
-    organizationId: String(session.organizationId ?? ""),
-    workspaceId: String(session.workspaceId ?? ""),
-    user: session.user,
-    currentProjectId: String(session.currentProjectId ?? ""),
+    status: "idle",
+    sessionKey: authorizationSessionKey(session),
+    error: "",
   };
 }

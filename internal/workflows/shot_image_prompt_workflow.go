@@ -16,13 +16,16 @@ func prepareShotImagePromptsForProduction(
 	for _, shot := range shots {
 		shotIDs = append(shotIDs, shot.ID)
 	}
-	promptCtx := workflow.WithActivityOptions(ctx, providerTextActivityOptions())
-	results, err := generateShotImagePromptsConcurrently(ctx, promptCtx, input, BatchShotProductionOptions{
-		ShotIDs:        shotIDs,
-		MaxConcurrency: clampConcurrency(maxConcurrency, DefaultShotImagePromptConcurrency, MaxShotImagePromptConcurrency),
-		AspectRatio:    aspectRatio,
-		Force:          false,
-	})
+	items, err := resolveShotAnchorWorkItemsForWorkflow(ctx, input, shotIDs)
+	if err != nil {
+		return err
+	}
+	promptCtx := workflow.WithActivityOptions(ctx, shotImagePromptReviewActivityOptions())
+	results, err := generateShotImagePromptsConcurrently(
+		ctx, promptCtx, input, items,
+		clampConcurrency(maxConcurrency, DefaultShotImagePromptConcurrency, MaxShotImagePromptConcurrency),
+		aspectRatio, "", false,
+	)
 	if err != nil {
 		return err
 	}
@@ -34,14 +37,15 @@ func prepareShotImagePromptsForProduction(
 	return nil
 }
 
-func prepareSingleShotImagePrompt(ctx workflow.Context, input TextToStoryboardInput, shotID, workflowPrompt, aspectRatio string) error {
-	promptCtx := workflow.WithActivityOptions(ctx, providerTextActivityOptions())
+func prepareSingleShotImagePrompt(ctx workflow.Context, input TextToStoryboardInput, shotID, anchorRole, workflowPrompt, aspectRatio string) error {
+	promptCtx := workflow.WithActivityOptions(ctx, shotImagePromptReviewActivityOptions())
 	return workflow.ExecuteActivity(promptCtx, "PrepareShotImagePrompt", PrepareShotImagePromptInput{
 		OrganizationID: input.OrganizationID,
 		ProjectID:      input.ProjectID,
 		WorkflowRunID:  input.WorkflowRunID,
 		CreatedBy:      input.CreatedBy,
 		ShotID:         shotID,
+		AnchorRole:     anchorRole,
 		WorkflowPrompt: workflowPrompt,
 		AspectRatio:    aspectRatio,
 		Force:          false,

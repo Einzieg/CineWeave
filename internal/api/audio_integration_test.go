@@ -41,7 +41,7 @@ func TestAudioProjectSettingsVoiceCRUDAndWorkflowStart(t *testing.T) {
 	handler := server.Handler()
 	suffix := uuid.NewString()
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
-		Email: "audio-api-" + suffix + "@example.test", Password: "Password123!", DisplayName: "Audio API",
+		Email: "audio-api-" + suffix + "@example.test", Username: randomStorageSegment(), Password: "Password123!", DisplayName: "Audio API",
 		OrganizationName: "Audio API Org " + suffix,
 	}, httptest.NewRequest(http.MethodPost, "/api/auth/register", nil))
 	if err != nil {
@@ -176,7 +176,7 @@ func TestCharacterVoiceGenerationChangeInvalidatesAudioDownstream(t *testing.T) 
 	handler := server.Handler()
 	suffix := uuid.NewString()
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
-		Email: "audio-stale-" + suffix + "@example.test", Password: "Password123!", DisplayName: "Audio Stale",
+		Email: "audio-stale-" + suffix + "@example.test", Username: randomStorageSegment(), Password: "Password123!", DisplayName: "Audio Stale",
 		OrganizationName: "Audio Stale Org " + suffix,
 	}, httptest.NewRequest(http.MethodPost, "/api/auth/register", nil))
 	if err != nil {

@@ -21,7 +21,119 @@ export type ApiEnvelope<TData> = {
 export type AuthUser = {
   id: string;
   email: string;
+  username?: string;
   displayName?: string;
+  avatarUrl?: string;
+  systemAdministrator?: boolean;
+};
+
+export type OrganizationChoice = {
+  id: string;
+  name: string;
+};
+
+export type MemberTeamSummary = {
+  id: string;
+  name: string;
+};
+
+export type MemberRoleSummary = {
+  bindingId: string;
+  roleId: string;
+  roleKey: string;
+  roleName: string;
+  resourceType: "organization" | "workspace" | "project";
+  resourceId: string;
+  viaTeam: boolean;
+  teamId?: string;
+  teamName?: string;
+  expiresAt?: string;
+};
+
+export type OrganizationMember = {
+  organizationId: string;
+  user: AuthUser;
+  status: "active" | "disabled" | "removed";
+  accountManagementAllowed: boolean;
+  createdAt: string;
+  updatedAt: string;
+  disabledAt?: string;
+  removedAt?: string;
+  teams: MemberTeamSummary[];
+  roles: MemberRoleSummary[];
+};
+
+export type MemberPasswordReset = {
+  userId: string;
+  resetToken: string;
+  expiresAt: string;
+};
+
+export type OrganizationMemberList = {
+  items: OrganizationMember[];
+  page: number;
+  pageSize: number;
+  total: number;
+};
+
+export type AuditActor = {
+  id: string;
+  username?: string;
+  displayName?: string;
+  avatarUrl?: string;
+};
+
+export type OrganizationAuditLog = {
+  id: string;
+  organizationId: string;
+  actorUserId?: string;
+  actor?: AuditActor;
+  action: string;
+  resourceType: string;
+  resourceId?: string;
+  metadata: JsonRecord;
+  createdAt: string;
+};
+
+export type OrganizationAuditLogList = {
+  items: OrganizationAuditLog[];
+  page: number;
+  pageSize: number;
+  total: number;
+  retentionPolicy: "organization_lifetime";
+};
+
+export type InvitationBinding = {
+  roleId: string;
+  resourceType: "organization" | "workspace" | "project";
+  organizationId?: string;
+  workspaceId?: string;
+  projectId?: string;
+};
+
+export type OrganizationInvitation = {
+  id: string;
+  organizationId: string;
+  email: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  baseRoleId: string;
+  expiresAt: string;
+  acceptedAt?: string;
+  acceptedBy?: string;
+  invitedBy: string;
+  createdAt: string;
+  updatedAt: string;
+  bindings: InvitationBinding[];
+  invitationToken?: string;
+  requiresRegistration?: boolean;
+  organizationName?: string;
+};
+
+export type OrganizationInvitationList = {
+  items: OrganizationInvitation[];
+  page: number;
+  pageSize: number;
+  total: number;
 };
 
 export type StudioSession = {
@@ -30,6 +142,8 @@ export type StudioSession = {
   organizationId: string;
   workspaceId?: string;
   user?: AuthUser;
+  membership?: OrganizationMember;
+  permissions?: string[];
   currentProjectId: string;
 };
 
@@ -40,6 +154,19 @@ export type AuthResponse = {
   organizationId: string;
   workspaceId?: string;
   user: AuthUser;
+};
+
+export type LoginResponse =
+  | (AuthResponse & { requiresOrganizationSelection: false })
+  | {
+      requiresOrganizationSelection: true;
+      organizationSelectionToken: string;
+      organizations: OrganizationChoice[];
+    };
+
+export type PendingOrganizationSelection = {
+  token: string;
+  organizations: OrganizationChoice[];
 };
 
 export type SetupState = {
@@ -70,10 +197,14 @@ export type Project = {
   audioRequirement?: "preferred" | "required" | "disabled";
   audioConfigurationRevision?: number;
   imageQuality?: string;
-  productionMode?: string;
+  videoProductionBinding?: ProjectVideoProductionBinding;
+  productionGeneration?: ProductionGeneration;
+  videoProductionState?: "unconfigured" | "storyboard_required" | "ready" | "rebuilding" | "blocked" | "reconfiguration_required";
+  videoProductionLocked?: boolean;
   timelineTimebase?: number;
   fpsNumerator?: number;
   fpsDenominator?: number;
+  activeScriptId?: string | null;
   activeFinalVideoVersionId?: string | null;
   activeAudioMixVersionId?: string | null;
   status?: string;
@@ -81,6 +212,253 @@ export type Project = {
   revision: number;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type VideoProductionProfileKey =
+  | "single_frame_i2v"
+  | "first_last_frame"
+  | "multimodal_reference"
+  | "storyboard_sheet";
+
+export type VideoProductionProfileVersion = {
+  id: string;
+  profileId: string;
+  profileKey: VideoProductionProfileKey;
+  profileName: string;
+  strategyFamily: string;
+  description: string;
+  version: number;
+  lifecycleState: "draft" | "published" | "retired";
+  implementationState: "available" | "reserved";
+  configuration: JsonRecord;
+  capabilityRequirements: JsonRecord;
+  promptContract: JsonRecord;
+  inputContractVersion: string;
+  configurationHash: string;
+  promptContractHash: string;
+  createdAt: string;
+  publishedAt?: string | null;
+  retiredAt?: string | null;
+  available: boolean;
+};
+
+export type ProjectVideoProductionBinding = {
+  id: string;
+  projectId: string;
+  profileVersionId: string;
+  profileKey: VideoProductionProfileKey;
+  profileName: string;
+  profileVersion: number;
+  lifecycleState: "draft" | "published" | "retired";
+  implementationState: "available" | "reserved";
+  status: "active" | "superseded";
+  compatibilityPolicy: "strict" | "compatible_fallback";
+  overrides: JsonRecord;
+  profileSnapshot: JsonRecord;
+  profileSnapshotHash: string;
+  revision: number;
+  createdAt: string;
+  supersededAt?: string | null;
+};
+
+export type ProductionGeneration = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  bindingId: string;
+  generationNo: number;
+  status: "active" | "superseded";
+  sourceGenerationId?: string | null;
+  rebuildId?: string | null;
+  createdAt: string;
+  activatedAt?: string | null;
+  supersededAt?: string | null;
+};
+
+export type ProductionManualBindingSnapshot = {
+  promptVersionId: string;
+  templateKey: string;
+  contentHash: string;
+};
+
+export type ProductionConfigurationSnapshot = {
+  schemaVersion: 2;
+  projectType: string;
+  contentType: string;
+  aspectRatio: string;
+  videoRatio: string;
+  artStyle: string;
+  directorManual: string;
+  visualManual: string;
+  imageModelProfileKey: string;
+  videoModelProfileKey: string;
+  scriptModelProfileKey: string;
+  ttsModelProfileKey: string;
+  asrModelProfileKey: string;
+  audioStrategy: "native_av" | "hybrid" | "tts_postdub";
+  audioRequirement: "preferred" | "required" | "disabled";
+  imageQuality: string;
+  timelineTimebase: number;
+  fpsNumerator: number;
+  fpsDenominator: number;
+  settings: JsonRecord;
+  manualBindings: Record<string, ProductionManualBindingSnapshot>;
+};
+
+export type VideoProductionConfigurationInput = {
+  projectType: string;
+  contentType: string;
+  aspectRatio: string;
+  videoRatio: string;
+  artStyle: string;
+  directorManualPromptVersionId?: string;
+  visualManualPromptVersionId?: string;
+  imageModelProfileKey: string;
+  videoModelProfileKey: string;
+  scriptModelProfileKey: string;
+  ttsModelProfileKey: string;
+  asrModelProfileKey: string;
+  audioStrategy: "native_av" | "hybrid" | "tts_postdub";
+  audioRequirement: "preferred" | "required" | "disabled";
+  imageQuality: string;
+  timelineTimebase: number;
+  fpsNumerator: number;
+  fpsDenominator: number;
+  settings: JsonRecord;
+};
+
+export type VideoProductionCompatibilityIssue = { code: string; message: string };
+
+export type VideoProductionCompatibility = {
+  profile: VideoProductionProfileVersion;
+  modelProfileKey: string;
+  nativeAudioRequired: boolean;
+  compatible: boolean;
+  executable: boolean;
+  issues: VideoProductionCompatibilityIssue[];
+  candidates: Array<{
+    modelProfileBindingId: string;
+    modelProfileId: string;
+    modelProfileKey: string;
+    modelProfileName: string;
+    providerAccountId: string;
+    providerAccountName: string;
+    providerModelId: string;
+    providerModelKey: string;
+    providerModelName: string;
+    priority: number;
+    weight: number;
+    capability: { taskTypes: string[]; providerOptionsSchema: JsonRecord };
+    compatibility: { compatible: boolean; issues: VideoProductionCompatibilityIssue[] };
+  }>;
+};
+
+export type VideoProductionRebuildImpact = {
+  projectId: string;
+  expectedProjectRevision: number;
+  sourceBindingId: string;
+  sourceBindingRevision: number;
+  sourceGenerationId: string;
+  sourceGenerationNo: number;
+  targetProfileVersionId: string;
+  targetProfileKey: VideoProductionProfileKey;
+  targetProfileVersion: number;
+  reason: "profile_change" | "configuration_change" | "profile_and_configuration_change" | string;
+  targetConfiguration: ProductionConfigurationSnapshot;
+  targetConfigurationHash: string;
+  episodes: Array<{
+    scriptEpisodeId: string;
+    episodeOrdinal: number;
+    scriptEpisodeRevision: number;
+    scriptEpisodeContentHash: string;
+    sourceStoryboardPlanId?: string | null;
+  }>;
+  counts: Record<string, number>;
+  impactToken: string;
+};
+
+export type VideoProductionRebuild = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  sourceBindingId: string;
+  sourceGenerationId: string;
+  sourceVideoProductionState: "unconfigured" | "storyboard_required" | "ready" | "rebuilding" | "blocked" | "reconfiguration_required";
+  targetProfileVersionId: string;
+  targetBindingId?: string | null;
+  targetGenerationId?: string | null;
+  status: "planned" | "approved" | "running" | "partial_succeeded" | "storyboard_required" | "succeeded" | "failed" | "cancelled";
+  reason: string;
+  targetConfiguration: ProductionConfigurationSnapshot;
+  targetConfigurationHash: string;
+  impactSnapshot: VideoProductionRebuildImpact;
+  impactToken: string;
+  expectedProjectRevision: number;
+  episodeCount: number;
+  retainedAssetCount: number;
+  workflowRunId?: string | null;
+  idempotencyKey: string;
+  requestedBy: string;
+  requestedAt: string;
+  approvedAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  failureCode?: string | null;
+  failureMessage?: string | null;
+};
+
+export type VideoProductionRebuildItem = {
+  id: string;
+  rebuildId: string;
+  projectId: string;
+  scriptEpisodeId: string;
+  episodeOrdinal: number;
+  scriptEpisodeRevision: number;
+  scriptEpisodeContentHash: string;
+  sourceStoryboardPlanId?: string | null;
+  targetStoryboardPlanId?: string | null;
+  workflowRunId?: string | null;
+  status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  checkpoint: JsonRecord;
+  attemptCount: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  failureCode?: string | null;
+  failureMessage?: string | null;
+};
+
+export type CreateProjectRequest = {
+  workspaceId: string;
+  name: string;
+  description?: string;
+  projectType?: string;
+  contentType?: string;
+  aspectRatio?: string;
+  videoRatio?: string;
+  artStyle?: string;
+  directorManualPromptVersionId?: string;
+  visualManualPromptVersionId?: string;
+  imageModelProfileKey?: string;
+  videoModelProfileKey?: string;
+  scriptModelProfileKey?: string;
+  ttsModelProfileKey?: string;
+  asrModelProfileKey?: string;
+  audioStrategy?: "native_av" | "hybrid" | "tts_postdub";
+  audioRequirement?: "preferred" | "required" | "disabled";
+  imageQuality?: string;
+  videoProductionProfileKey?: VideoProductionProfileKey;
+  videoProductionProfileVersion?: number;
+  compatibilityPolicy?: "strict" | "compatible_fallback";
+  timelineTimebase?: number;
+  fpsNumerator?: number;
+  fpsDenominator?: number;
+  settings?: JsonRecord;
+};
+
+export type UpdateProjectRequest = {
+  name?: string;
+  description?: string;
+  expectedRevision?: number;
 };
 
 export type ProjectManualBinding = {
@@ -407,6 +785,7 @@ export type Script = {
   sourceId?: string;
   title: string;
   status: string;
+  isCurrent: boolean;
   currentVersionId?: string;
   currentVersion?: ScriptVersion;
   createdAt?: string;
@@ -789,6 +1168,7 @@ export type AssetReference = {
   mediaFileId?: string;
   storageKey?: string;
   previewUrl?: string;
+  previewExpiresAt?: string;
   prompt?: string;
   promptVersionId?: string;
   promptHash?: string;
@@ -856,6 +1236,42 @@ export type ShotAssetRequirement = {
   updatedAt?: string;
   metadata?: JsonRecord;
   asset?: CanonicalAsset;
+};
+
+export type ShotAssetRequirementReviewIssue = {
+  code: string;
+  message: string;
+};
+
+export type ShotAssetRequirementReviewItem = {
+  requirementId: string;
+  storyboardShotId: string;
+  shotNo: number;
+  assetId: string;
+  assetType: string;
+  assetName: string;
+  requirementType: string;
+  status: string;
+  previousReviewStatus: string;
+  reviewStatus: string;
+  eligible: boolean;
+  issues: ShotAssetRequirementReviewIssue[];
+  warnings: ShotAssetRequirementReviewIssue[];
+  updatedAt: string;
+};
+
+export type BatchReviewShotAssetRequirementsResponse = {
+  validationVersion: string;
+  requestedStatus: string;
+  totalItems: number;
+  eligibleCount: number;
+  blockedCount: number;
+  approvedCount: number;
+  needsEditCount: number;
+  rejectedCount: number;
+  unchangedCount: number;
+  notFoundIds: string[];
+  items: ShotAssetRequirementReviewItem[];
 };
 
 export type StoryboardShotRequirementDetail = ShotAssetRequirement & {
@@ -975,7 +1391,6 @@ export type StoryboardShot = {
   timingConfidence?: number;
   durationLocked: boolean;
   shotGroupId?: string;
-  continuityGroupId?: string;
   oneTake: boolean;
   timingRevision: number;
   timelineTimebase: number;
@@ -1065,6 +1480,352 @@ export type StoryboardShotDetail = {
   videoPreviewUrl?: string;
 };
 
+export type StoryboardShotStateVersion = {
+  id: string;
+  productionGenerationId: string;
+  storyboardShotId: string;
+  purpose: "anchor" | "video";
+  stateRole: "planned_entry" | "planned_exit" | "observed_exit";
+  revision: number;
+  status: "draft" | "approved" | "rejected" | "stale";
+  state: JsonRecord;
+  stateHash: string;
+  sourceType: string;
+  sourceId?: string;
+  promptVersionId?: string;
+  providerCallId?: string;
+  modelId?: string;
+  createdBy?: string;
+  createdAt: string;
+  approvedAt?: string;
+};
+
+export type StoryboardShotTransition = {
+  id: string;
+  productionGenerationId: string;
+  storyboardPlanId: string;
+  sourceShotId?: string;
+  targetShotId: string;
+  transitionType: "match_action_cut" | "same_scene_cut" | "camera_cut" | "subject_change" | "scene_cut" | "time_jump" | "montage_cut" | "unclassified";
+  tailPolicy: "soft" | "none";
+  anchorPolicy: "new_anchor" | "match_action_anchor" | "independent_anchor";
+  carryConstraints: string[];
+  resetConstraints: string[];
+  confidence: number;
+  revision: number;
+  status: "active" | "superseded" | "stale";
+  reviewStatus: "pending" | "approved" | "rejected" | "needs_edit";
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EpisodeVideoProductionProviderTask = {
+  id: string;
+  status: string;
+  externalTaskId?: string;
+  pollCount: number;
+  errorCode?: string;
+  errorMessage?: string;
+  requestHash?: string;
+  createdAt: string;
+  completedAt?: string;
+};
+
+export type EpisodeVideoProductionSegment = {
+  id: string;
+  segmentIndex: number;
+  status: string;
+  inputContractKey?: string;
+  requestedDurationSeconds: number;
+  providerTasks: EpisodeVideoProductionProviderTask[];
+};
+
+export type EpisodeVideoProductionItem = {
+  id: string;
+  batchId: string;
+  storyboardShotId: string;
+  shotNo: number;
+  shotTitle: string;
+  shotStateHash: string;
+  executionIdentityVersion: number;
+  predecessorVideoRenderPlanId?: string;
+  referencePackId?: string;
+  referencePackStatus?: string;
+  videoPromptPlanId?: string;
+  videoPromptPlanStatus?: string;
+  videoPromptPlanRevision?: number;
+  videoRenderPlanId?: string;
+  videoRenderPlanStatus?: string;
+  providerAsyncTaskId?: string;
+  providerAsyncTaskStatus?: string;
+  externalTaskId?: string;
+  providerPollCount?: number;
+  providerErrorCode?: string;
+  providerErrorMessage?: string;
+  anchorId?: string;
+  anchorStatus?: string;
+  anchorReviewStatus?: string;
+  mediaStatus: "pending" | "transferring" | "stored" | "failed";
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelling" | "cancelled" | "discarded";
+  attempt: number;
+  revision: number;
+  errorCode?: string;
+  errorDetail: JsonRecord;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  segments: EpisodeVideoProductionSegment[];
+};
+
+export type EpisodeVideoProductionBatch = {
+  id: string;
+  checkpointId: string;
+  ordinal: number;
+  dependencySnapshotHash: string;
+  workflowRunId?: string;
+  temporalWorkflowId?: string;
+  temporalRunId?: string;
+  status: string;
+  attempt: number;
+  totalItems: number;
+  succeededItems: number;
+  failedItems: number;
+  cancelledItems: number;
+  revision: number;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  items: EpisodeVideoProductionItem[];
+};
+
+export type EpisodeVideoProductionCheckpoint = {
+  id: string;
+  productionGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  scriptEpisodeId: string;
+  episodeIndex: number;
+  episodeTitle: string;
+  profileVersionId: string;
+  profileSnapshotHash: string;
+  temporalWorkflowId: string;
+  temporalRunId?: string;
+  status: string;
+  nextBatchOrdinal: number;
+  revision: number;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  batches: EpisodeVideoProductionBatch[];
+};
+
+export type WorkflowVideoProductionActivity = {
+  workflowRunId: string;
+  checkpoints: EpisodeVideoProductionCheckpoint[];
+  totalItems: number;
+  succeededItems: number;
+  failedItems: number;
+  activeItems: number;
+};
+
+export type ShotVisualAnchor = {
+  id: string;
+  productionGenerationId: string;
+  storyboardShotId: string;
+  shotStateVersionId?: string;
+  anchorRole: "planned_first_frame" | "planned_last_frame" | "storyboard_sheet" | "storyboard_panel" | "observed_tail_frame" | "continuity_hint";
+  revision: number;
+  status: "draft" | "generating" | "ready" | "failed" | "stale" | "archived";
+  reviewStatus: "pending" | "approved" | "rejected" | "needs_edit";
+  artifactId?: string;
+  mediaFileId?: string;
+  storageKey?: string;
+  previewUrl?: string;
+  prompt?: string;
+  promptVersionId?: string;
+  promptHash?: string;
+  providerCallId?: string;
+  modelId?: string;
+  referencePackId?: string;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ShotReferencePack = {
+  id: string;
+  productionGenerationId: string;
+  storyboardShotId: string;
+  profileSnapshotHash: string;
+  shotStateHash: string;
+  capabilitySnapshotHash: string;
+  manifest: JsonRecord;
+  manifestHash: string;
+  status: "active" | "stale" | "archived";
+  createdAt: string;
+};
+
+export type ShotReferencePackItem = {
+  id: string;
+  referenceKey: string;
+  role: string;
+  mediaType: "image" | "video" | "audio";
+  semantics: string;
+  required: boolean;
+  priority: number;
+  sourceType: string;
+  sourceId?: string;
+  assetId?: string;
+  artifactId?: string;
+  mediaFileId?: string;
+  storageKey?: string;
+  previewUrl?: string;
+  contentHash: string;
+  metadata: JsonRecord;
+};
+
+export type StoryboardSheetManifest = {
+  id: string;
+  productionGenerationId: string;
+  storyboardShotId: string;
+  sheetAnchorId: string;
+  sheetPreviewUrl?: string;
+  revision: number;
+  contractVersion: string;
+  plannedDurationTicks: number;
+  timelineTimebase: number;
+  videoAspectRatio: string;
+  sheetAspectRatio: string;
+  gridRows: number;
+  gridColumns: number;
+  panelCount: number;
+  entryStateHash: string;
+  exitStateHash: string;
+  manifest: JsonRecord;
+  manifestHash: string;
+  status: "draft" | "processing" | "ready" | "failed" | "stale" | "archived";
+  reviewStatus: "pending" | "approved" | "rejected" | "needs_edit";
+  reviewerPromptVersionId?: string;
+  reviewerProviderCallId?: string;
+  reviewerModelId?: string;
+  reviewerOutput: JsonRecord;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+  reviewedAt?: string;
+};
+
+export type StoryboardSheetPanel = {
+  id: string;
+  productionGenerationId: string;
+  storyboardShotId: string;
+  manifestId: string;
+  visualAnchorId: string;
+  ordinal: number;
+  gridRow: number;
+  gridColumn: number;
+  timeTick: number;
+  normalizedPosition: number;
+  stage: string;
+  actionStage: string;
+  expectedState: JsonRecord;
+  expectedStateHash: string;
+  status: "planned" | "cropped" | "failed" | "stale" | "archived";
+  reviewStatus: "pending" | "approved" | "rejected" | "needs_edit";
+  artifactId?: string;
+  mediaFileId?: string;
+  storageKey?: string;
+  previewUrl?: string;
+  contentHash?: string;
+  crop: JsonRecord;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PromptContextPlan = {
+  id: string;
+  productionGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  storyboardPlanId: string;
+  storyboardShotId: string;
+  scriptEpisodeId: string;
+  scriptSceneId?: string;
+  revision: number;
+  status: "active" | "stale" | "archived";
+  episodeContinuityDigest: string;
+  currentSceneScript: string;
+  adjacentSceneSummaries: JsonValue[];
+  currentShotState: JsonRecord;
+  verbatimDialogueCues: JsonValue[];
+  modelContextLimit: number;
+  modelPromptLimit: number;
+  budgetAllocation: JsonRecord;
+  sourceHashes: JsonRecord;
+  planHash: string;
+  createdAt: string;
+  staleAt?: string;
+  archivedAt?: string;
+};
+
+export type VideoPromptPlan = {
+  id: string;
+  productionGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  profileVersionId: string;
+  storyboardShotId: string;
+  promptContextPlanId: string;
+  promptVersionId: string;
+  reviewerPromptVersionId?: string;
+  workflowRunId?: string;
+  nodeRunId?: string;
+  providerCallId?: string;
+  reviewerProviderCallId?: string;
+  providerModelId?: string;
+  revision: number;
+  status: "draft" | "generating" | "reviewing" | "approved" | "rejected" | "failed" | "stale" | "archived";
+  renderedPrompt: string;
+  promptHash: string;
+  promptContextPlanHash: string;
+  profileSnapshotHash: string;
+  shotStateHash: string;
+  transitionHash?: string;
+  referencePackHash: string;
+  capabilitySnapshotHash: string;
+  inputContractVersion: string;
+  dialogueCues: JsonValue[];
+  nativeAudioRequired: boolean;
+  audioStrategy: "native_av" | "hybrid" | "tts_postdub";
+  audioRequirement: "preferred" | "required" | "disabled";
+  reviewerOutput: JsonRecord;
+  metadata: JsonRecord;
+  createdAt: string;
+  reviewedAt?: string;
+  approvedAt?: string;
+  staleAt?: string;
+  archivedAt?: string;
+};
+
+export type StoryboardShotStateResponse = { items: StoryboardShotStateVersion[] };
+export type StoryboardShotTransitionResponse = { active?: StoryboardShotTransition; items: StoryboardShotTransition[] };
+export type ShotVisualAnchorResponse = { items: ShotVisualAnchor[] };
+export type ShotReferencePackResponse = { pack?: ShotReferencePack; items: ShotReferencePackItem[]; history: ShotReferencePack[] };
+export type StoryboardSheetResponse = {
+  active?: StoryboardSheetManifest;
+  manifest?: StoryboardSheetManifest;
+  panels: StoryboardSheetPanel[];
+  history: StoryboardSheetManifest[];
+};
+export type VideoPromptPlanResponse = { active?: VideoPromptPlan; items: VideoPromptPlan[]; contextPlan?: PromptContextPlan };
+
 export type VideoRenderSegment = {
   id: string;
   segmentIndex: number;
@@ -1110,14 +1871,36 @@ export type VideoRenderSegment = {
 
 export type VideoRenderPlan = {
   id: string;
+  productionGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  profileVersionId: string;
+  productionProfileSnapshot: JsonRecord;
+  productionProfileSnapshotHash: string;
   storyboardPlanId?: string;
   storyboardShotId: string;
   providerAccountId: string;
-  providerModelId: string;
+  providerModelId?: string;
   modelFamily: string;
   variantKey: string;
   capabilitySnapshot: VideoGenerationVariant;
   capabilitySnapshotHash: string;
+  capabilityAttestationId?: string;
+  shotStateRevision?: number;
+  shotStateHash?: string;
+  transitionSnapshot: JsonRecord;
+  transitionHash?: string;
+  referencePackId?: string;
+  referencePackHash?: string;
+  initialInputContractSnapshot?: JsonRecord;
+  initialInputContractHash?: string;
+  continuationInputContractSnapshot?: JsonRecord;
+  continuationInputContractHash?: string;
+  promptContextPlanId?: string;
+  promptContextPlanHash?: string;
+  videoPromptPlanId?: string;
+  dialogueCues: JsonValue[];
+  nativeAudioRequired: boolean;
   status: string;
   active: boolean;
   targetDurationTicks: number;
@@ -1141,6 +1924,7 @@ export type VideoRenderPlan = {
   audioVerifiedBy?: string;
   audioVerifiedAt?: string;
   audioVerificationNotes?: string;
+  metadata: JsonRecord;
   expiresAt: string;
   createdAt: string;
   updatedAt: string;
@@ -1381,8 +2165,12 @@ export type ProductionStatus = {
       propRequirementCount: number;
       derivedImageCount: number;
       missingDerivedImageCount: number;
+      approvedMissingDerivedImageCount: number;
       approvedCount: number;
       pendingReviewCount: number;
+      reviewPendingCount: number;
+      needsEditCount: number;
+      rejectedCount: number;
       manualOverrideCount: number;
       staleRequirementCount: number;
       summary: string[];
@@ -1422,6 +2210,109 @@ export type ProductionActionResponse = {
   status: string;
   workflowType: string;
   note?: string;
+  operationId?: string;
+  derivedAssets?: DerivedAssetBatchProjection;
+};
+
+export type DerivedAssetExecutionProjection = {
+  id: string;
+  nodeRunId: string;
+  nodeKey: string;
+  attemptNo: number;
+  status: string;
+  revision: number;
+  providerRequestId?: string | null;
+  providerCallId?: string | null;
+  selectedCredentialId?: string | null;
+  artifactId?: string | null;
+  mediaFileId?: string | null;
+  storageKey?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  diagnostic: JsonRecord;
+  lateResultCount: number;
+  lateResultDiagnostics: JsonValue;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  productionGenerationId: string;
+};
+
+export type DerivedAssetRequestItemProjection = {
+  id: string;
+  inputOrdinal: number;
+  originalId: string;
+  requirementId?: string | null;
+  duplicateOfRequestItemId?: string | null;
+  rootRequestItemId?: string | null;
+  retryOfRequestItemId?: string | null;
+  disposition: string;
+  dispositionDetail: JsonRecord;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  retryable: boolean;
+  inputSnapshot: JsonRecord;
+  inputHash: string;
+  status: string;
+  currentAttemptId?: string | null;
+  currentAttemptNo?: number | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  execution?: DerivedAssetExecutionProjection | null;
+};
+
+export type DerivedAssetBatchProjection = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  workflowRunId: string;
+  productionGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  rootBatchId?: string | null;
+  retryOfBatchId?: string | null;
+  retryDepth: number;
+  requestMode: string;
+  filters: JsonRecord;
+  filtersHash: string;
+  selectorCandidateCount: number;
+  selectorSkippedCount: number;
+  idempotencyKey: string;
+  requestHash: string;
+  status: string;
+  revision: number;
+  totalItems: number;
+  executableItems: number;
+  reviewRequiredItems: number;
+  notFoundItems: number;
+  generationMismatchItems: number;
+  alreadyRunningItems: number;
+  duplicateItems: number;
+  skippedItems: number;
+  pendingItems: number;
+  queuedItems: number;
+  runningItems: number;
+  succeededItems: number;
+  failedRetryableItems: number;
+  failedTerminalItems: number;
+  cancelledItems: number;
+  discardedItems: number;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  items: DerivedAssetRequestItemProjection[];
+};
+
+export type DerivedAssetBatchCommandResult = {
+  batch: DerivedAssetBatchProjection;
+  workflowRun: WorkflowRun;
+  idempotentReplay?: boolean;
+  operationId?: string;
 };
 
 export type ReviewResponse = {
@@ -1437,6 +2328,8 @@ export type RegenerateResponse = {
   workflowRunId: string;
   status: string;
   workflowType: string;
+  operationId?: string;
+  derivedAssets?: DerivedAssetBatchProjection;
 };
 
 export type ReviewItemAction = {
@@ -1703,6 +2596,7 @@ export type ProviderAccount = {
   providerType?: string;
   config?: JsonRecord;
   credentialPreview?: string | null;
+  credentialCount?: number;
   status: string;
   createdBy?: string;
   createdAt?: string;
@@ -1733,6 +2627,62 @@ export type ProviderModelCapability = {
 
 export type ProviderModelCapabilityOptions = JsonRecord & {
   xCapabilities?: ProviderModelXCapabilities;
+};
+
+export type ProviderCredential = {
+  id: string;
+  organizationId: string;
+  providerAccountId: string;
+  credentialKey: string;
+  credentialType: string;
+  maskedPreview: string;
+  status: "active" | "rotated" | "revoked" | "expired";
+  isActive: boolean;
+  availableModelCount: number;
+  lastDiscoveredAt?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  expiresAt?: string | null;
+  rotatedAt?: string | null;
+};
+
+export type ShotProductionBatchRequest = {
+  scriptEpisodeId?: string;
+  workflowRunId?: string;
+  shotIds?: string[];
+  force?: boolean;
+  maxConcurrency?: number;
+  resolution?: string;
+  pollIntervalSeconds?: number;
+  maxPolls?: number;
+};
+
+export type VideoInputSlot = {
+  role: string;
+  mediaType: "image" | "video" | "audio" | "text" | string;
+  semantics: string;
+  min: number;
+  max: number;
+  ordered: boolean;
+};
+
+export type VideoInputContractKey =
+  | "text_only"
+  | "first_frame"
+  | "first_last_frames"
+  | "semantic_references"
+  | "first_frame_plus_references"
+  | "storyboard_sheet_reference"
+  | "video_reference"
+  | "video_extension";
+
+export type VideoInputContract = {
+  contractKey: VideoInputContractKey;
+  requestMode: string;
+  slots: VideoInputSlot[];
+  mutuallyExclusiveRoles: string[][];
+  supportsStoryboardSheetReference: boolean;
+  supportsVideoExtension: boolean;
 };
 
 export type VideoGenerationVariant = {
@@ -1774,11 +2724,54 @@ export type VideoGenerationVariant = {
     supportsLastFrame: boolean;
     supportsVideoReference: boolean;
   };
+  inputContract?: VideoInputContract;
+  continuationInputContracts?: VideoInputContract[];
   requestModes?: string[];
   source?: string;
   sourceUrl?: string;
   verifiedAt?: string;
   capabilityVersion?: string;
+  verificationStatus?: "official" | "tested" | "inferred" | "unknown";
+};
+
+export type VideoCapabilityAttestation = {
+  id: string;
+  organizationId: string;
+  providerModelId: string;
+  variantKey: string;
+  capabilitySnapshotHash: string;
+  verificationStatus: "official" | "tested" | "inferred" | "unknown";
+  evidenceType: "official_documentation" | "adapter_contract_test" | "controlled_probe" | "administrator_review";
+  evidence: JsonRecord;
+  decision: "approved" | "rejected";
+  reason: string;
+  decidedBy?: string;
+  decidedAt: string;
+  supersedesAttestationId?: string;
+  revokedBy?: string;
+  revokedAt?: string;
+  currentSnapshot: boolean;
+  active: boolean;
+  createdAt: string;
+};
+
+export type VideoCapabilityVariantStatus = {
+  variantKey: string;
+  capabilitySnapshotHash: string;
+  verificationStatus: "official" | "tested" | "inferred" | "unknown";
+  source?: string;
+  sourceUrl?: string;
+  verifiedAt?: string;
+  initialInputContract: VideoInputContract;
+  continuationInputContracts: VideoInputContract[];
+  nativeAudio: VideoGenerationVariant["nativeAudio"];
+  duration: VideoGenerationVariant["duration"];
+  currentAttestation?: VideoCapabilityAttestation;
+};
+
+export type VideoCapabilityAttestationList = {
+  variants: VideoCapabilityVariantStatus[];
+  attestations: VideoCapabilityAttestation[];
 };
 
 export type ProviderModelXCapabilities = JsonRecord & {
@@ -1929,8 +2922,17 @@ export type DiscoveredProviderModel = {
 };
 
 export type ProviderModelDiscoveryResult = {
+  credentialId?: string;
+  credentialKey?: string;
   models: DiscoveredProviderModel[];
   unsupported: JsonValue[];
+  sync: {
+    discoveredCount: number;
+    createdCount: number;
+    existingCount: number;
+    skippedDisabledCount: number;
+    ignoredCount: number;
+  };
 };
 
 export type ModelProfileBinding = {
@@ -2132,6 +3134,36 @@ export type Organization = {
   createdAt?: string;
 };
 
+export type SystemOrganization = {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: string;
+  activeMemberCount: number;
+  workspaceCount: number;
+  projectCount: number;
+  ownerCount: number;
+};
+
+export type SystemOrganizationList = {
+  items: SystemOrganization[];
+  page: number;
+  pageSize: number;
+  total: number;
+};
+
+export type CreateSystemOrganizationRequest = {
+  name: string;
+  workspaceName?: string;
+  ownerIdentifier: string;
+};
+
+export type CreatedSystemOrganization = {
+  organization: SystemOrganization;
+  initialOwner: AuthUser;
+  defaultWorkspaceId: string;
+};
+
 export type Workspace = {
   id: string;
   organizationId: string;
@@ -2141,20 +3173,82 @@ export type Workspace = {
 
 export type Team = {
   id: string;
+  organizationId?: string;
   name: string;
+  description?: string | null;
   status: string;
+  memberCount: number;
+  bindingCount: number;
   createdAt?: string;
+};
+
+export type TeamMember = {
+  teamId: string;
+  userId: string;
+  status: "active" | "disabled";
+  createdBy?: string;
+  createdAt: string;
+  user: AuthUser;
+};
+
+export type TeamImpact = {
+  teamId: string;
+  activeMemberCount: number;
+  activeBindingCount: number;
 };
 
 export type Role = {
   id: string;
   roleKey: string;
-  name?: string;
-  scope?: string;
+  name: string;
+  description?: string | null;
+  scope: "organization" | "workspace" | "project";
+  isSystem: boolean;
+  permissions?: Permission[];
+  bindingCount: number;
+};
+
+export type RoleImpact = {
+  roleId: string;
+  bindingCount: number;
+  directUserCount: number;
+  teamCount: number;
+  affectedUserCount: number;
+  organizationBindings: number;
+  workspaceBindings: number;
+  projectBindings: number;
+  permissionKeys: string[];
 };
 
 export type Permission = {
   permissionKey: string;
   name?: string;
   description?: string;
+};
+
+export type RoleBinding = {
+  id: string;
+  organizationId: string;
+  roleId: string;
+  roleKey: string;
+  roleName?: string;
+  subjectType: "user" | "team";
+  subjectUserId?: string;
+  subjectTeamId?: string;
+  subjectName?: string;
+  resourceType: "organization" | "workspace" | "project";
+  resourceOrganizationId?: string;
+  resourceWorkspaceId?: string;
+  resourceProjectId?: string;
+  resourceName?: string;
+  expiresAt?: string;
+  createdBy?: string;
+  createdAt: string;
+};
+
+export type RoleBindingList = {
+  items: RoleBinding[];
+  page: number;
+  pageSize: number;
+  total: number;
 };

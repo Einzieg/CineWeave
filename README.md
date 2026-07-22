@@ -1,96 +1,113 @@
 # CineWeave
 
-CineWeave is a cloud-native AI video production platform rebuilt around Provider Gateway, Temporal workflows, multi-tenant access control, Artifact storage, and observable provider execution.
+CineWeave 是面向长篇内容改编的 AI 视频生产平台。系统以项目、分集剧本、资产、分镜、镜头媒体和成片为主线，使用 Provider Gateway 统一接入模型，使用 Temporal 承载可恢复的长时间生产任务。
 
-The repository root is this directory. Do not create a nested `cineweave/` folder.
+仓库根目录就是当前目录，不要创建嵌套的 `cineweave/` 或 `CineWeave/` 目录。
 
-## Quick Start
+## 运行要求
+
+- Docker Engine 与 Docker Compose v2
+- Go `1.26.5+`
+- Node.js `24`
+- pnpm `10.32.1`
+- Python 3，包含 PyYAML（仅 OpenAPI 校验使用）
+
+## 快速启动
 
 ```powershell
-pnpm install
+pnpm install --frozen-lockfile
 docker compose -f compose.yml --profile app up -d --build
+docker compose -f compose.yml --profile app ps
 ```
 
-The local Docker Compose environment exposes only browser-facing services by default:
+默认只向宿主机开放浏览器或外部客户端需要访问的服务：
 
-- Web: `http://localhost:19285`
-- API: `http://localhost:19288`
-- Realtime events: `http://localhost:19281/api/realtime/events`
-- MinIO object preview endpoint: `http://localhost:19290`
+- Web：`http://localhost:19285`
+- API：`http://localhost:19288`
+- Realtime：`http://localhost:19281/api/realtime/events`
+- MinIO API：`http://localhost:19290`
 
-PostgreSQL, Redis, NATS, Temporal, Provider Gateway, and the MinIO console stay on the Docker network and are not mapped to host ports by default. On a fresh database, open `http://localhost:19285/setup` to create the first administrator, organization, and workspace. Public registration is disabled by default with `CINEWEAVE_ALLOW_PUBLIC_REGISTRATION=false`; keep it disabled for server deployments unless you intentionally want open signup.
+PostgreSQL、Redis、NATS、Temporal、Provider Gateway、Workers、Event Publisher 和 MinIO Console 只在 Docker 网络内通信。
 
-After setup, use `/login` with the administrator account. The web app stores the login session locally and sends the access token plus organization context automatically; users do not manually enter tokens, organization IDs, or workspace IDs.
+空数据库首次启动时访问 `http://localhost:19285/setup` 创建系统管理员。服务器部署应保持 `CINEWEAVE_ALLOW_PUBLIC_REGISTRATION=false`，并替换 `.env.example` 中的开发密钥。
 
-Useful commands:
+## 架构边界
+
+- API Server 和 Worker 不得直接调用上游 AI 服务，也不得解密供应商凭据。
+- Provider Gateway 负责凭据解密、模型路由、上游调用、错误归一化、并发与额度控制、调用日志、成本记录和异步任务。
+- Temporal Workflow 负责任务编排、等待、重试、取消、Continue-As-New 和结果提交。
+- Media Worker 负责 FFmpeg、对象存储和媒体处理，不接触供应商凭据。
+- PostgreSQL 保存业务状态；对象媒体存入 S3/MinIO；前端通过短时 signed URL 预览。
+
+## 生产主线
+
+当前项目主线是：
+
+```text
+原文导入与分卷分集
+  -> 忠实分集剧本
+  -> Canonical Assets 与衍生资产
+  -> 分集分镜与镜头状态
+  -> 镜头图、视频提示词与视频
+  -> 时间线、审阅与成片
+```
+
+图像、视频、音频任务均经 Provider Gateway。长批次必须是可恢复、可取消、可按失败项重试的独立执行单元，前端任务活动通过 Realtime 同步状态。
+
+## Provider 与模型
+
+OpenAI-compatible 是默认渠道类型，可用于 OpenAI official、New API、One API、LiteLLM 及兼容网关。Provider Center 同时支持平台预设、声明式 Manifest、多 API Key、按凭据发现模型和模型能力配置。
+
+模型能力是运行时契约的一部分，覆盖文本流式/推理等级/多模态、图片参考与质量档位、视频异步任务/参考输入/时长/比例/分辨率等。业务模型通过 Model Profile 绑定，路由、优先级、权重、启停和 fallback 均由 Provider Gateway 执行。
+
+## 数据库
+
+应用启动使用嵌入式 Goose 迁移和独立系统 Seed：
 
 ```powershell
-go test ./...
-pnpm --filter @cineweave/web typecheck
-pnpm --filter @cineweave/web lint
-docker compose config
-docker compose -f compose.yml build api provider-gateway script-worker media-worker web
+go run ./cmd/cineweave-migrate validate
+go run ./cmd/cineweave-migrate up
+go run ./cmd/cineweave-seed apply
 ```
 
-Compose pins external runtime images with tag+digest for repeatable server deployments. To upgrade a base service image, update the tag and digest in `compose.yml`, run `docker compose -f compose.yml pull <service>`, verify `docker compose -f compose.yml config --quiet`, rebuild the app profile, and confirm `docker compose -f compose.yml --profile app ps` shows the expected services healthy.
+已应用迁移及其 hash 不得改写。当前迁移链和整合发布基线的说明见 [正式发布准备](docs/release-readiness.md) 与 [ADR 0002](docs/adr/0002-database-migrations-and-system-seeds.md)。
 
-The current MVP is silent video. TTS, generated audio artifacts, audio mix, subtitles, and BGM are intentionally deferred.
+## 验证
 
-## Provider Gateway Boundary
+日常全仓验证：
 
-Provider Gateway is required by default for upstream model access. API and worker services should call `PROVIDER_GATEWAY_URL` with `CINEWEAVE_SERVICE_TOKEN`; production must not enable direct provider fallback. `CINEWEAVE_ALLOW_PROVIDER_DIRECT_FALLBACK=true` is only for local development or test troubleshooting.
+```powershell
+pnpm run test
+```
 
-For server deployments, set `CINEWEAVE_ENV=production` and replace all development secrets before starting app services. API startup fails if `CINEWEAVE_JWT_SECRET` is empty or still `dev-insecure-cineweave-secret`; API and Provider Gateway startup fail if `CINEWEAVE_SERVICE_TOKEN` is empty or still `dev-service-token`; Provider Gateway credential vault startup fails if `CINEWEAVE_CREDENTIAL_MASTER_KEY` is empty.
+正式发布检查：
 
-Provider Gateway now owns `text.generate`, `text.stream`, and `image.generate` runtime calls. The image runtime targets OpenAI-compatible `/v1/images/generations`, accepts URL or `b64_json` upstream responses, downloads or decodes the media inside the Gateway, stores it in S3 / MinIO, and writes `media_files`, `artifacts`, `provider_call_logs`, and `cost_records`. Returned media URLs use a DNS-pinned, redirect-aware fetcher that blocks private and special-purpose networks by default.
+```powershell
+pnpm run release:check
+```
 
-Provider Gateway Video Runtime v1 adds declarative HTTP video providers through `/internal/provider/video/create-task`, `/internal/provider/video/poll-task`, and `/internal/provider/video/cancel-task`. Video providers should be onboarded with Provider Manifest endpoints first because upstream video APIs vary widely. `provider_async_tasks` is the durable async task state source; Temporal workers will own later durable polling loops, while the Gateway performs each create / poll / cancel call, downloads completed video media, writes S3 / MinIO objects, and records `media_files`, `artifacts`, `provider_call_logs`, and final `cost_records`. Video downloads default to `CINEWEAVE_PROVIDER_VIDEO_MAX_BYTES=536870912`. A private media endpoint requires an account-level `mediaEgress` policy with both an exact hostname and matching CIDR; there is no process-wide private-network bypass.
+发布检查包含 Go/Web/OpenAPI/Compose 测试、安全审计、生产构建、隔离迁移往返和整合基线等价性。运行服务更新前还需执行 Provider drain 与配置快照保护，具体命令见 [docs/release-readiness.md](docs/release-readiness.md)。
 
-Provider limits are enforced only inside Provider Gateway. `provider_limit_policies` can cap max concurrency, requests per minute/day, daily/monthly budget, and failure circuit behavior by organization, account, model, and task type. `provider_leases` protects active upstream calls, budget checks read `cost_records`, and circuit state is stored in `provider_circuit_states`. Guard-blocked calls are written to `provider_call_logs` with `status=blocked` and do not create `cost_records`.
+## 目录
 
-Model profiles can bind multiple provider models. Provider Gateway supports `priority`, `priority_with_fallback`, `weighted`, `cost_optimized`, and `latency_optimized` routing strategies, and every Gateway text/image/video-create response can include an `attempts` summary. Guard-blocked and retryable upstream failures can fall back to the next candidate according to `fallback_strategy`; `AUTH_FAILED`, `MODEL_NOT_FOUND`, `INVALID_REQUEST`, `UNSUPPORTED_CAPABILITY`, and `CONTENT_REJECTED` stop by default. Text streaming only falls back before the first delta is sent. Video poll/cancel are pinned to the `provider_async_tasks` row created by video create-task and are not rerouted.
+- `apps/api`：公共 API Server。
+- `apps/realtime`：Realtime 事件网关。
+- `apps/web`：Next.js 项目工作台。
+- `services/provider-gateway`：唯一上游 AI 访问边界。
+- `workers`：Temporal Worker 入口。
+- `internal`：Go 领域模块与运行时实现。
+- `packages/openapi`：公共 API 契约。
+- `packages/events`：事件目录及生成契约。
+- `db/migrations`：不可变升级链。
+- `db/baselines/current`：当前整合发布基线。
+- `db/seeds`：幂等系统数据。
+- `deploy`：Compose/Kubernetes/Helm 运行资产。
+- `docs`：架构、运行手册与执行计划。
 
-## Multi-Platform Providers
+## 主要文档
 
-Provider Center includes a Provider Catalog for installing official presets without writing scripts. The first presets are DeepSeek text, Volcengine Ark text, Volcengine Seedream image, Volcengine Seedance video, Kling video, and a custom OpenAI-compatible connector. Catalog installation creates the connector, provider account, encrypted credential, provider models, model capabilities, and optional Model Profile bindings; it does not call upstream services during installation.
-
-All installed providers still run through Provider Gateway. DeepSeek uses the OpenAI-compatible adapter with `https://api.deepseek.com` and `/chat/completions`, and supports `providerOptions.deepseek` / `extraBody` pass-through for reasoning options. Volcengine image/video and Kling video use Declarative Manifest presets with editable base URL, endpoint paths, and model IDs. Recommended bindings are DeepSeek or Volcengine text to `script_agent_default`, Volcengine image to `image_generation_default`, and Volcengine/Kling video to `video_generation_default`.
-
-## Prompt Registry
-
-System prompts are seeded during migration for `storyboard_planner`, `storyboard_image_prompt`, and `storyboard_video_prompt`. Prompt templates are versioned through `prompt_versions`; active versions are immutable operational records, and prompt edits should create a new version before activation.
-
-Workflow prompt resolution follows project binding, organization binding, organization active version, then system active version. `text_to_storyboard` and `video_production` render prompt templates through the Prompt Registry before calling Provider Gateway. Each new workflow model call sends `promptVersionId`, `promptHash`, `promptTemplateKey`, and `promptSource`; Provider Gateway writes `provider_call_logs.prompt_version_id`, `provider_call_logs.prompt_hash`, and gateway-side Artifact metadata for image/video outputs. Storyboard JSON artifacts also store `artifacts.prompt_hash` plus `metadata.promptVersionId`, `metadata.promptTemplateKey`, and `metadata.promptSource`.
-
-Prompt management APIs are available at `/api/prompt-templates`, `/api/prompt-templates/{templateId}/versions`, `/api/prompt-versions/{versionId}/activate`, `/api/prompt-bindings`, and `/api/prompts/render-test`. `prompt.read` allows listing and render-test; `prompt.manage` allows creating templates, versions, bindings, and activating versions.
-
-`text_to_storyboard` is the first real storyboard workflow path. `POST /api/workflow-runs` with `workflowType=text_to_storyboard` starts Temporal, the script worker calls Provider Gateway for `text.generate` using `script_agent_default`, then records the storyboard JSON artifact and normalized `storyboard_shots`. It does not call image or video Gateway paths.
-
-`video_production` v1 now generates up to 3 storyboard shots sequentially. Each shot gets its own Provider Gateway `image.generate` output and async `video.create_task` / `video.poll_task` `generated_video` artifact, with links persisted on `storyboard_shots`. After all shot videos succeed, the Media Worker runs FFmpeg to normalize and concatenate the clips into a `final_video` MP4 artifact and writes a `timeline_json` manifest artifact. `POST /api/workflow-runs` accepts optional `input.duration`, `input.aspectRatio`, `input.resolution`, `input.pollIntervalSeconds`, `input.maxPolls`, `input.maxShots` (capped at 3), and `input.skipCompose` for debugging.
-
-`media-worker` listens on Temporal task queue `cineweave-media`. It registers final-video composition and project export activities, using `media_files`, `artifacts`, `project_exports`, and S3 / MinIO object storage; it does not call Provider Gateway or access provider credentials. The Docker Compose media-worker image uses `deploy/docker-compose/Dockerfile-media-worker` and installs FFmpeg in that runtime image.
-
-Shot results are available through `GET /api/workflow-runs/{id}/shots?includePreviewUrl=true`, and the project workspace shows storyboard shots with image/video previews while retaining the Vault artifact list.
-
-Video workflow cancellation is exposed through `POST /api/workflow-runs/{id}/cancel`. Running, queued, or already-cancelling runs are marked `cancelling` and API requests Temporal cancellation; terminal runs return their current state for repeated cancel calls. If the current shot has a running Provider Gateway video async task, workflow cleanup calls `/internal/provider/video/cancel-task`; completed shots stay succeeded and not-yet-started shots are marked cancelled.
-
-The Vault preview path uses authenticated API endpoints to create short-lived signed GET URLs for `artifacts` and `media_files`; S3 / MinIO buckets do not need public read access. In local Docker Compose, server components use `S3_ENDPOINT=http://minio:9000`, while browser preview URLs are signed with `S3_PUBLIC_ENDPOINT=http://localhost:19290`.
-
-For Docker Compose deployments, configure provider accounts and bind active models to `script_agent_default`, `image_generation_default`, and `video_generation_default` before running `video_production`. Missing bindings fail the workflow with `MODEL_PROFILE_NOT_CONFIGURED`.
-
-## RBAC Authorization
-
-API access is permission based through `role_bindings` and `role_permissions`, not raw membership checks. Register creates an organization, active membership, and an `org_owner` binding for the creator. Project creation grants the creator `project_owner`. Provider, prompt, workflow, asset, artifact, media, team, and role-binding operations are checked with fine-grained permissions such as `provider.manage`, `prompt.read`, `prompt.manage`, `workflow.run`, `workflow.cancel`, `asset.write`, `artifact.read`, and `role.manage`. Organization bindings inherit to workspaces and projects; workspace bindings inherit to projects in that workspace; project bindings apply only to that project. Team role bindings apply only to active team members.
-
-## Layout
-
-- `apps/api`: Go public API server.
-- `apps/realtime`: Go realtime gateway.
-- `apps/web`: Next.js AI video creation workbench.
-- `services/provider-gateway`: CineWeave Gateway service.
-- `workers`: Temporal worker entry points.
-- `internal`: shared Go packages.
-- `packages`: OpenAPI, provider manifest schema, generated/shared types.
-- `db`: migrations and seeds.
-- `deploy`: Docker Compose, Kubernetes, Helm, and ingress assets.
-- `docs`: implementation-facing architecture and execution notes.
+- [当前 Codex 执行计划](docs/codex-execution-plan.md)
+- [后续开发计划](docs/follow-up-development-plan.md)
+- [Provider Gateway](docs/provider-gateway.md)
+- [工作流引擎](docs/workflow-engine.md)
+- [正式发布准备](docs/release-readiness.md)

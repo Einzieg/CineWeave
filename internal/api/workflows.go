@@ -18,30 +18,33 @@ import (
 )
 
 type WorkflowRun struct {
-	ID                   string          `json:"id"`
-	OrganizationID       string          `json:"organizationId"`
-	ProjectID            string          `json:"projectId"`
-	TemplateID           *string         `json:"templateId,omitempty"`
-	TemporalWorkflowID   string          `json:"temporalWorkflowId"`
-	Status               string          `json:"status"`
-	Input                json.RawMessage `json:"input"`
-	Output               json.RawMessage `json:"output"`
-	ErrorCode            *string         `json:"errorCode,omitempty"`
-	ErrorMessage         *string         `json:"errorMessage,omitempty"`
-	CreatedBy            string          `json:"createdBy"`
-	CreatedAt            time.Time       `json:"createdAt"`
-	StartedAt            *time.Time      `json:"startedAt,omitempty"`
-	CompletedAt          *time.Time      `json:"completedAt,omitempty"`
-	CancelledAt          *time.Time      `json:"cancelledAt,omitempty"`
-	WorkflowType         string          `json:"workflowType"`
-	TotalItems           int             `json:"totalItems"`
-	CompletedItems       int             `json:"completedItems"`
-	FailedItems          int             `json:"failedItems"`
-	Revision             int64           `json:"revision"`
-	AttemptGeneration    int             `json:"attemptGeneration"`
-	RootWorkflowRunID    *string         `json:"rootWorkflowRunId,omitempty"`
-	RetryOfWorkflowRunID *string         `json:"retryOfWorkflowRunId,omitempty"`
-	UpdatedAt            time.Time       `json:"updatedAt"`
+	ID                             string          `json:"id"`
+	OrganizationID                 string          `json:"organizationId"`
+	ProjectID                      string          `json:"projectId"`
+	ProductionGenerationID         string          `json:"productionGenerationId"`
+	VideoProductionBindingID       string          `json:"videoProductionBindingId"`
+	VideoProductionBindingRevision int64           `json:"videoProductionBindingRevision"`
+	TemplateID                     *string         `json:"templateId,omitempty"`
+	TemporalWorkflowID             string          `json:"temporalWorkflowId"`
+	Status                         string          `json:"status"`
+	Input                          json.RawMessage `json:"input"`
+	Output                         json.RawMessage `json:"output"`
+	ErrorCode                      *string         `json:"errorCode,omitempty"`
+	ErrorMessage                   *string         `json:"errorMessage,omitempty"`
+	CreatedBy                      string          `json:"createdBy"`
+	CreatedAt                      time.Time       `json:"createdAt"`
+	StartedAt                      *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt                    *time.Time      `json:"completedAt,omitempty"`
+	CancelledAt                    *time.Time      `json:"cancelledAt,omitempty"`
+	WorkflowType                   string          `json:"workflowType"`
+	TotalItems                     int             `json:"totalItems"`
+	CompletedItems                 int             `json:"completedItems"`
+	FailedItems                    int             `json:"failedItems"`
+	Revision                       int64           `json:"revision"`
+	AttemptGeneration              int             `json:"attemptGeneration"`
+	RootWorkflowRunID              *string         `json:"rootWorkflowRunId,omitempty"`
+	RetryOfWorkflowRunID           *string         `json:"retryOfWorkflowRunId,omitempty"`
+	UpdatedAt                      time.Time       `json:"updatedAt"`
 }
 
 type WorkflowNodeRun struct {
@@ -222,10 +225,12 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 			}
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO workflow_input_snapshots(
-					workflow_run_id, organization_id, project_id, project_revision, snapshot, snapshot_hash
+					workflow_run_id, organization_id, project_id, project_revision, snapshot, snapshot_hash,
+					production_generation_id
 				)
-				VALUES ($1, $2, $3, $4, $5, $6)
-			`, run.ID, run.OrganizationID, run.ProjectID, lockedProject.Revision, snapshotRaw, snapshotHash); err != nil {
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+			`, run.ID, run.OrganizationID, run.ProjectID, lockedProject.Revision, snapshotRaw, snapshotHash,
+				run.ProductionGenerationID); err != nil {
 				return err
 			}
 			updated, err := scanWorkflowRun(tx.QueryRow(ctx, workflowRunSelectSQL(`WHERE id = $1`), run.ID))
@@ -474,11 +479,27 @@ func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request, principal
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, model_id, metadata, created_at
-		FROM artifacts
-		WHERE organization_id = $1
-		  AND ($2 = '' OR project_id = $2::uuid)
-		ORDER BY created_at DESC
+		SELECT artifact.id, artifact.organization_id, artifact.project_id, artifact.workflow_run_id,
+		       artifact.node_run_id, artifact.type, artifact.storage_key, artifact.mime_type,
+		       artifact.content_hash, artifact.prompt_hash, artifact.model_id, artifact.metadata, artifact.created_at
+		FROM artifacts artifact
+		LEFT JOIN projects project ON project.id = artifact.project_id
+		WHERE artifact.organization_id = $1
+		  AND ($2 = '' OR artifact.project_id = $2::uuid)
+		  AND (
+		    artifact.project_id IS NULL
+		    OR artifact.production_generation_id IS NULL
+		    OR artifact.production_generation_id = project.active_video_production_generation_id
+		    OR EXISTS (SELECT 1 FROM asset_references ref WHERE ref.artifact_id = artifact.id AND ref.status = 'ready')
+		    OR EXISTS (
+		      SELECT 1 FROM canonical_assets asset
+		      WHERE asset.primary_reference_artifact_id = artifact.id OR asset.reference_artifact_id = artifact.id
+		    )
+		    OR EXISTS (SELECT 1 FROM novel_chapters chapter WHERE chapter.content_artifact_id = artifact.id)
+		    OR EXISTS (SELECT 1 FROM novels novel WHERE novel.raw_artifact_id = artifact.id OR novel.clean_artifact_id = artifact.id)
+		    OR EXISTS (SELECT 1 FROM script_versions version WHERE version.content_artifact_id = artifact.id)
+		  )
+		ORDER BY artifact.created_at DESC
 		LIMIT 100
 	`, orgID, projectID)
 	if err != nil {
@@ -513,6 +534,9 @@ func scanWorkflowRun(row pgx.Row) (WorkflowRun, error) {
 		&item.ID,
 		&item.OrganizationID,
 		&item.ProjectID,
+		&item.ProductionGenerationID,
+		&item.VideoProductionBindingID,
+		&item.VideoProductionBindingRevision,
 		&item.TemplateID,
 		&item.TemporalWorkflowID,
 		&item.Status,
@@ -540,7 +564,9 @@ func scanWorkflowRun(row pgx.Row) (WorkflowRun, error) {
 
 func workflowRunSelectSQL(where string) string {
 	return `
-		SELECT id, organization_id, project_id, template_id, temporal_workflow_id, status,
+		SELECT id, organization_id, project_id, production_generation_id,
+		       video_production_binding_id, video_production_binding_revision,
+		       template_id, temporal_workflow_id, status,
 		       input, output, error_code, error_message, created_by, created_at,
 		       started_at, completed_at, cancelled_at, workflow_type, total_items,
 		       completed_items, failed_items, revision, attempt_generation, root_workflow_run_id,

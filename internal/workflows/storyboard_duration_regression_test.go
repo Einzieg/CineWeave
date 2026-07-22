@@ -7,31 +7,21 @@ import (
 )
 
 type storyboardDurationRegressionFixture struct {
-	Name                     string           `json:"name"`
-	ScriptCharacterCount     int              `json:"scriptCharacterCount"`
-	RawTotalSeconds          float64          `json:"rawTotalSeconds"`
-	LegacyMaxShotSeconds     float64          `json:"legacyMaxShotSeconds"`
-	LegacyStoredTotalSeconds float64          `json:"legacyStoredTotalSeconds"`
-	Shots                    []StoryboardShot `json:"shots"`
+	Name                 string           `json:"name"`
+	ScriptCharacterCount int              `json:"scriptCharacterCount"`
+	ExpectedTotalSeconds float64          `json:"expectedTotalSeconds"`
+	Shots                []StoryboardShot `json:"shots"`
 }
 
-func TestStoryboardDurationRegressionFixtureDocumentsLegacyClamp(t *testing.T) {
+func TestStoryboardDurationRegressionFixturePreservesLongShots(t *testing.T) {
 	fixture := loadStoryboardDurationRegressionFixture(t)
 	if fixture.ScriptCharacterCount != 6355 || len(fixture.Shots) != 16 {
 		t.Fatalf("fixture dimensions = %d chars, %d shots", fixture.ScriptCharacterCount, len(fixture.Shots))
 	}
 
 	rawTotal := storyboardShotDurationTotal(fixture.Shots)
-	if rawTotal != fixture.RawTotalSeconds {
-		t.Fatalf("raw duration = %.1f, want %.1f", rawTotal, fixture.RawTotalSeconds)
-	}
-
-	legacyStoredTotal := legacyClampedStoryboardDuration(fixture.Shots, fixture.LegacyMaxShotSeconds)
-	if legacyStoredTotal != fixture.LegacyStoredTotalSeconds {
-		t.Fatalf("legacy stored duration = %.1f, want %.1f", legacyStoredTotal, fixture.LegacyStoredTotalSeconds)
-	}
-	if loss := rawTotal - legacyStoredTotal; loss != 170 {
-		t.Fatalf("legacy duration loss = %.1f, want 170", loss)
+	if rawTotal != fixture.ExpectedTotalSeconds {
+		t.Fatalf("raw duration = %.1f, want %.1f", rawTotal, fixture.ExpectedTotalSeconds)
 	}
 
 	normalized := NormalizeStoryboardShots(fixture.Shots, "fallback")
@@ -63,16 +53,4 @@ func loadStoryboardDurationRegressionFixture(t *testing.T) storyboardDurationReg
 		t.Fatalf("decode regression fixture: %v", err)
 	}
 	return fixture
-}
-
-func legacyClampedStoryboardDuration(shots []StoryboardShot, maxDuration float64) float64 {
-	total := 0.0
-	for _, shot := range shots {
-		duration := shot.Duration
-		if duration > maxDuration {
-			duration = maxDuration
-		}
-		total += duration
-	}
-	return total
 }

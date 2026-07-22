@@ -11,46 +11,71 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/provider"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
+	"github.com/Einzieg/cineweave/internal/workflows"
 )
 
 type VideoRenderPlanDetail struct {
-	ID                     string                     `json:"id"`
-	StoryboardPlanID       *string                    `json:"storyboardPlanId,omitempty"`
-	StoryboardShotID       string                     `json:"storyboardShotId"`
-	ProviderAccountID      string                     `json:"providerAccountId"`
-	ProviderModelID        string                     `json:"providerModelId"`
-	ModelFamily            string                     `json:"modelFamily"`
-	VariantKey             string                     `json:"variantKey"`
-	CapabilitySnapshot     json.RawMessage            `json:"capabilitySnapshot"`
-	CapabilitySnapshotHash string                     `json:"capabilitySnapshotHash"`
-	Status                 string                     `json:"status"`
-	Active                 bool                       `json:"active"`
-	TargetDurationTicks    int64                      `json:"targetDurationTicks"`
-	TargetDurationFrames   int64                      `json:"targetDurationFrames"`
-	TargetDurationSeconds  float64                    `json:"targetDurationSeconds"`
-	TimelineTimebase       int64                      `json:"timelineTimebase"`
-	FPSNumerator           int                        `json:"fpsNumerator"`
-	FPSDenominator         int                        `json:"fpsDenominator"`
-	TaskType               string                     `json:"taskType"`
-	ReferenceMode          string                     `json:"referenceMode"`
-	AspectRatio            string                     `json:"aspectRatio"`
-	Resolution             string                     `json:"resolution"`
-	AudioStrategy          string                     `json:"audioStrategy"`
-	AudioRequirement       string                     `json:"audioRequirement"`
-	NativeAudioStatus      string                     `json:"nativeAudioStatus"`
-	ProductionReadiness    string                     `json:"productionReadiness"`
-	OutputArtifactID       *string                    `json:"outputArtifactId,omitempty"`
-	OutputMediaFileID      *string                    `json:"outputMediaFileId,omitempty"`
-	OutputStorageKey       *string                    `json:"outputStorageKey,omitempty"`
-	OutputPreviewURL       *string                    `json:"outputPreviewUrl,omitempty"`
-	AudioVerifiedBy        *string                    `json:"audioVerifiedBy,omitempty"`
-	AudioVerifiedAt        *time.Time                 `json:"audioVerifiedAt,omitempty"`
-	AudioVerificationNotes *string                    `json:"audioVerificationNotes,omitempty"`
-	ExpiresAt              time.Time                  `json:"expiresAt"`
-	CreatedAt              time.Time                  `json:"createdAt"`
-	UpdatedAt              time.Time                  `json:"updatedAt"`
-	CompletedAt            *time.Time                 `json:"completedAt,omitempty"`
-	Segments               []VideoRenderSegmentDetail `json:"segments"`
+	ID                                string                     `json:"id"`
+	ProductionGenerationID            string                     `json:"productionGenerationId"`
+	VideoProductionBindingID          string                     `json:"videoProductionBindingId"`
+	VideoProductionBindingRevision    int64                      `json:"videoProductionBindingRevision"`
+	ProfileVersionID                  string                     `json:"profileVersionId"`
+	ProductionProfileSnapshot         json.RawMessage            `json:"productionProfileSnapshot"`
+	ProductionProfileSnapshotHash     string                     `json:"productionProfileSnapshotHash"`
+	StoryboardPlanID                  *string                    `json:"storyboardPlanId,omitempty"`
+	StoryboardShotID                  string                     `json:"storyboardShotId"`
+	ProviderAccountID                 string                     `json:"providerAccountId"`
+	ProviderModelID                   *string                    `json:"providerModelId,omitempty"`
+	ModelFamily                       string                     `json:"modelFamily"`
+	VariantKey                        string                     `json:"variantKey"`
+	CapabilitySnapshot                json.RawMessage            `json:"capabilitySnapshot"`
+	CapabilitySnapshotHash            string                     `json:"capabilitySnapshotHash"`
+	CapabilityAttestationID           *string                    `json:"capabilityAttestationId,omitempty"`
+	ShotStateRevision                 *int                       `json:"shotStateRevision,omitempty"`
+	ShotStateHash                     *string                    `json:"shotStateHash,omitempty"`
+	TransitionSnapshot                json.RawMessage            `json:"transitionSnapshot"`
+	TransitionHash                    *string                    `json:"transitionHash,omitempty"`
+	ReferencePackID                   *string                    `json:"referencePackId,omitempty"`
+	ReferencePackHash                 *string                    `json:"referencePackHash,omitempty"`
+	InitialInputContractSnapshot      json.RawMessage            `json:"initialInputContractSnapshot,omitempty"`
+	InitialInputContractHash          *string                    `json:"initialInputContractHash,omitempty"`
+	ContinuationInputContractSnapshot *json.RawMessage           `json:"continuationInputContractSnapshot,omitempty"`
+	ContinuationInputContractHash     *string                    `json:"continuationInputContractHash,omitempty"`
+	PromptContextPlanID               *string                    `json:"promptContextPlanId,omitempty"`
+	PromptContextPlanHash             *string                    `json:"promptContextPlanHash,omitempty"`
+	VideoPromptPlanID                 *string                    `json:"videoPromptPlanId,omitempty"`
+	DialogueCues                      json.RawMessage            `json:"dialogueCues"`
+	NativeAudioRequired               bool                       `json:"nativeAudioRequired"`
+	Status                            string                     `json:"status"`
+	Active                            bool                       `json:"active"`
+	TargetDurationTicks               int64                      `json:"targetDurationTicks"`
+	TargetDurationFrames              int64                      `json:"targetDurationFrames"`
+	TargetDurationSeconds             float64                    `json:"targetDurationSeconds"`
+	TimelineTimebase                  int64                      `json:"timelineTimebase"`
+	FPSNumerator                      int                        `json:"fpsNumerator"`
+	FPSDenominator                    int                        `json:"fpsDenominator"`
+	TaskType                          string                     `json:"taskType"`
+	ReferenceMode                     string                     `json:"referenceMode"`
+	AspectRatio                       string                     `json:"aspectRatio"`
+	Resolution                        string                     `json:"resolution"`
+	AudioStrategy                     string                     `json:"audioStrategy"`
+	AudioRequirement                  string                     `json:"audioRequirement"`
+	NativeAudioStatus                 string                     `json:"nativeAudioStatus"`
+	ProductionReadiness               string                     `json:"productionReadiness"`
+	OutputArtifactID                  *string                    `json:"outputArtifactId,omitempty"`
+	OutputMediaFileID                 *string                    `json:"outputMediaFileId,omitempty"`
+	OutputStorageKey                  *string                    `json:"outputStorageKey,omitempty"`
+	OutputPreviewURL                  *string                    `json:"outputPreviewUrl,omitempty"`
+	AudioVerifiedBy                   *string                    `json:"audioVerifiedBy,omitempty"`
+	AudioVerifiedAt                   *time.Time                 `json:"audioVerifiedAt,omitempty"`
+	AudioVerificationNotes            *string                    `json:"audioVerificationNotes,omitempty"`
+	Metadata                          json.RawMessage            `json:"metadata"`
+	ExpiresAt                         time.Time                  `json:"expiresAt"`
+	CreatedAt                         time.Time                  `json:"createdAt"`
+	UpdatedAt                         time.Time                  `json:"updatedAt"`
+	CompletedAt                       *time.Time                 `json:"completedAt,omitempty"`
+	Segments                          []VideoRenderSegmentDetail `json:"segments"`
 }
 
 type VideoRenderSegmentDetail struct {
@@ -169,9 +194,17 @@ func (s *Server) createStoryboardShotRenderPlan(w http.ResponseWriter, r *http.R
 		s.writeError(w, r, err)
 		return
 	}
+	productionContext, err := videoproduction.LoadActiveContext(r.Context(), s.db, project.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	plan, err := provider.NewGatewayClientFromEnv().PlanVideo(r.Context(), provider.GatewayVideoPlanRequest{
 		OrganizationID: project.OrganizationID, ProjectID: project.ID,
-		StoryboardPlanID: stringValue(shot.StoryboardPlanID), StoryboardShotID: shot.ID,
+		ProductionGenerationID:         productionContext.Generation.ID,
+		VideoProductionBindingID:       productionContext.Binding.ID,
+		VideoProductionBindingRevision: productionContext.Binding.Revision,
+		StoryboardPlanID:               stringValue(shot.StoryboardPlanID), StoryboardShotID: shot.ID,
 		ModelProfileKey: modelProfileKey, ProviderModelID: strings.TrimSpace(req.ProviderModelID), TaskType: taskType,
 		TargetDurationTicks: shot.PlannedDurationTicks, TimelineTimebase: project.TimelineTimebase,
 		FPSNumerator: int64(project.FPSNumerator), FPSDenominator: int64(project.FPSDenominator),
@@ -192,8 +225,18 @@ func (s *Server) createStoryboardShotRenderPlan(w http.ResponseWriter, r *http.R
 }
 
 func apiGatewayVideoDialogueSpans(shot StoryboardShot) ([]provider.GatewayVideoDialogueSpan, error) {
-	result := make([]provider.GatewayVideoDialogueSpan, 0, len(shot.ScriptDialogue))
 	for _, line := range shot.ScriptDialogue {
+		kind := strings.ToLower(strings.TrimSpace(line.Kind))
+		if kind == "" {
+			kind = "dialogue"
+		}
+		if kind == "dialogue" && strings.TrimSpace(line.Text) != "" && strings.TrimSpace(line.Speaker) == "" {
+			return nil, &provider.StandardErrorError{Standard: provider.StandardError{Code: provider.CodeStoryboardReplanRequired, Message: "角色对白缺少说话人，需要先重新生成分镜计划", Retryable: false}}
+		}
+	}
+	spokenDialogue := workflows.SpokenStoryboardDialogue(shot.ScriptDialogue)
+	result := make([]provider.GatewayVideoDialogueSpan, 0, len(spokenDialogue))
+	for _, line := range spokenDialogue {
 		if strings.TrimSpace(line.Text) == "" {
 			continue
 		}
@@ -226,24 +269,44 @@ func (s *Server) videoRenderPlanDetail(ctx context.Context, projectID, shotID, p
 	var item VideoRenderPlanDetail
 	var storyboardPlanID *string
 	if err := s.db.QueryRow(ctx, `
-		SELECT plan.id::text, plan.storyboard_plan_id::text, plan.storyboard_shot_id::text,
+		SELECT plan.id::text, plan.production_generation_id::text,
+		       plan.video_production_binding_id::text, plan.video_production_binding_revision,
+		       plan.profile_version_id::text, plan.production_profile_snapshot,
+		       plan.production_profile_snapshot_hash,
+		       plan.storyboard_plan_id::text, plan.storyboard_shot_id::text,
 		       plan.provider_account_id::text, plan.provider_model_id::text, plan.model_family, plan.variant_key,
-		       plan.capability_snapshot, plan.capability_snapshot_hash, plan.status, plan.active,
+		       plan.capability_snapshot, plan.capability_snapshot_hash, plan.capability_attestation_id::text,
+		       plan.shot_state_revision, plan.shot_state_hash, plan.transition_snapshot, plan.transition_hash,
+		       plan.reference_pack_id::text, plan.reference_pack_hash,
+		       plan.initial_input_contract_snapshot, plan.initial_input_contract_hash,
+		       plan.continuation_input_contract_snapshot, plan.continuation_input_contract_hash,
+		       plan.prompt_context_plan_id::text, plan.prompt_context_plan_hash,
+		       plan.video_prompt_plan_id::text, plan.dialogue_cues, plan.native_audio_required,
+		       plan.status, plan.active,
 		       plan.target_duration_ticks, plan.timeline_timebase, plan.fps_numerator, plan.fps_denominator,
 		       plan.task_type, plan.reference_mode, plan.aspect_ratio, plan.resolution,
 		       plan.audio_strategy, plan.audio_requirement, plan.native_audio_status, plan.production_readiness,
 		       plan.output_artifact_id::text, plan.output_media_file_id::text, plan.output_storage_key,
-		       plan.audio_verified_by::text, plan.audio_verified_at, plan.audio_verification_notes,
+		       plan.audio_verified_by::text, plan.audio_verified_at, plan.audio_verification_notes, plan.metadata,
 		       plan.expires_at, plan.created_at, plan.updated_at, plan.completed_at
 		FROM video_render_plans plan WHERE `+where,
 		args...).Scan(
-		&item.ID, &storyboardPlanID, &item.StoryboardShotID, &item.ProviderAccountID, &item.ProviderModelID,
+		&item.ID, &item.ProductionGenerationID, &item.VideoProductionBindingID,
+		&item.VideoProductionBindingRevision, &item.ProfileVersionID,
+		&item.ProductionProfileSnapshot, &item.ProductionProfileSnapshotHash,
+		&storyboardPlanID, &item.StoryboardShotID, &item.ProviderAccountID, &item.ProviderModelID,
 		&item.ModelFamily, &item.VariantKey, &item.CapabilitySnapshot, &item.CapabilitySnapshotHash,
+		&item.CapabilityAttestationID, &item.ShotStateRevision, &item.ShotStateHash,
+		&item.TransitionSnapshot, &item.TransitionHash, &item.ReferencePackID, &item.ReferencePackHash,
+		&item.InitialInputContractSnapshot, &item.InitialInputContractHash,
+		&item.ContinuationInputContractSnapshot, &item.ContinuationInputContractHash,
+		&item.PromptContextPlanID, &item.PromptContextPlanHash, &item.VideoPromptPlanID,
+		&item.DialogueCues, &item.NativeAudioRequired,
 		&item.Status, &item.Active, &item.TargetDurationTicks, &item.TimelineTimebase, &item.FPSNumerator, &item.FPSDenominator,
 		&item.TaskType, &item.ReferenceMode, &item.AspectRatio, &item.Resolution,
 		&item.AudioStrategy, &item.AudioRequirement, &item.NativeAudioStatus, &item.ProductionReadiness,
 		&item.OutputArtifactID, &item.OutputMediaFileID, &item.OutputStorageKey,
-		&item.AudioVerifiedBy, &item.AudioVerifiedAt, &item.AudioVerificationNotes,
+		&item.AudioVerifiedBy, &item.AudioVerifiedAt, &item.AudioVerificationNotes, &item.Metadata,
 		&item.ExpiresAt, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt,
 	); err != nil {
 		return VideoRenderPlanDetail{}, err

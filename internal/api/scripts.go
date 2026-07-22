@@ -24,6 +24,7 @@ type Script struct {
 	SourceID         *string        `json:"sourceId,omitempty"`
 	Title            string         `json:"title"`
 	Status           string         `json:"status"`
+	IsCurrent        bool           `json:"isCurrent"`
 	CurrentVersionID *string        `json:"currentVersionId,omitempty"`
 	CreatedBy        *string        `json:"createdBy,omitempty"`
 	CreatedAt        time.Time      `json:"createdAt"`
@@ -78,7 +79,7 @@ func (s *Server) listScripts(w http.ResponseWriter, r *http.Request, principal a
 	}
 	rows, err := s.db.Query(r.Context(), scriptSelectSQL(`
 		WHERE s.project_id = $1 AND COALESCE(s.status, 'active') <> 'archived'
-		ORDER BY s.created_at DESC
+		ORDER BY CASE WHEN s.id = p.active_script_id THEN 0 ELSE 1 END, s.created_at DESC
 	`), project.ID)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -164,8 +165,13 @@ func (s *Server) createScript(w http.ResponseWriter, r *http.Request, principal 
 			s.writeError(w, r, err)
 			return
 		}
+		if _, err := tx.Exec(r.Context(), `UPDATE projects SET active_script_id = $2 WHERE id = $1`, project.ID, item.ID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
 		item.CurrentVersionID = &version.ID
 		item.Status = "active"
+		item.IsCurrent = true
 		item.CurrentVersion = &version
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -877,6 +883,10 @@ func (s *Server) generateScriptFromAgent(w http.ResponseWriter, r *http.Request,
 		s.writeError(w, r, err)
 		return
 	}
+	if _, err := tx.Exec(r.Context(), `UPDATE projects SET active_script_id = $2 WHERE id = $1`, project.ID, script.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE agent_runs
 		SET status = 'succeeded', output = $2, provider_call_id = NULLIF($3, '')::uuid,
@@ -1135,8 +1145,10 @@ func (s *Server) scriptVersion(r *http.Request, projectID, scriptID, versionID s
 func scriptSelectSQL(where string) string {
 	return `
 		SELECT s.id, s.organization_id, s.project_id, s.source_id, s.title,
-		       COALESCE(s.status, 'draft'), s.current_version_id, s.created_by, s.created_at, s.updated_at
+		       COALESCE(s.status, 'draft'), s.id = p.active_script_id,
+		       s.current_version_id, s.created_by, s.created_at, s.updated_at
 		FROM scripts s
+		JOIN projects p ON p.id = s.project_id
 	` + where
 }
 
@@ -1144,7 +1156,8 @@ func scriptInsertSQL() string {
 	return `
 		INSERT INTO scripts(organization_id, project_id, source_id, title, status, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, organization_id, project_id, source_id, title, status, current_version_id, created_by, created_at, updated_at
+		RETURNING id, organization_id, project_id, source_id, title, status, false,
+		          current_version_id, created_by, created_at, updated_at
 	`
 }
 
@@ -1167,41 +1180,7 @@ func nextScriptVersion(r *http.Request, tx pgx.Tx, scriptID string) (int, error)
 }
 
 func markScriptVersionDownstreamStale(r *http.Request, tx pgx.Tx, projectID, versionID string) error {
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE script_scenes
-		SET stale_state = 'needs_regeneration',
-		    review_status = 'pending',
-		    updated_at = now()
-		WHERE project_id = $1 AND script_version_id = $2 AND deleted_at IS NULL
-	`, projectID, versionID); err != nil {
-		return err
-	}
-	rows, err := tx.Query(r.Context(), `
-		SELECT id::text
-		FROM script_scenes
-		WHERE project_id = $1 AND script_version_id = $2 AND deleted_at IS NULL
-	`, projectID, versionID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	sceneIDs := make([]string, 0)
-	for rows.Next() {
-		var sceneID string
-		if err := rows.Scan(&sceneID); err != nil {
-			return err
-		}
-		sceneIDs = append(sceneIDs, sceneID)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, sceneID := range sceneIDs {
-		if err := markScriptSceneDownstreamStale(r, tx, projectID, sceneID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return production.MarkScriptVersionDownstreamStale(r.Context(), tx, projectID, versionID)
 }
 
 func activateScriptVersionTx(r *http.Request, tx pgx.Tx, project Project, script Script, version ScriptVersion) (string, error) {
@@ -1210,6 +1189,9 @@ func activateScriptVersionTx(r *http.Request, tx pgx.Tx, project Project, script
 		previousVersionID = *script.CurrentVersionID
 	}
 	if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE projects SET active_script_id = $2 WHERE id = $1`, project.ID, script.ID); err != nil {
 		return "", err
 	}
 	if previousVersionID != "" && previousVersionID != version.ID {
@@ -1233,6 +1215,7 @@ func scanScript(row rowScan) (Script, error) {
 		&sourceID,
 		&item.Title,
 		&item.Status,
+		&item.IsCurrent,
 		&currentVersionID,
 		&createdBy,
 		&item.CreatedAt,
@@ -1340,16 +1323,16 @@ func optionalStringValue(value *string) string {
 
 func projectPromptVariables(project Project) map[string]any {
 	return map[string]any{
-		"id":             project.ID,
-		"projectType":    stringValue(project.ProjectType),
-		"contentType":    stringValue(project.ContentType),
-		"aspectRatio":    stringValue(project.AspectRatio),
-		"videoRatio":     project.VideoRatio,
-		"artStyle":       project.ArtStyle,
-		"directorManual": project.DirectorManual,
-		"visualManual":   project.VisualManual,
-		"imageQuality":   project.ImageQuality,
-		"productionMode": project.ProductionMode,
+		"id":                        project.ID,
+		"projectType":               stringValue(project.ProjectType),
+		"contentType":               stringValue(project.ContentType),
+		"aspectRatio":               stringValue(project.AspectRatio),
+		"videoRatio":                project.VideoRatio,
+		"artStyle":                  project.ArtStyle,
+		"directorManual":            project.DirectorManual,
+		"visualManual":              project.VisualManual,
+		"imageQuality":              project.ImageQuality,
+		"videoProductionProfileKey": project.VideoProductionBinding.ProfileKey,
 	}
 }
 

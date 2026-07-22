@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
@@ -71,7 +72,6 @@ func TestWorkflowStartOutboxDispatchesExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load project: %v", err)
 	}
-
 	run, err := server.startProjectWorkflowCore(seed.ctx, auth.Principal{
 		UserID: seed.ownerUserID, OrganizationID: seed.organizationID,
 	}, project, "script_to_assets", map[string]any{"scriptId": "script-1"}, workflows.ScriptToAssetsWorkflow)
@@ -177,6 +177,89 @@ func TestWorkflowStartOutboxCancellationFencesClaimedStart(t *testing.T) {
 	}
 	if nodeStatus != "cancelled" || nodeErrorCode != "USER_CANCELLED" {
 		t.Fatalf("node status=%s error=%s, want cancelled/USER_CANCELLED", nodeStatus, nodeErrorCode)
+	}
+}
+
+func TestWorkflowStartOutboxProductionLockFencesClaimedStart(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+	temporal := &workflowStartTestTemporal{}
+	server := New(seed.pool, seed.authService, nil, nil, nil)
+	server.temporal = temporal
+	project, err := server.project(requestWithContext(seed.ctx), seed.projectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	run, err := server.startProjectWorkflowCore(seed.ctx, auth.Principal{
+		UserID: seed.ownerUserID, OrganizationID: seed.organizationID,
+	}, project, "script_to_assets", map[string]any{"scriptId": "script-1"}, workflows.ScriptToAssetsWorkflow)
+	if err != nil {
+		t.Fatalf("enqueue workflow: %v", err)
+	}
+	claimed, ok, err := server.claimWorkflowStart(seed.ctx, "generation-fence-worker", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim workflow start ok=%v err=%v", ok, err)
+	}
+	if _, err := seed.pool.Exec(seed.ctx, `UPDATE projects SET video_production_locked = true WHERE id = $1`, seed.projectID); err != nil {
+		t.Fatalf("lock project: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = seed.pool.Exec(context.Background(), `UPDATE projects SET video_production_locked = false WHERE id = $1`, seed.projectID)
+	})
+
+	result, err := server.executeWorkflowStart(seed.ctx, "generation-fence-worker", claimed)
+	if err != nil {
+		t.Fatalf("execute fenced workflow: %v", err)
+	}
+	if result != workflowStartResultCancelledFenced {
+		t.Fatalf("execution result = %q, want %q", result, workflowStartResultCancelledFenced)
+	}
+	if temporal.Count() != 0 {
+		t.Fatalf("locked workflow reached Temporal: calls=%d", temporal.Count())
+	}
+	assertWorkflowStartState(t, seed, run.ID, "cancelled", "cancelled", 1)
+	var errorCode string
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT error_code FROM workflow_runs WHERE id = $1`, run.ID).Scan(&errorCode); err != nil {
+		t.Fatalf("read fenced workflow error: %v", err)
+	}
+	if errorCode != "PROJECT_VIDEO_PRODUCTION_LOCKED" {
+		t.Fatalf("error code=%q, want PROJECT_VIDEO_PRODUCTION_LOCKED", errorCode)
+	}
+}
+
+func TestWorkflowEnqueueRejectsLockedProject(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+	server := New(seed.pool, seed.authService, nil, nil, nil)
+	server.temporal = &workflowStartTestTemporal{}
+	project, err := server.project(requestWithContext(seed.ctx), seed.projectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	var before int
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT count(*) FROM workflow_runs WHERE project_id = $1 AND workflow_type = 'script_to_assets'`, seed.projectID).Scan(&before); err != nil {
+		t.Fatalf("count workflows before enqueue: %v", err)
+	}
+	if _, err := seed.pool.Exec(seed.ctx, `UPDATE projects SET video_production_locked = true WHERE id = $1`, seed.projectID); err != nil {
+		t.Fatalf("lock project: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = seed.pool.Exec(context.Background(), `UPDATE projects SET video_production_locked = false WHERE id = $1`, seed.projectID)
+	})
+
+	_, err = server.startProjectWorkflowCore(seed.ctx, auth.Principal{
+		UserID: seed.ownerUserID, OrganizationID: seed.organizationID,
+	}, project, "script_to_assets", map[string]any{"scriptId": "script-1"}, workflows.ScriptToAssetsWorkflow)
+	var productionErr videoproduction.Error
+	if !errors.As(err, &productionErr) || productionErr.Code != videoproduction.CodeProjectLocked {
+		t.Fatalf("enqueue error = %v, want %s", err, videoproduction.CodeProjectLocked)
+	}
+	var count int
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT count(*) FROM workflow_runs WHERE project_id = $1 AND workflow_type = 'script_to_assets'`, seed.projectID).Scan(&count); err != nil {
+		t.Fatalf("count workflows: %v", err)
+	}
+	if count != before {
+		t.Fatalf("locked enqueue changed workflow run count from %d to %d", before, count)
 	}
 }
 
@@ -365,5 +448,25 @@ func TestWorkflowStartInputHashCanonicalizesObjectKeys(t *testing.T) {
 	}
 	if string(left) != string(right) || leftHash != rightHash {
 		t.Fatalf("canonical values differ: %s/%s %s/%s", left, leftHash, right, rightHash)
+	}
+}
+
+func TestWorkflowStartVisibilityIncludesProductionAndEpisodeIdentity(t *testing.T) {
+	workflowRunID := "workflow-run"
+	searchAttributes, memo := workflowStartVisibility(workflowStartOutboxItem{
+		WorkflowRunID: &workflowRunID,
+		ProjectID:     "project", ProductionGenerationID: "generation", ProfileVersionID: "profile-version",
+		WorkflowType: "batch_generate_shot_videos",
+		Input:        json.RawMessage(`{"organizationId":"org","input":{"scriptEpisodeId":"episode","rebuildId":"rebuild"}}`),
+	})
+	for key, want := range map[string]string{
+		"ProjectId": "project", "ProductionGenerationId": "generation", "EpisodeId": "episode", "ProfileVersionId": "profile-version", "RebuildId": "rebuild",
+	} {
+		if got := searchAttributes[key]; got != want || memo[key] != want {
+			t.Fatalf("%s search=%v memo=%v, want %s", key, got, memo[key], want)
+		}
+	}
+	if memo["WorkflowType"] != "batch_generate_shot_videos" || memo["WorkflowRunId"] != workflowRunID {
+		t.Fatalf("memo = %+v", memo)
 	}
 }

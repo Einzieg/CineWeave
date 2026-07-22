@@ -10,6 +10,8 @@ import (
 var (
 	ErrValidation              = errors.New("provider validation failed")
 	ErrConflict                = errors.New("provider conflict")
+	ErrModelAlreadyExists      = fmt.Errorf("%w: provider model already exists", ErrConflict)
+	ErrModelInUse              = fmt.Errorf("%w: provider model has active runtime work", ErrConflict)
 	ErrProviderGatewayRequired = errors.New("provider gateway required")
 )
 
@@ -26,43 +28,48 @@ func (e CatalogError) Error() string {
 }
 
 const (
-	CodeAuthFailed                    = "AUTH_FAILED"
-	CodeQuotaExceeded                 = "QUOTA_EXCEEDED"
-	CodeRateLimited                   = "RATE_LIMITED"
-	CodeModelNotFound                 = "MODEL_NOT_FOUND"
-	CodeInvalidRequest                = "INVALID_REQUEST"
-	CodeUnsupportedCapability         = "UNSUPPORTED_CAPABILITY"
-	CodeUpstreamTimeout               = "UPSTREAM_TIMEOUT"
-	CodeUpstreamStreamTruncated       = "UPSTREAM_STREAM_TRUNCATED"
-	CodeUpstreamInternalError         = "UPSTREAM_INTERNAL_ERROR"
-	CodePollingTimeout                = "POLLING_TIMEOUT"
-	CodeResultExpired                 = "RESULT_EXPIRED"
-	CodeMediaDownloadFailed           = "MEDIA_DOWNLOAD_FAILED"
-	CodeUpstreamOutputMismatch        = "UPSTREAM_OUTPUT_MISMATCH"
-	CodeContentRejected               = "CONTENT_REJECTED"
-	CodeProviderGatewayRequired       = "PROVIDER_GATEWAY_REQUIRED"
-	CodeCannotCancelCompletedTask     = "CANNOT_CANCEL_COMPLETED_TASK"
-	CodeProviderTaskNotFound          = "PROVIDER_TASK_NOT_FOUND"
-	CodeProviderCancelFailed          = "PROVIDER_CANCEL_FAILED"
-	CodeProviderRateLimited           = "PROVIDER_RATE_LIMITED"
-	CodeProviderConcurrencyLimited    = "PROVIDER_CONCURRENCY_LIMITED"
-	CodeProviderDailyQuotaExceeded    = "PROVIDER_DAILY_QUOTA_EXCEEDED"
-	CodeProviderMonthlyBudgetExceeded = "PROVIDER_MONTHLY_BUDGET_EXCEEDED"
-	CodeProviderCircuitOpen           = "PROVIDER_CIRCUIT_OPEN"
-	CodeProviderLeaseExpired          = "PROVIDER_LEASE_EXPIRED"
-	CodeModelProfileNotConfigured     = "MODEL_PROFILE_NOT_CONFIGURED"
-	CodeProviderPresetNotFound        = "PROVIDER_PRESET_NOT_FOUND"
-	CodeProviderInstallFailed         = "PROVIDER_INSTALL_FAILED"
-	CodeProviderManifestInvalid       = "PROVIDER_MANIFEST_INVALID"
-	CodeProviderModelTemplateInvalid  = "PROVIDER_MODEL_TEMPLATE_INVALID"
-	CodeProviderSetupFieldMissing     = "PROVIDER_SETUP_FIELD_MISSING"
-	CodeProviderIdempotencyConflict   = "PROVIDER_IDEMPOTENCY_CONFLICT"
-	CodeProviderRequestInProgress     = "PROVIDER_REQUEST_IN_PROGRESS"
-	CodeProviderUnknownOutcome        = "PROVIDER_UNKNOWN_OUTCOME"
-	CodeModelCapabilityUnavailable    = "MODEL_CAPABILITY_UNAVAILABLE"
-	CodeRenderPlanReplanRequired      = "RENDER_PLAN_REPLAN_REQUIRED"
-	CodeStoryboardReplanRequired      = "STORYBOARD_REPLAN_REQUIRED"
-	CodeUnknownError                  = "UNKNOWN_ERROR"
+	CodeAuthFailed                      = "AUTH_FAILED"
+	CodeQuotaExceeded                   = "QUOTA_EXCEEDED"
+	CodeRateLimited                     = "RATE_LIMITED"
+	CodeModelNotFound                   = "MODEL_NOT_FOUND"
+	CodeInvalidRequest                  = "INVALID_REQUEST"
+	CodeUnsupportedCapability           = "UNSUPPORTED_CAPABILITY"
+	CodeUpstreamTimeout                 = "UPSTREAM_TIMEOUT"
+	CodeUpstreamStreamTruncated         = "UPSTREAM_STREAM_TRUNCATED"
+	CodeUpstreamInternalError           = "UPSTREAM_INTERNAL_ERROR"
+	CodePollingTimeout                  = "POLLING_TIMEOUT"
+	CodeResultExpired                   = "RESULT_EXPIRED"
+	CodeMediaDownloadFailed             = "MEDIA_DOWNLOAD_FAILED"
+	CodeUpstreamOutputMismatch          = "UPSTREAM_OUTPUT_MISMATCH"
+	CodeContentRejected                 = "CONTENT_REJECTED"
+	CodeProviderGatewayRequired         = "PROVIDER_GATEWAY_REQUIRED"
+	CodeCannotCancelCompletedTask       = "CANNOT_CANCEL_COMPLETED_TASK"
+	CodeProviderTaskNotFound            = "PROVIDER_TASK_NOT_FOUND"
+	CodeProviderCancelFailed            = "PROVIDER_CANCEL_FAILED"
+	CodeProviderRateLimited             = "PROVIDER_RATE_LIMITED"
+	CodeProviderConcurrencyLimited      = "PROVIDER_CONCURRENCY_LIMITED"
+	CodeProviderDailyQuotaExceeded      = "PROVIDER_DAILY_QUOTA_EXCEEDED"
+	CodeProviderMonthlyBudgetExceeded   = "PROVIDER_MONTHLY_BUDGET_EXCEEDED"
+	CodeProviderCircuitOpen             = "PROVIDER_CIRCUIT_OPEN"
+	CodeProviderLeaseExpired            = "PROVIDER_LEASE_EXPIRED"
+	CodeModelProfileNotConfigured       = "MODEL_PROFILE_NOT_CONFIGURED"
+	CodeProviderPresetNotFound          = "PROVIDER_PRESET_NOT_FOUND"
+	CodeProviderInstallFailed           = "PROVIDER_INSTALL_FAILED"
+	CodeProviderManifestInvalid         = "PROVIDER_MANIFEST_INVALID"
+	CodeProviderModelTemplateInvalid    = "PROVIDER_MODEL_TEMPLATE_INVALID"
+	CodeProviderSetupFieldMissing       = "PROVIDER_SETUP_FIELD_MISSING"
+	CodeProviderIdempotencyConflict     = "PROVIDER_IDEMPOTENCY_CONFLICT"
+	CodeProviderRequestInProgress       = "PROVIDER_REQUEST_IN_PROGRESS"
+	CodeProviderUnknownOutcome          = "PROVIDER_UNKNOWN_OUTCOME"
+	CodeModelCapabilityUnavailable      = "MODEL_CAPABILITY_UNAVAILABLE"
+	CodeRenderPlanReplanRequired        = "RENDER_PLAN_REPLAN_REQUIRED"
+	CodeStoryboardReplanRequired        = "STORYBOARD_REPLAN_REQUIRED"
+	CodeProductionGenerationMismatch    = "PRODUCTION_GENERATION_MISMATCH"
+	CodeProductionProfileIncompatible   = "PRODUCTION_PROFILE_INCOMPATIBLE"
+	CodeModelInputContractUnsupported   = "MODEL_INPUT_CONTRACT_UNSUPPORTED"
+	CodeModelCapabilityApprovalRequired = "MODEL_CAPABILITY_APPROVAL_REQUIRED"
+	CodeVideoDialogueContractViolation  = "VIDEO_DIALOGUE_CONTRACT_VIOLATION"
+	CodeUnknownError                    = "UNKNOWN_ERROR"
 )
 
 type StandardError struct {
@@ -113,9 +120,9 @@ func HTTPStatusForStandardError(standard *StandardError) int {
 		return http.StatusGatewayTimeout
 	case CodeUpstreamStreamTruncated:
 		return http.StatusBadGateway
-	case CodeInvalidRequest, CodeUnsupportedCapability, CodeModelNotFound, CodeContentRejected, CodeProviderTaskNotFound, CodeCannotCancelCompletedTask, CodeModelCapabilityUnavailable:
+	case CodeInvalidRequest, CodeUnsupportedCapability, CodeModelNotFound, CodeContentRejected, CodeProviderTaskNotFound, CodeCannotCancelCompletedTask, CodeModelCapabilityUnavailable, CodeProductionProfileIncompatible, CodeModelInputContractUnsupported, CodeModelCapabilityApprovalRequired, CodeVideoDialogueContractViolation:
 		return http.StatusUnprocessableEntity
-	case CodeRenderPlanReplanRequired, CodeStoryboardReplanRequired, CodeProviderIdempotencyConflict, CodeProviderRequestInProgress, CodeProviderUnknownOutcome:
+	case CodeRenderPlanReplanRequired, CodeStoryboardReplanRequired, CodeProductionGenerationMismatch, CodeProviderIdempotencyConflict, CodeProviderRequestInProgress, CodeProviderUnknownOutcome:
 		return http.StatusConflict
 	case CodeProviderGatewayRequired:
 		return http.StatusServiceUnavailable

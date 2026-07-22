@@ -11,20 +11,147 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/provider"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
+func registerSingleFrameShotAnchorWorkItemsTestActivity(env *testsuite.TestWorkflowEnvironment) {
+	env.RegisterActivityWithOptions(func(_ context.Context, input ResolveShotAnchorWorkItemsInput) ([]ShotAnchorWorkItem, error) {
+		items := make([]ShotAnchorWorkItem, 0, len(input.ShotIDs))
+		for index, shotID := range input.ShotIDs {
+			items = append(items, ShotAnchorWorkItem{ShotID: shotID, ShotIndex: index, ShotNo: index + 1, AnchorRole: "planned_first_frame"})
+		}
+		return items, nil
+	}, activity.RegisterOptions{Name: "ResolveShotAnchorWorkItems"})
+}
+
+func registerFirstLastShotAnchorWorkItemsTestActivity(env *testsuite.TestWorkflowEnvironment) {
+	env.RegisterActivityWithOptions(func(_ context.Context, input ResolveShotAnchorWorkItemsInput) ([]ShotAnchorWorkItem, error) {
+		items := make([]ShotAnchorWorkItem, 0, len(input.ShotIDs)*2)
+		for index, shotID := range input.ShotIDs {
+			for _, role := range []string{videoproduction.AnchorRolePlannedFirstFrame, videoproduction.AnchorRolePlannedLastFrame} {
+				items = append(items, ShotAnchorWorkItem{ShotID: shotID, ShotIndex: index, ShotNo: index + 1, AnchorRole: role})
+			}
+		}
+		return items, nil
+	}, activity.RegisterOptions{Name: "ResolveShotAnchorWorkItems"})
+}
+
+func TestBatchShotProgressCountsUsesUniqueTargetsAndFailurePrecedence(t *testing.T) {
+	total, completed, failed := batchShotProgressCounts(BatchShotProductionOutput{
+		TargetShotIDs:    []string{"shot-1", "shot-2", "shot-2", "shot-3"},
+		SucceededShotIDs: []string{"shot-1", "shot-2", "shot-2", "outside"},
+		FailedShotIDs:    []string{"shot-2", "shot-3", "shot-3", "outside"},
+	})
+	if total != 3 || completed != 1 || failed != 2 {
+		t.Fatalf("counts = total:%d completed:%d failed:%d", total, completed, failed)
+	}
+}
+
+func TestBatchGenerateShotImagePromptsWorkflowPersistsFailureWhenResolverCannotRun(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	var completed BatchShotProductionOutput
+	env.RegisterActivityWithOptions(func(_ context.Context, _ TextToStoryboardInput, output BatchShotProductionOutput) error {
+		completed = output
+		return nil
+	}, activity.RegisterOptions{Name: "CompleteBatchShotProductionWorkflow"})
+
+	env.ExecuteWorkflow(BatchGenerateShotImagePromptsWorkflow, TextToStoryboardInput{
+		OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user",
+		Input: json.RawMessage(`{"shotIds":["shot-1","shot-2"],"force":true,"maxConcurrency":2}`),
+	})
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() == nil {
+		t.Fatalf("workflow completed=%v error=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	if completed.Status != "failed" || len(completed.FailedShotIDs) != 2 || completed.FailedShotIDs[0] != "shot-1" || completed.FailedShotIDs[1] != "shot-2" {
+		t.Fatalf("completed = %+v", completed)
+	}
+	if completed.Errors["shot-1"] == "" || completed.Errors["shot-2"] == "" {
+		t.Fatalf("failure details were not persisted: %+v", completed.Errors)
+	}
+}
+
+func TestBatchGenerateShotImagesWorkflowExpandsFirstLastAnchors(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	registerFirstLastShotAnchorWorkItemsTestActivity(env)
+	var completed BatchShotProductionOutput
+	var rolesMu sync.Mutex
+	roles := map[string]int{}
+	env.RegisterActivityWithOptions(func(_ context.Context, input GenerateShotImageInput) (GenerateShotImageOutput, error) {
+		rolesMu.Lock()
+		roles[input.AnchorRole]++
+		rolesMu.Unlock()
+		return GenerateShotImageOutput{ShotID: input.ShotID, AnchorRole: input.AnchorRole, ImageArtifactID: "artifact-" + input.AnchorRole}, nil
+	}, activity.RegisterOptions{Name: "GenerateShotImage"})
+	env.RegisterActivityWithOptions(func(_ context.Context, _ TextToStoryboardInput, output BatchShotProductionOutput) error {
+		completed = output
+		return nil
+	}, activity.RegisterOptions{Name: "CompleteBatchShotProductionWorkflow"})
+
+	env.ExecuteWorkflow(BatchGenerateShotImagesWorkflow, TextToStoryboardInput{
+		OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user",
+		Input: json.RawMessage(`{"shotIds":["shot-1"],"maxConcurrency":2}`),
+	})
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("workflow completed=%v error=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	rolesMu.Lock()
+	firstCount := roles[videoproduction.AnchorRolePlannedFirstFrame]
+	lastCount := roles[videoproduction.AnchorRolePlannedLastFrame]
+	rolesMu.Unlock()
+	if firstCount != 1 || lastCount != 1 {
+		t.Fatalf("generated anchor roles = %+v", roles)
+	}
+	if len(completed.ImageOutputs) != 2 || len(completed.SucceededShotIDs) != 1 || completed.SucceededShotIDs[0] != "shot-1" || len(completed.FailedShotIDs) != 0 {
+		t.Fatalf("completed = %+v", completed)
+	}
+}
+
+func TestBatchGenerateShotImagePromptsWorkflowFailsShotWhenLastAnchorFails(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	registerFirstLastShotAnchorWorkItemsTestActivity(env)
+	var completed BatchShotProductionOutput
+	env.RegisterActivityWithOptions(func(_ context.Context, input PrepareShotImagePromptInput) (PrepareShotImagePromptOutput, error) {
+		if input.AnchorRole == videoproduction.AnchorRolePlannedLastFrame {
+			return PrepareShotImagePromptOutput{}, errors.New("last frame prompt rejected")
+		}
+		return PrepareShotImagePromptOutput{ShotID: input.ShotID, AnchorRole: input.AnchorRole, Prompt: "first frame"}, nil
+	}, activity.RegisterOptions{Name: "PrepareShotImagePrompt"})
+	env.RegisterActivityWithOptions(func(_ context.Context, _ TextToStoryboardInput, output BatchShotProductionOutput) error {
+		completed = output
+		return nil
+	}, activity.RegisterOptions{Name: "CompleteBatchShotProductionWorkflow"})
+
+	env.ExecuteWorkflow(BatchGenerateShotImagePromptsWorkflow, TextToStoryboardInput{
+		OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user",
+		Input: json.RawMessage(`{"shotIds":["shot-1"],"force":true,"maxConcurrency":2}`),
+	})
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("workflow completed=%v error=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	if len(completed.SucceededShotIDs) != 0 || len(completed.FailedShotIDs) != 1 || completed.FailedShotIDs[0] != "shot-1" ||
+		!strings.Contains(completed.Errors["shot-1"], videoproduction.AnchorRolePlannedLastFrame) {
+		t.Fatalf("completed = %+v", completed)
+	}
+}
+
 func TestBatchGenerateShotImagesWorkflowUsesBoundedConcurrency(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	registerSingleFrameShotAnchorWorkItemsTestActivity(env)
 	var mu sync.Mutex
 	active := 0
 	maxActive := 0
 	release := make(chan struct{})
 	var releaseOnce sync.Once
-
 	env.RegisterActivityWithOptions(func(ctx context.Context, input GenerateShotImageInput) (GenerateShotImageOutput, error) {
 		mu.Lock()
 		active++
@@ -87,33 +214,68 @@ func TestResolveBatchShotImageConcurrencyDefaultsAndClamps(t *testing.T) {
 func TestBatchGenerateShotVideoPromptsWorkflowUsesPromptOnlyActivities(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, ReconcileStoryboardDialogueAssignmentsInput) (ReconcileStoryboardDialogueAssignmentsOutput, error) {
+		return ReconcileStoryboardDialogueAssignmentsOutput{}, nil
+	}, activity.RegisterOptions{Name: "ReconcileStoryboardDialogueAssignments"})
 	var completed BatchShotProductionOutput
+	var mu sync.Mutex
+	preparedContracts := map[string]bool{"shot-1": true}
+	coarsePromptCalls := 0
+	planCalls := 0
+	segmentPromptCalls := 0
+	finalizeCalls := 0
+	env.RegisterActivityWithOptions(func(ctx context.Context, input PrepareShotVideoPromptInput) (PrepareShotVideoPromptOutput, error) {
+		if !input.PromptOnly || input.WorkflowPrompt != "batch_generate_shot_video_prompts" || !input.Force {
+			t.Fatalf("prompt input = %+v", input)
+		}
+		if input.RenderSegmentID != "" {
+			if input.ExecutionPlanID != "plan-"+input.ShotID || input.RequestedDuration != 8 || input.Duration != 8 || input.SegmentCount != 1 {
+				t.Fatalf("segment prompt input = %+v", input)
+			}
+			mu.Lock()
+			segmentPromptCalls++
+			mu.Unlock()
+			return PrepareShotVideoPromptOutput{ShotID: input.ShotID, Prompt: "segment-prompt-" + input.ShotID}, nil
+		}
+		if input.ShotID == "shot-2" {
+			return PrepareShotVideoPromptOutput{}, errors.New("dialogue validation failed")
+		}
+		mu.Lock()
+		coarsePromptCalls++
+		preparedContracts[input.ShotID] = true
+		mu.Unlock()
+		return PrepareShotVideoPromptOutput{ShotID: input.ShotID, Prompt: "prompt-" + input.ShotID, VideoPromptPlanID: "contract-" + input.ShotID}, nil
+	}, activity.RegisterOptions{Name: "PrepareShotVideoPrompt"})
 	env.RegisterActivityWithOptions(func(_ context.Context, input PlanShotVideoInput) (PlanShotVideoOutput, error) {
+		mu.Lock()
+		contractPrepared := preparedContracts[input.ShotID]
+		planCalls++
+		mu.Unlock()
+		if !contractPrepared {
+			return PlanShotVideoOutput{}, temporal.NewNonRetryableApplicationError(
+				"没有可执行的已审核视频提示词契约",
+				provider.CodeRenderPlanReplanRequired,
+				nil,
+			)
+		}
 		if !input.PromptOnly || input.WorkflowPrompt != "batch_generate_shot_video_prompts" || !input.Force {
 			t.Fatalf("plan input = %+v", input)
 		}
 		return PlanShotVideoOutput{GatewayVideoPlanResponse: provider.GatewayVideoPlanResponse{
 			ExecutionPlanID: "plan-" + input.ShotID,
-			AudioStrategy:   "native_av", AudioRequirement: "preferred",
 			Segments: []provider.GatewayVideoPlanSegment{{
 				SegmentID: "segment-" + input.ShotID, SegmentIndex: 0,
-				PlannedDurationSeconds: 5, RequestedDurationSeconds: 5,
+				PlannedStartTick: 0, PlannedEndTick: 7 * 90000, RequestedDurationSeconds: 8,
 			}},
 		}}, nil
 	}, activity.RegisterOptions{Name: "PlanShotVideo"})
-	env.RegisterActivityWithOptions(func(ctx context.Context, input PrepareShotVideoPromptInput) (PrepareShotVideoPromptOutput, error) {
-		if !input.PromptOnly || input.WorkflowPrompt != "batch_generate_shot_video_prompts" || !input.Force || input.ExecutionPlanID == "" || input.RenderSegmentID == "" {
-			t.Fatalf("prompt input = %+v", input)
-		}
-		if input.ShotID == "shot-2" {
-			return PrepareShotVideoPromptOutput{}, errors.New("dialogue validation failed")
-		}
-		return PrepareShotVideoPromptOutput{ShotID: input.ShotID, Prompt: "prompt-" + input.ShotID}, nil
-	}, activity.RegisterOptions{Name: "PrepareShotVideoPrompt"})
 	env.RegisterActivityWithOptions(func(_ context.Context, input FinalizeShotVideoPromptPlanInput) error {
-		if input.ExecutionPlanID != "plan-"+input.ShotID {
+		if input.ExecutionPlanID != "plan-"+input.ShotID || input.PromptSource != "segment_video_prompt_agents" {
 			t.Fatalf("finalize input = %+v", input)
 		}
+		mu.Lock()
+		finalizeCalls++
+		mu.Unlock()
 		return nil
 	}, activity.RegisterOptions{Name: "FinalizeShotVideoPromptPlan"})
 	env.RegisterActivityWithOptions(func(_ context.Context, _ TextToStoryboardInput, output BatchShotProductionOutput) error {
@@ -135,14 +297,64 @@ func TestBatchGenerateShotVideoPromptsWorkflowUsesPromptOnlyActivities(t *testin
 	if len(completed.SucceededShotIDs) != 2 || len(completed.FailedShotIDs) != 1 || completed.FailedShotIDs[0] != "shot-2" {
 		t.Fatalf("completed = %+v", completed)
 	}
-	if len(completed.VideoPromptOutputs) != 2 {
+	if len(completed.VideoPromptOutputs) != 3 {
 		t.Fatalf("prompt outputs = %+v", completed.VideoPromptOutputs)
+	}
+	mu.Lock()
+	gotCoarsePromptCalls := coarsePromptCalls
+	gotPlanCalls := planCalls
+	gotSegmentPromptCalls := segmentPromptCalls
+	gotFinalizeCalls := finalizeCalls
+	mu.Unlock()
+	if gotCoarsePromptCalls != 1 {
+		t.Fatalf("coarse prompt calls = %d, want only shot-3 regenerated", gotCoarsePromptCalls)
+	}
+	if gotPlanCalls != 4 {
+		t.Fatalf("render plan calls = %d, want shot-1 reused plus shot-2/3 recovery checks", gotPlanCalls)
+	}
+	if gotSegmentPromptCalls != 2 || gotFinalizeCalls != 2 {
+		t.Fatalf("segment prompt/finalize calls = %d/%d, want 2/2", gotSegmentPromptCalls, gotFinalizeCalls)
+	}
+}
+
+func TestBatchGenerateShotVideoPromptsWorkflowFinalizesCancellation(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, ReconcileStoryboardDialogueAssignmentsInput) (ReconcileStoryboardDialogueAssignmentsOutput, error) {
+		return ReconcileStoryboardDialogueAssignmentsOutput{}, nil
+	}, activity.RegisterOptions{Name: "ReconcileStoryboardDialogueAssignments"})
+	var finalized BatchShotProductionOutput
+
+	env.RegisterActivityWithOptions(func(ctx context.Context, input PrepareShotVideoPromptInput) (PrepareShotVideoPromptOutput, error) {
+		<-ctx.Done()
+		return PrepareShotVideoPromptOutput{}, ctx.Err()
+	}, activity.RegisterOptions{Name: "PrepareShotVideoPrompt"})
+	env.RegisterActivityWithOptions(func(_ context.Context, _ TextToStoryboardInput, output BatchShotProductionOutput) error {
+		finalized = output
+		return nil
+	}, activity.RegisterOptions{Name: "FinalizeBatchShotProductionCancellation"})
+	env.RegisterDelayedCallback(env.CancelWorkflow, time.Second)
+
+	env.ExecuteWorkflow(BatchGenerateShotVideoPromptsWorkflow, TextToStoryboardInput{
+		OrganizationID: "org",
+		ProjectID:      "project",
+		WorkflowRunID:  "workflow",
+		CreatedBy:      "user",
+		Input:          json.RawMessage(`{"shotIds":["shot-1","shot-2"],"maxConcurrency":2}`),
+	})
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() == nil {
+		t.Fatalf("workflow completed=%v error=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	if finalized.Status != "cancelled" || len(finalized.CancelledShotIDs) != 2 || finalized.CancelledShotIDs[0] != "shot-1" || finalized.CancelledShotIDs[1] != "shot-2" {
+		t.Fatalf("finalized cancellation = %+v", finalized)
 	}
 }
 
 func TestBatchGenerateShotImagePromptsWorkflowContinuesAfterFailure(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	registerSingleFrameShotAnchorWorkItemsTestActivity(env)
 	var completed BatchShotProductionOutput
 	env.RegisterActivityWithOptions(func(ctx context.Context, input PrepareShotImagePromptInput) (PrepareShotImagePromptOutput, error) {
 		if input.WorkflowPrompt != "batch_generate_shot_image_prompts" || !input.Force {
@@ -180,6 +392,7 @@ func TestBatchGenerateShotImagePromptsWorkflowContinuesAfterFailure(t *testing.T
 func TestBatchGenerateShotImagePromptsWorkflowUsesBoundedConcurrency(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	registerSingleFrameShotAnchorWorkItemsTestActivity(env)
 	var mu sync.Mutex
 	active := 0
 	maxActive := 0
@@ -245,14 +458,22 @@ func TestBatchGenerateShotImagePromptsWorkflowUsesBoundedConcurrency(t *testing.
 func TestBatchGenerateShotImagesWorkflowContinuesAfterFailure(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	registerSingleFrameShotAnchorWorkItemsTestActivity(env)
 	var completed BatchShotProductionOutput
+	var calledMu sync.Mutex
+	called := map[string]bool{}
 
 	env.RegisterActivityWithOptions(func(ctx context.Context, input GenerateShotImageInput) (GenerateShotImageOutput, error) {
-		if input.WorkflowPrompt != "batch_generate_shot_images" || !input.Force {
+		calledMu.Lock()
+		called[input.ShotID] = true
+		calledMu.Unlock()
+		if input.WorkflowPrompt != "batch_generate_shot_images" || !input.Force || input.FailureScope != workflowFailureScopeBatchItem {
 			t.Fatalf("image input = %+v", input)
 		}
 		if input.ShotID == "shot-2" {
-			return GenerateShotImageOutput{}, errors.New("image failed")
+			return GenerateShotImageOutput{}, temporal.NewNonRetryableApplicationError(
+				"provider request timed out", provider.CodeUpstreamTimeout, context.DeadlineExceeded,
+			)
 		}
 		return GenerateShotImageOutput{
 			NodeRunID:       "image-node-" + input.ShotID,
@@ -272,17 +493,28 @@ func TestBatchGenerateShotImagesWorkflowContinuesAfterFailure(t *testing.T) {
 		WorkflowRunID:  "workflow",
 		Prompt:         "batch_generate_shot_images",
 		CreatedBy:      "user",
-		Input:          json.RawMessage(`{"shotIds":["shot-1","shot-2","shot-3"],"force":true}`),
+		Input:          json.RawMessage(`{"shotIds":["shot-1","shot-2","shot-3","shot-4","shot-5","shot-6"],"force":true,"maxConcurrency":2}`),
 	})
 
 	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
 		t.Fatalf("workflow completed=%v error=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
 	}
-	if len(completed.SucceededShotIDs) != 2 || completed.SucceededShotIDs[0] != "shot-1" || completed.SucceededShotIDs[1] != "shot-3" {
+	if len(completed.SucceededShotIDs) != 5 || completed.SucceededShotIDs[0] != "shot-1" || completed.SucceededShotIDs[1] != "shot-3" {
 		t.Fatalf("succeeded = %+v", completed)
 	}
 	if len(completed.FailedShotIDs) != 1 || completed.FailedShotIDs[0] != "shot-2" || completed.Errors["shot-2"] == "" {
 		t.Fatalf("failed = %+v", completed)
+	}
+	if completed.ErrorCodes["shot-2"] != provider.CodeUpstreamTimeout {
+		t.Fatalf("error code = %q, want %q", completed.ErrorCodes["shot-2"], provider.CodeUpstreamTimeout)
+	}
+	for _, shotID := range []string{"shot-1", "shot-2", "shot-3", "shot-4", "shot-5", "shot-6"} {
+		calledMu.Lock()
+		wasCalled := called[shotID]
+		calledMu.Unlock()
+		if !wasCalled {
+			t.Fatalf("%s was not scheduled after an item timeout", shotID)
+		}
 	}
 }
 
@@ -316,7 +548,7 @@ func TestBatchGenerateShotVideosWorkflowRecordsVideoOutput(t *testing.T) {
 		}}
 		return LoadPreparedShotVideoPlanOutput{Plan: plan, Segments: []PreparedShotVideoSegment{
 			{GatewayVideoPlanSegment: provider.GatewayVideoPlanSegment{SegmentID: "segment-1", SegmentIndex: 0, RequestedDurationSeconds: 8, ContinuityMode: "first_frame"}, Prompt: "reviewed segment 1", PromptHash: "sha256:reviewed-1", ReviewProviderCallID: "review-call-1"},
-			{GatewayVideoPlanSegment: provider.GatewayVideoPlanSegment{SegmentID: "segment-2", SegmentIndex: 1, RequestedDurationSeconds: 4, ContinuityMode: "previous_last_frame"}, Prompt: "reviewed segment 2", PromptHash: "sha256:reviewed-2", ReviewProviderCallID: "review-call-2"},
+			{GatewayVideoPlanSegment: provider.GatewayVideoPlanSegment{SegmentID: "segment-2", SegmentIndex: 1, RequestedDurationSeconds: 4, ContinuityMode: "previous_segment_tail"}, Prompt: "reviewed segment 2", PromptHash: "sha256:reviewed-2", ReviewProviderCallID: "review-call-2"},
 		}}, nil
 	}, activity.RegisterOptions{Name: "EnsurePreparedShotVideoPlan"})
 	env.RegisterActivityWithOptions(func(_ context.Context, input PrepareShotVideoPromptInput) (PrepareShotVideoPromptOutput, error) {
@@ -393,43 +625,6 @@ func TestBatchGenerateShotVideosWorkflowRecordsVideoOutput(t *testing.T) {
 	}
 }
 
-func TestBatchGenerateShotVideosWorkflowRunsFiveIndependentGroupsConcurrentlyByDefault(t *testing.T) {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
-	registerShotVideoExecutionGroupsTestActivity(env)
-	var mu sync.Mutex
-	active := 0
-	maxActive := 0
-	env.RegisterActivityWithOptions(func(context.Context, EnsurePreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
-		mu.Lock()
-		active++
-		if active > maxActive {
-			maxActive = active
-		}
-		mu.Unlock()
-		time.Sleep(30 * time.Millisecond)
-		mu.Lock()
-		active--
-		mu.Unlock()
-		return LoadPreparedShotVideoPlanOutput{}, temporal.NewNonRetryableApplicationError("prompt plan unavailable", provider.CodeRenderPlanReplanRequired, nil)
-	}, activity.RegisterOptions{Name: "EnsurePreparedShotVideoPlan"})
-	env.RegisterActivityWithOptions(func(context.Context, TextToStoryboardInput, BatchShotProductionOutput) error { return nil }, activity.RegisterOptions{Name: "CompleteBatchShotProductionWorkflow"})
-
-	env.ExecuteWorkflow(BatchGenerateShotVideosWorkflow, TextToStoryboardInput{
-		OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user",
-		Input: json.RawMessage(`{"shotIds":["shot-1","shot-2","shot-3","shot-4","shot-5","shot-6"]}`),
-	})
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatalf("workflow failed: %v", err)
-	}
-	if DefaultShotVideoConcurrency != 5 {
-		t.Fatalf("default video concurrency = %d, want 5", DefaultShotVideoConcurrency)
-	}
-	if maxActive != DefaultShotVideoConcurrency {
-		t.Fatalf("max concurrent video groups = %d, want %d", maxActive, DefaultShotVideoConcurrency)
-	}
-}
-
 func TestBatchGenerateShotVideosWorkflowRetriesPreparedSegmentWithoutPromptAgents(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
@@ -478,6 +673,99 @@ func TestBatchGenerateShotVideosWorkflowRetriesPreparedSegmentWithoutPromptAgent
 	}
 }
 
+func TestBatchGenerateShotVideosWorkflowCancelsTimedOutAttemptBeforeRetry(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	registerRenderSegmentMediaTestActivity(env)
+	registerShotVideoExecutionGroupsTestActivity(env)
+	createCalls := 0
+	pollCalls := 0
+	cancelCalled := false
+	retryCalled := false
+	env.RegisterActivityWithOptions(func(context.Context, EnsurePreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
+		return preparedVideoPlanTestOutput("shot-1", "plan-a", "segment-a", "reviewed"), nil
+	}, activity.RegisterOptions{Name: "EnsurePreparedShotVideoPlan"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input CreateShotVideoTaskInput) (CreateShotVideoTaskOutput, error) {
+		createCalls++
+		if createCalls == 2 && input.RetryGeneration != 1 {
+			t.Fatalf("retry generation = %d, want 1", input.RetryGeneration)
+		}
+		return CreateShotVideoTaskOutput{
+			NodeRunID: fmt.Sprintf("node-%d", createCalls), ShotID: input.ShotID,
+			ProviderAsyncTaskID: fmt.Sprintf("task-%d", createCalls), ExternalTaskID: fmt.Sprintf("external-%d", createCalls),
+			Status: "running", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID,
+		}, nil
+	}, activity.RegisterOptions{Name: "CreateShotVideoTask"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input PollShotVideoTaskInput) (PollShotVideoTaskOutput, error) {
+		pollCalls++
+		if pollCalls == 1 {
+			return PollShotVideoTaskOutput{ProviderAsyncTaskID: input.ProviderAsyncTaskID, Status: "queued", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID}, nil
+		}
+		return PollShotVideoTaskOutput{ProviderAsyncTaskID: input.ProviderAsyncTaskID, Status: "succeeded", ArtifactID: "artifact", MediaFileID: "media", StorageKey: "video.mp4", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID}, nil
+	}, activity.RegisterOptions{Name: "PollShotVideoTask"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input CancelShotVideoTaskInput) (CancelShotVideoTaskOutput, error) {
+		cancelCalled = true
+		if input.ProviderAsyncTaskID != "task-1" || input.NodeRunID != "node-1" || input.RenderSegmentID != "segment-a" {
+			t.Fatalf("cancel input = %+v", input)
+		}
+		return CancelShotVideoTaskOutput{ProviderAsyncTaskID: input.ProviderAsyncTaskID, Status: "cancelled", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID}, nil
+	}, activity.RegisterOptions{Name: "CancelShotVideoTask"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input RetryShotVideoRenderSegmentInput) (RetryShotVideoRenderSegmentOutput, error) {
+		if !cancelCalled {
+			t.Fatal("retry was attempted before the previous provider task reached a cancelled state")
+		}
+		retryCalled = true
+		return RetryShotVideoRenderSegmentOutput{GatewayVideoRetrySegmentResponse: provider.GatewayVideoRetrySegmentResponse{RetryGeneration: 1, RetryScope: "segment"}}, nil
+	}, activity.RegisterOptions{Name: "RetryShotVideoRenderSegment"})
+
+	env.ExecuteWorkflow(BatchGenerateShotVideosWorkflow, TextToStoryboardInput{OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user", Input: json.RawMessage(`{"shotIds":["shot-1"],"maxPolls":1,"pollIntervalSeconds":1}`)})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	if !cancelCalled || !retryCalled || createCalls != 2 || pollCalls != 2 {
+		t.Fatalf("cancel=%v retry=%v createCalls=%d pollCalls=%d", cancelCalled, retryCalled, createCalls, pollCalls)
+	}
+}
+
+func TestBatchGenerateShotVideosWorkflowDoesNotRetryWhenTimedOutAttemptCannotBeCancelled(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	registerShotVideoExecutionGroupsTestActivity(env)
+	var completed BatchShotProductionOutput
+	retryCalled := false
+	env.RegisterActivityWithOptions(func(context.Context, EnsurePreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
+		return preparedVideoPlanTestOutput("shot-1", "plan-a", "segment-a", "reviewed"), nil
+	}, activity.RegisterOptions{Name: "EnsurePreparedShotVideoPlan"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input CreateShotVideoTaskInput) (CreateShotVideoTaskOutput, error) {
+		return CreateShotVideoTaskOutput{NodeRunID: "node-a", ShotID: input.ShotID, ProviderAsyncTaskID: "task-a", Status: "running", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID}, nil
+	}, activity.RegisterOptions{Name: "CreateShotVideoTask"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input PollShotVideoTaskInput) (PollShotVideoTaskOutput, error) {
+		return PollShotVideoTaskOutput{ProviderAsyncTaskID: input.ProviderAsyncTaskID, Status: "queued", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID}, nil
+	}, activity.RegisterOptions{Name: "PollShotVideoTask"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input CancelShotVideoTaskInput) (CancelShotVideoTaskOutput, error) {
+		return CancelShotVideoTaskOutput{ProviderAsyncTaskID: input.ProviderAsyncTaskID, Status: "failed", ErrorMessage: "upstream cancel rejected", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID}, nil
+	}, activity.RegisterOptions{Name: "CancelShotVideoTask"})
+	env.RegisterActivityWithOptions(func(context.Context, RetryShotVideoRenderSegmentInput) (RetryShotVideoRenderSegmentOutput, error) {
+		retryCalled = true
+		return RetryShotVideoRenderSegmentOutput{}, nil
+	}, activity.RegisterOptions{Name: "RetryShotVideoRenderSegment"})
+	env.RegisterActivityWithOptions(func(_ context.Context, _ TextToStoryboardInput, output BatchShotProductionOutput) error {
+		completed = output
+		return nil
+	}, activity.RegisterOptions{Name: "CompleteBatchShotProductionWorkflow"})
+
+	env.ExecuteWorkflow(BatchGenerateShotVideosWorkflow, TextToStoryboardInput{OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user", Input: json.RawMessage(`{"shotIds":["shot-1"],"maxPolls":1,"pollIntervalSeconds":1}`)})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	if retryCalled {
+		t.Fatal("retry must not start while the previous provider task is still active")
+	}
+	if completed.Status != "failed" || completed.ErrorCodes["shot-1"] != provider.CodeProviderCancelFailed {
+		t.Fatalf("completed = %+v", completed)
+	}
+}
+
 func TestBatchGenerateShotVideosWorkflowRequiresPromptRegenerationForReplan(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
@@ -491,10 +779,11 @@ func TestBatchGenerateShotVideosWorkflowRequiresPromptRegenerationForReplan(t *t
 		return PrepareShotVideoPromptOutput{}, nil
 	}, activity.RegisterOptions{Name: "PrepareShotVideoPrompt"})
 	env.RegisterActivityWithOptions(func(_ context.Context, input CreateShotVideoTaskInput) (CreateShotVideoTaskOutput, error) {
-		return CreateShotVideoTaskOutput{ShotID: input.ShotID, Status: "failed", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID, ErrorCode: provider.CodeModelCapabilityUnavailable, ErrorMessage: "capability changed"}, nil
+		return CreateShotVideoTaskOutput{ShotID: input.ShotID, Status: "failed", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID, ErrorCode: provider.CodeRenderPlanReplanRequired, ErrorMessage: "capability changed"}, nil
 	}, activity.RegisterOptions{Name: "CreateShotVideoTask"})
 	env.RegisterActivityWithOptions(func(context.Context, RetryShotVideoRenderSegmentInput) (RetryShotVideoRenderSegmentOutput, error) {
-		return RetryShotVideoRenderSegmentOutput{}, temporal.NewNonRetryableApplicationError("whole shot replan", provider.CodeRenderPlanReplanRequired, nil)
+		t.Fatal("deterministic render-plan failures must not create provider retry attempts")
+		return RetryShotVideoRenderSegmentOutput{}, nil
 	}, activity.RegisterOptions{Name: "RetryShotVideoRenderSegment"})
 	env.RegisterActivityWithOptions(func(_ context.Context, _ TextToStoryboardInput, output BatchShotProductionOutput) error {
 		completed = output
@@ -505,7 +794,83 @@ func TestBatchGenerateShotVideosWorkflowRequiresPromptRegenerationForReplan(t *t
 	if err := env.GetWorkflowError(); err != nil {
 		t.Fatalf("workflow failed: %v", err)
 	}
-	if completed.Status != "failed" || !strings.Contains(completed.Errors["shot-1"], "重新批量生成视频提示词") {
+	if completed.Status != "failed" || completed.ErrorCodes["shot-1"] != provider.CodeRenderPlanReplanRequired || completed.Errors["shot-1"] != "capability changed" {
+		t.Fatalf("completed = %+v", completed)
+	}
+}
+
+func TestBatchGenerateShotVideosWorkflowPreservesFailureWhenFallbackIsExhausted(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	registerShotVideoExecutionGroupsTestActivity(env)
+	var completed BatchShotProductionOutput
+	env.RegisterActivityWithOptions(func(context.Context, EnsurePreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
+		return preparedVideoPlanTestOutput("shot-1", "plan-a", "segment-a", "reviewed"), nil
+	}, activity.RegisterOptions{Name: "EnsurePreparedShotVideoPlan"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input CreateShotVideoTaskInput) (CreateShotVideoTaskOutput, error) {
+		return CreateShotVideoTaskOutput{
+			ShotID: input.ShotID, Status: "failed", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID,
+			ErrorCode: provider.CodeUpstreamTimeout, ErrorMessage: "Video task exceeded total timeout after 500 seconds",
+		}, nil
+	}, activity.RegisterOptions{Name: "CreateShotVideoTask"})
+	env.RegisterActivityWithOptions(func(context.Context, RetryShotVideoRenderSegmentInput) (RetryShotVideoRenderSegmentOutput, error) {
+		return RetryShotVideoRenderSegmentOutput{}, temporal.NewNonRetryableApplicationError(
+			"no active video fallback candidate remains for this render segment",
+			provider.CodeModelCapabilityUnavailable,
+			nil,
+		)
+	}, activity.RegisterOptions{Name: "RetryShotVideoRenderSegment"})
+	env.RegisterActivityWithOptions(func(_ context.Context, _ TextToStoryboardInput, output BatchShotProductionOutput) error {
+		completed = output
+		return nil
+	}, activity.RegisterOptions{Name: "CompleteBatchShotProductionWorkflow"})
+
+	env.ExecuteWorkflow(BatchGenerateShotVideosWorkflow, TextToStoryboardInput{OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user", Input: json.RawMessage(`{"shotIds":["shot-1"],"maxPolls":1}`)})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	if completed.Status != "failed" || completed.ErrorCodes["shot-1"] != provider.CodeUpstreamTimeout || completed.Errors["shot-1"] != "Video task exceeded total timeout after 500 seconds" {
+		t.Fatalf("completed = %+v", completed)
+	}
+}
+
+func TestBatchGenerateShotVideosWorkflowStopsAtAttemptBudgetWithoutPreparingDanglingRetry(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	registerShotVideoExecutionGroupsTestActivity(env)
+	var completed BatchShotProductionOutput
+	createCalls := 0
+	retryCalls := 0
+	env.RegisterActivityWithOptions(func(context.Context, EnsurePreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
+		return preparedVideoPlanTestOutput("shot-1", "plan-a", "segment-a", "reviewed"), nil
+	}, activity.RegisterOptions{Name: "EnsurePreparedShotVideoPlan"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input CreateShotVideoTaskInput) (CreateShotVideoTaskOutput, error) {
+		createCalls++
+		return CreateShotVideoTaskOutput{
+			ShotID: input.ShotID, Status: "failed", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID,
+			ErrorCode: provider.CodeUpstreamInternalError, ErrorMessage: "upstream create failed",
+		}, nil
+	}, activity.RegisterOptions{Name: "CreateShotVideoTask"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input RetryShotVideoRenderSegmentInput) (RetryShotVideoRenderSegmentOutput, error) {
+		retryCalls++
+		return RetryShotVideoRenderSegmentOutput{GatewayVideoRetrySegmentResponse: provider.GatewayVideoRetrySegmentResponse{
+			RetryGeneration: input.CurrentRetryGeneration + 1,
+			RetryScope:      "segment",
+		}}, nil
+	}, activity.RegisterOptions{Name: "RetryShotVideoRenderSegment"})
+	env.RegisterActivityWithOptions(func(_ context.Context, _ TextToStoryboardInput, output BatchShotProductionOutput) error {
+		completed = output
+		return nil
+	}, activity.RegisterOptions{Name: "CompleteBatchShotProductionWorkflow"})
+
+	env.ExecuteWorkflow(BatchGenerateShotVideosWorkflow, TextToStoryboardInput{OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user", Input: json.RawMessage(`{"shotIds":["shot-1"],"maxPolls":1}`)})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	if createCalls != maxVideoRenderSegmentAttempts || retryCalls != maxVideoRenderSegmentAttempts-1 {
+		t.Fatalf("createCalls=%d retryCalls=%d, want %d creates and %d retries", createCalls, retryCalls, maxVideoRenderSegmentAttempts, maxVideoRenderSegmentAttempts-1)
+	}
+	if completed.Status != "failed" || completed.ErrorCodes["shot-1"] != provider.CodeUpstreamInternalError || completed.Errors["shot-1"] != "upstream create failed" {
 		t.Fatalf("completed = %+v", completed)
 	}
 }

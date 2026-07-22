@@ -16,6 +16,8 @@ type videoFallbackCandidate struct {
 	CapabilitySnapshotHash string `json:"capabilitySnapshotHash"`
 }
 
+const maxVideoAttemptsForSingleCandidate = 3
+
 // RetryVideoRenderSegment prepares a new provider attempt without changing the
 // immutable narrative timing or discarding successful sibling segments.
 func (s *Service) RetryVideoRenderSegment(ctx context.Context, req GatewayVideoRetrySegmentRequest) (GatewayVideoRetrySegmentResponse, error) {
@@ -26,6 +28,12 @@ func (s *Service) RetryVideoRenderSegment(ctx context.Context, req GatewayVideoR
 	req.NodeExecutionToken = strings.TrimSpace(req.NodeExecutionToken)
 	req.ExecutionPlanID = strings.TrimSpace(req.ExecutionPlanID)
 	req.RenderSegmentID = strings.TrimSpace(req.RenderSegmentID)
+	if err := s.validateGatewayVideoProductionIdentity(
+		ctx, req.OrganizationID, req.ProjectID, req.ProductionGenerationID, req.VideoProductionBindingID,
+		req.VideoProductionBindingRevision, req.WorkflowRunID, req.NodeRunID,
+	); err != nil {
+		return GatewayVideoRetrySegmentResponse{}, err
+	}
 	if req.OrganizationID == "" || req.ProjectID == "" || req.WorkflowRunID == "" || req.NodeRunID == "" || req.NodeExecutionToken == "" || req.NodeAttemptGeneration <= 0 || req.ExecutionPlanID == "" || req.RenderSegmentID == "" {
 		return GatewayVideoRetrySegmentResponse{}, fmt.Errorf("%w: organizationId, projectId, workflowRunId, node execution identity, executionPlanId, and renderSegmentId are required", ErrValidation)
 	}
@@ -50,6 +58,11 @@ func (s *Service) RetryVideoRenderSegment(ctx context.Context, req GatewayVideoR
 		return GatewayVideoRetrySegmentResponse{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err := assertGatewayVideoProductionIdentityTx(ctx, tx, req.OrganizationID, req.ProjectID, videoProductionIdentity(
+		req.ProductionGenerationID, req.VideoProductionBindingID, req.VideoProductionBindingRevision,
+	)); err != nil {
+		return GatewayVideoRetrySegmentResponse{}, err
+	}
 	if err := lockGatewayVideoNodeExecutionTx(ctx, tx, req.NodeRunID, req.NodeExecutionToken, req.NodeAttemptGeneration); err != nil {
 		return GatewayVideoRetrySegmentResponse{}, err
 	}
@@ -86,26 +99,18 @@ func (s *Service) RetryVideoRenderSegment(ctx context.Context, req GatewayVideoR
 		attempted[current] = true
 	}
 
-	selected := videoFallbackCandidate{}
-	if retryGeneration == 0 && current != "" {
-		for _, candidate := range candidates {
-			if candidate.ProviderModelID == current && sameVideoCapabilityFamily(candidate, family, variantKey, snapshotHash) && s.videoRetryCandidateActive(ctx, req.OrganizationID, candidate) {
-				selected = candidate
-				break
-			}
-		}
-	}
-	if selected.ProviderModelID == "" {
-		for _, candidate := range candidates {
-			if attempted[candidate.ProviderModelID] || !sameVideoCapabilityFamily(candidate, family, variantKey, snapshotHash) {
-				continue
-			}
-			if s.videoRetryCandidateActive(ctx, req.OrganizationID, candidate) {
-				selected = candidate
-				break
-			}
-		}
-	}
+	selected := selectVideoRetryCandidate(
+		candidates,
+		attempted,
+		current,
+		retryGeneration,
+		family,
+		variantKey,
+		snapshotHash,
+		func(candidate videoFallbackCandidate) bool {
+			return s.videoRetryCandidateActive(ctx, req.OrganizationID, candidate)
+		},
+	)
 	if selected.ProviderModelID == "" {
 		for _, candidate := range candidates {
 			if attempted[candidate.ProviderModelID] || !s.videoRetryCandidateActive(ctx, req.OrganizationID, candidate) {
@@ -173,6 +178,44 @@ func (s *Service) RetryVideoRenderSegment(ctx context.Context, req GatewayVideoR
 	}, nil
 }
 
+func selectVideoRetryCandidate(
+	candidates []videoFallbackCandidate,
+	attempted map[string]bool,
+	current string,
+	retryGeneration int,
+	family string,
+	variantKey string,
+	snapshotHash string,
+	isActive func(videoFallbackCandidate) bool,
+) videoFallbackCandidate {
+	currentCandidate := videoFallbackCandidate{}
+	for _, candidate := range candidates {
+		if candidate.ProviderModelID != current || !sameVideoCapabilityFamily(candidate, family, variantKey, snapshotHash) || !isActive(candidate) {
+			continue
+		}
+		currentCandidate = candidate
+		break
+	}
+
+	// The first retry stays on the selected model. This absorbs transient queue
+	// and transport failures without invalidating the immutable render plan.
+	if retryGeneration == 0 && currentCandidate.ProviderModelID != "" {
+		return currentCandidate
+	}
+	for _, candidate := range candidates {
+		if attempted[candidate.ProviderModelID] || !sameVideoCapabilityFamily(candidate, family, variantKey, snapshotHash) || !isActive(candidate) {
+			continue
+		}
+		return candidate
+	}
+	// If this plan has no compatible fallback, spend the final bounded attempt
+	// on the current model instead of failing after one transient retry.
+	if retryGeneration < maxVideoAttemptsForSingleCandidate-1 && currentCandidate.ProviderModelID != "" {
+		return currentCandidate
+	}
+	return videoFallbackCandidate{}
+}
+
 func sameVideoCapabilityFamily(candidate videoFallbackCandidate, family, variantKey, hash string) bool {
 	return strings.EqualFold(strings.TrimSpace(candidate.ModelFamily), strings.TrimSpace(family)) &&
 		candidate.VariantKey == variantKey && candidate.CapabilitySnapshotHash == hash
@@ -209,9 +252,16 @@ func attemptedProviderModels(raw []byte) map[string]bool {
 
 func videoSegmentFailureRetryable(code string) bool {
 	switch strings.ToUpper(strings.TrimSpace(code)) {
-	case "", CodeProviderRateLimited, CodeProviderConcurrencyLimited, CodeUpstreamTimeout, CodeUpstreamInternalError, CodeUpstreamOutputMismatch, CodePollingTimeout, "PROVIDER_VIDEO_POLLING_TIMEOUT", CodeMediaDownloadFailed, CodeProviderCircuitOpen:
+	case "", CodeProviderRateLimited, CodeProviderConcurrencyLimited, CodeUpstreamTimeout, CodeUpstreamInternalError, CodeUpstreamStreamTruncated, CodeUpstreamOutputMismatch, CodePollingTimeout, "PROVIDER_VIDEO_POLLING_TIMEOUT", CodeMediaDownloadFailed, CodeProviderCircuitOpen:
 		return true
 	default:
 		return false
 	}
+}
+
+// VideoSegmentFailureRetryable is the shared retry policy for the workflow and
+// Provider Gateway. Keeping one policy prevents deterministic contract errors
+// from creating provider retry attempts.
+func VideoSegmentFailureRetryable(code string) bool {
+	return videoSegmentFailureRetryable(code)
 }

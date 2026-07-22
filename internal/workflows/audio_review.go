@@ -150,21 +150,30 @@ func (a Activities) PrepareNativeAudioReview(ctx context.Context, input NativeAu
 	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.StoryboardShotID) == "" {
 		return PrepareNativeAudioReviewOutput{}, fmt.Errorf("organizationId, projectId, workflowRunId, and storyboardShotId are required")
 	}
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return PrepareNativeAudioReviewOutput{}, err
+	}
+	defer tx.Rollback(ctx)
+	runCtx, err := lockWorkflowBusinessWrite(ctx, tx, input.WorkflowRunID)
+	if err != nil {
+		return PrepareNativeAudioReviewOutput{}, err
+	}
 	planID := strings.TrimSpace(input.VideoRenderPlanID)
-	query := `SELECT id::text FROM video_render_plans WHERE organization_id = $1 AND project_id = $2 AND storyboard_shot_id = $3`
-	args := []any{input.OrganizationID, input.ProjectID, input.StoryboardShotID}
+	query := `SELECT id::text FROM video_render_plans WHERE organization_id = $1 AND project_id = $2 AND storyboard_shot_id = $3 AND production_generation_id = $4`
+	args := []any{input.OrganizationID, input.ProjectID, input.StoryboardShotID, runCtx.ProductionGenerationID}
 	if planID != "" {
-		query += " AND id = $4"
+		query += " AND id = $5"
 		args = append(args, planID)
 	} else {
 		query += " AND active = true"
 	}
 	query += " ORDER BY created_at DESC LIMIT 1"
-	if err := a.db.QueryRow(ctx, query, args...).Scan(&planID); err != nil {
+	if err := tx.QueryRow(ctx, query, args...).Scan(&planID); err != nil {
 		return PrepareNativeAudioReviewOutput{}, err
 	}
 	var audioConfigurationRevision int
-	if err := a.db.QueryRow(ctx, `SELECT audio_configuration_revision FROM projects WHERE organization_id = $1 AND id = $2`, input.OrganizationID, input.ProjectID).Scan(&audioConfigurationRevision); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT audio_configuration_revision FROM projects WHERE organization_id = $1 AND id = $2`, input.OrganizationID, input.ProjectID).Scan(&audioConfigurationRevision); err != nil {
 		return PrepareNativeAudioReviewOutput{}, err
 	}
 	rows, err := a.db.Query(ctx, `
@@ -177,20 +186,16 @@ func (a Activities) PrepareNativeAudioReview(ctx context.Context, input NativeAu
 		  ORDER BY revision DESC LIMIT 1
 		) review ON true
 		WHERE segment.video_render_plan_id = $1 AND segment.status = 'succeeded'
+		  AND segment.production_generation_id = $3
 		  AND segment.native_audio_requested = true AND COALESCE(segment.native_audio_detected, false) = true
 		  AND segment.extracted_audio_artifact_id IS NOT NULL
 		ORDER BY segment.segment_index
-	`, planID, audioConfigurationRevision)
+	`, planID, audioConfigurationRevision, runCtx.ProductionGenerationID)
 	if err != nil {
 		return PrepareNativeAudioReviewOutput{}, err
 	}
 	defer rows.Close()
 	output := PrepareNativeAudioReviewOutput{RenderPlanID: planID}
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return PrepareNativeAudioReviewOutput{}, err
-	}
-	defer tx.Rollback(ctx)
 	for rows.Next() {
 		var segmentID, artifactID, existingReviewID string
 		var segmentIndex int
@@ -213,14 +218,15 @@ func (a Activities) PrepareNativeAudioReview(ctx context.Context, input NativeAu
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO native_audio_reviews(
 				organization_id, project_id, video_render_plan_id, video_render_segment_id, workflow_run_id,
-				revision, audio_configuration_revision, status, expected_dialogue, metadata
+				revision, audio_configuration_revision, status, expected_dialogue, metadata,
+				production_generation_id
 			)
 			VALUES ($1, $2, $3, $4, $5, $6, $10, 'pending', $7,
 			        jsonb_build_object('audioArtifactId', $8::uuid::text, 'segmentIndex', $9::integer,
-			                           'audioConfigurationRevision', $10::integer))
+			                           'audioConfigurationRevision', $10::integer), $11)
 			RETURNING id::text
 		`, input.OrganizationID, input.ProjectID, planID, segmentID, input.WorkflowRunID, revision, dialogue, artifactID,
-			segmentIndex, audioConfigurationRevision).Scan(&reviewID); err != nil {
+			segmentIndex, audioConfigurationRevision, runCtx.ProductionGenerationID).Scan(&reviewID); err != nil {
 			return PrepareNativeAudioReviewOutput{}, err
 		}
 		output.Jobs = append(output.Jobs, NativeAudioReviewJob{ReviewID: reviewID, RenderPlanID: planID, RenderSegmentID: segmentID, SegmentIndex: segmentIndex, AudioArtifactID: artifactID})
@@ -244,11 +250,15 @@ func (a Activities) PrepareNativeAudioReview(ctx context.Context, input NativeAu
 }
 
 func (a Activities) ReviewNativeAudioSegment(ctx context.Context, input ReviewNativeAudioSegmentInput) (ReviewNativeAudioSegmentOutput, error) {
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
+	if err != nil {
+		return ReviewNativeAudioSegmentOutput{}, err
+	}
 	var record nativeAudioReviewRecord
-	err := a.db.QueryRow(ctx, `
+	err = a.db.QueryRow(ctx, `
 		SELECT review.id::text, review.video_render_plan_id::text, review.video_render_segment_id::text,
 		       segment.storyboard_shot_id::text, review.expected_dialogue,
-		       review.metadata->>'audioArtifactId', project.asr_model_profile_key,
+		       review.metadata->>'audioArtifactId',
 		       plan.timeline_timebase, segment.planned_duration_ticks,
 		       COALESCE(media.duration_seconds::float8, 0), review.audio_configuration_revision,
 		       project.audio_configuration_revision, review.status
@@ -259,12 +269,14 @@ func (a Activities) ReviewNativeAudioSegment(ctx context.Context, input ReviewNa
 		LEFT JOIN artifacts audio ON audio.id = NULLIF(review.metadata->>'audioArtifactId', '')::uuid
 		LEFT JOIN LATERAL (SELECT duration_seconds FROM media_files WHERE artifact_id = audio.id ORDER BY created_at DESC LIMIT 1) media ON true
 		WHERE review.organization_id = $1 AND review.project_id = $2 AND review.id = $3
-	`, input.OrganizationID, input.ProjectID, input.ReviewID).Scan(&record.ID, &record.PlanID, &record.SegmentID, &record.ShotID,
-		&record.Expected, &record.AudioArtifactID, &record.ASRProfileKey, &record.Timebase, &record.PlannedDurationTicks,
+		  AND review.production_generation_id = $4
+	`, input.OrganizationID, input.ProjectID, input.ReviewID, project.ProductionGenerationID).Scan(&record.ID, &record.PlanID, &record.SegmentID, &record.ShotID,
+		&record.Expected, &record.AudioArtifactID, &record.Timebase, &record.PlannedDurationTicks,
 		&record.AudioDurationSeconds, &record.AudioConfigurationRevision, &record.CurrentAudioConfigurationRevision, &record.Status)
 	if err != nil {
 		return ReviewNativeAudioSegmentOutput{}, err
 	}
+	record.ASRProfileKey = project.ASRModelProfileKey
 	if record.Status == "stale" || record.AudioConfigurationRevision != record.CurrentAudioConfigurationRevision {
 		if record.Status != "stale" {
 			_, _ = a.db.Exec(ctx, `

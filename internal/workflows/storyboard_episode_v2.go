@@ -1,12 +1,14 @@
 package workflows
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	storyboardpkg "github.com/Einzieg/cineweave/internal/storyboard"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -15,20 +17,22 @@ import (
 const storyboardPlanMaximumReviewAttempts = 3
 
 type ScriptEpisodeToStoryboardInput struct {
-	OrganizationID    string                  `json:"organizationId"`
-	ProjectID         string                  `json:"projectId"`
-	WorkflowRunID     string                  `json:"workflowRunId"`
-	CreatedBy         string                  `json:"createdBy"`
-	ScriptID          string                  `json:"scriptId"`
-	ScriptVersionID   string                  `json:"scriptVersionId"`
-	ScriptEpisodeID   string                  `json:"scriptEpisodeId"`
-	EpisodeIndex      int                     `json:"episodeIndex"`
-	EpisodeTotal      int                     `json:"episodeTotal"`
-	EpisodeTitle      string                  `json:"episodeTitle"`
-	TimelineTimebase  int64                   `json:"timelineTimebase"`
-	FPSNumerator      int                     `json:"fpsNumerator"`
-	FPSDenominator    int                     `json:"fpsDenominator"`
-	ProductionOptions ScriptProductionOptions `json:"productionOptions"`
+	OrganizationID             string                  `json:"organizationId"`
+	ProjectID                  string                  `json:"projectId"`
+	WorkflowRunID              string                  `json:"workflowRunId"`
+	CreatedBy                  string                  `json:"createdBy"`
+	ScriptID                   string                  `json:"scriptId"`
+	ScriptVersionID            string                  `json:"scriptVersionId"`
+	ScriptEpisodeID            string                  `json:"scriptEpisodeId"`
+	EpisodeIndex               int                     `json:"episodeIndex"`
+	EpisodeTotal               int                     `json:"episodeTotal"`
+	EpisodeTitle               string                  `json:"episodeTitle"`
+	ExpectedEpisodeRevision    int64                   `json:"expectedEpisodeRevision,omitempty"`
+	ExpectedEpisodeContentHash string                  `json:"expectedEpisodeContentHash,omitempty"`
+	TimelineTimebase           int64                   `json:"timelineTimebase"`
+	FPSNumerator               int                     `json:"fpsNumerator"`
+	FPSDenominator             int                     `json:"fpsDenominator"`
+	ProductionOptions          ScriptProductionOptions `json:"productionOptions"`
 }
 
 type StoryboardScenePlanWorkflowInput struct {
@@ -51,6 +55,9 @@ func ScriptEpisodeToStoryboardWorkflow(ctx workflow.Context, input ScriptEpisode
 	}
 	providerCtx := workflow.WithActivityOptions(ctx, providerTextActivityOptions())
 	activationCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	if err := assertStoryboardEpisodeSnapshot(activationCtx, input); err != nil {
+		return ScriptStoryboardOutput{}, err
+	}
 
 	var targetDurationTicks *int64
 	if input.ProductionOptions.TargetDurationSeconds != nil && *input.ProductionOptions.TargetDurationSeconds > 0 {
@@ -111,6 +118,9 @@ func ScriptEpisodeToStoryboardWorkflow(ctx workflow.Context, input ScriptEpisode
 		}
 		providerCallIDs = appendProviderCallID(providerCallIDs, review.ProviderCallID)
 		if review.Approved {
+			if err := assertStoryboardEpisodeSnapshot(activationCtx, input); err != nil {
+				return ScriptStoryboardOutput{}, err
+			}
 			var output ScriptStoryboardOutput
 			if err := workflow.ExecuteActivity(activationCtx, "ActivateStoryboardPlan", ActivateStoryboardPlanActivityInput{
 				OrganizationID:   input.OrganizationID,
@@ -163,6 +173,44 @@ func ScriptEpisodeToStoryboardWorkflow(ctx workflow.Context, input ScriptEpisode
 		"STORYBOARD_REVIEW_EXHAUSTED",
 		nil,
 	)
+}
+
+type AssertScriptEpisodeSnapshotInput struct {
+	ProjectID   string `json:"projectId"`
+	EpisodeID   string `json:"episodeId"`
+	Revision    int64  `json:"revision"`
+	ContentHash string `json:"contentHash"`
+}
+
+func assertStoryboardEpisodeSnapshot(ctx workflow.Context, input ScriptEpisodeToStoryboardInput) error {
+	if input.ExpectedEpisodeRevision <= 0 && strings.TrimSpace(input.ExpectedEpisodeContentHash) == "" {
+		return nil
+	}
+	return workflow.ExecuteActivity(ctx, "AssertScriptEpisodeSnapshot", AssertScriptEpisodeSnapshotInput{
+		ProjectID: input.ProjectID, EpisodeID: input.ScriptEpisodeID,
+		Revision: input.ExpectedEpisodeRevision, ContentHash: input.ExpectedEpisodeContentHash,
+	}).Get(ctx, nil)
+}
+
+func (a Activities) AssertScriptEpisodeSnapshot(ctx context.Context, input AssertScriptEpisodeSnapshotInput) error {
+	var matches bool
+	if err := a.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM script_episodes
+			WHERE project_id = $1 AND id = $2
+			  AND revision = $3 AND content_hash = $4
+		)
+	`, input.ProjectID, input.EpisodeID, input.Revision, input.ContentHash).Scan(&matches); err != nil {
+		return err
+	}
+	if !matches {
+		return videoproduction.NewError(
+			videoproduction.CodeRebuildImpactStale,
+			"重建分集内容已变化，请重新确认视频生产配置影响",
+			false,
+		)
+	}
+	return nil
 }
 
 func storyboardEpisodeTimebase(input ScriptEpisodeToStoryboardInput) (storyboardpkg.Timebase, error) {

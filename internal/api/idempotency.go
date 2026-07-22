@@ -297,10 +297,6 @@ func (s *Server) completeIdempotency(ctx context.Context, state idempotencyState
 	return err
 }
 
-func completeIdempotencyTx(ctx context.Context, tx pgx.Tx, state idempotencyState, response any) error {
-	return completeIdempotencyTxWithStatus(ctx, tx, state, http.StatusOK, response)
-}
-
 func completeIdempotencyTxWithStatus(ctx context.Context, tx pgx.Tx, state idempotencyState, responseStatus int, response any) error {
 	if !state.enabled {
 		return nil
@@ -320,8 +316,7 @@ func completeIdempotencyTxWithStatus(ctx context.Context, tx pgx.Tx, state idemp
 }
 
 // failIdempotency is reserved for call sites that know the business side
-// effect did not commit. Unknown commit/call outcomes must use
-// markIdempotencyUnknown instead.
+// effect did not commit.
 func (s *Server) failIdempotency(ctx context.Context, state idempotencyState) {
 	if !state.enabled {
 		return
@@ -334,17 +329,4 @@ func (s *Server) failIdempotency(ctx context.Context, state idempotencyState) {
 		WHERE organization_id = $1 AND scope = $2 AND key = $3 AND request_hash = $4
 		  AND status = 'processing'
 	`, state.organizationID, state.scope, state.key, state.requestHash, idempotencyTTL)
-}
-
-func (s *Server) markIdempotencyUnknown(ctx context.Context, state idempotencyState, code, message string) {
-	if !state.enabled {
-		return
-	}
-	_, _ = s.db.Exec(ctx, `
-		UPDATE idempotency_keys
-		SET status = 'unknown_outcome', error_code = NULLIF($5, ''), error_message = NULLIF($6, ''),
-		    lease_expires_at = NULL, updated_at = now()
-		WHERE organization_id = $1 AND scope = $2 AND key = $3 AND request_hash = $4
-		  AND status = 'processing'
-	`, state.organizationID, state.scope, state.key, state.requestHash, code, message)
 }

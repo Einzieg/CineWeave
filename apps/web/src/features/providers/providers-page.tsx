@@ -10,10 +10,14 @@ import type {
   JsonRecord,
   JsonValue,
   ProviderAccount,
+  ProviderCredential,
   ProviderCatalogEntry,
   ProviderCatalogModelTemplate,
   ProviderModel,
   ProviderModelCapability,
+  VideoCapabilityAttestation,
+  VideoCapabilityVariantStatus,
+  VideoInputContract,
   ModelProfile,
   ModelProfileBinding,
   UpdateModelProfileBindingRequest,
@@ -56,6 +60,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  ShieldCheck,
   Sparkles,
   Trash2,
   X,
@@ -65,6 +70,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { providerKeyLabel, reasoningLevelLabel, taskTypeLabel } from "@/lib/labels";
+import { sessionHasPermission, useStudioSession } from "@/lib/session";
 
 type AccountDialogMode = "create" | "edit";
 type ModelDialogMode = "create" | "edit";
@@ -306,6 +312,9 @@ function compareProviderCatalogEntries(a: ProviderCatalogEntry, b: ProviderCatal
 }
 
 export function ProvidersPage() {
+  const { session } = useStudioSession();
+  const canReadProviders = sessionHasPermission(session, "provider.read");
+  const canManageProviders = sessionHasPermission(session, "provider.manage");
   const [selectedCatalogKey, setSelectedCatalogKey] = useState<string | null>(null);
   const [accountDialogMode, setAccountDialogMode] = useState<AccountDialogMode>("create");
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
@@ -317,11 +326,20 @@ export function ProvidersPage() {
   const [customModelModality, setCustomModelModality] = useState("text");
   const [modelsDialogOpen, setModelsDialogOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [credentialsDialogOpen, setCredentialsDialogOpen] = useState(false);
+  const [credentialsAccountId, setCredentialsAccountId] = useState<string | null>(null);
+  const [credentialKey, setCredentialKey] = useState("");
+  const [credentialSecret, setCredentialSecret] = useState("");
+  const [credentialToRotate, setCredentialToRotate] = useState<ProviderCredential | null>(null);
+  const [credentialToRevoke, setCredentialToRevoke] = useState<ProviderCredential | null>(null);
   const [modelDialogMode, setModelDialogMode] = useState<ModelDialogMode>("create");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<ProviderModel | null>(null);
   const [accountToDelete, setAccountToDelete] = useState<ProviderAccount | null>(null);
   const [modelForm, setModelForm] = useState<ModelForm>(emptyModelForm("text"));
+  const [capabilityDialogOpen, setCapabilityDialogOpen] = useState(false);
+  const [capabilityModel, setCapabilityModel] = useState<ProviderModel | null>(null);
+  const [capabilityDecisionReason, setCapabilityDecisionReason] = useState("");
   const [businessBindingDrafts, setBusinessBindingDrafts] = useState<Record<string, BusinessModelBindingDraft>>({});
   const invalidate = useInvalidateKeys();
   const lastDialogInnerPointerDownAtRef = useRef(0);
@@ -330,21 +348,32 @@ export function ProvidersPage() {
   const { data: catalogData } = useApiQuery({
     key: qk.providerCatalog(),
     queryFn: (session) => studioApi.listProviderCatalog(session),
+    enabled: canReadProviders,
   });
   const catalogEntries = useMemo(() => [...((catalogData?.items || []) as ProviderCatalogEntry[])].sort(compareProviderCatalogEntries), [catalogData?.items]);
 
   const { data: accountsData, isLoading: accountsLoading } = useApiQuery({
     key: qk.providerAccounts(),
     queryFn: (session) => studioApi.listProviderAccounts(session),
+    enabled: canReadProviders,
   });
   const accounts = useMemo(
     () => ((accountsData?.items || []) as ProviderAccount[]).filter((account) => account.status !== "disabled"),
     [accountsData?.items],
   );
 
+  const credentialsAccount = accounts.find((account) => account.id === credentialsAccountId) || null;
+  const { data: credentialsData, isLoading: credentialsLoading } = useApiQuery({
+    key: qk.providerCredentials(credentialsAccountId || "none"),
+    queryFn: (session) => studioApi.listProviderCredentials(session, credentialsAccountId!, "active").then((response) => response.items || []),
+    enabled: canReadProviders && credentialsDialogOpen && !!credentialsAccountId,
+  });
+  const credentials = useMemo(() => (credentialsData || []) as ProviderCredential[], [credentialsData]);
+
   const { data: profiles = [], isLoading: profilesLoading } = useApiQuery({
     key: qk.modelProfiles(),
     queryFn: (session) => studioApi.listModelProfiles(session).then((response) => response.items || []),
+    enabled: canReadProviders,
   });
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) || null;
@@ -367,14 +396,21 @@ export function ProvidersPage() {
 
   const { data: modelsData, isLoading: modelsLoading } = useApiQuery({
     key: qk.providerModels(selectedAccountId || "none"),
-    queryFn: (session) => studioApi.listProviderModels(session, selectedAccountId!).then((response) => response.items || []),
-    enabled: !!selectedAccountId,
+    queryFn: (session) => studioApi.listProviderModels(session, selectedAccountId!, "all").then((response) => response.items || []),
+    enabled: canReadProviders && !!selectedAccountId,
   });
+  const allModels = useMemo(() => (modelsData || []) as ProviderModel[], [modelsData]);
   const models = useMemo(
-    () => ((modelsData || []) as ProviderModel[]).filter((model) => model.status !== "disabled"),
-    [modelsData],
+    () => allModels.filter((model) => model.status !== "disabled"),
+    [allModels],
   );
   const groupedModels = useMemo(() => groupModelsByModality(models), [models]);
+
+  const { data: videoCapabilityData, isLoading: videoCapabilityLoading } = useApiQuery({
+    key: qk.providerModelVideoCapabilities(capabilityModel?.id || "none"),
+    queryFn: (session) => studioApi.listProviderModelVideoCapabilities(session, capabilityModel!.id),
+    enabled: canReadProviders && capabilityDialogOpen && !!capabilityModel,
+  });
 
   const { data: allProviderModels = [], isLoading: allProviderModelsLoading } = useApiQuery({
     key: qk.providerModelsAll(accountIdsKey || "none"),
@@ -393,7 +429,7 @@ export function ProvidersPage() {
       );
       return batches.flat() as ProviderModelWithAccount[];
     },
-    enabled: accounts.length > 0,
+    enabled: canReadProviders && accounts.length > 0,
   });
 
   const activeProviderModels = useMemo(
@@ -404,6 +440,7 @@ export function ProvidersPage() {
   const profileByKey = useMemo(() => new Map(profiles.map((profile) => [profile.profileKey, profile])), [profiles]);
 
   const createAccountMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, data: { providerKey: string; body: JsonRecord }) =>
       studioApi.installProviderCatalogEntry(session, data.providerKey, data.body),
     onSuccess: (result) => {
@@ -414,6 +451,7 @@ export function ProvidersPage() {
   });
 
   const updateAccountMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: async (session, data: { accountId: string; body: JsonRecord; apiKey?: string }) => {
       const account = await studioApi.updateProviderAccount(session, data.accountId, data.body);
       if (data.apiKey?.trim()) {
@@ -432,6 +470,7 @@ export function ProvidersPage() {
   });
 
   const createProfileMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, data: { slot: BusinessProfileSlot }) =>
       studioApi.createModelProfile(session, {
         profileKey: data.slot.profileKey,
@@ -448,6 +487,7 @@ export function ProvidersPage() {
   });
 
   const updateProfileMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, data: { profile: ModelProfile; body: JsonRecord }) =>
       studioApi.updateModelProfile(session, data.profile.id, data.body),
     onSuccess: () => {
@@ -458,6 +498,7 @@ export function ProvidersPage() {
   });
 
   const createProfileBindingMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: async (
       session,
       data: {
@@ -500,6 +541,7 @@ export function ProvidersPage() {
   });
 
   const updateProfileBindingMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (
       session,
       data: {
@@ -516,6 +558,7 @@ export function ProvidersPage() {
   });
 
   const deleteProfileBindingMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, data: { profileId: string; bindingId: string }) =>
       studioApi.deleteModelProfileBinding(session, data.profileId, data.bindingId),
     onSuccess: () => {
@@ -526,6 +569,7 @@ export function ProvidersPage() {
   });
 
   const deleteAccountMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, accountId: string) => studioApi.deleteProviderAccount(session, accountId),
     onSuccess: (_result, accountId) => {
       toast.success("供应商已删除");
@@ -540,16 +584,96 @@ export function ProvidersPage() {
     onError: (error) => toast.error("删除失败：" + error.message),
   });
 
+  const saveCredentialMutation = useApiMutation({
+    requiredPermission: "provider.manage",
+    mutationFn: (
+      session,
+      data: { accountId: string; credentialId?: string; credentialKey: string; apiKey: string },
+    ) => data.credentialId
+      ? studioApi.rotateProviderCredentialById(session, data.accountId, data.credentialId, {
+          credential: { apiKey: data.apiKey },
+        })
+      : studioApi.createProviderCredential(session, data.accountId, {
+          credentialKey: data.credentialKey,
+          credentialType: "api_key",
+          credential: { apiKey: data.apiKey },
+        }),
+    onSuccess: (_result, data) => {
+      toast.success(data.credentialId ? "API Key 已轮换" : "API Key 已添加");
+      setCredentialKey("");
+      setCredentialSecret("");
+      setCredentialToRotate(null);
+      invalidate([
+        qk.providerCredentials(data.accountId),
+        qk.providerAccounts(),
+        qk.providerModels(data.accountId),
+        qk.providerModelsAll(accountIdsKey || "none"),
+      ]);
+    },
+    onError: (error) => toast.error("密钥保存失败：" + error.message),
+  });
+
+  const discoverCredentialModelsMutation = useApiMutation({
+    requiredPermission: "provider.manage",
+    mutationFn: (session, data: { accountId: string; credentialId: string }) =>
+      studioApi.discoverProviderCredentialModels(session, data.accountId, data.credentialId),
+    onSuccess: (result, data) => {
+      toast.success(`该密钥可用模型 ${result.models.length} 个`, {
+        description: result.sync.createdCount > 0 ? `新增 ${result.sync.createdCount} 个模型` : "模型映射已刷新",
+      });
+      invalidate([
+        qk.providerCredentials(data.accountId),
+        qk.providerModels(data.accountId),
+        qk.providerModelsAll(accountIdsKey || "none"),
+        qk.modelProfiles(),
+      ]);
+    },
+    onError: (error) => toast.error("该密钥模型发现失败：" + error.message),
+  });
+
+  const revokeCredentialMutation = useApiMutation({
+    requiredPermission: "provider.manage",
+    mutationFn: (session, data: { accountId: string; credentialId: string }) =>
+      studioApi.revokeProviderCredential(session, data.accountId, data.credentialId),
+    onSuccess: (_result, data) => {
+      toast.success("API Key 已停用");
+      setCredentialToRevoke(null);
+      invalidate([
+        qk.providerCredentials(data.accountId),
+        qk.providerAccounts(),
+        qk.providerModels(data.accountId),
+        qk.providerModelsAll(accountIdsKey || "none"),
+      ]);
+    },
+    onError: (error) => toast.error("停用密钥失败：" + error.message),
+  });
+
   const discoverModelsMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, accountId: string) => studioApi.discoverProviderModels(session, accountId, {}),
     onSuccess: (result, accountId) => {
-      toast.success(`已同步 ${result.models?.length || 0} 个远程模型`);
+      const discoveredCount = result.sync?.discoveredCount ?? result.models?.length ?? 0;
+      const createdCount = result.sync?.createdCount ?? 0;
+      const summary = result.sync
+        ? [
+            result.sync.existingCount > 0 ? `${result.sync.existingCount} 个已存在` : "",
+            result.sync.skippedDisabledCount > 0 ? `${result.sync.skippedDisabledCount} 个已停用模型未自动恢复` : "",
+            result.sync.ignoredCount > 0 ? `${result.sync.ignoredCount} 个无效或重复条目已忽略` : "",
+          ].filter(Boolean).join("；")
+        : "";
+      toast.success(
+        createdCount > 0
+          ? `远端返回 ${discoveredCount} 个模型，新增 ${createdCount} 个`
+          : `远端返回 ${discoveredCount} 个模型，没有新增模型`,
+        summary ? { description: summary } : undefined,
+      );
       invalidate([qk.providerModels(accountId), qk.providerModelsAll(accountIdsKey || "none"), qk.modelProfiles()]);
     },
     onError: (error) => toast.error("模型发现失败：" + error.message),
   });
 
   const quickCreateModelMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, data: { accountId: string; model: ModelDraft | ProviderCatalogModelTemplate }) =>
       studioApi.createProviderModel(session, data.accountId, modelCreateBody(data.model)),
     onSuccess: (_result, data) => {
@@ -559,6 +683,7 @@ export function ProvidersPage() {
   });
 
   const saveModelMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, data: { accountId: string; modelId?: string; body: JsonRecord }) => {
       if (data.modelId) {
         return studioApi.updateProviderModel(session, data.modelId, data.body);
@@ -577,6 +702,7 @@ export function ProvidersPage() {
   });
 
   const deleteModelMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, modelId: string) => studioApi.deleteProviderModel(session, modelId),
     onSuccess: (_result, modelId) => {
       toast.success("模型已删除");
@@ -594,6 +720,7 @@ export function ProvidersPage() {
   });
 
   const testModelMutation = useApiMutation({
+    requiredPermission: "provider.manage",
     mutationFn: (session, modelId: string) =>
       studioApi.testProviderModel(session, modelId, {
         testType: "connection_test",
@@ -609,7 +736,67 @@ export function ProvidersPage() {
     onError: (error) => toast.error("模型测试失败：" + error.message),
   });
 
+  const verifyVideoCapabilityMutation = useApiMutation({
+    requiredPermission: "provider.manage",
+    mutationFn: (session, data: { modelId: string; variant: VideoCapabilityVariantStatus }) =>
+      studioApi.verifyProviderModelVideoCapability(session, data.modelId, {
+        variantKey: data.variant.variantKey,
+        capabilitySnapshotHash: data.variant.capabilitySnapshotHash,
+        verificationMode: "adapter_contract_test",
+      }),
+    onSuccess: (_result, data) => {
+      toast.success("视频能力验证通过");
+      invalidate([qk.providerModelVideoCapabilities(data.modelId)]);
+    },
+    onError: (error) => toast.error("视频能力验证失败：" + error.message),
+  });
+
+  const attestVideoCapabilityMutation = useApiMutation({
+    requiredPermission: "provider.manage",
+    mutationFn: (
+      session,
+      data: { modelId: string; variant: VideoCapabilityVariantStatus; decision: "approved" | "rejected"; reason: string },
+    ) => studioApi.attestProviderModelVideoCapability(session, data.modelId, {
+      variantKey: data.variant.variantKey,
+      capabilitySnapshotHash: data.variant.capabilitySnapshotHash,
+      decision: data.decision,
+      reason: data.reason,
+    }),
+    onSuccess: (_result, data) => {
+      toast.success(data.decision === "approved" ? "能力快照已批准" : "能力快照已拒绝");
+      setCapabilityDecisionReason("");
+      invalidate([qk.providerModelVideoCapabilities(data.modelId)]);
+    },
+    onError: (error) => toast.error("能力审批失败：" + error.message),
+  });
+
+  const revokeVideoCapabilityMutation = useApiMutation({
+    requiredPermission: "provider.manage",
+    mutationFn: (
+      session,
+      data: { modelId: string; attestation: VideoCapabilityAttestation; reason: string },
+    ) => studioApi.revokeProviderModelVideoCapability(session, data.modelId, data.attestation.id, {
+      capabilitySnapshotHash: data.attestation.capabilitySnapshotHash,
+      reason: data.reason,
+    }),
+    onSuccess: (_result, data) => {
+      toast.success("能力决定已撤销");
+      setCapabilityDecisionReason("");
+      invalidate([qk.providerModelVideoCapabilities(data.modelId)]);
+    },
+    onError: (error) => toast.error("撤销失败：" + error.message),
+  });
+
+  function requireProviderManage() {
+    if (canManageProviders) {
+      return true;
+    }
+    toast.error("当前账号没有管理供应商的权限");
+    return false;
+  }
+
   function openCreateAccountDialog() {
+    if (!requireProviderManage()) return;
     const preferred = catalogEntries.find((entry) => entry.providerKey === "openai_compatible_custom") || catalogEntries[0] || null;
     setAccountDialogMode("create");
     setEditingAccount(null);
@@ -624,6 +811,7 @@ export function ProvidersPage() {
   }
 
   function openEditAccountDialog(account: ProviderAccount) {
+    if (!requireProviderManage()) return;
     setAccountDialogMode("edit");
     setEditingAccount(account);
     setSelectedAccountId(account.id);
@@ -642,6 +830,45 @@ export function ProvidersPage() {
     setCustomModelName("");
     setCustomModelModality("text");
     setAccountDialogOpen(true);
+  }
+
+  function openCredentialsDialog(account: ProviderAccount) {
+    setCredentialsAccountId(account.id);
+    setCredentialKey("");
+    setCredentialSecret("");
+    setCredentialToRotate(null);
+    setCredentialsDialogOpen(true);
+  }
+
+  function closeCredentialsDialog() {
+    setCredentialsDialogOpen(false);
+    setCredentialsAccountId(null);
+    setCredentialKey("");
+    setCredentialSecret("");
+    setCredentialToRotate(null);
+    setCredentialToRevoke(null);
+  }
+
+  function beginCredentialRotation(credential: ProviderCredential) {
+    setCredentialToRotate(credential);
+    setCredentialKey(credential.credentialKey);
+    setCredentialSecret("");
+  }
+
+  function handleSaveCredential() {
+    if (!requireProviderManage() || !credentialsAccountId) return;
+    const key = credentialKey.trim();
+    const apiKey = credentialSecret.trim();
+    if (!key || !apiKey) {
+      toast.error("请填写密钥名称和 API Key");
+      return;
+    }
+    saveCredentialMutation.mutate({
+      accountId: credentialsAccountId,
+      credentialId: credentialToRotate?.id,
+      credentialKey: key,
+      apiKey,
+    });
   }
 
   function closeAccountDialog() {
@@ -790,6 +1017,7 @@ export function ProvidersPage() {
   }
 
   async function createAccountFromDialog() {
+    if (!requireProviderManage()) return null;
     const payload = buildCreateAccountPayload();
     if (!payload) {
       return null;
@@ -847,6 +1075,7 @@ export function ProvidersPage() {
   }
 
   async function handleDiscoverModelsInAccountDialog() {
+    if (!requireProviderManage()) return;
     const account = await ensureDialogAccount();
     if (!account) {
       return;
@@ -860,6 +1089,7 @@ export function ProvidersPage() {
   }
 
   async function handleFillTemplateModels() {
+    if (!requireProviderManage()) return;
     if (dialogModelTemplates.length === 0) {
       toast.error("当前供应商没有预设模型");
       return;
@@ -890,6 +1120,7 @@ export function ProvidersPage() {
   }
 
   async function handleAddCustomModel() {
+    if (!requireProviderManage()) return;
     const modelKey = customModelName.trim();
     if (!modelKey) {
       toast.error("请填写自定义模型名称");
@@ -944,6 +1175,7 @@ export function ProvidersPage() {
   }
 
   function openCreateModelDialog(template?: ProviderCatalogModelTemplate) {
+    if (!requireProviderManage()) return;
     setModelDialogMode("create");
     setEditingModel(null);
     setModelForm(template ? modelFormFromTemplate(template) : emptyModelForm("text"));
@@ -951,19 +1183,59 @@ export function ProvidersPage() {
   }
 
   function openEditModelDialog(model: ProviderModel) {
+    if (!requireProviderManage()) return;
     setModelDialogMode("edit");
     setEditingModel(model);
     setModelForm(modelFormFromModel(model));
     setModelDialogOpen(true);
   }
 
+  function openVideoCapabilityDialog(model: ProviderModel) {
+    setCapabilityModel(model);
+    setCapabilityDecisionReason("");
+    setCapabilityDialogOpen(true);
+  }
+
+  function handleCapabilityDecision(variant: VideoCapabilityVariantStatus, decision: "approved" | "rejected") {
+    if (!requireProviderManage()) return;
+    if (!capabilityModel) {
+      return;
+    }
+    const reason = capabilityDecisionReason.trim();
+    if (!reason) {
+      toast.error("请填写审批理由");
+      return;
+    }
+    attestVideoCapabilityMutation.mutate({ modelId: capabilityModel.id, variant, decision, reason });
+  }
+
+  function handleCapabilityRevoke(attestation: VideoCapabilityAttestation) {
+    if (!requireProviderManage()) return;
+    if (!capabilityModel) {
+      return;
+    }
+    const reason = capabilityDecisionReason.trim();
+    if (!reason) {
+      toast.error("请填写撤销理由");
+      return;
+    }
+    revokeVideoCapabilityMutation.mutate({ modelId: capabilityModel.id, attestation, reason });
+  }
+
   function handleSaveModel() {
+    if (!requireProviderManage()) return;
     if (!selectedAccountId) {
       toast.error("请选择供应商账号");
       return;
     }
-    if (!modelForm.modelKey.trim() || !modelForm.displayName.trim() || !modelForm.modality.trim()) {
+    const modelKey = modelForm.modelKey.trim();
+    if (!modelKey || !modelForm.displayName.trim() || !modelForm.modality.trim()) {
       toast.error("请填写模型 ID、名称和类型");
+      return;
+    }
+    const duplicateModel = allModels.find((model) => model.id !== editingModel?.id && model.modelKey === modelKey);
+    if (duplicateModel && (duplicateModel.status !== "disabled" || modelDialogMode === "edit")) {
+      toast.error(`模型 ID“${modelKey}”已存在，请直接编辑已有模型`);
       return;
     }
     const taskTypes = taskTypesFromText(modelForm.taskTypesText);
@@ -979,7 +1251,7 @@ export function ProvidersPage() {
       accountId: selectedAccountId,
       modelId: editingModel?.id,
       body: {
-        modelKey: modelForm.modelKey.trim(),
+        modelKey,
         displayName: modelForm.displayName.trim(),
         modality: modelForm.modality,
         status: modelForm.status,
@@ -1000,6 +1272,7 @@ export function ProvidersPage() {
   }
 
   function handleCreateBusinessProfile(slot: BusinessProfileSlot) {
+    if (!requireProviderManage()) return;
     if (profileByKey.has(slot.profileKey)) {
       toast.success("业务模型配置已存在");
       return;
@@ -1008,6 +1281,7 @@ export function ProvidersPage() {
   }
 
   function handleSaveBusinessBinding(slot: BusinessProfileSlot, profile?: ModelProfile) {
+    if (!requireProviderManage()) return;
     const draft = businessBindingDrafts[slot.profileKey] || defaultBusinessBindingDraft();
     if (!draft.modelId) {
       toast.error("请选择供应商模型");
@@ -1039,6 +1313,7 @@ export function ProvidersPage() {
   }
 
   function handleUpdateBusinessRouting(profile: ModelProfile, routingStrategy: string) {
+    if (!requireProviderManage()) return;
     updateProfileMutation.mutate({
       profile,
       body: {
@@ -1054,7 +1329,19 @@ export function ProvidersPage() {
   const accountDialogSaving = createAccountMutation.isPending || updateAccountMutation.isPending;
   const accountDialogModelActionPending =
     discoverModelsMutation.isPending || quickCreateModelMutation.isPending || createAccountMutation.isPending;
+  const videoCapabilityMutationPending =
+    verifyVideoCapabilityMutation.isPending || attestVideoCapabilityMutation.isPending || revokeVideoCapabilityMutation.isPending;
   const accountDialogModels = accountDialogMode === "create" ? selectedCreateModelDrafts : models;
+
+  if (!canReadProviders) {
+    return (
+      <AppShell active="providers" title="供应商中心" description="管理 AI 供应商账号与模型配置">
+        <Surface className="p-8 text-center">
+          <p className="text-sm text-muted-foreground">当前账号没有查看供应商配置的权限</p>
+        </Surface>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell active="providers" title="供应商中心" description="管理 AI 供应商账号与模型配置">
@@ -1076,10 +1363,12 @@ export function ProvidersPage() {
           <TabsContent value="accounts" className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">管理组织的供应商账号、访问密钥和可用模型</p>
-              <Button onClick={openCreateAccountDialog}>
-                <Plus className="h-4 w-4" />
-                添加供应商
-              </Button>
+              {canManageProviders ? (
+                <Button onClick={openCreateAccountDialog}>
+                  <Plus className="h-4 w-4" />
+                  添加供应商
+                </Button>
+              ) : null}
             </div>
 
             {accountsLoading && <Skeleton className="h-64" />}
@@ -1116,7 +1405,10 @@ export function ProvidersPage() {
                         <span className="truncate">Base URL: {account.baseUrl || "未设置"}</span>
                         <span>认证类型: {account.authType || "bearer"}</span>
                         <span>状态: {statusLabel(account.status)}</span>
-                        <span>密钥: {account.credentialPreview || "未保存"}</span>
+                        <span>
+                          API Key: {account.credentialCount ?? (account.credentialPreview ? 1 : 0)} 个
+                          {account.credentialPreview ? `（默认 ${account.credentialPreview}）` : ""}
+                        </span>
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -1128,40 +1420,54 @@ export function ProvidersPage() {
                         onClick={() => openModelsDialog(account)}
                       >
                         <Layers3 className="h-3.5 w-3.5" />
-                        管理模型
+                        {canManageProviders ? "管理模型" : "查看模型"}
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        data-provider-account-id={account.id}
-                        data-testid="provider-account-edit"
-                        onClick={() => openEditAccountDialog(account)}
-                      >
-                        <Edit2 className="h-3.5 w-3.5" />
-                        编辑
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        data-provider-account-id={account.id}
-                        data-testid="provider-account-discover"
-                        onClick={() => discoverModelsMutation.mutate(account.id)}
-                        disabled={discoverModelsMutation.isPending}
-                      >
-                        <RefreshCw className={cn("h-3.5 w-3.5", discoverModelsMutation.isPending && "animate-spin")} />
-                        发现模型
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        data-provider-account-id={account.id}
-                        data-testid="provider-account-delete"
-                        onClick={() => setAccountToDelete(account)}
-                        disabled={deleteAccountMutation.isPending}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        删除
-                      </Button>
+                      {canManageProviders ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            data-provider-account-id={account.id}
+                            data-testid="provider-account-credentials"
+                            onClick={() => openCredentialsDialog(account)}
+                          >
+                            <Key className="h-3.5 w-3.5" />
+                            管理密钥
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            data-provider-account-id={account.id}
+                            data-testid="provider-account-edit"
+                            onClick={() => openEditAccountDialog(account)}
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                            编辑
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            data-provider-account-id={account.id}
+                            data-testid="provider-account-discover"
+                            onClick={() => discoverModelsMutation.mutate(account.id)}
+                            disabled={discoverModelsMutation.isPending}
+                          >
+                            <RefreshCw className={cn("h-3.5 w-3.5", discoverModelsMutation.isPending && "animate-spin")} />
+                            发现模型
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            data-provider-account-id={account.id}
+                            data-testid="provider-account-delete"
+                            onClick={() => setAccountToDelete(account)}
+                            disabled={deleteAccountMutation.isPending}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            删除
+                          </Button>
+                        </>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -1223,7 +1529,11 @@ export function ProvidersPage() {
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         {profile ? (
-                          <Select value={profile.routingStrategy || "priority_with_fallback"} onValueChange={(value) => handleUpdateBusinessRouting(profile, value)}>
+                          <Select
+                            value={profile.routingStrategy || "priority_with_fallback"}
+                            onValueChange={(value) => handleUpdateBusinessRouting(profile, value)}
+                            disabled={!canManageProviders}
+                          >
                             <SelectTrigger className="w-44">
                               <SelectValue />
                             </SelectTrigger>
@@ -1233,12 +1543,12 @@ export function ProvidersPage() {
                               ))}
                             </SelectContent>
                           </Select>
-                        ) : (
+                        ) : canManageProviders ? (
                           <Button size="sm" variant="outline" onClick={() => handleCreateBusinessProfile(slot)} disabled={createProfileMutation.isPending}>
                             <Plus className="h-3.5 w-3.5" />
                             创建配置
                           </Button>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
@@ -1272,13 +1582,14 @@ export function ProvidersPage() {
                                   deleteProfileBindingMutation.isPending &&
                                   deleteProfileBindingMutation.variables?.bindingId === binding.id
                                 }
+                                canManage={canManageProviders}
                               />
                             ))}
                           </div>
                         )}
                       </div>
 
-                      <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                      {canManageProviders ? <div className="space-y-3 rounded-md border bg-muted/30 p-3">
                         <div className="text-xs font-medium text-muted-foreground">添加或更新绑定</div>
                         <div className="space-y-1.5">
                           <Label>供应商模型</Label>
@@ -1360,7 +1671,7 @@ export function ProvidersPage() {
                         >
                           保存绑定
                         </Button>
-                      </div>
+                      </div> : null}
                     </div>
                   </div>
                 );
@@ -1440,12 +1751,12 @@ export function ProvidersPage() {
 
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>API Key</Label>
+                <Label>{accountDialogMode === "edit" ? "默认 API Key" : "API Key"}</Label>
                 <Input
                   type="password"
                   value={accountForm.apiKey}
                   onChange={(event) => setAccountForm({ ...accountForm, apiKey: event.target.value })}
-                  placeholder={accountDialogMode === "edit" ? "留空则不修改" : "sk-..."}
+                  placeholder={accountDialogMode === "edit" ? "留空则不修改；其它密钥请使用管理密钥" : "sk-..."}
                 />
               </div>
               {accountDialogMode === "edit" && (
@@ -1616,6 +1927,125 @@ export function ProvidersPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={credentialsDialogOpen}
+        onOpenChange={(open) => {
+          if (open) setCredentialsDialogOpen(true);
+          else closeCredentialsDialog();
+        }}
+      >
+        <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{credentialsAccount?.name || "渠道密钥"}</DialogTitle>
+            <DialogDescription>每个 API Key 可对应不同上游分组；模型发现结果会分别保存并用于运行时选 key。</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-lg border p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="text-sm font-medium">{credentialToRotate ? "轮换 API Key" : "添加 API Key"}</div>
+                {credentialToRotate ? (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => {
+                      setCredentialToRotate(null);
+                      setCredentialKey("");
+                      setCredentialSecret("");
+                    }}
+                  >
+                    取消轮换
+                  </Button>
+                ) : null}
+              </div>
+              <div className="grid gap-3 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_auto]">
+                <div className="space-y-1.5">
+                  <Label>密钥名称</Label>
+                  <Input
+                    value={credentialKey}
+                    disabled={!!credentialToRotate}
+                    onChange={(event) => setCredentialKey(event.target.value)}
+                    placeholder="例如：grok1.6 分组"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>API Key</Label>
+                  <Input
+                    type="password"
+                    value={credentialSecret}
+                    onChange={(event) => setCredentialSecret(event.target.value)}
+                    placeholder="输入新的 API Key"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button onClick={handleSaveCredential} disabled={saveCredentialMutation.isPending}>
+                    {saveCredentialMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    {credentialToRotate ? "轮换" : "添加"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium">已启用密钥</div>
+                <Badge variant="secondary">{credentials.length}</Badge>
+              </div>
+              {credentialsLoading ? <Skeleton className="h-28" /> : null}
+              {!credentialsLoading && credentials.length === 0 ? (
+                <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">暂无可用 API Key</div>
+              ) : null}
+              {credentials.map((credential) => (
+                <div key={credential.id} className="rounded-lg border p-3" data-testid="provider-credential-row">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{credential.credentialKey}</span>
+                        <Badge variant="outline">{credential.maskedPreview || "****"}</Badge>
+                        <Badge variant="secondary">{credential.availableModelCount} 个模型</Badge>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {credential.lastDiscoveredAt
+                          ? `最近发现：${formatProviderDate(credential.lastDiscoveredAt)}`
+                          : "尚未发现该密钥可用的模型"}
+                      </div>
+                    </div>
+                    {canManageProviders ? (
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={discoverCredentialModelsMutation.isPending}
+                          onClick={() => credentialsAccountId && discoverCredentialModelsMutation.mutate({
+                            accountId: credentialsAccountId,
+                            credentialId: credential.id,
+                          })}
+                        >
+                          <RefreshCw className={cn("h-3 w-3", discoverCredentialModelsMutation.isPending && "animate-spin")} />
+                          发现模型
+                        </Button>
+                        <Button size="xs" variant="outline" onClick={() => beginCredentialRotation(credential)}>
+                          <RefreshCw className="h-3 w-3" />
+                          轮换
+                        </Button>
+                        <Button size="xs" variant="destructive" onClick={() => setCredentialToRevoke(credential)}>
+                          <Trash2 className="h-3 w-3" />
+                          停用
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeCredentialsDialog}>关闭</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={modelsDialogOpen} onOpenChange={handleModelsDialogOpenChange}>
         <DialogContent
           className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-4xl"
@@ -1632,7 +2062,7 @@ export function ProvidersPage() {
                 {selectedAccountCatalog && <Badge variant="outline">{selectedAccountCatalog.displayName}</Badge>}
                 {selectedAccount?.baseUrl && <Badge variant="secondary">{selectedAccount.baseUrl}</Badge>}
               </div>
-              <div className="flex flex-wrap gap-2">
+              {canManageProviders ? <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
                   variant="outline"
@@ -1647,10 +2077,10 @@ export function ProvidersPage() {
                   <Plus className="h-3.5 w-3.5" />
                   添加模型
                 </Button>
-              </div>
+              </div> : null}
             </div>
 
-            {modelTemplates.length > 0 && (
+            {canManageProviders && modelTemplates.length > 0 && (
               <div className="rounded-lg border p-3">
                 <div className="mb-2 text-xs font-medium text-muted-foreground">从预设添加</div>
                 <div className="flex flex-wrap gap-2">
@@ -1707,7 +2137,19 @@ export function ProvidersPage() {
                           )}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          {model.modality === "text" && (
+                          {(model.modality === "video" || model.modality === "multimodal") && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              data-provider-model-id={model.id}
+                              data-testid="provider-model-video-capabilities"
+                              onClick={() => openVideoCapabilityDialog(model)}
+                            >
+                              <ShieldCheck className="h-3.5 w-3.5" />
+                              视频能力
+                            </Button>
+                          )}
+                          {canManageProviders && model.modality === "text" && (
                             <Button
                               size="sm"
                               variant="outline"
@@ -1720,27 +2162,31 @@ export function ProvidersPage() {
                               测试
                             </Button>
                           )}
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            data-provider-model-id={model.id}
-                            data-testid="provider-model-edit"
-                            onClick={() => openEditModelDialog(model)}
-                          >
-                            <Edit2 className="h-3.5 w-3.5" />
-                            编辑
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            data-provider-model-id={model.id}
-                            data-testid="provider-model-delete"
-                            onClick={() => deleteModelMutation.mutate(model.id)}
-                            disabled={deleteModelMutation.isPending}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            删除
-                          </Button>
+                          {canManageProviders ? (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                data-provider-model-id={model.id}
+                                data-testid="provider-model-edit"
+                                onClick={() => openEditModelDialog(model)}
+                              >
+                                <Edit2 className="h-3.5 w-3.5" />
+                                编辑
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                data-provider-model-id={model.id}
+                                data-testid="provider-model-delete"
+                                onClick={() => deleteModelMutation.mutate(model.id)}
+                                disabled={deleteModelMutation.isPending}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                删除
+                              </Button>
+                            </>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -1749,6 +2195,139 @@ export function ProvidersPage() {
               ))}
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={capabilityDialogOpen}
+        onOpenChange={(open) => {
+          setCapabilityDialogOpen(open);
+          if (!open) {
+            setCapabilityModel(null);
+            setCapabilityDecisionReason("");
+          }
+        }}
+      >
+        <DialogContent
+          className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-4xl"
+          onInteractOutside={preventDialogCloseFromPortaledControl}
+          onPointerDownCapture={markDialogInnerPointerDown}
+        >
+          <DialogHeader>
+            <DialogTitle>{capabilityModel?.displayName || "视频模型能力"}</DialogTitle>
+            <DialogDescription>验证模型输入契约、原生音频和持续时间能力</DialogDescription>
+          </DialogHeader>
+
+          {videoCapabilityLoading && <Skeleton className="h-64" />}
+          {!videoCapabilityLoading && (videoCapabilityData?.variants.length || 0) === 0 && (
+            <div className="border-y py-10 text-center text-sm text-muted-foreground">当前模型没有可验证的视频能力变体</div>
+          )}
+
+          <div className="divide-y border-y">
+            {(videoCapabilityData?.variants || []).map((variant) => {
+              const attestation = variant.currentAttestation;
+              const canReview = variant.verificationStatus === "inferred";
+              return (
+                <section key={`${variant.variantKey}:${variant.capabilitySnapshotHash}`} className="space-y-4 py-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{variant.variantKey}</span>
+                        <Badge variant={videoCapabilityVerificationBadge(variant.verificationStatus)}>
+                          {videoCapabilityVerificationLabel(variant.verificationStatus)}
+                        </Badge>
+                        {attestation && (
+                          <Badge variant={attestation.decision === "approved" ? "default" : "destructive"}>
+                            {attestation.decision === "approved" ? "已批准" : "已拒绝"}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+                        {variant.capabilitySnapshotHash}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {canManageProviders && !attestation && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={videoCapabilityMutationPending || !capabilityModel}
+                          onClick={() => capabilityModel && verifyVideoCapabilityMutation.mutate({ modelId: capabilityModel.id, variant })}
+                        >
+                          {verifyVideoCapabilityMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                          验证 Adapter
+                        </Button>
+                      )}
+                      {canManageProviders && !attestation && canReview && (
+                        <>
+                          <Button size="sm" disabled={videoCapabilityMutationPending} onClick={() => handleCapabilityDecision(variant, "approved")}>
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            批准
+                          </Button>
+                          <Button size="sm" variant="destructive" disabled={videoCapabilityMutationPending} onClick={() => handleCapabilityDecision(variant, "rejected")}>
+                            <XCircle className="h-3.5 w-3.5" />
+                            拒绝
+                          </Button>
+                        </>
+                      )}
+                      {canManageProviders && attestation && (
+                        <Button size="sm" variant="outline" disabled={videoCapabilityMutationPending} onClick={() => handleCapabilityRevoke(attestation)}>
+                          {revokeVideoCapabilityMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                          撤销决定
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <CapabilityContractView title="首段输入" contract={variant.initialInputContract} />
+                    <div className="space-y-2">
+                      <div className="text-xs font-medium text-muted-foreground">续段输入</div>
+                      <div className="flex min-h-8 flex-wrap items-center gap-1.5">
+                        {variant.continuationInputContracts.length > 0 ? variant.continuationInputContracts.map((contract) => (
+                          <Badge key={contract.contractKey} variant="outline">{videoInputContractLabel(contract.contractKey)}</Badge>
+                        )) : <span className="text-sm text-muted-foreground">不支持同镜头续段</span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+                    <span>时长：{videoDurationCapabilityLabel(variant.duration)}</span>
+                    <span>原生音频：{videoCapabilityTruthLabel(variant.nativeAudio.support)}</span>
+                    {variant.source && <span>来源：{variant.source}</span>}
+                    {variant.verifiedAt && <span>验证时间：{formatProviderDate(variant.verifiedAt)}</span>}
+                  </div>
+
+                  {attestation && (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-muted-foreground">查看能力证据</summary>
+                      <div className="mt-2 space-y-1 rounded-md bg-muted/50 p-3">
+                        <div>证据类型：{videoCapabilityEvidenceLabel(attestation.evidenceType)}</div>
+                        <div>决定理由：{attestation.reason}</div>
+                        <div>决定时间：{formatProviderDate(attestation.decidedAt)}</div>
+                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px]">{JSON.stringify(attestation.evidence, null, 2)}</pre>
+                      </div>
+                    </details>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+
+          {canManageProviders ? (
+            <div className="space-y-2">
+              <Label htmlFor="video-capability-decision-reason">审批或撤销理由</Label>
+              <Textarea
+                id="video-capability-decision-reason"
+                className="min-h-20"
+                value={capabilityDecisionReason}
+                onChange={(event) => setCapabilityDecisionReason(event.target.value)}
+              />
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCapabilityDialogOpen(false)}>关闭</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1844,6 +2423,33 @@ export function ProvidersPage() {
         </DialogContent>
       </Dialog>
 
+      <AlertDialog open={!!credentialToRevoke} onOpenChange={(open) => !open && setCredentialToRevoke(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Trash2 className="h-5 w-5 text-destructive" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>停用 API Key</AlertDialogTitle>
+            <AlertDialogDescription>
+              停用“{credentialToRevoke?.credentialKey}”后，仅由该 key 提供的模型将不再参与运行时路由。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={revokeCredentialMutation.isPending}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={revokeCredentialMutation.isPending || !credentialsAccountId || !credentialToRevoke}
+              onClick={() => credentialsAccountId && credentialToRevoke && revokeCredentialMutation.mutate({
+                accountId: credentialsAccountId,
+                credentialId: credentialToRevoke.id,
+              })}
+            >
+              停用
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={!!accountToDelete} onOpenChange={(open) => !open && setAccountToDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1869,6 +2475,93 @@ export function ProvidersPage() {
       </AlertDialog>
     </AppShell>
   );
+}
+
+function CapabilityContractView({ title, contract }: { title: string; contract: VideoInputContract }) {
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">{title}</div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant="outline">{videoInputContractLabel(contract.contractKey)}</Badge>
+        {contract.slots.map((slot) => (
+          <span key={`${contract.contractKey}:${slot.role}`} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {videoReferenceRoleLabel(slot.role)} {slot.min}-{slot.max}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function videoCapabilityVerificationLabel(status: VideoCapabilityVariantStatus["verificationStatus"]) {
+  return ({ official: "官方证据", tested: "已验证", inferred: "待审批", unknown: "未知" } as const)[status];
+}
+
+function videoCapabilityVerificationBadge(status: VideoCapabilityVariantStatus["verificationStatus"]): "default" | "secondary" | "outline" | "destructive" {
+  if (status === "official" || status === "tested") return "default";
+  if (status === "inferred") return "secondary";
+  return "destructive";
+}
+
+function videoCapabilityEvidenceLabel(type: VideoCapabilityAttestation["evidenceType"]) {
+  return ({
+    official_documentation: "官方文档",
+    adapter_contract_test: "Adapter 契约测试",
+    controlled_probe: "受控探测",
+    administrator_review: "管理员审核",
+  } as const)[type];
+}
+
+function videoInputContractLabel(value: string) {
+  const labels: Record<string, string> = {
+    text_only: "纯文本",
+    first_frame: "首帧",
+    first_last_frames: "首尾帧",
+    semantic_references: "多模态参考",
+    first_frame_plus_references: "首帧与多参考",
+    storyboard_sheet_reference: "分镜板",
+    video_reference: "视频参考",
+    video_extension: "视频延长",
+  };
+  return labels[value] || value;
+}
+
+function videoReferenceRoleLabel(value: string) {
+  const labels: Record<string, string> = {
+    first_frame: "首帧",
+    last_frame: "尾帧",
+    video_extension_source: "延长源视频",
+    video_reference: "视频参考",
+    semantic_reference: "语义参考",
+    character_identity: "角色身份",
+    character_costume: "角色服装",
+    scene_identity: "场景身份",
+    scene_spatial: "场景空间",
+    prop_identity: "道具身份",
+    style_reference: "风格参考",
+    motion_reference: "动作参考",
+    storyboard_sheet: "分镜板",
+  };
+  return labels[value] || value;
+}
+
+function videoDurationCapabilityLabel(duration: VideoCapabilityVariantStatus["duration"]) {
+  if (duration.values?.length) return duration.values.map((value) => `${value} 秒`).join("、");
+  if (duration.minSeconds && duration.maxSeconds) return `${duration.minSeconds}-${duration.maxSeconds} 秒`;
+  if (duration.maxSeconds) return `最长 ${duration.maxSeconds} 秒`;
+  return "由输入决定";
+}
+
+function videoCapabilityTruthLabel(value: string) {
+  if (value === "true") return "支持";
+  if (value === "false") return "不支持";
+  return "待验证";
+}
+
+function formatProviderDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(date);
 }
 
 function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelForm; setModelForm: (value: ModelForm) => void }) {
@@ -2212,12 +2905,14 @@ function BusinessBindingRow({
   onDelete,
   onUpdate,
   deleting,
+  canManage,
 }: {
   binding: ModelProfileBinding;
   model?: ProviderModelWithAccount;
   onDelete: () => void;
   onUpdate: (body: UpdateModelProfileBindingRequest) => Promise<void>;
   deleting: boolean;
+  canManage: boolean;
 }) {
   const [priority, setPriority] = useState(String(binding.priority));
   const [weight, setWeight] = useState(String(binding.weight));
@@ -2236,6 +2931,7 @@ function BusinessBindingRow({
   const busy = saving || deleting;
 
   async function saveRoutingValues() {
+    if (!canManage) return;
     if (priorityValue === null || weightValue === null) {
       toast.error("优先顺序和权重必须是大于或等于 0 的整数");
       return;
@@ -2255,6 +2951,7 @@ function BusinessBindingRow({
   }
 
   async function changeEnabled(next: boolean) {
+    if (!canManage) return;
     const previous = enabled;
     setEnabled(next);
     setSaving(true);
@@ -2285,10 +2982,12 @@ function BusinessBindingRow({
             </div>
           ) : null}
         </div>
-        <Button size="sm" variant="destructive" onClick={onDelete} disabled={busy}>
-          <Trash2 className="h-3.5 w-3.5" />
-          删除
-        </Button>
+        {canManage ? (
+          <Button size="sm" variant="destructive" onClick={onDelete} disabled={busy}>
+            <Trash2 className="h-3.5 w-3.5" />
+            删除
+          </Button>
+        ) : null}
       </div>
 
       <div className={cn(
@@ -2307,7 +3006,7 @@ function BusinessBindingRow({
             step={1}
             value={priority}
             onChange={(event) => setPriority(event.target.value)}
-            disabled={busy}
+            disabled={busy || !canManage}
           />
           <div className="text-xs text-muted-foreground">数字越小越优先</div>
         </div>
@@ -2321,7 +3020,7 @@ function BusinessBindingRow({
             step={1}
             value={weight}
             onChange={(event) => setWeight(event.target.value)}
-            disabled={busy}
+            disabled={busy || !canManage}
           />
           <div className="text-xs text-muted-foreground">同级时数字越大越优先</div>
         </div>
@@ -2331,7 +3030,7 @@ function BusinessBindingRow({
             <Select
               value={reasoningLevel || "__provider_default__"}
               onValueChange={(value) => setReasoningLevel(value === "__provider_default__" ? "" : value)}
-              disabled={busy}
+              disabled={busy || !canManage}
             >
               <SelectTrigger id={`binding-reasoning-${binding.id}`}>
                 <SelectValue />
@@ -2355,13 +3054,15 @@ function BusinessBindingRow({
             id={`binding-enabled-${binding.id}`}
             checked={enabled}
             onCheckedChange={(checked) => void changeEnabled(checked)}
-            disabled={busy}
+            disabled={busy || !canManage}
           />
         </div>
-        <Button size="sm" onClick={() => void saveRoutingValues()} disabled={busy || !valuesDirty || priorityValue === null || weightValue === null}>
-          {saving ? <Loader2 className="animate-spin" /> : <Save />}
-          保存
-        </Button>
+        {canManage ? (
+          <Button size="sm" onClick={() => void saveRoutingValues()} disabled={busy || !valuesDirty || priorityValue === null || weightValue === null}>
+            {saving ? <Loader2 className="animate-spin" /> : <Save />}
+            保存
+          </Button>
+        ) : null}
       </div>
     </div>
   );

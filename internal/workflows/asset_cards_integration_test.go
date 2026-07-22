@@ -175,7 +175,11 @@ func TestShotAssetContextIncludesAssetCardConsistencyPrompt(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `
 		UPDATE storyboard_shots
-		SET video_reference_mode = 'auto', image_artifact_id = $2, image_storage_key = 'shot/current.png'
+		SET video_reference_mode = 'auto',
+			image_artifact_id = $2,
+			image_storage_key = 'shot/current.png',
+			image_status = 'succeeded',
+			stale_state = 'fresh'
 		WHERE id = $1
 	`, shotID, artifactID); err != nil {
 		t.Fatalf("attach current shot image: %v", err)

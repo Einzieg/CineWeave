@@ -20,6 +20,7 @@ export function SetupPage() {
   const [error, setError] = useState("");
   const [form, setForm] = useState({
     email: "",
+    username: "",
     displayName: "",
     password: "",
     confirmPassword: "",
@@ -66,6 +67,7 @@ export function SetupPage() {
     try {
       const response = await studioApi.setupSystem({
         email: form.email,
+        username: form.username,
         password: form.password,
         displayName: form.displayName,
         organizationName: form.organizationName,
@@ -108,6 +110,20 @@ export function SetupPage() {
             onChange={(e) => setForm({ ...form, email: e.target.value })}
             required
           />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="username">管理员用户名</Label>
+          <Input
+            id="username"
+            autoComplete="username"
+            minLength={3}
+            maxLength={32}
+            pattern="[A-Za-z0-9](?:[A-Za-z0-9_-]{1,30}[A-Za-z0-9])?"
+            value={form.username}
+            onChange={(e) => setForm({ ...form, username: e.target.value })}
+            required
+          />
+          <p className="text-xs text-muted-foreground">3–32 位字母、数字、下划线或短横线，以字母或数字开头和结尾。</p>
         </div>
         <div className="grid gap-2">
           <Label htmlFor="displayName">管理员姓名</Label>

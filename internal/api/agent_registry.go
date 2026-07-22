@@ -77,31 +77,33 @@ func agentToolContext(project Project, principal auth.Principal, task AgentTask,
 
 func agentToolResultToRegistry(result agentToolResult) agent.ToolResult {
 	return agent.ToolResult{
-		Name:         result.Name,
-		Label:        result.Label,
-		Status:       result.Status,
-		Summary:      result.Summary,
-		Arguments:    result.Arguments,
-		Data:         result.Data,
-		Retryable:    result.Retryable,
-		NextActions:  agentToolNextActionsToRegistry(result.NextActions),
-		ErrorCode:    result.ErrorCode,
-		ErrorMessage: result.ErrorMessage,
+		Name:                result.Name,
+		Label:               result.Label,
+		Status:              result.Status,
+		Summary:             result.Summary,
+		Arguments:           result.Arguments,
+		Data:                result.Data,
+		ChildWorkflowRunIDs: result.ChildWorkflowRunIDs,
+		Retryable:           result.Retryable,
+		NextActions:         agentToolNextActionsToRegistry(result.NextActions),
+		ErrorCode:           result.ErrorCode,
+		ErrorMessage:        result.ErrorMessage,
 	}
 }
 
 func agentToolResultFromRegistry(result agent.ToolResult) agentToolResult {
 	return agentToolResult{
-		Name:         result.Name,
-		Label:        result.Label,
-		Status:       result.Status,
-		Summary:      result.Summary,
-		Arguments:    result.Arguments,
-		Data:         result.Data,
-		Retryable:    result.Retryable,
-		NextActions:  agentToolNextActionsFromRegistry(result.NextActions),
-		ErrorCode:    result.ErrorCode,
-		ErrorMessage: result.ErrorMessage,
+		Name:                result.Name,
+		Label:               result.Label,
+		Status:              result.Status,
+		Summary:             result.Summary,
+		Arguments:           result.Arguments,
+		Data:                result.Data,
+		ChildWorkflowRunIDs: result.ChildWorkflowRunIDs,
+		Retryable:           result.Retryable,
+		NextActions:         agentToolNextActionsFromRegistry(result.NextActions),
+		ErrorCode:           result.ErrorCode,
+		ErrorMessage:        result.ErrorMessage,
 	}
 }
 

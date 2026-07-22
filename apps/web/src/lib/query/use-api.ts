@@ -10,7 +10,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { StudioApiError, studioApi } from "@/lib/api-client";
-import { sessionFromAuthResponse, useStudioSession } from "@/lib/session";
+import { sessionFromAuthResponse, sessionHasPermission, useStudioSession } from "@/lib/session";
 import type { StudioSession } from "@/lib/types";
 
 export function orgScopedKey(organizationId: string, key: QueryKey): QueryKey {
@@ -28,26 +28,34 @@ type ApiQueryOptions<TData> = Omit<UseQueryOptions<TData, Error, TData, QueryKey
 
 /** 会话感知的 useQuery 封装:自动追加组织前缀、注入 session、等待会话就绪。 */
 export function useApiQuery<TData>({ key, queryFn, enabled = true, ...rest }: ApiQueryOptions<TData>) {
-  const { session, hydrated, ready, setSession, clearSession } = useStudioSession();
+  const { session, hydrated, ready, authorizationReady, setSession, clearSession } = useStudioSession();
   return useQuery({
     ...rest,
     queryKey: orgScopedKey(session.organizationId, key),
     queryFn: () => withFreshSession(session, setSession, clearSession, queryFn),
-    enabled: hydrated && ready && enabled,
+    enabled: hydrated && ready && authorizationReady && enabled,
   });
 }
 
 type ApiMutationOptions<TData, TVariables> = Omit<UseMutationOptions<TData, Error, TVariables>, "mutationFn"> & {
   mutationFn: (session: StudioSession, variables: TVariables) => Promise<TData>;
+  requiredPermission?: string;
 };
 
 /** 会话感知的 useMutation 封装。 */
-export function useApiMutation<TData, TVariables = void>({ mutationFn, ...rest }: ApiMutationOptions<TData, TVariables>) {
-  const { session, setSession, clearSession } = useStudioSession();
+export function useApiMutation<TData, TVariables = void>({ mutationFn, requiredPermission, ...rest }: ApiMutationOptions<TData, TVariables>) {
+  const { session, authorizationReady, setSession, clearSession } = useStudioSession();
   return useMutation({
     ...rest,
-    mutationFn: (variables: TVariables) =>
-      withFreshSession(session, setSession, clearSession, (freshSession) => mutationFn(freshSession, variables)),
+    mutationFn: (variables: TVariables) => {
+      if (!authorizationReady) {
+        throw new StudioApiError("账号权限尚未加载完成，请稍后重试", "AUTHORIZATION_NOT_READY", 403, false);
+      }
+      if (requiredPermission && !sessionHasPermission(session, requiredPermission)) {
+        throw new StudioApiError("当前账号没有执行此操作的权限", "FORBIDDEN", 403, false);
+      }
+      return withFreshSession(session, setSession, clearSession, (freshSession) => mutationFn(freshSession, variables));
+    },
   });
 }
 

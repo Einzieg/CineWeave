@@ -19,6 +19,32 @@ type providerMediaEgressConfig struct {
 	AllowedPrivateCIDRs []string `json:"allowedPrivateCidrs"`
 }
 
+type gatewayMediaStageError struct {
+	stage string
+	err   error
+}
+
+func (e *gatewayMediaStageError) Error() string {
+	if e == nil {
+		return "provider media transfer failed"
+	}
+	return fmt.Sprintf("provider media %s failed: %v", e.stage, e.err)
+}
+
+func (e *gatewayMediaStageError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func gatewayMediaStageFailure(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &gatewayMediaStageError{stage: strings.TrimSpace(stage), err: err}
+}
+
 func (s *Service) SetMediaFetcher(fetcher *outbound.MediaFetcher) {
 	if fetcher == nil {
 		s.mediaFetcher = outbound.NewMediaFetcher(outbound.Config{})
@@ -188,6 +214,11 @@ func normalizedGatewayMediaFailure(err error, kind string) (string, string, *Sta
 	if kind == "" {
 		kind = "media"
 	}
+	stage := ""
+	var stageError *gatewayMediaStageError
+	if errors.As(err, &stageError) {
+		stage = stageError.stage
+	}
 	var code, message string
 	var retryable bool
 	switch {
@@ -203,6 +234,22 @@ func normalizedGatewayMediaFailure(err error, kind string) (string, string, *Sta
 	case errors.Is(err, outbound.ErrMIMETypeRejected):
 		code = CodeMediaDownloadFailed
 		message = fmt.Sprintf("provider returned an unsupported %s media type", kind)
+	case errors.Is(err, context.DeadlineExceeded) && stage == "storage":
+		code = CodeMediaDownloadFailed
+		message = fmt.Sprintf("provider %s object storage upload timed out", kind)
+		retryable = true
+	case errors.Is(err, context.DeadlineExceeded):
+		code = CodeMediaDownloadFailed
+		message = fmt.Sprintf("provider %s download timed out", kind)
+		retryable = true
+	case stage == "storage":
+		code = CodeMediaDownloadFailed
+		message = fmt.Sprintf("provider %s object storage upload failed", kind)
+		retryable = true
+	case stage == "download":
+		code = CodeMediaDownloadFailed
+		message = fmt.Sprintf("provider %s download failed", kind)
+		retryable = true
 	default:
 		code = CodeMediaDownloadFailed
 		message = fmt.Sprintf("provider %s media could not be stored", kind)

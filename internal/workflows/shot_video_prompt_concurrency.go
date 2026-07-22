@@ -1,9 +1,7 @@
 package workflows
 
 import (
-	"fmt"
-
-	"github.com/Einzieg/cineweave/internal/provider"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -57,7 +55,7 @@ func generateShotVideoPromptsConcurrently(
 	}
 	for inFlight > 0 {
 		selector.Select(ctx)
-		if err := ctx.Err(); err != nil {
+		if err := ctx.Err(); isWorkflowCancellationError(err) {
 			return nil, err
 		}
 		for nextIndex < len(options.ShotIDs) && inFlight < limit {
@@ -66,23 +64,6 @@ func generateShotVideoPromptsConcurrently(
 		}
 	}
 	return results, nil
-}
-
-type shotVideoPlanResult struct {
-	Plan PlanShotVideoOutput
-	Err  error
-}
-
-type shotVideoSegmentPromptRequest struct {
-	ShotPosition int
-	ShotID       string
-	Plan         PlanShotVideoOutput
-	Segment      provider.GatewayVideoPlanSegment
-}
-
-type shotVideoSegmentPromptResult struct {
-	Output PrepareShotVideoPromptOutput
-	Err    error
 }
 
 func generateShotVideoPromptPlansConcurrently(
@@ -91,173 +72,273 @@ func generateShotVideoPromptPlansConcurrently(
 	input TextToStoryboardInput,
 	options BatchShotProductionOptions,
 ) ([]shotVideoPromptResult, error) {
-	results := make([]shotVideoPromptResult, len(options.ShotIDs))
-	if len(options.ShotIDs) == 0 {
-		return results, nil
+	if workflow.GetVersion(ctx, "batch-video-prompt-resume-approved-plan-v2", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+		return generateResumableShotVideoPromptPlansConcurrently(ctx, input, options)
 	}
-	limit := clampConcurrency(options.MaxConcurrency, DefaultShotVideoPromptConcurrency, MaxShotVideoPromptConcurrency)
-	plans, err := planShotVideoPromptsConcurrently(ctx, input, options, limit)
+	results, err := generateShotVideoPromptsConcurrently(ctx, promptCtx, input, options)
 	if err != nil {
 		return nil, err
 	}
-	requests := make([]shotVideoSegmentPromptRequest, 0)
-	for shotPosition, planned := range plans {
-		if planned.Err != nil {
-			results[shotPosition].Err = planned.Err
-			continue
+	if workflow.GetVersion(ctx, "batch-video-prompt-segment-agents-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+		return generateShotVideoSegmentPromptPlansConcurrently(ctx, input, options, results)
+	}
+	planResults, err := materializeApprovedShotVideoPlansConcurrently(ctx, input, options, results)
+	if err != nil {
+		return nil, err
+	}
+	for index := range results {
+		if results[index].Err == nil && planResults[index] != nil {
+			results[index].Err = planResults[index]
 		}
-		if len(planned.Plan.Segments) == 0 {
-			results[shotPosition].Err = fmt.Errorf("video render plan has no segments")
-			continue
+	}
+	return results, nil
+}
+
+func generateResumableShotVideoPromptPlansConcurrently(
+	ctx workflow.Context,
+	input TextToStoryboardInput,
+	options BatchShotProductionOptions,
+) ([]shotVideoPromptResult, error) {
+	results := make([]shotVideoPromptResult, len(options.ShotIDs))
+	limit := clampConcurrency(options.MaxConcurrency, DefaultShotVideoPromptConcurrency, MaxShotVideoPromptConcurrency)
+	for start := 0; start < len(options.ShotIDs); start += limit {
+		end := start + limit
+		if end > len(options.ShotIDs) {
+			end = len(options.ShotIDs)
 		}
-		for _, segment := range planned.Plan.Segments {
-			requests = append(requests, shotVideoSegmentPromptRequest{
-				ShotPosition: shotPosition,
-				ShotID:       options.ShotIDs[shotPosition],
-				Plan:         planned.Plan,
-				Segment:      segment,
+		completed := workflow.NewBufferedChannel(ctx, end-start)
+		for index := start; index < end; index++ {
+			currentIndex := index
+			workflow.Go(ctx, func(shotCtx workflow.Context) {
+				outputs, prepareErr := prepareResumableShotVideoPromptPlan(
+					shotCtx, input, options, options.ShotIDs[currentIndex],
+				)
+				completed.SendAsync(shotVideoPromptPlanCompletion{Index: currentIndex, Outputs: outputs, Err: prepareErr})
 			})
 		}
+		drainCtx, _ := workflow.NewDisconnectedContext(ctx)
+		cancelled := false
+		for index := start; index < end; index++ {
+			var completion shotVideoPromptPlanCompletion
+			completed.Receive(drainCtx, &completion)
+			results[completion.Index] = shotVideoPromptResult{Outputs: completion.Outputs, Err: completion.Err}
+			if isWorkflowCancellationError(completion.Err) {
+				cancelled = true
+			}
+		}
+		if cancelled || isWorkflowCancellationError(ctx.Err()) {
+			return nil, temporal.NewCanceledError("batch video prompt planning was cancelled")
+		}
 	}
-	segmentResults, err := prepareVideoSegmentPromptsConcurrently(ctx, promptCtx, input, options, requests, limit)
-	if err != nil {
+	return results, nil
+}
+
+func generateShotVideoSegmentPromptPlansConcurrently(
+	ctx workflow.Context,
+	input TextToStoryboardInput,
+	options BatchShotProductionOptions,
+	results []shotVideoPromptResult,
+) ([]shotVideoPromptResult, error) {
+	limit := clampConcurrency(options.MaxConcurrency, DefaultShotVideoPromptConcurrency, MaxShotVideoPromptConcurrency)
+	for start := 0; start < len(options.ShotIDs); start += limit {
+		end := start + limit
+		if end > len(options.ShotIDs) {
+			end = len(options.ShotIDs)
+		}
+		completed := workflow.NewBufferedChannel(ctx, end-start)
+		started := 0
+		for index := start; index < end; index++ {
+			if results[index].Err != nil {
+				continue
+			}
+			started++
+			currentIndex := index
+			workflow.Go(ctx, func(shotCtx workflow.Context) {
+				outputs, prepareErr := prepareShotVideoSegmentPromptPlan(
+					shotCtx, input, options, options.ShotIDs[currentIndex],
+				)
+				completed.SendAsync(shotVideoPromptPlanCompletion{Index: currentIndex, Outputs: outputs, Err: prepareErr})
+			})
+		}
+		drainCtx, _ := workflow.NewDisconnectedContext(ctx)
+		cancelled := false
+		for index := 0; index < started; index++ {
+			var completion shotVideoPromptPlanCompletion
+			completed.Receive(drainCtx, &completion)
+			if isWorkflowCancellationError(completion.Err) {
+				cancelled = true
+			}
+			if completion.Err != nil {
+				results[completion.Index].Err = completion.Err
+				continue
+			}
+			results[completion.Index].Outputs = append(results[completion.Index].Outputs, completion.Outputs...)
+		}
+		if cancelled || isWorkflowCancellationError(ctx.Err()) {
+			return nil, temporal.NewCanceledError("batch video prompt segment planning was cancelled")
+		}
+	}
+	return results, nil
+}
+
+type shotVideoPromptPlanCompletion struct {
+	Index   int
+	Outputs []PrepareShotVideoPromptOutput
+	Err     error
+}
+
+func prepareShotVideoSegmentPromptPlan(
+	ctx workflow.Context,
+	input TextToStoryboardInput,
+	options BatchShotProductionOptions,
+	shotID string,
+) ([]PrepareShotVideoPromptOutput, error) {
+	var plan PlanShotVideoOutput
+	if err := workflow.ExecuteActivity(ctx, "PlanShotVideo", PlanShotVideoInput{
+		OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
+		CreatedBy: input.CreatedBy, WorkflowPrompt: "batch_generate_shot_video_prompts",
+		FailureScope: workflowFailureScopeBatchItem, ShotID: shotID,
+		AspectRatio: options.AspectRatio, Resolution: options.Resolution,
+		AudioStrategy: options.AudioStrategy, AudioRequirement: options.AudioRequirement,
+		Force: true, PromptOnly: true,
+	}).Get(ctx, &plan); err != nil {
 		return nil, err
 	}
-	for index, segmentResult := range segmentResults {
-		request := requests[index]
-		if segmentResult.Err != nil {
-			if results[request.ShotPosition].Err == nil {
-				results[request.ShotPosition].Err = segmentResult.Err
-			}
-			continue
-		}
-		results[request.ShotPosition].Outputs = append(results[request.ShotPosition].Outputs, segmentResult.Output)
-	}
-	for shotPosition, planned := range plans {
-		if planned.Err != nil || results[shotPosition].Err != nil {
-			continue
-		}
-		if err := workflow.ExecuteActivity(ctx, "FinalizeShotVideoPromptPlan", FinalizeShotVideoPromptPlanInput{
-			OrganizationID:  input.OrganizationID,
-			ProjectID:       input.ProjectID,
-			WorkflowRunID:   input.WorkflowRunID,
-			ShotID:          options.ShotIDs[shotPosition],
-			ExecutionPlanID: planned.Plan.ExecutionPlanID,
-		}).Get(ctx, nil); err != nil {
-			results[shotPosition].Err = err
-		}
-	}
-	return results, nil
+	return prepareShotVideoSegmentPromptsFromPlan(ctx, input, options, shotID, plan, nil)
 }
 
-func planShotVideoPromptsConcurrently(
+func prepareResumableShotVideoPromptPlan(
 	ctx workflow.Context,
 	input TextToStoryboardInput,
 	options BatchShotProductionOptions,
-	limit int,
-) ([]shotVideoPlanResult, error) {
-	results := make([]shotVideoPlanResult, len(options.ShotIDs))
-	selector := workflow.NewSelector(ctx)
-	nextIndex := 0
-	inFlight := 0
-	schedule := func(index int) {
-		future := workflow.ExecuteActivity(ctx, "PlanShotVideo", PlanShotVideoInput{
-			OrganizationID:   input.OrganizationID,
-			ProjectID:        input.ProjectID,
-			WorkflowRunID:    input.WorkflowRunID,
-			CreatedBy:        input.CreatedBy,
-			WorkflowPrompt:   "batch_generate_shot_video_prompts",
-			ShotID:           options.ShotIDs[index],
-			AspectRatio:      options.AspectRatio,
-			Resolution:       options.Resolution,
-			AudioStrategy:    options.AudioStrategy,
-			AudioRequirement: options.AudioRequirement,
-			Force:            options.Force,
-			PromptOnly:       true,
-		})
-		inFlight++
-		selector.AddFuture(future, func(completed workflow.Future) {
-			var plan PlanShotVideoOutput
-			results[index] = shotVideoPlanResult{Plan: plan, Err: completed.Get(ctx, &plan)}
-			results[index].Plan = plan
-			inFlight--
-		})
+	shotID string,
+) ([]PrepareShotVideoPromptOutput, error) {
+	var plan PlanShotVideoOutput
+	planInput := PlanShotVideoInput{
+		OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
+		CreatedBy: input.CreatedBy, WorkflowPrompt: "batch_generate_shot_video_prompts",
+		FailureScope: workflowFailureScopeBatchItem, ShotID: shotID,
+		AspectRatio: options.AspectRatio, Resolution: options.Resolution,
+		AudioStrategy: options.AudioStrategy, AudioRequirement: options.AudioRequirement,
+		Force: true, PromptOnly: true,
 	}
-	for nextIndex < len(options.ShotIDs) && inFlight < limit {
-		schedule(nextIndex)
-		nextIndex++
-	}
-	for inFlight > 0 {
-		selector.Select(ctx)
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	planErr := workflow.ExecuteActivity(ctx, "PlanShotVideo", planInput).Get(ctx, &plan)
+	outputs := make([]PrepareShotVideoPromptOutput, 0, 2)
+	if planErr != nil {
+		if !isPreparedVideoPromptPlanError(planErr) {
+			return nil, planErr
 		}
-		for nextIndex < len(options.ShotIDs) && inFlight < limit {
-			schedule(nextIndex)
-			nextIndex++
+		promptCtx := workflow.WithActivityOptions(ctx, providerTextActivityOptions())
+		var coarse PrepareShotVideoPromptOutput
+		if err := workflow.ExecuteActivity(promptCtx, "PrepareShotVideoPrompt", PrepareShotVideoPromptInput{
+			OrganizationID: input.OrganizationID,
+			ProjectID:      input.ProjectID,
+			WorkflowRunID:  input.WorkflowRunID,
+			CreatedBy:      input.CreatedBy,
+			ShotID:         shotID,
+			WorkflowPrompt: "batch_generate_shot_video_prompts",
+			Duration:       options.Duration,
+			AspectRatio:    options.AspectRatio,
+			Resolution:     options.Resolution,
+			Force:          options.Force,
+			PromptOnly:     true,
+		}).Get(promptCtx, &coarse); err != nil {
+			return outputs, err
+		}
+		outputs = append(outputs, coarse)
+		if err := workflow.ExecuteActivity(ctx, "PlanShotVideo", planInput).Get(ctx, &plan); err != nil {
+			return outputs, err
 		}
 	}
-	return results, nil
+	return prepareShotVideoSegmentPromptsFromPlan(ctx, input, options, shotID, plan, outputs)
 }
 
-func prepareVideoSegmentPromptsConcurrently(
+func prepareShotVideoSegmentPromptsFromPlan(
 	ctx workflow.Context,
-	promptCtx workflow.Context,
 	input TextToStoryboardInput,
 	options BatchShotProductionOptions,
-	requests []shotVideoSegmentPromptRequest,
-	limit int,
-) ([]shotVideoSegmentPromptResult, error) {
-	results := make([]shotVideoSegmentPromptResult, len(requests))
+	shotID string,
+	plan PlanShotVideoOutput,
+	outputs []PrepareShotVideoPromptOutput,
+) ([]PrepareShotVideoPromptOutput, error) {
+	promptCtx := workflow.WithActivityOptions(ctx, providerTextActivityOptions())
+	if len(plan.Segments) == 0 {
+		return outputs, preparedVideoPromptError("视频执行计划没有可生成提示词的片段")
+	}
+	if outputs == nil {
+		outputs = make([]PrepareShotVideoPromptOutput, 0, len(plan.Segments))
+	}
+	for _, segment := range plan.Segments {
+		var output PrepareShotVideoPromptOutput
+		err := workflow.ExecuteActivity(promptCtx, "PrepareShotVideoPrompt", PrepareShotVideoPromptInput{
+			OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
+			CreatedBy: input.CreatedBy, ShotID: shotID,
+			WorkflowPrompt: "batch_generate_shot_video_prompts", PromptOnly: true, Force: options.Force,
+			Duration: segment.RequestedDurationSeconds, RequestedDuration: segment.RequestedDurationSeconds,
+			AspectRatio: options.AspectRatio, Resolution: options.Resolution,
+			ExecutionPlanID: plan.ExecutionPlanID, RenderSegmentID: segment.SegmentID,
+			SegmentIndex: segment.SegmentIndex, SegmentCount: len(plan.Segments),
+			SegmentStartTick: segment.PlannedStartTick, SegmentEndTick: segment.PlannedEndTick,
+			AudioStrategy: options.AudioStrategy, AudioRequirement: options.AudioRequirement,
+			DialogueLines: renderSegmentDialogueLines(segment.DialogueSpans),
+		}).Get(promptCtx, &output)
+		if err != nil {
+			return outputs, err
+		}
+		outputs = append(outputs, output)
+	}
+	if err := workflow.ExecuteActivity(ctx, "FinalizeShotVideoPromptPlan", FinalizeShotVideoPromptPlanInput{
+		OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
+		ShotID: shotID, ExecutionPlanID: plan.ExecutionPlanID, PromptSource: "segment_video_prompt_agents",
+	}).Get(ctx, nil); err != nil {
+		return outputs, err
+	}
+	return outputs, nil
+}
+
+func materializeApprovedShotVideoPlansConcurrently(
+	ctx workflow.Context,
+	input TextToStoryboardInput,
+	options BatchShotProductionOptions,
+	promptResults []shotVideoPromptResult,
+) ([]error, error) {
+	results := make([]error, len(options.ShotIDs))
+	limit := clampConcurrency(options.MaxConcurrency, DefaultShotVideoPromptConcurrency, MaxShotVideoPromptConcurrency)
 	selector := workflow.NewSelector(ctx)
 	nextIndex := 0
 	inFlight := 0
-	schedule := func(index int) {
-		request := requests[index]
-		segment := request.Segment
-		future := workflow.ExecuteActivity(promptCtx, "PrepareShotVideoPrompt", PrepareShotVideoPromptInput{
-			OrganizationID:    input.OrganizationID,
-			ProjectID:         input.ProjectID,
-			WorkflowRunID:     input.WorkflowRunID,
-			CreatedBy:         input.CreatedBy,
-			ShotID:            request.ShotID,
-			WorkflowPrompt:    "batch_generate_shot_video_prompts",
-			Duration:          segment.PlannedDurationSeconds,
-			RequestedDuration: segment.RequestedDurationSeconds,
-			AspectRatio:       options.AspectRatio,
-			Resolution:        options.Resolution,
-			Force:             options.Force,
-			PromptOnly:        true,
-			ExecutionPlanID:   request.Plan.ExecutionPlanID,
-			RenderSegmentID:   segment.SegmentID,
-			SegmentIndex:      segment.SegmentIndex,
-			SegmentCount:      len(request.Plan.Segments),
-			SegmentStartTick:  segment.PlannedStartTick,
-			SegmentEndTick:    segment.PlannedEndTick,
-			AudioStrategy:     request.Plan.AudioStrategy,
-			AudioRequirement:  request.Plan.AudioRequirement,
-			DialogueLines:     renderSegmentDialogueLines(segment.DialogueSpans),
+	scheduleNext := func() bool {
+		for nextIndex < len(options.ShotIDs) && promptResults[nextIndex].Err != nil {
+			nextIndex++
+		}
+		if nextIndex >= len(options.ShotIDs) {
+			return false
+		}
+		index := nextIndex
+		nextIndex++
+		future := workflow.ExecuteActivity(ctx, "EnsurePreparedShotVideoPlan", EnsurePreparedShotVideoPlanInput{
+			OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
+			CreatedBy: input.CreatedBy, WorkflowPrompt: "batch_generate_shot_video_prompts",
+			ShotID: options.ShotIDs[index], AspectRatio: options.AspectRatio, Resolution: options.Resolution,
+			AudioStrategy: options.AudioStrategy, AudioRequirement: options.AudioRequirement,
+			Force: true, PromptOnly: true,
 		})
 		inFlight++
 		selector.AddFuture(future, func(completed workflow.Future) {
-			var output PrepareShotVideoPromptOutput
-			results[index] = shotVideoSegmentPromptResult{Output: output, Err: completed.Get(ctx, &output)}
-			results[index].Output = output
+			var prepared LoadPreparedShotVideoPlanOutput
+			results[index] = completed.Get(ctx, &prepared)
 			inFlight--
 		})
+		return true
 	}
-	for nextIndex < len(requests) && inFlight < limit {
-		schedule(nextIndex)
-		nextIndex++
+	for inFlight < limit && scheduleNext() {
 	}
 	for inFlight > 0 {
 		selector.Select(ctx)
-		if err := ctx.Err(); err != nil {
+		if err := ctx.Err(); isWorkflowCancellationError(err) {
 			return nil, err
 		}
-		for nextIndex < len(requests) && inFlight < limit {
-			schedule(nextIndex)
-			nextIndex++
+		for inFlight < limit && scheduleNext() {
 		}
 	}
 	return results, nil

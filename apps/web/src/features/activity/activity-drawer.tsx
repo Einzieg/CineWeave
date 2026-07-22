@@ -20,7 +20,19 @@ import { workflowLabel } from "@/lib/routes";
 import { useActivityStore, type ActivityRealtimeEvent, type ActivityRealtimeStatus } from "@/lib/stores/activity-store";
 import { useUiStore } from "@/lib/stores/ui-store";
 import { isActiveWorkflowStatus } from "@/lib/workflow-status";
-import type { WorkflowNodeRun, WorkflowRun } from "@/lib/types";
+import {
+  buildShotPromptActivityItems,
+  shotPromptActivityProgress,
+  ShotPromptActivityList,
+} from "./shot-prompt-activity";
+import type {
+  DerivedAssetBatchProjection,
+  DerivedAssetRequestItemProjection,
+  EpisodeVideoProductionItem,
+  WorkflowNodeRun,
+  WorkflowRun,
+  WorkflowVideoProductionActivity,
+} from "@/lib/types";
 
 const emptyEvents: ActivityRealtimeEvent[] = [];
 const nodeLabels: Record<string, string> = {
@@ -81,6 +93,16 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
   );
   const selectedWorkflowRunId = selectedRun?.id ?? "";
   const selectedRunActive = selectedRun ? isActiveWorkflow(selectedRun) : false;
+  const selectedVideoBatchWorkflow = selectedRun ? isVideoBatchWorkflow(selectedRun) : false;
+  const selectedDerivedAssetBatchWorkflow = selectedRun ? isDerivedAssetBatchWorkflow(selectedRun) : false;
+  const selectedShotPromptBatchWorkflow = selectedRun ? isShotPromptBatchWorkflow(selectedRun) : false;
+  const selectedSourceToScriptWorkflow = selectedRun ? isSourceToScriptWorkflow(selectedRun) : false;
+  const selectedRunOutput = recordValue(selectedRun?.output);
+  const sourceToScriptFailedEpisodes = arrayValue(selectedRunOutput.failedEpisodes)
+    .map(numberValue)
+    .filter((value) => value > 0);
+  const sourceToScriptMissingItems = numberValue(selectedRunOutput.missingItems);
+  const sourceToScriptActivated = selectedRunOutput.activated === true;
 
   const {
     data: workflowNodes = [],
@@ -94,6 +116,30 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     refetchInterval: activityOpen && connectionStatus !== "connected" && selectedRunActive ? 3000 : false,
   });
 
+  const {
+    data: videoProductionActivity,
+    isLoading: videoProductionActivityLoading,
+    isFetching: videoProductionActivityFetching,
+    refetch: refetchVideoProductionActivity,
+  } = useApiQuery({
+    key: qk.workflowVideoProduction(selectedWorkflowRunId || "none"),
+    queryFn: (session) => studioApi.getWorkflowVideoProductionActivity(session, selectedWorkflowRunId),
+    enabled: activityOpen && selectedVideoBatchWorkflow && !!selectedWorkflowRunId,
+    refetchInterval: activityOpen && connectionStatus !== "connected" && selectedRunActive ? 3000 : false,
+  });
+
+  const {
+    data: derivedAssetBatch,
+    isLoading: derivedAssetBatchLoading,
+    isFetching: derivedAssetBatchFetching,
+    refetch: refetchDerivedAssetBatch,
+  } = useApiQuery({
+    key: qk.workflowDerivedAssetBatch(selectedWorkflowRunId || "none"),
+    queryFn: (session) => studioApi.getWorkflowDerivedAssetBatch(session, selectedWorkflowRunId),
+    enabled: activityOpen && selectedDerivedAssetBatchWorkflow && !!selectedWorkflowRunId,
+    refetchInterval: activityOpen && connectionStatus !== "connected" && selectedRunActive ? 3000 : false,
+  });
+
   const selectedLiveEvents = useMemo(() => {
     if (!selectedWorkflowRunId) {
       return liveEvents.slice(-30);
@@ -101,8 +147,13 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     return liveEvents.filter((event) => stringValue(event.payload.workflowRunId) === selectedWorkflowRunId).slice(-40);
   }, [liveEvents, selectedWorkflowRunId]);
   const visibleWorkflowNodes = useMemo(
-    () => (selectedRun && isAssetBatchWorkflow(selectedRun) ? workflowNodes : sequentialVisibleNodes(workflowNodes)),
+    () => (selectedRun && isItemizedWorkflow(selectedRun) ? workflowNodes : sequentialVisibleNodes(workflowNodes)),
     [selectedRun, workflowNodes],
+  );
+  const shotPromptItems = useMemo(() => buildShotPromptActivityItems(workflowNodes), [workflowNodes]);
+  const shotPromptProgress = useMemo(
+    () => shotPromptActivityProgress(shotPromptItems, selectedRun?.totalItems ?? 0),
+    [selectedRun?.totalItems, shotPromptItems],
   );
 
   const cancelMutation = useApiMutation({
@@ -114,7 +165,7 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     onError: (error) => toast.error("取消失败：" + error.message),
   });
 
-  const retryAssetBatchMutation = useApiMutation({
+  const retryFailedItemsMutation = useApiMutation({
     mutationFn: (session, run: WorkflowRun) => {
       if (!project?.revision) {
         throw new Error("项目状态尚未加载，请稍后重试");
@@ -130,8 +181,42 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
       invalidate([
         qk.workflowRuns(projectId),
         qk.workflowNodes(retryRun.id),
-        qk.assets(projectId),
+        qk.workflowDerivedAssetBatch(retryRun.id),
+        qk.assetsRoot(projectId),
         qk.artifacts(projectId),
+        qk.sources(projectId),
+        qk.scripts(projectId),
+        qk.scriptDetailsPrefix(projectId),
+        qk.scriptVersionsPrefix(projectId),
+        qk.scriptEpisodesPrefix(projectId),
+        qk.productionStatus(projectId),
+      ]);
+    },
+    onError: (error) => toast.error("重试失败：" + error.message),
+  });
+
+  const retryVideoItemsMutation = useApiMutation({
+    mutationFn: async (session, activity: WorkflowVideoProductionActivity) => {
+      const groups = failedVideoItemsByEpisode(activity);
+      if (groups.length === 0) {
+        throw new Error("没有可重试的失败镜头");
+      }
+      return Promise.all(groups.map((group) => studioApi.generateShotVideosBatch(session, projectId, {
+        scriptEpisodeId: group.scriptEpisodeId,
+        shotIds: group.shotIds,
+        force: true,
+        maxConcurrency: 5,
+      })));
+    },
+    onSuccess: (runs) => {
+      toast.success(`已为 ${runs.reduce((total, run) => total + run.targetShotIds.length, 0)} 个失败镜头创建重试任务`);
+      const firstRun = runs[0];
+      if (firstRun) {
+        setSelectedActivityId(`workflow:${firstRun.workflowRunId}`);
+      }
+      invalidate([
+        qk.workflowRuns(projectId),
+        qk.shotProductionPrefix(projectId),
         qk.productionStatus(projectId),
       ]);
     },
@@ -142,6 +227,12 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     void refetchWorkflowRuns();
     if (selectedWorkflowRunId) {
       void refetchWorkflowNodes();
+      if (selectedVideoBatchWorkflow) {
+        void refetchVideoProductionActivity();
+      }
+      if (selectedDerivedAssetBatchWorkflow) {
+        void refetchDerivedAssetBatch();
+      }
     }
   };
 
@@ -161,7 +252,7 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <ConnectionBadge status={connectionStatus} />
                 <span>活动任务 {activeWorkflowCount}</span>
-                {(workflowRunsFetching || workflowNodesFetching) && <span>同步中</span>}
+                {(workflowRunsFetching || workflowNodesFetching || videoProductionActivityFetching || derivedAssetBatchFetching) && <span>同步中</span>}
               </div>
             </div>
             <Button variant="outline" size="sm" onClick={refreshSelected}>
@@ -242,14 +333,28 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                         </details>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
-                        {isAssetBatchWorkflow(selectedRun) && !selectedRunActive && selectedRun.failedItems > 0 ? (
+                        {usesFailedItemRetry(selectedRun) && !selectedRunActive && (
+                          selectedDerivedAssetBatchWorkflow
+                            ? derivedAssetRetryableItemCount(derivedAssetBatch) > 0
+                            : selectedRun.failedItems > 0
+                        ) ? (
                           <Button
                             size="sm"
-                            onClick={() => retryAssetBatchMutation.mutate(selectedRun)}
-                            disabled={retryAssetBatchMutation.isPending || !project?.revision}
+                            onClick={() => retryFailedItemsMutation.mutate(selectedRun)}
+                            disabled={retryFailedItemsMutation.isPending || !project?.revision}
                           >
-                            {retryAssetBatchMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
-                            重试失败项（{selectedRun.failedItems}）
+                            {retryFailedItemsMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+                            {selectedSourceToScriptWorkflow ? "重试失败分集" : "重试失败项"}（{selectedDerivedAssetBatchWorkflow ? derivedAssetRetryableItemCount(derivedAssetBatch) : selectedRun.failedItems}）
+                          </Button>
+                        ) : null}
+                        {selectedVideoBatchWorkflow && !selectedRunActive && (videoProductionActivity?.failedItems ?? 0) > 0 ? (
+                          <Button
+                            size="sm"
+                            onClick={() => videoProductionActivity && retryVideoItemsMutation.mutate(videoProductionActivity)}
+                            disabled={retryVideoItemsMutation.isPending || !videoProductionActivity}
+                          >
+                            {retryVideoItemsMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+                            重试失败镜头（{videoProductionActivity?.failedItems ?? 0}）
                           </Button>
                         ) : null}
                         {selectedRunActive ? (
@@ -265,7 +370,7 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                         ) : null}
                       </div>
                     </div>
-                    {isAssetBatchWorkflow(selectedRun) && selectedRun.totalItems > 0 ? (
+                    {usesFailedItemRetry(selectedRun) && selectedRun.totalItems > 0 ? (
                       <div className="mt-4 grid gap-2">
                         <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                           <span>已完成 {selectedRun.completedItems}/{selectedRun.totalItems}</span>
@@ -278,6 +383,48 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                         />
                       </div>
                     ) : null}
+                    {selectedSourceToScriptWorkflow && selectedRun.failedItems > 0 ? (
+                      <div className="mt-4 rounded-md border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-status-warning">
+                        <div className="font-medium">
+                          {sourceToScriptFailedEpisodes.length > 0
+                            ? `第 ${sourceToScriptFailedEpisodes.join("、")} 集生成失败`
+                            : `${selectedRun.failedItems} 个分集生成失败`}
+                        </div>
+                        <div className="mt-1 text-xs leading-relaxed">
+                          {sourceToScriptMissingItems > 0
+                            ? `其中 ${sourceToScriptMissingItems} 集没有旧内容可回退，部分版本未激活，当前剧本保持不变。`
+                            : sourceToScriptActivated
+                              ? "失败分集已保留旧版本内容并标记为需要重新生成，其余分集已组成并激活新版本。"
+                              : "当前剧本未切换；可使用上方按钮仅重试失败分集。"}
+                        </div>
+                      </div>
+                    ) : null}
+                    {selectedShotPromptBatchWorkflow && shotPromptProgress.totalItems > 0 ? (
+                      <div className="mt-4 grid gap-2">
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                          <span>已完成 {shotPromptProgress.completedItems}/{shotPromptProgress.totalItems}</span>
+                          {shotPromptProgress.failedItems > 0 ? <span>失败 {shotPromptProgress.failedItems}</span> : null}
+                          <span>已处理 {shotPromptProgress.processedItems}/{shotPromptProgress.totalItems}</span>
+                        </div>
+                        <Progress
+                          value={Math.round((shotPromptProgress.processedItems / shotPromptProgress.totalItems) * 100)}
+                          className="h-2"
+                        />
+                      </div>
+                    ) : null}
+                    {selectedVideoBatchWorkflow && videoProductionActivity && videoProductionActivity.totalItems > 0 ? (
+                      <div className="mt-4 grid gap-2">
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                          <span>已完成 {videoProductionActivity.succeededItems}/{videoProductionActivity.totalItems}</span>
+                          {videoProductionActivity.failedItems > 0 ? <span>失败 {videoProductionActivity.failedItems}</span> : null}
+                          {videoProductionActivity.activeItems > 0 ? <span>运行中 {videoProductionActivity.activeItems}</span> : null}
+                        </div>
+                        <Progress
+                          value={Math.round(((videoProductionActivity.succeededItems + videoProductionActivity.failedItems) / videoProductionActivity.totalItems) * 100)}
+                          className="h-2"
+                        />
+                      </div>
+                    ) : null}
                     {selectedRun.errorMessage ? (
                       <div className="mt-4 rounded-md border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
                         {localizePlatformError(selectedRun.errorMessage, selectedRun.errorCode)}
@@ -285,12 +432,49 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                     ) : null}
                   </section>
 
+                  {selectedVideoBatchWorkflow ? (
+                    <VideoProductionActivitySection
+                      activity={videoProductionActivity}
+                      loading={videoProductionActivityLoading}
+                      active={selectedRunActive}
+                    />
+                  ) : null}
+
+                  {selectedDerivedAssetBatchWorkflow ? (
+                    <DerivedAssetActivitySection
+                      batch={derivedAssetBatch}
+                      loading={derivedAssetBatchLoading}
+                      active={selectedRunActive}
+                    />
+                  ) : null}
+
                   <section className="grid gap-3">
                     <div className="flex items-center justify-between gap-3">
-                      <h4 className="text-sm font-semibold">{isAssetBatchWorkflow(selectedRun) ? "资产处理明细" : "Agent 动态与输出"}</h4>
-                      <Badge variant="outline">{visibleWorkflowNodes.length} 个节点</Badge>
+                      <h4 className="text-sm font-semibold">
+                        {isAssetBatchWorkflow(selectedRun)
+                          ? "资产处理明细"
+                          : selectedDerivedAssetBatchWorkflow
+                            ? "执行节点与输出"
+                          : selectedShotPromptBatchWorkflow
+                            ? "分镜提示词明细"
+                            : selectedVideoBatchWorkflow
+                              ? "工作流节点与输出"
+                              : "Agent 动态与输出"}
+                      </h4>
+                      <Badge variant="outline">
+                        {selectedShotPromptBatchWorkflow
+                          ? `${shotPromptItems.length}/${shotPromptProgress.totalItems} 个分镜`
+                          : `${visibleWorkflowNodes.length} 个节点`}
+                      </Badge>
                     </div>
-                    {workflowNodesLoading ? (
+                    {selectedShotPromptBatchWorkflow ? (
+                      <ShotPromptActivityList
+                        items={shotPromptItems}
+                        loading={workflowNodesLoading}
+                        active={selectedRunActive}
+                        totalItems={shotPromptProgress.totalItems}
+                      />
+                    ) : workflowNodesLoading ? (
                       <div className="grid gap-2">
                         <Skeleton className="h-24" />
                         <Skeleton className="h-24" />
@@ -331,6 +515,254 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
       </SheetContent>
     </Sheet>
   );
+}
+
+function DerivedAssetActivitySection({
+  batch,
+  loading,
+  active,
+}: {
+  batch?: DerivedAssetBatchProjection;
+  loading: boolean;
+  active: boolean;
+}) {
+  if (loading) {
+    return (
+      <section className="grid gap-3">
+        <h4 className="text-sm font-semibold">镜头衍生资产明细</h4>
+        <Skeleton className="h-28" />
+        <Skeleton className="h-28" />
+      </section>
+    );
+  }
+  if (!batch) {
+    return (
+      <section className="grid gap-3">
+        <h4 className="text-sm font-semibold">镜头衍生资产明细</h4>
+        <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+          {active ? "正在建立持久化工作集" : "该任务没有衍生资产工作集"}
+        </div>
+      </section>
+    );
+  }
+  const processed = Math.max(0, batch.totalItems - batch.pendingItems - batch.queuedItems - batch.runningItems);
+  return (
+    <section className="grid gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold">镜头衍生资产明细</h4>
+          <div className="mt-1 text-xs text-muted-foreground">
+            已处理 {processed}/{batch.totalItems} · 成功 {batch.succeededItems} · 可执行 {batch.executableItems}
+          </div>
+        </div>
+        <StatusBadge status={batch.status} />
+      </div>
+      {batch.totalItems > 0 ? (
+        <Progress value={Math.round((processed / batch.totalItems) * 100)} className="h-2" />
+      ) : null}
+      <div className="flex flex-wrap gap-2 text-xs">
+        {batch.reviewRequiredItems > 0 ? <Badge variant="outline">待审核 {batch.reviewRequiredItems}</Badge> : null}
+        {batch.generationMismatchItems > 0 ? <Badge variant="outline">旧生产代 {batch.generationMismatchItems}</Badge> : null}
+        {batch.notFoundItems > 0 ? <Badge variant="outline">未找到 {batch.notFoundItems}</Badge> : null}
+        {batch.alreadyRunningItems > 0 ? <Badge variant="outline">已在运行 {batch.alreadyRunningItems}</Badge> : null}
+        {batch.duplicateItems > 0 ? <Badge variant="outline">重复输入 {batch.duplicateItems}</Badge> : null}
+        {batch.failedRetryableItems > 0 ? <Badge variant="outline">可重试失败 {batch.failedRetryableItems}</Badge> : null}
+        {batch.failedTerminalItems > 0 ? <Badge variant="outline">终态失败 {batch.failedTerminalItems}</Badge> : null}
+        {batch.discardedItems > 0 ? <Badge variant="outline">已丢弃 {batch.discardedItems}</Badge> : null}
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        {batch.items.map((item) => <DerivedAssetRequestItemCard key={item.id} item={item} />)}
+      </div>
+      <details>
+        <summary className="cursor-pointer text-xs text-muted-foreground">批次技术信息</summary>
+        <div className="mt-2 grid gap-1 rounded bg-muted px-3 py-2 text-xs text-muted-foreground">
+          <span>批次：{shortId(batch.id)}</span>
+          <span>生产代次：{shortId(batch.productionGenerationId)}</span>
+          <span>配置绑定：{shortId(batch.videoProductionBindingId)} · 第 {batch.videoProductionBindingRevision} 版</span>
+          <span>工作集模式：{derivedAssetRequestModeLabel(batch.requestMode)}</span>
+          {batch.retryOfBatchId ? <span>重试来源：{shortId(batch.retryOfBatchId)}</span> : null}
+        </div>
+      </details>
+    </section>
+  );
+}
+
+function DerivedAssetRequestItemCard({ item }: { item: DerivedAssetRequestItemProjection }) {
+  const errorMessage = item.errorMessage ?? item.execution?.errorMessage;
+  const errorCode = item.errorCode ?? item.execution?.errorCode;
+  return (
+    <article className="grid content-start gap-3 rounded-lg border p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">第 {item.inputOrdinal} 项</div>
+          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+            需求 {shortId(item.requirementId || item.originalId)} · {derivedAssetDispositionLabel(item.disposition)}
+          </div>
+        </div>
+        <StatusBadge status={item.status} />
+      </div>
+      {errorMessage || errorCode ? (
+        <div className="rounded-md border border-destructive/20 bg-destructive/10 p-2 text-xs text-destructive">
+          {localizePlatformError(errorMessage, errorCode)}
+        </div>
+      ) : null}
+      <div className="grid gap-1 text-xs text-muted-foreground">
+        {item.execution ? <span>执行尝试：第 {item.execution.attemptNo} 次 · {statusLabel(item.execution.status)}</span> : <span>未创建供应商执行尝试</span>}
+        {item.retryable ? <span>该项满足条件后可单独重试</span> : null}
+        {item.duplicateOfRequestItemId ? <span>重复于工作集中的较早输入</span> : null}
+      </div>
+      {item.execution ? (
+        <details>
+          <summary className="cursor-pointer text-xs text-muted-foreground">执行技术信息</summary>
+          <div className="mt-2 grid gap-1 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+            <span>执行项：{shortId(item.execution.id)}</span>
+            <span>节点：{shortId(item.execution.nodeRunId)}</span>
+            {item.execution.providerCallId ? <span>供应商调用：{shortId(item.execution.providerCallId)}</span> : null}
+            {item.execution.artifactId ? <span>产物：{shortId(item.execution.artifactId)}</span> : null}
+            {item.execution.lateResultCount > 0 ? <span>迟到结果：{item.execution.lateResultCount}</span> : null}
+          </div>
+        </details>
+      ) : null}
+    </article>
+  );
+}
+
+function VideoProductionActivitySection({
+  activity,
+  loading,
+  active,
+}: {
+  activity?: WorkflowVideoProductionActivity;
+  loading: boolean;
+  active: boolean;
+}) {
+  if (loading) {
+    return (
+      <section className="grid gap-3">
+        <h4 className="text-sm font-semibold">镜头视频生产明细</h4>
+        <Skeleton className="h-32" />
+        <Skeleton className="h-32" />
+      </section>
+    );
+  }
+  if (!activity || activity.checkpoints.length === 0) {
+    return (
+      <section className="grid gap-3">
+        <h4 className="text-sm font-semibold">镜头视频生产明细</h4>
+        <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+          {active ? "正在准备分集执行检查点" : "该任务没有分集视频执行记录"}
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section className="grid gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-sm font-semibold">镜头视频生产明细</h4>
+        <Badge variant="outline">{activity.totalItems} 个镜头</Badge>
+      </div>
+      {activity.checkpoints.map((checkpoint) => (
+        <div key={checkpoint.id} className="grid gap-3 border-t pt-4 first:border-t-0 first:pt-0">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium">第 {checkpoint.episodeIndex} 集 · {checkpoint.episodeTitle}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                已提交 {checkpoint.batches.length} 个批次 · 下一批次 {checkpoint.nextBatchOrdinal}
+              </div>
+            </div>
+            <StatusBadge status={checkpoint.status} />
+          </div>
+          {checkpoint.batches.length === 0 ? (
+            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+              {active ? "正在创建首个镜头批次" : "该分集没有已提交批次"}
+            </div>
+          ) : checkpoint.batches.map((batch) => (
+            <div key={batch.id} className="grid gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-2">
+                <div className="text-sm font-medium">批次 {batch.ordinal} · 第 {batch.attempt} 次执行</div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>完成 {batch.succeededItems}/{batch.totalItems}</span>
+                  {batch.failedItems > 0 ? <span>失败 {batch.failedItems}</span> : null}
+                  <StatusBadge status={batch.status} />
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {batch.items.map((item) => <VideoProductionItemCard key={item.id} item={item} />)}
+              </div>
+            </div>
+          ))}
+          <details>
+            <summary className="cursor-pointer text-xs text-muted-foreground">分集执行技术信息</summary>
+            <div className="mt-2 grid gap-1 rounded bg-muted px-3 py-2 text-xs text-muted-foreground">
+              <span>检查点：{shortId(checkpoint.id)}</span>
+              <span>生产代次：{shortId(checkpoint.productionGenerationId)}</span>
+              <span>方案版本：{shortId(checkpoint.profileVersionId)}</span>
+            </div>
+          </details>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function VideoProductionItemCard({ item }: { item: EpisodeVideoProductionItem }) {
+  const error = videoProductionItemError(item);
+  return (
+    <article className="grid content-start gap-3 rounded-lg border p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">镜头 {item.shotNo}</div>
+          <div className="mt-0.5 truncate text-xs text-muted-foreground">{item.shotTitle || "未命名镜头"}</div>
+        </div>
+        <StatusBadge status={item.status} />
+      </div>
+      <div className="grid gap-2">
+        <VideoProductionStage label="计划首帧" status={anchorStageStatus(item)} detail={item.anchorReviewStatus ? statusLabel(item.anchorReviewStatus) : "等待生成"} />
+        <VideoProductionStage label="参考输入包" status={referencePackStageStatus(item)} detail={item.referencePackStatus ? statusLabel(item.referencePackStatus) : "等待编译"} />
+        <VideoProductionStage label="已审核提示词" status={promptPlanStageStatus(item)} detail={item.videoPromptPlanStatus ? `第 ${item.videoPromptPlanRevision ?? 1} 版 · ${statusLabel(item.videoPromptPlanStatus)}` : "等待已审核计划"} />
+        <VideoProductionStage label="上游视频任务" status={providerTaskStageStatus(item)} detail={providerTaskStageDetail(item)} />
+        <VideoProductionStage label="媒体入库" status={item.mediaStatus} detail={statusLabel(item.mediaStatus)} />
+      </div>
+      {error ? (
+        <div className="rounded-md border border-destructive/20 bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
+      ) : null}
+      <details>
+        <summary className="cursor-pointer text-xs text-muted-foreground">镜头执行技术信息</summary>
+        <div className="mt-2 grid gap-1 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+          <span>执行项：{shortId(item.id)}</span>
+          <span>尝试次数：{item.attempt}</span>
+          {item.externalTaskId ? <span>上游任务：{shortId(item.externalTaskId)}</span> : null}
+          {item.providerPollCount !== undefined ? <span>轮询次数：{item.providerPollCount}</span> : null}
+        </div>
+      </details>
+    </article>
+  );
+}
+
+function VideoProductionStage({ label, status, detail }: { label: string; status: string; detail: string }) {
+  return (
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-2 text-xs">
+      <ProductionStageIcon status={status} />
+      <div className="min-w-0">
+        <div className="font-medium">{label}</div>
+        <div className="truncate text-muted-foreground">{detail}</div>
+      </div>
+    </div>
+  );
+}
+
+function ProductionStageIcon({ status }: { status: string }) {
+  const normalized = status.toLowerCase();
+  if (["succeeded", "completed", "approved", "active", "ready", "stored"].includes(normalized)) {
+    return <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 text-status-success" />;
+  }
+  if (["failed", "rejected", "discarded", "stale"].includes(normalized)) {
+    return <XCircle className="mt-0.5 h-3.5 w-3.5 text-status-danger" />;
+  }
+  if (["running", "processing", "generating", "polling", "transferring", "cancelling"].includes(normalized)) {
+    return <Loader2 className="mt-0.5 h-3.5 w-3.5 animate-spin text-status-running" />;
+  }
+  return <Clock3 className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />;
 }
 
 function NodeRunCard({ node }: { node: WorkflowNodeRun }) {
@@ -486,6 +918,105 @@ function isAssetBatchWorkflow(run: WorkflowRun) {
   return run.workflowType === "batch_generate_asset_cards" || run.workflowType === "batch_generate_asset_images";
 }
 
+function isSourceToScriptWorkflow(run: WorkflowRun) {
+  return workflowTypeFromRun(run) === "source_to_script";
+}
+
+function isDerivedAssetBatchWorkflow(run: WorkflowRun) {
+  return workflowTypeFromRun(run) === "batch_generate_derived_asset_images";
+}
+
+function usesFailedItemRetry(run: WorkflowRun) {
+  return isAssetBatchWorkflow(run) || isSourceToScriptWorkflow(run) || isDerivedAssetBatchWorkflow(run);
+}
+
+function isVideoBatchWorkflow(run: WorkflowRun) {
+  const workflowType = workflowTypeFromRun(run);
+  return workflowType === "batch_generate_shot_videos"
+    || workflowType === "episode_batch_generate_shot_videos"
+    || workflowType === "episode_video_production";
+}
+
+function isShotPromptBatchWorkflow(run: WorkflowRun) {
+  const workflowType = workflowTypeFromRun(run);
+  return workflowType === "batch_generate_shot_image_prompts" || workflowType === "batch_generate_shot_video_prompts";
+}
+
+function isItemizedWorkflow(run: WorkflowRun) {
+  return isAssetBatchWorkflow(run) || isDerivedAssetBatchWorkflow(run) || isShotPromptBatchWorkflow(run) || isVideoBatchWorkflow(run);
+}
+
+function derivedAssetRetryableItemCount(batch?: DerivedAssetBatchProjection) {
+  return batch?.items.filter((item) => item.status === "failed_retryable" || (item.status === "blocked" && item.retryable)).length ?? 0;
+}
+
+function derivedAssetDispositionLabel(disposition: string) {
+  const labels: Record<string, string> = {
+    executable: "可执行",
+    review_required: "需要审核",
+    not_found: "未找到",
+    generation_mismatch: "不属于当前生产代",
+    already_running: "已在运行",
+    duplicate: "重复输入",
+    skipped: "已跳过",
+  };
+  return labels[disposition] ?? statusLabel(disposition);
+}
+
+function derivedAssetRequestModeLabel(mode: string) {
+  const labels: Record<string, string> = { explicit: "显式选择", select_all: "筛选全部", retry: "失败重试" };
+  return labels[mode] ?? mode;
+}
+
+function failedVideoItemsByEpisode(activity: WorkflowVideoProductionActivity) {
+  return activity.checkpoints.flatMap((checkpoint) => {
+    const shotIds = Array.from(new Set(checkpoint.batches.flatMap((batch) => batch.items)
+      .filter((item) => item.status === "failed" || item.status === "discarded")
+      .map((item) => item.storyboardShotId)));
+    return shotIds.length > 0 ? [{ scriptEpisodeId: checkpoint.scriptEpisodeId, shotIds }] : [];
+  });
+}
+
+function anchorStageStatus(item: EpisodeVideoProductionItem) {
+  if (item.anchorReviewStatus === "rejected") return "rejected";
+  if (item.anchorStatus === "ready" && item.anchorReviewStatus === "approved") return "approved";
+  return item.anchorStatus || "pending";
+}
+
+function referencePackStageStatus(item: EpisodeVideoProductionItem) {
+  return item.referencePackStatus || "pending";
+}
+
+function promptPlanStageStatus(item: EpisodeVideoProductionItem) {
+  return item.videoPromptPlanStatus || "pending";
+}
+
+function providerTaskStageStatus(item: EpisodeVideoProductionItem) {
+  if (item.providerAsyncTaskStatus) return item.providerAsyncTaskStatus;
+  if (item.status === "failed" || item.status === "discarded") return "failed";
+  return item.status === "running" ? "running" : "pending";
+}
+
+function providerTaskStageDetail(item: EpisodeVideoProductionItem) {
+  if (!item.providerAsyncTaskStatus) {
+    return item.status === "running" ? "正在创建上游任务" : "等待提交";
+  }
+  const pollText = item.providerPollCount !== undefined && item.providerPollCount > 0 ? ` · 已轮询 ${item.providerPollCount} 次` : "";
+  return `${statusLabel(item.providerAsyncTaskStatus)}${pollText}`;
+}
+
+function videoProductionItemError(item: EpisodeVideoProductionItem) {
+  const detail = recordValue(item.errorDetail);
+  const cause = recordValue(detail.cause);
+  const message = item.providerErrorMessage
+    || stringValue(detail.message)
+    || stringValue(detail.detail)
+    || stringValue(detail.error)
+    || stringValue(cause.message);
+  const code = item.providerErrorCode || item.errorCode || stringValue(detail.code) || stringValue(cause.code);
+  return message ? localizePlatformError(message, code) : "";
+}
+
 function workflowTypeFromRun(run: WorkflowRun) {
   const input = recordValue(run.input);
   const nestedInput = recordValue(input.input);
@@ -497,8 +1028,10 @@ function workflowInputSummary(run: WorkflowRun) {
   const nestedInput = recordValue(input.input);
   const chapterIds = arrayValue(nestedInput.chapterIds);
   const assetItems = arrayValue(input.items);
+  const shotIds = arrayValue(nestedInput.shotIds);
   const parts = [
     assetItems.length > 0 ? `资产 ${assetItems.length}` : "",
+    shotIds.length > 0 ? `分镜 ${shotIds.length}` : "",
     stringValue(nestedInput.sourceId) ? "已选择原文" : "",
     chapterIds.length > 0 ? `分集 ${chapterIds.length}` : "",
     stringValue(nestedInput.scriptId) ? "已选择剧本" : "",
@@ -582,8 +1115,27 @@ function activityEventLabel(event: ActivityRealtimeEvent) {
       return "视频片段提示词已审核";
     case "storyboard.audio.verification.completed":
       return "原生音轨审核已更新";
+    case "video.production.batch.started":
+      return "镜头视频批次开始执行";
+    case "video.production.batch.partial_succeeded":
+      return "镜头视频批次部分完成";
+    case "video.production.batch.failed":
+      return "镜头视频批次失败";
+    case "video.production.item.started":
+      return "镜头视频开始生成";
+    case "video.production.item.completed":
+      return "镜头视频已生成并入库";
+    case "video.production.item.failed":
+      return "镜头视频生成失败";
+    case "video.production.item.cancelled":
+      return "镜头视频生成已取消";
+    case "video.production.checkpoint.committed":
+      return "分集视频检查点已提交";
     default:
       return "任务更新";
+  }
+  if (nodeKey.startsWith("generate_derived_asset_")) {
+    return "生成镜头衍生资产";
   }
 }
 

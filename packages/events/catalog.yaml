@@ -10,6 +10,7 @@ events:
   - {name: agent.task.blocked, schemaVersion: 1, scopeType: project, aggregateType: agent_task, requiredPayloadFields: [], terminal: false}
   - {name: agent.task.child_workflow_failed, schemaVersion: 1, scopeType: project, aggregateType: agent_task, requiredPayloadFields: [], terminal: false}
   - {name: agent.task.continued, schemaVersion: 1, scopeType: project, aggregateType: agent_task, requiredPayloadFields: [], terminal: false}
+  - {name: agent.task.workflow_recovery_planned, schemaVersion: 1, scopeType: project, aggregateType: agent_task, requiredPayloadFields: [], terminal: false}
   - {name: agent.task.question_continued, schemaVersion: 1, scopeType: project, aggregateType: agent_task, requiredPayloadFields: [], terminal: false}
   - {name: agent.task.waiting_workflow, schemaVersion: 1, scopeType: project, aggregateType: agent_task, requiredPayloadFields: [], terminal: false}
   - {name: artifact.created, schemaVersion: 1, scopeType: project, aggregateType: artifact, requiredPayloadFields: [], terminal: true}
@@ -29,6 +30,15 @@ events:
   - {name: audio.tts.prepared, schemaVersion: 1, scopeType: project, aggregateType: script_episode, requiredPayloadFields: [], terminal: false}
   - {name: audio.tts.timing_revision.created, schemaVersion: 1, scopeType: project, aggregateType: script_timing_analysis, requiredPayloadFields: [], terminal: false}
   - {name: canonical_asset.archived, schemaVersion: 1, scopeType: project, aggregateType: canonical_asset, requiredPayloadFields: [], terminal: true}
+  - {name: derived_asset.batch.completed, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_batch, requiredPayloadFields: [batchId, workflowRunId], terminal: true}
+  - {name: derived_asset.batch.created, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_batch, requiredPayloadFields: [batchId, workflowRunId], terminal: false}
+  - {name: derived_asset.batch.reconciled, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_batch, requiredPayloadFields: [batchId, workflowRunId], terminal: false}
+  - {name: derived_asset.item.discarded, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_execution_item, requiredPayloadFields: [batchId, workflowRunId], terminal: true}
+  - {name: derived_asset.item.failed, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_execution_item, requiredPayloadFields: [batchId, workflowRunId], terminal: true}
+  - {name: derived_asset.item.media_ready, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_execution_item, requiredPayloadFields: [batchId, workflowRunId], terminal: false}
+  - {name: derived_asset.item.provider_succeeded, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_execution_item, requiredPayloadFields: [batchId, workflowRunId], terminal: false}
+  - {name: derived_asset.item.started, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_execution_item, requiredPayloadFields: [batchId, workflowRunId], terminal: false}
+  - {name: derived_asset.item.succeeded, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_execution_item, requiredPayloadFields: [batchId, workflowRunId], terminal: true}
   - {name: final_video.activated, schemaVersion: 1, scopeType: project, aggregateType: final_video_version, requiredPayloadFields: [], terminal: false}
   - {name: media.compose.completed, schemaVersion: 1, scopeType: project, aggregateType: workflow_node_run, requiredPayloadFields: [], terminal: true}
   - {name: media.compose.failed, schemaVersion: 1, scopeType: project, aggregateType: workflow_node_run, requiredPayloadFields: [], terminal: true}
@@ -38,6 +48,7 @@ events:
   - {name: project.export.completed, schemaVersion: 1, scopeType: project, aggregateType: project_export, requiredPayloadFields: [], terminal: true}
   - {name: project.export.failed, schemaVersion: 1, scopeType: project, aggregateType: project_export, requiredPayloadFields: [], terminal: true}
   - {name: project.frame_rate.changed, schemaVersion: 1, scopeType: project, aggregateType: project, requiredPayloadFields: [], terminal: false}
+  - {name: project.production_content.cleared, schemaVersion: 1, scopeType: project, aggregateType: project, requiredPayloadFields: [activeGenerationId, previousGenerationId], terminal: true}
   - {name: project.review.completed, schemaVersion: 1, scopeType: project, aggregateType: review_run, requiredPayloadFields: [], terminal: true}
   - {name: project.video_ratio.changed, schemaVersion: 1, scopeType: project, aggregateType: project, requiredPayloadFields: [], terminal: false}
   - {name: provider.video.task.cancel_failed, schemaVersion: 1, scopeType: project, aggregateType: provider_async_task, requiredPayloadFields: [], terminal: true}
@@ -45,6 +56,7 @@ events:
   - {name: provider.webhook.received, schemaVersion: 1, scopeType: project, aggregateType: provider_async_task, requiredPayloadFields: [], terminal: false}
   - {name: review.fix.applied, schemaVersion: 1, scopeType: project, aggregateType: review_fix, requiredPayloadFields: [], terminal: true}
   - {name: script.archived, schemaVersion: 1, scopeType: project, aggregateType: script, requiredPayloadFields: [], terminal: true}
+  - {name: script.episode.generation.staged, schemaVersion: 1, scopeType: project, aggregateType: script_episode_generation_result, requiredPayloadFields: [attemptGeneration, generationId, manifestOrdinal, scriptId, sourceId, workflowRunId], terminal: true}
   - {name: script.episode.generated, schemaVersion: 1, scopeType: project, aggregateType: script_episode, requiredPayloadFields: [], terminal: true}
   - {name: script.episode.updated, schemaVersion: 1, scopeType: project, aggregateType: script_episode, requiredPayloadFields: [], terminal: false}
   - {name: script.generated, schemaVersion: 1, scopeType: project, aggregateType: script, requiredPayloadFields: [], terminal: true}
@@ -88,7 +100,7 @@ events:
   - {name: storyboard.segment.running, schemaVersion: 1, scopeType: project, aggregateType: video_render_segment, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.segment.succeeded, schemaVersion: 1, scopeType: project, aggregateType: video_render_segment, requiredPayloadFields: [], terminal: true}
   - {name: storyboard.shot.cancelled, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}
-  - {name: storyboard.shot.continuity_frame.extracted, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}
+  - {name: storyboard.shot.segment_tail_anchor.extracted, schemaVersion: 1, scopeType: project, aggregateType: shot_visual_anchor, requiredPayloadFields: [anchorId, artifactId, mediaFileId, sourceRenderSegmentId, sourceVideoArtifactId, storyboardShotId, workflowRunId], terminal: true}
   - {name: storyboard.shot.created, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.shot.deleted, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}
   - {name: storyboard.shot.image.completed, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}
@@ -99,6 +111,7 @@ events:
   - {name: storyboard.shot.image_prompt.running, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.shot.media.unlinked, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.shot.render_plan.created, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: false}
+  - {name: storyboard.shot.render_plan.execution_cloned, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [executionPlanId, reason, shotId, sourceExecutionPlanId, workflowRunId], terminal: false}
   - {name: storyboard.shot.updated, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.shot.video.completed, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}
   - {name: storyboard.shot.video.composed, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}
@@ -120,6 +133,46 @@ events:
   - {name: storyboard.timing.reused, schemaVersion: 1, scopeType: project, aggregateType: script_timing_analysis, requiredPayloadFields: [], terminal: true}
   - {name: storyboard.timing.started, schemaVersion: 1, scopeType: project, aggregateType: script_episode, requiredPayloadFields: [], terminal: false}
   - {name: video.production.blueprint.created, schemaVersion: 1, scopeType: project, aggregateType: workflow_run, requiredPayloadFields: [], terminal: false}
+  - {name: video.production.binding.created, schemaVersion: 1, scopeType: project, aggregateType: video_production_binding, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId], terminal: false}
+  - {name: video.production.binding.superseded, schemaVersion: 1, scopeType: project, aggregateType: video_production_binding, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId], terminal: true}
+  - {name: video.production.generation.activated, schemaVersion: 1, scopeType: project, aggregateType: production_generation, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId], terminal: false}
+  - {name: video.production.generation.superseded, schemaVersion: 1, scopeType: project, aggregateType: production_generation, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId], terminal: true}
+  - {name: video.production.rebuild.requested, schemaVersion: 1, scopeType: project, aggregateType: video_production_rebuild, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, rebuildId, workflowRunId], terminal: false}
+  - {name: video.production.rebuild.started, schemaVersion: 1, scopeType: project, aggregateType: video_production_rebuild, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, rebuildId, workflowRunId], terminal: false}
+  - {name: video.production.rebuild.item.started, schemaVersion: 1, scopeType: project, aggregateType: video_production_rebuild_item, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, rebuildId, workflowRunId, rebuildItemId, episodeId], terminal: false}
+  - {name: video.production.rebuild.item.completed, schemaVersion: 1, scopeType: project, aggregateType: video_production_rebuild_item, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, rebuildId, workflowRunId, rebuildItemId, episodeId], terminal: true}
+  - {name: video.production.rebuild.item.failed, schemaVersion: 1, scopeType: project, aggregateType: video_production_rebuild_item, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, rebuildId, workflowRunId, rebuildItemId, episodeId], terminal: true}
+  - {name: video.production.rebuild.partial, schemaVersion: 1, scopeType: project, aggregateType: video_production_rebuild, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, rebuildId, workflowRunId], terminal: true}
+  - {name: video.production.rebuild.storyboard_required, schemaVersion: 1, scopeType: project, aggregateType: video_production_rebuild, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, rebuildId, workflowRunId], terminal: true}
+  - {name: video.production.rebuild.completed, schemaVersion: 1, scopeType: project, aggregateType: video_production_rebuild, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, rebuildId, workflowRunId], terminal: true}
+  - {name: video.production.rebuild.failed, schemaVersion: 1, scopeType: project, aggregateType: video_production_rebuild, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, rebuildId, workflowRunId], terminal: true}
+  - {name: storyboard.shot.state.planned, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot_state_version, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: storyboard.shot.transition.planned, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot_transition, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: storyboard.shot.transition.updated, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot_transition, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: storyboard.shot.reference_pack.compiled, schemaVersion: 1, scopeType: project, aggregateType: shot_reference_pack, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: storyboard.shot.anchor.started, schemaVersion: 1, scopeType: project, aggregateType: shot_visual_anchor, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: false}
+  - {name: storyboard.shot.anchor.completed, schemaVersion: 1, scopeType: project, aggregateType: shot_visual_anchor, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: storyboard.shot.anchor.failed, schemaVersion: 1, scopeType: project, aggregateType: shot_visual_anchor, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: storyboard.shot.anchor.reviewed, schemaVersion: 1, scopeType: project, aggregateType: shot_visual_anchor, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: storyboard.shot.panel_manifest.compiled, schemaVersion: 1, scopeType: project, aggregateType: storyboard_sheet_manifest, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId, panelManifestId, panelManifestHash, panelCount], terminal: true}
+  - {name: storyboard.shot.storyboard_sheet.cropped, schemaVersion: 1, scopeType: project, aggregateType: storyboard_sheet_manifest, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId, panelManifestId, panelManifestHash, panelCount], terminal: true}
+  - {name: storyboard.shot.storyboard_sheet.reviewed, schemaVersion: 1, scopeType: project, aggregateType: storyboard_sheet_manifest, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId, panelManifestId, panelManifestHash, approved], terminal: true}
+  - {name: storyboard.shot.observed_exit.reviewed, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot_state_version, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: storyboard.shot.continuity.rejected, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: video.render_plan.compiled, schemaVersion: 1, scopeType: project, aggregateType: video_render_plan, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: video.render_plan.stale, schemaVersion: 1, scopeType: project, aggregateType: video_render_plan, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId], terminal: true}
+  - {name: provider.model_capability.attested, schemaVersion: 1, scopeType: organization, aggregateType: provider_model, requiredPayloadFields: [providerModelId, variantKey, capabilitySnapshotHash, attestationId, verificationStatus, decision, status], terminal: true}
+  - {name: provider.model_capability.revoked, schemaVersion: 1, scopeType: organization, aggregateType: provider_model, requiredPayloadFields: [providerModelId, variantKey, capabilitySnapshotHash, attestationId, verificationStatus, decision, status], terminal: true}
+  - {name: video.production.batch.started, schemaVersion: 1, scopeType: project, aggregateType: episode_video_batch, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, workflowRunId, checkpointId, batchId, status], terminal: false}
+  - {name: video.production.item.started, schemaVersion: 1, scopeType: project, aggregateType: episode_video_item, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId, checkpointId, batchId, itemId, status], terminal: false}
+  - {name: video.production.item.completed, schemaVersion: 1, scopeType: project, aggregateType: episode_video_item, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId, checkpointId, batchId, itemId, status], terminal: true}
+  - {name: video.production.item.failed, schemaVersion: 1, scopeType: project, aggregateType: episode_video_item, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId, checkpointId, batchId, itemId, status], terminal: true}
+  - {name: video.production.item.cancelled, schemaVersion: 1, scopeType: project, aggregateType: episode_video_item, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, storyboardShotId, workflowRunId, checkpointId, batchId, itemId, status], terminal: true}
+  - {name: video.production.batch.partial_succeeded, schemaVersion: 1, scopeType: project, aggregateType: episode_video_batch, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, workflowRunId, checkpointId, batchId, status], terminal: true}
+  - {name: video.production.batch.failed, schemaVersion: 1, scopeType: project, aggregateType: episode_video_batch, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, workflowRunId, checkpointId, batchId, status], terminal: true}
+  - {name: video.production.checkpoint.committed, schemaVersion: 1, scopeType: project, aggregateType: episode_video_checkpoint, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, workflowRunId, checkpointId, status], terminal: false}
+  - {name: video.production.checkpoint.reconciled, schemaVersion: 1, scopeType: project, aggregateType: episode_video_checkpoint, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, workflowRunId, checkpointId, status], terminal: true}
+  - {name: video.production.checkpoint.failed, schemaVersion: 1, scopeType: project, aggregateType: episode_video_checkpoint, requiredPayloadFields: [bindingId, bindingRevision, productionGenerationId, episodeId, workflowRunId, checkpointId, status, failureCode, failureMessage], terminal: true}
   - {name: workflow.node.cancelled, schemaVersion: 1, scopeType: project, aggregateType: workflow_node_run, requiredPayloadFields: [workflowRunId], terminal: true}
   - {name: workflow.node.completed, schemaVersion: 1, scopeType: project, aggregateType: workflow_node_run, requiredPayloadFields: [workflowRunId], terminal: true}
   - {name: workflow.node.failed, schemaVersion: 1, scopeType: project, aggregateType: workflow_node_run, requiredPayloadFields: [workflowRunId], terminal: true}

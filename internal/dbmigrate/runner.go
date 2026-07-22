@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -25,12 +26,34 @@ import (
 )
 
 const (
-	gooseTable       = "cineweave_migrations.cineweave_schema_versions"
-	migrationDir     = "."
-	migrationLockKey = int64(0x43494e4557454156)
+	gooseTable                        = "cineweave_migrations.cineweave_schema_versions"
+	migrationDir                      = "."
+	migrationLockKey                  = int64(0x43494e4557454156)
+	providerProtectionBaselineVersion = int64(8)
+	providerModelHardDeleteVersion    = int64(36)
+	providerModelRollbackVersion      = int64(37)
 )
 
-var migrationNamePattern = regexp.MustCompile(`^(\d+)_[a-z0-9_]+\.sql$`)
+var ErrProviderModelRollbackUnsafe = errors.New("provider model deletion history makes this rollback unsafe")
+
+var (
+	migrationNamePattern                  = regexp.MustCompile(`^(\d+)_[a-z0-9_]+\.sql$`)
+	migrationExecutableDollarQuotePattern = regexp.MustCompile(
+		`(?s)(?:\bdo(?:\s+language\s+[a-z_][a-z0-9_$]*)?|\bas|\bexecute)\s*$`,
+	)
+)
+
+var protectedProviderConfigurationTables = []string{
+	"provider_accounts",
+	"provider_connectors",
+	"provider_credentials",
+	"provider_endpoints",
+	"provider_models",
+	"provider_model_capabilities",
+	"provider_limit_policies",
+	"model_profiles",
+	"model_profile_bindings",
+}
 
 type Config struct {
 	DatabaseURL string
@@ -49,6 +72,30 @@ type migrationFile struct {
 	Version int64
 	Name    string
 	Hash    string
+}
+
+type ProviderModelRollbackPreflightError struct {
+	CurrentVersion        int64
+	TargetVersion         int64
+	TombstoneCount        int64
+	ConflictingModelCount int64
+	NullRenderPlanCount   int64
+}
+
+func (e *ProviderModelRollbackPreflightError) Error() string {
+	return fmt.Sprintf(
+		"%v: migration range %d -> %d has tombstones=%d, conflictingModelKeys=%d, nullRenderPlans=%d; rebuild the development database or use a forward migration",
+		ErrProviderModelRollbackUnsafe,
+		e.CurrentVersion,
+		e.TargetVersion,
+		e.TombstoneCount,
+		e.ConflictingModelCount,
+		e.NullRenderPlanCount,
+	)
+}
+
+func (e *ProviderModelRollbackPreflightError) Unwrap() error {
+	return ErrProviderModelRollbackUnsafe
 }
 
 func ConfigFromEnv() (Config, error) {
@@ -118,8 +165,8 @@ func ValidateEmbedded() error {
 
 func (r *Runner) Run(ctx context.Context, command string, target int64) error {
 	command = strings.ToLower(strings.TrimSpace(command))
-	if isDestructive(command) && IsProduction(r.environment) {
-		return fmt.Errorf("migration command %q is disabled in production; use a forward repair migration", command)
+	if err := validateMigrationCommandPolicy(r.environment, command); err != nil {
+		return err
 	}
 	if err := r.acquireLock(ctx); err != nil {
 		return err
@@ -129,7 +176,8 @@ func (r *Runner) Run(ctx context.Context, command string, target int64) error {
 	if err := r.ensureControlSchema(ctx); err != nil {
 		return err
 	}
-	if _, err := goose.GetDBVersionContext(ctx, r.db); err != nil {
+	current, err := goose.GetDBVersionContext(ctx, r.db)
+	if err != nil {
 		return fmt.Errorf("initialize Goose ledger: %w", err)
 	}
 	if err := r.validateAppliedHashes(ctx); err != nil {
@@ -146,17 +194,103 @@ func (r *Runner) Run(ctx context.Context, command string, target int64) error {
 	case "version":
 		return goose.VersionContext(ctx, r.db, migrationDir)
 	case "down":
+		if err := r.preflightProviderModelRollback(ctx, current, max(current-1, 0)); err != nil {
+			return err
+		}
 		return r.downOne(ctx)
 	case "down-to":
 		if target < 0 {
 			return errors.New("down-to target must be zero or greater")
 		}
+		if err := r.preflightProviderModelRollback(ctx, current, target); err != nil {
+			return err
+		}
 		return r.downTo(ctx, target)
 	case "reset":
+		if err := r.preflightProviderModelRollback(ctx, current, 0); err != nil {
+			return err
+		}
 		return r.downTo(ctx, 0)
 	default:
 		return fmt.Errorf("unsupported migration command %q", command)
 	}
+}
+
+func validateMigrationCommandPolicy(environment, command string) error {
+	if isDestructive(command) && IsProduction(environment) {
+		return fmt.Errorf("migration command %q is disabled in production; use a forward repair migration", command)
+	}
+	return nil
+}
+
+func (r *Runner) preflightProviderModelRollback(ctx context.Context, current, target int64) error {
+	checkDeletionHistory, checkNullRenderPlans := providerModelRollbackPreflightScope(current, target)
+	if !checkDeletionHistory && !checkNullRenderPlans {
+		return nil
+	}
+
+	var tombstones int64
+	var conflicts int64
+	var nullRenderPlans int64
+	if checkDeletionHistory {
+		if err := r.db.QueryRowContext(ctx, `
+SELECT
+    (SELECT count(*) FROM provider_model_deletion_tombstones),
+    (
+        SELECT count(*)
+        FROM provider_model_deletion_tombstones tombstone
+        JOIN provider_models current_model
+          ON current_model.provider_account_id = tombstone.provider_account_id
+         AND current_model.model_key = tombstone.model_key
+         AND current_model.id <> tombstone.provider_model_id
+    ),
+    (SELECT count(*) FROM video_render_plans WHERE provider_model_id IS NULL)
+`).Scan(&tombstones, &conflicts, &nullRenderPlans); err != nil {
+			return fmt.Errorf("inspect provider model rollback safety for migration range %d -> %d: %w", current, target, err)
+		}
+	} else if err := r.db.QueryRowContext(ctx, `
+SELECT count(*) FROM video_render_plans WHERE provider_model_id IS NULL
+`).Scan(&nullRenderPlans); err != nil {
+		return fmt.Errorf("inspect nullable Render Plan provider models for migration range %d -> %d: %w", current, target, err)
+	}
+
+	if tombstones == 0 && conflicts == 0 && nullRenderPlans == 0 {
+		slog.InfoContext(ctx, "provider model rollback preflight passed",
+			"currentVersion", current,
+			"targetVersion", target,
+			"releaseId", r.releaseID,
+		)
+		return nil
+	}
+
+	preflightErr := &ProviderModelRollbackPreflightError{
+		CurrentVersion:        current,
+		TargetVersion:         target,
+		TombstoneCount:        tombstones,
+		ConflictingModelCount: conflicts,
+		NullRenderPlanCount:   nullRenderPlans,
+	}
+	slog.ErrorContext(ctx, "provider model rollback preflight rejected",
+		"currentVersion", current,
+		"targetVersion", target,
+		"tombstoneCount", tombstones,
+		"conflictingModelCount", conflicts,
+		"nullRenderPlanCount", nullRenderPlans,
+		"releaseId", r.releaseID,
+	)
+	return preflightErr
+}
+
+func providerModelRollbackPreflightScope(current, target int64) (checkDeletionHistory, checkNullRenderPlans bool) {
+	if current <= target {
+		return false, false
+	}
+	checkDeletionHistory = current >= providerModelRollbackVersion && target < providerModelRollbackVersion
+	checkNullRenderPlans = current >= providerModelHardDeleteVersion && target < providerModelHardDeleteVersion
+	if checkDeletionHistory {
+		checkNullRenderPlans = true
+	}
+	return checkDeletionHistory, checkNullRenderPlans
 }
 
 func (r *Runner) up(ctx context.Context) error {
@@ -424,6 +558,11 @@ func loadMigrationFiles() ([]migrationFile, error) {
 		if !strings.Contains(text, "-- +goose Up") || !strings.Contains(text, "-- +goose Down") {
 			return nil, fmt.Errorf("migration %q must contain Goose Up and Down sections", base)
 		}
+		if version > providerProtectionBaselineVersion {
+			if err := validateProtectedProviderMigration(base, text); err != nil {
+				return nil, err
+			}
+		}
 		result = append(result, migrationFile{
 			Version: version,
 			Name:    base,
@@ -432,6 +571,137 @@ func loadMigrationFiles() ([]migrationFile, error) {
 		previous = version
 	}
 	return result, nil
+}
+
+func validateProtectedProviderMigration(name, content string) error {
+	sql := migrationGuardSQL(content)
+	sql = removeAllowedProviderRestoreStatements(name, sql)
+	for _, table := range protectedProviderConfigurationTables {
+		tablePattern := `(?:public\.)?` + regexp.QuoteMeta(table) + `\b`
+		patterns := []string{
+			`\btruncate\b[^;]*` + tablePattern,
+			`\bdelete\s+from\s+(?:only\s+)?` + tablePattern,
+			`\binsert\s+into\s+` + tablePattern,
+			`\bupdate\s+(?:only\s+)?` + tablePattern,
+			`\bdrop\s+table\b[^;]*` + tablePattern,
+			`\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?` + tablePattern + `[^;]*\b(?:drop|rename)\b`,
+		}
+		for _, pattern := range patterns {
+			if regexp.MustCompile(pattern).FindStringIndex(sql) != nil {
+				return fmt.Errorf("migration %q contains a forbidden write to protected Provider configuration table %q", name, table)
+			}
+		}
+	}
+	return nil
+}
+
+func removeAllowedProviderRestoreStatements(name, sql string) string {
+	if name != "000037_provider_model_deletion_rollback.sql" {
+		return sql
+	}
+	statements := strings.Split(sql, ";")
+	for index, statement := range statements {
+		normalized := strings.ToLower(strings.TrimSpace(statement))
+		if strings.HasPrefix(normalized, "insert into provider_models") &&
+			strings.Contains(normalized, "from provider_model_deletion_tombstones") {
+			statements[index] = ""
+		}
+	}
+	return strings.Join(statements, ";")
+}
+
+// migrationGuardSQL removes comments and quoted data so prompt text cannot be
+// mistaken for an executable Provider configuration statement. Dollar-quoted
+// procedural bodies remain executable SQL and are recursively inspected.
+func migrationGuardSQL(content string) string {
+	var output strings.Builder
+	for index := 0; index < len(content); {
+		switch {
+		case strings.HasPrefix(content[index:], "--"):
+			if newline := strings.IndexByte(content[index:], '\n'); newline >= 0 {
+				index += newline
+				output.WriteByte('\n')
+				index++
+				continue
+			}
+			index = len(content)
+		case strings.HasPrefix(content[index:], "/*"):
+			if end := strings.Index(content[index+2:], "*/"); end >= 0 {
+				index += end + 4
+				output.WriteByte(' ')
+				continue
+			}
+			index = len(content)
+		case content[index] == '\'':
+			index++
+			for index < len(content) {
+				if content[index] != '\'' {
+					index++
+					continue
+				}
+				if index+1 < len(content) && content[index+1] == '\'' {
+					index += 2
+					continue
+				}
+				index++
+				break
+			}
+			output.WriteByte(' ')
+		case content[index] == '$':
+			tag, ok := migrationDollarQuoteTag(content[index:])
+			if !ok {
+				output.WriteByte(content[index])
+				index++
+				continue
+			}
+			bodyStart := index + len(tag)
+			bodyEnd := strings.Index(content[bodyStart:], tag)
+			executable := migrationDollarQuoteIsExecutable(output.String())
+			if bodyEnd >= 0 {
+				if executable {
+					output.WriteByte(' ')
+					output.WriteString(migrationGuardSQL(content[bodyStart : bodyStart+bodyEnd]))
+				}
+				index = bodyStart + bodyEnd + len(tag)
+			} else {
+				if executable {
+					output.WriteByte(' ')
+					output.WriteString(migrationGuardSQL(content[bodyStart:]))
+				}
+				index = len(content)
+			}
+			output.WriteByte(' ')
+		default:
+			character := content[index]
+			if character != '"' {
+				output.WriteByte(character)
+			}
+			index++
+		}
+	}
+	return strings.ToLower(output.String())
+}
+
+func migrationDollarQuoteIsExecutable(prefix string) bool {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	return migrationExecutableDollarQuotePattern.MatchString(prefix)
+}
+
+func migrationDollarQuoteTag(content string) (string, bool) {
+	if len(content) < 2 || content[0] != '$' {
+		return "", false
+	}
+	end := strings.IndexByte(content[1:], '$')
+	if end < 0 {
+		return "", false
+	}
+	end++
+	for _, character := range content[1:end] {
+		if character != '_' && !unicode.IsLetter(character) && !unicode.IsDigit(character) {
+			return "", false
+		}
+	}
+	return content[:end+1], true
 }
 
 func migrationContentHash(content []byte) string {

@@ -41,7 +41,7 @@ func TestSelectGatewayImageReferencesRejectsUnsupportedModel(t *testing.T) {
 	}
 }
 
-func TestResolveGatewayImageQualityMapsLegacyTiers(t *testing.T) {
+func TestResolveGatewayImageQualityMapsProjectQualityTiers(t *testing.T) {
 	capabilities := []Capability{{QualityTiers: json.RawMessage(`["low","medium","high"]`)}}
 	tests := []struct {
 		requested string

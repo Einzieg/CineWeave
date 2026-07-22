@@ -9,6 +9,7 @@ import { studioApi } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { useApiQuery } from "@/lib/query/use-api";
 import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
+import { useWorkflowTerminalRefresh } from "@/lib/realtime/use-workflow-terminal-refresh";
 import { useSessionDetails } from "@/lib/session-details";
 import { useUiStore } from "@/lib/stores/ui-store";
 import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
@@ -37,13 +38,14 @@ export function TopBar({
   const toggleAgent = useAgentDrawerStore((state) => state.toggle);
   const projectId = activeProjectId || session.currentProjectId;
   const pollingFallback = useProjectPollingFallback(projectId);
-  const { data: workflowRuns = [] } = useApiQuery({
+  const { data: workflowRuns = [], isFetched: workflowRunsReady } = useApiQuery({
     key: qk.workflowRuns(projectId || "none"),
     queryFn: (apiSession) => studioApi.listWorkflowRuns(apiSession, projectId).then((response) => response.items),
     enabled: !hideProjectActions && !!projectId,
     refetchInterval: (query) =>
       pollingFallback && query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
   });
+  useWorkflowTerminalRefresh(projectId || "", workflowRuns, workflowRunsReady);
   const activeWorkflowCount = workflowRuns.filter((run) => isActiveWorkflowStatus(run.status)).length;
   const activeActivityCount = activeWorkflowCount;
 

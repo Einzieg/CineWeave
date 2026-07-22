@@ -20,12 +20,12 @@ import {
 import { studioApi } from "@/lib/api-client";
 import { cssAspectRatio } from "@/lib/aspect-ratio";
 import { localizePlatformError } from "@/lib/error-localization";
-import { statusLabel } from "@/lib/labels";
+import { modalityLabel, shotReferenceRoleLabel, shotReferenceSemanticsLabel, statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import { retainUsableSignedMediaUrl } from "@/lib/signed-media-url";
-import type { NativeAudioReview, StoryboardShotDetail, StoryboardShotVideoReferenceOption, UpdateStoryboardShotRequest, VideoRenderPlan } from "@/lib/types";
+import type { NativeAudioReview, ShotReferencePackResponse, StoryboardShotDetail, StoryboardShotVideoReferenceOption, UpdateStoryboardShotRequest, VideoPromptPlan, VideoPromptPlanResponse, VideoRenderPlan } from "@/lib/types";
 
 type VideoDraft = {
   shotId: string;
@@ -90,6 +90,17 @@ export function ShotVideoDetailDialog({
     enabled: open && !!shotId && !!detail?.shot.activeVideoRenderPlanId,
     refetchInterval: (query) => pollingFallback && open && ["planned", "running"].includes(query.state.data?.status ?? "") ? 5000 : false,
   });
+  const { data: promptPlan, isLoading: promptPlanLoading } = useApiQuery({
+    key: qk.shotVideoPromptPlan(projectId, shotId || "none"),
+    queryFn: (session) => studioApi.getStoryboardShotVideoPromptPlan(session, projectId, shotId),
+    enabled: open && !!shotId,
+    refetchInterval: (query) => pollingFallback && open && query.state.data?.items.some((plan) => ["generating", "reviewing"].includes(plan.status)) ? 5000 : false,
+  });
+  const { data: referencePack, isLoading: referencePackLoading } = useApiQuery({
+    key: qk.shotReferencePack(projectId, shotId || "none", "video"),
+    queryFn: (session) => studioApi.getStoryboardShotReferencePack(session, projectId, shotId, "video"),
+    enabled: open && !!shotId,
+  });
   const { data: audioReviews = [], isLoading: audioReviewsLoading } = useApiQuery({
     key: qk.nativeAudioReviews(projectId, shotId || "none"),
     queryFn: (session) => studioApi.listNativeAudioReviews(session, projectId, shotId).then((response) => response.items),
@@ -97,12 +108,20 @@ export function ShotVideoDetailDialog({
     refetchInterval: (query) => pollingFallback && open && query.state.data?.some((review) => review.status === "queued" || review.status === "running") ? 5000 : false,
   });
 
-  const detailPromptRevision = detail ? promptRevision(detail) : "";
+  const detailPromptRevision = detail ? `${promptRevision(detail)}:${promptPlan?.active?.id ?? "none"}:${promptPlan?.active?.revision ?? 0}` : "";
   if (detail && (draft.shotId !== detail.shot.id || draft.promptRevision !== detailPromptRevision)) {
-    setDraft(draftFromDetail(detail));
+    setDraft(draftFromDetail(detail, promptPlan?.active, detailPromptRevision));
   }
 
   const referenceOptions = useMemo(() => detail?.videoReferenceOptions ?? [], [detail?.videoReferenceOptions]);
+  const spokenDialogue = useMemo(
+    () => detail?.shot.scriptDialogue.filter((line) => isSpokenDialogueKind(line.kind)) ?? [],
+    [detail?.shot.scriptDialogue],
+  );
+  const soundCues = useMemo(
+    () => detail?.shot.scriptDialogue.filter((line) => !isSpokenDialogueKind(line.kind)) ?? [],
+    [detail?.shot.scriptDialogue],
+  );
   const selectedReferenceKeys = useMemo(() => {
     if (draft.referenceMode === "custom") return new Set(draft.referenceKeys);
     if (draft.referenceMode === "auto") return new Set(referenceOptions.filter((option) => option.autoSelected).map((option) => option.key));
@@ -114,12 +133,15 @@ export function ShotVideoDetailDialog({
   const videoPreviewReady = !currentVideoKey || readyVideoKey === currentVideoKey;
   const autoHasReference = referenceOptions.some((option) => option.autoSelected);
   const referencesValid = draft.referenceMode === "none" || (draft.referenceMode === "auto" ? autoHasReference : draft.referenceKeys.length > 0);
-  const canSubmit = referencesValid && draft.videoPrompt.trim().length > 0;
+  const promptManuallyChanged = !!promptPlan?.active && draft.videoPrompt.trim() !== promptPlan.active.renderedPrompt.trim();
+  const canSubmit = referencesValid && draft.videoPrompt.trim().length > 0 && !!promptPlan?.active;
 
   const refresh = () => {
     invalidate([
       qk.shotDetail(projectId, shotId),
       qk.shotRenderPlan(projectId, shotId),
+      qk.shotVideoPromptPlan(projectId, shotId),
+      qk.shotReferencePack(projectId, shotId, "video"),
       qk.nativeAudioReviews(projectId, shotId),
       qk.shotProductionPrefix(projectId),
       qk.workflowRuns(projectId),
@@ -163,12 +185,20 @@ export function ShotVideoDetailDialog({
   });
 
   const saveMutation = useApiMutation({
-    mutationFn: (session) => studioApi.updateStoryboardShot(session, projectId, shotId, videoUpdateBody(draft)),
+    mutationFn: async (session) => {
+      const shot = await studioApi.updateStoryboardShot(session, projectId, shotId, videoReferenceUpdateBody(draft));
+      if (promptManuallyChanged && promptPlan?.active) {
+        await studioApi.createManualVideoPromptPlanRevision(session, projectId, shotId, {
+          expectedRevision: promptPlan.active.revision,
+          renderedPrompt: draft.videoPrompt,
+          reason: "用户在镜头视频设置中手工修改",
+        });
+      }
+      return shot;
+    },
     onSuccess: (shot) => {
       setDraft((current) => ({
         ...current,
-        promptRevision: shot.videoPromptUpdatedAt ?? shot.videoPrompt ?? "",
-        videoPrompt: shot.videoPrompt ?? "",
         referenceMode: normalizeReferenceMode(shot.videoReferenceMode),
         referenceKeys: shot.videoReferenceKeys ?? [],
       }));
@@ -179,10 +209,10 @@ export function ShotVideoDetailDialog({
   });
 
   const promptMutation = useApiMutation({
-    mutationFn: (session) => studioApi.runShotProductionAction(session, projectId, {
-      action: "generate_selected_video_prompts",
+    mutationFn: (session) => studioApi.generateVideoPromptsBatch(session, projectId, {
       shotIds: [shotId],
-      options: { force: true, maxConcurrency: 1 },
+      force: true,
+      maxConcurrency: 1,
     }),
     onSuccess: () => {
       toast.success(detail?.shot.videoPrompt ? "视频提示词重新生成中" : "视频提示词生成中");
@@ -193,11 +223,17 @@ export function ShotVideoDetailDialog({
 
   const generateMutation = useApiMutation({
     mutationFn: async (session) => {
-      await studioApi.updateStoryboardShot(session, projectId, shotId, videoUpdateBody(draft));
-      return studioApi.runShotProductionAction(session, projectId, {
-        action: "generate_selected_videos",
+      await studioApi.updateStoryboardShot(session, projectId, shotId, videoReferenceUpdateBody(draft));
+      if (promptManuallyChanged && promptPlan?.active) {
+        await studioApi.createManualVideoPromptPlanRevision(session, projectId, shotId, {
+          expectedRevision: promptPlan.active.revision,
+          renderedPrompt: draft.videoPrompt,
+          reason: "用户在生成视频前手工修改",
+        });
+      }
+      return studioApi.generateShotVideosBatch(session, projectId, {
         shotIds: [shotId],
-        options: { maxConcurrency: 1 },
+        maxConcurrency: 1,
       });
     },
     onSuccess: () => {
@@ -314,6 +350,10 @@ export function ShotVideoDetailDialog({
 
               <RenderPlanPanel
                 plan={renderPlan}
+                promptPlan={promptPlan}
+                promptPlanLoading={promptPlanLoading}
+                referencePack={referencePack}
+                referencePackLoading={referencePackLoading}
                 loading={renderPlanLoading}
                 creating={renderPlanMutation.isPending}
                 onCreate={() => renderPlanMutation.mutate()}
@@ -333,24 +373,41 @@ export function ShotVideoDetailDialog({
               <section className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <h3 className="text-sm font-semibold">剧本原始台词</h3>
-                    <p className="mt-1 text-xs text-muted-foreground">视频提示词必须逐字保留以下中文台词。</p>
+                    <h3 className="text-sm font-semibold">剧本口播台词</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">角色对白、旁白与解说会作为视频语音逐字执行。</p>
                   </div>
-                  <Badge variant="outline">{detail.shot.scriptDialogue.length} 条</Badge>
+                  <Badge variant="outline">{spokenDialogue.length} 条</Badge>
                 </div>
-                {detail.shot.scriptDialogue.length > 0 ? (
+                {spokenDialogue.length > 0 ? (
                   <div className="grid gap-2">
-                    {detail.shot.scriptDialogue.map((line, index) => (
+                    {spokenDialogue.map((line, index) => (
                       <div key={`${line.speaker}-${index}`} className="rounded-md border bg-background px-3 py-2 text-sm leading-6">
-                        <span className="font-medium">{line.speaker || "角色"}：</span>
+                        <span className="font-medium">{line.speaker || dialogueKindLabel(line.kind)}：</span>
                         <span>{line.text}</span>
                         {line.delivery ? <span className="ml-2 text-xs text-muted-foreground">（{line.delivery}）</span> : null}
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">该镜头尚未绑定剧本台词</div>
+                  <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">该镜头没有角色台词、旁白或解说</div>
                 )}
+                {soundCues.length > 0 ? (
+                  <div className="space-y-2 border-t pt-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-medium">非语言音效</h4>
+                      <Badge variant="outline">{soundCues.length} 条</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">仅用于环境声、拟音或音乐设计，不会作为角色语音朗读。</p>
+                    <div className="grid gap-2">
+                      {soundCues.map((line, index) => (
+                        <div key={`${line.kind}-${index}`} className="rounded-md border bg-background px-3 py-2 text-sm leading-6">
+                          <span className="font-medium">{dialogueKindLabel(line.kind)}：</span>
+                          <span>{stripSoundCueWrapper(line.text)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </section>
 
               <section className="space-y-2">
@@ -377,7 +434,7 @@ export function ShotVideoDetailDialog({
                   disabled={videoRunning || promptRunning}
                   onChange={(event) => setDraft((current) => ({ ...current, videoPrompt: event.target.value }))}
                 />
-                {!draft.videoPrompt.trim() ? <p className="text-xs text-destructive">请先生成或填写视频提示词，再生成视频。</p> : null}
+                {!promptPlan?.active ? <p className="text-xs text-destructive">请先生成并通过视频提示词审核，再生成视频。</p> : null}
               </section>
 
               <section className="mt-5 flex items-center justify-between gap-3 border-t pt-5">
@@ -549,6 +606,10 @@ function preserveVideoPreviewUrls(previous: StoryboardShotDetail | undefined, ne
 
 function RenderPlanPanel({
   plan,
+  promptPlan,
+  promptPlanLoading,
+  referencePack,
+  referencePackLoading,
   loading,
   creating,
   onCreate,
@@ -561,6 +622,10 @@ function RenderPlanPanel({
   onOpen,
 }: {
   plan?: VideoRenderPlan;
+  promptPlan?: VideoPromptPlanResponse;
+  promptPlanLoading: boolean;
+  referencePack?: ShotReferencePackResponse;
+  referencePackLoading: boolean;
   loading: boolean;
   creating: boolean;
   onCreate: () => void;
@@ -579,7 +644,7 @@ function RenderPlanPanel({
           <h3 className="text-sm font-semibold">视频执行计划</h3>
           {plan ? <p className="mt-1 text-xs text-muted-foreground">{plan.modelFamily} · {plan.variantKey} · {plan.resolution}</p> : null}
         </div>
-        <Button type="button" size="sm" variant="outline" onClick={onCreate} disabled={creating || plan?.status === "running"}>
+        <Button type="button" size="sm" variant="outline" onClick={onCreate} disabled={creating || plan?.status === "running" || !promptPlan?.active}>
           {creating ? <Loader2 className="animate-spin" /> : <RefreshCw />}
           {plan ? "重新规划" : "生成计划"}
         </Button>
@@ -590,6 +655,13 @@ function RenderPlanPanel({
           </Button>
         ) : null}
       </div>
+      <PromptPlanDiagnostics
+        promptPlan={promptPlan}
+        promptPlanLoading={promptPlanLoading}
+        referencePack={referencePack}
+        referencePackLoading={referencePackLoading}
+        renderPlan={plan}
+      />
       {loading ? <Skeleton className="h-28" /> : plan ? (
         <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
@@ -645,6 +717,101 @@ function RenderPlanPanel({
       )}
     </section>
   );
+}
+
+function PromptPlanDiagnostics({
+  promptPlan,
+  promptPlanLoading,
+  referencePack,
+  referencePackLoading,
+  renderPlan,
+}: {
+  promptPlan?: VideoPromptPlanResponse;
+  promptPlanLoading: boolean;
+  referencePack?: ShotReferencePackResponse;
+  referencePackLoading: boolean;
+  renderPlan?: VideoRenderPlan;
+}) {
+  if (promptPlanLoading || referencePackLoading) return <Skeleton className="mb-3 h-24" />;
+  const active = promptPlan?.active;
+  return (
+    <div className="mb-3 space-y-3 border-b pb-4">
+      {active ? (
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">视频提示词计划</span>
+            <Badge variant="default">{statusLabel(active.status)}</Badge>
+            <Badge variant="outline">版本 {active.revision}</Badge>
+            <Badge variant="outline">{active.nativeAudioRequired ? "需要原生音频" : "不要求原生音频"}</Badge>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>提示词 {shortDiagnosticHash(active.promptHash)}</span>
+            <span>上下文 {shortDiagnosticHash(active.promptContextPlanHash)}</span>
+            <span>引用 {shortDiagnosticHash(active.referencePackHash)}</span>
+            <span>能力 {shortDiagnosticHash(active.capabilitySnapshotHash)}</span>
+          </div>
+          <details className="mt-2 text-xs">
+            <summary className="cursor-pointer text-muted-foreground">提示词与上下文版本</summary>
+            <div className="mt-2 grid gap-2">
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-2 text-foreground">{active.renderedPrompt}</pre>
+              {promptPlan?.contextPlan ? (
+                <div className="grid gap-1 rounded border p-2 text-muted-foreground">
+                  <span>上下文版本：{promptPlan.contextPlan.revision} / {statusLabel(promptPlan.contextPlan.status)}</span>
+                  <span>上下文上限：{promptPlan.contextPlan.modelContextLimit} tokens</span>
+                  <span>提示词上限：{promptPlan.contextPlan.modelPromptLimit}</span>
+                  <span>本集连续性摘要：{promptPlan.contextPlan.episodeContinuityDigest}</span>
+                </div>
+              ) : null}
+              <div className="text-muted-foreground">历史版本：{promptPlan?.items.length ?? 0}</div>
+            </div>
+          </details>
+        </div>
+      ) : (
+        <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">尚无已审核的视频提示词计划</div>
+      )}
+
+      {referencePack?.pack ? (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground">引用包 · {referencePack.items.length} 项 · {statusLabel(referencePack.pack.status)}</summary>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {referencePack.items.map((reference) => (
+              <div key={reference.id} className="min-w-0 rounded border px-2 py-1.5">
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="truncate">{shotReferenceRoleLabel(reference.role)}</span>
+                  <span className="shrink-0 text-muted-foreground">{reference.required ? "必需" : "可选"} · {shortDiagnosticHash(reference.contentHash)}</span>
+                </div>
+                <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                  {modalityLabel(reference.mediaType)} · {shotReferenceSemanticsLabel(reference.semantics)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
+
+      {renderPlan ? (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground">执行计划技术溯源</summary>
+          <div className="mt-2 grid gap-1 break-all rounded border p-2 text-muted-foreground">
+            <span>生产代：{renderPlan.productionGenerationId}</span>
+            <span>绑定：{renderPlan.videoProductionBindingId} / r{renderPlan.videoProductionBindingRevision}</span>
+            <span>方案版本：{renderPlan.profileVersionId}</span>
+            <span>镜头状态：r{renderPlan.shotStateRevision ?? "-"} / {renderPlan.shotStateHash ? shortDiagnosticHash(renderPlan.shotStateHash) : "-"}</span>
+            <span>转场：{renderPlan.transitionHash ? shortDiagnosticHash(renderPlan.transitionHash) : "-"}</span>
+            <span>引用包：{renderPlan.referencePackHash ? shortDiagnosticHash(renderPlan.referencePackHash) : "-"}</span>
+            <span>首段输入：{renderPlan.initialInputContractHash ? shortDiagnosticHash(renderPlan.initialInputContractHash) : "-"}</span>
+            <span>续段输入：{renderPlan.continuationInputContractHash ? shortDiagnosticHash(renderPlan.continuationInputContractHash) : "无"}</span>
+            <span>提示词计划：{renderPlan.videoPromptPlanId ?? "-"}</span>
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function shortDiagnosticHash(value: string) {
+  const normalized = value.replace(/^sha256:/, "");
+  return normalized.length > 12 ? `${normalized.slice(0, 12)}…` : normalized;
 }
 
 function NativeAudioReviewList({ reviews }: { reviews: NativeAudioReview[] }) {
@@ -714,11 +881,11 @@ function VideoGenerationHistory({ detail, onOpen }: { detail: StoryboardShotDeta
   );
 }
 
-function draftFromDetail(detail: StoryboardShotDetail): VideoDraft {
+function draftFromDetail(detail: StoryboardShotDetail, promptPlan: VideoPromptPlan | undefined, promptRevisionValue: string): VideoDraft {
   return {
     shotId: detail.shot.id,
-    promptRevision: promptRevision(detail),
-    videoPrompt: detail.shot.videoPrompt ?? "",
+    promptRevision: promptRevisionValue,
+    videoPrompt: promptPlan?.renderedPrompt ?? detail.shot.videoPrompt ?? "",
     referenceMode: normalizeReferenceMode(detail.shot.videoReferenceMode),
     referenceKeys: detail.shot.videoReferenceKeys ?? [],
   };
@@ -728,9 +895,8 @@ function promptRevision(detail: StoryboardShotDetail) {
   return detail.shot.videoPromptUpdatedAt ?? detail.shot.videoPrompt ?? "";
 }
 
-function videoUpdateBody(draft: VideoDraft): UpdateStoryboardShotRequest {
+function videoReferenceUpdateBody(draft: VideoDraft): UpdateStoryboardShotRequest {
   return {
-    videoPrompt: draft.videoPrompt,
     videoReferenceMode: draft.referenceMode,
     videoReferenceKeys: draft.referenceMode === "custom" ? draft.referenceKeys : [],
   };
@@ -746,6 +912,26 @@ function videoReferenceSourceLabel(option: StoryboardShotVideoReferenceOption) {
   if (option.sourceType === "derived_asset") return "镜头衍生图";
   if (option.sourceType === "asset_primary") return "资产当前主图";
   return "资产参考图";
+}
+
+function isSpokenDialogueKind(kind?: string) {
+  return ["dialogue", "voiceover", "narration"].includes((kind || "dialogue").trim().toLowerCase());
+}
+
+function dialogueKindLabel(kind?: string) {
+  switch ((kind || "dialogue").trim().toLowerCase()) {
+    case "voiceover": return "旁白";
+    case "narration": return "解说";
+    case "system": return "音效";
+    default: return "角色";
+  }
+}
+
+function stripSoundCueWrapper(value: string) {
+  return value.trim()
+    .replace(/^[【[](?:音效|环境音|音乐)[:：]/, "")
+    .replace(/[】\]]$/, "")
+    .trim();
 }
 
 function DetailRow({ label, value }: { label: string; value?: string }) {

@@ -1,0 +1,80 @@
+{
+  "resourceKey": "rbac-member-permissions",
+  "resourceVersion": 1,
+  "tables": [
+    {
+      "name": "permissions",
+      "rows": [
+        {
+          "id": "aac9a9c7-f15b-48e1-a2dd-9760f90dc801",
+          "permission_key": "member.read",
+          "name": "Member Read",
+          "description": "Read organization members",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        },
+        {
+          "id": "96db5bf0-7e95-4c48-9a43-3ff248bc9ddd",
+          "permission_key": "member.manage",
+          "name": "Member Manage",
+          "description": "Invite, suspend, restore, and remove organization members",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        }
+      ]
+    },
+    {
+      "name": "role_permissions",
+      "rows": [
+        {
+          "role_id": "4bedbd3f-a8d2-4a2f-8630-f83a2a7eade9",
+          "permission_key": "member.read",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        },
+        {
+          "role_id": "4bedbd3f-a8d2-4a2f-8630-f83a2a7eade9",
+          "permission_key": "member.manage",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        },
+        {
+          "role_id": "6353102e-ec30-4df0-aa82-114dd77ed7e4",
+          "permission_key": "member.read",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        },
+        {
+          "role_id": "6353102e-ec30-4df0-aa82-114dd77ed7e4",
+          "permission_key": "member.manage",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        },
+        {
+          "role_id": "73fab93d-ca90-4a3f-83ee-5d0eb9fdcb99",
+          "permission_key": "member.read",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        },
+        {
+          "role_id": "73fab93d-ca90-4a3f-83ee-5d0eb9fdcb99",
+          "permission_key": "member.manage",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        },
+        {
+          "role_id": "7be21606-0813-4666-b4c3-c56e618141dd",
+          "permission_key": "member.read",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        },
+        {
+          "role_id": "7be21606-0813-4666-b4c3-c56e618141dd",
+          "permission_key": "member.manage",
+          "created_at": "2026-07-18T12:00:00Z",
+          "managed_by": "system"
+        }
+      ]
+    }
+  ]
+}

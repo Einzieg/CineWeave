@@ -26,7 +26,7 @@ func (c openAICompatibleClient) createVideoTask(ctx context.Context, account Acc
 	if err != nil {
 		return manifestRunResult{}, err
 	}
-	requestBody, err := buildOpenAICompatibleVideoRequest(model.ModelKey, input, references, cfg.VideoProtocol)
+	requestBody, err := buildOpenAICompatibleVideoRequest(model.ModelKey, input, references, cfg)
 	if err != nil {
 		return manifestRunResult{}, err
 	}
@@ -122,7 +122,7 @@ func (c openAICompatibleClient) callVideoEndpoint(ctx context.Context, account A
 	}, nil
 }
 
-func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, references []GatewayVideoReference, protocol string) (map[string]any, error) {
+func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, references []GatewayVideoReference, cfg openAICompatibleConfig) (map[string]any, error) {
 	var decoded map[string]any
 	if err := json.Unmarshal(input, &decoded); err != nil {
 		return nil, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
@@ -131,8 +131,30 @@ func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, r
 	if prompt == "" {
 		return nil, fmt.Errorf("%w: input.prompt is required", ErrValidation)
 	}
-	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	protocol := strings.ToLower(strings.TrimSpace(cfg.VideoProtocol))
 	body := map[string]any{"model": strings.TrimSpace(modelKey), "prompt": prompt}
+	ordinaryReferences := make([]GatewayVideoReference, 0, len(references))
+	for _, reference := range references {
+		if gatewayVideoReferenceRole(reference) != "video_extension_source" {
+			ordinaryReferences = append(ordinaryReferences, reference)
+			continue
+		}
+		field := strings.TrimSpace(cfg.VideoExtensionField)
+		if field == "" {
+			return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "OpenAI-compatible 视频 Adapter 未配置视频延长输入字段", Retryable: false}}
+		}
+		if _, exists := body[field]; exists {
+			return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "OpenAI-compatible 视频 Adapter 只接受一个视频延长输入", Retryable: false}}
+		}
+		body[field] = strings.TrimSpace(reference.URL)
+		if modeField := strings.TrimSpace(cfg.VideoExtensionModeField); modeField != "" {
+			modeValue := strings.TrimSpace(cfg.VideoExtensionModeValue)
+			if modeValue == "" {
+				return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "OpenAI-compatible 视频 Adapter 缺少视频延长模式值", Retryable: false}}
+			}
+			body[modeField] = modeValue
+		}
+	}
 	if protocol != "openrouter" {
 		body["n"] = 1
 	}
@@ -144,16 +166,52 @@ func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, r
 		}
 	}
 	if protocol == "openrouter" {
-		appendOpenRouterVideoReferences(body, references)
+		if err := appendOpenRouterVideoReferences(body, ordinaryReferences); err != nil {
+			return nil, err
+		}
 		copyVideoRequestOption(body, decoded, "aspectRatio", "aspect_ratio")
 		copyVideoRequestOption(body, decoded, "resolution", "resolution")
 		copyVideoRequestOption(body, decoded, "generateAudio", "generate_audio")
 	} else {
-		for _, reference := range references {
-			if strings.TrimSpace(reference.URL) != "" {
-				body["image"] = strings.TrimSpace(reference.URL)
-				break
+		inputReferences := make([]map[string]any, 0)
+		for index, reference := range ordinaryReferences {
+			url := strings.TrimSpace(reference.URL)
+			if url == "" {
+				continue
 			}
+			role := gatewayVideoReferenceRole(reference)
+			if role == "" && len(ordinaryReferences) == 1 && index == 0 {
+				role = "first_frame"
+			}
+			switch role {
+			case "first_frame":
+				if _, exists := body["image"]; exists {
+					return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "OpenAI-compatible 视频协议只接受一张首帧", Retryable: false}}
+				}
+				body["image"] = url
+			case "last_frame":
+				body["last_frame"] = url
+			case "video_reference":
+				if len(ordinaryReferences) == 1 {
+					body["video"] = url
+				} else {
+					inputReferences = append(inputReferences, map[string]any{"role": role, "type": "video_url", "url": url})
+				}
+			case "semantic_reference", "character_identity", "character_costume", "scene_identity", "scene_spatial", "prop_identity", "continuity_hint", "style_reference", "motion_reference", "audio_reference", "storyboard_sheet":
+				referenceType := "image_url"
+				switch gatewayVideoReferenceMediaType(reference) {
+				case "video":
+					referenceType = "video_url"
+				case "audio":
+					referenceType = "audio_url"
+				}
+				inputReferences = append(inputReferences, map[string]any{"role": role, "type": referenceType, "url": url})
+			default:
+				return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "OpenAI-compatible 视频 Adapter 无法映射引用角色：" + role, Retryable: false}}
+			}
+		}
+		if len(inputReferences) > 0 {
+			body["input_references"] = inputReferences
 		}
 	}
 
@@ -176,7 +234,7 @@ func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, r
 	return body, nil
 }
 
-func appendOpenRouterVideoReferences(body map[string]any, references []GatewayVideoReference) {
+func appendOpenRouterVideoReferences(body map[string]any, references []GatewayVideoReference) error {
 	frameImages := make([]map[string]any, 0, 2)
 	inputReferences := make([]map[string]any, 0, len(references))
 	for _, reference := range references {
@@ -184,21 +242,28 @@ func appendOpenRouterVideoReferences(body map[string]any, references []GatewayVi
 		if url == "" {
 			continue
 		}
-		switch strings.ToLower(strings.TrimSpace(reference.Type)) {
+		role := gatewayVideoReferenceRole(reference)
+		if role == "" && len(references) == 1 {
+			role = "first_frame"
+		}
+		switch role {
 		case "first_frame", "last_frame":
 			frameImages = append(frameImages, map[string]any{
-				"frame_type": strings.ToLower(strings.TrimSpace(reference.Type)),
+				"frame_type": role,
 				"image_url":  url,
 			})
-		default:
+		case "video_reference", "semantic_reference", "character_identity", "character_costume", "scene_identity", "scene_spatial", "prop_identity", "continuity_hint", "style_reference", "motion_reference", "audio_reference", "storyboard_sheet":
 			referenceType := "image_url"
-			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(reference.MimeType)), "video/") || strings.Contains(strings.ToLower(reference.Type), "video") {
+			if gatewayVideoReferenceMediaType(reference) == "video" || role == "video_reference" {
 				referenceType = "video_url"
+			} else if gatewayVideoReferenceMediaType(reference) == "audio" || role == "audio_reference" {
+				referenceType = "audio_url"
 			}
 			inputReferences = append(inputReferences, map[string]any{
-				"type": referenceType,
-				"url":  url,
+				"type": referenceType, "role": role, "url": url,
 			})
+		default:
+			return &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "OpenRouter 视频 Adapter 无法映射引用角色：" + role, Retryable: false}}
 		}
 	}
 	if len(frameImages) > 0 {
@@ -207,6 +272,7 @@ func appendOpenRouterVideoReferences(body map[string]any, references []GatewayVi
 	if len(inputReferences) > 0 {
 		body["input_references"] = inputReferences
 	}
+	return nil
 }
 
 func newAPIVideoDimensions(resolution, aspectRatio string) (int, int) {

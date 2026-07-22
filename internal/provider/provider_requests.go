@@ -42,15 +42,23 @@ type ProviderRequest struct {
 }
 
 type providerRequestStartInput struct {
-	OrganizationID    string
-	ProjectID         string
-	WorkflowRunID     string
-	NodeRunID         string
-	TaskType          string
-	IdempotencyKey    string
-	RequestHash       string
-	HashSchemaVersion int
-	Retry             bool
+	OrganizationID                 string
+	ProjectID                      string
+	ProductionGenerationID         string
+	VideoProductionBindingID       string
+	VideoProductionBindingRevision int64
+	WorkflowRunID                  string
+	NodeRunID                      string
+	OperationID                    string
+	OperationItemID                string
+	OperationItemAttempt           int
+	ExecutionPlanID                string
+	RenderSegmentID                string
+	TaskType                       string
+	IdempotencyKey                 string
+	RequestHash                    string
+	HashSchemaVersion              int
+	Retry                          bool
 }
 
 type providerRequestDisposition string
@@ -69,8 +77,14 @@ type providerRequestStart struct {
 func (s *Service) beginProviderRequest(ctx context.Context, input providerRequestStartInput) (providerRequestStart, error) {
 	input.OrganizationID = strings.TrimSpace(input.OrganizationID)
 	input.ProjectID = strings.TrimSpace(input.ProjectID)
+	input.ProductionGenerationID = strings.TrimSpace(input.ProductionGenerationID)
+	input.VideoProductionBindingID = strings.TrimSpace(input.VideoProductionBindingID)
 	input.WorkflowRunID = strings.TrimSpace(input.WorkflowRunID)
 	input.NodeRunID = strings.TrimSpace(input.NodeRunID)
+	input.OperationID = strings.TrimSpace(input.OperationID)
+	input.OperationItemID = strings.TrimSpace(input.OperationItemID)
+	input.ExecutionPlanID = strings.TrimSpace(input.ExecutionPlanID)
+	input.RenderSegmentID = strings.TrimSpace(input.RenderSegmentID)
 	input.TaskType = strings.TrimSpace(input.TaskType)
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
 	input.RequestHash = strings.TrimSpace(input.RequestHash)
@@ -79,6 +93,9 @@ func (s *Service) beginProviderRequest(ctx context.Context, input providerReques
 	}
 	if input.OrganizationID == "" || input.TaskType == "" || input.RequestHash == "" {
 		return providerRequestStart{}, fmt.Errorf("%w: organizationId, taskType, and requestHash are required", ErrValidation)
+	}
+	if (input.OperationItemID == "") != (input.OperationItemAttempt <= 0) {
+		return providerRequestStart{}, fmt.Errorf("%w: operationItemId and operationItemAttempt must be provided together", ErrValidation)
 	}
 
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
@@ -145,10 +162,16 @@ func insertProviderRequest(ctx context.Context, tx pgx.Tx, input providerRequest
 	row := tx.QueryRow(ctx, `
 		INSERT INTO provider_requests(
 			organization_id, project_id, workflow_run_id, node_run_id,
+			production_generation_id, video_production_binding_id, video_production_binding_revision,
+			operation_id, operation_item_id, operation_item_attempt,
+			video_render_plan_id, video_render_segment_id,
 			task_type, idempotency_key, request_hash, status,
 			attempt_generation, hash_schema_version, started_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'running', 1, $8, now(), now())
+		VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, NULLIF($7, 0),
+		        NULLIF($8, '')::uuid, NULLIF($9, '')::uuid, NULLIF($10, 0),
+		        NULLIF($11, '')::uuid, NULLIF($12, '')::uuid,
+		        $13, $14, $15, 'running', 1, $16, now(), now())
 		ON CONFLICT (organization_id, task_type, idempotency_key)
 			WHERE idempotency_key IS NOT NULL
 		DO NOTHING
@@ -158,6 +181,9 @@ func insertProviderRequest(ctx context.Context, tx pgx.Tx, input providerRequest
 			result_snapshot, artifact_ids, media_file_ids, error_code, error_message,
 			expires_at, created_at, started_at, completed_at, updated_at, hash_schema_version
 	`, input.OrganizationID, nullString(input.ProjectID), nullString(input.WorkflowRunID), nullString(input.NodeRunID),
+		input.ProductionGenerationID, input.VideoProductionBindingID, input.VideoProductionBindingRevision,
+		input.OperationID, input.OperationItemID, input.OperationItemAttempt,
+		input.ExecutionPlanID, input.RenderSegmentID,
 		input.TaskType, nullString(input.IdempotencyKey), input.RequestHash, input.HashSchemaVersion)
 	return scanProviderRequest(row)
 }

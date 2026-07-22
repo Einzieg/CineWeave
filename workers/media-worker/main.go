@@ -46,7 +46,8 @@ func main() {
 	temporalWorker.RegisterActivityWithOptions(activities.ComposeFinalVideo, activity.RegisterOptions{Name: "ComposeFinalVideo"})
 	temporalWorker.RegisterActivityWithOptions(activities.ProcessRenderSegmentMedia, activity.RegisterOptions{Name: "ProcessRenderSegmentMedia"})
 	temporalWorker.RegisterActivityWithOptions(activities.ComposeShotRenderPlanMedia, activity.RegisterOptions{Name: "ComposeShotRenderPlanMedia"})
-	temporalWorker.RegisterActivityWithOptions(activities.ExtractShotContinuityFrame, activity.RegisterOptions{Name: "ExtractShotContinuityFrame"})
+	temporalWorker.RegisterActivityWithOptions(activities.ExtractRenderSegmentTailAnchor, activity.RegisterOptions{Name: "ExtractRenderSegmentTailAnchor"})
+	temporalWorker.RegisterActivityWithOptions(activities.ProcessStoryboardSheetPanels, activity.RegisterOptions{Name: "ProcessStoryboardSheetPanels"})
 	temporalWorker.RegisterActivityWithOptions(activities.ExportProject, activity.RegisterOptions{Name: "ExportProject"})
 
 	if err := workerkit.RunTemporalWorker(temporalWorker, worker.InterruptCh()); err != nil {

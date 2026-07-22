@@ -3,7 +3,6 @@ package workflows
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 
 	"github.com/Einzieg/cineweave/internal/provider"
@@ -13,19 +12,17 @@ import (
 )
 
 type BatchShotProductionOptions struct {
-	ShotIDs             []string                  `json:"shotIds"`
-	Force               bool                      `json:"force"`
-	MaxConcurrency      int                       `json:"maxConcurrency"`
-	Duration            float64                   `json:"duration"`
-	AspectRatio         string                    `json:"aspectRatio"`
-	Resolution          string                    `json:"resolution"`
-	AudioStrategy       string                    `json:"audioStrategy"`
-	AudioRequirement    string                    `json:"audioRequirement"`
-	PollIntervalSeconds int                       `json:"pollIntervalSeconds"`
-	MaxPolls            int                       `json:"maxPolls"`
-	SkipCompletion      bool                      `json:"skipCompletion,omitempty"`
-	GroupsPerRun        int                       `json:"groupsPerRun,omitempty"`
-	Checkpoint          *BatchShotVideoCheckpoint `json:"checkpoint,omitempty"`
+	ShotIDs             []string `json:"shotIds"`
+	Force               bool     `json:"force"`
+	MaxConcurrency      int      `json:"maxConcurrency"`
+	Duration            float64  `json:"duration"`
+	AspectRatio         string   `json:"aspectRatio"`
+	Resolution          string   `json:"resolution"`
+	AudioStrategy       string   `json:"audioStrategy"`
+	AudioRequirement    string   `json:"audioRequirement"`
+	PollIntervalSeconds int      `json:"pollIntervalSeconds"`
+	MaxPolls            int      `json:"maxPolls"`
+	SkipCompletion      bool     `json:"skipCompletion,omitempty"`
 }
 
 type BatchShotProductionOutput struct {
@@ -38,6 +35,7 @@ type BatchShotProductionOutput struct {
 	CancelledShotIDs           []string                           `json:"cancelledShotIds,omitempty"`
 	ProviderAsyncTaskIDs       map[string]string                  `json:"providerAsyncTaskIds,omitempty"`
 	Errors                     map[string]string                  `json:"errors,omitempty"`
+	ErrorCodes                 map[string]string                  `json:"errorCodes,omitempty"`
 	ImageOutputs               []GenerateShotImageOutput          `json:"imageOutputs,omitempty"`
 	ImagePromptOutputs         []PrepareShotImagePromptOutput     `json:"imagePromptOutputs,omitempty"`
 	VideoOutputs               []PollShotVideoTaskOutput          `json:"videoOutputs,omitempty"`
@@ -48,45 +46,71 @@ type BatchShotProductionOutput struct {
 	CancelledProviderOutputs   []CancelShotVideoTaskOutput        `json:"cancelledProviderOutputs,omitempty"`
 }
 
-func BatchGenerateShotImagePromptsWorkflow(ctx workflow.Context, input TextToStoryboardInput) (BatchShotProductionOutput, error) {
+func BatchGenerateShotImagePromptsWorkflow(ctx workflow.Context, input TextToStoryboardInput) (output BatchShotProductionOutput, resultErr error) {
 	options := resolveBatchShotProductionOptions(input.Input, DefaultShotImagePromptConcurrency, MaxShotImagePromptConcurrency)
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
-	promptCtx := workflow.WithActivityOptions(ctx, providerTextActivityOptions())
-	output := BatchShotProductionOutput{
+	promptCtx := workflow.WithActivityOptions(ctx, shotImagePromptReviewActivityOptions())
+	output = BatchShotProductionOutput{
 		Action:        "batch_generate_shot_image_prompts",
 		WorkflowRunID: input.WorkflowRunID,
 		TargetShotIDs: options.ShotIDs,
 		Errors:        map[string]string{},
+		ErrorCodes:    map[string]string{},
 	}
-	results, err := generateShotImagePromptsConcurrently(ctx, promptCtx, input, options)
+	completionStarted := false
+	defer finalizeFailedBatchShotProduction(ctx, input, &output, &resultErr, &completionStarted)
+	workItems, err := resolveShotAnchorWorkItemsForWorkflow(ctx, input, options.ShotIDs)
 	if err != nil {
-		return BatchShotProductionOutput{}, err
+		return output, err
 	}
+	results, err := generateShotImagePromptsConcurrently(
+		ctx, promptCtx, input, workItems, options.MaxConcurrency, options.AspectRatio, options.Resolution, options.Force,
+	)
+	if err != nil {
+		return output, err
+	}
+	outcomes := make([]shotAnchorWorkItemOutcome, 0, len(results))
 	for index, result := range results {
-		shotID := options.ShotIDs[index]
+		item := workItems[index]
+		outcomes = append(outcomes, shotAnchorWorkItemOutcome{Item: item, Err: result.Err})
 		if result.Err != nil {
-			output.FailedShotIDs = append(output.FailedShotIDs, shotID)
-			output.Errors[shotID] = result.Err.Error()
 			continue
 		}
-		output.SucceededShotIDs = append(output.SucceededShotIDs, shotID)
 		output.ImagePromptOutputs = append(output.ImagePromptOutputs, result.Output)
 	}
+	output.SucceededShotIDs, output.FailedShotIDs, output.Errors, output.ErrorCodes = summarizeShotAnchorWorkItemOutcomes(options.ShotIDs, outcomes)
+	completionStarted = true
 	if err := workflow.ExecuteActivity(ctx, "CompleteBatchShotProductionWorkflow", input, output).Get(ctx, nil); err != nil {
-		return BatchShotProductionOutput{}, err
+		return output, err
 	}
 	return output, nil
 }
 
-func BatchGenerateShotVideoPromptsWorkflow(ctx workflow.Context, input TextToStoryboardInput) (BatchShotProductionOutput, error) {
+func BatchGenerateShotVideoPromptsWorkflow(ctx workflow.Context, input TextToStoryboardInput) (output BatchShotProductionOutput, resultErr error) {
 	options := resolveBatchShotProductionOptions(input.Input, DefaultShotVideoPromptConcurrency, MaxShotVideoPromptConcurrency)
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
 	promptCtx := workflow.WithActivityOptions(ctx, providerTextActivityOptions())
-	output := BatchShotProductionOutput{
+	output = BatchShotProductionOutput{
 		Action:        "batch_generate_shot_video_prompts",
 		WorkflowRunID: input.WorkflowRunID,
 		TargetShotIDs: options.ShotIDs,
 		Errors:        map[string]string{},
+		ErrorCodes:    map[string]string{},
+	}
+	completionStarted := false
+	defer finalizeFailedBatchShotProduction(ctx, input, &output, &resultErr, &completionStarted)
+	if workflow.GetVersion(ctx, "batch-video-prompt-dialogue-reconciliation-v3", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+		var reconciled ReconcileStoryboardDialogueAssignmentsOutput
+		if err := workflow.ExecuteActivity(ctx, "ReconcileStoryboardDialogueAssignments", ReconcileStoryboardDialogueAssignmentsInput{
+			OrganizationID: input.OrganizationID,
+			ProjectID:      input.ProjectID,
+			WorkflowRunID:  input.WorkflowRunID,
+			ShotIDs:        options.ShotIDs,
+		}).Get(ctx, &reconciled); err != nil {
+			return output, err
+		}
+		options.ShotIDs = reconciledStoryboardDialogueTargetIDs(options.ShotIDs, reconciled.ChangedShotIDs)
+		output.TargetShotIDs = append([]string(nil), options.ShotIDs...)
 	}
 	var results []shotVideoPromptResult
 	var err error
@@ -97,20 +121,23 @@ func BatchGenerateShotVideoPromptsWorkflow(ctx workflow.Context, input TextToSto
 		results, err = generateShotVideoPromptPlansConcurrently(ctx, promptCtx, input, options)
 	}
 	if err != nil {
-		return BatchShotProductionOutput{}, err
+		return output, err
 	}
 	for index, result := range results {
 		shotID := options.ShotIDs[index]
 		if result.Err != nil {
+			code, message := workflowExecutionError(result.Err)
 			output.FailedShotIDs = append(output.FailedShotIDs, shotID)
-			output.Errors[shotID] = result.Err.Error()
+			output.ErrorCodes[shotID] = code
+			output.Errors[shotID] = message
 			continue
 		}
 		output.SucceededShotIDs = append(output.SucceededShotIDs, shotID)
 		output.VideoPromptOutputs = append(output.VideoPromptOutputs, result.Outputs...)
 	}
+	completionStarted = true
 	if err := workflow.ExecuteActivity(ctx, "CompleteBatchShotProductionWorkflow", input, output).Get(ctx, nil); err != nil {
-		return BatchShotProductionOutput{}, err
+		return output, err
 	}
 	return output, nil
 }
@@ -132,27 +159,38 @@ type ListRunningShotVideoTasksInput struct {
 	ShotIDs   []string `json:"shotIds"`
 }
 
-func BatchGenerateShotImagesWorkflow(ctx workflow.Context, input TextToStoryboardInput) (BatchShotProductionOutput, error) {
+func BatchGenerateShotImagesWorkflow(ctx workflow.Context, input TextToStoryboardInput) (output BatchShotProductionOutput, resultErr error) {
 	options := resolveBatchShotProductionOptions(input.Input, DefaultShotImageConcurrency, MaxShotImageConcurrency)
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
 	imageCtx := workflow.WithActivityOptions(ctx, providerImageActivityOptions())
-	output := BatchShotProductionOutput{
+	output = BatchShotProductionOutput{
 		Action:        "batch_generate_shot_images",
 		WorkflowRunID: input.WorkflowRunID,
 		TargetShotIDs: options.ShotIDs,
 		Errors:        map[string]string{},
+		ErrorCodes:    map[string]string{},
 	}
-	results := make([]shotImageGenerationResult, len(options.ShotIDs))
+	completionStarted := false
+	defer finalizeFailedBatchShotProduction(ctx, input, &output, &resultErr, &completionStarted)
+	workItems, err := resolveShotAnchorWorkItemsForWorkflow(ctx, input, options.ShotIDs)
+	if err != nil {
+		return output, err
+	}
+	results := make([]shotImageGenerationResult, len(workItems))
 	version := workflow.GetVersion(ctx, "batch-shot-image-concurrency-v1", workflow.DefaultVersion, 1)
 	if version == workflow.DefaultVersion {
-		for index, shotID := range options.ShotIDs {
+		for index, item := range workItems {
 			var image GenerateShotImageOutput
 			err := workflow.ExecuteActivity(imageCtx, "GenerateShotImage", GenerateShotImageInput{
 				OrganizationID: input.OrganizationID,
 				ProjectID:      input.ProjectID,
 				WorkflowRunID:  input.WorkflowRunID,
 				CreatedBy:      input.CreatedBy,
-				ShotID:         shotID,
+				FailureScope:   workflowFailureScopeBatchItem,
+				ShotID:         item.ShotID,
+				ShotIndex:      item.ShotIndex,
+				ShotNo:         item.ShotNo,
+				AnchorRole:     item.AnchorRole,
 				WorkflowPrompt: "batch_generate_shot_images",
 				AspectRatio:    options.AspectRatio,
 				Force:          options.Force,
@@ -160,115 +198,110 @@ func BatchGenerateShotImagesWorkflow(ctx workflow.Context, input TextToStoryboar
 			results[index] = shotImageGenerationResult{Output: image, Err: err}
 		}
 	} else {
-		requests := make([]shotImageGenerationRequest, 0, len(options.ShotIDs))
-		for _, shotID := range options.ShotIDs {
+		requests := make([]shotImageGenerationRequest, 0, len(workItems))
+		for _, item := range workItems {
 			requests = append(requests, shotImageGenerationRequest{
-				ShotID:         shotID,
+				ShotID:         item.ShotID,
+				ShotIndex:      item.ShotIndex,
+				ShotNo:         item.ShotNo,
+				AnchorRole:     item.AnchorRole,
 				WorkflowPrompt: "batch_generate_shot_images",
 				AspectRatio:    options.AspectRatio,
 				Force:          options.Force,
+				FailureScope:   workflowFailureScopeBatchItem,
 			})
 		}
 		var err error
 		results, err = generateShotImagesConcurrently(ctx, imageCtx, input, requests, options.MaxConcurrency)
 		if err != nil {
-			return BatchShotProductionOutput{}, err
+			return output, err
 		}
 	}
-	for index, result := range results {
-		shotID := options.ShotIDs[index]
-		if result.Err != nil {
-			output.FailedShotIDs = append(output.FailedShotIDs, shotID)
-			output.Errors[shotID] = result.Err.Error()
+	for index := range results {
+		if results[index].Err != nil {
 			continue
 		}
-		output.SucceededShotIDs = append(output.SucceededShotIDs, shotID)
+		if err := finalizeStoryboardSheetImage(ctx, input, results[index].Output); err != nil {
+			results[index].Err = err
+		}
+	}
+	outcomes := make([]shotAnchorWorkItemOutcome, 0, len(results))
+	for index, result := range results {
+		item := workItems[index]
+		outcomes = append(outcomes, shotAnchorWorkItemOutcome{Item: item, Err: result.Err})
+		if result.Err != nil {
+			continue
+		}
 		output.ImageOutputs = append(output.ImageOutputs, result.Output)
 	}
+	output.SucceededShotIDs, output.FailedShotIDs, output.Errors, output.ErrorCodes = summarizeShotAnchorWorkItemOutcomes(options.ShotIDs, outcomes)
+	completionStarted = true
 	if err := workflow.ExecuteActivity(ctx, "CompleteBatchShotProductionWorkflow", input, output).Get(ctx, nil); err != nil {
-		return BatchShotProductionOutput{}, err
+		return output, err
 	}
 	return output, nil
 }
 
+func finalizeFailedBatchShotProduction(
+	ctx workflow.Context,
+	input TextToStoryboardInput,
+	output *BatchShotProductionOutput,
+	resultErr *error,
+	completionStarted *bool,
+) {
+	if output == nil || resultErr == nil || *resultErr == nil || (completionStarted != nil && *completionStarted) {
+		return
+	}
+	if temporal.IsCanceledError(*resultErr) {
+		if workflow.GetVersion(ctx, "batch-shot-cancellation-finalizer-v1", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+			return
+		}
+		output.Status = "cancelled"
+		output.CancelledShotIDs = append([]string(nil), output.TargetShotIDs...)
+		cancellationCtx, _ := workflow.NewDisconnectedContext(ctx)
+		cancellationCtx = workflow.WithActivityOptions(cancellationCtx, defaultActivityOptions())
+		if err := workflow.ExecuteActivity(cancellationCtx, "FinalizeBatchShotProductionCancellation", input, *output).Get(cancellationCtx, nil); err != nil {
+			workflow.GetLogger(ctx).Error("failed to persist batch shot workflow cancellation", "error", err)
+		}
+		return
+	}
+	if workflow.GetVersion(ctx, "batch-shot-terminal-reconciliation-v1", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		return
+	}
+	code, message := workflowExecutionError(*resultErr)
+	if strings.Contains(message, "ActivityNotRegisteredError") || strings.Contains(message, "unable to find activityType") {
+		message = "Worker 缺少批量镜头任务所需组件，请更新 Worker 后重试"
+	}
+	output.Status = "failed"
+	output.SucceededShotIDs = nil
+	output.FailedShotIDs = append([]string(nil), output.TargetShotIDs...)
+	if output.Errors == nil {
+		output.Errors = make(map[string]string, len(output.TargetShotIDs))
+	}
+	if output.ErrorCodes == nil {
+		output.ErrorCodes = make(map[string]string, len(output.TargetShotIDs))
+	}
+	for _, shotID := range output.TargetShotIDs {
+		output.Errors[shotID] = message
+		output.ErrorCodes[shotID] = code
+	}
+	failureCtx, _ := workflow.NewDisconnectedContext(ctx)
+	failureCtx = workflow.WithActivityOptions(failureCtx, defaultActivityOptions())
+	if err := workflow.ExecuteActivity(failureCtx, "CompleteBatchShotProductionWorkflow", input, *output).Get(failureCtx, nil); err != nil {
+		workflow.GetLogger(ctx).Error("failed to persist batch shot workflow terminal state", "error", err)
+	}
+}
+
+func (a Activities) FinalizeBatchShotProductionCancellation(ctx context.Context, input TextToStoryboardInput, output BatchShotProductionOutput) error {
+	output.Status = "cancelled"
+	if len(output.CancelledShotIDs) == 0 {
+		output.CancelledShotIDs = append([]string(nil), output.TargetShotIDs...)
+	}
+	return CancelWorkflowRun(ctx, a.db, input.WorkflowRunID, mustJSON(output), "用户已取消批量镜头任务")
+}
+
 func BatchGenerateShotVideosWorkflow(ctx workflow.Context, input TextToStoryboardInput) (result BatchShotProductionOutput, err error) {
-	options := resolveBatchShotProductionOptions(input.Input, DefaultShotVideoConcurrency, MaxShotVideoConcurrency)
-	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
-	var groups []ShotVideoExecutionGroup
-	nextGroupIndex := 0
-	if options.Checkpoint != nil {
-		groups = options.Checkpoint.Groups
-		nextGroupIndex = options.Checkpoint.NextGroupIndex
-		result = options.Checkpoint.Output
-	} else {
-		if err := workflow.ExecuteActivity(ctx, "PrepareShotVideoExecutionGroups", PrepareShotVideoExecutionGroupsInput{
-			OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID, ShotIDs: options.ShotIDs,
-		}).Get(ctx, &groups); err != nil {
-			if isWorkflowCancellationError(err) {
-				return BatchShotProductionOutput{}, err
-			}
-			result = failedBatchShotVideoOutput(input, options.ShotIDs, err)
-			if !options.SkipCompletion {
-				if completeErr := workflow.ExecuteActivity(ctx, "CompleteBatchShotProductionWorkflow", input, result).Get(ctx, nil); completeErr != nil {
-					return result, completeErr
-				}
-			}
-			return result, nil
-		}
-		result = newBatchShotVideoOutput(input, options.ShotIDs)
-	}
-	if result.ProviderAsyncTaskIDs == nil {
-		result.ProviderAsyncTaskIDs = map[string]string{}
-	}
-	if result.Errors == nil {
-		result.Errors = map[string]string{}
-	}
-	groupsPerRun := options.GroupsPerRun
-	if groupsPerRun <= 0 {
-		groupsPerRun = defaultVideoGroupsPerRun
-	}
-	runEnd := nextGroupIndex + groupsPerRun
-	if runEnd > len(groups) {
-		runEnd = len(groups)
-	}
-	for nextGroupIndex < runEnd {
-		batchEnd := nextGroupIndex + options.MaxConcurrency
-		if batchEnd > runEnd {
-			batchEnd = runEnd
-		}
-		batchGroups := groups[nextGroupIndex:batchEnd]
-		futures := make([]workflow.ChildWorkflowFuture, 0, len(batchGroups))
-		for index := nextGroupIndex; index < batchEnd; index++ {
-			group := groups[index]
-			childCtx := workflow.WithChildOptions(ctx, shotVideoGroupChildOptions(ctx, group))
-			futures = append(futures, workflow.ExecuteChildWorkflow(childCtx, ShotVideoContinuityGroupWorkflow, ShotVideoContinuityGroupInput{TextInput: input, Options: options, Group: group}))
-		}
-		for index, future := range futures {
-			var childOutput BatchShotProductionOutput
-			if err := future.Get(ctx, &childOutput); err != nil {
-				if isWorkflowCancellationError(err) {
-					return BatchShotProductionOutput{}, err
-				}
-				appendFailedShotVideoGroup(&result, batchGroups[index], err)
-				continue
-			}
-			mergeBatchShotVideoOutput(&result, childOutput)
-		}
-		nextGroupIndex = batchEnd
-	}
-	if nextGroupIndex < len(groups) {
-		nextInput := input
-		options.Checkpoint = &BatchShotVideoCheckpoint{Groups: groups, NextGroupIndex: nextGroupIndex, Output: result}
-		nextInput.Input = mustJSON(options)
-		return BatchShotProductionOutput{}, workflow.NewContinueAsNewError(ctx, BatchGenerateShotVideosWorkflow, nextInput)
-	}
-	result.Status = batchShotOutputStatus(result)
-	if !options.SkipCompletion {
-		if err := workflow.ExecuteActivity(ctx, "CompleteBatchShotProductionWorkflow", input, result).Get(ctx, nil); err != nil {
-			return BatchShotProductionOutput{}, err
-		}
-	}
-	return result, nil
+	return EpisodeBatchGenerateShotVideosWorkflow(ctx, input)
 }
 
 func BatchCancelShotVideosWorkflow(ctx workflow.Context, input TextToStoryboardInput) (BatchShotProductionOutput, error) {
@@ -279,6 +312,7 @@ func BatchCancelShotVideosWorkflow(ctx workflow.Context, input TextToStoryboardI
 		WorkflowRunID: input.WorkflowRunID,
 		TargetShotIDs: options.ShotIDs,
 		Errors:        map[string]string{},
+		ErrorCodes:    map[string]string{},
 	}
 	var tasks []BatchShotVideoCancelTask
 	if err := workflow.ExecuteActivity(ctx, "ListRunningShotVideoTasks", ListRunningShotVideoTasksInput{
@@ -306,7 +340,9 @@ func BatchCancelShotVideosWorkflow(ctx workflow.Context, input TextToStoryboardI
 		}).Get(ctx, &cancelled)
 		if err != nil {
 			output.FailedShotIDs = append(output.FailedShotIDs, task.ShotID)
-			output.Errors[task.ShotID] = err.Error()
+			code, message := workflowExecutionError(err)
+			output.ErrorCodes[task.ShotID] = code
+			output.Errors[task.ShotID] = message
 			continue
 		}
 		output.CancelledShotIDs = append(output.CancelledShotIDs, task.ShotID)
@@ -366,10 +402,50 @@ func (a Activities) CompleteBatchShotProductionWorkflow(ctx context.Context, inp
 		return err
 	}
 	failureCode, failureMessage := batchShotWorkflowFailure(output)
-	if _, _, err := transitionWorkflowRunTx(ctx, tx, input.WorkflowRunID, output.Status, failureCode, failureMessage, outputJSON); err != nil {
+	if _, applied, err := transitionWorkflowRunTx(ctx, tx, input.WorkflowRunID, output.Status, failureCode, failureMessage, outputJSON); err != nil {
 		return err
+	} else if applied {
+		totalItems, completedItems, failedItems := batchShotProgressCounts(output)
+		if _, err := tx.Exec(ctx, `
+			UPDATE workflow_runs
+			SET total_items = $2,
+			    completed_items = $3,
+			    failed_items = $4,
+			    updated_at = now()
+			WHERE id = $1
+		`, input.WorkflowRunID, totalItems, completedItems, failedItems); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
+}
+
+func batchShotProgressCounts(output BatchShotProductionOutput) (totalItems, completedItems, failedItems int) {
+	targets := make(map[string]struct{}, len(output.TargetShotIDs))
+	for _, shotID := range output.TargetShotIDs {
+		if shotID = strings.TrimSpace(shotID); shotID != "" {
+			targets[shotID] = struct{}{}
+		}
+	}
+	succeeded := make(map[string]struct{}, len(output.SucceededShotIDs))
+	for _, shotID := range output.SucceededShotIDs {
+		succeeded[strings.TrimSpace(shotID)] = struct{}{}
+	}
+	failed := make(map[string]struct{}, len(output.FailedShotIDs))
+	for _, shotID := range output.FailedShotIDs {
+		failed[strings.TrimSpace(shotID)] = struct{}{}
+	}
+	for shotID := range targets {
+		totalItems++
+		if _, ok := failed[shotID]; ok {
+			failedItems++
+			continue
+		}
+		if _, ok := succeeded[shotID]; ok {
+			completedItems++
+		}
+	}
+	return totalItems, completedItems, failedItems
 }
 
 func batchShotWorkflowFailure(output BatchShotProductionOutput) (string, string) {
@@ -386,7 +462,21 @@ func batchShotWorkflowFailure(output BatchShotProductionOutput) (string, string)
 	if message == "" {
 		message = "所有目标均生成失败"
 	}
+	failedCodes := make([]string, 0, len(output.FailedShotIDs))
+	for _, shotID := range output.FailedShotIDs {
+		if code := strings.TrimSpace(output.ErrorCodes[shotID]); code != "" {
+			failedCodes = append(failedCodes, code)
+		}
+	}
+	if len(failedCodes) == len(output.FailedShotIDs) && len(failedCodes) > 0 {
+		if code := commonWorkflowErrorCode(failedCodes); code != codeActivityFailed {
+			return code, message
+		}
+	}
 	if len(output.FailedShotIDs) == 1 {
+		if code := strings.TrimSpace(output.ErrorCodes[output.FailedShotIDs[0]]); code != "" {
+			return code, message
+		}
 		switch output.Action {
 		case "batch_generate_shot_images":
 			return batchShotImageErrorCode(message), message
@@ -406,7 +496,11 @@ func (a Activities) reconcileFailedBatchShotImagePromptsTx(ctx context.Context, 
 		if message == "" {
 			message = "image prompt generation failed"
 		}
-		code, normalizedMessage := workflowErrorFields(workflowError{Code: codeActivityFailed, Message: message}, codeActivityFailed)
+		code := strings.TrimSpace(output.ErrorCodes[shotID])
+		if code == "" {
+			code = codeActivityFailed
+		}
+		normalizedMessage := message
 		if _, err := tx.Exec(ctx, `
 			UPDATE storyboard_shots
 			SET image_prompt_status = 'failed',
@@ -434,7 +528,11 @@ func (a Activities) reconcileFailedBatchShotVideoPromptsTx(ctx context.Context, 
 		if message == "" {
 			message = "video prompt generation failed"
 		}
-		code, normalizedMessage := workflowErrorFields(workflowError{Code: codeActivityFailed, Message: message}, codeActivityFailed)
+		code := strings.TrimSpace(output.ErrorCodes[shotID])
+		if code == "" {
+			code = codeActivityFailed
+		}
+		normalizedMessage := message
 		if _, err := tx.Exec(ctx, `
 			UPDATE storyboard_shots
 			SET video_prompt_status = 'failed',
@@ -447,6 +545,9 @@ func (a Activities) reconcileFailedBatchShotVideoPromptsTx(ctx context.Context, 
 			  AND video_prompt_workflow_run_id = $3
 			  AND video_prompt_status IN ('queued', 'running')
 		`, shotID, input.ProjectID, input.WorkflowRunID, code, normalizedMessage); err != nil {
+			return err
+		}
+		if _, err := restoreApprovedVideoPromptStateTx(ctx, tx, shotID, input.WorkflowRunID); err != nil {
 			return err
 		}
 	}
@@ -462,7 +563,10 @@ func (a Activities) reconcileFailedBatchShotImagesTx(ctx context.Context, tx pgx
 		if message == "" {
 			message = "image generation failed"
 		}
-		code := batchShotImageErrorCode(message)
+		code := strings.TrimSpace(output.ErrorCodes[shotID])
+		if code == "" {
+			code = batchShotImageErrorCode(message)
+		}
 		shotTag, err := tx.Exec(ctx, `
 			UPDATE storyboard_shots
 			SET status = 'image_failed',
@@ -503,7 +607,10 @@ func (a Activities) reconcileFailedBatchShotVideosTx(ctx context.Context, tx pgx
 		if message == "" {
 			message = "video generation failed"
 		}
-		code := batchShotVideoErrorCode(message)
+		code := strings.TrimSpace(output.ErrorCodes[shotID])
+		if code == "" {
+			code = batchShotVideoErrorCode(message)
+		}
 		shotTag, err := tx.Exec(ctx, `
 			UPDATE storyboard_shots
 			SET status = 'video_failed',
@@ -569,39 +676,14 @@ func batchShotVideoErrorCode(message string) string {
 
 func failedBatchShotVideoOutput(input TextToStoryboardInput, shotIDs []string, cause error) BatchShotProductionOutput {
 	output := newBatchShotVideoOutput(input, shotIDs)
-	message := batchShotRootErrorMessage(cause)
+	code, message := workflowExecutionError(cause)
 	for _, shotID := range shotIDs {
 		output.FailedShotIDs = append(output.FailedShotIDs, shotID)
+		output.ErrorCodes[shotID] = code
 		output.Errors[shotID] = message
 	}
 	output.Status = "failed"
 	return output
-}
-
-func appendFailedShotVideoGroup(output *BatchShotProductionOutput, group ShotVideoExecutionGroup, cause error) {
-	message := batchShotRootErrorMessage(cause)
-	for _, shot := range group.Shots {
-		output.FailedShotIDs = append(output.FailedShotIDs, shot.ShotID)
-		output.Errors[shot.ShotID] = message
-	}
-}
-
-func batchShotRootErrorMessage(cause error) string {
-	if cause == nil {
-		return "video generation failed"
-	}
-	for {
-		next := errors.Unwrap(cause)
-		if next == nil {
-			break
-		}
-		cause = next
-	}
-	message := strings.TrimSpace(cause.Error())
-	if message == "" {
-		return "video generation failed"
-	}
-	return message
 }
 
 func isWorkflowCancellationError(err error) bool {
@@ -661,19 +743,17 @@ func resolveBatchShotProductionOptions(raw json.RawMessage, defaultConcurrency, 
 		return options
 	}
 	var decoded struct {
-		ShotIDs             []string                  `json:"shotIds"`
-		Force               *bool                     `json:"force"`
-		MaxConcurrency      int                       `json:"maxConcurrency"`
-		Duration            float64                   `json:"duration"`
-		AspectRatio         string                    `json:"aspectRatio"`
-		Resolution          string                    `json:"resolution"`
-		AudioStrategy       string                    `json:"audioStrategy"`
-		AudioRequirement    string                    `json:"audioRequirement"`
-		PollIntervalSeconds int                       `json:"pollIntervalSeconds"`
-		MaxPolls            int                       `json:"maxPolls"`
-		SkipCompletion      bool                      `json:"skipCompletion"`
-		GroupsPerRun        int                       `json:"groupsPerRun"`
-		Checkpoint          *BatchShotVideoCheckpoint `json:"checkpoint"`
+		ShotIDs             []string `json:"shotIds"`
+		Force               *bool    `json:"force"`
+		MaxConcurrency      int      `json:"maxConcurrency"`
+		Duration            float64  `json:"duration"`
+		AspectRatio         string   `json:"aspectRatio"`
+		Resolution          string   `json:"resolution"`
+		AudioStrategy       string   `json:"audioStrategy"`
+		AudioRequirement    string   `json:"audioRequirement"`
+		PollIntervalSeconds int      `json:"pollIntervalSeconds"`
+		MaxPolls            int      `json:"maxPolls"`
+		SkipCompletion      bool     `json:"skipCompletion"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return options
@@ -707,10 +787,6 @@ func resolveBatchShotProductionOptions(raw json.RawMessage, defaultConcurrency, 
 		options.MaxPolls = decoded.MaxPolls
 	}
 	options.SkipCompletion = decoded.SkipCompletion
-	if decoded.GroupsPerRun > 0 {
-		options.GroupsPerRun = decoded.GroupsPerRun
-	}
-	options.Checkpoint = decoded.Checkpoint
 	return options
 }
 

@@ -188,11 +188,6 @@ export function buildManualStyleOptions(templates: PromptTemplate[], kind: "dire
     });
 }
 
-export function selectedToonflowStyleFromSettings(settings: JsonRecord | undefined, key: "toonflowVisualStyle" | "toonflowStoryStyle") {
-  const value = settings?.[key];
-  return typeof value === "string" ? value : "";
-}
-
 export function withToonflowSetting(settings: JsonRecord | undefined, key: "toonflowVisualStyle" | "toonflowStoryStyle", value?: string): JsonRecord {
   const next: JsonRecord = isJsonRecord(settings) ? { ...settings } : {};
   if (value) {

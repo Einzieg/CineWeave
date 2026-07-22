@@ -1,91 +1,87 @@
 # CineWeave Codex 当前执行计划
 
-本文档是 Codex 执行入口，用于记录当前项目状态、下一阶段任务顺序和验收命令。详细任务拆解维护在 `docs/follow-up-development-plan.md`。运行时基础设施重构的目标架构维护在 `docs/runtime-foundation-hardening-target.md`，逐项完成状态维护在 `docs/runtime-foundation-hardening-progress.md`。
+本文档是 Codex 执行入口，只记录当前状态、优先级和验收入口。详细通用任务拆解维护在 `docs/follow-up-development-plan.md`；视频生产重构的目标和完成证据分别维护在 `docs/video-production-workflow-continuity-refactor-target.md` 与 `docs/video-production-workflow-continuity-refactor-progress.md`。
 
 ## 根决策
 
-- 仓库根目录固定为 `D:\Code\CineWeave`。
-- 不创建嵌套 `cineweave/` 目录。
-- 项目处于开发阶段，不做旧 demo、旧数据、旧 TypeScript 供应商脚本兼容。
-- Worker、API Server 不得直接调用上游供应商；所有 AI 调用必须经 Provider Gateway。
-- 当前优先部署方式为 Docker Compose：`docker compose -f compose.yml --profile app up -d --build`。
+- 仓库根目录固定为 `D:\Code\CineWeave`，不创建嵌套项目目录。
+- 项目处于开发阶段，不兼容旧 demo、旧项目生产数据或旧 TypeScript 供应商脚本。
+- 已配置的供应商、凭据、模型、能力、业务模型绑定和 Provider 历史必须保留。
+- API Server 和 Worker 不得直接调用上游供应商或解密凭据；所有 AI 调用必须经 Provider Gateway。
+- 服务器部署优先使用 `docker compose -f compose.yml --profile app up -d --build`，不优先制作 `.exe`。
+- 数据库只新增前向 migration；生产环境不执行 down/reset。
 
 ## 当前状态
 
-- 基础 monorepo、Docker Compose、API Server、Provider Gateway、Worker 和 Web 已进入 MVP 开发阶段。
-- `mock-provider` 已从 CI 构建流程移除。
-- `pnpm run test` 已统一覆盖 Go tests、Web typecheck/lint、OpenAPI YAML parse、OpenAPI route check 和 Compose config。
-- OpenAPI route check 已接入 CI，公开 API / Realtime 路由必须与 Go mux 注册保持一致。
-- `CINEWEAVE_ENV=production` 下，API 和 Provider Gateway 已对 JWT secret、service token、credential master key 做启动时 fail fast 校验。
-- API、Realtime、Provider Gateway、Web、Worker 和 Event Publisher 已配置 Compose healthcheck 与 `restart: unless-stopped`。
-- API `/readyz` 会检查数据库、存储、Temporal 客户端和 Provider Gateway `/readyz`；Realtime 与 Provider Gateway `/readyz` 会检查自身关键依赖。
-- Compose 外部运行时镜像已使用 tag+digest 固定，避免服务器部署拉取浮动镜像。
-- Provider 管理 API 的 OpenAPI schema 与前端 API client 已补齐到当前后端路由：connector import、provider call logs、usage summary、limit policies、circuit states、model profile bindings。
-- Provider 模型能力写入路径已统一规范化：手工创建、Catalog 安装和远程发现同步都会补齐 `xCapabilities` 的流式、思考、多模态、异步任务、参考图/视频、请求方式、响应格式和分辨率等默认声明。
-- 供应商中心的模型添加/编辑弹窗已改为结构化能力与限制编辑，不再把输入限制、输出限制、质量档位和 provider options 作为可见 JSON 文本框直接暴露给用户。
-- 供应商 catalog 已将 OpenAI 兼容入口固定为首位和默认新增类型，并补充 OpenRouter、Ollama、Google Gemini、阿里通义千问、智谱 GLM、百度文心千帆、讯飞星火、MiniMax 的基础接入模板。
-- 原文管理已接入编辑和删除；小说原文编辑时默认重新分卷分章节，章节识别已覆盖常见中文网文卷/部/章/节/回/幕和英文 Part/Book/Chapter/Scene 标题。
-- Docker Compose 默认只开放浏览器或本机调试需要访问的服务，其余服务优先走 Docker 网络。
-- 当前公开宿主端口：
-  - Web：`http://localhost:19285`
-  - API：`http://localhost:19288`
-  - Realtime：`http://localhost:19281`
-  - MinIO API：`http://localhost:19290`
-- PostgreSQL、Redis、NATS、Temporal、Provider Gateway、Worker、Event Publisher、MinIO Console 默认不映射宿主端口。
+- Monorepo、Compose、API、Provider Gateway、Temporal Worker、Realtime、Web、MinIO 和 Event Publisher 已进入可运行 MVP 阶段。
+- 根测试入口覆盖 Go、Web typecheck/lint、OpenAPI YAML/route、Event catalog 和 Compose config；`mock-provider` 已从 CI 移除。
+- Compose 默认只映射 Web `19285`、API `19288`、Realtime `19281` 和 MinIO API `19290`；PostgreSQL、Redis、NATS、Temporal、Provider Gateway、Workers、Event Publisher 和 MinIO Console 只走 Docker 网络。
+- 当前未提交变更的 15 项缺陷修复已完成实现与自动化验证；详细证据见 `docs/uncommitted-change-bug-verification-fix-checklist.md`。
+- 工作树中前向 migration 已编号至 `000044`。`000040` 视频执行身份、`000042` 原文到剧本分集 staging、`000043` 镜头衍生资产持久执行和 `000044` 供应商模型删除历史能力证明保留均已通过隔离数据库验证，并已应用到主数据库。
+- Prompt Registry seed 为 v2。旧 `projects.production_mode`、旧通用视频 Prompt 和跨镜头硬尾帧链已删除。
+- 四个最新视频生产 Profile v2 均为 `published + available`：图生视频、首尾帧衔接、多模态参考和分镜板。
+- 项目创建原子写入不可变 Profile binding 和 active production generation；切换方案只能经过影响检查、多分集受控重建和 generation 切换。
+- 视频生产使用 Profile Compiler、ShotState、Transition、VisualAnchor、typed ReferencePack、PromptContextPlan、approved VideoPromptPlan、RenderPlan 和 capability attestation；旧 generation 晚到结果不能写入当前代。
+- 视频 Prompt 生成/审核与视频执行已经拆分。视频执行只消费已审核 Prompt Plan，不会逐镜头重复运行 Prompt Agent。
+- Project/Episode/Batch 分层 Workflow、持久 checkpoint、部分完成、失败项重试、取消、Continue-As-New 和 Pinned Worker Deployment 已落地。
+- 10 集并发和 70 分钟长分集压测、四 Profile contract load、Workflow replay、Provider runtime contract、migration Up/Down/Up 和 Provider 数据保护测试已通过。
+- 根入口 `pnpm run test` 已通过：Go 全仓、migration/seed validate、Web test/typecheck/lint、OpenAPI 323 条路由、Event catalog 和 Compose config 均通过。
+- 2026-07-22 已在排空活动 Workflow/视频任务/租约后重建主环境 Compose，主数据库迁移至 v44，Provider 发布前后快照等值，所有常驻服务健康，Web/API/Realtime/MinIO 端点返回 200。真实供应商与完整业务页浏览器 smoke 尚未执行。
 
-## 执行顺序
+## 下一阶段顺序
 
-### P0：验证与发布基线
+### P0：本轮运行态验收收尾
 
-1. 统一根测试入口，让 `pnpm run test` 覆盖 Go、Web、OpenAPI 和 Compose 基础验证。
-2. 增加 OpenAPI 与实际路由一致性检查，避免接口实现和文档继续偏移。
+1. 执行真实文本/图片/视频供应商 smoke，确认多凭据选择、任务轮询、媒体入库和错误归一化。
+2. 通过浏览器验证供应商多凭据、分集剧本、镜头衍生资产、分镜视频与任务活动投影。
+3. 保留旧 Pinned Worker，直到 v1 任务排空指标达到 `safeToDecommission=true`。
 
-### P1：核心服务与生产链路
+### P1：主流程产品闭环
 
-1. 完成生产部署硬化：生产密钥 fail fast、healthcheck、restart 策略和基础镜像版本固定。
-2. 对齐 Provider 管理 API、OpenAPI schema 和前端 API client。
-3. 收敛模型能力声明，确保 UI 展示能力、Gateway 校验和运行时实际支持一致。
-4. 完成供应商与模型配置闭环：添加/编辑供应商、发现模型、自定义模型、编辑模型、删除模型、可视化能力和限制配置。
-5. 扩展常用渠道连接器，OpenAI-compatible 放首位并作为默认渠道，后续补齐 Ollama、百度文心千帆、阿里通义千问、讯飞星火、智谱 GLM、Google Gemini、OpenRouter、MiniMax。
-6. 优化 Workflow 状态和失败详情，让生产看板、Workflow 页面能展示当前步骤、错误、重试和取消动作。
+1. 完成原文、剧本、资产、分镜、视频、时间线和成片之间的状态传播与可恢复操作。
+2. 收口真实供应商 capability probe、精确 snapshot attestation、模型限制可视化和错误中文化。
+3. 补齐真实音视频供应商 smoke、Range 播放、媒体缓存和长任务故障恢复演练。
+4. 继续强化 Project Agent 的工具覆盖、审批模式、交互提问、子 Agent 和长任务动态输出。
 
-### P2：前端产品闭环
+### P2：管理面与运营能力
 
-1. 完成原文与剧本管理：原文可编辑可删除，小说上传自动分卷分章节，剧本版本和场景可编辑管理。
-2. 完成时间线最小编辑闭环：clip 创建、编辑、删除、排序、合成版本和下载入口。
-3. 完成资产管理闭环：资产字段编辑、参考图上传、主参考图、审核和批量生成。
-4. 完成分镜安全编辑：新建、编辑、删除确认、重排和审阅入口。
-5. 完成 Prompt 与 RBAC 管理面：提示词版本、绑定、成员、团队、角色和权限配置。
-6. 完成全站中文标签映射，项目概览、生产看板、原文与剧本、供应商中心、提示词中心、权限管理不直接显示英文内部枚举。
-7. 收口文档状态，避免 README、docs 和 dev_docs 把未来规划写成已实现能力。
-
-## 下一批 Codex 任务
-
-1. 先做全站中文标签映射。
-2. 再做 Workflow 状态和失败详情 UX。
-3. 再做时间线、资产、分镜的编辑闭环。
+1. 完成 Prompt Registry、项目手册、RBAC、成员/角色/权限的可视化管理闭环。
+2. 完成全站中文枚举审计，禁止正常用户界面直接显示内部英文值。
+3. 实现 RenderPlan 成本/时间预演、预算审批和发布后的可观测性看板。
+4. 详细步骤按 `docs/follow-up-development-plan.md` 逐项更新，不在本文复制长任务清单。
 
 ## 验收命令
 
-每个实现任务完成后按改动范围运行必要验证。基础验证命令如下：
-
 ```powershell
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
+pnpm run test
 go test ./...
 pnpm --filter @cineweave/web typecheck
 pnpm --filter @cineweave/web lint
-@'
-import yaml
-with open('packages/openapi/openapi.yaml', 'r', encoding='utf-8') as f:
-    yaml.safe_load(f)
-print('ok')
-'@ | python -
+python -c "import pathlib, yaml; yaml.safe_load(pathlib.Path('packages/openapi/openapi.yaml').read_text(encoding='utf-8'))"
+python scripts/check-openapi-routes.py
+go run ./cmd/events-gen --check
 docker compose -f compose.yml config --quiet
 docker compose -f compose.yml --profile app up -d --build
 docker compose -f compose.yml --profile app ps
 ```
 
+视频生产或 Provider 相关发布还必须执行：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
+pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode DrainCheck
+pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode Snapshot -SnapshotPath tmp/provider-protection-before-release.json
+# 部署完成且 API 仍处于 Provider 配置冻结状态时执行
+pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode Verify -SnapshotPath tmp/provider-protection-before-release.json
+```
+
 ## 维护规则
 
-- `docs/codex-execution-plan.md` 只写当前执行总览、阶段顺序和下一批任务。
-- 详细任务步骤、涉及文件和验收标准维护在 `docs/follow-up-development-plan.md`。
-- 每完成一个阶段后，同步更新本文档的“当前状态”和“下一批 Codex 任务”。
+- 本文只写当前执行总览、优先级和验收入口。
+- 详细任务步骤维护在 `docs/follow-up-development-plan.md`，专项架构与证据维护在对应 target/progress 文档。
+- 每完成一个阶段，同步更新“当前状态”和“下一阶段顺序”；不得把未来能力写成已实现。

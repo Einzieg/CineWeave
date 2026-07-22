@@ -42,8 +42,10 @@ func TestRBAC(t *testing.T) {
 	ensureRBACProviderConnector(t, ctx, pool)
 
 	suffix := uuid.NewString()
+	shortSuffix := strings.ReplaceAll(suffix, "-", "")[:12]
 	owner, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "rbac-owner-" + suffix + "@example.test",
+		Username:         "rbac-owner-" + shortSuffix,
 		Password:         "Password123!",
 		DisplayName:      "RBAC Owner",
 		OrganizationName: "RBAC Org " + suffix,
@@ -56,6 +58,7 @@ func TestRBAC(t *testing.T) {
 	})
 	member, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "rbac-member-" + suffix + "@example.test",
+		Username:         "rbac-member-" + shortSuffix,
 		Password:         "Password123!",
 		DisplayName:      "RBAC Member",
 		OrganizationName: "RBAC Member Org " + suffix,
@@ -69,6 +72,35 @@ func TestRBAC(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO organization_members(organization_id, user_id, status) VALUES ($1, $2, 'active')`, owner.OrganizationID, member.User.ID); err != nil {
 		t.Fatalf("insert member org membership: %v", err)
 	}
+	memberPrincipal, err := authService.ParseBearer("Bearer " + member.AccessToken)
+	if err != nil {
+		t.Fatalf("parse member access token: %v", err)
+	}
+	member, err = authService.SwitchOrganization(ctx, memberPrincipal, auth.SwitchOrganizationRequest{
+		RefreshToken: member.RefreshToken, OrganizationID: owner.OrganizationID,
+	}, httptest.NewRequest(http.MethodPost, "/api/auth/switch-organization", nil))
+	if err != nil {
+		t.Fatalf("switch member organization: %v", err)
+	}
+
+	var listedRoles struct {
+		Items []Role `json:"items"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/roles", owner.AccessToken, owner.OrganizationID, nil, &listedRoles)
+	roleKeys := make(map[string]bool, len(listedRoles.Items))
+	for _, role := range listedRoles.Items {
+		roleKeys[role.RoleKey] = true
+	}
+	for _, legacyRoleKey := range []string{"organization_owner", "organization_admin", "organization_member"} {
+		if roleKeys[legacyRoleKey] {
+			t.Fatalf("legacy role %q should not be listed", legacyRoleKey)
+		}
+	}
+	for _, canonicalRoleKey := range []string{"org_owner", "org_admin", "org_member"} {
+		if !roleKeys[canonicalRoleKey] {
+			t.Fatalf("canonical role %q is missing", canonicalRoleKey)
+		}
+	}
 
 	workspaceID := firstWorkspaceID(t, ctx, pool, owner.OrganizationID)
 	var project Project
@@ -77,6 +109,80 @@ func TestRBAC(t *testing.T) {
 		"name":        "RBAC Project",
 		"settings":    map[string]any{},
 	}, &project)
+
+	teamOnly := registerRBACOrgMember(t, ctx, pool, authService, owner.OrganizationID, suffix)
+	var team Team
+	doAPISuccess(t, server, http.MethodPost, "/api/teams", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"name": "Project Viewers", "description": "Read-only project access",
+	}, &team)
+	var teamMember TeamMember
+	doAPISuccess(t, server, http.MethodPost, "/api/teams/"+team.ID+"/members", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"userId": teamOnly.User.ID,
+	}, &teamMember)
+	if teamMember.User.ID != teamOnly.User.ID || teamMember.User.Email != teamOnly.User.Email {
+		t.Fatalf("team member user summary = %+v", teamMember.User)
+	}
+	projectViewerRoleID := roleIDByKey(t, ctx, pool, "project_viewer")
+	var teamBinding RoleBinding
+	doAPISuccess(t, server, http.MethodPost, "/api/role-bindings", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"organizationId":    owner.OrganizationID,
+		"roleId":            projectViewerRoleID,
+		"subjectType":       "team",
+		"subjectTeamId":     team.ID,
+		"resourceType":      "project",
+		"resourceProjectId": project.ID,
+	}, &teamBinding)
+	if teamBinding.SubjectName != team.Name || teamBinding.ResourceName != project.Name || teamBinding.RoleName == "" {
+		t.Fatalf("team role binding display summary = %+v", teamBinding)
+	}
+	var impact TeamImpact
+	doAPISuccess(t, server, http.MethodGet, "/api/teams/"+team.ID+"/impact", owner.AccessToken, owner.OrganizationID, nil, &impact)
+	if impact.ActiveMemberCount != 1 || impact.ActiveBindingCount != 1 {
+		t.Fatalf("team impact = %+v", impact)
+	}
+	var teamMembers struct {
+		Items []TeamMember `json:"items"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/teams/"+team.ID+"/members", owner.AccessToken, owner.OrganizationID, nil, &teamMembers)
+	if len(teamMembers.Items) != 1 || teamMembers.Items[0].User.Username == "" {
+		t.Fatalf("team members = %+v", teamMembers.Items)
+	}
+	var roleDetail Role
+	doAPISuccess(t, server, http.MethodGet, "/api/roles/"+projectViewerRoleID, owner.AccessToken, owner.OrganizationID, nil, &roleDetail)
+	if len(roleDetail.Permissions) == 0 || roleDetail.BindingCount == 0 {
+		t.Fatalf("role detail = %+v", roleDetail)
+	}
+	var filteredBindings struct {
+		Items []RoleBinding `json:"items"`
+		Page  int           `json:"page"`
+		Total int           `json:"total"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/role-bindings?subjectType=team&subjectId="+team.ID+"&page=1&pageSize=1", owner.AccessToken, owner.OrganizationID, nil, &filteredBindings)
+	if len(filteredBindings.Items) != 1 || filteredBindings.Items[0].ID != teamBinding.ID || filteredBindings.Page != 1 || filteredBindings.Total != 1 {
+		t.Fatalf("filtered team bindings = %+v", filteredBindings.Items)
+	}
+	var teamReadable Project
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+project.ID, teamOnly.AccessToken, owner.OrganizationID, nil, &teamReadable)
+	var disabledTeam Team
+	doAPISuccess(t, server, http.MethodPatch, "/api/teams/"+team.ID, owner.AccessToken, owner.OrganizationID, map[string]any{"status": "disabled"}, &disabledTeam)
+	assertAPIErrorCode(t, server, http.MethodGet, "/api/projects/"+project.ID, teamOnly.AccessToken, owner.OrganizationID, nil, http.StatusForbidden, "ACCESS_DENIED")
+	doAPISuccess(t, server, http.MethodPatch, "/api/teams/"+team.ID, owner.AccessToken, owner.OrganizationID, map[string]any{"status": "active"}, &team)
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+project.ID, teamOnly.AccessToken, owner.OrganizationID, nil, &teamReadable)
+	var deletedBinding map[string]bool
+	doAPISuccess(t, server, http.MethodDelete, "/api/role-bindings/"+teamBinding.ID, owner.AccessToken, owner.OrganizationID, nil, &deletedBinding)
+	assertAPIErrorCode(t, server, http.MethodGet, "/api/projects/"+project.ID, teamOnly.AccessToken, owner.OrganizationID, nil, http.StatusForbidden, "ACCESS_DENIED")
+	var ownerBindingID string
+	if err := pool.QueryRow(ctx, `
+		SELECT rb.id FROM role_bindings rb
+		JOIN roles role ON role.id = rb.role_id
+		WHERE rb.organization_id = $1 AND rb.subject_user_id = $2
+		  AND role.role_key IN ('org_owner', 'organization_owner')
+		  AND rb.resource_type = 'organization'
+		LIMIT 1
+	`, owner.OrganizationID, owner.User.ID).Scan(&ownerBindingID); err != nil {
+		t.Fatalf("select owner binding: %v", err)
+	}
+	assertAPIErrorCode(t, server, http.MethodDelete, "/api/role-bindings/"+ownerBindingID, owner.AccessToken, owner.OrganizationID, nil, http.StatusConflict, "LAST_OWNER_REQUIRED")
 
 	assertAPIErrorCode(t, server, http.MethodGet, "/api/projects/"+project.ID, member.AccessToken, owner.OrganizationID, nil, http.StatusForbidden, "ACCESS_DENIED")
 
@@ -119,6 +225,161 @@ func TestRBAC(t *testing.T) {
 	if cancelled.Status != "cancelling" {
 		t.Fatalf("cancel status = %s", cancelled.Status)
 	}
+
+	assertAPIErrorCode(t, server, http.MethodGet, "/api/organizations/"+owner.OrganizationID+"/audit-logs", teamOnly.AccessToken, owner.OrganizationID, nil, http.StatusForbidden, "ACCESS_DENIED")
+	var currentContext struct {
+		User           auth.UserResponse       `json:"user"`
+		OrganizationID string                  `json:"organizationId"`
+		Membership     auth.OrganizationMember `json:"membership"`
+		Permissions    []string                `json:"permissions"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/auth/me", owner.AccessToken, owner.OrganizationID, nil, &currentContext)
+	if currentContext.OrganizationID != owner.OrganizationID || currentContext.Membership.User.ID != owner.User.ID || currentContext.Membership.Status != "active" {
+		t.Fatalf("current organization context = %+v", currentContext)
+	}
+	hasMemberManage := false
+	for _, permission := range currentContext.Permissions {
+		if permission == "member.manage" {
+			hasMemberManage = true
+			break
+		}
+	}
+	if !hasMemberManage {
+		t.Fatalf("current context permissions = %v, want member.manage", currentContext.Permissions)
+	}
+	assertAPIErrorCode(t, server, http.MethodPatch, "/api/auth/me", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"avatarUrl": "javascript:alert(1)",
+	}, http.StatusUnprocessableEntity, "PROFILE_VALIDATION_FAILED")
+	var profile auth.UserResponse
+	doAPISuccess(t, server, http.MethodPatch, "/api/auth/me", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"displayName": "RBAC Owner Updated",
+		"avatarUrl":   "https://example.test/avatar.png",
+	}, &profile)
+	if profile.DisplayName != "RBAC Owner Updated" || profile.AvatarURL != "https://example.test/avatar.png" {
+		t.Fatalf("updated profile = %+v", profile)
+	}
+	var originalOrganization Organization
+	doAPISuccess(t, server, http.MethodGet, "/api/organizations/"+owner.OrganizationID, owner.AccessToken, owner.OrganizationID, nil, &originalOrganization)
+	var updatedOrganization Organization
+	doAPISuccess(t, server, http.MethodPatch, "/api/organizations/"+owner.OrganizationID, owner.AccessToken, owner.OrganizationID, map[string]any{
+		"name": "RBAC Organization Updated",
+	}, &updatedOrganization)
+	if updatedOrganization.Name != "RBAC Organization Updated" || updatedOrganization.Slug != originalOrganization.Slug {
+		t.Fatalf("updated organization = %+v, original slug = %s", updatedOrganization, originalOrganization.Slug)
+	}
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/roles", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"roleKey": "invalid_project_provider", "name": "Invalid Project Provider", "scope": "project", "permissionKeys": []string{"provider.read"},
+	}, http.StatusUnprocessableEntity, "ROLE_PERMISSION_NOT_ALLOWED")
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/roles", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"roleKey": "invalid_org_admin", "name": "Invalid Wildcard", "scope": "organization", "permissionKeys": []string{"admin.manage"},
+	}, http.StatusUnprocessableEntity, "ROLE_PERMISSION_NOT_ALLOWED")
+	assertAPIErrorCode(t, server, http.MethodPatch, "/api/roles/"+projectViewerRoleID, owner.AccessToken, owner.OrganizationID, map[string]any{
+		"name": "Cannot Rename System Role",
+	}, http.StatusConflict, "SYSTEM_ROLE_IMMUTABLE")
+	assertAPIErrorCode(t, server, http.MethodDelete, "/api/roles/"+projectViewerRoleID, owner.AccessToken, owner.OrganizationID, nil, http.StatusConflict, "SYSTEM_ROLE_IMMUTABLE")
+	var customRole Role
+	doAPISuccess(t, server, http.MethodPost, "/api/roles", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"roleKey": "custom_project_editor", "name": "自定义项目编辑", "description": "项目读取与编辑", "scope": "project",
+		"permissionKeys": []string{"project.read", "project.write"},
+	}, &customRole)
+	if customRole.IsSystem || customRole.OrganizationID == nil || *customRole.OrganizationID != owner.OrganizationID || len(customRole.Permissions) != 2 {
+		t.Fatalf("created custom role = %+v", customRole)
+	}
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/roles", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"roleKey": "custom_project_editor", "name": "Duplicate Across Scope", "scope": "workspace", "permissionKeys": []string{"workspace.read"},
+	}, http.StatusConflict, "ROLE_KEY_EXISTS")
+	var customBinding RoleBinding
+	doAPISuccess(t, server, http.MethodPost, "/api/role-bindings", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"organizationId": owner.OrganizationID, "roleId": customRole.ID, "subjectType": "user", "subjectUserId": teamOnly.User.ID,
+		"resourceType": "project", "resourceProjectId": project.ID,
+	}, &customBinding)
+	var customImpact RoleImpact
+	doAPISuccess(t, server, http.MethodGet, "/api/roles/"+customRole.ID+"/impact", owner.AccessToken, owner.OrganizationID, nil, &customImpact)
+	if customImpact.BindingCount != 1 || customImpact.DirectUserCount != 1 || customImpact.AffectedUserCount != 1 || customImpact.ProjectBindings != 1 {
+		t.Fatalf("custom role impact = %+v", customImpact)
+	}
+	var customReadable Project
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+project.ID, teamOnly.AccessToken, owner.OrganizationID, nil, &customReadable)
+	var customUpdated Project
+	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+project.ID, teamOnly.AccessToken, owner.OrganizationID, map[string]any{"name": "Custom Role Edited Project"}, &customUpdated)
+	var reducedCustomRole Role
+	doAPISuccess(t, server, http.MethodPatch, "/api/roles/"+customRole.ID, owner.AccessToken, owner.OrganizationID, map[string]any{
+		"permissionKeys": []string{"project.read"},
+	}, &reducedCustomRole)
+	assertAPIErrorCode(t, server, http.MethodPatch, "/api/projects/"+project.ID, teamOnly.AccessToken, owner.OrganizationID, map[string]any{"name": "Denied After Permission Removal"}, http.StatusForbidden, "ACCESS_DENIED")
+	assertAPIErrorCode(t, server, http.MethodPatch, "/api/roles/"+customRole.ID, owner.AccessToken, owner.OrganizationID, map[string]any{
+		"scope": "workspace", "permissionKeys": []string{"workspace.read"},
+	}, http.StatusConflict, "ROLE_SCOPE_IN_USE")
+	assertAPIErrorCode(t, server, http.MethodDelete, "/api/roles/"+customRole.ID, owner.AccessToken, owner.OrganizationID, nil, http.StatusConflict, "ROLE_IN_USE")
+	var deletedCustomBinding map[string]bool
+	doAPISuccess(t, server, http.MethodDelete, "/api/role-bindings/"+customBinding.ID, owner.AccessToken, owner.OrganizationID, nil, &deletedCustomBinding)
+	var deletedCustomRole map[string]bool
+	doAPISuccess(t, server, http.MethodDelete, "/api/roles/"+customRole.ID, owner.AccessToken, owner.OrganizationID, nil, &deletedCustomRole)
+	assertAPIErrorCode(t, server, http.MethodGet, "/api/roles/"+customRole.ID, owner.AccessToken, owner.OrganizationID, nil, http.StatusNotFound, "NOT_FOUND")
+	var roleManager Role
+	doAPISuccess(t, server, http.MethodPost, "/api/roles", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"roleKey": "custom_role_manager", "name": "自定义角色管理员", "scope": "organization", "permissionKeys": []string{"member.manage", "role.manage"},
+	}, &roleManager)
+	var roleManagerBinding RoleBinding
+	doAPISuccess(t, server, http.MethodPost, "/api/role-bindings", owner.AccessToken, owner.OrganizationID, map[string]any{
+		"organizationId": owner.OrganizationID, "roleId": roleManager.ID, "subjectType": "user", "subjectUserId": teamOnly.User.ID,
+		"resourceType": "organization", "resourceOrganizationId": owner.OrganizationID,
+	}, &roleManagerBinding)
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/roles", teamOnly.AccessToken, owner.OrganizationID, map[string]any{
+		"roleKey": "privilege_escalation_attempt", "name": "提权尝试", "scope": "project", "permissionKeys": []string{"project.write"},
+	}, http.StatusForbidden, "ACCESS_DENIED")
+	orgOwnerRoleID := roleIDByKey(t, context.Background(), pool, "org_owner")
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/role-bindings", teamOnly.AccessToken, owner.OrganizationID, map[string]any{
+		"organizationId": owner.OrganizationID, "roleId": orgOwnerRoleID, "subjectType": "user", "subjectUserId": teamOnly.User.ID,
+		"resourceType": "organization", "resourceOrganizationId": owner.OrganizationID,
+	}, http.StatusForbidden, "ACCESS_DENIED")
+	baseMemberRoleID := roleIDByKey(t, context.Background(), pool, "org_member")
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/organizations/"+owner.OrganizationID+"/invitations", teamOnly.AccessToken, owner.OrganizationID, map[string]any{
+		"email": "blocked-escalation-" + uuid.NewString() + "@example.test", "baseRoleId": baseMemberRoleID, "expiresInDays": 7,
+		"bindings": []map[string]any{{"roleId": orgOwnerRoleID, "resourceType": "organization", "organizationId": owner.OrganizationID}},
+	}, http.StatusForbidden, "ACCESS_DENIED")
+	var deletedRoleManagerBinding map[string]bool
+	doAPISuccess(t, server, http.MethodDelete, "/api/role-bindings/"+roleManagerBinding.ID, owner.AccessToken, owner.OrganizationID, nil, &deletedRoleManagerBinding)
+	var deletedRoleManager map[string]bool
+	doAPISuccess(t, server, http.MethodDelete, "/api/roles/"+roleManager.ID, owner.AccessToken, owner.OrganizationID, nil, &deletedRoleManager)
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/organizations/"+owner.OrganizationID+"/leave", owner.AccessToken, owner.OrganizationID, nil, http.StatusConflict, "LAST_OWNER_REQUIRED")
+	var left map[string]bool
+	doAPISuccess(t, server, http.MethodPost, "/api/organizations/"+owner.OrganizationID+"/leave", teamOnly.AccessToken, owner.OrganizationID, nil, &left)
+	if !left["left"] {
+		t.Fatalf("leave response = %+v", left)
+	}
+	assertAPIErrorCode(t, server, http.MethodGet, "/api/organizations/"+owner.OrganizationID, teamOnly.AccessToken, owner.OrganizationID, nil, http.StatusForbidden, "FORBIDDEN")
+	var audits struct {
+		Items           []AuditLog `json:"items"`
+		Page            int        `json:"page"`
+		PageSize        int        `json:"pageSize"`
+		Total           int        `json:"total"`
+		RetentionPolicy string     `json:"retentionPolicy"`
+	}
+	doAPISuccess(t, server, http.MethodGet, "/api/organizations/"+owner.OrganizationID+"/audit-logs?pageSize=100", owner.AccessToken, owner.OrganizationID, nil, &audits)
+	if audits.Total == 0 || audits.RetentionPolicy != "organization_lifetime" {
+		t.Fatalf("audit list = %+v", audits)
+	}
+	wantAuditActions := map[string]bool{
+		"team.created":             false,
+		"role_binding.created":     false,
+		"organization.updated":     false,
+		"user.profile.updated":     false,
+		"organization.member.left": false,
+		"role.created":             false,
+		"role.updated":             false,
+		"role.deleted":             false,
+	}
+	for _, item := range audits.Items {
+		if _, ok := wantAuditActions[item.Action]; ok {
+			wantAuditActions[item.Action] = true
+		}
+	}
+	for action, found := range wantAuditActions {
+		if !found {
+			t.Errorf("audit action %s was not returned", action)
+		}
+	}
 }
 
 func createUserRoleBinding(t *testing.T, handler http.Handler, pool dbQueryer, owner auth.TokenResponse, userID, roleKey, resourceType, resourceOrgID, resourceWorkspaceID, resourceProjectID string) {
@@ -151,6 +412,7 @@ func registerRBACOrgMember(t *testing.T, ctx context.Context, pool dbQueryer, au
 	t.Helper()
 	resp, err := authService.Register(ctx, auth.RegisterRequest{
 		Email:            "rbac-viewer-" + uuid.NewString() + "-" + suffix + "@example.test",
+		Username:         "rbac-viewer-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12],
 		Password:         "Password123!",
 		DisplayName:      "RBAC Viewer",
 		OrganizationName: "RBAC Viewer Org " + uuid.NewString(),
@@ -164,7 +426,17 @@ func registerRBACOrgMember(t *testing.T, ctx context.Context, pool dbQueryer, au
 	if _, err := pool.Exec(ctx, `INSERT INTO organization_members(organization_id, user_id, status) VALUES ($1, $2, 'active')`, orgID, resp.User.ID); err != nil {
 		t.Fatalf("insert org member: %v", err)
 	}
-	return resp
+	principal, err := authService.ParseBearer("Bearer " + resp.AccessToken)
+	if err != nil {
+		t.Fatalf("parse org member access token: %v", err)
+	}
+	targetSession, err := authService.SwitchOrganization(ctx, principal, auth.SwitchOrganizationRequest{
+		RefreshToken: resp.RefreshToken, OrganizationID: orgID,
+	}, httptest.NewRequest(http.MethodPost, "/api/auth/switch-organization", nil))
+	if err != nil {
+		t.Fatalf("switch org member organization: %v", err)
+	}
+	return targetSession
 }
 
 func ensureRBACProviderConnector(t *testing.T, ctx context.Context, pool dbQueryer) {
@@ -225,8 +497,15 @@ func insertRBACWorkflowRun(t *testing.T, ctx context.Context, pool dbQueryer, or
 	t.Helper()
 	var workflowID string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO workflow_runs(organization_id, project_id, temporal_workflow_id, status, input, output, created_by)
-		VALUES ($1, $2, $3, $4, '{}', '{}', $5)
+		INSERT INTO workflow_runs(
+			organization_id, project_id, temporal_workflow_id, status, input, output, created_by,
+			production_generation_id, video_production_binding_id, video_production_binding_revision
+		)
+		SELECT $1, $2, $3, $4, '{}', '{}', $5, generation.id, binding.id, binding.revision
+		FROM projects project
+		JOIN project_video_production_generations generation ON generation.id = project.active_video_production_generation_id
+		JOIN project_video_production_bindings binding ON binding.id = generation.binding_id
+		WHERE project.id = $2
 		RETURNING id
 	`, orgID, projectID, "rbac-workflow-"+uuid.NewString(), status, userID).Scan(&workflowID); err != nil {
 		t.Fatalf("insert workflow: %v", err)

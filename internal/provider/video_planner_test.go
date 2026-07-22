@@ -12,18 +12,19 @@ func TestVideoRenderPlanKeyForcedGenerationUsesWorkflowIdentity(t *testing.T) {
 		SnapshotHash: "sha256:capabilities",
 	}
 	base := GatewayVideoPlanRequest{
-		StoryboardShotID:    "shot-1",
-		WorkflowRunID:       "workflow-1",
-		Force:               true,
-		TargetDurationTicks: 900000,
-		TaskType:            "video.image_to_video",
-		ReferenceMode:       "first_frame",
-		AspectRatio:         "16:9",
-		Resolution:          "720p",
-		AudioStrategy:       "native_av",
-		AudioRequirement:    "preferred",
-		DialogueLanguage:    "zh-CN",
-		HasDialogue:         true,
+		StoryboardShotID:      "shot-1",
+		WorkflowRunID:         "workflow-1",
+		NodeAttemptGeneration: 1,
+		Force:                 true,
+		TargetDurationTicks:   900000,
+		TaskType:              "video.image_to_video",
+		ReferenceMode:         "first_frame",
+		AspectRatio:           "16:9",
+		Resolution:            "720p",
+		AudioStrategy:         "native_av",
+		AudioRequirement:      "preferred",
+		DialogueLanguage:      "zh-CN",
+		HasDialogue:           true,
 	}
 
 	first, err := videoRenderPlanKey(base, 1, selected)
@@ -46,6 +47,16 @@ func TestVideoRenderPlanKeyForcedGenerationUsesWorkflowIdentity(t *testing.T) {
 	}
 	if second == first {
 		t.Fatal("different forced workflows must not reuse the same render plan key")
+	}
+
+	secondAttempt := base
+	secondAttempt.NodeAttemptGeneration = 2
+	secondAttemptKey, err := videoRenderPlanKey(secondAttempt, 1, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondAttemptKey == first {
+		t.Fatal("different workflow attempts must not reuse a forced render plan key")
 	}
 
 	nonForcedFirst := base

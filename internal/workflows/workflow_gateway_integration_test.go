@@ -18,6 +18,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/db"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/storage"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -289,9 +290,28 @@ func openWorkflowGatewayIntegrationDB(t *testing.T, ctx context.Context) *pgxpoo
 }
 
 func seedWorkflowGatewayIntegrationData(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string, string, string, string, string) {
+	return seedWorkflowGatewayIntegrationDataForProfile(t, ctx, pool, videoproduction.ProfileSingleFrameI2V)
+}
+
+func seedWorkflowGatewayIntegrationDataForProfile(t *testing.T, ctx context.Context, pool *pgxpool.Pool, profileKey string) (string, string, string, string, string, string) {
+	return seedWorkflowGatewayIntegrationDataForProfileAndConfiguration(t, ctx, pool, profileKey, videoproduction.ProductionConfigurationSnapshot{
+		VideoRatio:       "16:9",
+		AudioStrategy:    "native_av",
+		AudioRequirement: "preferred",
+		ImageQuality:     "standard",
+	})
+}
+
+func seedWorkflowGatewayIntegrationDataForProfileAndConfiguration(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	profileKey string,
+	configuration videoproduction.ProductionConfigurationSnapshot,
+) (string, string, string, string, string, string) {
 	t.Helper()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	var orgID, userID, workspaceID, projectID, workflowRunID, connectorID, accountID, textModelID, imageModelID, scriptProfileID, imageProfileID string
+	var orgID, userID, workspaceID, projectID, workflowRunID, connectorID, accountID, textModelID, imageModelID, scriptProfileID, imageProfileID, videoProfileID string
 	if err := pool.QueryRow(ctx, `INSERT INTO organizations(name, slug) VALUES ($1, $2) RETURNING id`, "Workflow Gateway", "workflow-gateway-"+suffix).Scan(&orgID); err != nil {
 		t.Fatalf("insert organization: %v", err)
 	}
@@ -301,6 +321,9 @@ func seedWorkflowGatewayIntegrationData(t *testing.T, ctx context.Context, pool 
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+		if connectorID != "" {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM provider_connectors WHERE id = $1`, connectorID)
+		}
 	})
 	if _, err := pool.Exec(ctx, `INSERT INTO organization_members(organization_id, user_id) VALUES ($1, $2)`, orgID, userID); err != nil {
 		t.Fatalf("insert organization member: %v", err)
@@ -308,22 +331,54 @@ func seedWorkflowGatewayIntegrationData(t *testing.T, ctx context.Context, pool 
 	if err := pool.QueryRow(ctx, `INSERT INTO workspaces(organization_id, name) VALUES ($1, 'Workflow Workspace') RETURNING id`, orgID).Scan(&workspaceID); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
-		INSERT INTO projects(organization_id, workspace_id, name, created_by)
-		VALUES ($1, $2, 'Workflow Project', $3)
-		RETURNING id
-	`, orgID, workspaceID, userID).Scan(&projectID); err != nil {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin project seed: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	profileVersion, err := videoproduction.ResolveProfileVersion(ctx, tx, profileKey, nil, true)
+	if err != nil {
+		t.Fatalf("resolve video production profile: %v", err)
+	}
+	identity := videoproduction.NewIdentity()
+	projectID = identity.ProjectID
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO projects(
+			id, organization_id, workspace_id, name, created_by,
+			active_video_production_generation_id, video_production_generation_no,
+			video_production_state, video_production_locked
+		)
+		VALUES ($1, $2, $3, 'Workflow Project', $4, $5, 1, 'storyboard_required', false)
+	`, projectID, orgID, workspaceID, userID, identity.GenerationID); err != nil {
 		t.Fatalf("insert project: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO project_members(project_id, user_id) VALUES ($1, $2)`, projectID, userID); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO project_members(project_id, user_id) VALUES ($1, $2)`, projectID, userID); err != nil {
 		t.Fatalf("insert project member: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
-		INSERT INTO workflow_runs(organization_id, project_id, temporal_workflow_id, status, input, output, created_by)
-		VALUES ($1, $2, $3, 'queued', $4, '{}', $5)
+	binding, generation, err := videoproduction.CreateInitialBindingAndGeneration(ctx, tx, videoproduction.InitialBindingParams{
+		Identity:            identity,
+		OrganizationID:      orgID,
+		CreatedBy:           userID,
+		ProfileVersion:      profileVersion,
+		CompatibilityPolicy: videoproduction.CompatibilityStrict,
+		Configuration:       configuration,
+	})
+	if err != nil {
+		t.Fatalf("create project video production context: %v", err)
+	}
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO workflow_runs(
+			organization_id, project_id, temporal_workflow_id, status, input, output, created_by,
+			production_generation_id, video_production_binding_id, video_production_binding_revision
+		)
+		VALUES ($1, $2, $3, 'queued', $4, '{}', $5, $6, $7, $8)
 		RETURNING id
-	`, orgID, projectID, "workflow-gateway-"+suffix, mustJSON(map[string]any{"prompt": "train"}), userID).Scan(&workflowRunID); err != nil {
+	`, orgID, projectID, "workflow-gateway-"+suffix, mustJSON(map[string]any{"prompt": "train"}), userID,
+		generation.ID, binding.ID, binding.Revision).Scan(&workflowRunID); err != nil {
 		t.Fatalf("insert workflow run: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit project seed: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO provider_connectors(connector_key, name, type, is_official, manifest, version)
@@ -369,6 +424,13 @@ func seedWorkflowGatewayIntegrationData(t *testing.T, ctx context.Context, pool 
 		RETURNING id
 	`, orgID, imageGenerationModelProfileKey).Scan(&imageProfileID); err != nil {
 		t.Fatalf("insert image profile: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO model_profiles(organization_id, profile_key, name, purpose, routing_strategy, fallback_strategy)
+		VALUES ($1, $2, 'Video Default', 'video', 'priority_with_fallback', '{"enabled":true,"maxAttempts":3}')
+		RETURNING id
+	`, orgID, videoGenerationModelProfileKey).Scan(&videoProfileID); err != nil {
+		t.Fatalf("insert video profile: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO model_profile_bindings(model_profile_id, provider_model_id, priority, weight, enabled)
@@ -580,6 +642,18 @@ func (s *workflowMemoryStorage) PutJSON(ctx context.Context, key string, value a
 	if err != nil {
 		return storage.PutResult{}, err
 	}
+	return s.putObject(key, body), nil
+}
+
+func (s *workflowMemoryStorage) PutBytes(_ context.Context, key string, body []byte, _ string) (storage.PutResult, error) {
+	return s.putObject(key, body), nil
+}
+
+func (s *workflowMemoryStorage) PresignGetObject(_ context.Context, key string, _ time.Duration) (storage.PresignedGetResult, error) {
+	return storage.PresignedGetResult{StorageKey: key, URL: "https://media.example.test/" + key}, nil
+}
+
+func (s *workflowMemoryStorage) putObject(key string, body []byte) storage.PutResult {
 	s.mu.Lock()
 	s.objects[key] = bytes.Clone(body)
 	s.mu.Unlock()
@@ -588,5 +662,5 @@ func (s *workflowMemoryStorage) PutJSON(ctx context.Context, key string, value a
 		StorageKey:  key,
 		ContentHash: "sha256:" + hex.EncodeToString(sum[:]),
 		ByteSize:    int64(len(body)),
-	}, nil
+	}
 }

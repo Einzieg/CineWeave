@@ -16,6 +16,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/config"
 	"github.com/Einzieg/cineweave/internal/observability"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
 	"go.temporal.io/api/serviceerror"
@@ -33,19 +34,21 @@ type workflowStartDefinition struct {
 }
 
 type workflowStartOutboxItem struct {
-	ID                 string
-	WorkflowRunID      *string
-	AgentTaskID        *string
-	OrganizationID     string
-	ProjectID          string
-	WorkflowType       string
-	WorkflowHandler    string
-	TemporalWorkflowID string
-	TaskQueue          string
-	Input              json.RawMessage
-	InputHash          string
-	AttemptCount       int
-	MaxAttempts        int
+	ID                     string
+	WorkflowRunID          *string
+	AgentTaskID            *string
+	OrganizationID         string
+	ProjectID              string
+	ProductionGenerationID string
+	ProfileVersionID       string
+	WorkflowType           string
+	WorkflowHandler        string
+	TemporalWorkflowID     string
+	TaskQueue              string
+	Input                  json.RawMessage
+	InputHash              string
+	AttemptCount           int
+	MaxAttempts            int
 }
 
 type workflowStartFailure struct {
@@ -75,35 +78,37 @@ func decodeWorkflowStartInput[T any](raw json.RawMessage) (any, error) {
 }
 
 var workflowStartDefinitions = map[string]workflowStartDefinition{
-	"text_to_storyboard":                {workflows.TextToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"extract_novel_events":              {workflows.ExtractNovelEventsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"generate_adaptation_plan":          {workflows.GenerateAdaptationPlanWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"adaptation_plan_to_script":         {workflows.AdaptationPlanToScriptWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"source_to_script":                  {workflows.SourceToScriptWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"parse_script_scenes":               {workflows.ParseScriptScenesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"script_to_assets":                  {workflows.ScriptToAssetsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"script_to_storyboard":              {workflows.ScriptToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"script_episode_timing":             {workflows.AnalyzeScriptEpisodeTimingWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"video_production":                  {workflows.VideoProductionWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"compose_timeline":                  {workflows.ComposeTimelineWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_canonical_asset_image":  {workflows.RegenerateCanonicalAssetImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_derived_asset_image":    {workflows.RegenerateDerivedAssetImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_shot_image":             {workflows.RegenerateShotImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_shot_video":             {workflows.RegenerateShotVideoWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_final_video":            {workflows.RegenerateFinalVideoWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_script_scene":           {workflows.RegenerateScriptSceneWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_scene_storyboard":       {workflows.RegenerateSceneStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_shot_image_prompts": {workflows.BatchGenerateShotImagePromptsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_shot_images":        {workflows.BatchGenerateShotImagesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_shot_video_prompts": {workflows.BatchGenerateShotVideoPromptsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_shot_videos":        {workflows.BatchGenerateShotVideosWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_cancel_shot_videos":          {workflows.BatchCancelShotVideosWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_asset_cards":        {workflows.BatchGenerateAssetCardsWorkflow, decodeWorkflowStartInput[workflows.AssetBatchWorkflowInput]},
-	"batch_generate_asset_images":       {workflows.BatchGenerateCanonicalAssetImagesWorkflow, decodeWorkflowStartInput[workflows.AssetBatchWorkflowInput]},
-	"episode_audio_production":          {workflows.EpisodeAudioProductionWorkflow, decodeWorkflowStartInput[workflows.EpisodeAudioProductionInput]},
-	"native_audio_review":               {workflows.NativeAudioReviewWorkflow, decodeWorkflowStartInput[workflows.NativeAudioReviewWorkflowInput]},
-	"export_project":                    {workflows.ExportProjectWorkflow, decodeWorkflowStartInput[workflows.ExportProjectInput]},
-	"project_agent":                     {workflows.ProjectAgentWorkflow, decodeWorkflowStartInput[workflows.ProjectAgentWorkflowInput]},
+	"text_to_storyboard":                  {workflows.TextToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"extract_novel_events":                {workflows.ExtractNovelEventsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"generate_adaptation_plan":            {workflows.GenerateAdaptationPlanWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"adaptation_plan_to_script":           {workflows.AdaptationPlanToScriptWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"source_to_script":                    {workflows.SourceToScriptWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"parse_script_scenes":                 {workflows.ParseScriptScenesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"script_to_assets":                    {workflows.ScriptToAssetsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"script_to_storyboard":                {workflows.ScriptToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"script_episode_timing":               {workflows.AnalyzeScriptEpisodeTimingWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"video_production":                    {workflows.VideoProductionWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"compose_timeline":                    {workflows.ComposeTimelineWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_canonical_asset_image":    {workflows.RegenerateCanonicalAssetImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_derived_asset_image":      {workflows.RegenerateDerivedAssetImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_shot_image":               {workflows.RegenerateShotImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_shot_video":               {workflows.RegenerateShotVideoWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_final_video":              {workflows.RegenerateFinalVideoWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_script_scene":             {workflows.RegenerateScriptSceneWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_scene_storyboard":         {workflows.RegenerateSceneStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_shot_image_prompts":   {workflows.BatchGenerateShotImagePromptsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_shot_images":          {workflows.BatchGenerateShotImagesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_shot_video_prompts":   {workflows.BatchGenerateShotVideoPromptsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_shot_videos":          {workflows.EpisodeBatchGenerateShotVideosWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_cancel_shot_videos":            {workflows.BatchCancelShotVideosWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_asset_cards":          {workflows.BatchGenerateAssetCardsWorkflow, decodeWorkflowStartInput[workflows.AssetBatchWorkflowInput]},
+	"batch_generate_asset_images":         {workflows.BatchGenerateCanonicalAssetImagesWorkflow, decodeWorkflowStartInput[workflows.AssetBatchWorkflowInput]},
+	"batch_generate_derived_asset_images": {workflows.BatchGenerateDerivedAssetImagesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"episode_audio_production":            {workflows.EpisodeAudioProductionWorkflow, decodeWorkflowStartInput[workflows.EpisodeAudioProductionInput]},
+	"native_audio_review":                 {workflows.NativeAudioReviewWorkflow, decodeWorkflowStartInput[workflows.NativeAudioReviewWorkflowInput]},
+	"export_project":                      {workflows.ExportProjectWorkflow, decodeWorkflowStartInput[workflows.ExportProjectInput]},
+	"project_agent":                       {workflows.ProjectAgentWorkflow, decodeWorkflowStartInput[workflows.ProjectAgentWorkflowInput]},
+	"project_video_production_rebuild":    {workflows.ProjectVideoProductionRebuildWorkflow, decodeWorkflowStartInput[workflows.ProjectVideoProductionRebuildInput]},
 }
 
 func workflowHandlerForFunction(workflowFunc any) (string, error) {
@@ -152,6 +157,51 @@ func hashWorkflowStartInput(raw json.RawMessage) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func workflowStartVisibility(item workflowStartOutboxItem) (map[string]interface{}, map[string]interface{}) {
+	values := map[string]string{
+		"ProjectId":              strings.TrimSpace(item.ProjectID),
+		"ProductionGenerationId": strings.TrimSpace(item.ProductionGenerationID),
+		"EpisodeId":              workflowStartInputString(item.Input, "scriptEpisodeId", "episodeId"),
+		"ProfileVersionId":       strings.TrimSpace(item.ProfileVersionID),
+		"RebuildId":              workflowStartInputString(item.Input, "rebuildId"),
+	}
+	searchAttributes := make(map[string]interface{}, len(values))
+	memo := make(map[string]interface{}, len(values)+2)
+	for key, value := range values {
+		if value == "" {
+			continue
+		}
+		searchAttributes[key] = value
+		memo[key] = value
+	}
+	memo["WorkflowType"] = item.WorkflowType
+	if item.WorkflowRunID != nil && strings.TrimSpace(*item.WorkflowRunID) != "" {
+		memo["WorkflowRunId"] = strings.TrimSpace(*item.WorkflowRunID)
+	}
+	return searchAttributes, memo
+}
+
+func workflowStartInputString(raw json.RawMessage, keys ...string) string {
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return ""
+	}
+	containers := []map[string]any{root}
+	for _, containerKey := range []string{"input", "plan", "options"} {
+		if nested, ok := root[containerKey].(map[string]any); ok {
+			containers = append(containers, nested)
+		}
+	}
+	for _, container := range containers {
+		for _, key := range keys {
+			if value, ok := container[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
+}
+
 func (s *Server) insertWorkflowRunTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -160,24 +210,40 @@ func (s *Server) insertWorkflowRunTx(
 	workflowType string,
 	runInput json.RawMessage,
 ) (WorkflowRun, error) {
+	productionContext, err := videoproduction.LoadWritableContextTx(
+		ctx,
+		tx,
+		project.ID,
+		workflowStartAllowsLockedProject(workflowType),
+	)
+	if err != nil {
+		return WorkflowRun{}, err
+	}
 	var run WorkflowRun
-	err := tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		WITH new_run AS (SELECT gen_random_uuid() AS id)
 		INSERT INTO workflow_runs(
 			id, organization_id, project_id, temporal_workflow_id, workflow_type,
-			status, input, output, created_by
+			status, input, output, created_by, production_generation_id,
+			video_production_binding_id, video_production_binding_revision
 		)
-		SELECT id, $1, $2, 'workflow-' || id::text, $3, 'queued', $4, '{}', $5
+		SELECT id, $1, $2, 'workflow-' || id::text, $3, 'queued', $4, '{}', $5, $6, $7, $8
 		FROM new_run
-		RETURNING id, organization_id, project_id, template_id, temporal_workflow_id, status,
+		RETURNING id, organization_id, project_id, production_generation_id,
+		          video_production_binding_id, video_production_binding_revision,
+		          template_id, temporal_workflow_id, status,
 		          input, output, error_code, error_message, created_by, created_at,
 		          started_at, completed_at, cancelled_at, workflow_type, total_items,
 		          completed_items, failed_items, revision, attempt_generation, root_workflow_run_id,
 		          retry_of_workflow_run_id, updated_at
-	`, project.OrganizationID, project.ID, workflowType, runInput, principal.UserID).Scan(
+	`, project.OrganizationID, project.ID, workflowType, runInput, principal.UserID,
+		productionContext.Generation.ID, productionContext.Binding.ID, productionContext.Binding.Revision).Scan(
 		&run.ID,
 		&run.OrganizationID,
 		&run.ProjectID,
+		&run.ProductionGenerationID,
+		&run.VideoProductionBindingID,
+		&run.VideoProductionBindingRevision,
 		&run.TemplateID,
 		&run.TemporalWorkflowID,
 		&run.Status,
@@ -210,6 +276,7 @@ func (s *Server) enqueueWorkflowStartTx(
 	agentTaskID string,
 	organizationID string,
 	projectID string,
+	productionGenerationID string,
 	workflowType string,
 	workflowHandler string,
 	temporalWorkflowID string,
@@ -223,13 +290,14 @@ func (s *Server) enqueueWorkflowStartTx(
 	_, err = tx.Exec(ctx, `
 		INSERT INTO workflow_start_outbox(
 			workflow_run_id, agent_task_id, organization_id, project_id, workflow_type,
-			workflow_handler, temporal_workflow_id, task_queue, input, input_hash, max_attempts
+			workflow_handler, temporal_workflow_id, task_queue, input, input_hash, max_attempts,
+			production_generation_id
 		)
 		VALUES (
-			NULLIF($1, '')::uuid, NULLIF($2, '')::uuid, $3, $4, $5,
-			$6, $7, $8, $9, $10, $11
+			NULLIF($1, '')::uuid, NULLIF($2, '')::uuid, $3, $4, $6,
+			$7, $8, $9, $10, $11, $12, $5
 		)
-	`, workflowRunID, agentTaskID, organizationID, projectID, workflowType, workflowHandler,
+	`, workflowRunID, agentTaskID, organizationID, projectID, productionGenerationID, workflowType, workflowHandler,
 		temporalWorkflowID, taskQueue, raw, inputHash, workflowStartDefaultMaxAttempts)
 	return err
 }
@@ -299,7 +367,7 @@ func (s *Server) enqueueProjectWorkflowTx(
 		return WorkflowRun{}, err
 	}
 	if err := s.enqueueWorkflowStartTx(
-		ctx, tx, run.ID, "", project.OrganizationID, project.ID, workflowType,
+		ctx, tx, run.ID, "", project.OrganizationID, project.ID, run.ProductionGenerationID, workflowType,
 		handler, run.TemporalWorkflowID, taskQueue, buildInput(run),
 	); err != nil {
 		return WorkflowRun{}, err
@@ -467,7 +535,15 @@ func (s *Server) claimWorkflowStart(ctx context.Context, workerID string, leaseT
 		FROM candidate
 		WHERE outbox.id = candidate.id
 		RETURNING outbox.id::text, outbox.workflow_run_id::text, outbox.agent_task_id::text,
-		          outbox.organization_id::text, outbox.project_id::text, outbox.workflow_type,
+		          outbox.organization_id::text, outbox.project_id::text,
+		          outbox.production_generation_id::text,
+		          COALESCE((
+		            SELECT binding.profile_version_id::text
+		            FROM project_video_production_generations generation
+		            JOIN project_video_production_bindings binding ON binding.id = generation.binding_id
+		            WHERE generation.id = outbox.production_generation_id
+		          ), ''),
+		          outbox.workflow_type,
 		          outbox.workflow_handler, outbox.temporal_workflow_id, outbox.task_queue,
 		          outbox.input, outbox.input_hash, outbox.attempt_count, outbox.max_attempts
 	`, workerID, leaseTimeout.String()).Scan(
@@ -476,6 +552,8 @@ func (s *Server) claimWorkflowStart(ctx context.Context, workerID string, leaseT
 		&item.AgentTaskID,
 		&item.OrganizationID,
 		&item.ProjectID,
+		&item.ProductionGenerationID,
+		&item.ProfileVersionID,
 		&item.WorkflowType,
 		&item.WorkflowHandler,
 		&item.TemporalWorkflowID,
@@ -537,11 +615,33 @@ func (s *Server) executeWorkflowStart(ctx context.Context, workerID string, item
 		}
 		return workflowStartResultCancelledFenced, nil
 	}
+	if _, err := videoproduction.AssertGenerationWritableTx(
+		ctx,
+		tx,
+		item.ProjectID,
+		item.ProductionGenerationID,
+		workflowStartAllowsLockedProject(item.WorkflowType),
+	); err != nil {
+		if domainErr, ok := videoproduction.AsError(err); ok &&
+			(domainErr.Code == videoproduction.CodeProjectLocked || domainErr.Code == videoproduction.CodeGenerationMismatch) {
+			if err := s.cancelFencedWorkflowStartTx(ctx, tx, workerID, item, domainErr.Code, domainErr.Error()); err != nil {
+				return "", err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return "", err
+			}
+			return workflowStartResultCancelledFenced, nil
+		}
+		return "", err
+	}
 
 	alreadyStartedExecution := false
+	searchAttributes, memo := workflowStartVisibility(item)
 	_, err = s.temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:        item.TemporalWorkflowID,
-		TaskQueue: item.TaskQueue,
+		ID:               item.TemporalWorkflowID,
+		TaskQueue:        item.TaskQueue,
+		SearchAttributes: searchAttributes,
+		Memo:             memo,
 	}, definition.workflow, input)
 	if err != nil {
 		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
@@ -594,6 +694,82 @@ func (s *Server) executeWorkflowStart(ctx context.Context, workerID string, item
 		return workflowStartResultAlreadyStarted, nil
 	}
 	return workflowStartResultStarted, nil
+}
+
+func workflowStartAllowsLockedProject(workflowType string) bool {
+	return strings.TrimSpace(workflowType) == "project_video_production_rebuild"
+}
+
+func (s *Server) cancelFencedWorkflowStartTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workerID string,
+	item workflowStartOutboxItem,
+	code string,
+	message string,
+) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE workflow_start_outbox
+		SET status = 'cancelled', completed_at = now(), locked_at = NULL, locked_by = NULL,
+		    last_error_code = $3, last_error_message = $4, updated_at = now()
+		WHERE id = $1 AND status = 'processing' AND locked_by = $2
+	`, item.ID, workerID, code, message)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+	if item.WorkflowRunID != nil {
+		runTag, err := tx.Exec(ctx, `
+			UPDATE workflow_runs
+			SET status = 'cancelled', error_code = $2, error_message = $3,
+			    completed_at = now(), cancelled_at = now(), terminalized_at = now(), settled_at = now(),
+			    updated_at = now(), revision = revision + 1
+			WHERE id = $1 AND status IN ('pending', 'queued')
+		`, *item.WorkflowRunID, code, message)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE workflow_node_runs
+			SET status = 'cancelled', error_code = $2, error_message = $3,
+			    completed_at = now(), updated_at = now(), revision = revision + 1
+			WHERE workflow_run_id = $1 AND status IN ('pending', 'queued')
+		`, *item.WorkflowRunID, code, message); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE project_exports
+			SET status = 'cancelled', error_code = $2, error_message = $3, completed_at = now()
+			WHERE workflow_run_id = $1 AND status = 'queued'
+		`, *item.WorkflowRunID, code, message); err != nil {
+			return err
+		}
+		if runTag.RowsAffected() > 0 {
+			if err := insertAPIEvent(ctx, tx, item.OrganizationID, item.ProjectID, "workflow.run.cancelled", "workflow_run", *item.WorkflowRunID, mustMarshal(map[string]any{
+				"workflowRunId": *item.WorkflowRunID,
+				"workflowType":  item.WorkflowType,
+				"status":        "cancelled",
+				"errorCode":     code,
+				"errorMessage":  message,
+			})); err != nil {
+				return err
+			}
+		}
+	}
+	if item.AgentTaskID != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE agent_tasks
+			SET status = 'cancelled', error_code = $3, error_message = $4,
+			    completed_at = now(), updated_at = now()
+			WHERE id = $1 AND temporal_workflow_id = $2
+			  AND status IN ('queued', 'planning', 'running', 'waiting_approval')
+		`, *item.AgentTaskID, item.TemporalWorkflowID, code, message); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) observeWorkflowRuntime(ctx context.Context) error {

@@ -8,6 +8,9 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"unicode"
+
+	"github.com/Einzieg/cineweave/internal/videocontracts"
 )
 
 const (
@@ -19,24 +22,59 @@ const (
 	VideoSupportTrue    = "true"
 	VideoSupportFalse   = "false"
 	VideoSupportUnknown = "unknown"
+
+	VideoInputContractTextOnly                 = string(videocontracts.InputContractTextOnly)
+	VideoInputContractFirstFrame               = string(videocontracts.InputContractFirstFrame)
+	VideoInputContractFirstLastFrames          = string(videocontracts.InputContractFirstLastFrames)
+	VideoInputContractSemanticReferences       = string(videocontracts.InputContractSemanticReferences)
+	VideoInputContractFirstFramePlusReferences = string(videocontracts.InputContractFirstFramePlusReferences)
+	VideoInputContractStoryboardSheetReference = string(videocontracts.InputContractStoryboardSheetReference)
+	VideoInputContractVideoReference           = string(videocontracts.InputContractVideoReference)
+	VideoInputContractVideoExtension           = string(videocontracts.InputContractVideoExtension)
+
+	VideoCapabilityVerificationOfficial = "official"
+	VideoCapabilityVerificationTested   = "tested"
+	VideoCapabilityVerificationInferred = "inferred"
+	VideoCapabilityVerificationUnknown  = "unknown"
 )
 
 type VideoGenerationVariant struct {
-	VariantKey               string                      `json:"variantKey"`
-	ModelFamily              string                      `json:"modelFamily,omitempty"`
-	When                     VideoGenerationVariantWhen  `json:"when"`
-	Duration                 VideoDurationCapability     `json:"duration"`
-	Resolutions              []string                    `json:"resolutions,omitempty"`
-	AspectRatios             []string                    `json:"aspectRatios,omitempty"`
-	FrameRate                VideoFrameRateCapability    `json:"frameRate"`
-	SupportedPromptLanguages []string                    `json:"supportedPromptLanguages,omitempty"`
-	NativeAudio              VideoNativeAudioCapability  `json:"nativeAudio"`
-	Continuation             VideoContinuationCapability `json:"continuation"`
-	RequestModes             []string                    `json:"requestModes,omitempty"`
-	Source                   string                      `json:"source,omitempty"`
-	SourceURL                string                      `json:"sourceUrl,omitempty"`
-	VerifiedAt               string                      `json:"verifiedAt,omitempty"`
-	CapabilityVersion        string                      `json:"capabilityVersion,omitempty"`
+	VariantKey                 string                      `json:"variantKey"`
+	ModelFamily                string                      `json:"modelFamily,omitempty"`
+	When                       VideoGenerationVariantWhen  `json:"when"`
+	Duration                   VideoDurationCapability     `json:"duration"`
+	Resolutions                []string                    `json:"resolutions,omitempty"`
+	AspectRatios               []string                    `json:"aspectRatios,omitempty"`
+	FrameRate                  VideoFrameRateCapability    `json:"frameRate"`
+	SupportedPromptLanguages   []string                    `json:"supportedPromptLanguages,omitempty"`
+	NativeAudio                VideoNativeAudioCapability  `json:"nativeAudio"`
+	Continuation               VideoContinuationCapability `json:"continuation"`
+	InputContract              VideoInputContract          `json:"inputContract"`
+	ContinuationInputContracts []VideoInputContract        `json:"continuationInputContracts,omitempty"`
+	RequestModes               []string                    `json:"requestModes,omitempty"`
+	Source                     string                      `json:"source,omitempty"`
+	SourceURL                  string                      `json:"sourceUrl,omitempty"`
+	VerifiedAt                 string                      `json:"verifiedAt,omitempty"`
+	CapabilityVersion          string                      `json:"capabilityVersion,omitempty"`
+	VerificationStatus         string                      `json:"verificationStatus"`
+}
+
+type VideoInputContract struct {
+	ContractKey                      string           `json:"contractKey"`
+	RequestMode                      string           `json:"requestMode"`
+	Slots                            []VideoInputSlot `json:"slots"`
+	MutuallyExclusiveRoles           [][]string       `json:"mutuallyExclusiveRoles"`
+	SupportsStoryboardSheetReference bool             `json:"supportsStoryboardSheetReference"`
+	SupportsVideoExtension           bool             `json:"supportsVideoExtension"`
+}
+
+type VideoInputSlot struct {
+	Role      string `json:"role"`
+	MediaType string `json:"mediaType"`
+	Semantics string `json:"semantics"`
+	Min       int    `json:"min"`
+	Max       int    `json:"max"`
+	Ordered   bool   `json:"ordered"`
 }
 
 type VideoGenerationVariantWhen struct {
@@ -78,34 +116,56 @@ type VideoContinuationCapability struct {
 }
 
 type GatewayVideoPlanRequest struct {
-	OrganizationID          string                     `json:"organizationId"`
-	ProjectID               string                     `json:"projectId"`
-	WorkflowRunID           string                     `json:"workflowRunId,omitempty"`
-	NodeRunID               string                     `json:"nodeRunId,omitempty"`
-	NodeExecutionToken      string                     `json:"nodeExecutionToken,omitempty"`
-	NodeAttemptGeneration   int                        `json:"nodeAttemptGeneration,omitempty"`
-	StoryboardPlanID        string                     `json:"storyboardPlanId,omitempty"`
-	StoryboardShotID        string                     `json:"storyboardShotId"`
-	ModelProfileKey         string                     `json:"modelProfileKey,omitempty"`
-	ProviderModelID         string                     `json:"providerModelId,omitempty"`
-	TaskType                string                     `json:"taskType"`
-	TargetDurationTicks     int64                      `json:"targetDurationTicks"`
-	TimelineTimebase        int64                      `json:"timelineTimebase"`
-	FPSNumerator            int64                      `json:"fpsNumerator"`
-	FPSDenominator          int64                      `json:"fpsDenominator"`
-	AudioStrategy           string                     `json:"audioStrategy"`
-	AudioRequirement        string                     `json:"audioRequirement"`
-	DialogueLanguage        string                     `json:"dialogueLanguage,omitempty"`
-	HasDialogue             bool                       `json:"hasDialogue"`
-	ReferenceMode           string                     `json:"referenceMode"`
-	AspectRatio             string                     `json:"aspectRatio"`
-	Resolution              string                     `json:"resolution"`
-	PromptLanguage          string                     `json:"promptLanguage,omitempty"`
-	ExpiresInSeconds        int                        `json:"expiresInSeconds,omitempty"`
-	Force                   bool                       `json:"force,omitempty"`
-	ExcludeProviderModelIDs []string                   `json:"excludeProviderModelIds,omitempty"`
-	PreviousExecutionPlanID string                     `json:"previousExecutionPlanId,omitempty"`
-	DialogueSpans           []GatewayVideoDialogueSpan `json:"dialogueSpans,omitempty"`
+	OrganizationID                    string                     `json:"organizationId"`
+	ProjectID                         string                     `json:"projectId"`
+	OperationID                       string                     `json:"operationId,omitempty"`
+	OperationItemID                   string                     `json:"operationItemId,omitempty"`
+	OperationItemAttempt              int                        `json:"operationItemAttempt,omitempty"`
+	ProductionGenerationID            string                     `json:"productionGenerationId"`
+	VideoProductionBindingID          string                     `json:"videoProductionBindingId"`
+	VideoProductionBindingRevision    int64                      `json:"videoProductionBindingRevision"`
+	ProductionProfileVersionID        string                     `json:"productionProfileVersionId"`
+	ProductionProfileSnapshotHash     string                     `json:"productionProfileSnapshotHash"`
+	CompatibilityPolicy               string                     `json:"compatibilityPolicy"`
+	RequiredInitialInputContract      string                     `json:"requiredInitialInputContract"`
+	AllowedContinuationInputContracts []string                   `json:"allowedContinuationInputContracts,omitempty"`
+	InputContractVersion              string                     `json:"inputContractVersion"`
+	ShotStateRevision                 int                        `json:"shotStateRevision"`
+	ShotStateHash                     string                     `json:"shotStateHash"`
+	TransitionHash                    string                     `json:"transitionHash,omitempty"`
+	ReferencePackID                   string                     `json:"referencePackId"`
+	ReferencePackHash                 string                     `json:"referencePackHash"`
+	PromptContextPlanID               string                     `json:"promptContextPlanId"`
+	PromptContextPlanHash             string                     `json:"promptContextPlanHash"`
+	VideoPromptPlanID                 string                     `json:"videoPromptPlanId"`
+	NativeAudioRequired               bool                       `json:"nativeAudioRequired"`
+	WorkflowRunID                     string                     `json:"workflowRunId,omitempty"`
+	NodeRunID                         string                     `json:"nodeRunId,omitempty"`
+	NodeExecutionToken                string                     `json:"nodeExecutionToken,omitempty"`
+	NodeAttemptGeneration             int                        `json:"nodeAttemptGeneration,omitempty"`
+	StoryboardPlanID                  string                     `json:"storyboardPlanId,omitempty"`
+	StoryboardShotID                  string                     `json:"storyboardShotId"`
+	ModelProfileKey                   string                     `json:"modelProfileKey,omitempty"`
+	ProviderModelID                   string                     `json:"providerModelId,omitempty"`
+	TaskType                          string                     `json:"taskType"`
+	TargetDurationTicks               int64                      `json:"targetDurationTicks"`
+	TimelineTimebase                  int64                      `json:"timelineTimebase"`
+	FPSNumerator                      int64                      `json:"fpsNumerator"`
+	FPSDenominator                    int64                      `json:"fpsDenominator"`
+	AudioStrategy                     string                     `json:"audioStrategy"`
+	AudioRequirement                  string                     `json:"audioRequirement"`
+	DialogueLanguage                  string                     `json:"dialogueLanguage,omitempty"`
+	HasDialogue                       bool                       `json:"hasDialogue"`
+	ReferenceMode                     string                     `json:"referenceMode"`
+	AspectRatio                       string                     `json:"aspectRatio"`
+	Resolution                        string                     `json:"resolution"`
+	PromptLanguage                    string                     `json:"promptLanguage,omitempty"`
+	ExpiresInSeconds                  int                        `json:"expiresInSeconds,omitempty"`
+	Force                             bool                       `json:"force,omitempty"`
+	ExcludeProviderModelIDs           []string                   `json:"excludeProviderModelIds,omitempty"`
+	PreviousExecutionPlanID           string                     `json:"previousExecutionPlanId,omitempty"`
+	DialogueSpans                     []GatewayVideoDialogueSpan `json:"dialogueSpans,omitempty"`
+	validatedContract                 *videoPlanProductionContract
 }
 
 type GatewayVideoDialogueSpan struct {
@@ -129,40 +189,62 @@ type GatewayVideoPlanSegment struct {
 	PlannedDurationSeconds   float64                    `json:"plannedDurationSeconds"`
 	RequestedDurationSeconds float64                    `json:"requestedDurationSeconds"`
 	ContinuityMode           string                     `json:"continuityMode"`
+	InputContractKey         string                     `json:"inputContractKey"`
+	InputContractHash        string                     `json:"inputContractHash"`
 	TrimEndTick              int64                      `json:"trimEndTick,omitempty"`
 	DialogueSpans            []GatewayVideoDialogueSpan `json:"dialogueSpans,omitempty"`
 }
 
 type GatewayVideoPlanResponse struct {
-	ExecutionPlanID        string                    `json:"executionPlanId"`
-	ProviderModelID        string                    `json:"providerModelId"`
-	ProviderAccountID      string                    `json:"providerAccountId"`
-	ModelFamily            string                    `json:"modelFamily"`
-	VariantKey             string                    `json:"variantKey"`
-	CapabilitySnapshot     VideoGenerationVariant    `json:"capabilitySnapshot"`
-	CapabilitySnapshotHash string                    `json:"capabilitySnapshotHash"`
-	TimelineTimebase       int64                     `json:"timelineTimebase"`
-	FPSNumerator           int64                     `json:"fpsNumerator"`
-	FPSDenominator         int64                     `json:"fpsDenominator"`
-	ExpiresAt              string                    `json:"expiresAt"`
-	AudioStrategy          string                    `json:"audioStrategy"`
-	AudioRequirement       string                    `json:"audioRequirement"`
-	NativeAudioStatus      string                    `json:"nativeAudioStatus"`
-	ProductionReadiness    string                    `json:"productionReadiness"`
-	Segments               []GatewayVideoPlanSegment `json:"segments"`
+	ExecutionPlanID                   string                    `json:"executionPlanId"`
+	ProviderModelID                   string                    `json:"providerModelId"`
+	ProviderAccountID                 string                    `json:"providerAccountId"`
+	ModelFamily                       string                    `json:"modelFamily"`
+	VariantKey                        string                    `json:"variantKey"`
+	CapabilitySnapshot                VideoGenerationVariant    `json:"capabilitySnapshot"`
+	CapabilitySnapshotHash            string                    `json:"capabilitySnapshotHash"`
+	InitialInputContractSnapshot      VideoInputContract        `json:"initialInputContractSnapshot"`
+	InitialInputContractHash          string                    `json:"initialInputContractHash"`
+	ContinuationInputContractSnapshot *VideoInputContract       `json:"continuationInputContractSnapshot,omitempty"`
+	ContinuationInputContractHash     string                    `json:"continuationInputContractHash,omitempty"`
+	CapabilityAttestationID           string                    `json:"capabilityAttestationId,omitempty"`
+	ProductionProfileVersionID        string                    `json:"productionProfileVersionId"`
+	ProductionProfileSnapshotHash     string                    `json:"productionProfileSnapshotHash"`
+	CompatibilityPolicy               string                    `json:"compatibilityPolicy"`
+	ShotStateRevision                 int                       `json:"shotStateRevision"`
+	ShotStateHash                     string                    `json:"shotStateHash"`
+	TransitionHash                    string                    `json:"transitionHash,omitempty"`
+	ReferencePackID                   string                    `json:"referencePackId"`
+	ReferencePackHash                 string                    `json:"referencePackHash"`
+	PromptContextPlanID               string                    `json:"promptContextPlanId"`
+	PromptContextPlanHash             string                    `json:"promptContextPlanHash"`
+	VideoPromptPlanID                 string                    `json:"videoPromptPlanId"`
+	NativeAudioRequired               bool                      `json:"nativeAudioRequired"`
+	TimelineTimebase                  int64                     `json:"timelineTimebase"`
+	FPSNumerator                      int64                     `json:"fpsNumerator"`
+	FPSDenominator                    int64                     `json:"fpsDenominator"`
+	ExpiresAt                         string                    `json:"expiresAt"`
+	AudioStrategy                     string                    `json:"audioStrategy"`
+	AudioRequirement                  string                    `json:"audioRequirement"`
+	NativeAudioStatus                 string                    `json:"nativeAudioStatus"`
+	ProductionReadiness               string                    `json:"productionReadiness"`
+	Segments                          []GatewayVideoPlanSegment `json:"segments"`
 }
 
 type GatewayVideoRetrySegmentRequest struct {
-	OrganizationID        string `json:"organizationId"`
-	ProjectID             string `json:"projectId"`
-	WorkflowRunID         string `json:"workflowRunId"`
-	NodeRunID             string `json:"nodeRunId"`
-	NodeExecutionToken    string `json:"nodeExecutionToken"`
-	NodeAttemptGeneration int    `json:"nodeAttemptGeneration"`
-	ExecutionPlanID       string `json:"executionPlanId"`
-	RenderSegmentID       string `json:"renderSegmentId"`
-	FailureCode           string `json:"failureCode,omitempty"`
-	FailureMessage        string `json:"failureMessage,omitempty"`
+	OrganizationID                 string `json:"organizationId"`
+	ProjectID                      string `json:"projectId"`
+	ProductionGenerationID         string `json:"productionGenerationId"`
+	VideoProductionBindingID       string `json:"videoProductionBindingId"`
+	VideoProductionBindingRevision int64  `json:"videoProductionBindingRevision"`
+	WorkflowRunID                  string `json:"workflowRunId"`
+	NodeRunID                      string `json:"nodeRunId"`
+	NodeExecutionToken             string `json:"nodeExecutionToken"`
+	NodeAttemptGeneration          int    `json:"nodeAttemptGeneration"`
+	ExecutionPlanID                string `json:"executionPlanId"`
+	RenderSegmentID                string `json:"renderSegmentId"`
+	FailureCode                    string `json:"failureCode,omitempty"`
+	FailureMessage                 string `json:"failureMessage,omitempty"`
 }
 
 type GatewayVideoRetrySegmentResponse struct {
@@ -176,15 +258,18 @@ type GatewayVideoRetrySegmentResponse struct {
 }
 
 type videoVariantMatchRequest struct {
-	TaskType         string
-	ReferenceMode    string
-	AspectRatio      string
-	Resolution       string
-	PromptLanguage   string
-	DialogueLanguage string
-	HasDialogue      bool
-	AudioStrategy    string
-	AudioRequirement string
+	TaskType                          string
+	ReferenceMode                     string
+	AspectRatio                       string
+	Resolution                        string
+	PromptLanguage                    string
+	DialogueLanguage                  string
+	HasDialogue                       bool
+	AudioStrategy                     string
+	AudioRequirement                  string
+	RequiredInitialInputContract      string
+	AllowedContinuationInputContracts []string
+	CompatibilityPolicy               string
 }
 
 func videoGenerationVariants(capabilities []Capability, model Model) ([]VideoGenerationVariant, error) {
@@ -211,10 +296,6 @@ func videoGenerationVariants(capabilities []Capability, model Model) ([]VideoGen
 				return nil, fmt.Errorf("%w: videoGenerationVariants is invalid", ErrValidation)
 			}
 			variants = append(variants, parsed...)
-			continue
-		}
-		if legacy, ok := legacyVideoGenerationVariant(xCapabilities, capability, model); ok {
-			variants = append(variants, legacy)
 		}
 	}
 	seen := map[string]bool{}
@@ -228,11 +309,245 @@ func videoGenerationVariants(capabilities []Capability, model Model) ([]VideoGen
 		if strings.TrimSpace(variant.ModelFamily) == "" {
 			variant.ModelFamily = inferVideoModelFamily(model.ModelKey)
 		}
+		if err := normalizeVideoInputContract(variant); err != nil {
+			return nil, err
+		}
 		if err := validateVideoGenerationVariant(*variant); err != nil {
 			return nil, err
 		}
 	}
 	return variants, nil
+}
+
+func normalizeVideoInputContract(variant *VideoGenerationVariant) error {
+	if variant == nil {
+		return fmt.Errorf("%w: video generation variant is required", ErrValidation)
+	}
+	variant.VerificationStatus = normalizeVideoCapabilityVerification(variant.VerificationStatus, variant.Source)
+	if err := normalizeVideoInputContractValue(&variant.InputContract, *variant, true); err != nil {
+		return err
+	}
+	if len(variant.ContinuationInputContracts) == 0 {
+		variant.ContinuationInputContracts = inferredVideoContinuationInputContracts(*variant)
+	}
+	seen := make(map[string]struct{}, len(variant.ContinuationInputContracts))
+	for index := range variant.ContinuationInputContracts {
+		contract := &variant.ContinuationInputContracts[index]
+		if err := normalizeVideoInputContractValue(contract, *variant, false); err != nil {
+			return err
+		}
+		if _, exists := seen[contract.ContractKey]; exists {
+			return fmt.Errorf("%w: variant %s has duplicate continuation input contract %s", ErrValidation, variant.VariantKey, contract.ContractKey)
+		}
+		seen[contract.ContractKey] = struct{}{}
+	}
+	return nil
+}
+
+func normalizeVideoInputContractValue(contract *VideoInputContract, variant VideoGenerationVariant, initial bool) error {
+	if contract == nil {
+		return fmt.Errorf("%w: video input contract is required", ErrValidation)
+	}
+	contract.ContractKey = strings.ToLower(strings.TrimSpace(contract.ContractKey))
+	contract.RequestMode = strings.ToLower(strings.TrimSpace(contract.RequestMode))
+	if contract.ContractKey == "" {
+		if !initial {
+			return fmt.Errorf("%w: continuation video input contract requires contractKey", ErrValidation)
+		}
+		contract.ContractKey = inferVideoInputContractKey(variant)
+	}
+	if contract.RequestMode == "" {
+		contract.RequestMode = firstNormalizedVideoRequestMode(variant.RequestModes)
+	}
+	if contract.RequestMode == "" {
+		contract.RequestMode = "async_create"
+	}
+	if len(contract.Slots) == 0 {
+		contract.Slots = canonicalVideoInputSlots(contract.ContractKey, variant)
+	}
+	if contract.Slots == nil {
+		contract.Slots = []VideoInputSlot{}
+	}
+	if contract.MutuallyExclusiveRoles == nil {
+		contract.MutuallyExclusiveRoles = [][]string{}
+	}
+	if contract.ContractKey == VideoInputContractStoryboardSheetReference {
+		contract.SupportsStoryboardSheetReference = true
+	}
+	if contract.ContractKey == VideoInputContractVideoExtension || variant.Continuation.SupportsExtension {
+		if contract.ContractKey == VideoInputContractVideoExtension {
+			contract.SupportsVideoExtension = true
+		}
+	}
+	return validateVideoInputContract(*contract)
+}
+
+func inferredVideoContinuationInputContracts(variant VideoGenerationVariant) []VideoInputContract {
+	result := make([]VideoInputContract, 0, 2)
+	if variant.Continuation.SupportsExtension || variant.InputContract.SupportsVideoExtension {
+		result = append(result, VideoInputContract{
+			ContractKey:            VideoInputContractVideoExtension,
+			RequestMode:            variant.InputContract.RequestMode,
+			Slots:                  canonicalVideoInputSlots(VideoInputContractVideoExtension, variant),
+			MutuallyExclusiveRoles: [][]string{},
+			SupportsVideoExtension: true,
+		})
+	}
+	if videoInputContractSatisfies(variant.InputContract, VideoInputContractFirstFrame) || variant.Continuation.SupportsFirstFrame {
+		result = append(result, VideoInputContract{
+			ContractKey:            VideoInputContractFirstFrame,
+			RequestMode:            variant.InputContract.RequestMode,
+			Slots:                  canonicalVideoInputSlots(VideoInputContractFirstFrame, variant),
+			MutuallyExclusiveRoles: [][]string{},
+		})
+	}
+	return result
+}
+
+func normalizeVideoCapabilityVerification(value, source string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case VideoCapabilityVerificationOfficial, VideoCapabilityVerificationTested,
+		VideoCapabilityVerificationInferred, VideoCapabilityVerificationUnknown:
+		return value
+	}
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "official":
+		return VideoCapabilityVerificationOfficial
+	case "test", "tested", "fixture":
+		return VideoCapabilityVerificationTested
+	case "derived", "inferred":
+		return VideoCapabilityVerificationInferred
+	default:
+		return VideoCapabilityVerificationUnknown
+	}
+}
+
+func inferVideoInputContractKey(variant VideoGenerationVariant) string {
+	modes := normalizeVideoStringSlice(variant.When.ReferenceModes)
+	switch {
+	case containsNormalizedString(modes, "storyboard_sheet") || containsNormalizedString(modes, "storyboard_sheet_reference"):
+		return VideoInputContractStoryboardSheetReference
+	case containsNormalizedString(modes, "first_last_frames") ||
+		(variant.Continuation.SupportsFirstFrame && variant.Continuation.SupportsLastFrame):
+		return VideoInputContractFirstLastFrames
+	case containsNormalizedString(modes, "first_frame_plus_references"):
+		return VideoInputContractFirstFramePlusReferences
+	case containsNormalizedString(modes, "semantic_references") || containsNormalizedString(modes, "reference"):
+		return VideoInputContractSemanticReferences
+	case containsNormalizedString(modes, "video_extension") || variant.Continuation.SupportsExtension:
+		return VideoInputContractVideoExtension
+	case containsNormalizedString(modes, "video_reference") || variant.Continuation.SupportsVideoReference:
+		return VideoInputContractVideoReference
+	case containsNormalizedString(modes, "first_frame") || variant.Continuation.SupportsFirstFrame:
+		return VideoInputContractFirstFrame
+	default:
+		return VideoInputContractTextOnly
+	}
+}
+
+func normalizeVideoStringSlice(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func canonicalVideoInputSlots(contractKey string, variant VideoGenerationVariant) []VideoInputSlot {
+	maxReferences := 1
+	for _, mode := range variant.When.ReferenceModes {
+		if strings.EqualFold(strings.TrimSpace(mode), "first_frame_plus_references") || strings.EqualFold(strings.TrimSpace(mode), "semantic_references") {
+			maxReferences = 8
+			break
+		}
+	}
+	firstFrame := VideoInputSlot{Role: "first_frame", MediaType: "image", Semantics: "output_start_frame", Min: 1, Max: 1, Ordered: true}
+	lastFrame := VideoInputSlot{Role: "last_frame", MediaType: "image", Semantics: "output_end_frame", Min: 1, Max: 1, Ordered: true}
+	semantic := VideoInputSlot{Role: "semantic_reference", MediaType: "image", Semantics: "identity_scene_style_guidance", Min: 1, Max: maxReferences, Ordered: false}
+	switch contractKey {
+	case VideoInputContractTextOnly:
+		return []VideoInputSlot{}
+	case VideoInputContractFirstFrame:
+		return []VideoInputSlot{firstFrame}
+	case VideoInputContractFirstLastFrames:
+		return []VideoInputSlot{firstFrame, lastFrame}
+	case VideoInputContractSemanticReferences:
+		return []VideoInputSlot{semantic}
+	case VideoInputContractFirstFramePlusReferences:
+		semantic.Min = 0
+		return []VideoInputSlot{firstFrame, semantic}
+	case VideoInputContractStoryboardSheetReference:
+		return []VideoInputSlot{{Role: "storyboard_sheet", MediaType: "image", Semantics: "ordered_keyframe_sheet", Min: 1, Max: 1, Ordered: true}}
+	case VideoInputContractVideoReference:
+		return []VideoInputSlot{{Role: "video_reference", MediaType: "video", Semantics: "motion_identity_guidance", Min: 1, Max: 1, Ordered: true}}
+	case VideoInputContractVideoExtension:
+		return []VideoInputSlot{{Role: "video_extension_source", MediaType: "video", Semantics: "source_video_extension", Min: 1, Max: 1, Ordered: true}}
+	default:
+		return nil
+	}
+}
+
+func validateVideoInputContract(contract VideoInputContract) error {
+	if !validVideoInputContractKey(contract.ContractKey) {
+		return fmt.Errorf("%w: unsupported video input contract %s", ErrValidation, contract.ContractKey)
+	}
+	if contract.RequestMode == "" {
+		return fmt.Errorf("%w: video input contract %s requires requestMode", ErrValidation, contract.ContractKey)
+	}
+	seenRoles := map[string]bool{}
+	for _, slot := range contract.Slots {
+		role := strings.ToLower(strings.TrimSpace(slot.Role))
+		mediaType := strings.ToLower(strings.TrimSpace(slot.MediaType))
+		if role == "" || seenRoles[role] || (mediaType != "image" && mediaType != "video" && mediaType != "audio") || slot.Min < 0 || slot.Max < slot.Min || slot.Max <= 0 {
+			return fmt.Errorf("%w: video input contract %s has an invalid or duplicate slot %s", ErrValidation, contract.ContractKey, role)
+		}
+		seenRoles[role] = true
+	}
+	for _, group := range contract.MutuallyExclusiveRoles {
+		if len(group) < 2 {
+			return fmt.Errorf("%w: mutually exclusive role groups require at least two roles", ErrValidation)
+		}
+		for _, role := range group {
+			if !seenRoles[strings.ToLower(strings.TrimSpace(role))] {
+				return fmt.Errorf("%w: mutually exclusive role %s is not declared as an input slot", ErrValidation, role)
+			}
+		}
+	}
+	return nil
+}
+
+func validVideoInputContractKey(value string) bool {
+	_, err := videocontracts.ParseInputContractKey(value)
+	return err == nil
+}
+
+func firstNormalizedVideoRequestMode(values []string) string {
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "async_create" || value == "sync" || value == "stream" {
+			return value
+		}
+	}
+	return ""
+}
+
+func videoInputContractSatisfies(actual VideoInputContract, required string) bool {
+	required = strings.ToLower(strings.TrimSpace(required))
+	actualKey := strings.ToLower(strings.TrimSpace(actual.ContractKey))
+	if actualKey == required {
+		return true
+	}
+	return required == VideoInputContractFirstFrame && actualKey == VideoInputContractFirstFramePlusReferences
 }
 
 func validateVideoGenerationVariant(variant VideoGenerationVariant) error {
@@ -276,6 +591,15 @@ func validateVideoGenerationVariant(variant VideoGenerationVariant) error {
 }
 
 func matchVideoGenerationVariant(variant VideoGenerationVariant, req videoVariantMatchRequest) (bool, int, string, string) {
+	if strings.TrimSpace(req.RequiredInitialInputContract) != "" {
+		if strings.EqualFold(strings.TrimSpace(req.CompatibilityPolicy), "strict") {
+			if !strings.EqualFold(strings.TrimSpace(variant.InputContract.ContractKey), strings.TrimSpace(req.RequiredInitialInputContract)) {
+				return false, 0, "", ""
+			}
+		} else if !videoInputContractSatisfies(variant.InputContract, req.RequiredInitialInputContract) {
+			return false, 0, "", ""
+		}
+	}
 	if !matchesOptionalValue(variant.When.TaskTypes, req.TaskType) || !matchesOptionalValue(variant.When.ReferenceModes, req.ReferenceMode) {
 		return false, 0, "", ""
 	}
@@ -322,7 +646,7 @@ func matchVideoGenerationVariant(variant VideoGenerationVariant, req videoVarian
 	}
 }
 
-func planVideoSegments(targetTicks, timebase int64, variant VideoGenerationVariant, referenceMode string) ([]GatewayVideoPlanSegment, error) {
+func planVideoSegments(targetTicks, timebase int64, variant VideoGenerationVariant, referenceMode string, continuation *VideoInputContract) ([]GatewayVideoPlanSegment, error) {
 	if targetTicks <= 0 || timebase <= 0 {
 		return nil, fmt.Errorf("%w: targetDurationTicks and timelineTimebase must be positive", ErrValidation)
 	}
@@ -331,7 +655,7 @@ func planVideoSegments(targetTicks, timebase int64, variant VideoGenerationVaria
 	if err != nil {
 		return nil, err
 	}
-	if len(requested) > 1 && !variantSupportsContinuation(variant) {
+	if len(requested) > 1 && continuation == nil {
 		return nil, &StandardErrorError{Standard: StandardError{
 			Code: CodeStoryboardReplanRequired, Message: "selected video capability cannot preserve continuity across multiple render segments", Retryable: false,
 		}}
@@ -350,7 +674,7 @@ func planVideoSegments(targetTicks, timebase int64, variant VideoGenerationVaria
 		}
 		continuityMode := normalizeReferenceMode(referenceMode)
 		if index > 0 {
-			continuityMode = nextVideoContinuityMode(variant)
+			continuityMode = nextVideoContinuityMode(continuation)
 		}
 		segment := GatewayVideoPlanSegment{
 			SegmentIndex: index, PlannedStartTick: start, PlannedEndTick: start + planned,
@@ -378,9 +702,9 @@ type videoDialoguePlanState struct {
 	requestedSecond float64
 }
 
-func planVideoSegmentsWithDialogue(targetTicks, timebase, frameTick int64, variant VideoGenerationVariant, referenceMode string, dialogue []GatewayVideoDialogueSpan) ([]GatewayVideoPlanSegment, error) {
+func planVideoSegmentsWithDialogue(targetTicks, timebase, frameTick int64, variant VideoGenerationVariant, referenceMode string, dialogue []GatewayVideoDialogueSpan, continuation *VideoInputContract) ([]GatewayVideoPlanSegment, error) {
 	if len(dialogue) == 0 {
-		return planVideoSegments(targetTicks, timebase, variant, referenceMode)
+		return planVideoSegments(targetTicks, timebase, variant, referenceMode, continuation)
 	}
 	normalized, err := validateGatewayVideoDialogueSpans(dialogue, targetTicks, frameTick)
 	if err != nil {
@@ -398,6 +722,10 @@ func planVideoSegmentsWithDialogue(targetTicks, timebase, frameTick int64, varia
 	targetFrames := targetTicks / frameTick
 	if maxPlannedFrames <= 0 || targetFrames <= 0 {
 		return nil, fmt.Errorf("%w: video capability cannot cover a frame-aligned render segment", ErrValidation)
+	}
+	normalized, err = splitLongGatewayVideoDialogueSpans(normalized, maxPlannedFrames*frameTick, frameTick)
+	if err != nil {
+		return nil, err
 	}
 	for _, line := range normalized {
 		if line.EndTick-line.StartTick > maxPlannedFrames*frameTick {
@@ -486,7 +814,7 @@ func planVideoSegmentsWithDialogue(targetTicks, timebase, frameTick int64, varia
 	for left, right := 0, len(edges)-1; left < right; left, right = left+1, right-1 {
 		edges[left], edges[right] = edges[right], edges[left]
 	}
-	if len(edges) > 1 && !variantSupportsContinuation(variant) {
+	if len(edges) > 1 && continuation == nil {
 		return nil, &StandardErrorError{Standard: StandardError{
 			Code: CodeStoryboardReplanRequired, Message: "selected video capability cannot preserve continuity across dialogue-safe render segments", Retryable: false,
 		}}
@@ -497,7 +825,7 @@ func planVideoSegmentsWithDialogue(targetTicks, timebase, frameTick int64, varia
 		endTick := edge.endFrame * frameTick
 		continuityMode := normalizeReferenceMode(referenceMode)
 		if index > 0 {
-			continuityMode = nextVideoContinuityMode(variant)
+			continuityMode = nextVideoContinuityMode(continuation)
 		}
 		segment := GatewayVideoPlanSegment{
 			SegmentIndex: index, PlannedStartTick: startTick, PlannedEndTick: endTick,
@@ -510,6 +838,155 @@ func planVideoSegmentsWithDialogue(targetTicks, timebase, frameTick int64, varia
 		segments = append(segments, segment)
 	}
 	return segments, nil
+}
+
+func splitLongGatewayVideoDialogueSpans(dialogue []GatewayVideoDialogueSpan, maxTicks, frameTick int64) ([]GatewayVideoDialogueSpan, error) {
+	result := make([]GatewayVideoDialogueSpan, 0, len(dialogue))
+	for _, line := range dialogue {
+		if line.EndTick-line.StartTick <= maxTicks {
+			result = append(result, line)
+			continue
+		}
+		parts, err := splitGatewayVideoDialogueSpan(line, maxTicks, frameTick)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, parts...)
+	}
+	return result, nil
+}
+
+type weightedDialogueClause struct {
+	text   string
+	weight int64
+}
+
+func splitGatewayVideoDialogueSpan(line GatewayVideoDialogueSpan, maxTicks, frameTick int64) ([]GatewayVideoDialogueSpan, error) {
+	clauses := gatewayVideoDialogueClauses(line.Text)
+	if len(clauses) < 2 || maxTicks <= 0 || frameTick <= 0 {
+		return nil, storyboardDialogueSplitRequiredError()
+	}
+	totalFrames := (line.EndTick - line.StartTick) / frameTick
+	maxFrames := maxTicks / frameTick
+	if totalFrames <= 0 || maxFrames <= 0 {
+		return nil, storyboardDialogueSplitRequiredError()
+	}
+	totalWeight := int64(0)
+	for _, clause := range clauses {
+		totalWeight += clause.weight
+	}
+	if totalWeight <= 0 {
+		return nil, storyboardDialogueSplitRequiredError()
+	}
+
+	type dialogueBoundary struct {
+		clauseIndex int
+		frame       int64
+	}
+	boundaries := make([]dialogueBoundary, 0, len(clauses)-1)
+	cumulativeWeight := int64(0)
+	previousFrame := int64(0)
+	for index := 0; index < len(clauses)-1; index++ {
+		cumulativeWeight += clauses[index].weight
+		frame := int64(math.Round(float64(totalFrames) * float64(cumulativeWeight) / float64(totalWeight)))
+		if frame <= previousFrame {
+			frame = previousFrame + 1
+		}
+		if frame >= totalFrames {
+			continue
+		}
+		boundaries = append(boundaries, dialogueBoundary{clauseIndex: index + 1, frame: frame})
+		previousFrame = frame
+	}
+	if len(boundaries) == 0 {
+		return nil, storyboardDialogueSplitRequiredError()
+	}
+
+	parts := make([]GatewayVideoDialogueSpan, 0, int(math.Ceil(float64(totalFrames)/float64(maxFrames))))
+	startClause := 0
+	startFrame := int64(0)
+	for startFrame < totalFrames {
+		if totalFrames-startFrame <= maxFrames {
+			parts = append(parts, gatewayVideoDialoguePart(line, clauses, startClause, len(clauses), startFrame, totalFrames, len(parts), frameTick))
+			break
+		}
+		selected := dialogueBoundary{clauseIndex: -1}
+		for _, boundary := range boundaries {
+			if boundary.clauseIndex <= startClause || boundary.frame <= startFrame {
+				continue
+			}
+			if boundary.frame-startFrame > maxFrames {
+				break
+			}
+			selected = boundary
+		}
+		if selected.clauseIndex < 0 {
+			return nil, storyboardDialogueSplitRequiredError()
+		}
+		parts = append(parts, gatewayVideoDialoguePart(line, clauses, startClause, selected.clauseIndex, startFrame, selected.frame, len(parts), frameTick))
+		startClause = selected.clauseIndex
+		startFrame = selected.frame
+	}
+	for index := range parts {
+		parts[index].ContinuesFromPrevious = index > 0 || line.ContinuesFromPrevious
+		parts[index].ContinuesToNext = index < len(parts)-1 || line.ContinuesToNext
+	}
+	return parts, nil
+}
+
+func gatewayVideoDialogueClauses(text string) []weightedDialogueClause {
+	clauses := make([]weightedDialogueClause, 0)
+	var builder strings.Builder
+	flush := func() {
+		value := strings.TrimSpace(builder.String())
+		builder.Reset()
+		if value == "" {
+			return
+		}
+		weight := int64(0)
+		for _, char := range value {
+			if !unicode.IsSpace(char) {
+				weight++
+			}
+		}
+		clauses = append(clauses, weightedDialogueClause{text: value, weight: maxInt64(1, weight)})
+	}
+	for _, char := range strings.TrimSpace(text) {
+		builder.WriteRune(char)
+		if strings.ContainsRune("，。！？；：,.!?;:", char) {
+			flush()
+		}
+	}
+	flush()
+	return clauses
+}
+
+func gatewayVideoDialoguePart(
+	line GatewayVideoDialogueSpan,
+	clauses []weightedDialogueClause,
+	startClause, endClause int,
+	startFrame, endFrame int64,
+	partIndex int,
+	frameTick int64,
+) GatewayVideoDialogueSpan {
+	var text strings.Builder
+	for _, clause := range clauses[startClause:endClause] {
+		text.WriteString(clause.text)
+	}
+	part := line
+	part.Text = text.String()
+	part.StartTick = line.StartTick + startFrame*frameTick
+	part.EndTick = line.StartTick + endFrame*frameTick
+	if strings.TrimSpace(line.TimingUnitID) != "" {
+		part.TimingUnitID = fmt.Sprintf("%s:part:%d", line.TimingUnitID, partIndex+1)
+	}
+	return part
+}
+
+func storyboardDialogueSplitRequiredError() error {
+	return &StandardErrorError{Standard: StandardError{
+		Code: CodeStoryboardReplanRequired, Message: "a complete dialogue turn is longer than the selected video model can generate without an unsafe split", Retryable: false,
+	}}
 }
 
 func validateGatewayVideoDialogueSpans(dialogue []GatewayVideoDialogueSpan, targetTicks, frameTick int64) ([]GatewayVideoDialogueSpan, error) {
@@ -526,8 +1003,8 @@ func validateGatewayVideoDialogueSpans(dialogue []GatewayVideoDialogueSpan, targ
 		if line.Kind == "" {
 			line.Kind = "dialogue"
 		}
-		if line.Kind != "dialogue" && line.Kind != "voiceover" && line.Kind != "narration" && line.Kind != "system" {
-			return nil, &StandardErrorError{Standard: StandardError{Code: CodeStoryboardReplanRequired, Message: "视频音轨片段包含不支持的类型，需要重新生成分镜计划", Retryable: false}}
+		if line.Kind != "dialogue" && line.Kind != "voiceover" && line.Kind != "narration" {
+			return nil, &StandardErrorError{Standard: StandardError{Code: CodeStoryboardReplanRequired, Message: "视频台词片段只能包含角色对白、旁白或解说，非语言音效必须使用独立音效契约", Retryable: false}}
 		}
 		if line.Text == "" || (line.Kind == "dialogue" && line.Speaker == "") || line.StartTick < 0 || line.EndTick <= line.StartTick || line.EndTick > targetTicks {
 			return nil, &StandardErrorError{Standard: StandardError{Code: CodeStoryboardReplanRequired, Message: "视频音轨片段必须包含准确文本和有效的镜头内时间范围；角色对白还必须包含说话人", Retryable: false}}
@@ -782,67 +1259,34 @@ func capabilitySnapshotHash(variant VideoGenerationVariant) (string, error) {
 }
 
 func variantSupportsContinuation(variant VideoGenerationVariant) bool {
-	continuation := variant.Continuation
-	return continuation.SupportsExtension || (continuation.SupportsFirstFrame && continuation.SupportsLastFrame) || continuation.SupportsVideoReference
+	return len(variant.ContinuationInputContracts) > 0
 }
 
-func nextVideoContinuityMode(variant VideoGenerationVariant) string {
-	switch {
-	case variant.Continuation.SupportsExtension:
-		return "extension"
-	case variant.Continuation.SupportsFirstFrame && variant.Continuation.SupportsLastFrame:
-		return "previous_last_frame"
-	case variant.Continuation.SupportsVideoReference:
-		return "previous_segment"
+func selectVideoContinuationInputContract(variant VideoGenerationVariant, allowed []string) (*VideoInputContract, error) {
+	allowed = normalizeVideoStringSlice(allowed)
+	for _, required := range allowed {
+		for _, candidate := range variant.ContinuationInputContracts {
+			if strings.EqualFold(candidate.ContractKey, required) {
+				selected := candidate
+				return &selected, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func nextVideoContinuityMode(contract *VideoInputContract) string {
+	if contract == nil {
+		return "none"
+	}
+	switch contract.ContractKey {
+	case VideoInputContractVideoExtension:
+		return "video_extension"
+	case VideoInputContractFirstFrame, VideoInputContractFirstFramePlusReferences:
+		return "previous_segment_tail"
 	default:
 		return "none"
 	}
-}
-
-func legacyVideoGenerationVariant(xCapabilities map[string]any, capability Capability, model Model) (VideoGenerationVariant, bool) {
-	durations := floatSliceFromAny(xCapabilities["durations"])
-	minDuration := positiveFloatFromAny(xCapabilities["minDurationSeconds"])
-	maxDuration := positiveFloatFromAny(xCapabilities["maxDurationSeconds"])
-	duration := VideoDurationCapability{}
-	switch {
-	case len(durations) == 1:
-		duration = VideoDurationCapability{Mode: VideoDurationFixed, Values: durations}
-	case len(durations) > 1:
-		duration = VideoDurationCapability{Mode: VideoDurationDiscrete, Values: durations}
-	case minDuration > 0 && maxDuration >= minDuration:
-		duration = VideoDurationCapability{Mode: VideoDurationContinuousRange, MinSeconds: minDuration, MaxSeconds: maxDuration}
-	default:
-		return VideoGenerationVariant{}, false
-	}
-	taskTypes := stringSliceFromRaw(capability.TaskTypes)
-	referenceModes := []string{"none"}
-	supportsFirst := boolFromAny(xCapabilities["supportsFirstFrame"])
-	supportsLast := boolFromAny(xCapabilities["supportsLastFrame"])
-	supportsVideo := boolFromAny(xCapabilities["supportsVideoReference"])
-	if boolFromAny(xCapabilities["supportsReferenceImages"]) || supportsFirst {
-		referenceModes = append(referenceModes, "first_frame")
-		taskTypes = appendUniqueVideoString(taskTypes, "video.image_to_video")
-	}
-	taskTypes = appendUniqueVideoString(taskTypes, "video.text_to_video")
-	if supportsLast {
-		referenceModes = append(referenceModes, "last_frame")
-	}
-	if supportsVideo {
-		referenceModes = append(referenceModes, "video_reference")
-	}
-	return VideoGenerationVariant{
-		VariantKey:   "default",
-		ModelFamily:  inferVideoModelFamily(model.ModelKey),
-		When:         VideoGenerationVariantWhen{TaskTypes: taskTypes, ReferenceModes: referenceModes},
-		Duration:     duration,
-		Resolutions:  stringSliceFromAny(xCapabilities["supportedResolutions"]),
-		AspectRatios: stringSliceFromAny(xCapabilities["supportedAspectRatios"]),
-		FrameRate:    VideoFrameRateCapability{Mode: "unknown"},
-		NativeAudio:  VideoNativeAudioCapability{Support: VideoSupportUnknown},
-		Continuation: VideoContinuationCapability{SupportsFirstFrame: supportsFirst, SupportsLastFrame: supportsLast, SupportsVideoReference: supportsVideo},
-		RequestModes: stringSliceFromAny(xCapabilities["requestModes"]),
-		Source:       "derived_legacy", CapabilityVersion: "1",
-	}, true
 }
 
 func inferVideoModelFamily(modelKey string) string {
@@ -939,12 +1383,6 @@ func roundVideoDuration(value float64) float64 {
 	return math.Round(value*1000) / 1000
 }
 
-func stringSliceFromRaw(raw json.RawMessage) []string {
-	var values []string
-	_ = json.Unmarshal(raw, &values)
-	return values
-}
-
 func stringSliceFromAny(value any) []string {
 	items, _ := value.([]any)
 	result := make([]string, 0, len(items))
@@ -956,41 +1394,6 @@ func stringSliceFromAny(value any) []string {
 	if direct, ok := value.([]string); ok {
 		return append([]string(nil), direct...)
 	}
-	return result
-}
-
-func floatSliceFromAny(value any) []float64 {
-	items, _ := value.([]any)
-	result := make([]float64, 0, len(items))
-	for _, item := range items {
-		if number := positiveFloatFromAny(item); number > 0 {
-			result = append(result, number)
-		}
-	}
-	return normalizedPositiveDurations(result)
-}
-
-func positiveFloatFromAny(value any) float64 {
-	switch typed := value.(type) {
-	case float64:
-		if typed > 0 {
-			return typed
-		}
-	case int:
-		if typed > 0 {
-			return float64(typed)
-		}
-	case json.Number:
-		parsed, _ := typed.Float64()
-		if parsed > 0 {
-			return parsed
-		}
-	}
-	return 0
-}
-
-func boolFromAny(value any) bool {
-	result, _ := value.(bool)
 	return result
 }
 

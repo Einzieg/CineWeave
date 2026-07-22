@@ -11,29 +11,36 @@ func generateShotImagePromptsConcurrently(
 	ctx workflow.Context,
 	promptCtx workflow.Context,
 	input TextToStoryboardInput,
-	options BatchShotProductionOptions,
+	items []ShotAnchorWorkItem,
+	maxConcurrency int,
+	aspectRatio string,
+	size string,
+	force bool,
 ) ([]shotImagePromptResult, error) {
-	results := make([]shotImagePromptResult, len(options.ShotIDs))
-	if len(options.ShotIDs) == 0 {
+	results := make([]shotImagePromptResult, len(items))
+	if len(items) == 0 {
 		return results, nil
 	}
 
-	limit := clampConcurrency(options.MaxConcurrency, DefaultShotImagePromptConcurrency, MaxShotImagePromptConcurrency)
+	limit := clampConcurrency(maxConcurrency, DefaultShotImagePromptConcurrency, MaxShotImagePromptConcurrency)
 	selector := workflow.NewSelector(ctx)
 	nextIndex := 0
 	inFlight := 0
 	schedule := func(index int) {
-		shotID := options.ShotIDs[index]
+		item := items[index]
 		future := workflow.ExecuteActivity(promptCtx, "PrepareShotImagePrompt", PrepareShotImagePromptInput{
 			OrganizationID: input.OrganizationID,
 			ProjectID:      input.ProjectID,
 			WorkflowRunID:  input.WorkflowRunID,
 			CreatedBy:      input.CreatedBy,
-			ShotID:         shotID,
+			ShotID:         item.ShotID,
+			ShotIndex:      item.ShotIndex,
+			ShotNo:         item.ShotNo,
+			AnchorRole:     item.AnchorRole,
 			WorkflowPrompt: "batch_generate_shot_image_prompts",
-			AspectRatio:    options.AspectRatio,
-			Size:           options.Resolution,
-			Force:          options.Force,
+			AspectRatio:    aspectRatio,
+			Size:           size,
+			Force:          force,
 		})
 		inFlight++
 		selector.AddFuture(future, func(completed workflow.Future) {
@@ -44,16 +51,16 @@ func generateShotImagePromptsConcurrently(
 		})
 	}
 
-	for nextIndex < len(options.ShotIDs) && inFlight < limit {
+	for nextIndex < len(items) && inFlight < limit {
 		schedule(nextIndex)
 		nextIndex++
 	}
 	for inFlight > 0 {
 		selector.Select(ctx)
-		if err := ctx.Err(); err != nil {
+		if err := ctx.Err(); isWorkflowCancellationError(err) {
 			return nil, err
 		}
-		for nextIndex < len(options.ShotIDs) && inFlight < limit {
+		for nextIndex < len(items) && inFlight < limit {
 			schedule(nextIndex)
 			nextIndex++
 		}

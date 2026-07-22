@@ -9,7 +9,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/workflows"
 )
 
-func TestAPIGatewayVideoDialogueSpansPreservesSpeakerlessSystemAudio(t *testing.T) {
+func TestAPIGatewayVideoDialogueSpansExcludesNonSpeechSystemAudio(t *testing.T) {
 	shot := StoryboardShot{
 		StartTick: 90000,
 		EndTick:   6 * 90000,
@@ -21,8 +21,8 @@ func TestAPIGatewayVideoDialogueSpansPreservesSpeakerlessSystemAudio(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(spans) != 1 || spans[0].Speaker != "" || spans[0].Kind != "system" || spans[0].StartTick != 2*90000 || spans[0].EndTick != 5*90000 {
-		t.Fatalf("system audio span = %+v", spans)
+	if len(spans) != 0 {
+		t.Fatalf("system audio leaked into provider dialogue spans: %+v", spans)
 	}
 }
 

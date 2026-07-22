@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/Einzieg/cineweave/internal/workflows"
@@ -189,6 +190,60 @@ func TestShotProductionStatusReconcilesTerminalImageWorkflow(t *testing.T) {
 	}
 }
 
+func TestShotProductionStatusReconcilesSucceededVideoWithoutDurableMedia(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	workflowRunID := seed.insertWorkflowRun(t, "succeeded")
+	imageArtifactID := seed.insertArtifact(t, "generated_image", "org/project/shot.png", "image/png")
+	videoArtifactID := seed.insertArtifact(t, "generated_video", "org/project/missing-video.mp4", "video/mp4")
+	shotID := insertShotProductionShot(t, seed, workflowRunID, 0, imageArtifactID, videoArtifactID, "succeeded", "succeeded")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE storyboard_shots
+		SET video_media_file_id = NULL, video_storage_key = NULL
+		WHERE id = $1
+	`, shotID); err != nil {
+		t.Fatalf("remove durable video output: %v", err)
+	}
+
+	var status ShotProductionStatus
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/shot-production/status", seed.ownerToken, seed.organizationID, nil, &status)
+	if len(status.Shots) != 1 || status.Shots[0].VideoStatus != "failed" || !status.Shots[0].CanRetryVideo {
+		t.Fatalf("status = %+v", status)
+	}
+	if stringValue(status.Shots[0].VideoErrorCode) != "VIDEO_OUTPUT_MISSING" {
+		t.Fatalf("video error = %v", status.Shots[0].VideoErrorCode)
+	}
+}
+
+func TestShotProductionStatusKeepsSucceededProviderResultWhileWorkflowComposesMedia(t *testing.T) {
+	server, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	workflowRunID := seed.insertWorkflowRun(t, "running")
+	imageArtifactID := seed.insertArtifact(t, "generated_image", "org/project/shot.png", "image/png")
+	videoArtifactID := seed.insertArtifact(t, "generated_video", "org/project/provider-video.mp4", "video/mp4")
+	shotID := insertShotProductionShot(t, seed, workflowRunID, 0, imageArtifactID, videoArtifactID, "succeeded", "succeeded")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE storyboard_shots
+		SET video_workflow_run_id = $2,
+		    video_media_file_id = NULL,
+		    video_storage_key = NULL
+		WHERE id = $1
+	`, shotID, workflowRunID); err != nil {
+		t.Fatalf("set composing video state: %v", err)
+	}
+
+	var status ShotProductionStatus
+	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+seed.projectID+"/shot-production/status", seed.ownerToken, seed.organizationID, nil, &status)
+	if len(status.Shots) != 1 || status.Shots[0].VideoStatus != "succeeded" {
+		t.Fatalf("status = %+v", status)
+	}
+	if status.Shots[0].VideoErrorCode != nil || status.Shots[0].VideoErrorMessage != nil {
+		t.Fatalf("video error = code:%v message:%v", status.Shots[0].VideoErrorCode, status.Shots[0].VideoErrorMessage)
+	}
+}
+
 func TestUpdateProjectVideoRatioStalesExistingShotMedia(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
@@ -368,6 +423,68 @@ func TestShotProductionGenerateMissingVideosSkipsNoImage(t *testing.T) {
 	}
 }
 
+func TestShotVideoBatchEndpointStartsEpisodeCheckpointWorkflow(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	temporalClient := &fakeTemporalClient{}
+	server := New(seed.pool, seed.authService, nil, nil, nil)
+	server.temporal = temporalClient
+	workflowRunID := seed.insertWorkflowRun(t, "succeeded")
+	imageArtifactID := seed.insertArtifact(t, "generated_image", "org/project/shot.png", "image/png")
+	shotID := insertShotProductionShot(t, seed, workflowRunID, 0, imageArtifactID, "", "succeeded", "not_started")
+	if _, err := seed.pool.Exec(seed.ctx, `UPDATE storyboard_shots SET video_prompt_status = 'succeeded' WHERE id = $1`, shotID); err != nil {
+		t.Fatalf("mark video prompt ready: %v", err)
+	}
+
+	var response ShotProductionActionResponse
+	doAPISuccess(t, server.Handler(), http.MethodPost, "/api/projects/"+seed.projectID+"/shot-videos/generate-batch", seed.ownerToken, seed.organizationID, map[string]any{
+		"shotIds": []string{shotID}, "maxConcurrency": 3,
+	}, &response)
+	dispatchWorkflowStartsForTest(t, server)
+
+	if response.WorkflowType != "batch_generate_shot_videos" || len(response.TargetShotIDs) != 1 || response.TargetShotIDs[0] != shotID {
+		t.Fatalf("response = %+v", response)
+	}
+	if temporalClient.workflow == nil || reflect.ValueOf(temporalClient.workflow).Pointer() != reflect.ValueOf(workflows.EpisodeBatchGenerateShotVideosWorkflow).Pointer() {
+		t.Fatalf("shot video batch started unexpected workflow %T", temporalClient.workflow)
+	}
+	input := temporalClient.args[0].(workflows.TextToStoryboardInput)
+	var options struct {
+		MaxConcurrency int `json:"maxConcurrency"`
+	}
+	if err := json.Unmarshal(input.Input, &options); err != nil {
+		t.Fatalf("decode workflow input: %v", err)
+	}
+	if options.MaxConcurrency != 3 {
+		t.Fatalf("maxConcurrency = %d, want 3", options.MaxConcurrency)
+	}
+}
+
+func TestVideoPromptBatchEndpointRemainsSeparateFromVideoExecution(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+
+	temporalClient := &fakeTemporalClient{}
+	server := New(seed.pool, seed.authService, nil, nil, nil)
+	server.temporal = temporalClient
+	workflowRunID := seed.insertWorkflowRun(t, "succeeded")
+	shotID := insertShotProductionShot(t, seed, workflowRunID, 0, "", "", "not_started", "not_started")
+
+	var response ShotProductionActionResponse
+	doAPISuccess(t, server.Handler(), http.MethodPost, "/api/projects/"+seed.projectID+"/video-prompts/generate-batch", seed.ownerToken, seed.organizationID, map[string]any{
+		"shotIds": []string{shotID},
+	}, &response)
+	dispatchWorkflowStartsForTest(t, server)
+
+	if response.WorkflowType != "batch_generate_shot_video_prompts" {
+		t.Fatalf("response = %+v", response)
+	}
+	if temporalClient.workflow == nil || reflect.ValueOf(temporalClient.workflow).Pointer() != reflect.ValueOf(workflows.BatchGenerateShotVideoPromptsWorkflow).Pointer() {
+		t.Fatalf("video prompt batch started unexpected workflow %T", temporalClient.workflow)
+	}
+}
+
 func TestShotProductionGenerateSelectedVideoPromptDoesNotRequireImage(t *testing.T) {
 	_, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
@@ -453,6 +570,13 @@ func TestShotProductionGenerateSelectedImagePromptQueuesPromptOnly(t *testing.T)
 	if promptStatus != "queued" || imageStatus != "not_started" || promptWorkflowRunID != response.WorkflowRunID {
 		t.Fatalf("prompt state = prompt:%s image:%s workflow:%s", promptStatus, imageStatus, promptWorkflowRunID)
 	}
+	var totalItems int
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT total_items FROM workflow_runs WHERE id = $1`, response.WorkflowRunID).Scan(&totalItems); err != nil {
+		t.Fatalf("select workflow item total: %v", err)
+	}
+	if totalItems != 1 {
+		t.Fatalf("workflow total_items = %d, want 1", totalItems)
+	}
 }
 
 func TestSelectShotProductionTargetsRequiresReadyImagePromptForImageGeneration(t *testing.T) {
@@ -484,6 +608,13 @@ func TestSelectShotProductionTargetsGenerateVideoPromptsSkipsReadyAndRunning(t *
 		t.Fatalf("error code = %q", code)
 	}
 	assertStringSet(t, targets, []string{"missing", "failed"})
+	forcedTargets, code := selectShotProductionTargets(ShotProductionActionRequest{
+		Action: "generate_video_prompts", Options: map[string]any{"force": true},
+	}, shots)
+	if code != "" {
+		t.Fatalf("forced error code = %q", code)
+	}
+	assertStringSet(t, forcedTargets, []string{"missing", "failed", "ready"})
 }
 
 func TestSelectShotProductionTargetsRequiresReadyVideoPromptForVideoGeneration(t *testing.T) {
@@ -501,6 +632,40 @@ func TestSelectShotProductionTargetsRequiresReadyVideoPromptForVideoGeneration(t
 	shots[0].VideoPromptStatus = "succeeded"
 	if targets, code := selectShotProductionTargets(ShotProductionActionRequest{Action: "generate_missing_videos"}, shots); code != "" || len(targets) != 1 {
 		t.Fatalf("ready targets=%v code=%q", targets, code)
+	}
+}
+
+func TestShotProductionScopeFiltersTreatExplicitShotIDsAsAuthoritative(t *testing.T) {
+	sceneID, workflowRunID, episodeID := shotProductionScopeFilters(ShotProductionActionRequest{
+		ScriptSceneID: "stale-scene", ScriptEpisodeID: "hallucinated-episode", WorkflowRunID: "old-workflow",
+		ShotIDs: []string{"shot-1", "shot-2"},
+	})
+	if sceneID != "" || workflowRunID != "" || episodeID != "" {
+		t.Fatalf("filters = scene:%q workflow:%q episode:%q, want empty explicit-shot scope", sceneID, workflowRunID, episodeID)
+	}
+
+	sceneID, workflowRunID, episodeID = shotProductionScopeFilters(ShotProductionActionRequest{
+		ScriptSceneID: " scene ", ScriptEpisodeID: " episode ", WorkflowRunID: " workflow ",
+	})
+	if sceneID != "scene" || workflowRunID != "workflow" || episodeID != "episode" {
+		t.Fatalf("filters = scene:%q workflow:%q episode:%q", sceneID, workflowRunID, episodeID)
+	}
+}
+
+func TestShotProductionTargetEpisodeIDDerivesValidatedShotScope(t *testing.T) {
+	episodeOne := "episode-1"
+	episodeTwo := "episode-2"
+	shots := []ShotProductionShot{
+		{ID: "shot-1", ScriptEpisodeID: &episodeOne},
+		{ID: "shot-2", ScriptEpisodeID: &episodeOne},
+		{ID: "shot-3", ScriptEpisodeID: &episodeTwo},
+	}
+	req := ShotProductionActionRequest{ScriptEpisodeID: "hallucinated-episode", ShotIDs: []string{"shot-1", "shot-2"}}
+	if got := shotProductionTargetEpisodeID(req, shots, []string{"shot-1", "shot-2"}); got != episodeOne {
+		t.Fatalf("episode = %q, want %q", got, episodeOne)
+	}
+	if got := shotProductionTargetEpisodeID(req, shots, []string{"shot-1", "shot-3"}); got != "" {
+		t.Fatalf("mixed episode = %q, want empty", got)
 	}
 }
 
@@ -556,6 +721,17 @@ func insertShotProductionShot(t *testing.T, seed *artifactPreviewSeed, workflowR
 	`, seed.organizationID, seed.projectID, workflowRunID, index, index+1, "Shot visual", imageArtifactID, videoArtifactID, imageStatus, videoStatus,
 		int64(index)*450000, int64(index+1)*450000).Scan(&id); err != nil {
 		t.Fatalf("insert shot production shot: %v", err)
+	}
+	if videoArtifactID != "" {
+		storageKey := fmt.Sprintf("org/project/shot-%d.mp4", index)
+		mediaFileID := seed.insertMediaFile(t, videoArtifactID, storageKey, "video/mp4")
+		if _, err := seed.pool.Exec(seed.ctx, `
+			UPDATE storyboard_shots
+			SET video_media_file_id = $2, video_storage_key = $3
+			WHERE id = $1
+		`, id, mediaFileID, storageKey); err != nil {
+			t.Fatalf("attach shot video media: %v", err)
+		}
 	}
 	return id
 }

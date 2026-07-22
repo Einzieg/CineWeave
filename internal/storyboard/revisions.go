@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Einzieg/cineweave/internal/events"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -119,10 +120,10 @@ func SplitStoryboardShotTx(ctx context.Context, tx pgx.Tx, req SplitStoryboardSh
 			shot_index, shot_no, title, visual, camera, motion, mood, shot_size, camera_move,
 			action, dialogue, asset_bindings, image_prompt, video_prompt, script_dialogue,
 			start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source,
-			timing_confidence, duration_locked, shot_group_id, continuity_group_id, one_take,
+			timing_confidence, duration_locked, shot_group_id, one_take,
 			timing_revision, image_reference_mode, image_reference_keys, video_reference_mode,
 			video_reference_keys, status, review_status, manual_override, stale_state,
-			edited_by, edited_at, metadata
+			edited_by, edited_at, metadata, production_generation_id
 		)
 		SELECT organization_id, project_id, storyboard_id, workflow_run_id, script_id, script_version_id,
 		       script_scene_id, script_episode_id, episode_index, episode_shot_index, storyboard_plan_id,
@@ -131,11 +132,12 @@ func SplitStoryboardShotTx(ctx context.Context, tx pgx.Tx, req SplitStoryboardSh
 		       COALESCE(NULLIF($5::text, ''), CASE WHEN COALESCE(title, '') = '' THEN '' ELSE title || '（续）' END),
 		       visual, camera, motion, mood, shot_size, camera_move, action, dialogue, asset_bindings,
 		       image_prompt, video_prompt, script_dialogue, $3::bigint, $7::bigint, $4::bigint, $4::bigint,
-		       'manual_locked', 1, true, shot_group_id, continuity_group_id, one_take,
+		       'manual_locked', 1, true, shot_group_id, one_take,
 		       timing_revision + 1, image_reference_mode, image_reference_keys,
 		       video_reference_mode, video_reference_keys, 'storyboard_ready', 'pending', true,
 		       'fresh', NULLIF($6::text, '')::uuid, now(),
-		       metadata || jsonb_build_object('editType', 'split', 'splitPart', 'right', 'splitTick', $3::bigint)
+		       metadata || jsonb_build_object('editType', 'split', 'splitPart', 'right', 'splitTick', $3::bigint),
+		       production_generation_id
 		FROM storyboard_shots
 		WHERE id = $1::uuid
 		RETURNING id::text
@@ -147,13 +149,13 @@ func SplitStoryboardShotTx(ctx context.Context, tx pgx.Tx, req SplitStoryboardSh
 			organization_id, project_id, workflow_run_id, storyboard_shot_id, asset_id,
 			requirement_type, role_in_shot, costume, pose, expression, action,
 			camera_relation, scene_state, prop_state, prompt, status, metadata,
-			manual_override, stale_state, edited_by, edited_at
+			manual_override, stale_state, edited_by, edited_at, production_generation_id
 		)
 		SELECT organization_id, project_id, workflow_run_id, $2, asset_id,
 		       requirement_type, role_in_shot, costume, pose, expression, action,
 		       camera_relation, scene_state, prop_state, prompt, 'pending',
 		       metadata || jsonb_build_object('splitFromRequirementId', id::text),
-		       manual_override, 'upstream_changed', NULLIF($3, '')::uuid, now()
+		       manual_override, 'upstream_changed', NULLIF($3, '')::uuid, now(), production_generation_id
 		FROM shot_asset_requirements
 		WHERE storyboard_shot_id = $1
 	`, leftID, rightID, req.ActorID); err != nil {
@@ -316,10 +318,17 @@ func RetimeStoryboardShotTx(ctx context.Context, tx pgx.Tx, req RetimeStoryboard
 }
 
 func loadEditableStoryboardShot(ctx context.Context, tx pgx.Tx, projectID, shotID string) (storyboardRevisionShot, storyboardRevisionSource, error) {
+	active, err := videoproduction.LoadActiveContext(ctx, tx, projectID)
+	if err != nil {
+		return storyboardRevisionShot{}, storyboardRevisionSource{}, err
+	}
+	if _, err := videoproduction.AssertWritableTx(ctx, tx, projectID, active.Generation.ID, active.Binding.ID, active.Binding.Revision); err != nil {
+		return storyboardRevisionShot{}, storyboardRevisionSource{}, err
+	}
 	var shot storyboardRevisionShot
 	var source storyboardRevisionSource
 	var fpsNumerator, fpsDenominator int64
-	err := tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT shot.id::text, shot.storyboard_plan_id::text, shot.shot_index,
 		       shot.start_tick, shot.end_tick, shot.script_scene_id::text,
 		       plan.organization_id::text, plan.script_episode_id::text,
@@ -329,9 +338,11 @@ func loadEditableStoryboardShot(ctx context.Context, tx pgx.Tx, projectID, shotI
 		JOIN storyboard_plans plan ON plan.id = shot.storyboard_plan_id
 		JOIN script_timing_analyses analysis ON analysis.id = plan.timing_analysis_id
 		WHERE shot.project_id = $1 AND shot.id = $2 AND shot.deleted_at IS NULL
+		  AND shot.production_generation_id = $3
+		  AND plan.production_generation_id = $3
 		  AND plan.active = true AND plan.status = 'ready'
 		FOR UPDATE OF shot, plan
-	`, projectID, shotID).Scan(
+	`, projectID, shotID, active.Generation.ID).Scan(
 		&shot.ID, &shot.PlanID, &shot.ShotIndex, &shot.StartTick, &shot.EndTick, &shot.ScriptSceneID,
 		&source.OrganizationID, &source.ScriptEpisodeID, &source.TimingAnalysisID,
 		&source.Revision, &source.TargetTicks, &source.Timebase.TicksPerSecond,
@@ -382,12 +393,13 @@ func deriveStoryboardPlanRevision(ctx context.Context, tx pgx.Tx, source storybo
 		INSERT INTO storyboard_plans(
 			organization_id, project_id, script_id, script_version_id, script_episode_id,
 			timing_analysis_id, revision, status, pacing_profile, target_duration_ticks,
-			estimated_shot_count, actual_shot_count, active, stale_state, metadata, created_by
+			estimated_shot_count, actual_shot_count, active, stale_state, metadata, created_by,
+			production_generation_id
 		)
 		SELECT organization_id, project_id, script_id, script_version_id, script_episode_id,
 		       timing_analysis_id, $2, 'planning', pacing_profile, target_duration_ticks,
 		       estimated_shot_count, actual_shot_count, false, 'fresh',
-		       metadata || $3::jsonb, NULLIF($4, '')::uuid
+		       metadata || $3::jsonb, NULLIF($4, '')::uuid, production_generation_id
 		FROM storyboard_plans
 		WHERE id = $1 AND active = true AND status = 'ready'
 		RETURNING id::text
@@ -420,21 +432,22 @@ func deriveStoryboardPlanRevision(ctx context.Context, tx pgx.Tx, source storybo
 			shot_index, shot_no, title, visual, camera, motion, mood, shot_size, camera_move,
 			action, dialogue, asset_bindings, image_prompt, video_prompt, script_dialogue,
 			start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source,
-			timing_confidence, duration_locked, shot_group_id, continuity_group_id, one_take,
+			timing_confidence, duration_locked, shot_group_id, one_take,
 			timing_revision, image_reference_mode, image_reference_keys, video_reference_mode,
 			video_reference_keys, status, review_status, manual_override, stale_state,
-			edited_by, edited_at, metadata
+			edited_by, edited_at, metadata, production_generation_id
 		)
 		SELECT organization_id, project_id, storyboard_id, workflow_run_id, script_id, script_version_id,
 		       script_scene_id, script_episode_id, episode_index, episode_shot_index, $2,
 		       shot_index, shot_no, title, visual, camera, motion, mood, shot_size, camera_move,
 		       action, dialogue, asset_bindings, image_prompt, video_prompt, script_dialogue,
 		       start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source,
-		       timing_confidence, duration_locked, shot_group_id, continuity_group_id, one_take,
+		       timing_confidence, duration_locked, shot_group_id, one_take,
 		       timing_revision, image_reference_mode, image_reference_keys, video_reference_mode,
 		       video_reference_keys, 'storyboard_ready', 'pending', manual_override, 'fresh',
 		       NULLIF($3, '')::uuid, now(),
-		       metadata || jsonb_build_object('sourceShotId', id::text, 'sourceStoryboardPlanId', $1::uuid::text, 'editType', $4::text)
+		       metadata || jsonb_build_object('sourceShotId', id::text, 'sourceStoryboardPlanId', $1::uuid::text, 'editType', $4::text),
+		       production_generation_id
 		FROM storyboard_shots
 		WHERE storyboard_plan_id = $1 AND deleted_at IS NULL
 		ORDER BY shot_index
@@ -465,7 +478,7 @@ func deriveStoryboardPlanRevision(ctx context.Context, tx pgx.Tx, source storybo
 			organization_id, project_id, workflow_run_id, storyboard_shot_id, asset_id,
 			requirement_type, role_in_shot, costume, pose, expression, action,
 			camera_relation, scene_state, prop_state, prompt, status, metadata,
-			manual_override, stale_state, edited_by, edited_at
+			manual_override, stale_state, edited_by, edited_at, production_generation_id
 		)
 		SELECT requirement.organization_id, requirement.project_id, requirement.workflow_run_id,
 		       target.id, requirement.asset_id, requirement.requirement_type,
@@ -473,7 +486,8 @@ func deriveStoryboardPlanRevision(ctx context.Context, tx pgx.Tx, source storybo
 		       requirement.expression, requirement.action, requirement.camera_relation,
 		       requirement.scene_state, requirement.prop_state, requirement.prompt, 'pending',
 		       requirement.metadata || jsonb_build_object('sourceRequirementId', requirement.id::text, 'sourceShotId', source.id::text),
-		       requirement.manual_override, 'upstream_changed', NULLIF($3, '')::uuid, now()
+		       requirement.manual_override, 'upstream_changed', NULLIF($3, '')::uuid, now(),
+		       requirement.production_generation_id
 		FROM shot_asset_requirements requirement
 		JOIN storyboard_shots source ON source.id = requirement.storyboard_shot_id
 		JOIN storyboard_shots target ON target.storyboard_plan_id = $2

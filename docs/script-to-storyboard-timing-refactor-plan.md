@@ -6,6 +6,8 @@
 - 适用仓库：`D:\Code\CineWeave`
 - 调研日期：2026-07-12
 
+> 连续性权威边界：自 2026-07-16 起，视频生产方案、跨镜头连续性、视觉锚点和参考图语义由 `docs/video-production-workflow-continuity-refactor-target.md` 定义。同一 `StoryboardShot` 内多个 `RenderSegment` 只允许使用 `video_extension` 或 `previous_segment_tail`；不同镜头之间由结构化 ShotState、Transition 和 Visual Anchor 约束。发生冲突时以新目标文档为准。
+
 ## 1. 结论先行
 
 当前实现把以下三个不同概念混在了一个 `duration_seconds` 字段里：
@@ -559,7 +561,7 @@ Gateway 负责：
       "segmentIndex": 1,
       "plannedDurationTicks": 360000,
       "requestedDurationSeconds": 4,
-      "continuityMode": "previous_last_frame"
+      "continuityMode": "previous_segment_tail"
     }
   ]
 }
@@ -803,7 +805,6 @@ duration_source
 timing_confidence
 duration_locked
 shot_group_id
-continuity_group_id
 one_take
 timing_revision
 ```

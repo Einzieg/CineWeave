@@ -20,6 +20,9 @@ type PlanShotVideoInput struct {
 	OrganizationID          string   `json:"organizationId"`
 	ProjectID               string   `json:"projectId"`
 	WorkflowRunID           string   `json:"workflowRunId"`
+	OperationID             string   `json:"operationId,omitempty"`
+	OperationItemID         string   `json:"operationItemId,omitempty"`
+	OperationItemAttempt    int      `json:"operationItemAttempt,omitempty"`
 	CreatedBy               string   `json:"createdBy,omitempty"`
 	WorkflowPrompt          string   `json:"workflowPrompt,omitempty"`
 	FailureScope            string   `json:"failureScope,omitempty"`
@@ -75,19 +78,21 @@ func (a Activities) PlanShotVideo(ctx context.Context, input PlanShotVideoInput)
 		}
 		return PlanShotVideoOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeExecution, "video_failed", "storyboard.shot.video.failed", cause)
 	}
-	settings, err := a.projectProductionSettings(ctx, input.ProjectID)
+	settings, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return fail(NodeExecution{}, err)
 	}
-	assetContext, err := a.shotAssetContext(ctx, input.ProjectID, shot.ID)
+	var approvedContract approvedShotVideoExecutionContract
+	var references ShotVideoReferenceContext
+	approvedContract, err = a.loadApprovedShotVideoExecutionContract(ctx, input.OrganizationID, settings, shot)
 	if err != nil {
 		return fail(NodeExecution{}, err)
 	}
-	references, err := a.shotVideoReferenceContext(ctx, input.ProjectID, shot, assetContext)
-	if err != nil {
-		return fail(NodeExecution{}, err)
+	references = ShotVideoReferenceContext{
+		References:    approvedContract.References,
+		ReferenceMode: videoReferenceModeForProfile(settings.VideoProductionProfileKey),
 	}
-	referenceMode := "first_frame"
+	referenceMode := references.ReferenceMode
 	taskType := "video.image_to_video"
 	if references.ReferenceMode == "none" || len(references.References) == 0 {
 		referenceMode = "none"
@@ -95,12 +100,15 @@ func (a Activities) PlanShotVideo(ctx context.Context, input PlanShotVideoInput)
 	}
 	aspectRatio := firstNonEmptyString(settings.VideoRatio, settings.AspectRatio, input.AspectRatio, "16:9")
 	resolution := firstNonEmptyString(input.Resolution, "720p")
-	audioStrategy := firstNonEmptyString(input.AudioStrategy, "native_av")
-	audioRequirement := firstNonEmptyString(input.AudioRequirement, "preferred")
-	dialogueSpans, err := gatewayVideoDialogueSpans(shot)
-	if err != nil {
-		return fail(NodeExecution{}, err)
+	audioStrategy := firstNonEmptyString(input.AudioStrategy, settings.AudioStrategy, "native_av")
+	audioRequirement := firstNonEmptyString(input.AudioRequirement, settings.AudioRequirement, "preferred")
+	if (strings.TrimSpace(input.AudioStrategy) != "" && !strings.EqualFold(input.AudioStrategy, approvedContract.AudioStrategy)) ||
+		(strings.TrimSpace(input.AudioRequirement) != "" && !strings.EqualFold(input.AudioRequirement, approvedContract.AudioRequirement)) {
+		return fail(NodeExecution{}, workflowError{Code: provider.CodeRenderPlanReplanRequired, Message: "音频策略与已审核视频提示词契约不一致"})
 	}
+	audioStrategy = approvedContract.AudioStrategy
+	audioRequirement = approvedContract.AudioRequirement
+	dialogueSpans := approvedContract.DialogueCues
 	nodeExecution, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
 		NodeKey: fmt.Sprintf("plan_shot_video_%d", shot.ShotIndex), NodeType: "video.plan",
@@ -130,8 +138,11 @@ func (a Activities) PlanShotVideo(ctx context.Context, input PlanShotVideoInput)
 			return fail(nodeExecution, err)
 		}
 	}
-	if shotVideoReferencesStoryboardImage(references, shot.ID) {
-		if err := a.validateShotImageAspectRatio(ctx, input.ProjectID, shot.ImageMediaFileID, aspectRatio); err != nil {
+	for _, reference := range references.References {
+		if strings.TrimSpace(reference.MediaFileID) == "" || strings.Contains(strings.ToLower(reference.Type), "video") {
+			continue
+		}
+		if err := a.validateShotImageAspectRatio(ctx, input.ProjectID, reference.MediaFileID, aspectRatio); err != nil {
 			return fail(nodeExecution, err)
 		}
 	}
@@ -141,7 +152,26 @@ func (a Activities) PlanShotVideo(ctx context.Context, input PlanShotVideoInput)
 	}
 	plan, err := a.gateway.PlanVideo(ctx, provider.GatewayVideoPlanRequest{
 		OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID, NodeRunID: nodeExecution.NodeRunID,
-		NodeExecutionToken: nodeExecution.ExecutionToken, NodeAttemptGeneration: nodeExecution.AttemptGeneration,
+		OperationID: input.OperationID, OperationItemID: input.OperationItemID, OperationItemAttempt: input.OperationItemAttempt,
+		ProductionGenerationID:            nodeExecution.ProductionGenerationID,
+		VideoProductionBindingID:          nodeExecution.VideoProductionBindingID,
+		VideoProductionBindingRevision:    nodeExecution.VideoProductionBindingRevision,
+		ProductionProfileVersionID:        settings.VideoProductionProfileVersionID,
+		ProductionProfileSnapshotHash:     cleanContractHash(settings.VideoProductionProfileHash),
+		CompatibilityPolicy:               settings.VideoProductionCompatibilityPolicy,
+		RequiredInitialInputContract:      settings.VideoProductionRequiredInitialInputContract,
+		AllowedContinuationInputContracts: settings.VideoProductionAllowedContinuationInputContracts,
+		InputContractVersion:              settings.VideoProductionInputContract,
+		ShotStateRevision:                 approvedContract.ShotStateRevision,
+		ShotStateHash:                     approvedContract.ShotStateHash,
+		TransitionHash:                    approvedContract.TransitionHash,
+		ReferencePackID:                   approvedContract.ReferencePackID,
+		ReferencePackHash:                 approvedContract.ReferencePackHash,
+		PromptContextPlanID:               approvedContract.PromptContextPlanID,
+		PromptContextPlanHash:             approvedContract.PromptContextPlanHash,
+		VideoPromptPlanID:                 approvedContract.VideoPromptPlanID,
+		NativeAudioRequired:               approvedContract.NativeAudioRequired,
+		NodeExecutionToken:                nodeExecution.ExecutionToken, NodeAttemptGeneration: nodeExecution.AttemptGeneration,
 		StoryboardPlanID: shot.StoryboardPlanID, StoryboardShotID: shot.ID, ModelProfileKey: settings.VideoModelProfileKey,
 		TaskType: taskType, TargetDurationTicks: shot.PlannedDurationTicks, TimelineTimebase: shot.TimelineTimebase,
 		FPSNumerator: int64(shot.FPSNumerator), FPSDenominator: int64(shot.FPSDenominator),
@@ -218,6 +248,45 @@ type EnsurePreparedShotVideoPlanInput struct {
 	AudioStrategy    string `json:"audioStrategy,omitempty"`
 	AudioRequirement string `json:"audioRequirement,omitempty"`
 	Force            bool   `json:"force,omitempty"`
+	PromptOnly       bool   `json:"promptOnly,omitempty"`
+}
+
+type EnsurePreparedShotVideoPlanV2Input struct {
+	EnsurePreparedShotVideoPlanInput
+	OperationID          string `json:"operationId"`
+	OperationItemID      string `json:"operationItemId"`
+	OperationItemAttempt int    `json:"operationItemAttempt"`
+}
+
+type LoadApprovedShotVideoPromptPlanV2Input struct {
+	OrganizationID string `json:"organizationId"`
+	ProjectID      string `json:"projectId"`
+	WorkflowRunID  string `json:"workflowRunId"`
+	ShotID         string `json:"shotId"`
+	ShotIndex      int    `json:"shotIndex"`
+}
+
+type LoadApprovedShotVideoPromptPlanV2Output struct {
+	ShotID                         string `json:"shotId"`
+	ProductionGenerationID         string `json:"productionGenerationId"`
+	VideoProductionBindingID       string `json:"videoProductionBindingId"`
+	VideoProductionBindingRevision int64  `json:"videoProductionBindingRevision"`
+	ProductionProfileVersionID     string `json:"productionProfileVersionId"`
+	ProductionProfileSnapshotHash  string `json:"productionProfileSnapshotHash"`
+	VideoPromptPlanID              string `json:"videoPromptPlanId"`
+	VideoPromptHash                string `json:"videoPromptHash"`
+	Prompt                         string `json:"prompt"`
+	ShotStateHash                  string `json:"shotStateHash"`
+	ReferencePackID                string `json:"referencePackId"`
+	ReferencePackHash              string `json:"referencePackHash"`
+}
+
+type LoadExecutableShotVideoPlanV2Input struct {
+	LoadPreparedShotVideoPlanInput
+	OperationID          string `json:"operationId"`
+	OperationItemID      string `json:"operationItemId"`
+	OperationItemAttempt int    `json:"operationItemAttempt"`
+	ExecutionPlanID      string `json:"executionPlanId"`
 }
 
 type reviewedShotVideoPromptSource struct {
@@ -274,7 +343,7 @@ func (a Activities) FinalizeShotVideoPromptPlan(ctx context.Context, input Final
 }
 
 func (a Activities) shotVideoPromptPlanReady(ctx context.Context, projectID, shotID, executionPlanID string) (bool, error) {
-	var ready bool
+	var shotReady bool
 	err := a.db.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1
@@ -283,17 +352,49 @@ func (a Activities) shotVideoPromptPlanReady(ctx context.Context, projectID, sho
 			WHERE shot.id = $1 AND shot.project_id = $2 AND plan.id = $3
 			  AND shot.video_prompt_status = 'succeeded'
 			  AND COALESCE(shot.metadata #>> '{videoPromptPlan,status}', '') = 'ready'
+			  AND COALESCE(shot.metadata #>> '{videoPromptPlan,executionPlanId}', '') = plan.id::text
+			  AND COALESCE(plan.metadata->>'promptStatus', '') = 'ready'
 			  AND plan.active = true
 		)
-	`, shotID, projectID, executionPlanID).Scan(&ready)
-	return ready, err
+	`, shotID, projectID, executionPlanID).Scan(&shotReady)
+	if err != nil || !shotReady {
+		return false, err
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT COALESCE(prompt, ''),
+		       COALESCE(metadata #>> '{videoPromptAgent,status}', ''),
+		       COALESCE(execution_prompt_hash, '')
+		FROM video_render_segments
+		WHERE video_render_plan_id = $1 AND storyboard_shot_id = $2 AND project_id = $3
+		ORDER BY segment_index
+	`, executionPlanID, shotID, projectID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	segmentCount := 0
+	for rows.Next() {
+		var prompt, reviewStatus, promptHash string
+		if err := rows.Scan(&prompt, &reviewStatus, &promptHash); err != nil {
+			return false, err
+		}
+		segmentCount++
+		if !reviewedVideoSegmentPromptReady(prompt, reviewStatus, promptHash) {
+			return false, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return segmentCount > 0, nil
 }
 
 func (a Activities) finalizeShotVideoPromptPlanTx(ctx context.Context, tx pgx.Tx, input FinalizeShotVideoPromptPlanInput) error {
 	rows, err := tx.Query(ctx, `
 		SELECT segment_index, COALESCE(prompt, ''),
 		       COALESCE(metadata #>> '{videoPromptAgent,status}', ''),
-		       COALESCE(metadata #>> '{videoPromptAgent,promptHash}', '')
+		       COALESCE(execution_prompt_hash, '')
 		FROM video_render_segments
 		WHERE video_render_plan_id = $1 AND storyboard_shot_id = $2 AND project_id = $3
 		ORDER BY segment_index
@@ -310,7 +411,7 @@ func (a Activities) finalizeShotVideoPromptPlanTx(ctx context.Context, tx pgx.Tx
 		if err := rows.Scan(&segmentIndex, &prompt, &status, &promptHash); err != nil {
 			return err
 		}
-		if strings.TrimSpace(prompt) == "" || (status != "approved" && status != "manual_approved") || strings.TrimSpace(promptHash) == "" {
+		if !reviewedVideoSegmentPromptReady(prompt, status, promptHash) {
 			return preparedVideoPromptError(fmt.Sprintf("视频片段 %d 的提示词尚未完成审核，请重新生成视频提示词", segmentIndex+1))
 		}
 		prompts = append(prompts, strings.TrimSpace(prompt))
@@ -388,40 +489,204 @@ func (a Activities) EnsurePreparedShotVideoPlan(ctx context.Context, input Ensur
 		ShotID: input.ShotID, ShotIndex: input.ShotIndex, AspectRatio: input.AspectRatio, Resolution: input.Resolution,
 		AudioStrategy: input.AudioStrategy, AudioRequirement: input.AudioRequirement,
 	}
-	if shouldReusePreparedShotVideoPlan(input.Force) {
-		prepared, loadErr := a.loadPreparedShotVideoPlan(ctx, loadInput)
-		if loadErr == nil {
-			return prepared, nil
-		}
-		if !isPreparedVideoPromptPlanError(loadErr) {
-			return LoadPreparedShotVideoPlanOutput{}, loadErr
-		}
+	if input.PromptOnly {
+		return a.loadPreparedShotVideoPlan(ctx, loadInput)
 	}
-	source, err := a.reviewedShotVideoPromptSource(ctx, input.OrganizationID, input.ProjectID, input.ShotID)
+
+	plan, recovered, err := a.recoverableWorkflowShotVideoExecutionPlan(ctx, input)
 	if err != nil {
 		return LoadPreparedShotVideoPlanOutput{}, err
 	}
-	if err := a.validateReviewedShotVideoPromptDialogue(ctx, input, source); err != nil {
-		return LoadPreparedShotVideoPlanOutput{}, err
+	if !recovered {
+		previousExecutionPlanID, err := a.activeShotVideoExecutionPlanID(ctx, input)
+		if err != nil {
+			return LoadPreparedShotVideoPlanOutput{}, err
+		}
+		plan, err = a.PlanShotVideo(ctx, PlanShotVideoInput{
+			OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
+			CreatedBy: input.CreatedBy, WorkflowPrompt: input.WorkflowPrompt, FailureScope: input.FailureScope,
+			ShotID: input.ShotID, ShotIndex: input.ShotIndex,
+			AspectRatio: input.AspectRatio, Resolution: input.Resolution,
+			AudioStrategy: input.AudioStrategy, AudioRequirement: input.AudioRequirement,
+			Force: true, PreviousExecutionPlanID: previousExecutionPlanID,
+		})
+		if err != nil {
+			return LoadPreparedShotVideoPlanOutput{}, err
+		}
 	}
-	plan, err := a.PlanShotVideo(ctx, PlanShotVideoInput{
-		OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
-		CreatedBy: input.CreatedBy, WorkflowPrompt: input.WorkflowPrompt, FailureScope: input.FailureScope,
-		ShotID: input.ShotID, ShotIndex: input.ShotIndex,
-		AspectRatio: input.AspectRatio, Resolution: input.Resolution, AudioStrategy: input.AudioStrategy,
-		AudioRequirement: input.AudioRequirement, Force: input.Force,
-	})
+	ready, err := a.shotVideoPromptPlanReady(ctx, input.ProjectID, input.ShotID, plan.ExecutionPlanID)
 	if err != nil {
 		return LoadPreparedShotVideoPlanOutput{}, err
 	}
-	if err := a.materializeReviewedShotVideoPromptPlan(ctx, input, plan.ExecutionPlanID); err != nil {
-		return LoadPreparedShotVideoPlanOutput{}, err
+	if !ready {
+		if err := a.materializeApprovedVideoPromptPlan(ctx, input, plan); err != nil {
+			return LoadPreparedShotVideoPlanOutput{}, err
+		}
 	}
-	return a.loadPreparedShotVideoPlan(ctx, loadInput)
+	prepared, err := a.loadPreparedShotVideoPlan(ctx, loadInput)
+	if err == nil {
+		return prepared, nil
+	}
+	if isPreparedVideoPromptPlanError(err) {
+		return LoadPreparedShotVideoPlanOutput{}, preparedVideoPromptError("没有可执行的已审核视频提示词计划，请先批量生成视频提示词")
+	}
+	return LoadPreparedShotVideoPlanOutput{}, err
 }
 
-func shouldReusePreparedShotVideoPlan(force bool) bool {
-	return !force
+func (a Activities) LoadApprovedShotVideoPromptPlanV2(ctx context.Context, input LoadApprovedShotVideoPromptPlanV2Input) (LoadApprovedShotVideoPromptPlanV2Output, error) {
+	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" ||
+		strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.ShotID) == "" {
+		return LoadApprovedShotVideoPromptPlanV2Output{}, fmt.Errorf("organizationId, projectId, workflowRunId, and shotId are required")
+	}
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
+	if err != nil {
+		return LoadApprovedShotVideoPromptPlanV2Output{}, err
+	}
+	shot, err := a.storyboardShot(ctx, input.ProjectID, input.WorkflowRunID, input.ShotID, input.ShotIndex)
+	if err != nil {
+		return LoadApprovedShotVideoPromptPlanV2Output{}, err
+	}
+	contract, err := a.loadApprovedShotVideoExecutionContract(ctx, input.OrganizationID, project, shot)
+	if err != nil {
+		return LoadApprovedShotVideoPromptPlanV2Output{}, err
+	}
+	return LoadApprovedShotVideoPromptPlanV2Output{
+		ShotID:                         shot.ID,
+		ProductionGenerationID:         project.ProductionGenerationID,
+		VideoProductionBindingID:       project.VideoProductionBindingID,
+		VideoProductionBindingRevision: project.VideoProductionBindingRevision,
+		ProductionProfileVersionID:     contract.ProductionProfileVersionID,
+		ProductionProfileSnapshotHash:  contract.ProductionProfileSnapshotHash,
+		VideoPromptPlanID:              contract.VideoPromptPlanID,
+		VideoPromptHash:                contract.VideoPromptHash,
+		Prompt:                         contract.Prompt,
+		ShotStateHash:                  contract.ShotStateHash,
+		ReferencePackID:                contract.ReferencePackID,
+		ReferencePackHash:              contract.ReferencePackHash,
+	}, nil
+}
+
+func (a Activities) EnsurePreparedShotVideoPlanV2(ctx context.Context, input EnsurePreparedShotVideoPlanV2Input) (LoadPreparedShotVideoPlanOutput, error) {
+	return a.materializeAndBindExecutableShotVideoPlanV2(ctx, input)
+}
+
+func (a Activities) MaterializeAndBindExecutableShotVideoPlanV2(ctx context.Context, input EnsurePreparedShotVideoPlanV2Input) (LoadPreparedShotVideoPlanOutput, error) {
+	return a.materializeAndBindExecutableShotVideoPlanV2(ctx, input)
+}
+
+func (a Activities) materializeAndBindExecutableShotVideoPlanV2(ctx context.Context, input EnsurePreparedShotVideoPlanV2Input) (LoadPreparedShotVideoPlanOutput, error) {
+	input.OperationID = strings.TrimSpace(input.OperationID)
+	input.OperationItemID = strings.TrimSpace(input.OperationItemID)
+	if input.OperationID == "" || input.OperationItemID == "" || input.OperationItemAttempt <= 0 {
+		return LoadPreparedShotVideoPlanOutput{}, fmt.Errorf("operationId, operationItemId, and operationItemAttempt are required")
+	}
+	base := input.EnsurePreparedShotVideoPlanInput
+	if _, err := a.LoadApprovedShotVideoPromptPlanV2(ctx, LoadApprovedShotVideoPromptPlanV2Input{
+		OrganizationID: base.OrganizationID, ProjectID: base.ProjectID, WorkflowRunID: base.WorkflowRunID,
+		ShotID: base.ShotID, ShotIndex: base.ShotIndex,
+	}); err != nil {
+		return LoadPreparedShotVideoPlanOutput{}, err
+	}
+	planID, predecessorPlanID, err := a.loadEpisodeVideoOperationItemPlan(ctx, input)
+	if err != nil {
+		return LoadPreparedShotVideoPlanOutput{}, err
+	}
+	var plan PlanShotVideoOutput
+	if planID == "" {
+		plan, err = a.PlanShotVideo(ctx, PlanShotVideoInput{
+			OrganizationID: base.OrganizationID, ProjectID: base.ProjectID, WorkflowRunID: base.WorkflowRunID,
+			OperationID: input.OperationID, OperationItemID: input.OperationItemID, OperationItemAttempt: input.OperationItemAttempt,
+			CreatedBy: base.CreatedBy, WorkflowPrompt: base.WorkflowPrompt, FailureScope: base.FailureScope,
+			ShotID: base.ShotID, ShotIndex: base.ShotIndex, AspectRatio: base.AspectRatio, Resolution: base.Resolution,
+			AudioStrategy: base.AudioStrategy, AudioRequirement: base.AudioRequirement,
+			Force: true, PreviousExecutionPlanID: predecessorPlanID,
+		})
+		if err != nil {
+			return LoadPreparedShotVideoPlanOutput{}, err
+		}
+		planID = plan.ExecutionPlanID
+	} else {
+		plan.ExecutionPlanID = planID
+	}
+	ready, err := a.shotVideoPromptPlanReady(ctx, base.ProjectID, base.ShotID, planID)
+	if err != nil {
+		return LoadPreparedShotVideoPlanOutput{}, err
+	}
+	if !ready {
+		if err := a.materializeApprovedVideoPromptPlan(ctx, base, plan); err != nil {
+			return LoadPreparedShotVideoPlanOutput{}, err
+		}
+	}
+	prepared, err := a.LoadExecutableShotVideoPlanV2(ctx, LoadExecutableShotVideoPlanV2Input{
+		LoadPreparedShotVideoPlanInput: LoadPreparedShotVideoPlanInput{
+			OrganizationID: base.OrganizationID, ProjectID: base.ProjectID, WorkflowRunID: base.WorkflowRunID,
+			ShotID: base.ShotID, ShotIndex: base.ShotIndex, AspectRatio: base.AspectRatio, Resolution: base.Resolution,
+			AudioStrategy: base.AudioStrategy, AudioRequirement: base.AudioRequirement,
+		},
+		ExecutionPlanID: planID, OperationID: input.OperationID,
+		OperationItemID: input.OperationItemID, OperationItemAttempt: input.OperationItemAttempt,
+	})
+	if err == nil {
+		return prepared, nil
+	}
+	if isPreparedVideoPromptPlanError(err) {
+		return LoadPreparedShotVideoPlanOutput{}, preparedVideoPromptError("当前视频生产项没有可执行的已审核 Render Plan，请重新生成视频提示词")
+	}
+	return LoadPreparedShotVideoPlanOutput{}, err
+}
+
+func (a Activities) LoadExecutableShotVideoPlanV2(ctx context.Context, input LoadExecutableShotVideoPlanV2Input) (LoadPreparedShotVideoPlanOutput, error) {
+	input.OperationID = strings.TrimSpace(input.OperationID)
+	input.OperationItemID = strings.TrimSpace(input.OperationItemID)
+	input.ExecutionPlanID = strings.TrimSpace(input.ExecutionPlanID)
+	if input.OperationID == "" || input.OperationItemID == "" || input.OperationItemAttempt <= 0 || input.ExecutionPlanID == "" {
+		return LoadPreparedShotVideoPlanOutput{}, fmt.Errorf("operationId, operationItemId, operationItemAttempt, and executionPlanId are required")
+	}
+	return a.loadPreparedShotVideoPlanByIdentity(
+		ctx,
+		input.LoadPreparedShotVideoPlanInput,
+		input.ExecutionPlanID,
+		input.OperationID,
+		input.OperationItemID,
+		input.OperationItemAttempt,
+	)
+}
+
+func (a Activities) loadEpisodeVideoOperationItemPlan(ctx context.Context, input EnsurePreparedShotVideoPlanV2Input) (string, string, error) {
+	var planID, predecessorPlanID string
+	err := a.db.QueryRow(ctx, `
+		SELECT COALESCE(item.video_render_plan_id::text, ''),
+		       COALESCE(item.predecessor_video_render_plan_id::text, '')
+		FROM episode_video_production_items item
+		JOIN episode_video_production_batches batch ON batch.id = item.batch_id
+		JOIN episode_video_production_checkpoints checkpoint ON checkpoint.id = batch.checkpoint_id
+		LEFT JOIN video_render_plans plan ON plan.id = item.video_render_plan_id
+		WHERE item.id = $1 AND item.attempt = $2 AND item.execution_identity_version = 2
+		  AND checkpoint.id = $3 AND checkpoint.organization_id = $4 AND checkpoint.project_id = $5
+		  AND checkpoint.workflow_run_id = $6 AND item.storyboard_shot_id = $7
+		  AND checkpoint.production_generation_id = (
+		    SELECT production_generation_id FROM workflow_runs WHERE id = $6
+		  )
+		  AND checkpoint.video_production_binding_id = (
+		    SELECT video_production_binding_id FROM workflow_runs WHERE id = $6
+		  )
+		  AND checkpoint.video_production_binding_revision = (
+		    SELECT video_production_binding_revision FROM workflow_runs WHERE id = $6
+		  )
+		  AND (plan.id IS NULL OR (
+		    plan.operation_item_id = item.id
+		    AND plan.operation_item_attempt = item.attempt
+		    AND plan.workflow_run_id = checkpoint.workflow_run_id
+		  ))
+	`, input.OperationItemID, input.OperationItemAttempt, input.OperationID,
+		input.OrganizationID, input.ProjectID, input.WorkflowRunID, input.ShotID).Scan(&planID, &predecessorPlanID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", preparedVideoPromptError("视频生产项身份已失效，请重新提交该镜头")
+		}
+		return "", "", err
+	}
+	return planID, predecessorPlanID, nil
 }
 
 func (a Activities) reviewedShotVideoPromptSource(ctx context.Context, organizationID, projectID, shotID string) (reviewedShotVideoPromptSource, error) {
@@ -458,7 +723,7 @@ func (a Activities) validateReviewedShotVideoPromptDialogue(ctx context.Context,
 	`, input.ShotID, input.ProjectID, input.OrganizationID).Scan(&rawDialogue, &promptSource); err != nil {
 		return err
 	}
-	currentDialogue := NormalizeStoryboardDialogue(shot.Dialogue)
+	currentDialogue := SpokenStoryboardDialogue(shot.Dialogue)
 	if strings.EqualFold(promptSource, "manual") {
 		for _, line := range currentDialogue {
 			if !strings.Contains(source.Prompt, line.Text) {
@@ -487,7 +752,7 @@ func (a Activities) validateReviewedShotVideoPromptDialogue(ctx context.Context,
 
 func sameStoryboardDialogueContent(left, right []StoryboardDialogueLine) bool {
 	left = NormalizeStoryboardDialogue(left)
-	right = NormalizeStoryboardDialogue(right)
+	right = SpokenStoryboardDialogue(right)
 	if len(left) != len(right) {
 		return false
 	}
@@ -653,12 +918,13 @@ func (a Activities) materializeReviewedShotVideoPromptPlan(ctx context.Context, 
 		if _, err := tx.Exec(ctx, `
 			UPDATE video_render_segments
 			SET prompt = $2,
+			    execution_prompt_hash = $3,
 			    metadata = COALESCE(metadata, '{}'::jsonb)
 			      || jsonb_build_object('promptStatus', 'succeeded', 'promptCompletedAt', now())
-			      || jsonb_build_object('videoPromptAgent', $3::jsonb),
+			      || jsonb_build_object('videoPromptAgent', $4::jsonb),
 			    error_code = NULL, error_message = NULL, updated_at = now()
-			WHERE id = $1 AND video_render_plan_id = $4 AND project_id = $5
-		`, segment.ID, prompt, mustJSON(segmentMetadata), executionPlanID, input.ProjectID); err != nil {
+			WHERE id = $1 AND video_render_plan_id = $5 AND project_id = $6
+		`, segment.ID, prompt, promptHash, mustJSON(segmentMetadata), executionPlanID, input.ProjectID); err != nil {
 			return err
 		}
 	}
@@ -747,6 +1013,17 @@ func (a Activities) LoadPreparedShotVideoPlan(ctx context.Context, input LoadPre
 }
 
 func (a Activities) loadPreparedShotVideoPlan(ctx context.Context, input LoadPreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
+	return a.loadPreparedShotVideoPlanByIdentity(ctx, input, "", "", "", 0)
+}
+
+func (a Activities) loadPreparedShotVideoPlanByIdentity(
+	ctx context.Context,
+	input LoadPreparedShotVideoPlanInput,
+	executionPlanID string,
+	operationID string,
+	operationItemID string,
+	operationItemAttempt int,
+) (LoadPreparedShotVideoPlanOutput, error) {
 	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" || strings.TrimSpace(input.ShotID) == "" {
 		return LoadPreparedShotVideoPlanOutput{}, fmt.Errorf("organizationId, projectId, workflowRunId, and shotId are required")
 	}
@@ -756,6 +1033,9 @@ func (a Activities) loadPreparedShotVideoPlan(ctx context.Context, input LoadPre
 	}
 	var plan PlanShotVideoOutput
 	var snapshot []byte
+	var initialInputContractSnapshot []byte
+	var continuationInputContractSnapshot []byte
+	var continuationInputContractHash, capabilityAttestationID *string
 	var expiresAt time.Time
 	var promptStatus, planStatus, planAspectRatio, planResolution string
 	var targetDurationTicks int64
@@ -766,20 +1046,52 @@ func (a Activities) loadPreparedShotVideoPlan(ctx context.Context, input LoadPre
 		       plan.fps_denominator, plan.expires_at, plan.audio_strategy,
 		       plan.audio_requirement, plan.native_audio_status, plan.production_readiness,
 		       plan.status, plan.aspect_ratio, plan.resolution, plan.target_duration_ticks,
+		       plan.initial_input_contract_snapshot, plan.initial_input_contract_hash,
+		       plan.continuation_input_contract_snapshot, plan.continuation_input_contract_hash,
+		       plan.capability_attestation_id::text,
 		       COALESCE(shot.video_prompt_status, 'not_started')
-		FROM storyboard_shots shot
-		JOIN video_render_plans plan ON plan.id = shot.active_video_render_plan_id
+		FROM video_render_plans plan
+		JOIN storyboard_shots shot ON shot.id = plan.storyboard_shot_id
 		JOIN provider_models model ON model.id = plan.provider_model_id AND model.status = 'active'
 		JOIN provider_accounts account ON account.id = plan.provider_account_id AND account.status = 'active'
 		WHERE shot.id = $1 AND shot.project_id = $2 AND shot.organization_id = $3
 		  AND shot.deleted_at IS NULL AND plan.active = true
 		  AND plan.status NOT IN ('stale', 'archived', 'cancelled', 'replan_required')
-	`, shot.ID, input.ProjectID, input.OrganizationID).Scan(
+		  AND (
+		    ($4 = '' AND plan.id = shot.active_video_render_plan_id)
+		    OR (
+		      $4 <> '' AND plan.id::text = $4
+		      AND plan.workflow_run_id::text = $8
+		      AND EXISTS (
+		        SELECT 1
+		        FROM episode_video_production_items item
+		        JOIN episode_video_production_batches batch ON batch.id = item.batch_id
+		        JOIN episode_video_production_checkpoints checkpoint ON checkpoint.id = batch.checkpoint_id
+		        WHERE item.id::text = $6 AND item.attempt = $7
+		          AND item.execution_identity_version = 2
+		          AND item.video_render_plan_id = plan.id
+		          AND plan.operation_item_id = item.id
+		          AND plan.operation_item_attempt = item.attempt
+		          AND checkpoint.id::text = $5
+		          AND checkpoint.organization_id = plan.organization_id
+		          AND checkpoint.project_id = plan.project_id
+		          AND checkpoint.production_generation_id = plan.production_generation_id
+		          AND checkpoint.video_production_binding_id = plan.video_production_binding_id
+		          AND checkpoint.video_production_binding_revision = plan.video_production_binding_revision
+		          AND checkpoint.workflow_run_id = plan.workflow_run_id
+		      )
+		    )
+		  )
+	`, shot.ID, input.ProjectID, input.OrganizationID, executionPlanID, operationID,
+		operationItemID, operationItemAttempt, input.WorkflowRunID).Scan(
 		&plan.ExecutionPlanID, &plan.ProviderModelID, &plan.ProviderAccountID,
 		&plan.ModelFamily, &plan.VariantKey, &snapshot, &plan.CapabilitySnapshotHash,
 		&plan.TimelineTimebase, &plan.FPSNumerator, &plan.FPSDenominator, &expiresAt,
 		&plan.AudioStrategy, &plan.AudioRequirement, &plan.NativeAudioStatus, &plan.ProductionReadiness,
-		&planStatus, &planAspectRatio, &planResolution, &targetDurationTicks, &promptStatus,
+		&planStatus, &planAspectRatio, &planResolution, &targetDurationTicks,
+		&initialInputContractSnapshot, &plan.InitialInputContractHash,
+		&continuationInputContractSnapshot, &continuationInputContractHash,
+		&capabilityAttestationID, &promptStatus,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -812,15 +1124,32 @@ func (a Activities) loadPreparedShotVideoPlan(ctx context.Context, input LoadPre
 	if err := json.Unmarshal(snapshot, &plan.CapabilitySnapshot); err != nil {
 		return LoadPreparedShotVideoPlanOutput{}, err
 	}
+	if err := json.Unmarshal(initialInputContractSnapshot, &plan.InitialInputContractSnapshot); err != nil {
+		return LoadPreparedShotVideoPlanOutput{}, err
+	}
+	if len(continuationInputContractSnapshot) > 0 {
+		var contract provider.VideoInputContract
+		if err := json.Unmarshal(continuationInputContractSnapshot, &contract); err != nil {
+			return LoadPreparedShotVideoPlanOutput{}, err
+		}
+		plan.ContinuationInputContractSnapshot = &contract
+	}
+	if continuationInputContractHash != nil {
+		plan.ContinuationInputContractHash = *continuationInputContractHash
+	}
+	if capabilityAttestationID != nil {
+		plan.CapabilityAttestationID = *capabilityAttestationID
+	}
 	plan.ExpiresAt = expiresAt.UTC().Format(time.RFC3339Nano)
 	rows, err := a.db.Query(ctx, `
 		SELECT id::text, segment_index, planned_start_tick, planned_end_tick,
 		       planned_duration_ticks, requested_duration_seconds::float8,
-		       continuity_mode, COALESCE(trim_end_tick, 0), dialogue,
+		       continuity_mode, input_contract_key, input_contract_hash,
+		       COALESCE(trim_end_tick, 0), dialogue,
 		       COALESCE(prompt, ''),
 		       COALESCE(metadata #>> '{videoPromptAgent,status}', ''),
 		       COALESCE(metadata #>> '{videoPromptAgent,negativePrompt}', ''),
-		       COALESCE(metadata #>> '{videoPromptAgent,promptHash}', ''),
+		       COALESCE(execution_prompt_hash, ''),
 		       COALESCE(metadata #>> '{videoPromptAgent,generationProviderCallId}', ''),
 		       COALESCE(metadata #>> '{videoPromptAgent,reviewProviderCallId}', ''),
 		       COALESCE(metadata #>> '{videoPromptAgent,reviewTemplateKey}', ''),
@@ -841,6 +1170,7 @@ func (a Activities) loadPreparedShotVideoPlan(ctx context.Context, input LoadPre
 		if err := rows.Scan(
 			&segment.SegmentID, &segment.SegmentIndex, &segment.PlannedStartTick, &segment.PlannedEndTick,
 			&segment.PlannedDurationTicks, &segment.RequestedDurationSeconds, &segment.ContinuityMode,
+			&segment.InputContractKey, &segment.InputContractHash,
 			&segment.TrimEndTick, &dialogue, &segment.Prompt, &promptReviewStatus, &segment.NegativePrompt,
 			&segment.PromptHash, &segment.GenerationProviderCallID, &segment.ReviewProviderCallID,
 			&segment.ReviewTemplateKey, &segment.ReviewPromptVersionID,
@@ -849,7 +1179,7 @@ func (a Activities) loadPreparedShotVideoPlan(ctx context.Context, input LoadPre
 		}
 		segment.PlannedDurationSeconds = float64(segment.PlannedDurationTicks) / float64(plan.TimelineTimebase)
 		segment.DialogueSpans = decodeStoredVideoDialogue(dialogue)
-		if strings.TrimSpace(segment.Prompt) == "" || (promptReviewStatus != "approved" && promptReviewStatus != "manual_approved") || strings.TrimSpace(segment.PromptHash) == "" {
+		if !reviewedVideoSegmentPromptReady(segment.Prompt, promptReviewStatus, segment.PromptHash) {
 			return LoadPreparedShotVideoPlanOutput{}, preparedVideoPromptError(fmt.Sprintf("视频片段 %d 的提示词尚未完成审核，请重新生成视频提示词", segment.SegmentIndex+1))
 		}
 		segments = append(segments, segment)
@@ -862,6 +1192,13 @@ func (a Activities) loadPreparedShotVideoPlan(ctx context.Context, input LoadPre
 		return LoadPreparedShotVideoPlanOutput{}, preparedVideoPromptError("视频执行计划没有渲染片段，请重新生成视频提示词")
 	}
 	return LoadPreparedShotVideoPlanOutput{Plan: plan, Segments: segments}, nil
+}
+
+func reviewedVideoSegmentPromptReady(prompt, reviewStatus, executionPromptHash string) bool {
+	if strings.TrimSpace(prompt) == "" || (reviewStatus != "approved" && reviewStatus != "manual_approved") {
+		return false
+	}
+	return strings.TrimSpace(executionPromptHash) == promptsvc.HashText(prompt)
 }
 
 func decodeStoredVideoDialogue(raw []byte) []provider.GatewayVideoDialogueSpan {
@@ -898,7 +1235,16 @@ func isPreparedVideoPromptPlanError(err error) bool {
 }
 
 func gatewayVideoDialogueSpans(shot StoryboardShotRecord) ([]provider.GatewayVideoDialogueSpan, error) {
-	lines := NormalizeStoryboardDialogue(shot.Dialogue)
+	for _, line := range shot.Dialogue {
+		kind := strings.ToLower(strings.TrimSpace(line.Kind))
+		if kind == "" {
+			kind = "dialogue"
+		}
+		if kind == "dialogue" && strings.TrimSpace(line.Text) != "" && strings.TrimSpace(line.Speaker) == "" {
+			return nil, workflowError{Code: provider.CodeStoryboardReplanRequired, Message: "storyboard dialogue is missing a speaker"}
+		}
+	}
+	lines := SpokenStoryboardDialogue(shot.Dialogue)
 	result := make([]provider.GatewayVideoDialogueSpan, 0, len(lines))
 	for _, line := range lines {
 		if line.SpanEndTick <= line.SpanStartTick || line.SpanStartTick < shot.StartTick || line.SpanEndTick > shot.EndTick {
@@ -975,7 +1321,10 @@ func (a Activities) RetryShotVideoRenderSegment(ctx context.Context, input Retry
 	}
 	response, err := a.gateway.RetryVideoRenderSegment(ctx, provider.GatewayVideoRetrySegmentRequest{
 		OrganizationID: input.OrganizationID, ProjectID: input.ProjectID, WorkflowRunID: input.WorkflowRunID,
-		NodeRunID: execution.NodeRunID, NodeExecutionToken: execution.ExecutionToken, NodeAttemptGeneration: execution.AttemptGeneration,
+		ProductionGenerationID:         execution.ProductionGenerationID,
+		VideoProductionBindingID:       execution.VideoProductionBindingID,
+		VideoProductionBindingRevision: execution.VideoProductionBindingRevision,
+		NodeRunID:                      execution.NodeRunID, NodeExecutionToken: execution.ExecutionToken, NodeAttemptGeneration: execution.AttemptGeneration,
 		ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID,
 		FailureCode: input.FailureCode, FailureMessage: input.FailureMessage,
 	})

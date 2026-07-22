@@ -12,6 +12,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/production"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -234,6 +235,19 @@ func (s *Server) updateScriptEpisode(w http.ResponseWriter, r *http.Request, pri
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if project.ProductionGeneration == nil || project.VideoProductionBinding == nil {
+		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeGenerationMismatch, "项目没有活动的视频生产代", false))
+		return
+	}
+	if _, err := videoproduction.AssertWritableTx(
+		r.Context(), tx, project.ID,
+		project.ProductionGeneration.ID,
+		project.VideoProductionBinding.ID,
+		project.VideoProductionBinding.Revision,
+	); err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
 	item, err := scanScriptEpisode(tx.QueryRow(r.Context(), scriptEpisodeSelectSQL(`
 		WHERE se.project_id = $1 AND se.id = $2
 	`)+`

@@ -53,9 +53,15 @@ export function useAgentTasks(projectId: string, sessionId?: string | null, enab
     key: qk.agentTask(projectId, activeTask?.id || ""),
     queryFn: (session) => studioApi.getAgentTask(session, projectId, activeTask!.id),
     enabled: enabled && Boolean(activeTask?.id),
-    refetchInterval: enabled && activeTask && !isTerminalTask(activeTask.status) ? 1000 : false,
+    refetchInterval: (query) => {
+      const detailStatus = query.state.data?.status || activeTask?.status || "";
+      return enabled && Boolean(activeTask?.id) && !isTerminalTask(detailStatus) ? 1000 : false;
+    },
   });
-  const task = taskDetailQuery.data || activeTask || null;
+  const task = useMemo(
+    () => reconcileAgentTask(activeTask, taskDetailQuery.data),
+    [activeTask, taskDetailQuery.data],
+  );
   const refreshSignature = useMemo(() => (task ? agentTaskRefreshSignature(task) : ""), [task]);
   const productionRefreshSignature = useMemo(() => (task ? agentTaskProductionRefreshSignature(task) : ""), [task]);
   const generatedScript = useMemo(() => (task ? agentTaskGeneratedScript(task) : null), [task]);
@@ -196,6 +202,27 @@ function isTerminalTask(status: string) {
   return ["succeeded", "failed", "cancelled"].includes(status);
 }
 
+function reconcileAgentTask(listTask: AgentTask | null, detailTask?: AgentTask) {
+  if (!listTask) {
+    return detailTask || null;
+  }
+  if (!detailTask || detailTask.id !== listTask.id) {
+    return listTask;
+  }
+  if (!isTerminalTask(listTask.status) || isTerminalTask(detailTask.status)) {
+    return detailTask;
+  }
+
+  // The list can observe workflow reconciliation before the detail poll. Keep
+  // the detailed steps, but never let that older snapshot mask a terminal task.
+  return {
+    ...detailTask,
+    ...listTask,
+    steps: detailTask.steps,
+    approvals: detailTask.approvals,
+  };
+}
+
 function projectAgentInvalidationKeys(projectId: string, taskId: string, sessionId?: string | null) {
   return [
     qk.agentTasks(projectId),
@@ -218,7 +245,7 @@ function projectAgentProductionInvalidationKeys(projectId: string) {
     qk.scriptEpisodesPrefix(projectId),
     qk.scriptScenesPrefix(projectId),
     qk.shotProductionPrefix(projectId),
-    qk.assets(projectId),
+    qk.assetsRoot(projectId),
     qk.requirements(projectId),
     qk.artifacts(projectId),
   ];

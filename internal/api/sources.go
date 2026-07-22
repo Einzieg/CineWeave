@@ -113,12 +113,23 @@ type OutputImpact struct {
 }
 
 type sourceChapterRequest struct {
+	ID           *string `json:"id"`
 	ChapterIndex *int    `json:"chapterIndex"`
 	VolumeIndex  *int    `json:"volumeIndex"`
 	SectionIndex *int    `json:"sectionIndex"`
 	VolumeTitle  *string `json:"volumeTitle"`
 	ChapterTitle *string `json:"chapterTitle"`
 	Content      string  `json:"content"`
+}
+
+type sourceChapterIdentityRecord struct {
+	ID           string
+	ChapterIndex int
+	VolumeIndex  sql.NullInt32
+	SectionIndex sql.NullInt32
+	VolumeTitle  sql.NullString
+	ChapterTitle sql.NullString
+	Content      string
 }
 
 type importProjectSourceRequest struct {
@@ -966,9 +977,36 @@ func (s *Server) sourceChapter(r *http.Request, projectID, sourceID, chapterID s
 }
 
 func (s *Server) replaceSourceChapters(r *http.Request, tx pgx.Tx, project Project, sourceID string, reqChapters []sourceChapterRequest) ([]NovelChapter, error) {
-	if _, err := tx.Exec(r.Context(), `DELETE FROM novel_chapters WHERE project_id = $1 AND source_id = $2`, project.ID, sourceID); err != nil {
+	rows, err := tx.Query(r.Context(), `
+		SELECT id::text, chapter_index, volume_index, section_index, volume_title, chapter_title, content
+		FROM novel_chapters
+		WHERE project_id = $1 AND source_id = $2
+		ORDER BY COALESCE(volume_index, 0), COALESCE(section_index, chapter_index), chapter_index, id
+		FOR UPDATE
+	`, project.ID, sourceID)
+	if err != nil {
 		return nil, err
 	}
+	existing := make([]sourceChapterIdentityRecord, 0)
+	for rows.Next() {
+		var item sourceChapterIdentityRecord
+		if err := rows.Scan(&item.ID, &item.ChapterIndex, &item.VolumeIndex, &item.SectionIndex, &item.VolumeTitle, &item.ChapterTitle, &item.Content); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		existing = append(existing, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	existingByID := make(map[string]sourceChapterIdentityRecord, len(existing))
+	for _, item := range existing {
+		existingByID[item.ID] = item
+	}
+	claimed := make(map[string]bool, len(existing))
 	items := make([]NovelChapter, 0, len(reqChapters))
 	for i, chapter := range reqChapters {
 		index := i + 1
@@ -979,7 +1017,40 @@ func (s *Server) replaceSourceChapters(r *http.Request, tx pgx.Tx, project Proje
 		if content == "" {
 			continue
 		}
-		item, err := scanNovelChapter(tx.QueryRow(r.Context(), `
+		chapterID := strings.TrimSpace(stringValue(chapter.ID))
+		if chapterID != "" {
+			if _, ok := existingByID[chapterID]; !ok || claimed[chapterID] {
+				return nil, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "chapter id does not belong to this source or is duplicated")
+			}
+		} else {
+			chapterID = matchExistingSourceChapter(existing, claimed, chapter, index, content)
+		}
+
+		var item NovelChapter
+		var err error
+		if chapterID != "" {
+			claimed[chapterID] = true
+			item, err = scanNovelChapter(tx.QueryRow(r.Context(), `
+				UPDATE novel_chapters
+				SET chapter_index = $4,
+				    volume_index = $5,
+				    section_index = $6,
+				    volume_title = $7,
+				    chapter_title = $8,
+				    content = $9,
+				    event_state = CASE
+				      WHEN ROW(chapter_index, volume_index, section_index, volume_title, chapter_title, content)
+				        IS DISTINCT FROM ROW($4, $5::integer, $6::integer, $7::text, $8::text, $9::text)
+				      THEN 'pending'
+				      ELSE event_state
+				    END,
+				    updated_at = now()
+				WHERE id = $1 AND project_id = $2 AND source_id = $3
+				RETURNING id, source_id, chapter_index, volume_index, section_index, volume_title, chapter_title, content,
+				          event_state, event_summary, error_message, created_at, updated_at
+			`, chapterID, project.ID, sourceID, index, chapterVolumeIndex(chapter), chapterSectionIndex(chapter, index), chapter.VolumeTitle, chapter.ChapterTitle, content))
+		} else {
+			item, err = scanNovelChapter(tx.QueryRow(r.Context(), `
 			INSERT INTO novel_chapters(
 				organization_id, project_id, source_id, chapter_index, volume_index, section_index,
 				volume_title, chapter_title, content, event_state
@@ -987,13 +1058,86 @@ func (s *Server) replaceSourceChapters(r *http.Request, tx pgx.Tx, project Proje
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
 			RETURNING id, source_id, chapter_index, volume_index, section_index, volume_title, chapter_title, content,
 			          event_state, event_summary, error_message, created_at, updated_at
-		`, project.OrganizationID, project.ID, sourceID, index, chapterVolumeIndex(chapter), chapterSectionIndex(chapter, index), chapter.VolumeTitle, chapter.ChapterTitle, content))
+			`, project.OrganizationID, project.ID, sourceID, index, chapterVolumeIndex(chapter), chapterSectionIndex(chapter, index), chapter.VolumeTitle, chapter.ChapterTitle, content))
+		}
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, item)
 	}
+	deletedIDs := make([]string, 0)
+	for _, item := range existing {
+		if !claimed[item.ID] {
+			deletedIDs = append(deletedIDs, item.ID)
+		}
+	}
+	if len(deletedIDs) > 0 {
+		if _, err := tx.Exec(r.Context(), `
+			DELETE FROM novel_chapters
+			WHERE project_id = $1 AND source_id = $2 AND id = ANY($3::uuid[])
+		`, project.ID, sourceID, deletedIDs); err != nil {
+			return nil, err
+		}
+	}
 	return items, nil
+}
+
+func matchExistingSourceChapter(existing []sourceChapterIdentityRecord, claimed map[string]bool, chapter sourceChapterRequest, index int, content string) string {
+	volumeIndex := intValueOrZero(chapter.VolumeIndex)
+	sectionIndex := intValueOrZero(chapter.SectionIndex)
+	volumeTitle := normalizeSourceChapterIdentity(stringValue(chapter.VolumeTitle))
+	chapterTitle := normalizeSourceChapterIdentity(stringValue(chapter.ChapterTitle))
+	content = strings.TrimSpace(content)
+	bestID, bestScore := "", 0
+	ambiguous := false
+	for _, candidate := range existing {
+		if claimed[candidate.ID] {
+			continue
+		}
+		score := 0
+		candidateVolumeTitle := normalizeSourceChapterIdentity(candidate.VolumeTitle.String)
+		candidateChapterTitle := normalizeSourceChapterIdentity(candidate.ChapterTitle.String)
+		if content != "" && strings.TrimSpace(candidate.Content) == content {
+			score = 120
+		}
+		if chapterTitle != "" && chapterTitle == candidateChapterTitle {
+			if volumeTitle != "" && volumeTitle == candidateVolumeTitle {
+				score = max(score, 110)
+			}
+			if volumeIndex > 0 && candidate.VolumeIndex.Valid && int(candidate.VolumeIndex.Int32) == volumeIndex {
+				score = max(score, 105)
+			}
+			if sectionIndex > 0 && candidate.SectionIndex.Valid && int(candidate.SectionIndex.Int32) == sectionIndex {
+				score = max(score, 100)
+			}
+			if candidate.ChapterIndex == index {
+				score = max(score, 90)
+			}
+		}
+		if score == 0 {
+			continue
+		}
+		if score > bestScore {
+			bestID, bestScore, ambiguous = candidate.ID, score, false
+		} else if score == bestScore {
+			ambiguous = true
+		}
+	}
+	if ambiguous {
+		return ""
+	}
+	return bestID
+}
+
+func normalizeSourceChapterIdentity(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
+}
+
+func intValueOrZero(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func scanProjectSource(row rowScan) (ProjectSource, error) {
@@ -1502,7 +1646,11 @@ func (s *Server) createImportedScript(r *http.Request, tx pgx.Tx, principal auth
 	if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, script.ID, version.ID); err != nil {
 		return Script{}, ScriptVersion{}, err
 	}
+	if _, err := tx.Exec(r.Context(), `UPDATE projects SET active_script_id = $2 WHERE id = $1`, project.ID, script.ID); err != nil {
+		return Script{}, ScriptVersion{}, err
+	}
 	script.CurrentVersionID = &version.ID
+	script.IsCurrent = true
 	script.CurrentVersion = &version
 	return script, version, nil
 }

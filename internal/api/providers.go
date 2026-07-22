@@ -2,13 +2,40 @@ package api
 
 import (
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/provider"
 )
+
+const providerConfigurationFrozenCode = "PROVIDER_CONFIGURATION_FROZEN"
+
+func (s *Server) withProviderConfigurationWriteGate(next func(http.ResponseWriter, *http.Request, auth.Principal)) func(http.ResponseWriter, *http.Request, auth.Principal) {
+	return func(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+		if providerConfigurationFrozen() {
+			httpx.WriteError(
+				w,
+				r,
+				http.StatusServiceUnavailable,
+				providerConfigurationFrozenCode,
+				"供应商配置正在维护，暂时无法修改",
+				nil,
+				true,
+			)
+			return
+		}
+		next(w, r, principal)
+	}
+}
+
+func providerConfigurationFrozen() bool {
+	value := strings.TrimSpace(os.Getenv("CINEWEAVE_PROVIDER_CONFIGURATION_FROZEN"))
+	return strings.EqualFold(value, "true") || value == "1"
+}
 
 func (s *Server) listProviderCatalog(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
@@ -178,6 +205,82 @@ func (s *Server) rotateProviderCredential(w http.ResponseWriter, r *http.Request
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
+func (s *Server) listProviderCredentials(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	items, err := s.providers.ListCredentials(r.Context(), orgID, r.PathValue("accountId"), r.URL.Query().Get("filter[status]"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) createProviderCredential(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req provider.CreateCredentialRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.CreateCredential(r.Context(), orgID, r.PathValue("accountId"), principal.UserID, req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+}
+
+func (s *Server) rotateProviderCredentialByID(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req provider.RotateCredentialRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.RotateCredentialByID(
+		r.Context(), orgID, r.PathValue("accountId"), r.PathValue("credentialId"), principal.UserID, req,
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) revokeProviderCredential(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	if err := s.providers.RevokeCredential(r.Context(), orgID, r.PathValue("accountId"), r.PathValue("credentialId")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]bool{"revoked": true}, nil)
+}
+
+func (s *Server) discoverProviderCredentialModels(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.DiscoverModelsForCredential(
+		r.Context(), orgID, r.PathValue("accountId"), r.PathValue("credentialId"),
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
 func (s *Server) discoverProviderModels(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
 	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
@@ -276,6 +379,72 @@ func (s *Server) testProviderModel(w http.ResponseWriter, r *http.Request, princ
 		return
 	}
 	if err := s.completeIdempotency(r.Context(), idempotencyState, item); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+}
+
+func (s *Server) listProviderModelVideoCapabilityAttestations(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.ListVideoCapabilityAttestations(r.Context(), orgID, r.PathValue("modelId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) createProviderModelVideoCapabilityAttestation(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req provider.CreateVideoCapabilityAttestationRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.CreateVideoCapabilityAttestation(r.Context(), orgID, principal.UserID, r.PathValue("modelId"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+}
+
+func (s *Server) revokeProviderModelVideoCapabilityAttestation(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req provider.RevokeVideoCapabilityAttestationRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.RevokeVideoCapabilityAttestation(
+		r.Context(), orgID, principal.UserID, r.PathValue("modelId"), r.PathValue("attestationId"), req,
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) verifyProviderModelVideoCapabilities(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req provider.VerifyVideoCapabilityRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	item, err := s.providers.VerifyVideoCapability(r.Context(), orgID, principal.UserID, r.PathValue("modelId"), req)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}

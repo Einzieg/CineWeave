@@ -176,13 +176,14 @@ func (s *Service) executeGatewayImage(ctx context.Context, req GatewayImageReque
 		return GatewayImageResponse{}, err
 	}
 	req.Input = input
+	requestDeadline := time.Now().Add(gatewayImageRequestTimeout(req.Options.TimeoutMS))
 
 	if strings.TrimSpace(req.ProviderModelID) != "" {
 		selection, err := s.selectGatewayImageModel(ctx, req)
 		if err != nil {
 			return GatewayImageResponse{}, err
 		}
-		response, _, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, 1, 1, string(RoutingPriority), providerRequestID, attemptGeneration)
+		response, _, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, 1, 1, string(RoutingPriority), providerRequestID, attemptGeneration, requestDeadline)
 		return response, err
 	}
 
@@ -202,12 +203,15 @@ func (s *Service) executeGatewayImage(ctx context.Context, req GatewayImageReque
 	attempts := make([]GatewayAttempt, 0, maxAttempts)
 	var final GatewayImageResponse
 	for i := 0; i < maxAttempts; i++ {
+		if i > 0 && time.Until(requestDeadline) <= 0 {
+			return final, nil
+		}
 		candidate := candidates[i]
 		selection, err := s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidate)
 		if err != nil {
 			return GatewayImageResponse{}, err
 		}
-		response, attempt, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, i+1, maxAttempts, candidate.RoutingStrategy, providerRequestID, attemptGeneration)
+		response, attempt, err := s.executeGatewayImageAttempt(ctx, req, imageInput, selection, i+1, maxAttempts, candidate.RoutingStrategy, providerRequestID, attemptGeneration, requestDeadline)
 		if err != nil {
 			return GatewayImageResponse{}, err
 		}
@@ -224,7 +228,25 @@ func (s *Service) executeGatewayImage(ctx context.Context, req GatewayImageReque
 	return final, nil
 }
 
-func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayImageRequest, imageInput gatewayImageInput, selection gatewayModelSelection, attemptIndex, maxAttempts int, selectedBy, providerRequestID string, attemptGeneration int) (GatewayImageResponse, GatewayAttempt, error) {
+func gatewayImageRequestTimeout(optionMS int) time.Duration {
+	if optionMS > 0 {
+		return time.Duration(optionMS) * time.Millisecond
+	}
+	return time.Duration(gatewayImageRequestTimeoutMSFromEnv()) * time.Millisecond
+}
+
+func gatewayImageAttemptTimeout(configured time.Duration, requestDeadline time.Time) time.Duration {
+	remaining := time.Until(requestDeadline)
+	if remaining <= 0 {
+		return time.Millisecond
+	}
+	if configured <= 0 || remaining < configured {
+		return remaining
+	}
+	return configured
+}
+
+func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayImageRequest, imageInput gatewayImageInput, selection gatewayModelSelection, attemptIndex, maxAttempts int, selectedBy, providerRequestID string, attemptGeneration int, requestDeadline time.Time) (GatewayImageResponse, GatewayAttempt, error) {
 	cfg := parseOpenAICompatibleConfig(selection.Account.Config)
 	isDeclarativeManifest := accountConfigString(selection.Account.Config, "runtime") == "declarative_manifest"
 	selectedReferences, referenceSelectionErr := selectGatewayImageReferences(selection.Model.Capabilities, req.References, !isDeclarativeManifest)
@@ -237,12 +259,10 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 		attemptReq.Input = mergeJSONObjects(req.Input, mustJSON(map[string]any{"quality": normalizedQuality}))
 	}
 	requestSnapshot := gatewayImageRequestSnapshot(selection.Model.ModelKey, attemptReq.Input, req.References, selectedReferences)
-	if req.Options.TimeoutMS > 0 {
-		cfg.TimeoutMS = req.Options.TimeoutMS
-	} else if !openAICompatibleConfigHasTimeout(selection.Account.Config) {
+	if !openAICompatibleConfigHasTimeout(selection.Account.Config) {
 		cfg.TimeoutMS = gatewayImageTimeoutMSFromEnv()
 	}
-	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
+	timeout := gatewayImageAttemptTimeout(time.Duration(cfg.TimeoutMS)*time.Millisecond, requestDeadline)
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -380,6 +400,9 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 	} else {
 		media, mediaErr := s.materializeGatewayImageMedia(callCtx, selection.Account, result, timeout)
 		defer media.close()
+		if mediaErr == nil {
+			mediaErr = validateGatewayImageVisualQuality(media)
+		}
 		if mediaErr == nil {
 			stored, mediaErr = s.storeGatewayImageMedia(callCtx, callID, attemptReq, selection, result, media, attemptImageInput)
 		}

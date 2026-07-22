@@ -3,9 +3,8 @@ package workflows
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
+	"net/http"
 	"os"
 	"testing"
 
@@ -133,7 +132,8 @@ func (s *workflowMemoryStorage) GetObject(ctx context.Context, key string, maxBy
 	if maxBytes > 0 && int64(len(body)) > maxBytes {
 		return nil, "", fmt.Errorf("object exceeds maxBytes")
 	}
-	return bytes.Clone(body), "application/octet-stream", nil
+	cloned := bytes.Clone(body)
+	return cloned, http.DetectContentType(cloned), nil
 }
 
 func (s *workflowMemoryStorage) PutFile(ctx context.Context, key, filePath, contentType string) (storage.PutResult, error) {
@@ -141,13 +141,5 @@ func (s *workflowMemoryStorage) PutFile(ctx context.Context, key, filePath, cont
 	if err != nil {
 		return storage.PutResult{}, err
 	}
-	sum := sha256.Sum256(body)
-	s.mu.Lock()
-	s.objects[key] = bytes.Clone(body)
-	s.mu.Unlock()
-	return storage.PutResult{
-		StorageKey:  key,
-		ContentHash: "sha256:" + hex.EncodeToString(sum[:]),
-		ByteSize:    int64(len(body)),
-	}, nil
+	return s.putObject(key, body), nil
 }

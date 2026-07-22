@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	enumspb "go.temporal.io/api/enums/v1"
+	operatorservice "go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/api/serviceerror"
 	workflowservice "go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
@@ -19,6 +21,19 @@ import (
 type namespaceService interface {
 	DescribeNamespace(context.Context, *workflowservice.DescribeNamespaceRequest, ...grpc.CallOption) (*workflowservice.DescribeNamespaceResponse, error)
 	RegisterNamespace(context.Context, *workflowservice.RegisterNamespaceRequest, ...grpc.CallOption) (*workflowservice.RegisterNamespaceResponse, error)
+}
+
+type searchAttributeService interface {
+	ListSearchAttributes(context.Context, *operatorservice.ListSearchAttributesRequest, ...grpc.CallOption) (*operatorservice.ListSearchAttributesResponse, error)
+	AddSearchAttributes(context.Context, *operatorservice.AddSearchAttributesRequest, ...grpc.CallOption) (*operatorservice.AddSearchAttributesResponse, error)
+}
+
+var cineWeaveSearchAttributes = map[string]enumspb.IndexedValueType{
+	"ProjectId":              enumspb.INDEXED_VALUE_TYPE_KEYWORD,
+	"ProductionGenerationId": enumspb.INDEXED_VALUE_TYPE_KEYWORD,
+	"EpisodeId":              enumspb.INDEXED_VALUE_TYPE_KEYWORD,
+	"ProfileVersionId":       enumspb.INDEXED_VALUE_TYPE_KEYWORD,
+	"RebuildId":              enumspb.INDEXED_VALUE_TYPE_KEYWORD,
 }
 
 func main() {
@@ -42,9 +57,14 @@ func main() {
 	}
 	if created {
 		log.Printf("Temporal namespace %s created", namespace)
-		return
+	} else {
+		log.Printf("Temporal namespace %s already exists", namespace)
 	}
-	log.Printf("Temporal namespace %s already exists", namespace)
+	added, err := ensureSearchAttributes(ctx, temporalClient.OperatorService(), namespace, cineWeaveSearchAttributes)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Temporal namespace %s search attributes ready; added=%d", namespace, added)
 }
 
 func ensureNamespace(ctx context.Context, service namespaceService, namespace string, retention time.Duration) (bool, error) {
@@ -73,6 +93,37 @@ func ensureNamespace(ctx context.Context, service namespaceService, namespace st
 		return false, fmt.Errorf("register Temporal namespace %s: %w", namespace, err)
 	}
 	return true, nil
+}
+
+func ensureSearchAttributes(
+	ctx context.Context,
+	service searchAttributeService,
+	namespace string,
+	required map[string]enumspb.IndexedValueType,
+) (int, error) {
+	response, err := service.ListSearchAttributes(ctx, &operatorservice.ListSearchAttributesRequest{Namespace: namespace})
+	if err != nil {
+		return 0, fmt.Errorf("list Temporal search attributes for %s: %w", namespace, err)
+	}
+	missing := make(map[string]enumspb.IndexedValueType)
+	for name, valueType := range required {
+		if existing, ok := response.CustomAttributes[name]; ok {
+			if existing != valueType {
+				return 0, fmt.Errorf("Temporal search attribute %s has type %s, want %s", name, existing, valueType)
+			}
+			continue
+		}
+		missing[name] = valueType
+	}
+	if len(missing) == 0 {
+		return 0, nil
+	}
+	if _, err := service.AddSearchAttributes(ctx, &operatorservice.AddSearchAttributesRequest{
+		Namespace: namespace, SearchAttributes: missing,
+	}); err != nil {
+		return 0, fmt.Errorf("add Temporal search attributes for %s: %w", namespace, err)
+	}
+	return len(missing), nil
 }
 
 func environment(key, fallback string) string {

@@ -60,6 +60,38 @@ func TestGetObjectRejectsOversizedObjectBeforeDownload(t *testing.T) {
 	}
 }
 
+func TestStorageHTTPClientDoesNotInheritEnvironmentProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:65530")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:65530")
+	client, err := newStorageHTTPClient("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("storage transport must not inherit the provider proxy")
+	}
+}
+
+func TestStorageHTTPClientUsesExplicitProxy(t *testing.T) {
+	client, err := newStorageHTTPClient("http://proxy.example:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := client.Transport.(*http.Transport)
+	req := httptest.NewRequest(http.MethodGet, "https://storage.example/object", nil)
+	proxyURL, err := transport.Proxy(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxyURL == nil || proxyURL.String() != "http://proxy.example:8080" {
+		t.Fatalf("proxy URL = %v", proxyURL)
+	}
+}
+
 func newRangeObjectServer(t *testing.T, body []byte, rangeRequests *atomic.Int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

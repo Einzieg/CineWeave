@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -16,8 +17,10 @@ import (
 	"github.com/Einzieg/cineweave/internal/httpx"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
+	"go.temporal.io/api/serviceerror"
 )
 
 type AgentTask struct {
@@ -289,6 +292,9 @@ func (s *Server) startAgentTaskWorkflowWithID(r *http.Request, principal auth.Pr
 }
 
 func (s *Server) enqueueAgentTaskWorkflowTx(ctx context.Context, tx pgx.Tx, principal auth.Principal, project Project, task AgentTask, workflowID string) error {
+	if project.ProductionGeneration == nil {
+		return videoproduction.NewError(videoproduction.CodeGenerationMismatch, "项目没有活动的视频生产代", false)
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE agent_tasks
 		SET temporal_workflow_id = $2,
@@ -305,6 +311,7 @@ func (s *Server) enqueueAgentTaskWorkflowTx(ctx context.Context, tx pgx.Tx, prin
 		task.ID,
 		project.OrganizationID,
 		project.ID,
+		project.ProductionGeneration.ID,
 		"project_agent",
 		"project_agent",
 		workflowID,
@@ -564,15 +571,15 @@ func (s *Server) buildAgentPlannerPrompt(r *http.Request, principal auth.Princip
 	toolsJSON := string(mustMarshal(toolDescriptors))
 	contextJSON := string(mustMarshal(map[string]any{
 		"project": map[string]any{
-			"id":                    project.ID,
-			"name":                  project.Name,
-			"contentType":           stringValue(project.ContentType),
-			"videoRatio":            project.VideoRatio,
-			"artStyle":              project.ArtStyle,
-			"productionMode":        project.ProductionMode,
-			"scriptModelProfileKey": project.ScriptModelProfileKey,
-			"imageModelProfileKey":  project.ImageModelProfileKey,
-			"videoModelProfileKey":  project.VideoModelProfileKey,
+			"id":                        project.ID,
+			"name":                      project.Name,
+			"contentType":               stringValue(project.ContentType),
+			"videoRatio":                project.VideoRatio,
+			"artStyle":                  project.ArtStyle,
+			"videoProductionProfileKey": project.VideoProductionBinding.ProfileKey,
+			"scriptModelProfileKey":     project.ScriptModelProfileKey,
+			"imageModelProfileKey":      project.ImageModelProfileKey,
+			"videoModelProfileKey":      project.VideoModelProfileKey,
 		},
 		"productionStatus": production,
 		"constraints":      json.RawMessage(task.Constraints),
@@ -583,10 +590,15 @@ func (s *Server) buildAgentPlannerPrompt(r *http.Request, principal auth.Princip
 	builder.WriteString("不要执行工具，不要假装已经完成动作。不要虚构 sourceId、scriptId、workflowRunId、assetId、shotId；缺少 ID 时先安排读取类工具。\n")
 	builder.WriteString("当目标缺少关键偏好、存在多个合理路径或你不确定用户真实意图时，先安排 agent.ask_user。它必须包含一个中文 question、2 到 4 个 options，并设置 allowCustom=true，等待用户选择或自定义下一步。\n")
 	builder.WriteString("用户明确要求删除、归档、覆盖、替换或改写已有数据时，可以使用 source.update/source.delete/source.delete_chapter/script.update_episode/script.delete/asset.delete 等写入工具；如果目标对象不明确，必须先读取列表或询问用户。\n")
+	builder.WriteString("用户明确要求清空项目中除小说原文外的全部生产内容时，必须使用 project.clear_production_content，并传 confirmation=preserve_novel_sources。该工具会原子切换到新的空白生产代并清理剧本、事件、改编计划、资产、分镜、媒体生产结果和审阅数据；不要用一组只读清单代替实际清理。\n")
 	builder.WriteString("删除小说中的单个分集/章节必须使用 source.delete_chapter，禁止用 source.update 读取并覆盖整本小说。可传真实 sourceId/chapterId，也可传 sourceTitle 与 chapterIndex，或 volumeIndex+sectionIndex；未知 ID 必须省略。计划是静态 JSON，严禁写入 <由上一步返回的ID>、{{sourceId}}、<完整正文> 等占位文本。\n")
 	builder.WriteString("用户要求按自然语言调整现有资产生图提示词时，优先使用 asset.revise_prompt；资产准确名称已知时可直接传 assetName，不要虚构 assetId。只有用户提供了完整替换值时才使用 asset.update。\n")
-	builder.WriteString("生成小说剧本时必须按分集处理：script.generate_from_source 必须提供 chapterIds 或 chapterRange；用户说“1-10集/前十节/第一卷第一节到第十节”时写入 chapterRange。禁止把多个小说分集合并成一个剧本分集；一条小说分集只能对应一条剧本分集。若范围不明确，先用 agent.ask_user 询问。\n")
+	builder.WriteString("资产分析只使用 script_to_assets 且 generateImages=false。需要补全资产卡时使用 asset.batch_generate_prompts，需要生成参考图时使用 asset.batch_generate_images；两者都传明确 assetIds，默认 maxConcurrency=5。禁止再用 script_to_assets(generateImages=true) 串行生成图片。批处理允许部分完成；失败后先读取工作流节点并仅对失败 assetIds 重试。\n")
+	builder.WriteString("生成小说剧本时必须按分集处理：script.generate_from_source 必须提供 chapterIds 或 chapterRange；用户说“1-10集/前十节/第一卷第一节到第十节”时写入 chapterRange。每条小说分集按其持久 chapterIndex 对应同序号剧本分集，禁止按本次批次位置从第1集重新编号，也禁止把多个小说分集合并成一个剧本分集。默认追加或更新该来源对应的项目当前剧本；只有用户明确要求另一套剧本时才设置 createNewScript=true，已知目标剧本时传 scriptId。若范围不明确，先用 agent.ask_user 询问。\n")
 	builder.WriteString("生成分镜时直接使用 script_to_storyboard。该工作流会读取活动剧本的 script_episodes，按集串行生成并逐集写库；不要在它之前自动插入 parse_script_scenes，也不要为每集规划多个 workflow.start。需要限定集数时把 scriptEpisodeIds 放进 input。\n")
+	builder.WriteString("workflow.start 执行器会等待子工作流到达真实终态。启动新工作流后不要再规划 workflow.read_runs 或 workflow.read_nodes 轮询，因为静态计划不能把上一步返回的 workflowRunId 写入后续参数；终态后直接使用对应业务读取工具核对结果。只有用户提供了真实 workflowRunId 时才可规划 workflow.read_nodes。\n")
+	builder.WriteString("分镜生成后必须检查 productionStatus.stages.shotAssets。存在 reviewPendingCount 时，先用 shot_asset.list_requirements 检查具体需求，再用 shot_asset.review_requirements 批量校验确认；用户限定某一分集时，两个工具都必须传递该分集的 scriptEpisodeId，禁止把当前生产代的其他分集一并读取或审核。该工具只批准结构化校验通过的需求，失败项会转为 needs_edit 并返回原因。重新审核 needs_edit 时，必须把 list_requirements 返回的 requirementId 明确传给 review_requirements，不能省略 ID 后误用默认 pending 范围。若需求关联了错误资产，先用 asset.list 找到正确资产，再用 shot_asset.update_requirement 修正 assetId、requirementType 或镜头状态字段；确认该需求确实不适用时才使用 shot_asset.skip_requirement。修正后必须重新审核。存在 approvedMissingDerivedImageCount 时，再使用 batch_generate_derived_asset_images 按当前生产代并发补齐镜头衍生资产；用户限定某一分集时，该 workflow 的 input 也必须传递 scriptEpisodeId。不要为了补衍生图重新运行 script_to_storyboard。衍生资产完成后，先用 shot.generate_image_prompts 生成该分集镜头图片提示词，再用 shot.generate_missing_images 生成镜头图片；所有镜头生产工具在限定分集时都必须传 scriptEpisodeId。\n")
+	builder.WriteString("遇到 MODEL_CAPABILITY_APPROVAL_REQUIRED 时先使用 provider.list_status 读取当前绑定视频模型的 variantKey 和 capabilitySnapshotHash；推断能力使用 provider.attest_video_capability 审批，未知能力先使用 provider.verify_video_capability 完成 Adapter 契约验证。管理动作必须服从权限模式。遇到 RENDER_PLAN_REPLAN_REQUIRED 时使用 shot.generate_video_prompts 重新生成并审核目标镜头提示词，完成后再生成视频。\n")
 	builder.WriteString("JSON 格式必须为：{\"summary\":\"中文摘要\",\"steps\":[{\"tool\":\"工具名\",\"args\":{},\"expectedResult\":\"预期结果\"}]}。\n")
 	builder.WriteString("plan_only 模式只允许产出计划，不代表会执行。权限模式由后端监督器裁决，require_approval 需要人工批准，auto_approve 自动放行写入/工作流/成本步骤，full_access 自动放行管理步骤。\n\n")
 	builder.WriteString("用户目标：\n")
@@ -603,6 +615,20 @@ func (s *Server) buildAgentPlannerPrompt(r *http.Request, principal auth.Princip
 }
 
 func (s *Server) persistAgentPlan(r *http.Request, principal auth.Principal, project Project, task AgentTask, registry *agent.Registry, plan agent.Plan, runID string, gatewayResp provider.GatewayTextResponse) error {
+	return s.persistAgentPlanWithSummaryPatch(r, principal, project, task, registry, plan, runID, gatewayResp, nil)
+}
+
+func (s *Server) persistAgentPlanWithSummaryPatch(
+	r *http.Request,
+	principal auth.Principal,
+	project Project,
+	task AgentTask,
+	registry *agent.Registry,
+	plan agent.Plan,
+	runID string,
+	gatewayResp provider.GatewayTextResponse,
+	summaryPatch map[string]any,
+) error {
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		return err
@@ -723,11 +749,14 @@ func (s *Server) persistAgentPlan(r *http.Request, principal auth.Principal, pro
 	if stepOffset > 0 {
 		summary["continuation"] = true
 	}
+	for key, value := range summaryPatch {
+		summary[key] = value
+	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE agent_tasks
 		SET status = $2,
 		    plan = $3,
-		    summary = $4,
+		    summary = COALESCE(summary, '{}'::jsonb) || $4,
 		    completed_at = COALESCE($5::timestamptz, completed_at)
 		WHERE id = $1
 	`, task.ID, taskStatus, mustMarshal(plan), mustMarshal(summary), completedAt); err != nil {
@@ -813,18 +842,20 @@ func (s *Server) agentStepDryRunOutput(r *http.Request, project Project, toolNam
 			"estimatedCostCents": agentEstimatedProviderCostCents(toolName, args, 0),
 			"idempotencyScope":   "agent_task_step",
 		}
-	case "shot.generate_missing_images", "shot.generate_missing_videos", "shot.cancel_running_videos":
-		action := strings.TrimPrefix(toolName, "shot.")
-		status, err := s.loadShotProductionStatus(r, project.ID, agentReferenceStringArg(args, "scriptSceneId"), agentReferenceStringArg(args, "workflowRunId"), false)
+	case "shot.generate_image_prompts", "shot.generate_video_prompts", "shot.generate_missing_images", "shot.generate_missing_videos", "shot.cancel_running_videos":
+		action := agentShotProductionAction(strings.TrimPrefix(toolName, "shot."), args)
+		req := ShotProductionActionRequest{
+			Action:          action,
+			ScriptSceneID:   agentReferenceStringArg(args, "scriptSceneId"),
+			ScriptEpisodeID: agentReferenceStringArg(args, "scriptEpisodeId"),
+			WorkflowRunID:   agentReferenceStringArg(args, "workflowRunId"),
+			ShotIDs:         agentReferenceStringSliceArg(args, "shotIds"),
+			Options:         agentMapArg(args, "options"),
+		}
+		scriptSceneID, workflowRunID, scriptEpisodeID := shotProductionScopeFilters(req)
+		status, err := s.loadShotProductionStatusForEpisode(r, project.ID, scriptSceneID, workflowRunID, scriptEpisodeID, "", false)
 		if err != nil {
 			return map[string]any{"status": "unavailable", "errorMessage": err.Error()}
-		}
-		req := ShotProductionActionRequest{
-			Action:        action,
-			ScriptSceneID: agentReferenceStringArg(args, "scriptSceneId"),
-			WorkflowRunID: agentReferenceStringArg(args, "workflowRunId"),
-			ShotIDs:       agentReferenceStringSliceArg(args, "shotIds"),
-			Options:       agentMapArg(args, "options"),
 		}
 		targets, code := selectShotProductionTargets(req, status.Shots)
 		if code != "" {
@@ -848,6 +879,42 @@ func (s *Server) agentStepDryRunOutput(r *http.Request, project Project, toolNam
 			"targetShotIds":      targets,
 			"estimatedCostCents": agentEstimatedProviderCostCents(toolName, args, len(targets)),
 			"idempotencyScope":   "agent_task_step",
+		}
+	case "shot_asset.review_requirements":
+		preview, err := s.previewShotAssetRequirementReview(r.Context(), project, args)
+		if err != nil {
+			return map[string]any{"status": "unavailable", "errorMessage": err.Error()}
+		}
+		preview["status"] = "ready"
+		preview["summary"] = "将按结构化规则审核当前生产代的镜头资产需求。"
+		preview["idempotencyScope"] = "production_generation_requirements"
+		return preview
+	case "shot_asset.update_requirement", "shot_asset.skip_requirement":
+		requirementID := agentReferenceStringArg(args, "requirementId")
+		if requirementID == "" {
+			return map[string]any{"status": "blocked", "errorCode": "VALIDATION_FAILED", "errorMessage": "缺少镜头资产需求 ID"}
+		}
+		item, err := scanShotAssetRequirement(s.db.QueryRow(r.Context(), shotAssetRequirementSelectSQL(`
+			WHERE r.project_id = $1
+			  AND r.id = $2
+			  AND r.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
+		`), project.ID, requirementID))
+		if err != nil {
+			return map[string]any{"status": "unavailable", "errorMessage": err.Error()}
+		}
+		if toolName == "shot_asset.update_requirement" && !hasShotAssetRequirementPatch(updateShotAssetRequirementRequestFromPatch(agentMapArg(args, "patch"))) {
+			return map[string]any{"status": "blocked", "errorCode": "VALIDATION_FAILED", "errorMessage": "至少需要提供一个镜头资产需求字段"}
+		}
+		return map[string]any{
+			"status":           "ready",
+			"summary":          map[bool]string{true: "将跳过该镜头资产需求并保留审计记录。", false: "将修正该镜头资产需求，保存后重新进入审核。"}[toolName == "shot_asset.skip_requirement"],
+			"requirementId":    item.ID,
+			"storyboardShotId": item.StoryboardShotID,
+			"assetId":          item.AssetID,
+			"requirementType":  item.RequirementType,
+			"patch":            agentMapArg(args, "patch"),
+			"reason":           agentStringArg(args, "reason"),
+			"idempotencyScope": "shot_asset_requirement",
 		}
 	case "timeline.compose":
 		status, err := s.productionStatus(r, project)
@@ -935,6 +1002,16 @@ func agentStateGateNextActions(decision agentStateGateDecision) []agentToolNextA
 		return []agentToolNextAction{{Label: "刷新镜头生产状态后重试", Tool: "shot.status", Reason: "镜头状态暂时不可用"}}
 	case "review_state_unavailable":
 		return []agentToolNextAction{{Label: "刷新审阅状态后重试", Tool: "review.list_items", Reason: "审阅状态暂时不可用"}}
+	case "shot_asset_requirement_review_required":
+		return []agentToolNextAction{{
+			Label:  "校验并确认镜头资产需求",
+			Tool:   "shot_asset.review_requirements",
+			Reason: "镜头衍生资产只能基于已确认且结构完整的需求生成",
+			Arguments: map[string]any{
+				"reviewStatus": "approved",
+				"note":         "Project Agent 按结构化规则校验镜头资产需求",
+			},
+		}}
 	default:
 		return agentToolErrorNextActions("", "AGENT_STEP_BLOCKED")
 	}
@@ -1000,7 +1077,10 @@ func (s *Server) superviseAgentStepState(r *http.Request, project Project, task 
 		return fail("invalid_workflow_request", workflowErr.Error(), nil)
 	}
 	if workflowType != "" {
-		states, err := s.loadProductionWorkflowState(r, project.ID)
+		if project.ProductionGeneration == nil || strings.TrimSpace(project.ProductionGeneration.ID) == "" {
+			return fail("workflow_state_unavailable", "项目没有活动的视频生产代。", nil)
+		}
+		states, err := s.loadProductionWorkflowState(r, project.ID, project.ProductionGeneration.ID)
 		if err != nil {
 			return fail("workflow_state_unavailable", err.Error(), nil)
 		}
@@ -1011,21 +1091,60 @@ func (s *Server) superviseAgentStepState(r *http.Request, project Project, task 
 				"status":        state.LatestStatus,
 			})
 		}
+		if workflowType == "batch_generate_derived_asset_images" {
+			workflowInput := agentMapArg(args, "input")
+			targetCount := len(agentReferenceStringSliceArg(workflowInput, "requirementIds"))
+			if targetCount == 0 {
+				status, err := s.productionStatus(r, project)
+				if err != nil {
+					return fail("production_status_unavailable", err.Error(), nil)
+				}
+				targetCount = status.Stages.ShotAssets.ApprovedMissingDerivedImageCount
+				if targetCount == 0 && status.Stages.ShotAssets.ReviewPendingCount > 0 {
+					return fail("shot_asset_requirement_review_required", "镜头资产需求尚未完成结构化校验和确认。", map[string]any{
+						"reviewPendingCount": status.Stages.ShotAssets.ReviewPendingCount,
+						"needsEditCount":     status.Stages.ShotAssets.NeedsEditCount,
+					})
+				}
+			}
+			if targetCount == 0 {
+				return fail("no_target_derived_assets", "当前生产代没有待生成的镜头衍生资产。", nil)
+			}
+			estimatedCostCents = float64(targetCount) * 10
+			if budgetCents, exists := agentConstraintFloat(constraints, "maxProviderCostCents"); exists {
+				spentCents, err := s.agentProjectCostSpentCents(r, project.ID)
+				if err != nil {
+					return fail("cost_state_unavailable", err.Error(), nil)
+				}
+				if spentCents+estimatedCostCents > budgetCents {
+					return fail("cost_budget_exceeded", "镜头衍生资产预计成本超过当前任务预算。", map[string]any{
+						"budgetCents": budgetCents, "spentCents": spentCents,
+						"estimatedCostCents": estimatedCostCents, "targetRequirementCount": targetCount,
+					})
+				}
+			}
+			ok.Details = mergeAgentStateDetails(ok.Details, map[string]any{
+				"targetRequirementCount": targetCount,
+				"estimatedCostCents":     estimatedCostCents,
+			})
+		}
 	}
 
 	switch toolName {
-	case "shot.generate_missing_images", "shot.generate_missing_videos", "shot.cancel_running_videos":
-		action := strings.TrimPrefix(toolName, "shot.")
-		status, err := s.loadShotProductionStatus(r, project.ID, agentReferenceStringArg(args, "scriptSceneId"), agentReferenceStringArg(args, "workflowRunId"), false)
+	case "shot.generate_image_prompts", "shot.generate_video_prompts", "shot.generate_missing_images", "shot.generate_missing_videos", "shot.cancel_running_videos":
+		action := agentShotProductionAction(strings.TrimPrefix(toolName, "shot."), args)
+		req := ShotProductionActionRequest{
+			Action:          action,
+			ScriptSceneID:   agentReferenceStringArg(args, "scriptSceneId"),
+			ScriptEpisodeID: agentReferenceStringArg(args, "scriptEpisodeId"),
+			WorkflowRunID:   agentReferenceStringArg(args, "workflowRunId"),
+			ShotIDs:         agentReferenceStringSliceArg(args, "shotIds"),
+			Options:         agentMapArg(args, "options"),
+		}
+		scriptSceneID, workflowRunID, scriptEpisodeID := shotProductionScopeFilters(req)
+		status, err := s.loadShotProductionStatusForEpisode(r, project.ID, scriptSceneID, workflowRunID, scriptEpisodeID, "", false)
 		if err != nil {
 			return fail("shot_status_unavailable", err.Error(), nil)
-		}
-		req := ShotProductionActionRequest{
-			Action:        action,
-			ScriptSceneID: agentReferenceStringArg(args, "scriptSceneId"),
-			WorkflowRunID: agentReferenceStringArg(args, "workflowRunId"),
-			ShotIDs:       agentReferenceStringSliceArg(args, "shotIds"),
-			Options:       agentMapArg(args, "options"),
 		}
 		targets, code := selectShotProductionTargets(req, status.Shots)
 		if code != "" {
@@ -1175,8 +1294,8 @@ func (s *Server) agentPlannedWorkflowType(r *http.Request, project Project, tool
 		return spec.WorkflowType, nil
 	case "timeline.compose":
 		return "compose_timeline", nil
-	case "shot.generate_missing_images", "shot.generate_missing_videos", "shot.cancel_running_videos":
-		action := strings.TrimPrefix(toolName, "shot.")
+	case "shot.generate_image_prompts", "shot.generate_video_prompts", "shot.generate_missing_images", "shot.generate_missing_videos", "shot.cancel_running_videos":
+		action := agentShotProductionAction(strings.TrimPrefix(toolName, "shot."), args)
 		workflowType, _, ok := shotProductionWorkflowForAction(action)
 		if !ok {
 			return "", fmt.Errorf("shot production action is not supported")
@@ -1250,6 +1369,7 @@ func agentToolReadOnly(toolName string) bool {
 		"script.get",
 		"asset.list",
 		"asset.get",
+		"shot_asset.list_requirements",
 		"storyboard.list",
 		"workflow.read_runs",
 		"workflow.read_nodes",
@@ -1298,7 +1418,7 @@ func agentToolMayGenerateVideo(toolName string, args map[string]any) bool {
 
 func agentToolRequiresReviewGate(toolName string) bool {
 	switch toolName {
-	case "workflow.start", "shot.generate_missing_images", "shot.generate_missing_videos", "timeline.compose", "final_video.activate":
+	case "workflow.start", "shot.generate_image_prompts", "shot.generate_video_prompts", "shot.generate_missing_images", "shot.generate_missing_videos", "timeline.compose", "final_video.activate":
 		return true
 	default:
 		return false
@@ -1314,7 +1434,7 @@ func agentToolMaySpendProvider(toolName string, args map[string]any) bool {
 		return strings.EqualFold(agentStringArg(args, "mode"), "agent")
 	case "prompt.render_test", "script.rewrite_preview", "script.generate_from_source", "script.rewrite", "provider.test_model":
 		return true
-	case "workflow.start", "shot.generate_missing_images", "shot.generate_missing_videos", "timeline.compose":
+	case "workflow.start", "asset.batch_generate_prompts", "asset.batch_generate_images", "shot.generate_image_prompts", "shot.generate_video_prompts", "shot.generate_missing_images", "shot.generate_missing_videos", "timeline.compose":
 		return true
 	default:
 		return false
@@ -1322,12 +1442,25 @@ func agentToolMaySpendProvider(toolName string, args map[string]any) bool {
 }
 
 func agentEstimatedProviderCostCents(toolName string, args map[string]any, targetCount int) float64 {
+	if toolName == "asset.batch_generate_prompts" || toolName == "asset.batch_generate_images" {
+		if count := len(agentReferenceStringSliceArg(args, "assetIds")); count > 0 {
+			targetCount = count
+		}
+	}
 	if targetCount < 1 {
 		targetCount = 1
 	}
 	switch toolName {
+	case "asset.batch_generate_prompts":
+		return float64(targetCount) * 2
+	case "asset.batch_generate_images":
+		return float64(targetCount) * 10
 	case "shot.generate_missing_videos":
 		return float64(targetCount) * 50
+	case "shot.generate_image_prompts":
+		return float64(targetCount) * 2
+	case "shot.generate_video_prompts":
+		return float64(targetCount) * 2
 	case "shot.generate_missing_images":
 		return float64(targetCount) * 10
 	case "workflow.start":
@@ -1336,6 +1469,8 @@ func agentEstimatedProviderCostCents(toolName string, args map[string]any, targe
 			return 100
 		case "script_to_assets", "script_to_storyboard":
 			return 25
+		case "batch_generate_derived_asset_images":
+			return 10
 		default:
 			return 5
 		}
@@ -1446,7 +1581,7 @@ func (s *Server) cancelAgentTask(w http.ResponseWriter, r *http.Request, princip
 		TaskID: item.ID,
 		UserID: principal.UserID,
 		Reason: strings.TrimSpace(req.Reason),
-	}); err != nil {
+	}); err != nil && !isCompletedAgentWorkflowSignalError(err) {
 		s.writeError(w, r, err)
 		return
 	}
@@ -1618,8 +1753,13 @@ func isCompletedAgentWorkflowSignalError(err error) bool {
 	if err == nil {
 		return false
 	}
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "workflow execution already completed")
+	return strings.Contains(message, "workflow execution already completed") ||
+		strings.Contains(message, "workflow not found")
 }
 
 type blockedAgentStepForResume struct {
@@ -1962,6 +2102,15 @@ func (s *Server) agentTaskWithDetails(r *http.Request, projectID, taskID string)
 	if err != nil {
 		return AgentTask{}, err
 	}
+	if item.Status == "succeeded" && agentTaskSummaryStillWaiting(item.Summary) {
+		if err := s.mergeAgentTaskCompletionSummary(r.Context(), projectID, taskID); err != nil {
+			return AgentTask{}, err
+		}
+		item, err = s.agentTask(r, projectID, taskID)
+		if err != nil {
+			return AgentTask{}, err
+		}
+	}
 	steps, err := s.listAgentTaskSteps(r, item.ID)
 	if err != nil {
 		return AgentTask{}, err
@@ -1979,24 +2128,23 @@ func (s *Server) agentTaskWithDetails(r *http.Request, projectID, taskID string)
 	return item, nil
 }
 
+func agentTaskSummaryStillWaiting(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var summary struct {
+		Text                   string            `json:"summary"`
+		WaitingForWorkflowRuns []json.RawMessage `json:"waitingForWorkflowRuns"`
+	}
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		return false
+	}
+	return len(summary.WaitingForWorkflowRuns) > 0 || strings.Contains(summary.Text, "正在等待")
+}
+
 func (s *Server) withAgentWorkflowProgress(ctx context.Context, projectID string, steps []AgentStep) ([]AgentStep, error) {
 	for index := range steps {
-		if !agentToolWaitsForWorkflow(steps[index].ToolName) {
-			continue
-		}
-		workflowRunIDs := make([]string, 0, 1)
-		seen := map[string]bool{}
-		var outputValue any
-		if err := json.Unmarshal(steps[index].Output, &outputValue); err != nil {
-			continue
-		}
-		collectAgentWorkflowRunIDs(outputValue, func(id string) {
-			if id == "" || seen[id] {
-				return
-			}
-			seen[id] = true
-			workflowRunIDs = append(workflowRunIDs, id)
-		})
+		workflowRunIDs := agentStepChildWorkflowRunIDs(steps[index].ToolName, steps[index].Output)
 		if len(workflowRunIDs) == 0 {
 			continue
 		}
@@ -2155,38 +2303,13 @@ func (s *Server) listAgentTaskApprovals(r *http.Request, taskID string) ([]Agent
 }
 
 func (s *Server) cancelAgentTaskWorkflowRuns(r *http.Request, projectID, taskID, reason string) ([]string, error) {
-	rows, err := s.db.Query(r.Context(), `
-		WITH candidates AS (
-		  SELECT input->>'workflowRunId' AS workflow_run_id
-		  FROM agent_steps
-		  WHERE task_id = $1
-		  UNION
-		  SELECT output->>'workflowRunId' AS workflow_run_id
-		  FROM agent_steps
-		  WHERE task_id = $1
-		  UNION
-		  SELECT output #>> '{workflowRun,id}' AS workflow_run_id
-		  FROM agent_steps
-		  WHERE task_id = $1
-		  UNION
-		  SELECT jsonb_array_elements_text(
-		    CASE
-		      WHEN jsonb_typeof(output->'workflowRunIds') = 'array' THEN output->'workflowRunIds'
-		      ELSE '[]'::jsonb
-		    END
-		  ) AS workflow_run_id
-		  FROM agent_steps
-		  WHERE task_id = $1
-		)
-		SELECT DISTINCT w.id, w.organization_id, w.project_id, w.template_id, w.temporal_workflow_id,
-		       w.status, w.input, w.output, w.error_code, w.error_message, w.created_by,
-		       w.created_at, w.started_at, w.completed_at, w.cancelled_at, w.workflow_type,
-		       w.total_items, w.completed_items, w.failed_items, w.revision,
-		       w.attempt_generation, w.root_workflow_run_id, w.retry_of_workflow_run_id, w.updated_at
-		FROM candidates c
-		JOIN workflow_runs w ON w.id::text = c.workflow_run_id
-		WHERE w.project_id = $2
-	`, taskID, projectID)
+	workflowRunIDs, err := s.agentTaskWorkflowRunIDs(r.Context(), taskID)
+	if err != nil || len(workflowRunIDs) == 0 {
+		return nil, err
+	}
+	rows, err := s.db.Query(r.Context(), workflowRunSelectSQL(`
+		WHERE project_id = $1 AND id::text = ANY($2::text[])
+	`), projectID, workflowRunIDs)
 	if err != nil {
 		return nil, err
 	}

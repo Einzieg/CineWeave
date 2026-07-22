@@ -41,7 +41,7 @@ func TestNormalizeStoryboardShotsInvalidJSONFallback(t *testing.T) {
 	}
 }
 
-func TestNormalizeStoryboardShotsDoesNotApplyLegacyCountCap(t *testing.T) {
+func TestNormalizeStoryboardShotsPreservesAllInputShots(t *testing.T) {
 	shots := NormalizeStoryboardShots([]StoryboardShot{
 		{Visual: "1"},
 		{Visual: "2"},

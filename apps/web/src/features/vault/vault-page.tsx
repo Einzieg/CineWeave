@@ -1,5 +1,6 @@
 "use client";
 
+import NextImage from "next/image";
 import { useApiQuery } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
@@ -59,7 +60,11 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
     return <video className="aspect-video w-full bg-black object-cover" controls src={artifact.previewUrl} />;
   }
   if (artifact.previewUrl) {
-    return <img alt={artifactTypeLabel(artifact.type)} className="aspect-video w-full bg-muted object-cover" src={artifact.previewUrl} />;
+    return (
+      <div className="relative aspect-video w-full bg-muted">
+        <NextImage alt={artifactTypeLabel(artifact.type)} className="object-cover" fill sizes="(max-width: 640px) 100vw, 33vw" src={artifact.previewUrl} unoptimized />
+      </div>
+    );
   }
   return (
     <div className="grid aspect-video place-items-center bg-muted">

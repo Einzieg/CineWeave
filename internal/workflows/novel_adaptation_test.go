@@ -97,20 +97,21 @@ func TestSourceToScriptWorkflowReturnsNovelPlanOutput(t *testing.T) {
 			t.Fatalf("input = %+v", input)
 		}
 		return SourceToScriptPlan{
-			SourceID:        input.SourceID,
-			SourceType:      "novel",
-			SourceTitle:     "source",
-			ScriptID:        "script-1",
-			ScriptVersionID: "version-1",
-			EpisodeTotal:    2,
+			GenerationID:        "generation-1",
+			SourceID:            input.SourceID,
+			SourceType:          "novel",
+			SourceTitle:         "source",
+			ScriptID:            "script-1",
+			BaseScriptVersionID: "version-1",
+			EpisodeTotal:        2,
 			Chapters: []SourceToScriptChapterRef{
-				{ID: "chapter-1", ChapterIndex: 1, Title: "第1节"},
-				{ID: "chapter-2", ChapterIndex: 2, Title: "第2节"},
+				{ID: "chapter-1", ItemKey: "chapter:chapter-1", ManifestOrdinal: 1, ChapterIndex: 1, Title: "第1节"},
+				{ID: "chapter-2", ItemKey: "chapter:chapter-2", ManifestOrdinal: 2, ChapterIndex: 2, Title: "第2节"},
 			},
 		}, nil
 	}, activity.RegisterOptions{Name: "PrepareScriptFromSource"})
 	env.RegisterActivityWithOptions(func(ctx context.Context, input GenerateSourceScriptEpisodeInput) (SourceScriptEpisodeOutput, error) {
-		if input.ScriptVersionID != "version-1" || input.EpisodeTotal != 2 || input.Chapter.ID == "" {
+		if input.GenerationID != "generation-1" || input.ItemKey == "" || input.ScriptVersionID != "version-1" || input.EpisodeTotal != 2 || input.Chapter.ID == "" {
 			t.Fatalf("episode input = %+v", input)
 		}
 		return SourceScriptEpisodeOutput{
@@ -131,7 +132,7 @@ func TestSourceToScriptWorkflowReturnsNovelPlanOutput(t *testing.T) {
 			Status:          "succeeded",
 			SourceID:        input.SourceID,
 			ScriptID:        plan.ScriptID,
-			ScriptVersionID: plan.ScriptVersionID,
+			ScriptVersionID: "version-2",
 			EpisodeCount:    finalization.CompletedEpisodeCount,
 			TotalItems:      finalization.RequestedEpisodeCount,
 			CompletedItems:  finalization.CompletedEpisodeCount,
@@ -216,6 +217,32 @@ func TestSourceToScriptWorkflowContinuesAfterIndependentEpisodeFailure(t *testin
 		if seen[episodeIndex] != 1 {
 			t.Fatalf("episode %d attempts = %d, want 1", episodeIndex, seen[episodeIndex])
 		}
+	}
+}
+
+func TestSourceToScriptEpisodeNumberUsesImmutableManifestOrdinal(t *testing.T) {
+	plan := SourceToScriptPlan{
+		EpisodeTotal:       1,
+		SeriesEpisodeTotal: 120,
+		Chapters: []SourceToScriptChapterRef{
+			{ID: "chapter-74", ManifestOrdinal: 74, ChapterIndex: 2},
+		},
+	}
+	if got := SourceToScriptEpisodeNumber(plan, 0); got != 74 {
+		t.Fatalf("episode number = %d, want 74", got)
+	}
+	if got := SourceToScriptSeriesEpisodeTotal(plan); got != 120 {
+		t.Fatalf("series episode total = %d, want 120", got)
+	}
+}
+
+func TestSourceToScriptFinalStatusDoesNotTreatCopiedEpisodesAsGeneratedTargets(t *testing.T) {
+	status := sourceToScriptFinalStatus(1, 9, SourceToScriptFinalization{
+		RequestedEpisodeCount: 1,
+		FailedEpisodeCount:    1,
+	})
+	if status != "failed" {
+		t.Fatalf("status = %q, want failed when every requested episode failed", status)
 	}
 }
 

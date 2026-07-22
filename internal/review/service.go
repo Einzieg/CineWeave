@@ -23,20 +23,34 @@ func BuildProjectReviewContext(ctx context.Context, db *pgxpool.Pool, projectID 
 	project, err := queryJSON(`
 		SELECT COALESCE(to_jsonb(p), '{}'::jsonb)
 		FROM (
-			SELECT id, name, description, content_type, video_ratio, art_style, production_mode, active_final_video_version_id
-			FROM projects
-			WHERE id = $1
+			SELECT p.id, p.name, p.description, p.content_type, p.video_ratio, p.art_style,
+			       profile.profile_key AS video_production_profile_key,
+			       p.active_final_video_version_id
+			FROM projects p
+			JOIN project_video_production_generations generation
+			  ON generation.id = p.active_video_production_generation_id
+			 AND generation.status = 'active'
+			JOIN project_video_production_bindings binding
+			  ON binding.id = generation.binding_id
+			 AND binding.status = 'active'
+			JOIN video_production_profile_versions version ON version.id = binding.profile_version_id
+			JOIN video_production_profiles profile ON profile.id = version.profile_id
+			WHERE p.id = $1
 		) p
 	`, projectID)
 	if err != nil {
 		return nil, err
 	}
 	scripts, err := queryJSON(`
-		SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.updated_at DESC, t.created_at DESC), '[]'::jsonb)
+		SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.is_current DESC, t.updated_at DESC, t.created_at DESC), '[]'::jsonb)
 		FROM (
-			SELECT id, title, status, current_version_id, created_at, updated_at
-			FROM scripts
-			WHERE project_id = $1
+			SELECT script.id, script.title, script.status, script.current_version_id,
+			       script.id = project.active_script_id AS is_current,
+			       script.created_at, script.updated_at
+			FROM scripts script
+			JOIN projects project ON project.id = script.project_id
+			WHERE script.project_id = $1
+			ORDER BY is_current DESC, script.updated_at DESC, script.created_at DESC
 			LIMIT 20
 		) t
 	`, projectID)

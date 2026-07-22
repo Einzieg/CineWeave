@@ -1,7 +1,9 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/Einzieg/cineweave/internal/provider/outbound"
@@ -15,6 +17,22 @@ func TestProviderMediaRequestPolicyRequiresHostAndCIDR(t *testing.T) {
 		if _, err := providerMediaRequestPolicy(raw); err == nil {
 			t.Fatalf("providerMediaRequestPolicy(%s) error = nil", raw)
 		}
+	}
+}
+
+func TestNormalizedGatewayMediaFailureReportsStorageStage(t *testing.T) {
+	err := gatewayMediaStageFailure("storage", errors.New("connection reset"))
+	code, message, standard := normalizedGatewayMediaFailure(err, "video")
+	if code != CodeMediaDownloadFailed || message != "provider video object storage upload failed" || standard == nil || !standard.Retryable {
+		t.Fatalf("failure = %s %q %#v", code, message, standard)
+	}
+}
+
+func TestNormalizedGatewayMediaFailureReportsDownloadTimeout(t *testing.T) {
+	err := gatewayMediaStageFailure("download", context.DeadlineExceeded)
+	code, message, standard := normalizedGatewayMediaFailure(err, "video")
+	if code != CodeMediaDownloadFailed || message != "provider video download timed out" || standard == nil || !standard.Retryable {
+		t.Fatalf("failure = %s %q %#v", code, message, standard)
 	}
 }
 

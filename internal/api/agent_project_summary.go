@@ -14,6 +14,7 @@ type agentProjectGapSummary struct {
 	Storyboard       agentProjectStoryboardGap    `json:"storyboard"`
 	Assets           agentProjectAssetsGap        `json:"assets"`
 	ShotImages       agentProjectShotMediaGap     `json:"shotImages"`
+	ShotAssets       agentProjectShotAssetsGap    `json:"shotAssets"`
 	ShotVideos       agentProjectShotMediaGap     `json:"shotVideos"`
 	FinalVideo       agentProjectFinalVideoGap    `json:"finalVideo"`
 	Workflows        agentProjectWorkflowGap      `json:"workflows"`
@@ -56,6 +57,19 @@ type agentProjectStoryboardGap struct {
 	PendingReviewCount int    `json:"pendingReviewCount"`
 	StaleShotCount     int    `json:"staleShotCount"`
 	Status             string `json:"status"`
+}
+
+type agentProjectShotAssetsGap struct {
+	RequirementCount                 int    `json:"requirementCount"`
+	DerivedImageCount                int    `json:"derivedImageCount"`
+	MissingDerivedImageCount         int    `json:"missingDerivedImageCount"`
+	ApprovedMissingDerivedImageCount int    `json:"approvedMissingDerivedImageCount"`
+	PendingReviewCount               int    `json:"pendingReviewCount"`
+	ReviewPendingCount               int    `json:"reviewPendingCount"`
+	NeedsEditCount                   int    `json:"needsEditCount"`
+	RejectedCount                    int    `json:"rejectedCount"`
+	StaleRequirementCount            int    `json:"staleRequirementCount"`
+	Status                           string `json:"status"`
 }
 
 type agentProjectShotMediaGap struct {
@@ -217,6 +231,7 @@ func buildAgentProjectGapSummary(status ProductionStatus, workflows agentProject
 	source := status.Stages.Source
 	assets := status.Stages.Assets
 	storyboard := status.Stages.Storyboard
+	shotAssets := status.Stages.ShotAssets
 	shotImages := status.Stages.ShotImages
 	shotVideos := status.Stages.ShotVideos
 	finalVideo := status.Stages.FinalVideo
@@ -260,6 +275,18 @@ func buildAgentProjectGapSummary(status ProductionStatus, workflows agentProject
 			PendingReviewCount: storyboard.PendingReviewCount,
 			StaleShotCount:     storyboard.StaleShotCount,
 			Status:             storyboard.Status,
+		},
+		ShotAssets: agentProjectShotAssetsGap{
+			RequirementCount:                 shotAssets.RequirementCount,
+			DerivedImageCount:                shotAssets.DerivedImageCount,
+			MissingDerivedImageCount:         shotAssets.MissingDerivedImageCount,
+			ApprovedMissingDerivedImageCount: shotAssets.ApprovedMissingDerivedImageCount,
+			PendingReviewCount:               shotAssets.PendingReviewCount,
+			ReviewPendingCount:               shotAssets.ReviewPendingCount,
+			NeedsEditCount:                   shotAssets.NeedsEditCount,
+			RejectedCount:                    shotAssets.RejectedCount,
+			StaleRequirementCount:            shotAssets.StaleRequirementCount,
+			Status:                           shotAssets.Status,
 		},
 		ShotImages: agentProjectShotMediaGap{
 			Total:     shotImages.Total,
@@ -333,6 +360,32 @@ func buildAgentProjectGapSummary(status ProductionStatus, workflows agentProject
 	addGap(storyboard.PendingReviewCount > 0, fmt.Sprintf("%d 个分镜镜头待审核", storyboard.PendingReviewCount))
 	addGap(storyboard.StaleShotCount > 0, fmt.Sprintf("%d 个分镜镜头已过期", storyboard.StaleShotCount))
 	addAction(hasActiveScript && storyboard.ShotCount == 0, workflowNextAction("script_to_storyboard", "从剧本生成分镜", "活动剧本还没有分镜镜头", "script_to_storyboard", map[string]any{}))
+
+	addGap(shotAssets.ReviewPendingCount > 0, fmt.Sprintf("%d 个镜头资产需求待校验确认", shotAssets.ReviewPendingCount))
+	addAction(shotAssets.ReviewPendingCount > 0, toolNextAction(
+		"review_shot_asset_requirements",
+		"校验并确认镜头资产需求",
+		"镜头资产需求必须通过结构化校验后才能生成衍生图",
+		"shot_asset.review_requirements",
+		map[string]any{"reviewStatus": "approved", "note": "Project Agent 按结构化规则校验镜头资产需求"},
+	))
+
+	addGap(shotAssets.MissingDerivedImageCount > 0, fmt.Sprintf("%d 个镜头衍生资产图未生成", shotAssets.MissingDerivedImageCount))
+	addAction(shotAssets.ApprovedMissingDerivedImageCount > 0, workflowNextAction(
+		"batch_generate_derived_asset_images",
+		"生成镜头衍生资产",
+		"已确认的镜头角色状态、场景状态或道具状态缺少衍生参考图",
+		"batch_generate_derived_asset_images",
+		map[string]any{"input": map[string]any{"maxConcurrency": 5, "force": false}},
+	))
+	addGap(shotAssets.NeedsEditCount > 0, fmt.Sprintf("%d 个镜头资产需求需要修改", shotAssets.NeedsEditCount))
+	addAction(shotAssets.NeedsEditCount > 0, toolNextAction(
+		"inspect_invalid_shot_asset_requirements",
+		"查看需修改的镜头资产需求",
+		"部分镜头资产需求未通过结构化校验，需要补齐资产、参考图或镜头上下文",
+		"shot_asset.list_requirements",
+		map[string]any{"reviewStatus": "needs_edit", "limit": 200},
+	))
 
 	addGap(imageMissing > 0, fmt.Sprintf("%d 个镜头图片未完成", imageMissing))
 	addAction(storyboard.ShotCount > 0 && imageMissing > 0, toolNextAction("generate_missing_images", "生成缺失镜头图片", "已有分镜但镜头图片未完成", "shot.generate_missing_images", map[string]any{}))

@@ -10,6 +10,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 )
 
@@ -158,14 +159,25 @@ func (s *Server) createProjectExport(w http.ResponseWriter, r *http.Request, pri
 		"input":        workflowInput,
 	}))
 	var run WorkflowRun
+	if project.VideoProductionBinding == nil || project.ProductionGeneration == nil {
+		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeGenerationMismatch, "项目没有活动的视频生产代", false))
+		return
+	}
 	if err := tx.QueryRow(r.Context(), `
 		WITH new_run AS (SELECT gen_random_uuid() AS id)
-		INSERT INTO workflow_runs(id, organization_id, project_id, temporal_workflow_id, workflow_type, status, input, output, created_by)
-		SELECT id, $1, $2, 'workflow-' || id::text, 'export_project', 'queued', $3, '{}', $4
+		INSERT INTO workflow_runs(
+			id, organization_id, project_id, temporal_workflow_id, workflow_type, status, input, output, created_by,
+			production_generation_id, video_production_binding_id, video_production_binding_revision
+		)
+		SELECT id, $1, $2, 'workflow-' || id::text, 'export_project', 'queued', $3, '{}', $4, $5, $6, $7
 		FROM new_run
-		RETURNING id, organization_id, project_id, template_id, temporal_workflow_id, status, input, output, error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-	`, project.OrganizationID, project.ID, runInput, principal.UserID).Scan(
-		&run.ID, &run.OrganizationID, &run.ProjectID, &run.TemplateID, &run.TemporalWorkflowID, &run.Status, &run.Input, &run.Output,
+		RETURNING id, organization_id, project_id, production_generation_id, video_production_binding_id,
+		          video_production_binding_revision, template_id, temporal_workflow_id, status, input, output,
+		          error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
+	`, project.OrganizationID, project.ID, runInput, principal.UserID, project.ProductionGeneration.ID,
+		project.VideoProductionBinding.ID, project.VideoProductionBinding.Revision).Scan(
+		&run.ID, &run.OrganizationID, &run.ProjectID, &run.ProductionGenerationID, &run.VideoProductionBindingID,
+		&run.VideoProductionBindingRevision, &run.TemplateID, &run.TemporalWorkflowID, &run.Status, &run.Input, &run.Output,
 		&run.ErrorCode, &run.ErrorMessage, &run.CreatedBy, &run.CreatedAt, &run.StartedAt, &run.CompletedAt, &run.CancelledAt,
 	); err != nil {
 		s.writeError(w, r, err)
@@ -196,6 +208,7 @@ func (s *Server) createProjectExport(w http.ResponseWriter, r *http.Request, pri
 		"",
 		project.OrganizationID,
 		project.ID,
+		project.ProductionGeneration.ID,
 		"export_project",
 		"export_project",
 		run.TemporalWorkflowID,

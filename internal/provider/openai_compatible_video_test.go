@@ -113,6 +113,153 @@ func TestOpenRouterVideoCreateAndPoll(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleVideoExtensionRequiresExplicitAdapterMapping(t *testing.T) {
+	input := json.RawMessage(`{"prompt":"continue motion","duration":5}`)
+	references := []GatewayVideoReference{{
+		Role: "video_extension_source", Type: "video_reference",
+		URL: "https://cdn.example/previous.mp4", MimeType: "video/mp4",
+	}}
+	if _, err := buildOpenAICompatibleVideoRequest("video-model", input, references, openAICompatibleConfig{VideoProtocol: "new_api"}); err == nil {
+		t.Fatal("expected an unmapped video extension contract to be rejected")
+	}
+	body, err := buildOpenAICompatibleVideoRequest("video-model", input, references, openAICompatibleConfig{
+		VideoProtocol: "new_api", VideoExtensionField: "source_video",
+		VideoExtensionModeField: "operation", VideoExtensionModeValue: "extend",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["source_video"] != "https://cdn.example/previous.mp4" || body["operation"] != "extend" {
+		t.Fatalf("extension body = %#v", body)
+	}
+}
+
+func TestOpenAICompatibleVideoReferenceDoesNotImplyVideoExtension(t *testing.T) {
+	body, err := buildOpenAICompatibleVideoRequest(
+		"video-model",
+		json.RawMessage(`{"prompt":"follow this motion","duration":5}`),
+		[]GatewayVideoReference{{Role: "video_reference", Type: "video_reference", URL: "https://cdn.example/reference.mp4", MimeType: "video/mp4"}},
+		openAICompatibleConfig{VideoProtocol: "new_api"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["video"] != "https://cdn.example/reference.mp4" {
+		t.Fatalf("video reference body = %#v", body)
+	}
+	if _, exists := body["operation"]; exists {
+		t.Fatalf("ordinary video reference must not enable extension mode: %#v", body)
+	}
+}
+
+func TestOpenAICompatibleVideoMapsFirstAndLastFrameRoles(t *testing.T) {
+	references := []GatewayVideoReference{
+		{Role: "first_frame", Type: "image_reference", URL: "https://cdn.example/first.png"},
+		{Role: "last_frame", Type: "image_reference", URL: "https://cdn.example/last.png"},
+	}
+	body, err := buildOpenAICompatibleVideoRequest(
+		"video-model",
+		json.RawMessage(`{"prompt":"reachable action","duration":5}`),
+		references,
+		openAICompatibleConfig{VideoProtocol: "new_api"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["image"] != "https://cdn.example/first.png" || body["last_frame"] != "https://cdn.example/last.png" {
+		t.Fatalf("new api first/last mapping = %#v", body)
+	}
+
+	body, err = buildOpenAICompatibleVideoRequest(
+		"video-model",
+		json.RawMessage(`{"prompt":"reachable action","duration":5}`),
+		references,
+		openAICompatibleConfig{VideoProtocol: "openrouter"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, ok := body["frame_images"].([]map[string]any)
+	if !ok || len(frames) != 2 {
+		t.Fatalf("openrouter frame_images = %#v", body["frame_images"])
+	}
+	if frames[0]["frame_type"] != "first_frame" || frames[0]["image_url"] != "https://cdn.example/first.png" ||
+		frames[1]["frame_type"] != "last_frame" || frames[1]["image_url"] != "https://cdn.example/last.png" {
+		t.Fatalf("openrouter ordered frames = %#v", frames)
+	}
+}
+
+func TestOpenAICompatibleVideoMapsTypedMultimodalReferences(t *testing.T) {
+	references := []GatewayVideoReference{
+		{Role: "first_frame", Type: "image", URL: "https://cdn.example/first.png"},
+		{Role: "character_identity", Type: "image", URL: "https://cdn.example/character.png"},
+		{Role: "scene_identity", Type: "image", URL: "https://cdn.example/scene.png"},
+		{Role: "video_reference", Type: "video", URL: "https://cdn.example/motion.mp4"},
+		{Role: "audio_reference", Type: "audio", URL: "https://cdn.example/voice.wav"},
+	}
+	body, err := buildOpenAICompatibleVideoRequest(
+		"video-model", json.RawMessage(`{"prompt":"typed references","duration":10}`), references,
+		openAICompatibleConfig{VideoProtocol: "new_api"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["image"] != "https://cdn.example/first.png" {
+		t.Fatalf("first frame mapping = %#v", body)
+	}
+	inputReferences, ok := body["input_references"].([]map[string]any)
+	if !ok || len(inputReferences) != 4 {
+		t.Fatalf("new api input references = %#v", body["input_references"])
+	}
+	typesByRole := map[string]string{}
+	for _, reference := range inputReferences {
+		typesByRole[reference["role"].(string)] = reference["type"].(string)
+	}
+	if typesByRole["character_identity"] != "image_url" || typesByRole["scene_identity"] != "image_url" ||
+		typesByRole["video_reference"] != "video_url" || typesByRole["audio_reference"] != "audio_url" {
+		t.Fatalf("new api typed mappings = %#v", inputReferences)
+	}
+
+	body, err = buildOpenAICompatibleVideoRequest(
+		"video-model", json.RawMessage(`{"prompt":"typed references","duration":10}`), references,
+		openAICompatibleConfig{VideoProtocol: "openrouter"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, ok := body["frame_images"].([]map[string]any)
+	if !ok || len(frames) != 1 || frames[0]["frame_type"] != "first_frame" {
+		t.Fatalf("openrouter first frame = %#v", body["frame_images"])
+	}
+	inputReferences, ok = body["input_references"].([]map[string]any)
+	if !ok || len(inputReferences) != 4 {
+		t.Fatalf("openrouter input references = %#v", body["input_references"])
+	}
+}
+
+func TestOpenAICompatibleVideoMapsStoryboardSheetReference(t *testing.T) {
+	references := []GatewayVideoReference{{
+		Role: "storyboard_sheet", Type: "image", URL: "https://cdn.example/storyboard-sheet.png",
+	}}
+	for _, protocol := range []string{"new_api", "openrouter"} {
+		body, err := buildOpenAICompatibleVideoRequest(
+			"video-model", json.RawMessage(`{"prompt":"animate the ordered keyframes","duration":10}`), references,
+			openAICompatibleConfig{VideoProtocol: protocol},
+		)
+		if err != nil {
+			t.Fatalf("%s mapping failed: %v", protocol, err)
+		}
+		inputReferences, ok := body["input_references"].([]map[string]any)
+		if !ok || len(inputReferences) != 1 || inputReferences[0]["role"] != "storyboard_sheet" ||
+			inputReferences[0]["type"] != "image_url" || inputReferences[0]["url"] != "https://cdn.example/storyboard-sheet.png" {
+			t.Fatalf("%s storyboard sheet mapping = %#v", protocol, body["input_references"])
+		}
+		if _, exists := body["image"]; exists {
+			t.Fatalf("%s storyboard sheet must not be mapped as first frame: %#v", protocol, body)
+		}
+	}
+}
+
 func TestOpenAICompatibleVideoCreateRejectsAcknowledgedLayoutMismatch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -203,6 +350,24 @@ func TestGatewayVideoPromptLimitAndInvalidRequestClassification(t *testing.T) {
 	}
 	if !isVideoInvalidRequestFailure("video_generation_failed", "Prompt length exceeds the maximum allowed length of 4096") {
 		t.Fatal("prompt length failure should be classified as invalid request")
+	}
+}
+
+func TestNormalizeVideoTerminalFailureClassifiesGenerationTimeout(t *testing.T) {
+	normalized := json.RawMessage(`{
+		"status":"failed",
+		"errorCode":"success",
+		"errorMessage":"Video task exceeded total timeout after 500 seconds"
+	}`)
+	code, message, upstreamCode, standard := normalizedVideoTerminalFailure(normalized)
+	if code != CodeUpstreamTimeout || upstreamCode != "success" || message != "Video task exceeded total timeout after 500 seconds" {
+		t.Fatalf("failure = code %q message %q upstream %q", code, message, upstreamCode)
+	}
+	if standard == nil || standard.Code != CodeUpstreamTimeout || !standard.Retryable {
+		t.Fatalf("standard = %+v", standard)
+	}
+	if isVideoTimeoutFailure("video_generation_failed", "参考图下载失败：图片地址下载失败或超时") {
+		t.Fatal("reference download ambiguity must not be classified as generation timeout")
 	}
 }
 

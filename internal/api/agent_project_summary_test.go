@@ -163,6 +163,40 @@ func TestAgentAutoProductionPlanRunsReviewBeforeProduction(t *testing.T) {
 	}
 }
 
+func TestAgentAutoProductionPlanReviewsShotAssetRequirementsBeforeDerivedImages(t *testing.T) {
+	summary := agentProjectGapSummary{
+		Summary:          "项目离成片还差：镜头资产需求待确认。",
+		ProviderProfiles: readyProviderProfiles(),
+		ShotAssets: agentProjectShotAssetsGap{
+			RequirementCount:   12,
+			ReviewPendingCount: 12,
+		},
+		NextActions: []agentProjectNextAction{
+			toolNextAction(
+				"review_shot_asset_requirements",
+				"校验并确认镜头资产需求",
+				"镜头资产需求必须先通过结构化校验",
+				"shot_asset.review_requirements",
+				map[string]any{"reviewStatus": "approved"},
+			),
+			workflowNextAction(
+				"batch_generate_derived_asset_images",
+				"生成镜头衍生资产",
+				"已确认需求缺少衍生图",
+				"batch_generate_derived_asset_images",
+				map[string]any{},
+			),
+		},
+	}
+	plan, ok := agentAutoProductionPlanFromSummary("自动推进到成片", summary)
+	if !ok {
+		t.Fatal("expected auto production plan")
+	}
+	if len(plan.Steps) != 2 || plan.Steps[1].Tool != "shot_asset.review_requirements" {
+		t.Fatalf("steps = %#v", plan.Steps)
+	}
+}
+
 func readyProviderProfiles() []agentProviderProfileStatus {
 	return []agentProviderProfileStatus{
 		{Purpose: "文本/剧本业务模型", ProfileKey: "script_agent_default", RequiredModality: "text", ProfileExists: true, EnabledBindingCount: 1, ActiveBindingCount: 1, ActiveCompatibleBindingCount: 1, Ready: true},

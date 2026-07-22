@@ -51,6 +51,52 @@ func ValidateGeneratedCardStyle(styleSlug, basePrompt, consistencyPrompt string)
 	return nil
 }
 
+// ValidateCanonicalAssetBaseline keeps temporary story states out of reusable
+// character references. Injuries, blood, combat poses, and held props belong to
+// shot-level derived assets rather than the canonical identity card.
+func ValidateCanonicalAssetBaseline(assetType, basePrompt, consistencyPrompt string) error {
+	if strings.TrimSpace(assetType) != "character" {
+		return nil
+	}
+	positive := canonicalPositiveAssertions(basePrompt + "\n" + consistencyPrompt)
+	forbidden := []string{
+		"浑身浴血", "遍体鳞伤", "遍体伤口", "流血", "鲜血淋漓", "鲜血浸透",
+		"染血", "血迹", "血泊", "开放性伤口", "断肢", "尸体",
+		"blood-soaked", "covered in blood", "fresh blood", "bleeding", "open wound",
+		"fresh wound", "battle wounds", "gore", "mutilated",
+	}
+	for _, term := range forbidden {
+		if strings.Contains(positive, term) {
+			return fmt.Errorf("核心角色资产包含剧情瞬时伤情 %q；请恢复为无血迹、无开放伤口的中性基础设定，并把受伤状态留给镜头衍生资产", term)
+		}
+	}
+	return nil
+}
+
+func canonicalPositiveAssertions(value string) string {
+	clauses := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		switch r {
+		case '\n', '\r', '。', '！', '？', '；', ';', '，', ',':
+			return true
+		default:
+			return false
+		}
+	})
+	positive := make([]string, 0, len(clauses))
+	negations := []string{
+		"无血", "无伤", "无战损", "无泥污", "无汗", "无泪", "没有", "不得", "禁止",
+		"排除", "不包含", "不固化", "不出现", "避免", "移除", "without", " no ", "exclude", "avoid",
+	}
+	for _, clause := range clauses {
+		clause = strings.TrimSpace(clause)
+		if clause == "" || containsAnyFold(" "+clause+" ", negations) {
+			continue
+		}
+		positive = append(positive, clause)
+	}
+	return strings.Join(positive, "\n")
+}
+
 func containsAnyFold(value string, candidates []string) bool {
 	for _, candidate := range candidates {
 		if strings.Contains(value, strings.ToLower(candidate)) {

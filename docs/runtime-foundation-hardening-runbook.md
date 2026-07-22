@@ -10,6 +10,9 @@
 - Provider Request 的 `unknown_outcome` 不得自动重试。先确认上游是否已执行和是否已计费，再使用显式 retry。
 - Workflow Start 只能通过 `workflow_start_outbox` 启动。API 写入 `workflow_runs` 成功不等于 Temporal 已接收。
 - 浏览器只查询批任务状态，不拥有并发执行权和权威进度。
+- 项目视频生产必须绑定不可变 `VideoProductionProfileVersion` 和 active `ProductionGeneration`；普通设置更新不得直接切换 Profile。
+- Prompt 生产与视频执行是两个状态机。视频执行只能消费 approved Prompt/Render Plan，不得在 create/poll 路径临时重跑 Prompt Agent。
+- 旧 generation 的延迟结果不得更新当前分镜、锚点、引用、Prompt、Render Plan 或媒体绑定，只能写审计终态。
 - Worker 启动不得修改 Temporal Current/Ramping Version。发布路由只由 `cmd/temporal-release` 修改。
 - 生产环境禁止数据库 down/reset；修复 schema 只能新增前向迁移。
 - 日志、指标、命令输出和故障记录不得包含凭据明文、Authorization、完整 Prompt 或媒体 base64。
@@ -85,6 +88,26 @@ if ([string]::IsNullOrWhiteSpace($env:CINEWEAVE_RELEASE_ID)) {
 
 确认部署环境已通过 Secret 管理注入数据库、S3、JWT、Provider Gateway 内部令牌和凭据加密主密钥。不要把这些值写入 Compose、Git 或命令历史。
 
+### 3.1 视频生产与 Provider 发布门
+
+涉及视频 Profile、Workflow、Provider contract 或 migration 的发布必须先进入维护窗口，停止新的视频生产与 Profile rebuild。然后冻结 Provider 管理写入、排空在途视频任务并保存保护快照：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
+$env:CINEWEAVE_PROVIDER_CONFIGURATION_FROZEN = 'true'
+docker compose -f compose.yml --profile app up -d --no-deps --force-recreate api
+
+pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode DrainCheck
+pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode Snapshot `
+  -SnapshotPath 'tmp/provider-protection-before-release.json'
+```
+
+`DrainCheck` 必须返回 `activeWorkflowRuns=0`、`activeVideoTasks=0`、`activeVideoLeases=0`。保护快照对 9 张 Provider 配置表保存主键、行数和全行 hash，对 `provider_call_logs`、`cost_records`、`provider_async_tasks` 保存历史主键基线。快照不得提交到 Git。
+
+若无法通过环境变量冻结 API，可停止 API 后执行 Snapshot/Verify；不得在可写 API 运行时忽略保护脚本的拒绝结果。
+
 ## 4. 数据库迁移与系统 Seed
 
 ### 4.1 执行顺序
@@ -112,6 +135,19 @@ docker compose -f compose.yml exec -T postgres psql -U cineweave -d cineweave -c
 
 迁移日志固定包含 `version`、`direction`、`contentHash`、`durationMs`、`releaseId`、`status`；失败时还包含截断后的 `failureStatementSummary`。
 
+视频生产 schema 发布后至少核对 migration、旧字段、最新 Profile 和旧 Prompt：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
+docker compose -f compose.yml exec -T postgres psql -U cineweave -d cineweave -v ON_ERROR_STOP=1 -c "SELECT max(version_id) AS migration_version FROM cineweave_migrations.cineweave_schema_versions WHERE is_applied;"
+docker compose -f compose.yml exec -T postgres psql -U cineweave -d cineweave -v ON_ERROR_STOP=1 -c "SELECT p.profile_key, v.version, v.lifecycle_state, v.implementation_state, v.input_contract_version FROM video_production_profiles p JOIN LATERAL (SELECT * FROM video_production_profile_versions x WHERE x.profile_id = p.id ORDER BY x.version DESC LIMIT 1) v ON true ORDER BY p.profile_key;"
+docker compose -f compose.yml exec -T postgres psql -U cineweave -d cineweave -v ON_ERROR_STOP=1 -c "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'projects' AND column_name = 'production_mode') AS legacy_column_exists;"
+```
+
+当前目标是 migration v18、四个最新 v2 Profile 均为 `published + available`、`legacy_column_exists=false`。若任一条件不满足，保持维护窗口并停止发布。
+
 ## 5. Compose 部署
 
 ```powershell
@@ -136,6 +172,32 @@ Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:19290/minio/health/liv
 ```
 
 API `/readyz` 的 `database`、`providerGateway`、`storage`、`temporal` 必须全部为 `ok`。仅容器进程存活不能替代 readiness。
+
+Provider Gateway 只在 Docker 网络内验收：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
+docker compose -f compose.yml exec -T provider-gateway wget -q -O - http://127.0.0.1:8082/healthz
+docker compose -f compose.yml exec -T provider-gateway wget -q -O - http://127.0.0.1:8082/readyz
+```
+
+应用迁移和 seed 完成后，在 API 仍冻结 Provider 配置时验证部署前快照；通过后再解除冻结并重建 API：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
+pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode Verify `
+  -SnapshotPath 'tmp/provider-protection-before-release.json'
+
+$env:CINEWEAVE_PROVIDER_CONFIGURATION_FROZEN = 'false'
+docker compose -f compose.yml --profile app up -d --no-deps --force-recreate api
+Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:19288/readyz'
+```
+
+Verify 要求 9 张配置表完全等值，3 张历史表部署前主键仍为部署后集合的子集。任何差异都必须保留现场并中止开放流量。
 
 ## 6. Temporal Worker 发布
 
@@ -323,6 +385,13 @@ docker compose -f compose.yml exec -T postgres psql -U cineweave -d cineweave -c
 3. 查询旧 Pinned Workflow 的等待 Activity、Timer、Signal 或 Provider async task。
 4. 修复阻塞原因或由用户取消；不要删除 Temporal 数据。
 
+### 9.9 `WORKFLOW_RESULT_DISCARDED` 或 generation mismatch
+
+1. 查询项目 active binding/generation，并与 Workflow、Node、Provider task 和目标镜头记录中的 identity 对比。
+2. 若结果来自旧 generation，这是预期的写入保护；保留审计，不重放到当前代。
+3. 若当前代误报，检查 rebuild 切换事务、binding revision、workflow writable fence 和 Provider callback payload，禁止放宽 CAS 条件规避错误。
+4. 只对当前 active generation 中的失败 item 发起显式 retry；旧代任务必须取消或自然排空。
+
 ## 10. 真实供应商 Smoke
 
 每次运行时边界、Gateway、存储、Workflow 或 Worker 发布机制变化后，至少覆盖：
@@ -335,6 +404,10 @@ docker compose -f compose.yml exec -T postgres psql -U cineweave -d cineweave -c
 6. 失败重试：只创建失败项的新关联 run，成功后不重复提交原成功项。
 7. 取消：父 run、queued/running nodes 和可取消 Provider async task 收敛为 cancelled。
 8. revision：任务期间编辑资产时，旧结果不能覆盖新 revision。
+9. Profile：新建项目回显的 Profile key/version 与用户选择一致，项目设置只读显示 binding revision 和 generation。
+10. Prompt/视频分离：先生成并审核 Prompt Plan，再执行视频；已有 approved Prompt 的视频批任务不得再次产生 Prompt Agent call。
+11. Generation fence：受控重建后模拟旧 Activity/Provider 回调，必须得到 `WORKFLOW_RESULT_DISCARDED` 且当前代业务数据不变。
+12. 四 Profile：分别验证首帧、首尾帧、多模态引用和分镜板的 canonical Input Contract；分镜板不得被 Adapter 当作 `first_frame`。
 
 Smoke 记录至少保存 release ID、时间、项目 ID、Workflow Run ID、Provider Request ID、Provider Call ID、Artifact ID、结果和错误码。不得保存凭据、完整 Prompt 或 base64。
 

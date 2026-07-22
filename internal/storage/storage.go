@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -30,6 +31,7 @@ type Config struct {
 	AccessKeyID         string
 	SecretAccessKey     string
 	UsePathStyle        bool
+	ProxyURL            string
 	DownloadPartSize    int64
 	DownloadConcurrency int
 }
@@ -78,6 +80,7 @@ func ConfigFromEnv() Config {
 		AccessKeyID:     env("S3_ACCESS_KEY_ID", "minio"),
 		SecretAccessKey: env("S3_SECRET_ACCESS_KEY", "minio123"),
 		UsePathStyle:    envBool("S3_USE_PATH_STYLE", true),
+		ProxyURL:        env("S3_HTTP_PROXY", ""),
 		DownloadPartSize: envInt64(
 			"S3_DOWNLOAD_PART_SIZE_BYTES",
 			defaultDownloadPartSize,
@@ -101,6 +104,11 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	storageHTTPClient, err := newStorageHTTPClient(cfg.ProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	awsCfg.HTTPClient = storageHTTPClient
 	client := newS3Client(awsCfg, cfg.Endpoint, cfg.UsePathStyle)
 	presignEndpoint := cfg.Endpoint
 	if strings.TrimSpace(cfg.PublicEndpoint) != "" {
@@ -383,6 +391,23 @@ func newS3Client(cfg aws.Config, endpoint string, usePathStyle bool) *s3.Client 
 		}
 		options.UsePathStyle = usePathStyle
 	})
+}
+
+func newStorageHTTPClient(rawProxyURL string) (*http.Client, error) {
+	baseTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("default HTTP transport has unexpected type %T", http.DefaultTransport)
+	}
+	transport := baseTransport.Clone()
+	transport.Proxy = nil
+	if rawProxyURL = strings.TrimSpace(rawProxyURL); rawProxyURL != "" {
+		proxyURL, err := url.Parse(rawProxyURL)
+		if err != nil || proxyURL.Host == "" || proxyURL.Scheme != "http" && proxyURL.Scheme != "https" {
+			return nil, fmt.Errorf("S3 HTTP proxy URL is invalid")
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	return &http.Client{Transport: transport}, nil
 }
 
 func normalizePresignExpiry(expires time.Duration) time.Duration {

@@ -13,6 +13,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/production"
 	storyboardtiming "github.com/Einzieg/cineweave/internal/storyboard"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
 )
@@ -42,7 +43,6 @@ type StoryboardShot struct {
 	TimingConfidence         *float64                           `json:"timingConfidence,omitempty"`
 	DurationLocked           bool                               `json:"durationLocked"`
 	ShotGroupID              *string                            `json:"shotGroupId,omitempty"`
-	ContinuityGroupID        *string                            `json:"continuityGroupId,omitempty"`
 	OneTake                  bool                               `json:"oneTake"`
 	TimingRevision           int                                `json:"timingRevision"`
 	TimelineTimebase         int64                              `json:"timelineTimebase"`
@@ -283,23 +283,51 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotNo must be greater than zero", nil, false)
 		return
 	}
-	workflowRunID, err := s.storyboardWorkflowRunForCreate(r, project, strings.TrimSpace(req.WorkflowRunID), principal.UserID)
+	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	defer tx.Rollback(r.Context())
+	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
+	productionConfiguration, err := videoproduction.DecodeProductionConfiguration(productionContext.Binding.ProfileSnapshot)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
+	workflowRunID, err := storyboardWorkflowRunForCreateTx(
+		r.Context(), tx, project.OrganizationID, project.ID, productionContext,
+		strings.TrimSpace(req.WorkflowRunID), principal.UserID,
+	)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
 	if strings.TrimSpace(req.ScriptSceneID) != "" {
-		if _, err := s.scriptScene(r, project.ID, strings.TrimSpace(req.ScriptSceneID)); err != nil {
+		if _, err := workflows.ScanScriptSceneRecord(tx.QueryRow(r.Context(), workflows.ScriptSceneSelectSQL(`
+			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
+		`), project.ID, strings.TrimSpace(req.ScriptSceneID))); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
 	}
-	shotIndex, shotNo, err := s.nextStoryboardShotPosition(r, project.ID, workflowRunID, req.ShotIndex, req.ShotNo)
+	shotIndex, shotNo, err := nextStoryboardShotPositionTx(
+		r.Context(), tx, project.ID, productionContext.Generation.ID, workflowRunID,
+		req.ShotIndex, req.ShotNo,
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	timebase := storyboardtiming.Timebase{TicksPerSecond: project.TimelineTimebase, FPSNumerator: int64(project.FPSNumerator), FPSDenominator: int64(project.FPSDenominator)}
+	timebase := storyboardtiming.Timebase{
+		TicksPerSecond: productionConfiguration.TimelineTimebase,
+		FPSNumerator:   int64(productionConfiguration.FPSNumerator),
+		FPSDenominator: int64(productionConfiguration.FPSDenominator),
+	}
 	if err := timebase.Validate(); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -307,11 +335,12 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	startTick := int64(0)
 	if req.StartTick != nil {
 		startTick = *req.StartTick
-	} else if err := s.db.QueryRow(r.Context(), `
+	} else if err := tx.QueryRow(r.Context(), `
 		SELECT COALESCE(MAX(end_tick), 0)
 		FROM storyboard_shots
-		WHERE project_id = $1 AND workflow_run_id = $2 AND deleted_at IS NULL
-	`, project.ID, workflowRunID).Scan(&startTick); err != nil {
+		WHERE project_id = $1 AND production_generation_id = $2
+		  AND workflow_run_id = $3 AND deleted_at IS NULL
+	`, project.ID, productionContext.Generation.ID, workflowRunID).Scan(&startTick); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -328,30 +357,27 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shot timing must be positive and aligned to the project frame rate", nil, false)
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
 	var shotID string
 	if err := tx.QueryRow(r.Context(), `
 		INSERT INTO storyboard_shots(
 			organization_id, project_id, workflow_run_id, script_scene_id, shot_index, shot_no,
 			start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source, duration_locked,
 			visual, camera, motion, mood, image_prompt, video_prompt,
-			status, review_status, manual_override, stale_state, edited_by, edited_at, metadata
+			status, review_status, manual_override, stale_state, edited_by, edited_at, metadata,
+			production_generation_id
 		)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6,
 		        $7, $8, $9, $9, 'manual_locked', true,
 		        NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''),
 		        NULLIF($14, ''), NULLIF($15, ''), 'pending', 'pending', true, 'needs_regeneration', $16, now(),
-		        jsonb_build_object('timingEditedAt', now(), 'timelineTimebase', $17::bigint, 'fpsNumerator', $18::integer, 'fpsDenominator', $19::integer))
+		        jsonb_build_object('timingEditedAt', now(), 'timelineTimebase', $17::bigint, 'fpsNumerator', $18::integer, 'fpsDenominator', $19::integer),
+		        $20)
 		RETURNING id::text
 	`, project.OrganizationID, project.ID, workflowRunID, strings.TrimSpace(req.ScriptSceneID), shotIndex, shotNo, startTick, endTick, durationTicks,
 		strings.TrimSpace(req.Visual), strings.TrimSpace(req.Camera), strings.TrimSpace(req.Motion), strings.TrimSpace(req.Mood),
 		strings.TrimSpace(req.ImagePrompt), strings.TrimSpace(req.VideoPrompt), principal.UserID,
-		project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator).Scan(&shotID); err != nil {
+		productionConfiguration.TimelineTimebase, productionConfiguration.FPSNumerator,
+		productionConfiguration.FPSDenominator, productionContext.Generation.ID).Scan(&shotID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -367,10 +393,13 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shot.created", "storyboard_shot", item.ID, mustRawJSON(map[string]any{
-		"shotId":        item.ID,
-		"workflowRunId": workflowRunID,
-		"scriptSceneId": item.ScriptSceneID,
-		"shotNo":        item.ShotNo,
+		"shotId":                 item.ID,
+		"workflowRunId":          workflowRunID,
+		"scriptSceneId":          item.ScriptSceneID,
+		"shotNo":                 item.ShotNo,
+		"productionGenerationId": productionContext.Generation.ID,
+		"bindingId":              productionContext.Binding.ID,
+		"bindingRevision":        productionContext.Binding.Revision,
 	})); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -1047,7 +1076,6 @@ func storyboardShotSelectSQL(where string) string {
 			s.timing_confidence::float8,
 			s.duration_locked,
 			s.shot_group_id::text,
-			s.continuity_group_id::text,
 			s.one_take,
 			s.timing_revision,
 			p.timeline_timebase,
@@ -1125,7 +1153,7 @@ func storyboardShotSelectSQL(where string) string {
 func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 	var item StoryboardShot
 	var duration sql.NullFloat64
-	var storyboardPlanID, shotGroupID, continuityGroupID sql.NullString
+	var storyboardPlanID, shotGroupID sql.NullString
 	var durationMinTicks, durationMaxTicks sql.NullInt64
 	var timingConfidence sql.NullFloat64
 	var imageArtifactID, imageMediaFileID, imageStorageKey, imageArtifactStorageKey, imageArtifactMimeType sql.NullString
@@ -1157,7 +1185,6 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 		&timingConfidence,
 		&item.DurationLocked,
 		&shotGroupID,
-		&continuityGroupID,
 		&item.OneTake,
 		&item.TimingRevision,
 		&item.TimelineTimebase,
@@ -1239,7 +1266,6 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 		item.TimingConfidence = &timingConfidence.Float64
 	}
 	item.ShotGroupID = stringPtrFromNull(shotGroupID)
-	item.ContinuityGroupID = stringPtrFromNull(continuityGroupID)
 	item.ImageArtifactID = stringPtrFromNull(imageArtifactID)
 	item.ScriptEpisodeID = stringPtrFromNull(scriptEpisodeID)
 	if episodeIndex.Valid {
@@ -1318,52 +1344,19 @@ func scanStoryboardShot(row pgx.Row) (StoryboardShot, error) {
 func normalizeStoryboardShotProductionStatus(item *StoryboardShot) {
 	hasImage := item.ImageArtifactID != nil || item.ImageMediaFileID != nil || stringValue(item.ImageStorageKey) != ""
 	hasVideo := item.VideoArtifactID != nil || item.VideoMediaFileID != nil || stringValue(item.VideoStorageKey) != ""
-	item.ImageStatus = normalizeShotProductionStatus(item.ImageStatus, item.Status, item.StaleState, hasImage, "image")
-	item.VideoStatus = normalizeShotProductionStatus(item.VideoStatus, item.Status, item.StaleState, hasVideo, "video")
+	item.ImageStatus = normalizeShotProductionStatus(item.ImageStatus, item.StaleState, hasImage)
+	item.VideoStatus = normalizeShotProductionStatus(item.VideoStatus, item.StaleState, hasVideo)
 }
 
-func normalizeShotProductionStatus(current, legacyStatus, staleState string, hasArtifact bool, mediaKind string) string {
+func normalizeShotProductionStatus(current, staleState string, hasArtifact bool) string {
 	current = strings.TrimSpace(current)
-	legacyStatus = strings.TrimSpace(legacyStatus)
 	stale := strings.TrimSpace(staleState) != "" && staleState != "fresh"
-	// Per-media status is authoritative. The shot-level stale state can describe
-	// a downstream video invalidated by a newly generated image.
 	switch current {
 	case "queued", "running", "succeeded", "failed", "cancelled":
 		return current
 	case "stale":
 		if hasArtifact {
 			return "stale"
-		}
-	}
-	if mediaKind == "image" {
-		if legacyStatus == "image_running" {
-			return "running"
-		}
-		if legacyStatus == "image_failed" {
-			return "failed"
-		}
-		if legacyStatus == "image_succeeded" || legacyStatus == "video_running" || legacyStatus == "video_succeeded" {
-			if stale && hasArtifact {
-				return "stale"
-			}
-			return "succeeded"
-		}
-	} else {
-		if legacyStatus == "video_running" {
-			return "running"
-		}
-		if legacyStatus == "video_failed" {
-			return "failed"
-		}
-		if legacyStatus == "cancelled" {
-			return "cancelled"
-		}
-		if legacyStatus == "video_succeeded" {
-			if stale && hasArtifact {
-				return "stale"
-			}
-			return "succeeded"
 		}
 	}
 	if stale && hasArtifact {
@@ -1393,56 +1386,103 @@ func (s *Server) attachShotPreviewURLs(r *http.Request, item *StoryboardShot, ex
 	return nil
 }
 
-func (s *Server) storyboardWorkflowRunForCreate(r *http.Request, project Project, requestedWorkflowRunID, userID string) (string, error) {
+func storyboardWorkflowRunForCreateTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID, projectID string,
+	productionContext videoproduction.Context,
+	requestedWorkflowRunID, userID string,
+) (string, error) {
 	if requestedWorkflowRunID != "" {
-		var id string
-		if err := s.db.QueryRow(r.Context(), `
-			SELECT id::text
+		var id, runOrganizationID, runProjectID, generationID, bindingID, workflowType string
+		var bindingRevision int64
+		if err := tx.QueryRow(ctx, `
+			SELECT id::text, organization_id::text, project_id::text,
+			       production_generation_id::text, video_production_binding_id::text,
+			       video_production_binding_revision, workflow_type
 			FROM workflow_runs
-			WHERE id = $1 AND project_id = $2
-		`, requestedWorkflowRunID, project.ID).Scan(&id); err != nil {
+			WHERE id::text = $1
+		`, requestedWorkflowRunID).Scan(
+			&id, &runOrganizationID, &runProjectID, &generationID, &bindingID,
+			&bindingRevision, &workflowType,
+		); err != nil {
 			return "", err
+		}
+		if runOrganizationID != organizationID || runProjectID != projectID ||
+			generationID != productionContext.Generation.ID || bindingID != productionContext.Binding.ID ||
+			bindingRevision != productionContext.Binding.Revision || !manualStoryboardWorkflowTypeAllowed(workflowType) {
+			return "", videoproduction.NewError(
+				videoproduction.CodeGenerationMismatch,
+				"所选工作流不属于当前视频生产代，无法创建分镜",
+				false,
+			)
 		}
 		return id, nil
 	}
 	var id string
-	err := s.db.QueryRow(r.Context(), `
+	err := tx.QueryRow(ctx, `
 		SELECT id::text
 		FROM workflow_runs
 		WHERE project_id = $1
-		  AND input->>'workflowType' IN ('script_to_storyboard', 'script_to_video', 'full_production')
+		  AND organization_id = $2
+		  AND production_generation_id = $3
+		  AND video_production_binding_id = $4
+		  AND video_production_binding_revision = $5
+		  AND workflow_type IN ('script_to_storyboard', 'script_to_video', 'full_production')
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, project.ID).Scan(&id)
+	`, projectID, organizationID, productionContext.Generation.ID,
+		productionContext.Binding.ID, productionContext.Binding.Revision).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
 	if err != pgx.ErrNoRows {
 		return "", err
 	}
-	if err := s.db.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		WITH new_run AS (SELECT gen_random_uuid() AS id)
-		INSERT INTO workflow_runs(id, organization_id, project_id, temporal_workflow_id, status, input, output, created_by)
-		SELECT id, $1, $2, 'manual-storyboard-' || id::text, 'succeeded',
-		       '{"workflowType":"script_to_storyboard","input":{"manual":true}}'::jsonb, '{}', $3
+		INSERT INTO workflow_runs(
+			id, organization_id, project_id, temporal_workflow_id, workflow_type, status,
+			input, output, created_by, production_generation_id,
+			video_production_binding_id, video_production_binding_revision
+		)
+		SELECT id, $1, $2, 'manual-storyboard-' || id::text, 'script_to_storyboard',
+		       'succeeded', '{"workflowType":"script_to_storyboard","input":{"manual":true}}'::jsonb,
+		       '{}', $3, $4, $5, $6
 		FROM new_run
 		RETURNING id::text
-	`, project.OrganizationID, project.ID, userID).Scan(&id); err != nil {
+	`, organizationID, projectID, userID, productionContext.Generation.ID,
+		productionContext.Binding.ID, productionContext.Binding.Revision).Scan(&id); err != nil {
 		return "", err
 	}
 	return id, nil
 }
 
-func (s *Server) nextStoryboardShotPosition(r *http.Request, projectID, workflowRunID string, requestedShotIndex, requestedShotNo *int) (int, int, error) {
+func manualStoryboardWorkflowTypeAllowed(workflowType string) bool {
+	switch workflowType {
+	case "script_to_storyboard", "script_to_video", "full_production":
+		return true
+	default:
+		return false
+	}
+}
+
+func nextStoryboardShotPositionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	projectID, generationID, workflowRunID string,
+	requestedShotIndex, requestedShotNo *int,
+) (int, int, error) {
 	if requestedShotIndex != nil && requestedShotNo != nil {
 		return *requestedShotIndex, *requestedShotNo, nil
 	}
 	var maxIndex, maxNo sql.NullInt64
-	if err := s.db.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		SELECT max(shot_index), max(COALESCE(shot_no, shot_index + 1))
 		FROM storyboard_shots
-		WHERE project_id = $1 AND workflow_run_id = $2 AND deleted_at IS NULL
-	`, projectID, workflowRunID).Scan(&maxIndex, &maxNo); err != nil {
+		WHERE project_id = $1 AND production_generation_id = $2
+		  AND workflow_run_id = $3 AND deleted_at IS NULL
+	`, projectID, generationID, workflowRunID).Scan(&maxIndex, &maxNo); err != nil {
 		return 0, 0, err
 	}
 	shotIndex := 0

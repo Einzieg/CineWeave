@@ -1,6 +1,13 @@
 package dbseed
 
-import "testing"
+import (
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+
+	storyboardpkg "github.com/Einzieg/cineweave/internal/storyboard"
+)
 
 func TestValidateEmbedded(t *testing.T) {
 	if err := ValidateEmbedded(); err != nil {
@@ -13,8 +20,8 @@ func TestEmbeddedResourceCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resources) != 5 {
-		t.Fatalf("resource count = %d, want 5", len(resources))
+	if len(resources) != 6 {
+		t.Fatalf("resource count = %d, want 6", len(resources))
 	}
 	totals := map[string]int{}
 	for _, resource := range resources {
@@ -23,20 +30,134 @@ func TestEmbeddedResourceCoverage(t *testing.T) {
 		}
 	}
 	want := map[string]int{
-		"permissions":                       51,
+		"permissions":                       53,
 		"roles":                             10,
-		"role_permissions":                  146,
+		"role_permissions":                  154,
 		"provider_connectors":               2,
 		"provider_catalog_entries":          15,
 		"provider_model_capability_presets": 48,
-		"prompt_templates":                  234,
-		"prompt_versions":                   250,
+		"prompt_templates":                  232,
+		"prompt_versions":                   244,
 	}
 	for table, expected := range want {
 		if totals[table] != expected {
 			t.Fatalf("%s count = %d, want %d", table, totals[table], expected)
 		}
 	}
+}
+
+func TestActiveStoryboardScenePlannerSeedUsesCurrentContract(t *testing.T) {
+	resources, err := loadResources()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var templateID string
+	var activeVersions []struct {
+		Version int
+		Content string
+	}
+	for _, resource := range resources {
+		if resource.Data.ResourceKey != "prompt-registry" {
+			continue
+		}
+		if resource.Data.ResourceVersion < 3 {
+			t.Fatalf("prompt registry version = %d, want at least 3", resource.Data.ResourceVersion)
+		}
+		for _, table := range resource.Data.Tables {
+			switch table.Name {
+			case "prompt_templates":
+				var rows []struct {
+					ID          string `json:"id"`
+					TemplateKey string `json:"template_key"`
+				}
+				if err := json.Unmarshal(table.Rows, &rows); err != nil {
+					t.Fatal(err)
+				}
+				for _, row := range rows {
+					if row.TemplateKey == "storyboard_scene_planner" {
+						templateID = row.ID
+						break
+					}
+				}
+			case "prompt_versions":
+				var rows []struct {
+					TemplateID string `json:"template_id"`
+					Status     string `json:"status"`
+					Version    int    `json:"version"`
+					Content    string `json:"content"`
+				}
+				if err := json.Unmarshal(table.Rows, &rows); err != nil {
+					t.Fatal(err)
+				}
+				for _, row := range rows {
+					if row.TemplateID == templateID && row.Status == "active" {
+						activeVersions = append(activeVersions, struct {
+							Version int
+							Content string
+						}{Version: row.Version, Content: row.Content})
+					}
+				}
+			}
+		}
+	}
+	if templateID == "" {
+		t.Fatal("storyboard_scene_planner template is missing")
+	}
+	if len(activeVersions) != 1 {
+		t.Fatalf("active storyboard scene planner versions = %d, want 1", len(activeVersions))
+	}
+	active := activeVersions[0]
+	if active.Version < 3 {
+		t.Fatalf("active storyboard scene planner version = %d, want at least 3", active.Version)
+	}
+	if strings.Contains(active.Content, "continuityGroupKey") {
+		t.Fatal("active storyboard scene planner still requests removed continuityGroupKey")
+	}
+	if !strings.Contains(active.Content, "禁止自行新增字段") {
+		t.Fatal("active storyboard scene planner does not forbid undeclared output fields")
+	}
+	assertStoryboardPlannerExampleMatchesContract(t, active.Content)
+}
+
+func assertStoryboardPlannerExampleMatchesContract(t *testing.T, content string) {
+	t.Helper()
+	const prefix = "只返回合法 JSON：\n"
+	start := strings.Index(content, prefix)
+	if start < 0 {
+		t.Fatal("active storyboard scene planner is missing its JSON example")
+	}
+	example := content[start+len(prefix):]
+	if end := strings.Index(example, "\n\n硬性规则："); end >= 0 {
+		example = example[:end]
+	}
+	var decoded struct {
+		SceneKey string           `json:"sceneKey"`
+		Shots    []map[string]any `json:"shots"`
+	}
+	if err := json.Unmarshal([]byte(example), &decoded); err != nil {
+		t.Fatalf("decode storyboard scene planner JSON example: %v", err)
+	}
+	if len(decoded.Shots) != 1 {
+		t.Fatalf("storyboard scene planner example shots = %d, want 1", len(decoded.Shots))
+	}
+	allowed := jsonFieldSet(reflect.TypeOf(storyboardpkg.ShotPlannerSuggestion{}))
+	for field := range decoded.Shots[0] {
+		if !allowed[field] {
+			t.Fatalf("storyboard scene planner example contains undeclared shot field %q", field)
+		}
+	}
+}
+
+func jsonFieldSet(valueType reflect.Type) map[string]bool {
+	fields := make(map[string]bool, valueType.NumField())
+	for index := 0; index < valueType.NumField(); index++ {
+		name := strings.Split(valueType.Field(index).Tag.Get("json"), ",")[0]
+		if name != "" && name != "-" {
+			fields[name] = true
+		}
+	}
+	return fields
 }
 
 func TestSeedContentHashIgnoresPlatformLineEndings(t *testing.T) {

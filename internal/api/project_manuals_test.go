@@ -1,11 +1,14 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	seedfiles "github.com/Einzieg/cineweave/db/seeds"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
+	"github.com/google/uuid"
 )
 
 func TestProjectManualTemplatesAndBindings(t *testing.T) {
@@ -40,6 +43,18 @@ func TestProjectManualTemplatesAndBindings(t *testing.T) {
 	if !strings.Contains(created.VisualManual, "角色模板") || !strings.Contains(created.VisualManual, "分镜视频模板") {
 		t.Fatalf("created visual manual = %q", created.VisualManual)
 	}
+	if created.VideoProductionBinding == nil {
+		t.Fatal("created project has no video production binding")
+	}
+	configuration, err := videoproduction.DecodeProductionConfiguration(created.VideoProductionBinding.ProfileSnapshot)
+	if err != nil {
+		t.Fatalf("decode initial production configuration: %v", err)
+	}
+	if configuration.SchemaVersion != videoproduction.ProductionConfigurationSnapshotVersion ||
+		configuration.ManualBindings["director"].PromptVersionID == "" ||
+		configuration.ManualBindings["visual"].PromptVersionID == "" {
+		t.Fatalf("initial production configuration is incomplete: %+v", configuration)
+	}
 
 	var bindings struct {
 		Items []ProjectManualBinding `json:"items"`
@@ -47,6 +62,48 @@ func TestProjectManualTemplatesAndBindings(t *testing.T) {
 	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+created.ID+"/manual-bindings", seed.ownerToken, seed.organizationID, nil, &bindings)
 	assertManualBinding(t, bindings.Items, "director", "default_director_manual")
 	assertManualBinding(t, bindings.Items, "visual", "default_visual_manual")
+
+	foreignOrganizationID := uuid.NewString()
+	foreignTemplateID := uuid.NewString()
+	foreignVersionID := uuid.NewString()
+	foreignSuffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	if _, err := seed.pool.Exec(seed.ctx, `
+		INSERT INTO organizations(id, name, slug) VALUES ($1, $2, $3)
+	`, foreignOrganizationID, "Foreign Organization "+foreignSuffix, "foreign-"+foreignSuffix); err != nil {
+		t.Fatalf("seed foreign organization: %v", err)
+	}
+	defer seed.pool.Exec(seed.ctx, `DELETE FROM organizations WHERE id = $1`, foreignOrganizationID)
+	if _, err := seed.pool.Exec(seed.ctx, `
+		INSERT INTO prompt_templates(
+			id, organization_id, template_key, name, purpose, description,
+			modality, task_type, scope, status, is_system
+		) VALUES ($1, $2, $3, 'Foreign Director Manual', 'director_manual', '',
+		          'text', 'text.generate', 'organization', 'active', false)
+	`, foreignTemplateID, foreignOrganizationID, "foreign_director_manual_"+foreignSuffix); err != nil {
+		t.Fatalf("seed foreign organization prompt template: %v", err)
+	}
+	if _, err := seed.pool.Exec(seed.ctx, `
+		INSERT INTO prompt_versions(
+			id, prompt_template_id, template_id, version_no, version, content,
+			variables_schema, content_hash, status, content_format, activated_at
+		) VALUES ($1, $2, $2, 1, 1, 'FOREIGN_ORGANIZATION_SECRET',
+		          '{}'::jsonb, $3, 'active', 'markdown', now())
+	`, foreignVersionID, foreignTemplateID, strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("seed foreign organization prompt version: %v", err)
+	}
+	assertAPIErrorCode(t, server, http.MethodPost, "/api/projects", seed.ownerToken, seed.organizationID, map[string]any{
+		"workspaceId":                   seed.workspaceID,
+		"name":                          "Cross Organization Manual Project",
+		"directorManualPromptVersionId": foreignVersionID,
+	}, http.StatusUnprocessableEntity, "MANUAL_VERSION_NOT_AVAILABLE")
+	assertAPIErrorCode(t, server, http.MethodPost,
+		"/api/projects/"+created.ID+"/video-production/rebuild-impact",
+		seed.ownerToken, seed.organizationID, map[string]any{
+			"targetProfileKey": "single_frame_i2v",
+			"targetConfiguration": map[string]any{
+				"directorManualPromptVersionId": foreignVersionID,
+			},
+		}, http.StatusConflict, videoproduction.CodeRebuildConflict)
 
 	if _, err := seed.pool.Exec(seed.ctx, `
 		UPDATE projects
@@ -65,31 +122,15 @@ func TestProjectManualTemplatesAndBindings(t *testing.T) {
 		t.Fatalf("project visual manual should come from active binding, got %q", loaded.VisualManual)
 	}
 
-	var rebound ProjectManualBinding
-	doAPISuccess(t, server, http.MethodPut, "/api/projects/"+created.ID+"/manual-bindings/director", seed.ownerToken, seed.organizationID, map[string]any{
+	assertAPIErrorCode(t, server, http.MethodPut, "/api/projects/"+created.ID+"/manual-bindings/director", seed.ownerToken, seed.organizationID, map[string]any{
 		"promptVersionId": directorVersionID,
-	}, &rebound)
-	if rebound.ManualKind != "director" || rebound.TemplateKey != "default_director_manual" {
-		t.Fatalf("rebound manual = %+v", rebound)
-	}
+	}, http.StatusConflict, videoproduction.CodeConfigurationRebuildRequired)
 
-	var updated Project
-	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+created.ID, seed.ownerToken, seed.organizationID, map[string]any{
+	assertAPIErrorCode(t, server, http.MethodPatch, "/api/projects/"+created.ID, seed.ownerToken, seed.organizationID, map[string]any{
 		"directorManual": "自定义导演手册",
-	}, &updated)
-	if updated.DirectorManual != "自定义导演手册" {
-		t.Fatalf("updated director manual = %q", updated.DirectorManual)
-	}
-	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+created.ID+"/manual-bindings", seed.ownerToken, seed.organizationID, nil, &bindings)
-	for _, item := range bindings.Items {
-		if item.ManualKind == "director" {
-			t.Fatalf("director binding should be disabled after direct edit: %+v", bindings.Items)
-		}
-	}
-	assertManualBinding(t, bindings.Items, "visual", "default_visual_manual")
+	}, http.StatusConflict, videoproduction.CodeConfigurationRebuildRequired)
 
-	var patchedManuals Project
-	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+created.ID, seed.ownerToken, seed.organizationID, map[string]any{
+	assertAPIErrorCode(t, server, http.MethodPatch, "/api/projects/"+created.ID, seed.ownerToken, seed.organizationID, map[string]any{
 		"artStyle":                      "2d_90s_japanese_anime",
 		"directorManualPromptVersionId": toonflowDirectorVersionID,
 		"visualManualPromptVersionId":   toonflowVisualVersionID,
@@ -97,13 +138,10 @@ func TestProjectManualTemplatesAndBindings(t *testing.T) {
 			"toonflowVisualStyle": "2d_90s_japanese_anime",
 			"toonflowStoryStyle":  "xianxia_fantasy",
 		},
-	}, &patchedManuals)
-	if !strings.Contains(patchedManuals.DirectorManual, "仙侠") || !strings.Contains(patchedManuals.VisualManual, "90") {
-		t.Fatalf("patched manuals director=%q visual=%q", patchedManuals.DirectorManual, patchedManuals.VisualManual)
-	}
+	}, http.StatusConflict, videoproduction.CodeConfigurationRebuildRequired)
 	doAPISuccess(t, server, http.MethodGet, "/api/projects/"+created.ID+"/manual-bindings", seed.ownerToken, seed.organizationID, nil, &bindings)
-	assertManualBinding(t, bindings.Items, "director", "toonflow_director_manual_xianxia_fantasy")
-	assertManualBinding(t, bindings.Items, "visual", "toonflow_visual_manual_2d_90s_japanese_anime")
+	assertManualBinding(t, bindings.Items, "director", "default_director_manual")
+	assertManualBinding(t, bindings.Items, "visual", "default_visual_manual")
 
 	var toonflowProject Project
 	doAPISuccess(t, server, http.MethodPost, "/api/projects", seed.ownerToken, seed.organizationID, map[string]any{
@@ -117,7 +155,7 @@ func TestProjectManualTemplatesAndBindings(t *testing.T) {
 			"toonflowStoryStyle":  "xianxia_fantasy",
 		},
 	}, &toonflowProject)
-	if !strings.Contains(toonflowProject.DirectorManual, "仙侠") || !strings.Contains(toonflowProject.DirectorManual, "导演规划") {
+	if !strings.Contains(toonflowProject.DirectorManual, "古风仙侠") || !strings.Contains(toonflowProject.DirectorManual, "分镜表") {
 		t.Fatalf("toonflow director manual = %q", toonflowProject.DirectorManual)
 	}
 	if !strings.Contains(toonflowProject.VisualManual, "90") || !strings.Contains(toonflowProject.VisualManual, "角色") {
@@ -133,8 +171,7 @@ func TestToonflowSeedResourcesContainRequiredKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Toonflow prompt seed: %v", err)
 	}
-	content := string(raw)
-	required := []string{
+	assertSeedPromptTemplateKeys(t, raw, "prompt-registry", []string{
 		"toonflow_visual_2d_90s_japanese_anime_prefix",
 		"toonflow_visual_2d_90s_japanese_anime_art_character",
 		"toonflow_visual_2d_90s_japanese_anime_art_character_derivative",
@@ -142,26 +179,51 @@ func TestToonflowSeedResourcesContainRequiredKeys(t *testing.T) {
 		"toonflow_director_xianxia_fantasy_director_planning_narrative",
 		"toonflow_production_agent_decision",
 		"toonflow_script_execution_script",
-		`"resourceKey": "prompt-registry"`,
-	}
-	for _, want := range required {
-		if !strings.Contains(content, want) {
-			t.Fatalf("Toonflow prompt seed missing %s", want)
-		}
-	}
+	})
 
 	manualRaw, err := seedfiles.FS.ReadFile("project-manuals/000001_project_manuals.json")
 	if err != nil {
 		t.Fatalf("read Toonflow manual seed: %v", err)
 	}
-	manualContent := string(manualRaw)
-	for _, want := range []string{
+	assertSeedPromptTemplateKeys(t, manualRaw, "project-manuals", []string{
 		"toonflow_visual_manual_2d_90s_japanese_anime",
 		"toonflow_director_manual_xianxia_fantasy",
-		`"resourceKey": "project-manuals"`,
-	} {
-		if !strings.Contains(manualContent, want) {
-			t.Fatalf("Toonflow manual seed missing %s", want)
+	})
+}
+
+func assertSeedPromptTemplateKeys(t *testing.T, raw []byte, resourceKey string, required []string) {
+	t.Helper()
+	var manifest struct {
+		ResourceKey string `json:"resourceKey"`
+		Tables      []struct {
+			Name string          `json:"name"`
+			Rows json.RawMessage `json:"rows"`
+		} `json:"tables"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("parse %s seed: %v", resourceKey, err)
+	}
+	if manifest.ResourceKey != resourceKey {
+		t.Fatalf("seed resource key = %q, want %q", manifest.ResourceKey, resourceKey)
+	}
+	templateKeys := map[string]bool{}
+	for _, table := range manifest.Tables {
+		if table.Name != "prompt_templates" {
+			continue
+		}
+		var rows []struct {
+			TemplateKey string `json:"template_key"`
+		}
+		if err := json.Unmarshal(table.Rows, &rows); err != nil {
+			t.Fatalf("parse %s prompt templates: %v", resourceKey, err)
+		}
+		for _, row := range rows {
+			templateKeys[row.TemplateKey] = true
+		}
+	}
+	for _, want := range required {
+		if !templateKeys[want] {
+			t.Fatalf("%s seed missing prompt template %s", resourceKey, want)
 		}
 	}
 }

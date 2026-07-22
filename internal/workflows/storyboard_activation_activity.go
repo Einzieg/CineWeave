@@ -52,7 +52,7 @@ func (a Activities) ActivateStoryboardPlan(ctx context.Context, input ActivateSt
 	if err != nil {
 		return ScriptStoryboardOutput{}, a.failStoryboardActivation(ctx, baseInput, NodeExecution{}, err)
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return ScriptStoryboardOutput{}, a.failStoryboardActivation(ctx, baseInput, NodeExecution{}, err)
 	}

@@ -31,16 +31,17 @@ type agentToolCall struct {
 }
 
 type agentToolResult struct {
-	Name         string                `json:"name"`
-	Label        string                `json:"label"`
-	Status       string                `json:"status"`
-	Summary      string                `json:"summary"`
-	Arguments    map[string]any        `json:"arguments,omitempty"`
-	Data         map[string]any        `json:"data,omitempty"`
-	Retryable    bool                  `json:"retryable,omitempty"`
-	NextActions  []agentToolNextAction `json:"nextActions,omitempty"`
-	ErrorCode    string                `json:"errorCode,omitempty"`
-	ErrorMessage string                `json:"errorMessage,omitempty"`
+	Name                string                `json:"name"`
+	Label               string                `json:"label"`
+	Status              string                `json:"status"`
+	Summary             string                `json:"summary"`
+	Arguments           map[string]any        `json:"arguments,omitempty"`
+	Data                map[string]any        `json:"data,omitempty"`
+	ChildWorkflowRunIDs []string              `json:"childWorkflowRunIds,omitempty"`
+	Retryable           bool                  `json:"retryable,omitempty"`
+	NextActions         []agentToolNextAction `json:"nextActions,omitempty"`
+	ErrorCode           string                `json:"errorCode,omitempty"`
+	ErrorMessage        string                `json:"errorMessage,omitempty"`
 }
 
 type agentToolNextAction struct {
@@ -460,11 +461,14 @@ func (s *Server) agentToolListScripts(r *http.Request, principal auth.Principal,
 	rows, err := s.db.Query(r.Context(), `
 		SELECT s.id::text, s.title, s.status, s.current_version_id::text,
 		       COALESCE(sv.version, 0), COALESCE(char_length(sv.content), 0),
-		       s.created_at, s.updated_at
+		       s.id = p.active_script_id, s.created_at, s.updated_at
 		FROM scripts s
+		JOIN projects p ON p.id = s.project_id
 		LEFT JOIN script_versions sv ON sv.id = s.current_version_id
 		WHERE s.project_id = $1 AND COALESCE(s.status, 'active') <> 'archived'
-		ORDER BY CASE WHEN s.status = 'active' THEN 0 ELSE 1 END, s.updated_at DESC, s.created_at DESC
+		ORDER BY CASE WHEN s.id = p.active_script_id THEN 0 ELSE 1 END,
+		         CASE WHEN s.status = 'active' THEN 0 ELSE 1 END,
+		         s.updated_at DESC, s.created_at DESC
 		LIMIT $2
 	`, project.ID, limit)
 	if err != nil {
@@ -476,8 +480,9 @@ func (s *Server) agentToolListScripts(r *http.Request, principal auth.Principal,
 		var id, title, status string
 		var versionID sql.NullString
 		var version, contentLength int
+		var isCurrent bool
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &title, &status, &versionID, &version, &contentLength, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &title, &status, &versionID, &version, &contentLength, &isCurrent, &createdAt, &updatedAt); err != nil {
 			return agentToolError("list_scripts", args, err)
 		}
 		items = append(items, map[string]any{
@@ -487,6 +492,7 @@ func (s *Server) agentToolListScripts(r *http.Request, principal auth.Principal,
 			"currentVersionId": stringPtrFromNull(versionID),
 			"version":          version,
 			"contentLength":    contentLength,
+			"isCurrent":        isCurrent,
 			"createdAt":        createdAt,
 			"updatedAt":        updatedAt,
 		})
@@ -622,6 +628,17 @@ func (s *Server) agentToolStartProductionAction(r *http.Request, principal auth.
 		SourceID: firstNonEmpty(agentReferenceStringArg(args, "sourceId"), productionOptionString(options, "sourceId")),
 		ScriptID: firstNonEmpty(agentReferenceStringArg(args, "scriptId"), productionOptionString(options, "scriptId")),
 		Options:  options,
+	}
+	if action == "generate_derived_asset_images" {
+		result, err := s.createDerivedAssetBatchForAgentAction(r, principal, project, userMessage, req)
+		if err != nil {
+			return agentToolError("start_production_action", args, err)
+		}
+		return agentToolOK("start_production_action", args, fmt.Sprintf("已启动 %s，工作流 %s 当前状态 %s。", action, result.WorkflowRun.ID, result.WorkflowRun.Status), map[string]any{
+			"action": action, "workflowRunId": result.WorkflowRun.ID, "workflowType": derivedAssetBatchWorkflowType,
+			"status": result.WorkflowRun.Status, "input": options, "sourceMessageId": userMessage.ID,
+			"operationId": result.OperationID, "derivedAssets": result.Batch,
+		})
 	}
 	spec, err := s.productionActionWorkflowCore(r, project, action, req)
 	if err != nil {
@@ -778,6 +795,12 @@ func agentToolErrorNextActions(toolName, code string) []agentToolNextAction {
 		return []agentToolNextAction{{Label: "先确认分镜和镜头生产状态", Tool: "shot.status", Reason: "没有符合条件的目标镜头"}}
 	case "SHOT_IMAGES_NOT_READY":
 		return []agentToolNextAction{{Label: "先生成缺失镜头图片", Tool: "shot.generate_missing_images", Reason: "镜头视频生成依赖图片完成"}}
+	case "SHOT_ASSET_REQUIREMENT_REVIEW_REQUIRED":
+		return []agentToolNextAction{{Label: "重新校验镜头资产需求", Tool: "shot_asset.review_requirements", Reason: "衍生资产只能基于已确认的镜头需求生成", Arguments: map[string]any{"reviewStatus": "approved"}}}
+	case "SHOT_ASSET_REQUIREMENT_TYPE_MISMATCH", "CANONICAL_ASSET_ARCHIVED", "CANONICAL_ASSET_STALE":
+		return []agentToolNextAction{{Label: "检查需求和可用资产后修正关联", Tool: "shot_asset.list_requirements", Reason: "当前镜头资产需求与核心资产状态不一致", Arguments: map[string]any{"reviewStatus": "needs_edit"}}}
+	case "STORYBOARD_REGENERATION_REQUIRED":
+		return []agentToolNextAction{{Label: "查看当前分镜并重新生成受影响分集", Tool: "storyboard.list", Reason: "镜头资产需求依赖的上游分镜已变化"}}
 	case "AGENT_STEP_BLOCKED":
 		return []agentToolNextAction{{Label: "查看步骤预览里的阻塞原因并调整任务约束", Reason: "监督层阻止了该步骤执行"}}
 	case "AGENT_VERIFIER_FAILED":
@@ -789,18 +812,22 @@ func agentToolErrorNextActions(toolName, code string) []agentToolNextAction {
 
 func scriptAgentToolLabel(name string) string {
 	labels := map[string]string{
-		"get_project_status":      "读取项目状态",
-		"list_sources":            "列出原文",
-		"list_source_chapters":    "列出分集章节",
-		"list_events":             "列出事件",
-		"list_scripts":            "列出剧本",
-		"list_assets":             "列出资产",
-		"asset.get":               "读取资产卡",
-		"asset.revise_prompt":     "修订资产提示词",
-		"list_storyboard_shots":   "列出分镜",
-		"list_workflow_runs":      "列出任务",
-		"start_production_action": "启动生产动作",
-		"cancel_workflow":         "取消任务",
+		"get_project_status":             "读取项目状态",
+		"list_sources":                   "列出原文",
+		"list_source_chapters":           "列出分集章节",
+		"list_events":                    "列出事件",
+		"list_scripts":                   "列出剧本",
+		"list_assets":                    "列出资产",
+		"asset.get":                      "读取资产卡",
+		"asset.revise_prompt":            "修订资产提示词",
+		"shot_asset.list_requirements":   "读取镜头资产需求",
+		"shot_asset.review_requirements": "审核镜头资产需求",
+		"shot_asset.update_requirement":  "修正镜头资产需求",
+		"shot_asset.skip_requirement":    "跳过镜头资产需求",
+		"list_storyboard_shots":          "列出分镜",
+		"list_workflow_runs":             "列出任务",
+		"start_production_action":        "启动生产动作",
+		"cancel_workflow":                "取消任务",
 	}
 	if label, ok := labels[name]; ok {
 		return label

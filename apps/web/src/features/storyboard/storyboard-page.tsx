@@ -22,6 +22,7 @@ import { assetTypeLabel, requirementTypeLabel, statusLabel } from "@/lib/labels"
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
+import { currentProjectScript } from "@/lib/scripts";
 import { secondsToFrameTicks, wholeSecondDuration } from "@/lib/timing";
 import { cn } from "@/lib/utils";
 import type { ScriptTimingAnalysis, ShotProductionShot, StoryboardPlan, StoryboardShot, StoryboardShotDetail, StoryboardShotRequirementDetail, WorkflowRun } from "@/lib/types";
@@ -135,10 +136,7 @@ export function StoryboardPage({
     key: qk.scripts(projectId),
     queryFn: (session) => studioApi.listScripts(session, projectId).then((response) => response.items || []),
   });
-  const activeScript = useMemo(
-    () => scripts.find((script) => script.status === "active" && script.currentVersionId) ?? scripts.find((script) => script.currentVersionId) ?? null,
-    [scripts],
-  );
+  const activeScript = useMemo(() => currentProjectScript(scripts), [scripts]);
   const activeVersionId = activeScript?.currentVersionId ?? activeScript?.currentVersion?.id ?? "";
   const { data: episodes = [], isLoading: episodesLoading } = useApiQuery({
     key: qk.scriptEpisodes(projectId, activeScript?.id ?? "none", activeVersionId),
@@ -373,10 +371,16 @@ export function StoryboardPage({
 
   const generateDerivedMutation = useApiMutation({
     mutationFn: (session, requirementId: string) => studioApi.generateDerivedAssetImage(session, projectId, requirementId),
-    onSuccess: () => {
-      toast.success("衍生资产图已生成");
+    onSuccess: (result) => {
+      toast.success("衍生资产图任务已创建");
       refreshStoryboard(projectId, selectedId, invalidate);
-      invalidate([qk.requirements(projectId), qk.assets(projectId), qk.artifacts(projectId)]);
+      invalidate([
+        qk.workflowRuns(projectId),
+        qk.workflowDerivedAssetBatch(result.workflowRun.id),
+        qk.requirements(projectId),
+        qk.assetsRoot(projectId),
+        qk.artifacts(projectId),
+      ]);
     },
     onError: (error) => toast.error("生成失败：" + error.message),
   });

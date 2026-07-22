@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/events"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 	"go.temporal.io/sdk/temporal"
 )
@@ -24,13 +25,18 @@ type NodeRunInput struct {
 }
 
 // NodeExecution is the immutable capability captured when an Activity starts a
-// node attempt. Business results must present all three fields; loading the
-// current token from the database at completion time would let a stale Activity
-// write into a newer attempt.
+// node attempt. Business results must present the execution fence fields;
+// production identity is copied from the workflow run and must never be
+// resolved from the project's current generation at completion time. Loading
+// either identity from mutable state would let a stale Activity write into a
+// newer attempt or production generation.
 type NodeExecution struct {
-	NodeRunID         string `json:"nodeRunId"`
-	ExecutionToken    string `json:"executionToken"`
-	AttemptGeneration int    `json:"attemptGeneration"`
+	NodeRunID                      string `json:"nodeRunId"`
+	ExecutionToken                 string `json:"executionToken"`
+	AttemptGeneration              int    `json:"attemptGeneration"`
+	ProductionGenerationID         string `json:"productionGenerationId,omitempty"`
+	VideoProductionBindingID       string `json:"videoProductionBindingId,omitempty"`
+	VideoProductionBindingRevision int64  `json:"videoProductionBindingRevision,omitempty"`
 }
 
 func (execution NodeExecution) valid() bool {
@@ -40,14 +46,17 @@ func (execution NodeExecution) valid() bool {
 }
 
 type nodeRunContext struct {
-	OrganizationID    string
-	ProjectID         string
-	WorkflowRunID     string
-	NodeKey           string
-	NodeStatus        string
-	WorkflowStatus    string
-	ExecutionToken    string
-	AttemptGeneration int
+	OrganizationID                 string
+	ProjectID                      string
+	WorkflowRunID                  string
+	NodeKey                        string
+	NodeStatus                     string
+	WorkflowStatus                 string
+	ExecutionToken                 string
+	AttemptGeneration              int
+	ProductionGenerationID         string
+	VideoProductionBindingID       string
+	VideoProductionBindingRevision int64
 }
 
 var workflowTerminalStatuses = map[string]string{
@@ -87,16 +96,36 @@ func StartNodeRun(ctx context.Context, db txBeginner, input NodeRunInput) (NodeE
 		return NodeExecution{}, err
 	}
 	defer tx.Rollback(ctx)
+	// Provider requests acquire project foreign-key locks before workflow/node
+	// locks. Keep the same global order here to avoid deadlocks when a batch
+	// starts new nodes while earlier provider calls are being recorded.
+	productionContext, err := videoproduction.LoadWritableContextTx(ctx, tx, input.ProjectID, true)
+	if err != nil {
+		if _, ok := videoproduction.AsError(err); ok || errors.Is(err, pgx.ErrNoRows) {
+			return NodeExecution{}, ErrWorkflowWriteFenced
+		}
+		return NodeExecution{}, err
+	}
 
-	var workflowStatus string
+	var workflowStatus, organizationID, projectID string
 	var workflowGeneration int
+	var productionGenerationID, bindingID string
+	var bindingRevision int64
 	if err := tx.QueryRow(ctx, `
-		SELECT status, attempt_generation
+		SELECT status, attempt_generation, organization_id::text, project_id::text,
+		       production_generation_id::text, video_production_binding_id::text,
+		       video_production_binding_revision
 		FROM workflow_runs
 		WHERE id = $1
 		FOR UPDATE
-	`, input.WorkflowRunID).Scan(&workflowStatus, &workflowGeneration); err != nil {
+	`, input.WorkflowRunID).Scan(
+		&workflowStatus, &workflowGeneration, &organizationID, &projectID,
+		&productionGenerationID, &bindingID, &bindingRevision,
+	); err != nil {
 		return NodeExecution{}, err
+	}
+	if organizationID != input.OrganizationID || projectID != input.ProjectID {
+		return NodeExecution{}, ErrWorkflowWriteFenced
 	}
 	if workflowStatus != "pending" && workflowStatus != "queued" && workflowStatus != "running" {
 		return NodeExecution{}, ErrWorkflowWriteFenced
@@ -105,6 +134,18 @@ func StartNodeRun(ctx context.Context, db txBeginner, input NodeRunInput) (NodeE
 		return NodeExecution{}, ErrWorkflowWriteFenced
 	}
 	input.AttemptGeneration = workflowGeneration
+	allowLocked, err := workflowMayWriteLockedProductionGeneration(
+		ctx, tx, input.WorkflowRunID, projectID, productionGenerationID, bindingID, bindingRevision,
+	)
+	if err != nil {
+		return NodeExecution{}, err
+	}
+	if (productionContext.Locked && !allowLocked) ||
+		productionContext.Generation.ID != productionGenerationID ||
+		productionContext.Binding.ID != bindingID ||
+		productionContext.Binding.Revision != bindingRevision {
+		return NodeExecution{}, ErrWorkflowWriteFenced
+	}
 	var workflowRevision int64
 	if err := tx.QueryRow(ctx, `
 		UPDATE workflow_runs
@@ -121,9 +162,9 @@ func StartNodeRun(ctx context.Context, db txBeginner, input NodeRunInput) (NodeE
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO workflow_node_runs(
 			organization_id, project_id, workflow_run_id, node_key, node_type,
-			status, input, started_at, attempt_generation
+			status, input, started_at, attempt_generation, production_generation_id
 		)
-		VALUES ($1, $2, $3, $4, $5, 'running', $6, now(), $7)
+		VALUES ($1, $2, $3, $4, $5, 'running', $6, now(), $7, $8)
 		ON CONFLICT (workflow_run_id, node_key) DO UPDATE SET
 			status = 'running',
 			input = EXCLUDED.input,
@@ -138,7 +179,8 @@ func StartNodeRun(ctx context.Context, db txBeginner, input NodeRunInput) (NodeE
 		WHERE workflow_node_runs.status IN ('pending', 'queued', 'running', 'failed')
 		  AND workflow_node_runs.attempt_generation = EXCLUDED.attempt_generation
 		RETURNING id::text, execution_token::text, attempt_generation, revision
-	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, input.NodeKey, input.NodeType, nodeInput, input.AttemptGeneration).Scan(
+	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, input.NodeKey, input.NodeType,
+		nodeInput, input.AttemptGeneration, productionGenerationID).Scan(
 		&execution.NodeRunID, &execution.ExecutionToken, &execution.AttemptGeneration, &nodeRevision,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -146,6 +188,9 @@ func StartNodeRun(ctx context.Context, db txBeginner, input NodeRunInput) (NodeE
 		}
 		return NodeExecution{}, err
 	}
+	execution.ProductionGenerationID = productionGenerationID
+	execution.VideoProductionBindingID = bindingID
+	execution.VideoProductionBindingRevision = bindingRevision
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "workflow.node.started", "workflow_node_run", execution.NodeRunID, mustJSON(map[string]any{
 		"workflowRunId":     input.WorkflowRunID,
 		"nodeKey":           input.NodeKey,
@@ -266,10 +311,8 @@ func transitionWorkflowRunTx(
 		}
 		return nodeRunContext{}, false, err
 	}
-	if status == "failed" {
-		if _, err := settleFailedWorkflowNodesTx(ctx, tx, runCtx, workflowRunID, revision, code, message); err != nil {
-			return nodeRunContext{}, false, err
-		}
+	if _, err := settleTerminalWorkflowNodesTx(ctx, tx, runCtx, workflowRunID, revision, status, code, message); err != nil {
+		return nodeRunContext{}, false, err
 	}
 	payload := workflowRunEventPayload(workflowRunID, status, revision, output, code, message)
 	if err := insertEvent(ctx, tx, runCtx.OrganizationID, runCtx.ProjectID, eventType, "workflow_run", workflowRunID, payload); err != nil {
@@ -284,23 +327,17 @@ type unsettledWorkflowNode struct {
 	Revision int64
 }
 
-func settleFailedWorkflowNodesTx(
+func settleTerminalWorkflowNodesTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	runCtx nodeRunContext,
 	workflowRunID string,
 	workflowRevision int64,
+	workflowStatus string,
 	code string,
 	message string,
 ) (int, error) {
-	code = strings.TrimSpace(code)
-	if code == "" {
-		code = "WORKFLOW_FAILED"
-	}
-	message = strings.TrimSpace(message)
-	if message == "" {
-		message = "workflow failed before node completion"
-	}
+	code, message = unsettledTerminalNodeError(workflowStatus, code, message)
 	rows, err := tx.Query(ctx, `
 		UPDATE workflow_node_runs
 		SET status = 'failed',
@@ -346,25 +383,50 @@ func settleFailedWorkflowNodesTx(
 	return len(nodes), nil
 }
 
-// ReconcileFailedWorkflowNodes repairs terminal workflow rows left behind by a
-// worker crash or an older failure path before the worker starts polling again.
-func ReconcileFailedWorkflowNodes(ctx context.Context, db txBeginner) (int, error) {
+func unsettledTerminalNodeError(workflowStatus, code, message string) (string, string) {
+	code = strings.TrimSpace(code)
+	message = strings.TrimSpace(message)
+	if workflowStatus == "failed" {
+		if code == "" {
+			code = "WORKFLOW_FAILED"
+		}
+		if message == "" {
+			message = "工作流失败时节点尚未正常终结"
+		}
+		return code, message
+	}
+	if code == "" {
+		code = "WORKFLOW_NODE_UNSETTLED"
+		if workflowStatus == "partial_succeeded" {
+			code = "WORKFLOW_PARTIAL_SUCCEEDED"
+		}
+	}
+	if message == "" {
+		message = "工作流已进入终态，未完成节点已由状态协调器终结"
+	}
+	return code, message
+}
+
+// ReconcileTerminalWorkflowNodes repairs unfinished nodes left behind after a
+// workflow reached a terminal state, including partial-success workflows.
+func ReconcileTerminalWorkflowNodes(ctx context.Context, db txBeginner) (int, error) {
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	type failedWorkflow struct {
+	type terminalWorkflow struct {
 		Context  nodeRunContext
 		Revision int64
+		Status   string
 		Code     string
 		Message  string
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT run.id::text, run.organization_id::text, run.project_id::text,
-		       run.revision, COALESCE(run.error_code, ''), COALESCE(run.error_message, '')
+		       run.revision, run.status, COALESCE(run.error_code, ''), COALESCE(run.error_message, '')
 		FROM workflow_runs run
-		WHERE run.status = 'failed'
+		WHERE run.status IN ('succeeded', 'partial_succeeded', 'failed', 'skipped')
 		  AND EXISTS (
 		    SELECT 1 FROM workflow_node_runs node
 		    WHERE node.workflow_run_id = run.id
@@ -375,21 +437,22 @@ func ReconcileFailedWorkflowNodes(ctx context.Context, db txBeginner) (int, erro
 	if err != nil {
 		return 0, err
 	}
-	runs := make([]failedWorkflow, 0)
+	runs := make([]terminalWorkflow, 0)
 	for rows.Next() {
-		var run failedWorkflow
+		var run terminalWorkflow
 		if err := rows.Scan(
 			&run.Context.WorkflowRunID,
 			&run.Context.OrganizationID,
 			&run.Context.ProjectID,
 			&run.Revision,
+			&run.Status,
 			&run.Code,
 			&run.Message,
 		); err != nil {
 			rows.Close()
 			return 0, err
 		}
-		run.Context.WorkflowStatus = "failed"
+		run.Context.WorkflowStatus = run.Status
 		runs = append(runs, run)
 	}
 	rows.Close()
@@ -398,12 +461,13 @@ func ReconcileFailedWorkflowNodes(ctx context.Context, db txBeginner) (int, erro
 	}
 	settled := 0
 	for _, run := range runs {
-		count, err := settleFailedWorkflowNodesTx(
+		count, err := settleTerminalWorkflowNodesTx(
 			ctx,
 			tx,
 			run.Context,
 			run.Context.WorkflowRunID,
 			run.Revision,
+			run.Status,
 			run.Code,
 			run.Message,
 		)
@@ -470,6 +534,15 @@ func transitionNodeRunTx(
 	}
 	if !runCtx.writable() {
 		return false, nil
+	}
+	if status == "succeeded" || status == "running" {
+		writable, err := nodeProductionGenerationWritable(ctx, tx, runCtx)
+		if err != nil {
+			return false, err
+		}
+		if !writable {
+			return false, nil
+		}
 	}
 	var nodeRevision int64
 	if err := tx.QueryRow(ctx, `
@@ -708,12 +781,12 @@ func CancelWorkflowRun(ctx context.Context, db txBeginner, workflowRunID string,
 		return err
 	}
 	defer tx.Rollback(ctx)
-	runCtx, applied, err := cancelWorkflowRunTx(ctx, tx, workflowRunID, output, reason, "USER_CANCELLED")
+	runCtx, _, err := cancelWorkflowRunTx(ctx, tx, workflowRunID, output, reason, "USER_CANCELLED")
 	if err != nil {
 		return err
 	}
-	if !applied {
-		return tx.Commit(ctx)
+	if err := cancelEpisodeVideoProductionCheckpointsForWorkflowTx(ctx, tx, workflowRunID, reason); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
@@ -749,7 +822,40 @@ func CancelWorkflowRun(ctx context.Context, db txBeginner, workflowRunID string,
 		      WHEN image_workflow_run_id = $1 AND image_status IN ('queued', 'running') THEN now()
 		      ELSE image_completed_at
 		    END,
+		    video_prompt_status = CASE
+		      WHEN video_prompt_workflow_run_id = $1 AND video_prompt_status IN ('queued', 'running') THEN 'failed'
+		      ELSE video_prompt_status
+		    END,
+		    video_prompt_error_code = CASE
+		      WHEN video_prompt_workflow_run_id = $1 AND video_prompt_status IN ('queued', 'running') THEN 'USER_CANCELLED'
+		      ELSE video_prompt_error_code
+		    END,
+		    video_prompt_error_message = CASE
+		      WHEN video_prompt_workflow_run_id = $1 AND video_prompt_status IN ('queued', 'running') THEN COALESCE(NULLIF($2, ''), '关联工作流已取消，视频提示词未完成')
+		      ELSE video_prompt_error_message
+		    END,
+		    video_prompt_updated_at = CASE
+		      WHEN video_prompt_workflow_run_id = $1 AND video_prompt_status IN ('queued', 'running') THEN now()
+		      ELSE video_prompt_updated_at
+		    END,
+		    video_status = CASE
+		      WHEN video_workflow_run_id = $1 AND video_status IN ('queued', 'running') THEN 'failed'
+		      ELSE video_status
+		    END,
+		    video_error_code = CASE
+		      WHEN video_workflow_run_id = $1 AND video_status IN ('queued', 'running') THEN 'USER_CANCELLED'
+		      ELSE video_error_code
+		    END,
+		    video_error_message = CASE
+		      WHEN video_workflow_run_id = $1 AND video_status IN ('queued', 'running') THEN COALESCE(NULLIF($2, ''), '关联工作流已取消，视频生成未完成')
+		      ELSE video_error_message
+		    END,
+		    video_completed_at = CASE
+		      WHEN video_workflow_run_id = $1 AND video_status IN ('queued', 'running') THEN now()
+		      ELSE video_completed_at
+		    END,
 		    status = CASE
+		      WHEN video_workflow_run_id = $1 AND video_status IN ('queued', 'running') THEN 'video_failed'
 		      WHEN image_workflow_run_id = $1 AND image_status IN ('queued', 'running') THEN 'image_failed'
 		      ELSE status
 		    END,
@@ -759,8 +865,13 @@ func CancelWorkflowRun(ctx context.Context, db txBeginner, workflowRunID string,
 		  AND (
 		    (image_prompt_workflow_run_id = $1 AND image_prompt_status IN ('queued', 'running'))
 		    OR (image_workflow_run_id = $1 AND image_status IN ('queued', 'running'))
+		    OR (video_prompt_workflow_run_id = $1 AND video_prompt_status IN ('queued', 'running'))
+		    OR (video_workflow_run_id = $1 AND video_status IN ('queued', 'running'))
 		  )
 	`, workflowRunID, strings.TrimSpace(reason), runCtx.ProjectID); err != nil {
+		return err
+	}
+	if err := restoreApprovedVideoPromptStatesForWorkflowTx(ctx, tx, runCtx.ProjectID, workflowRunID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -773,13 +884,50 @@ func insertEvent(ctx context.Context, tx pgx.Tx, organizationID, projectID, even
 func updateWorkflowProgressTx(ctx context.Context, tx pgx.Tx, workflowRunID string) (int64, error) {
 	var revision int64
 	err := tx.QueryRow(ctx, `
-		WITH counts AS (
+		WITH run AS (
+			SELECT id, project_id, workflow_type
+			FROM workflow_runs
+			WHERE id = $1
+		), node_counts AS (
 			SELECT
 				count(*) FILTER (WHERE status IN ('succeeded', 'skipped'))::integer AS completed,
 				count(*) FILTER (WHERE status = 'failed')::integer AS failed
 			FROM workflow_node_runs
 			WHERE workflow_run_id = $1
 			  AND node_type NOT LIKE 'workflow.%'
+		), shot_counts AS (
+			SELECT
+				count(*) FILTER (WHERE
+					(run.workflow_type = 'batch_generate_shot_image_prompts' AND s.image_prompt_workflow_run_id = run.id AND s.image_prompt_status = 'succeeded') OR
+					(run.workflow_type = 'batch_generate_shot_images' AND s.image_workflow_run_id = run.id AND s.image_status = 'succeeded') OR
+					(run.workflow_type = 'batch_generate_shot_video_prompts' AND s.video_prompt_workflow_run_id = run.id AND s.video_prompt_status = 'succeeded') OR
+					(run.workflow_type = 'batch_generate_shot_videos' AND s.video_workflow_run_id = run.id AND s.video_status = 'succeeded')
+				)::integer AS completed,
+				count(*) FILTER (WHERE
+					(run.workflow_type = 'batch_generate_shot_image_prompts' AND s.image_prompt_workflow_run_id = run.id AND s.image_prompt_status = 'failed') OR
+					(run.workflow_type = 'batch_generate_shot_images' AND s.image_workflow_run_id = run.id AND s.image_status = 'failed') OR
+					(run.workflow_type = 'batch_generate_shot_video_prompts' AND s.video_prompt_workflow_run_id = run.id AND s.video_prompt_status = 'failed') OR
+					(run.workflow_type = 'batch_generate_shot_videos' AND s.video_workflow_run_id = run.id AND s.video_status = 'failed')
+				)::integer AS failed
+			FROM run
+			LEFT JOIN storyboard_shots s
+			  ON s.project_id = run.project_id
+			 AND s.deleted_at IS NULL
+		), counts AS (
+			SELECT
+				CASE WHEN run.workflow_type IN (
+					'batch_generate_shot_image_prompts',
+					'batch_generate_shot_images',
+					'batch_generate_shot_video_prompts',
+					'batch_generate_shot_videos'
+				) THEN shot_counts.completed ELSE node_counts.completed END AS completed,
+				CASE WHEN run.workflow_type IN (
+					'batch_generate_shot_image_prompts',
+					'batch_generate_shot_images',
+					'batch_generate_shot_video_prompts',
+					'batch_generate_shot_videos'
+				) THEN shot_counts.failed ELSE node_counts.failed END AS failed
+			FROM run, node_counts, shot_counts
 		)
 		UPDATE workflow_runs wr
 		SET completed_items = CASE
@@ -815,18 +963,35 @@ func lockNodeRunContextByID(ctx context.Context, tx pgx.Tx, nodeRunID string) (n
 }
 
 func lockNodeRunContextQuery(ctx context.Context, tx pgx.Tx, nodeRunID, executionToken string, attemptGeneration int, strict bool) (nodeRunContext, error) {
+	var projectID string
+	if err := tx.QueryRow(ctx, `
+		SELECT project_id::text
+		FROM workflow_node_runs
+		WHERE id = $1
+		  AND (NOT $4 OR (execution_token = NULLIF($2, '')::uuid AND attempt_generation = $3))
+	`, nodeRunID, executionToken, attemptGeneration, strict).Scan(&projectID); err != nil {
+		return nodeRunContext{}, err
+	}
+	if err := lockProjectRow(ctx, tx, projectID); err != nil {
+		return nodeRunContext{}, err
+	}
+
 	var runCtx nodeRunContext
 	err := tx.QueryRow(ctx, `
 		SELECT node.organization_id, node.project_id, node.workflow_run_id, node.node_key,
-		       node.status, run.status, node.execution_token::text, node.attempt_generation
+		       node.status, run.status, node.execution_token::text, node.attempt_generation,
+		       run.production_generation_id::text, run.video_production_binding_id::text,
+		       run.video_production_binding_revision
 		FROM workflow_runs run
 		JOIN workflow_node_runs node ON node.workflow_run_id = run.id
 		WHERE node.id = $1
+		  AND node.production_generation_id = run.production_generation_id
 		  AND (NOT $4 OR (node.execution_token = NULLIF($2, '')::uuid AND node.attempt_generation = $3))
 		FOR UPDATE OF run, node
 	`, nodeRunID, executionToken, attemptGeneration, strict).Scan(
 		&runCtx.OrganizationID, &runCtx.ProjectID, &runCtx.WorkflowRunID, &runCtx.NodeKey,
 		&runCtx.NodeStatus, &runCtx.WorkflowStatus, &runCtx.ExecutionToken, &runCtx.AttemptGeneration,
+		&runCtx.ProductionGenerationID, &runCtx.VideoProductionBindingID, &runCtx.VideoProductionBindingRevision,
 	)
 	return runCtx, err
 }
@@ -846,7 +1011,89 @@ func lockNodeBusinessWrite(ctx context.Context, tx pgx.Tx, workflowRunID string,
 	if runCtx.WorkflowRunID != workflowRunID || !runCtx.writable() {
 		return nodeRunContext{}, ErrWorkflowWriteFenced
 	}
+	writable, err := nodeProductionGenerationWritable(ctx, tx, runCtx)
+	if err != nil {
+		return nodeRunContext{}, err
+	}
+	if !writable {
+		return nodeRunContext{}, ErrWorkflowWriteFenced
+	}
 	return runCtx, nil
+}
+
+func lockWorkflowBusinessWrite(ctx context.Context, tx pgx.Tx, workflowRunID string) (nodeRunContext, error) {
+	runCtx, err := lockWorkflowRunContext(ctx, tx, workflowRunID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nodeRunContext{}, ErrWorkflowWriteFenced
+		}
+		return nodeRunContext{}, err
+	}
+	if runCtx.WorkflowStatus != "pending" && runCtx.WorkflowStatus != "queued" && runCtx.WorkflowStatus != "running" && runCtx.WorkflowStatus != "waiting_review" {
+		return nodeRunContext{}, ErrWorkflowWriteFenced
+	}
+	writable, err := nodeProductionGenerationWritable(ctx, tx, runCtx)
+	if err != nil {
+		return nodeRunContext{}, err
+	}
+	if !writable {
+		return nodeRunContext{}, ErrWorkflowWriteFenced
+	}
+	return runCtx, nil
+}
+
+func nodeProductionGenerationWritable(ctx context.Context, tx pgx.Tx, runCtx nodeRunContext) (bool, error) {
+	allowLocked, err := workflowMayWriteLockedProductionGeneration(
+		ctx, tx, runCtx.WorkflowRunID, runCtx.ProjectID, runCtx.ProductionGenerationID,
+		runCtx.VideoProductionBindingID, runCtx.VideoProductionBindingRevision,
+	)
+	if err != nil {
+		return false, err
+	}
+	_, err = videoproduction.AssertWritableTx(
+		ctx,
+		tx,
+		runCtx.ProjectID,
+		runCtx.ProductionGenerationID,
+		runCtx.VideoProductionBindingID,
+		runCtx.VideoProductionBindingRevision,
+		allowLocked,
+	)
+	if err != nil {
+		if _, ok := videoproduction.AsError(err); ok || errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func workflowMayWriteLockedProductionGeneration(
+	ctx context.Context,
+	tx pgx.Tx,
+	workflowRunID, projectID, generationID, bindingID string,
+	bindingRevision int64,
+) (bool, error) {
+	var allowed bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM workflow_runs run
+		  JOIN project_video_production_rebuilds rebuild
+		    ON rebuild.workflow_run_id = run.root_workflow_run_id
+		   AND rebuild.project_id = run.project_id
+		  WHERE run.id = $1
+		    AND run.project_id = $2
+		    AND run.workflow_type = 'video_production_rebuild_episode'
+		    AND run.production_generation_id = $3
+		    AND run.video_production_binding_id = $4
+		    AND run.video_production_binding_revision = $5
+		    AND rebuild.target_generation_id = run.production_generation_id
+		    AND rebuild.target_binding_id = run.video_production_binding_id
+		    AND rebuild.status IN ('running', 'storyboard_required')
+		)
+	`, workflowRunID, projectID, generationID, bindingID, bindingRevision).Scan(&allowed)
+	return allowed, err
 }
 
 func isWorkflowWriteFenced(err error) bool {
@@ -879,10 +1126,17 @@ func discardWorkflowResult(ctx context.Context, db txBeginner, execution NodeExe
 }
 
 func finalizeWorkflowActivityError(ctx context.Context, db txBeginner, execution NodeExecution, err error) error {
-	if err == nil || !isWorkflowWriteFenced(err) || !execution.valid() {
+	if err == nil || !execution.valid() {
 		return err
 	}
-	return discardWorkflowResult(ctx, db, execution, err.Error())
+	if isWorkflowWriteFenced(err) {
+		return discardWorkflowResult(ctx, db, execution, err.Error())
+	}
+	code, message := workflowErrorFields(err, codeActivityFailed)
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	_ = FailNodeRun(persistCtx, db, execution, code, message)
+	return err
 }
 
 func insertWorkflowResultDiscardedTx(ctx context.Context, tx pgx.Tx, execution NodeExecution, reason string) error {
@@ -897,29 +1151,75 @@ func insertWorkflowResultDiscardedTx(ctx context.Context, tx pgx.Tx, execution N
 	if reason == "" {
 		reason = workflowWriteFenceMessage
 	}
+	currentGenerationID := ""
+	currentBindingID := ""
+	var currentBindingRevision int64
+	_ = tx.QueryRow(ctx, `
+		SELECT project.active_video_production_generation_id::text,
+		       generation.binding_id::text,
+		       binding.revision
+		FROM projects project
+		JOIN project_video_production_generations generation
+		  ON generation.id = project.active_video_production_generation_id
+		 AND generation.project_id = project.id
+		JOIN project_video_production_bindings binding
+		  ON binding.id = generation.binding_id
+		 AND binding.project_id = project.id
+		WHERE project.id = $1
+	`, runCtx.ProjectID).Scan(&currentGenerationID, &currentBindingID, &currentBindingRevision)
+	reasonCode := CodeWorkflowResultDiscarded
+	if execution.ProductionGenerationID != "" && currentGenerationID != "" && execution.ProductionGenerationID != currentGenerationID {
+		reasonCode = videoproduction.CodeGenerationMismatch
+	}
 	return insertEvent(ctx, tx, runCtx.OrganizationID, runCtx.ProjectID, "workflow.result.discarded", "workflow_node_run", execution.NodeRunID, mustJSON(map[string]any{
-		"workflowRunId":            runCtx.WorkflowRunID,
-		"nodeRunId":                execution.NodeRunID,
-		"nodeKey":                  runCtx.NodeKey,
-		"attemptGeneration":        execution.AttemptGeneration,
-		"executionToken":           execution.ExecutionToken,
-		"currentAttemptGeneration": runCtx.AttemptGeneration,
-		"currentExecutionToken":    runCtx.ExecutionToken,
-		"workflowStatus":           runCtx.WorkflowStatus,
-		"nodeStatus":               runCtx.NodeStatus,
-		"reason":                   reason,
+		"workflowRunId":                   runCtx.WorkflowRunID,
+		"nodeRunId":                       execution.NodeRunID,
+		"nodeKey":                         runCtx.NodeKey,
+		"attemptGeneration":               execution.AttemptGeneration,
+		"executionToken":                  execution.ExecutionToken,
+		"currentAttemptGeneration":        runCtx.AttemptGeneration,
+		"currentExecutionToken":           runCtx.ExecutionToken,
+		"workflowStatus":                  runCtx.WorkflowStatus,
+		"nodeStatus":                      runCtx.NodeStatus,
+		"errorCode":                       CodeWorkflowResultDiscarded,
+		"reasonCode":                      reasonCode,
+		"productionGenerationId":          execution.ProductionGenerationID,
+		"videoProductionBindingId":        execution.VideoProductionBindingID,
+		"bindingRevision":                 execution.VideoProductionBindingRevision,
+		"currentProductionGenerationId":   currentGenerationID,
+		"currentVideoProductionBindingId": currentBindingID,
+		"currentBindingRevision":          currentBindingRevision,
+		"reason":                          reason,
 	}))
 }
 
 func lockWorkflowRunContext(ctx context.Context, tx pgx.Tx, workflowRunID string) (nodeRunContext, error) {
+	var projectID string
+	if err := tx.QueryRow(ctx, `SELECT project_id::text FROM workflow_runs WHERE id = $1`, workflowRunID).Scan(&projectID); err != nil {
+		return nodeRunContext{}, err
+	}
+	if err := lockProjectRow(ctx, tx, projectID); err != nil {
+		return nodeRunContext{}, err
+	}
+
 	var runCtx nodeRunContext
 	err := tx.QueryRow(ctx, `
-		SELECT organization_id, project_id, id::text, '', status
+		SELECT organization_id, project_id, id::text, '', status,
+		       production_generation_id::text, video_production_binding_id::text,
+		       video_production_binding_revision
 		FROM workflow_runs
 		WHERE id = $1
 		FOR UPDATE
-	`, workflowRunID).Scan(&runCtx.OrganizationID, &runCtx.ProjectID, &runCtx.WorkflowRunID, &runCtx.NodeKey, &runCtx.WorkflowStatus)
+	`, workflowRunID).Scan(
+		&runCtx.OrganizationID, &runCtx.ProjectID, &runCtx.WorkflowRunID, &runCtx.NodeKey, &runCtx.WorkflowStatus,
+		&runCtx.ProductionGenerationID, &runCtx.VideoProductionBindingID, &runCtx.VideoProductionBindingRevision,
+	)
 	return runCtx, err
+}
+
+func lockProjectRow(ctx context.Context, tx pgx.Tx, projectID string) error {
+	var lockedProjectID string
+	return tx.QueryRow(ctx, `SELECT id::text FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&lockedProjectID)
 }
 
 func nullableCancelReason(reason string) any {

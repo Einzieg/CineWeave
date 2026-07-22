@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,7 +14,6 @@ import (
 	"github.com/Einzieg/cineweave/internal/httpx"
 	storyboardpkg "github.com/Einzieg/cineweave/internal/storyboard"
 	"github.com/Einzieg/cineweave/internal/workflows"
-	"github.com/jackc/pgx/v5"
 )
 
 type ScriptTimingAnalysis struct {
@@ -637,10 +635,6 @@ func scanStoryboardPlan(row rowScan) (StoryboardPlan, error) {
 		item.TargetDurationSeconds = float64(item.TargetDurationTicks) / float64(item.TimelineTimebase)
 	}
 	return item, nil
-}
-
-func storyboardPlanNotFound(err error) bool {
-	return errors.Is(err, pgx.ErrNoRows)
 }
 
 func storyboardPlanFrameTick(timebase int64, fpsNumerator, fpsDenominator int) (int64, error) {

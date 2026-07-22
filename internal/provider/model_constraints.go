@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -29,6 +30,30 @@ type GatewayModelConstraintCandidate struct {
 	ModelKey        string                 `json:"modelKey"`
 	Modality        string                 `json:"modality"`
 	Prompt          PromptLengthConstraint `json:"prompt"`
+	ContextWindow   int                    `json:"contextWindow,omitempty"`
+	References      ReferenceConstraint    `json:"references"`
+	NativeAudio     NativeAudioConstraint  `json:"nativeAudio"`
+}
+
+type ReferenceConstraint struct {
+	Supported                        bool     `json:"supported"`
+	MaxReferences                    int      `json:"maxReferences"`
+	MaxImageReferences               int      `json:"maxImageReferences"`
+	MaxVideoReferences               int      `json:"maxVideoReferences"`
+	MaxAudioReferences               int      `json:"maxAudioReferences"`
+	SupportsFirstFrame               bool     `json:"supportsFirstFrame"`
+	SupportsLastFrame                bool     `json:"supportsLastFrame"`
+	SupportsStoryboardSheetReference bool     `json:"supportsStoryboardSheetReference"`
+	SupportsSemanticReferenceImages  bool     `json:"supportsSemanticReferenceImages"`
+	SupportsVideoReference           bool     `json:"supportsVideoReference"`
+	SupportsAudioReference           bool     `json:"supportsAudioReference"`
+	InputContracts                   []string `json:"inputContracts"`
+}
+
+type NativeAudioConstraint struct {
+	Support          string `json:"support"`
+	SupportsDialogue bool   `json:"supportsDialogue"`
+	SupportsLipSync  bool   `json:"supportsLipSync"`
 }
 
 type GatewayModelConstraintsResponse struct {
@@ -58,14 +83,147 @@ func (s *Service) ResolveModelConstraints(ctx context.Context, req GatewayModelC
 		Candidates:      make([]GatewayModelConstraintCandidate, 0, len(candidates)),
 	}
 	for _, candidate := range candidates {
+		references := ModelReferenceConstraint(candidate.Capabilities)
+		nativeAudio := NativeAudioConstraint{Support: VideoSupportUnknown}
+		if strings.EqualFold(candidate.Modality, "video") || strings.EqualFold(req.Modality, "video") {
+			references, nativeAudio = ModelVideoRuntimeConstraints(candidate)
+		}
 		response.Candidates = append(response.Candidates, GatewayModelConstraintCandidate{
 			ProviderModelID: candidate.ProviderModelID,
 			ModelKey:        candidate.ModelKey,
 			Modality:        candidate.Modality,
 			Prompt:          ModelPromptLengthConstraint(candidate.Capabilities),
+			ContextWindow:   ModelContextWindow(candidate.Capabilities),
+			References:      references,
+			NativeAudio:     nativeAudio,
 		})
 	}
 	return response, nil
+}
+
+func ModelVideoRuntimeConstraints(candidate RoutingCandidate) (ReferenceConstraint, NativeAudioConstraint) {
+	references := ModelReferenceConstraint(candidate.Capabilities)
+	nativeAudio := NativeAudioConstraint{Support: VideoSupportUnknown}
+	variants, err := videoGenerationVariants(candidate.Capabilities, Model{
+		ID: candidate.ProviderModelID, ModelKey: candidate.ModelKey, Modality: candidate.Modality,
+	})
+	if err != nil || len(variants) == 0 {
+		return references, nativeAudio
+	}
+	// Declared video input contracts are authoritative. Generic image-reference
+	// capability fields cannot distinguish a first frame from semantic guidance.
+	references = ReferenceConstraint{}
+	allFalse := true
+	inputContracts := map[string]bool{}
+	for _, variant := range variants {
+		contractKey := strings.ToLower(strings.TrimSpace(variant.InputContract.ContractKey))
+		if contractKey != "" {
+			inputContracts[contractKey] = true
+		}
+		variantTotal, variantImages, variantVideos, variantAudios := 0, 0, 0, 0
+		for _, slot := range variant.InputContract.Slots {
+			role := strings.ToLower(strings.TrimSpace(slot.Role))
+			mediaType := strings.ToLower(strings.TrimSpace(slot.MediaType))
+			variantTotal += slot.Max
+			switch mediaType {
+			case "image":
+				variantImages += slot.Max
+			case "video":
+				variantVideos += slot.Max
+			case "audio":
+				variantAudios += slot.Max
+			}
+			switch role {
+			case "first_frame":
+				references.SupportsFirstFrame = true
+			case "last_frame":
+				references.SupportsLastFrame = true
+			case "storyboard_sheet":
+				references.SupportsStoryboardSheetReference = mediaType == "image"
+			case "semantic_reference":
+				references.SupportsSemanticReferenceImages = mediaType == "image"
+			case "video_reference":
+				references.SupportsVideoReference = mediaType == "video"
+			case "audio_reference":
+				references.SupportsAudioReference = mediaType == "audio"
+			}
+		}
+		if variantTotal > references.MaxReferences {
+			references.MaxReferences = variantTotal
+		}
+		if variantImages > references.MaxImageReferences {
+			references.MaxImageReferences = variantImages
+		}
+		if variantVideos > references.MaxVideoReferences {
+			references.MaxVideoReferences = variantVideos
+		}
+		if variantAudios > references.MaxAudioReferences {
+			references.MaxAudioReferences = variantAudios
+		}
+		if variant.Continuation.SupportsFirstFrame || containsNormalizedString(variant.When.ReferenceModes, "first_frame") {
+			references.Supported = true
+			references.SupportsFirstFrame = true
+			if references.MaxReferences == 0 {
+				references.MaxReferences = 1
+			}
+		}
+		if variant.Continuation.SupportsLastFrame {
+			references.SupportsLastFrame = true
+		}
+		if variant.Continuation.SupportsVideoReference {
+			references.SupportsVideoReference = true
+		}
+		switch variant.NativeAudio.Support {
+		case VideoSupportTrue:
+			nativeAudio.Support = VideoSupportTrue
+			allFalse = false
+		case VideoSupportUnknown:
+			allFalse = false
+		}
+		if variant.NativeAudio.SupportsDialogue != nil && *variant.NativeAudio.SupportsDialogue {
+			nativeAudio.SupportsDialogue = true
+		}
+		if variant.NativeAudio.SupportsLipSync != nil && *variant.NativeAudio.SupportsLipSync {
+			nativeAudio.SupportsLipSync = true
+		}
+	}
+	if allFalse {
+		nativeAudio.Support = VideoSupportFalse
+	}
+	if references.MaxReferences > 0 {
+		references.Supported = true
+	}
+	references.InputContracts = make([]string, 0, len(inputContracts))
+	for contractKey := range inputContracts {
+		references.InputContracts = append(references.InputContracts, contractKey)
+	}
+	sort.Strings(references.InputContracts)
+	return references, nativeAudio
+}
+
+func ModelReferenceConstraint(capabilities []Capability) ReferenceConstraint {
+	parsed := parseGatewayImageReferenceCapabilities(capabilities)
+	return ReferenceConstraint{
+		Supported: parsed.SupportsReferences, MaxReferences: parsed.MaxReferences,
+		MaxImageReferences:              parsed.MaxReferences,
+		SupportsSemanticReferenceImages: parsed.SupportsReferences,
+	}
+}
+
+func ModelContextWindow(capabilities []Capability) int {
+	limit := 0
+	for _, capability := range capabilities {
+		for _, raw := range []json.RawMessage{capability.InputLimits, capability.ProviderOptionsSchema} {
+			values := promptConstraintValues(raw)
+			for _, key := range []string{"contextWindow", "maxContextTokens", "maxInputTokens", "maxTokens"} {
+				candidate := int(floatField(values[key], key))
+				if candidate > 0 && (limit == 0 || candidate < limit) {
+					limit = candidate
+				}
+			}
+		}
+	}
+	return limit
 }
 
 func ModelPromptLengthConstraint(capabilities []Capability) PromptLengthConstraint {

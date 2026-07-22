@@ -8,6 +8,7 @@ import (
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
 func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
@@ -31,6 +32,9 @@ func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, input ListStoryboardShotsInput) ([]StoryboardShotRecord, error) {
 		return shots, nil
 	}, activity.RegisterOptions{Name: "ListStoryboardShots"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input ResolveShotAnchorWorkItemsInput) ([]ShotAnchorWorkItem, error) {
+		return []ShotAnchorWorkItem{{ShotID: input.ShotIDs[0], ShotIndex: 0, ShotNo: 1, AnchorRole: "planned_first_frame"}}, nil
+	}, activity.RegisterOptions{Name: "ResolveShotAnchorWorkItems"})
 	env.RegisterActivityWithOptions(func(context.Context, EnsurePreparedShotVideoPlanInput) (LoadPreparedShotVideoPlanOutput, error) {
 		output := preparedVideoPlanTestOutput("shot-1", "render-plan", "render-segment", "reviewed video prompt")
 		output.Plan.CapabilitySnapshotHash = "sha256:capability"
@@ -130,5 +134,82 @@ func TestVideoProductionWorkflowCancellationCleanup(t *testing.T) {
 	}
 	if !cancelCalled || !workflowCancelled {
 		t.Fatalf("cleanup not called: cancel=%v workflow=%v output=%+v", cancelCalled, workflowCancelled, cancelOutput)
+	}
+}
+
+func TestShotRenderExecutionCancellationTargetsActiveSegmentInMultiSegmentPlan(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	registerRenderSegmentMediaTestActivity(env)
+
+	prepared := preparedVideoPlanTestOutput("shot-1", "render-plan", "segment-1", "first reviewed prompt")
+	prepared.Plan.CapabilitySnapshotHash = "sha256:capability"
+	second := prepared.Segments[0]
+	second.SegmentID = "segment-2"
+	second.SegmentIndex = 1
+	second.PlannedStartTick = 360000
+	second.PlannedEndTick = 720000
+	second.Prompt = "second reviewed prompt"
+	second.PromptHash = "prompt-hash-2"
+	prepared.Segments = append(prepared.Segments, second)
+
+	env.RegisterActivityWithOptions(func(_ context.Context, input EnsurePreparedShotVideoPlanV2Input) (LoadPreparedShotVideoPlanOutput, error) {
+		if input.OperationID != "checkpoint-1" || input.OperationItemID != "item-1" || input.OperationItemAttempt != 1 {
+			t.Fatalf("materialize identity = %+v", input)
+		}
+		return prepared, nil
+	}, activity.RegisterOptions{Name: "MaterializeAndBindExecutableShotVideoPlanV2"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input CreateShotVideoTaskInput) (CreateShotVideoTaskOutput, error) {
+		return CreateShotVideoTaskOutput{
+			NodeRunID: "node-" + input.RenderSegmentID, ShotID: input.ShotID,
+			ProviderAsyncTaskID: "task-" + input.RenderSegmentID,
+			ExternalTaskID:      "external-" + input.RenderSegmentID,
+			Status:              "running", ExecutionPlanID: input.ExecutionPlanID,
+			RenderSegmentID: input.RenderSegmentID, SegmentIndex: input.SegmentIndex, SegmentCount: input.SegmentCount,
+		}, nil
+	}, activity.RegisterOptions{Name: "CreateShotVideoTask"})
+	env.RegisterActivityWithOptions(func(_ context.Context, input PollShotVideoTaskInput) (PollShotVideoTaskOutput, error) {
+		if input.RenderSegmentID == "segment-1" {
+			return PollShotVideoTaskOutput{
+				ProviderAsyncTaskID: input.ProviderAsyncTaskID, ExternalTaskID: input.ExternalTaskID,
+				Status: "succeeded", ArtifactID: "artifact-1", MediaFileID: "media-1", StorageKey: "segment-1.mp4",
+				ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID,
+				SegmentIndex: input.SegmentIndex, SegmentCount: input.SegmentCount,
+			}, nil
+		}
+		return PollShotVideoTaskOutput{
+			ProviderAsyncTaskID: input.ProviderAsyncTaskID, ExternalTaskID: input.ExternalTaskID,
+			Status: "running", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID,
+			SegmentIndex: input.SegmentIndex, SegmentCount: input.SegmentCount,
+		}, nil
+	}, activity.RegisterOptions{Name: "PollShotVideoTask"})
+	cancelledTaskID := ""
+	env.RegisterActivityWithOptions(func(_ context.Context, input CancelShotVideoTaskInput) (CancelShotVideoTaskOutput, error) {
+		cancelledTaskID = input.ProviderAsyncTaskID
+		if input.ProviderAsyncTaskID != "task-segment-2" || input.RenderSegmentID != "segment-2" || input.SegmentIndex != 1 {
+			t.Fatalf("cancel input = %+v", input)
+		}
+		return CancelShotVideoTaskOutput{
+			ProviderAsyncTaskID: input.ProviderAsyncTaskID, ExternalTaskID: input.ExternalTaskID,
+			Status: "cancelled", ExecutionPlanID: input.ExecutionPlanID, RenderSegmentID: input.RenderSegmentID,
+		}, nil
+	}, activity.RegisterOptions{Name: "CancelShotVideoTask"})
+
+	testWorkflow := func(ctx workflow.Context, input ShotRenderExecutionInput) (ShotRenderExecutionResult, error) {
+		ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: time.Minute})
+		return executePreparedShotRenderPlan(ctx, ctx, input)
+	}
+	env.RegisterWorkflow(testWorkflow)
+	env.RegisterDelayedCallback(env.CancelWorkflow, time.Second)
+	env.ExecuteWorkflow(testWorkflow, ShotRenderExecutionInput{
+		OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow",
+		OperationID: "checkpoint-1", OperationItemID: "item-1", OperationAttempt: 1,
+		CreatedBy: "user", ShotID: "shot-1", ShotNo: 1, MaxPolls: 120, PollInterval: 5 * time.Second,
+	})
+	if env.GetWorkflowError() == nil {
+		t.Fatal("workflow error is nil, want cancellation")
+	}
+	if cancelledTaskID != "task-segment-2" {
+		t.Fatalf("cancelled task = %q, want active second segment task; workflow error=%v", cancelledTaskID, env.GetWorkflowError())
 	}
 }

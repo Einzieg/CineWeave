@@ -15,6 +15,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/provider"
 	reviewpkg "github.com/Einzieg/cineweave/internal/review"
 	"github.com/Einzieg/cineweave/internal/workflows"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -65,6 +66,13 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 				return AgentTask{}, err
 			}
 			if len(failedRuns) > 0 {
+				appendedRecovery, err := s.appendAgentWorkflowRecoveryPlan(r, principal, project, task.ID, failedRuns)
+				if err != nil {
+					return AgentTask{}, err
+				}
+				if appendedRecovery {
+					continue
+				}
 				return s.finishAgentTaskFailedWorkflows(r.Context(), project, task.ID, failedRuns)
 			}
 			appendedQuestionContinuation, err := s.appendAgentQuestionContinuationPlan(r, principal, project, task.ID)
@@ -84,6 +92,16 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 			if appended {
 				continue
 			}
+			appendedGoalEffect, stopped, err := s.appendAgentGoalEffectPlan(r, principal, project, task)
+			if err != nil {
+				return AgentTask{}, err
+			}
+			if stopped != nil {
+				return *stopped, nil
+			}
+			if appendedGoalEffect {
+				continue
+			}
 			return s.finishAgentTaskState(r.Context(), project.ID, task.ID, "succeeded", "", "")
 		}
 		if next == nil {
@@ -101,6 +119,13 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 			return AgentTask{}, err
 		}
 		if len(failedRuns) > 0 {
+			appendedRecovery, err := s.appendAgentWorkflowRecoveryPlan(r, principal, project, task.ID, failedRuns)
+			if err != nil {
+				return AgentTask{}, err
+			}
+			if appendedRecovery {
+				continue
+			}
 			return s.finishAgentTaskFailedWorkflows(r.Context(), project, task.ID, failedRuns)
 		}
 		result, execErr := s.executeAgentStep(r, principal, project, task, *next, registry)
@@ -124,6 +149,126 @@ type agentQuestionContinuation struct {
 	StepIndex int
 	Answer    string
 	NextGoal  string
+}
+
+func (s *Server) appendAgentGoalEffectPlan(r *http.Request, principal auth.Principal, project Project, task AgentTask) (bool, *AgentTask, error) {
+	if !agentGoalRequiresWriteEffect(task.UserGoal) {
+		return false, nil, nil
+	}
+	var succeededEffects int
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT count(*)
+		FROM agent_steps
+		WHERE task_id = $1
+		  AND status = 'succeeded'
+		  AND risk IN ('write', 'destructive', 'workflow', 'cost', 'admin')
+	`, task.ID).Scan(&succeededEffects); err != nil {
+		return false, nil, err
+	}
+	if succeededEffects > 0 {
+		return false, nil, nil
+	}
+	if !agentGoalRequestsProductionContentClear(task.UserGoal) {
+		stopped, err := s.blockAgentGoalWithoutEffect(r.Context(), project, task.ID)
+		return false, &stopped, err
+	}
+	var existingClearSteps int
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT count(*)
+		FROM agent_steps
+		WHERE task_id = $1 AND tool_name = 'project.clear_production_content'
+	`, task.ID).Scan(&existingClearSteps); err != nil {
+		return false, nil, err
+	}
+	if existingClearSteps > 0 {
+		stopped, err := s.blockAgentGoalWithoutEffect(r.Context(), project, task.ID)
+		return false, &stopped, err
+	}
+	registry, err := s.projectAgentRegistry()
+	if err != nil {
+		return false, nil, err
+	}
+	plan := agent.Plan{
+		Summary: "已完成清理范围核查，开始保留小说原文并清空其余生产内容。",
+		Steps: []agent.PlanStep{{
+			Tool: "project.clear_production_content",
+			Args: mustRawJSON(map[string]any{
+				"confirmation": "preserve_novel_sources",
+				"reason":       task.UserGoal,
+			}),
+			ExpectedResult: "保留小说原文及分卷分集，切换到新的空白生产代并清空其余生产内容",
+		}},
+	}
+	validated, err := agent.ValidatePlan(plan, registry, 20)
+	if err != nil {
+		return false, nil, err
+	}
+	planInput := map[string]any{
+		"goal":        task.UserGoal,
+		"plannerMode": "deterministic_goal_effect",
+		"reason":      "read_only_plan_did_not_satisfy_mutation_goal",
+	}
+	promptHash := promptsvc.HashText("agent-goal-effect:" + task.ID + ":" + string(mustMarshal(planInput)))
+	var runID string
+	if err := s.db.QueryRow(r.Context(), `
+		INSERT INTO agent_runs(
+			organization_id, project_id, session_id, agent_type, task_type, status,
+			input, prompt_hash, task_id, created_by, started_at
+		)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, 'project_agent', 'goal_effect', 'running', $4, $5, $6, $7, now())
+		RETURNING id
+	`, project.OrganizationID, project.ID, stringValue(task.SessionID), mustMarshal(planInput), promptHash, task.ID, principal.UserID).Scan(&runID); err != nil {
+		return false, nil, err
+	}
+	if err := s.persistAgentPlanWithSummaryPatch(r, principal, project, task, registry, validated, runID, provider.GatewayTextResponse{}, map[string]any{
+		"goalEffectContinuation": true,
+	}); err != nil {
+		return false, nil, err
+	}
+	s.insertAgentTaskEvent(r.Context(), project, task.ID, "agent.task.continued", map[string]any{
+		"summary":      validated.Summary,
+		"appendedPlan": validated,
+		"reason":       "goal_effect_required",
+	})
+	return true, nil, nil
+}
+
+func agentGoalRequiresWriteEffect(goal string) bool {
+	goal = strings.TrimSpace(goal)
+	if goal == "" {
+		return false
+	}
+	interrogative := containsAnyFold(goal, "为什么", "什么原因", "是否", "能否", "能不能", "查看", "检查", "分析", "说明")
+	direct := containsAnyFold(goal, "请删除", "帮我删除", "立即删除", "彻底删除", "清空", "重置", "归档", "覆盖", "替换", "修改", "更新", "创建", "生成", "启动", "执行", "取消")
+	return direct && (!interrogative || containsAnyFold(goal, "请", "帮我", "立即", "彻底", "清空", "执行"))
+}
+
+func agentGoalRequestsProductionContentClear(goal string) bool {
+	return containsAnyFold(goal, "清空", "彻底删除", "移除全部", "删除全部", "重置") &&
+		containsAnyFold(goal, "除小说原文外", "保留小说原文", "生产内容", "当前项目")
+}
+
+func (s *Server) blockAgentGoalWithoutEffect(ctx context.Context, project Project, taskID string) (AgentTask, error) {
+	message := "任务只完成了读取或分析，没有执行用户要求的写入操作，已停止并等待重新规划。"
+	patch := map[string]any{
+		"summary":                 message,
+		"goalEffectMissing":       true,
+		"goalEffectRequired":      true,
+		"autoContinuationStopped": true,
+	}
+	if _, err := s.db.Exec(ctx, `
+		UPDATE agent_tasks
+		SET status = 'blocked',
+		    error_code = 'AGENT_GOAL_NOT_EFFECTED',
+		    error_message = $3,
+		    completed_at = NULL,
+		    summary = COALESCE(summary, '{}'::jsonb) || $4::jsonb
+		WHERE id = $1 AND project_id = $2
+	`, taskID, project.ID, message, mustMarshal(patch)); err != nil {
+		return AgentTask{}, err
+	}
+	s.insertAgentTaskEvent(ctx, project, taskID, "agent.task.blocked", patch)
+	return s.agentTaskWithDetails(requestWithContext(ctx), project.ID, taskID)
 }
 
 func (s *Server) pendingAgentQuestionContinuation(ctx context.Context, taskID string) (agentQuestionContinuation, bool, error) {
@@ -287,6 +432,20 @@ func (s *Server) executeAgentStep(r *http.Request, principal auth.Principal, pro
 	if result.Status == "" {
 		result.Status = "succeeded"
 	}
+	if result.Status == "succeeded" && tool.StartsWorkflow {
+		workflowRunIDs, workflowErr := agentWorkflowRunIDsFromValue(result.Data)
+		if workflowErr != nil || len(workflowRunIDs) == 0 {
+			result.Status = "failed"
+			result.ErrorCode = "AGENT_CHILD_WORKFLOW_CONTRACT_INVALID"
+			result.ErrorMessage = "启动型工具没有返回有效的子工作流标识"
+			if workflowErr != nil {
+				result.ErrorMessage = workflowErr.Error()
+			}
+			result.Summary = result.ErrorMessage
+		} else {
+			result.ChildWorkflowRunIDs = workflowRunIDs
+		}
+	}
 	if result.Status != "succeeded" && result.Status != "blocked" && result.ErrorCode == "" {
 		result.ErrorCode = "AGENT_TOOL_FAILED"
 	}
@@ -309,6 +468,8 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 		return s.agentToolAskUser(r, project, task, step, args)
 	case "project.read_summary":
 		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolProjectStatus(r, principal, project, args))
+	case "project.clear_production_content":
+		return s.agentToolClearProjectProductionContent(r, principal, project, task, step, args)
 	case "source.list":
 		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListSources(r, principal, project, args))
 	case "source.list_chapters":
@@ -321,6 +482,8 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListAssets(r, principal, project, args))
 	case "asset.get":
 		return s.agentToolGetCanonicalAsset(r, project, args)
+	case "shot_asset.list_requirements":
+		return s.agentToolListShotAssetRequirements(r, principal, project, args)
 	case "storyboard.list":
 		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListStoryboardShots(r, principal, project, args))
 	case "workflow.read_runs":
@@ -365,6 +528,16 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 		return s.agentToolUpdateReviewPatchTarget(r, principal, project, task, step, args, "asset.update", "canonical_asset", "assetId")
 	case "asset.revise_prompt":
 		return s.agentToolReviseCanonicalAssetPrompt(r, principal, project, task, step, args)
+	case "asset.batch_generate_prompts":
+		return s.agentToolStartAssetBatch(r, principal, project, task, step, args, workflows.AssetBatchOperationGeneratePrompts)
+	case "asset.batch_generate_images":
+		return s.agentToolStartAssetBatch(r, principal, project, task, step, args, workflows.AssetBatchOperationGenerateImages)
+	case "shot_asset.review_requirements":
+		return s.agentToolReviewShotAssetRequirements(r, principal, project, args)
+	case "shot_asset.update_requirement":
+		return s.agentToolUpdateShotAssetRequirement(r, principal, project, args)
+	case "shot_asset.skip_requirement":
+		return s.agentToolSkipShotAssetRequirement(r, principal, project, args)
 	case "asset.delete":
 		return s.agentToolDeleteCanonicalAsset(r, principal, project, args)
 	case "storyboard.update_shot":
@@ -385,6 +558,10 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 		return s.agentToolUpdateProviderAccount(r, project, args)
 	case "provider.update_model":
 		return s.agentToolUpdateProviderModel(r, project, args)
+	case "provider.attest_video_capability":
+		return s.agentToolAttestVideoCapability(r, principal, project, args)
+	case "provider.verify_video_capability":
+		return s.agentToolVerifyVideoCapability(r, principal, project, args)
 	case "provider.install_catalog_preset":
 		return s.agentToolInstallProviderCatalogPreset(r, principal, project, args)
 	case "artifact.list":
@@ -399,6 +576,10 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolCancelWorkflow(r, principal, project, args))
 	case "shot.status":
 		return s.agentToolShotStatus(r, project, args)
+	case "shot.generate_image_prompts":
+		return s.agentToolRunShotProduction(r, principal, project, task, step, "generate_image_prompts", args)
+	case "shot.generate_video_prompts":
+		return s.agentToolRunShotProduction(r, principal, project, task, step, "generate_video_prompts", args)
 	case "shot.generate_missing_images":
 		return s.agentToolRunShotProduction(r, principal, project, task, step, "generate_missing_images", args)
 	case "shot.generate_missing_videos":
@@ -485,6 +666,34 @@ func (s *Server) verifyAgentToolResult(ctx context.Context, project Project, res
 		return map[string]any{"status": "failed", "errorCode": code, "errorMessage": message}
 	}
 	switch result.Name {
+	case "project.clear_production_content":
+		generationID := stringValueFromAny(result.Data["activeGenerationId"])
+		if generationID == "" {
+			return fail("VERIFIER_MISSING_PRODUCTION_GENERATION", "activeGenerationId is missing from tool output")
+		}
+		var activeGenerationID string
+		var remainingScripts, remainingAssets, remainingEvents, remainingPlans, remainingShots, remainingNonNovelSources int
+		if err := s.db.QueryRow(ctx, `
+			SELECT project.active_video_production_generation_id::text,
+			       (SELECT count(*) FROM scripts WHERE project_id = project.id),
+			       (SELECT count(*) FROM canonical_assets WHERE project_id = project.id),
+			       (SELECT count(*) FROM novel_events WHERE project_id = project.id),
+			       (SELECT count(*) FROM adaptation_plans WHERE project_id = project.id),
+			       (SELECT count(*) FROM storyboard_shots WHERE project_id = project.id AND deleted_at IS NULL),
+			       (SELECT count(*) FROM project_sources WHERE project_id = project.id AND source_type <> 'novel')
+			FROM projects project
+			WHERE project.id = $1
+		`, project.ID).Scan(&activeGenerationID, &remainingScripts, &remainingAssets, &remainingEvents, &remainingPlans, &remainingShots, &remainingNonNovelSources); err != nil {
+			return fail("VERIFIER_PROJECT_CLEAR_CHECK_FAILED", err.Error())
+		}
+		if activeGenerationID != generationID {
+			return fail("VERIFIER_PRODUCTION_GENERATION_MISMATCH", "project active generation does not match tool output")
+		}
+		remaining := remainingScripts + remainingAssets + remainingEvents + remainingPlans + remainingShots + remainingNonNovelSources
+		if remaining != 0 {
+			return fail("VERIFIER_PROJECT_CLEAR_INCOMPLETE", fmt.Sprintf("%d production records remain after clear", remaining))
+		}
+		return ok("project production content is empty and the novel source was preserved")
 	case "workflow.start", "timeline.compose", "shot.cancel_running_videos":
 		runID := stringValueFromAny(result.Data["workflowRunId"])
 		if runID == "" {
@@ -500,7 +709,7 @@ func (s *Server) verifyAgentToolResult(ctx context.Context, project Project, res
 		default:
 			return fail("VERIFIER_WORKFLOW_BAD_STATUS", "workflow run status is "+status)
 		}
-	case "shot.generate_missing_images", "shot.generate_missing_videos":
+	case "shot.generate_image_prompts", "shot.generate_video_prompts", "shot.generate_missing_images", "shot.generate_missing_videos":
 		runID := stringValueFromAny(result.Data["workflowRunId"])
 		if runID == "" {
 			return fail("VERIFIER_MISSING_WORKFLOW_RUN", "workflowRunId is missing from tool output")
@@ -519,7 +728,9 @@ func (s *Server) verifyAgentToolResult(ctx context.Context, project Project, res
 			return fail("VERIFIER_MISSING_TARGET_SHOTS", "targetShotIds is missing from tool output")
 		}
 		column := "image_status"
-		if result.Name == "shot.generate_missing_videos" {
+		if result.Name == "shot.generate_image_prompts" {
+			column = "image_prompt_status"
+		} else if result.Name == "shot.generate_missing_videos" {
 			column = "video_status"
 		}
 		var invalidCount int
@@ -744,11 +955,25 @@ func (s *Server) finishAgentTaskState(ctx context.Context, projectID, taskID, st
 }
 
 type agentPendingWorkflowRun struct {
-	ID                  string `json:"id"`
-	WorkflowType        string `json:"workflowType,omitempty"`
-	Status              string `json:"status"`
-	ActiveNodeRuns      int    `json:"activeNodeRuns,omitempty"`
-	ActiveProviderTasks int    `json:"activeProviderTasks,omitempty"`
+	ID                  string          `json:"id"`
+	WorkflowType        string          `json:"workflowType,omitempty"`
+	Status              string          `json:"status"`
+	ActiveNodeRuns      int             `json:"activeNodeRuns,omitempty"`
+	ActiveProviderTasks int             `json:"activeProviderTasks,omitempty"`
+	ErrorCode           string          `json:"errorCode,omitempty"`
+	ErrorMessage        string          `json:"errorMessage,omitempty"`
+	Input               json.RawMessage `json:"input,omitempty"`
+}
+
+type agentCompletedWorkflowRun struct {
+	ID             string `json:"id"`
+	WorkflowType   string `json:"workflowType,omitempty"`
+	Status         string `json:"status"`
+	TotalItems     int    `json:"totalItems,omitempty"`
+	CompletedItems int    `json:"completedItems,omitempty"`
+	FailedItems    int    `json:"failedItems,omitempty"`
+	ErrorCode      string `json:"errorCode,omitempty"`
+	ErrorMessage   string `json:"errorMessage,omitempty"`
 }
 
 func (s *Server) finishAgentTaskWaitingForWorkflows(ctx context.Context, project Project, taskID string, runs []agentPendingWorkflowRun) (AgentTask, error) {
@@ -772,6 +997,7 @@ func (s *Server) finishAgentTaskWaitingForWorkflows(ctx context.Context, project
 }
 
 func (s *Server) finishAgentTaskFailedWorkflows(ctx context.Context, project Project, taskID string, runs []agentPendingWorkflowRun) (AgentTask, error) {
+	errorCode, errorMessage := agentFailedWorkflowError(runs)
 	summary := map[string]any{
 		"summary":            fmt.Sprintf("子工作流失败，已停止后续执行。失败工作流 %d 个。", len(runs)),
 		"failedWorkflowRuns": runs,
@@ -780,15 +1006,23 @@ func (s *Server) finishAgentTaskFailedWorkflows(ctx context.Context, project Pro
 		UPDATE agent_tasks
 		SET status = 'failed',
 		    summary = COALESCE(summary, '{}'::jsonb) || $3::jsonb,
-		    error_code = 'CHILD_WORKFLOW_FAILED',
-		    error_message = 'child workflow failed',
+		    error_code = $4,
+		    error_message = $5,
 		    completed_at = now()
 		WHERE id = $1 AND project_id = $2
-	`, taskID, project.ID, mustMarshal(summary)); err != nil {
+	`, taskID, project.ID, mustMarshal(summary), errorCode, errorMessage); err != nil {
 		return AgentTask{}, err
 	}
 	s.insertAgentTaskEvent(ctx, project, taskID, "agent.task.child_workflow_failed", summary)
 	return s.agentTaskWithDetails(requestWithContext(ctx), project.ID, taskID)
+}
+
+func agentFailedWorkflowError(runs []agentPendingWorkflowRun) (string, string) {
+	if len(runs) == 1 {
+		return firstNonEmpty(runs[0].ErrorCode, "CHILD_WORKFLOW_FAILED"),
+			firstNonEmpty(runs[0].ErrorMessage, "子工作流执行失败")
+	}
+	return "CHILD_WORKFLOW_FAILED", fmt.Sprintf("%d 个子工作流执行失败", len(runs))
 }
 
 func (s *Server) agentTaskPendingWorkflowRuns(ctx context.Context, projectID, taskID string) ([]agentPendingWorkflowRun, error) {
@@ -812,7 +1046,10 @@ func (s *Server) agentTaskPendingWorkflowRuns(ctx context.Context, projectID, ta
 				FROM provider_async_tasks p
 				WHERE p.workflow_run_id = w.id
 				  AND p.status IN ('queued', 'running', 'cancelling')
-			)
+			),
+			COALESCE(w.error_code, ''),
+			COALESCE(w.error_message, ''),
+			w.input
 		FROM workflow_runs w
 		WHERE w.project_id = $1
 		  AND w.id = ANY($2::uuid[])
@@ -824,7 +1061,7 @@ func (s *Server) agentTaskPendingWorkflowRuns(ctx context.Context, projectID, ta
 	pending := make([]agentPendingWorkflowRun, 0)
 	for rows.Next() {
 		var run agentPendingWorkflowRun
-		if err := rows.Scan(&run.ID, &run.WorkflowType, &run.Status, &run.ActiveNodeRuns, &run.ActiveProviderTasks); err != nil {
+		if err := rows.Scan(&run.ID, &run.WorkflowType, &run.Status, &run.ActiveNodeRuns, &run.ActiveProviderTasks, &run.ErrorCode, &run.ErrorMessage, &run.Input); err != nil {
 			return nil, err
 		}
 		if !isTerminalWorkflowStatus(run.Status) || run.ActiveNodeRuns > 0 || run.ActiveProviderTasks > 0 {
@@ -845,7 +1082,10 @@ func (s *Server) agentTaskFailedWorkflowRuns(ctx context.Context, projectID, tas
 			COALESCE(w.input->>'workflowType', w.template_id::text, ''),
 			w.status,
 			0,
-			0
+			0,
+			COALESCE(w.error_code, ''),
+			COALESCE(w.error_message, ''),
+			w.input
 		FROM workflow_runs w
 		WHERE w.project_id = $1
 		  AND w.id = ANY($2::uuid[])
@@ -855,15 +1095,349 @@ func (s *Server) agentTaskFailedWorkflowRuns(ctx context.Context, projectID, tas
 		return nil, err
 	}
 	defer rows.Close()
+	handled, err := s.agentTaskHandledFailedWorkflowRuns(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
 	failed := make([]agentPendingWorkflowRun, 0)
 	for rows.Next() {
 		var run agentPendingWorkflowRun
-		if err := rows.Scan(&run.ID, &run.WorkflowType, &run.Status, &run.ActiveNodeRuns, &run.ActiveProviderTasks); err != nil {
+		if err := rows.Scan(&run.ID, &run.WorkflowType, &run.Status, &run.ActiveNodeRuns, &run.ActiveProviderTasks, &run.ErrorCode, &run.ErrorMessage, &run.Input); err != nil {
 			return nil, err
+		}
+		if handled[run.ID] {
+			continue
 		}
 		failed = append(failed, run)
 	}
 	return failed, rows.Err()
+}
+
+func (s *Server) agentTaskHandledFailedWorkflowRuns(ctx context.Context, taskID string) (map[string]bool, error) {
+	var summary json.RawMessage
+	if err := s.db.QueryRow(ctx, `SELECT summary FROM agent_tasks WHERE id = $1`, taskID).Scan(&summary); err != nil {
+		return nil, err
+	}
+	values, _ := rawObject(summary)["handledFailedWorkflowRunIds"].([]any)
+	handled := make(map[string]bool, len(values))
+	for _, value := range values {
+		if id := stringValueFromAny(value); id != "" {
+			handled[id] = true
+		}
+	}
+	return handled, nil
+}
+
+const agentWorkflowRecoveryMaxAttempts = 3
+
+func (s *Server) appendAgentWorkflowRecoveryPlan(
+	r *http.Request,
+	principal auth.Principal,
+	project Project,
+	taskID string,
+	failedRuns []agentPendingWorkflowRun,
+) (bool, error) {
+	task, err := s.agentTask(r, project.ID, taskID)
+	if err != nil {
+		return false, err
+	}
+	if task.Mode == string(agent.TaskModePlanOnly) {
+		return false, nil
+	}
+	summary := rawObject(task.Summary)
+	attempts := int(float64Value(summary["workflowRecoveryAttempts"]))
+	if attempts >= agentWorkflowRecoveryMaxAttempts {
+		return false, nil
+	}
+	plan, handledRunIDs, ok, err := s.agentWorkflowRecoveryPlan(r.Context(), project, task.UserGoal, failedRuns)
+	if err != nil || !ok {
+		return false, err
+	}
+	registry, err := s.projectAgentRegistry()
+	if err != nil {
+		return false, err
+	}
+	validated, err := agent.ValidatePlan(plan, registry, 20)
+	if err != nil {
+		return false, err
+	}
+	previousHandled := agentStringValues(summary["handledFailedWorkflowRunIds"])
+	handledRunIDs = uniqueNonEmptyStrings(append(previousHandled, handledRunIDs...))
+	recoveryInput := map[string]any{
+		"goal": task.UserGoal, "failedWorkflowRuns": failedRuns,
+		"attempt": attempts + 1, "maxAttempts": agentWorkflowRecoveryMaxAttempts,
+	}
+	promptHash := promptsvc.HashText("agent-workflow-recovery:" + task.ID + ":" + string(mustMarshal(recoveryInput)))
+	var runID string
+	if err := s.db.QueryRow(r.Context(), `
+		INSERT INTO agent_runs(
+			organization_id, project_id, session_id, agent_type, task_type, status,
+			input, prompt_hash, task_id, created_by, started_at
+		)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, 'project_agent', 'workflow_recovery', 'running', $4, $5, $6, $7, now())
+		RETURNING id
+	`, project.OrganizationID, project.ID, stringValue(task.SessionID), mustMarshal(recoveryInput), promptHash, task.ID, principal.UserID).Scan(&runID); err != nil {
+		return false, err
+	}
+	summaryPatch := map[string]any{
+		"workflowRecoveryAttempts":    attempts + 1,
+		"workflowRecoveryMaxAttempts": agentWorkflowRecoveryMaxAttempts,
+		"handledFailedWorkflowRunIds": handledRunIDs,
+		"lastWorkflowRecovery":        recoveryInput,
+	}
+	if err := s.persistAgentPlanWithSummaryPatch(
+		r, principal, project, task, registry, validated, runID, provider.GatewayTextResponse{}, summaryPatch,
+	); err != nil {
+		return false, err
+	}
+	s.insertAgentTaskEvent(r.Context(), project, task.ID, "agent.task.workflow_recovery_planned", map[string]any{
+		"summary": validated.Summary, "attempt": attempts + 1,
+		"maxAttempts": agentWorkflowRecoveryMaxAttempts, "handledWorkflowRunIds": handledRunIDs,
+	})
+	return true, nil
+}
+
+func (s *Server) agentWorkflowRecoveryPlan(
+	ctx context.Context,
+	project Project,
+	userGoal string,
+	failedRuns []agentPendingWorkflowRun,
+) (agent.Plan, []string, bool, error) {
+	policy := agentWorkflowRecoveryPolicyForGoal(userGoal)
+	needsCapabilityRepair := false
+	needsRenderPlanRepair := false
+	retryPromptRequested := false
+	retryVideoRequested := false
+	retryPromptShotIDs := make([]string, 0)
+	retryVideoShotIDs := make([]string, 0)
+	handledRunIDs := make([]string, 0)
+	for _, run := range failedRuns {
+		code := agentWorkflowFailureCode(run)
+		shotIDs := agentFailedWorkflowShotIDs(run)
+		switch code {
+		case provider.CodeModelCapabilityApprovalRequired:
+			needsCapabilityRepair = true
+			handledRunIDs = append(handledRunIDs, run.ID)
+			if run.WorkflowType == "batch_generate_shot_video_prompts" {
+				retryPromptRequested = true
+				retryPromptShotIDs = append(retryPromptShotIDs, shotIDs...)
+			} else {
+				retryVideoRequested = true
+				retryVideoShotIDs = append(retryVideoShotIDs, shotIDs...)
+			}
+		case "RENDER_PLAN_REPLAN_REQUIRED":
+			if !policy.allows("shot.generate_video_prompts") {
+				continue
+			}
+			needsRenderPlanRepair = true
+			retryPromptRequested = true
+			retryVideoRequested = true
+			handledRunIDs = append(handledRunIDs, run.ID)
+			retryPromptShotIDs = append(retryPromptShotIDs, shotIDs...)
+			retryVideoShotIDs = append(retryVideoShotIDs, shotIDs...)
+		}
+	}
+	if !needsCapabilityRepair && !needsRenderPlanRepair {
+		return agent.Plan{}, nil, false, nil
+	}
+	retryPromptShotIDs = uniqueNonEmptyStrings(retryPromptShotIDs)
+	retryVideoShotIDs = uniqueNonEmptyStrings(retryVideoShotIDs)
+	steps := make([]agent.PlanStep, 0)
+	if needsCapabilityRepair {
+		steps = append(steps, agentRecoveryStep("provider.list_status", map[string]any{}, "读取当前视频模型能力快照和审批状态"))
+		variants, variantErrors, err := s.agentVideoCapabilityVariantStatus(ctx, project)
+		if err != nil {
+			return agent.Plan{}, nil, false, err
+		}
+		if len(variantErrors) > 0 && len(variants) == 0 {
+			return agent.Plan{}, nil, false, fmt.Errorf("读取视频模型能力失败: %s", variantErrors[0]["message"])
+		}
+		needsUserDecision := false
+		actionable := 0
+		for _, variant := range variants {
+			approvalState := stringValueFromAny(variant["approvalState"])
+			if approvalState == "approved" || approvalState == "system_verified" {
+				continue
+			}
+			verificationStatus := stringValueFromAny(variant["verificationStatus"])
+			args := map[string]any{
+				"modelId":                stringValueFromAny(variant["modelId"]),
+				"variantKey":             stringValueFromAny(variant["variantKey"]),
+				"capabilitySnapshotHash": stringValueFromAny(variant["capabilitySnapshotHash"]),
+			}
+			switch {
+			case approvalState == "rejected":
+				needsUserDecision = true
+			case verificationStatus == provider.VideoCapabilityVerificationUnknown:
+				args["verificationMode"] = "adapter_contract_test"
+				args["reason"] = "Project Agent 在恢复视频工作流前验证当前能力快照"
+				steps = append(steps, agentRecoveryStep("provider.verify_video_capability", args, "完成视频模型 Adapter 能力验证"))
+				actionable++
+			default:
+				args["decision"] = "approved"
+				args["reason"] = "Project Agent 恢复任务：批准当前推断能力快照"
+				args["evidence"] = map[string]any{"source": "project_agent_workflow_recovery"}
+				steps = append(steps, agentRecoveryStep("provider.attest_video_capability", args, "批准当前视频模型能力快照"))
+				actionable++
+			}
+		}
+		if needsUserDecision || actionable == 0 {
+			question := "当前视频模型能力快照无法由助手直接恢复，请确认下一步。"
+			if needsUserDecision {
+				question = "当前视频模型能力快照曾被管理员拒绝，是否重新检查并调整模型能力配置？"
+			}
+			steps = append(steps, agentRecoveryStep("agent.ask_user", map[string]any{
+				"question": question,
+				"options": []any{
+					map[string]any{"id": "review_capability", "label": "检查模型能力", "description": "打开供应商模型配置并重新验证当前能力。", "nextGoal": "检查并修正视频模型能力后重试失败任务"},
+					map[string]any{"id": "change_model", "label": "更换视频模型", "description": "改用已有可靠能力配置的模型。", "nextGoal": "调整视频业务模型绑定后重试"},
+				},
+				"allowCustom": true, "defaultOptionId": "review_capability",
+			}, "等待用户确认视频模型能力处理方式"))
+			return agent.Plan{Summary: "视频模型能力需要管理员确认，助手已整理当前能力状态并请求下一步。", Steps: steps}, handledRunIDs, true, nil
+		}
+	}
+	if retryPromptRequested {
+		args := map[string]any{"maxConcurrency": 5}
+		if len(retryPromptShotIDs) > 0 {
+			args["shotIds"] = retryPromptShotIDs
+		}
+		steps = append(steps, agentRecoveryStep("shot.generate_video_prompts", args, "重新生成并审核缺失或失效的视频提示词契约"))
+	}
+	if retryVideoRequested {
+		args := map[string]any{"maxConcurrency": 5}
+		if len(retryVideoShotIDs) > 0 {
+			args["shotIds"] = retryVideoShotIDs
+		}
+		steps = append(steps, agentRecoveryStep("shot.generate_missing_videos", args, "在提示词和能力恢复后重试失败镜头视频"))
+	}
+	for _, step := range steps {
+		if !policy.allows(step.Tool) {
+			return agent.Plan{}, nil, false, nil
+		}
+	}
+	return agent.Plan{Summary: "助手已根据子工作流错误生成受控恢复计划。", Steps: steps}, handledRunIDs, len(steps) > 0, nil
+}
+
+type agentWorkflowRecoveryPolicy struct {
+	restrictedTools                bool
+	allowedTools                   map[string]bool
+	forbidsVideoPromptRegeneration bool
+}
+
+var agentWorkflowRecoveryTools = []string{
+	"agent.ask_user",
+	"provider.list_status",
+	"provider.verify_video_capability",
+	"provider.attest_video_capability",
+	"shot.generate_video_prompts",
+	"shot.generate_missing_videos",
+}
+
+func agentWorkflowRecoveryPolicyForGoal(goal string) agentWorkflowRecoveryPolicy {
+	normalized := strings.ToLower(strings.Join(strings.Fields(goal), ""))
+	policy := agentWorkflowRecoveryPolicy{
+		allowedTools:                   map[string]bool{},
+		forbidsVideoPromptRegeneration: agentGoalForbidsVideoPromptRegeneration(goal),
+	}
+	for _, marker := range []string{"仅调用", "只调用", "仅使用", "只使用", "onlycall", "onlyuse", "onlyexecute"} {
+		if strings.Contains(normalized, marker) {
+			policy.restrictedTools = true
+			break
+		}
+	}
+	if policy.restrictedTools {
+		for _, tool := range agentWorkflowRecoveryTools {
+			if strings.Contains(normalized, tool) {
+				policy.allowedTools[tool] = true
+			}
+		}
+	}
+	return policy
+}
+
+func (policy agentWorkflowRecoveryPolicy) allows(tool string) bool {
+	if tool == "shot.generate_video_prompts" && policy.forbidsVideoPromptRegeneration {
+		return false
+	}
+	return !policy.restrictedTools || policy.allowedTools[tool]
+}
+
+func agentGoalForbidsVideoPromptRegeneration(goal string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(goal), ""))
+	for _, marker := range []string{
+		"不得重新生成或审核视频提示词",
+		"不得重新生成视频提示词",
+		"不要重新生成视频提示词",
+		"禁止重新生成视频提示词",
+		"不得生成视频提示词",
+		"不要生成视频提示词",
+		"donotregeneratevideoprompt",
+		"mustnotregeneratevideoprompt",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	for _, negation := range []string{"不得", "不要", "禁止", "不可", "不允许"} {
+		remaining := normalized
+		for {
+			index := strings.Index(remaining, negation)
+			if index < 0 {
+				break
+			}
+			tail := remaining[index+len(negation):]
+			promptIndex := strings.Index(tail, "提示词")
+			if promptIndex >= 0 && promptIndex <= 120 {
+				restriction := tail[:promptIndex+len("提示词")]
+				for _, action := range []string{"重新生成", "生成", "修改", "审核"} {
+					if strings.Contains(restriction, action) {
+						return true
+					}
+				}
+			}
+			remaining = tail
+		}
+	}
+	return false
+}
+
+func agentRecoveryStep(tool string, args map[string]any, expected string) agent.PlanStep {
+	return agent.PlanStep{Tool: tool, Args: mustMarshal(args), ExpectedResult: expected}
+}
+
+func agentWorkflowFailureCode(run agentPendingWorkflowRun) string {
+	code := strings.ToUpper(strings.TrimSpace(run.ErrorCode))
+	message := strings.ToUpper(run.ErrorMessage)
+	for _, candidate := range []string{
+		provider.CodeModelCapabilityApprovalRequired,
+		"RENDER_PLAN_REPLAN_REQUIRED",
+	} {
+		if code == candidate || strings.Contains(message, candidate) {
+			return candidate
+		}
+	}
+	return code
+}
+
+func agentFailedWorkflowShotIDs(run agentPendingWorkflowRun) []string {
+	envelope := rawObject(run.Input)
+	input := agentMapArg(envelope, "input")
+	if len(input) == 0 {
+		input = envelope
+	}
+	return agentReferenceStringSliceArg(input, "shotIds")
+}
+
+func agentStringValues(value any) []string {
+	values, _ := value.([]any)
+	result := make([]string, 0, len(values))
+	for _, item := range values {
+		if text := stringValueFromAny(item); text != "" {
+			result = append(result, text)
+		}
+	}
+	return result
 }
 
 func (s *Server) agentTaskWorkflowRunIDs(ctx context.Context, taskID string) ([]string, error) {
@@ -871,7 +1445,6 @@ func (s *Server) agentTaskWorkflowRunIDs(ctx context.Context, taskID string) ([]
 		SELECT tool_name, output
 		FROM agent_steps
 		WHERE task_id = $1
-		  AND status IN ('running', 'succeeded')
 	`, taskID)
 	if err != nil {
 		return nil, err
@@ -885,29 +1458,28 @@ func (s *Server) agentTaskWorkflowRunIDs(ctx context.Context, taskID string) ([]
 		if err := rows.Scan(&toolName, &raw); err != nil {
 			return nil, err
 		}
-		if !agentToolWaitsForWorkflow(toolName) {
-			continue
-		}
-		var value any
-		if err := json.Unmarshal(raw, &value); err != nil {
-			continue
-		}
-		collectAgentWorkflowRunIDs(value, func(id string) {
-			if id == "" || seen[id] {
-				return
+		for _, id := range agentStepChildWorkflowRunIDs(toolName, raw) {
+			if seen[id] {
+				continue
 			}
 			seen[id] = true
 			ids = append(ids, id)
-		})
+		}
 	}
 	return ids, rows.Err()
 }
 
-func agentToolWaitsForWorkflow(toolName string) bool {
+// legacyAgentToolWaitsForWorkflow is only used for step results written before
+// childWorkflowRunIds became part of the tool result contract.
+func legacyAgentToolWaitsForWorkflow(toolName string) bool {
 	switch toolName {
 	case "workflow.start",
 		"script.generate_from_source",
+		"asset.batch_generate_prompts",
+		"asset.batch_generate_images",
 		"timeline.compose",
+		"shot.generate_image_prompts",
+		"shot.generate_video_prompts",
 		"shot.generate_missing_images",
 		"shot.generate_missing_videos",
 		"shot.cancel_running_videos":
@@ -915,6 +1487,54 @@ func agentToolWaitsForWorkflow(toolName string) bool {
 	default:
 		return false
 	}
+}
+
+func agentStepChildWorkflowRunIDs(toolName string, raw json.RawMessage) []string {
+	var result agentToolResult
+	if err := json.Unmarshal(raw, &result); err == nil && len(result.ChildWorkflowRunIDs) > 0 {
+		ids, err := normalizeAgentWorkflowRunIDs(result.ChildWorkflowRunIDs)
+		if err == nil {
+			return ids
+		}
+		return nil
+	}
+	if !legacyAgentToolWaitsForWorkflow(toolName) {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	ids, err := agentWorkflowRunIDsFromValue(value)
+	if err != nil {
+		return nil
+	}
+	return ids
+}
+
+func agentWorkflowRunIDsFromValue(value any) ([]string, error) {
+	values := make([]string, 0, 1)
+	collectAgentWorkflowRunIDs(value, func(id string) {
+		values = append(values, id)
+	})
+	return normalizeAgentWorkflowRunIDs(values)
+}
+
+func normalizeAgentWorkflowRunIDs(values []string) ([]string, error) {
+	seen := make(map[string]bool, len(values))
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		id := strings.TrimSpace(value)
+		if id == "" || seen[id] {
+			continue
+		}
+		if _, err := uuid.Parse(id); err != nil {
+			return nil, fmt.Errorf("启动型工具返回了无效的子工作流标识")
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func collectAgentWorkflowRunIDs(value any, add func(string)) {
@@ -1144,6 +1764,7 @@ func (s *Server) mergeAgentTaskCompletionSummary(ctx context.Context, projectID,
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	rows.Close()
 	if patch == nil {
 		if len(completedTools) == 0 {
 			return nil
@@ -1156,6 +1777,15 @@ func (s *Server) mergeAgentTaskCompletionSummary(ctx context.Context, projectID,
 	if tracePatch := trace.Patch(); len(tracePatch) > 0 {
 		patch["trace"] = tracePatch
 	}
+	workflowResults, err := s.agentTaskCompletedWorkflowRuns(ctx, projectID, taskID)
+	if err != nil {
+		return err
+	}
+	if len(workflowResults) > 0 {
+		patch["summary"] = agentCompletedWorkflowSummary(workflowResults)
+		patch["waitingForWorkflowRuns"] = []agentPendingWorkflowRun{}
+		patch["completedWorkflowRuns"] = workflowResults
+	}
 	if len(patch) == 0 {
 		return nil
 	}
@@ -1165,6 +1795,61 @@ func (s *Server) mergeAgentTaskCompletionSummary(ctx context.Context, projectID,
 		WHERE id = $1 AND project_id = $2
 	`, taskID, projectID, mustMarshal(patch))
 	return err
+}
+
+func (s *Server) agentTaskCompletedWorkflowRuns(ctx context.Context, projectID, taskID string) ([]agentCompletedWorkflowRun, error) {
+	ids, err := s.agentTaskWorkflowRunIDs(ctx, taskID)
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT w.id::text,
+		       COALESCE(w.input->>'workflowType', w.template_id::text, ''),
+		       w.status, w.total_items, w.completed_items, w.failed_items,
+		       COALESCE(w.error_code, ''), COALESCE(w.error_message, '')
+		FROM workflow_runs w
+		WHERE w.project_id = $1
+		  AND w.id = ANY($2::uuid[])
+		  AND w.status IN ('succeeded', 'partial_succeeded', 'failed', 'cancelled', 'skipped')
+		ORDER BY w.created_at, w.id
+	`, projectID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	results := make([]agentCompletedWorkflowRun, 0, len(ids))
+	for rows.Next() {
+		var result agentCompletedWorkflowRun
+		if err := rows.Scan(
+			&result.ID, &result.WorkflowType, &result.Status,
+			&result.TotalItems, &result.CompletedItems, &result.FailedItems,
+			&result.ErrorCode, &result.ErrorMessage,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, rows.Err()
+}
+
+func agentCompletedWorkflowSummary(results []agentCompletedWorkflowRun) string {
+	partialRuns := 0
+	completedItems := 0
+	failedItems := 0
+	for _, result := range results {
+		completedItems += result.CompletedItems
+		failedItems += result.FailedItems
+		if result.Status == "partial_succeeded" || result.Status == "failed" || result.Status == "cancelled" || result.FailedItems > 0 {
+			partialRuns++
+		}
+	}
+	if partialRuns > 0 || failedItems > 0 {
+		return fmt.Sprintf("生产任务部分完成：%d 个工作流，成功 %d 项，失败 %d 项。", len(results), completedItems, failedItems)
+	}
+	if completedItems > 0 {
+		return fmt.Sprintf("生产任务已完成：%d 个工作流，共完成 %d 项。", len(results), completedItems)
+	}
+	return fmt.Sprintf("生产任务已完成：%d 个工作流。", len(results))
 }
 
 type agentTaskTrace struct {
@@ -1591,20 +2276,120 @@ func (s *Server) agentToolProviderStatus(r *http.Request, project Project, args 
 	if err != nil {
 		return agentToolError("provider.list_status", args, err)
 	}
-	return agentToolOK("provider.list_status", args, fmt.Sprintf("当前有 %d 个启用供应商、%d 个启用模型。", activeAccounts, activeModels), map[string]any{
-		"accounts":          accounts,
-		"activeAccounts":    activeAccounts,
-		"disabledAccounts":  disabledAccounts,
-		"models":            models,
-		"activeModels":      activeModels,
-		"disabledModels":    disabledModels,
-		"recentCalls24h":    recentCalls,
-		"failedCalls24h":    failedRecentCalls,
-		"scriptProfileKey":  project.ScriptModelProfileKey,
-		"imageProfileKey":   project.ImageModelProfileKey,
-		"videoProfileKey":   project.VideoModelProfileKey,
-		"productionProfile": project.ProductionMode,
+	videoCapabilityVariants, variantErrors, err := s.agentVideoCapabilityVariantStatus(r.Context(), project)
+	if err != nil {
+		return agentToolError("provider.list_status", args, err)
+	}
+	pendingApprovals := 0
+	for _, variant := range videoCapabilityVariants {
+		if variant["approvalState"] == "pending" || variant["approvalState"] == "rejected" {
+			pendingApprovals++
+		}
+	}
+	return agentToolOK("provider.list_status", args, fmt.Sprintf("当前有 %d 个启用供应商、%d 个启用模型，%d 个视频能力快照需要处理。", activeAccounts, activeModels, pendingApprovals), map[string]any{
+		"accounts":                        accounts,
+		"activeAccounts":                  activeAccounts,
+		"disabledAccounts":                disabledAccounts,
+		"models":                          models,
+		"activeModels":                    activeModels,
+		"disabledModels":                  disabledModels,
+		"recentCalls24h":                  recentCalls,
+		"failedCalls24h":                  failedRecentCalls,
+		"scriptProfileKey":                project.ScriptModelProfileKey,
+		"imageProfileKey":                 project.ImageModelProfileKey,
+		"videoProfileKey":                 project.VideoModelProfileKey,
+		"productionProfile":               project.VideoProductionBinding.ProfileKey,
+		"videoCapabilityVariants":         videoCapabilityVariants,
+		"videoCapabilityErrors":           variantErrors,
+		"pendingVideoCapabilityApprovals": pendingApprovals,
 	})
+}
+
+func (s *Server) agentVideoCapabilityVariantStatus(ctx context.Context, project Project) ([]map[string]any, []map[string]string, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT model.id::text, model.model_key, model.display_name
+		FROM model_profiles profile
+		JOIN model_profile_bindings binding ON binding.model_profile_id = profile.id AND binding.enabled
+		JOIN provider_models model ON model.id = binding.provider_model_id AND model.status = 'active'
+		JOIN provider_accounts account ON account.id = model.provider_account_id AND account.status = 'active'
+		WHERE profile.organization_id = $1
+		  AND profile.profile_key = $2
+		ORDER BY model.display_name, model.model_key
+	`, project.OrganizationID, project.VideoModelProfileKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	type boundModel struct{ ID, Key, Name string }
+	models := make([]boundModel, 0)
+	for rows.Next() {
+		var model boundModel
+		if err := rows.Scan(&model.ID, &model.Key, &model.Name); err != nil {
+			return nil, nil, err
+		}
+		models = append(models, model)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	variants := make([]map[string]any, 0)
+	variantErrors := make([]map[string]string, 0)
+	for _, model := range models {
+		status, err := s.providers.ListVideoCapabilityAttestations(ctx, project.OrganizationID, model.ID)
+		if err != nil {
+			variantErrors = append(variantErrors, map[string]string{"modelId": model.ID, "modelKey": model.Key, "message": err.Error()})
+			continue
+		}
+		for _, variant := range status.Variants {
+			approvalState := "pending"
+			if variant.CurrentAttestation != nil {
+				approvalState = variant.CurrentAttestation.Decision
+			} else if variant.VerificationStatus == provider.VideoCapabilityVerificationOfficial || variant.VerificationStatus == provider.VideoCapabilityVerificationTested {
+				approvalState = "system_verified"
+			}
+			variants = append(variants, map[string]any{
+				"modelId": model.ID, "modelKey": model.Key, "modelName": model.Name,
+				"variantKey": variant.VariantKey, "capabilitySnapshotHash": variant.CapabilitySnapshotHash,
+				"verificationStatus": variant.VerificationStatus, "source": variant.Source,
+				"approvalState": approvalState,
+			})
+		}
+	}
+	return variants, variantErrors, nil
+}
+
+func (s *Server) agentToolAttestVideoCapability(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
+	request := provider.CreateVideoCapabilityAttestationRequest{
+		VariantKey:             agentStringArg(args, "variantKey"),
+		CapabilitySnapshotHash: agentStringArg(args, "capabilitySnapshotHash"),
+		Decision:               agentStringArg(args, "decision"),
+		Reason:                 agentStringArg(args, "reason"),
+		Evidence:               mustMarshal(agentMapArg(args, "evidence")),
+	}
+	item, err := s.providers.CreateVideoCapabilityAttestation(
+		r.Context(), project.OrganizationID, principal.UserID, agentReferenceStringArg(args, "modelId"), request,
+	)
+	if err != nil {
+		return agentToolError("provider.attest_video_capability", args, err)
+	}
+	return agentToolOK("provider.attest_video_capability", args, "已保存当前视频模型能力快照的审批结论。", map[string]any{"attestation": item})
+}
+
+func (s *Server) agentToolVerifyVideoCapability(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
+	request := provider.VerifyVideoCapabilityRequest{
+		VariantKey:             agentStringArg(args, "variantKey"),
+		CapabilitySnapshotHash: agentStringArg(args, "capabilitySnapshotHash"),
+		VerificationMode:       agentStringArg(args, "verificationMode"),
+		ProviderTestRunID:      agentReferenceStringArg(args, "providerTestRunId"),
+		Reason:                 agentStringArg(args, "reason"),
+	}
+	item, err := s.providers.VerifyVideoCapability(
+		r.Context(), project.OrganizationID, principal.UserID, agentReferenceStringArg(args, "modelId"), request,
+	)
+	if err != nil {
+		return agentToolError("provider.verify_video_capability", args, err)
+	}
+	return agentToolOK("provider.verify_video_capability", args, "视频模型能力快照已通过 Adapter 契约验证。", map[string]any{"attestation": item})
 }
 
 func (s *Server) agentToolStartWorkflow(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
@@ -1614,6 +2399,9 @@ func (s *Server) agentToolStartWorkflow(r *http.Request, principal auth.Principa
 	}
 	input := cleanAgentReferenceOptions(agentMapArg(args, "input"))
 	args["input"] = input
+	if workflowType == derivedAssetBatchWorkflowType {
+		return s.agentToolStartDerivedAssetBatch(r, principal, project, task, step, args, input)
+	}
 	spec, err := s.agentWorkflowStartSpec(r, project, workflowType, input)
 	if err != nil {
 		return agentToolError("workflow.start", args, err)
@@ -1688,6 +2476,8 @@ func (s *Server) agentWorkflowStartSpec(r *http.Request, project Project, workfl
 			action = "analyze_shot_assets"
 		}
 		return s.productionActionWorkflowCore(r, project, action, req)
+	case "batch_generate_derived_asset_images":
+		return s.productionActionWorkflowCore(r, project, "generate_derived_asset_images", req)
 	case "script_to_video":
 		action := "generate_shot_videos"
 		if boolValue(input["generateImages"]) && boolValue(input["skipCompose"]) {
@@ -1727,6 +2517,8 @@ func agentWorkflowFuncForType(workflowType string) any {
 		return workflows.ScriptToAssetsWorkflow
 	case "script_to_storyboard":
 		return workflows.ScriptToStoryboardWorkflow
+	case "batch_generate_derived_asset_images":
+		return workflows.BatchGenerateDerivedAssetImagesWorkflow
 	case "script_to_video", "full_production", "video_production":
 		return workflows.VideoProductionWorkflow
 	case "compose_timeline":
@@ -1755,7 +2547,7 @@ func (s *Server) agentWorkflowRunForStep(ctx context.Context, projectID, taskID,
 }
 
 func (s *Server) agentToolShotStatus(r *http.Request, project Project, args map[string]any) agentToolResult {
-	status, err := s.loadShotProductionStatus(r, project.ID, agentReferenceStringArg(args, "scriptSceneId"), agentReferenceStringArg(args, "workflowRunId"), false)
+	status, err := s.loadShotProductionStatusForEpisode(r, project.ID, agentReferenceStringArg(args, "scriptSceneId"), agentReferenceStringArg(args, "workflowRunId"), agentReferenceStringArg(args, "scriptEpisodeId"), "", false)
 	if err != nil {
 		return agentToolError("shot.status", args, err)
 	}
@@ -1763,36 +2555,49 @@ func (s *Server) agentToolShotStatus(r *http.Request, project Project, args map[
 }
 
 func (s *Server) agentToolRunShotProduction(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, action string, args map[string]any) agentToolResult {
-	status, err := s.loadShotProductionStatus(r, project.ID, agentReferenceStringArg(args, "scriptSceneId"), agentReferenceStringArg(args, "workflowRunId"), false)
-	if err != nil {
-		return agentToolError(action, args, err)
-	}
+	scriptEpisodeID := agentReferenceStringArg(args, "scriptEpisodeId")
 	options := cleanAgentReferenceOptions(agentMapArg(args, "options"))
 	if value, exists := args["maxConcurrency"]; exists {
 		options["maxConcurrency"] = value
 	}
+	effectiveAction := agentShotProductionAction(action, args)
 	req := ShotProductionActionRequest{
-		Action:        action,
-		ScriptSceneID: agentReferenceStringArg(args, "scriptSceneId"),
-		WorkflowRunID: agentReferenceStringArg(args, "workflowRunId"),
-		ShotIDs:       agentReferenceStringSliceArg(args, "shotIds"),
-		Options:       options,
+		Action:          effectiveAction,
+		ScriptSceneID:   agentReferenceStringArg(args, "scriptSceneId"),
+		ScriptEpisodeID: scriptEpisodeID,
+		WorkflowRunID:   agentReferenceStringArg(args, "workflowRunId"),
+		ShotIDs:         agentReferenceStringSliceArg(args, "shotIds"),
+		Options:         options,
+	}
+	scriptSceneID, workflowRunID, filteredEpisodeID := shotProductionScopeFilters(req)
+	status, err := s.loadShotProductionStatusForEpisode(r, project.ID, scriptSceneID, workflowRunID, filteredEpisodeID, "", false)
+	if err != nil {
+		return agentToolError(action, args, err)
 	}
 	targets, errorCode := selectShotProductionTargets(req, status.Shots)
 	if errorCode != "" {
 		return agentToolError(action, args, newAPIError(http.StatusUnprocessableEntity, errorCode, shotProductionActionErrorMessage(errorCode)))
 	}
-	workflowType, workflowFunc, ok := shotProductionWorkflowForAction(action)
+	scriptEpisodeID = shotProductionTargetEpisodeID(req, status.Shots, targets)
+	if scriptEpisodeID != "" {
+		args["scriptEpisodeId"] = scriptEpisodeID
+	} else {
+		delete(args, "scriptEpisodeId")
+	}
+	workflowType, workflowFunc, ok := shotProductionWorkflowForAction(effectiveAction)
 	if !ok {
 		return agentToolError(action, args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shot production action is not supported"))
 	}
 	input := map[string]any{
-		"action":         action,
+		"action":         effectiveAction,
 		"shotIds":        targets,
 		"force":          shotProductionOptionBool(req.Options, "force", true),
 		"aspectRatio":    firstNonEmptyString(project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
 		"resolution":     firstNonEmptyString(shotProductionOptionString(req.Options, "resolution"), "720p"),
 		"maxConcurrency": shotProductionMaxConcurrency(action, req.Options),
+	}
+	if scriptEpisodeID != "" {
+		input["scriptEpisodeId"] = scriptEpisodeID
 	}
 	if value := shotProductionOptionFloat(req.Options, "duration", 0); value > 0 {
 		input["duration"] = value
@@ -1818,11 +2623,13 @@ func (s *Server) agentToolRunShotProduction(r *http.Request, principal auth.Prin
 	input["agentTaskId"] = task.ID
 	input["agentStepId"] = step.ID
 	input["idempotencyKey"] = agentStepIdempotencyKey(task, step)
-	run, err := s.startProjectWorkflowCore(r.Context(), principal, project, workflowType, input, workflowFunc)
+	run, err := s.startProjectWorkflowCoreWithHook(
+		r.Context(), principal, project, workflowType, input, workflowFunc,
+		func(ctx context.Context, tx pgx.Tx, run WorkflowRun) error {
+			return markShotProductionQueuedTx(ctx, tx, effectiveAction, run.ID, targets)
+		},
+	)
 	if err != nil {
-		return agentToolError(action, args, err)
-	}
-	if err := s.markShotProductionQueued(r, action, run.ID, targets); err != nil {
 		return agentToolError(action, args, err)
 	}
 	return agentToolOK(action, args, fmt.Sprintf("已启动 %s，目标镜头 %d 个。", workflowType, len(targets)), map[string]any{
@@ -1832,6 +2639,24 @@ func (s *Server) agentToolRunShotProduction(r *http.Request, principal auth.Prin
 		"status":        run.Status,
 		"targetShotIds": targets,
 	})
+}
+
+func agentShotProductionAction(action string, args map[string]any) string {
+	if len(agentReferenceStringSliceArg(args, "shotIds")) == 0 {
+		return action
+	}
+	switch action {
+	case "generate_image_prompts":
+		return "generate_selected_image_prompts"
+	case "generate_video_prompts":
+		return "generate_selected_video_prompts"
+	case "generate_missing_videos":
+		return "generate_selected_videos"
+	case "generate_missing_images":
+		return "generate_selected_images"
+	default:
+		return action
+	}
 }
 
 func boolValue(value any) bool {
@@ -2277,6 +3102,11 @@ func (s *Server) agentToolGenerateScriptFromSource(r *http.Request, principal au
 	}
 	title := firstNonEmpty(agentStringArg(args, "title"), source.Title+" Script")
 	instruction := agentStringArg(args, "instruction")
+	targetScriptID := agentReferenceStringArg(args, "scriptId")
+	createNewScript, _ := agentBoolArg(args, "createNewScript")
+	if targetScriptID != "" && createNewScript {
+		return agentToolError("script.generate_from_source", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "scriptId 与 createNewScript 不能同时使用"))
+	}
 	chapterRange := agentStringArg(args, "chapterRange")
 	scopeText := strings.Join([]string{task.UserGoal, title, instruction, chapterRange}, "\n")
 	chapterIDs := agentReferenceStringSliceArg(args, "chapterIds")
@@ -2327,11 +3157,13 @@ func (s *Server) agentToolGenerateScriptFromSource(r *http.Request, principal au
 		chapterContexts = scriptNovelChapterContexts(chapters)
 	}
 	input := map[string]any{
-		"sourceId":       sourceID,
-		"title":          title,
-		"instruction":    instruction,
-		"chapterIds":     chapterIDs,
-		"maxConcurrency": agentIntArg(args, "maxConcurrency", 2, 1, 4),
+		"sourceId":        sourceID,
+		"scriptId":        targetScriptID,
+		"createNewScript": createNewScript,
+		"title":           title,
+		"instruction":     instruction,
+		"chapterIds":      chapterIDs,
+		"maxConcurrency":  agentIntArg(args, "maxConcurrency", 2, 1, 4),
 	}
 	spec, err := s.agentWorkflowStartSpec(r, project, "source_to_script", input)
 	if err != nil {
@@ -2359,18 +3191,20 @@ func (s *Server) agentToolGenerateScriptFromSource(r *http.Request, principal au
 		return agentToolError("script.generate_from_source", args, err)
 	}
 	return agentToolOK("script.generate_from_source", args, fmt.Sprintf("已启动原文转剧本工作流 %s。", run.ID), map[string]any{
-		"workflowRunId":  run.ID,
-		"workflowType":   spec.WorkflowType,
-		"status":         run.Status,
-		"sourceId":       sourceID,
-		"sourceType":     source.SourceType,
-		"sourceTitle":    source.Title,
-		"chapterIds":     chapterIDs,
-		"episodeCount":   maxInt(1, len(chapterContexts)),
-		"maxConcurrency": specInput["maxConcurrency"],
-		"agentTaskId":    task.ID,
-		"agentStepId":    step.ID,
-		"idempotencyKey": specInput["idempotencyKey"],
+		"workflowRunId":   run.ID,
+		"workflowType":    spec.WorkflowType,
+		"status":          run.Status,
+		"sourceId":        sourceID,
+		"sourceType":      source.SourceType,
+		"sourceTitle":     source.Title,
+		"scriptId":        targetScriptID,
+		"createNewScript": createNewScript,
+		"chapterIds":      chapterIDs,
+		"episodeCount":    maxInt(1, len(chapterContexts)),
+		"maxConcurrency":  specInput["maxConcurrency"],
+		"agentTaskId":     task.ID,
+		"agentStepId":     step.ID,
+		"idempotencyKey":  specInput["idempotencyKey"],
 	})
 }
 
@@ -2680,7 +3514,7 @@ func (s *Server) agentToolUpdateReviewPatchTarget(r *http.Request, principal aut
 	if err := s.mergeAgentPatchTargetMetadata(r.Context(), tx, project.ID, entityType, entityID, metadata); err != nil {
 		return agentToolError(toolName, args, err)
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "agent.target.updated", entityType, entityID, mustRawJSON(map[string]any{
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "agent.target.updated", "agent_task", task.ID, mustRawJSON(map[string]any{
 		"tool":           toolName,
 		"entityType":     entityType,
 		"entityId":       entityID,

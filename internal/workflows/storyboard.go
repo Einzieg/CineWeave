@@ -59,8 +59,7 @@ func shouldTransitionWorkflowOnActivityFailure(input TextToStoryboardInput) bool
 	case workflowFailureScopeWorkflow:
 		return true
 	default:
-		// Preserve workflow histories created before failure scopes were explicit.
-		return !strings.HasPrefix(strings.TrimSpace(input.Prompt), "batch_")
+		return true
 	}
 }
 
@@ -164,7 +163,7 @@ func (a Activities) GenerateStoryboardText(ctx context.Context, input GenerateSt
 	if err := validateStoryboardInput(baseInput); err != nil {
 		return GenerateStoryboardTextOutput{}, err
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return GenerateStoryboardTextOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -291,7 +290,7 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 	if strings.TrimSpace(shot.Visual) == "" {
 		shot.Visual = imagePrompt
 	}
-	aspectRatio, err := a.projectAspectRatio(ctx, input.ProjectID)
+	aspectRatio, err := a.projectAspectRatio(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return GenerateStoryboardImageOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -339,7 +338,7 @@ func (a Activities) GenerateStoryboardImage(ctx context.Context, input GenerateS
 		return GenerateStoryboardImageOutput{}, a.failActivity(ctx, baseInput, nodeRunID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
 
-	gatewayResp, err := a.gateway.GenerateImage(ctx, provider.GatewayImageRequest{
+	gatewayResp, err := a.generateProviderImage(ctx, nodeRunID, provider.GatewayImageRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
@@ -400,7 +399,8 @@ func (a Activities) insertStoryboardArtifactAndShots(ctx context.Context, input 
 		return "", nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+	runCtx, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution)
+	if err != nil {
 		return "", nil, err
 	}
 	nodeRunID := execution.NodeRunID
@@ -425,13 +425,13 @@ func (a Activities) insertStoryboardArtifactAndShots(ctx context.Context, input 
 	}
 	var artifactID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, metadata, created_by)
-		VALUES ($1, $2, $3, $4, 'storyboard_json', $5, 'application/json', $6, $7, $8, $9)
+		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, metadata, created_by, production_generation_id)
+		VALUES ($1, $2, $3, $4, 'storyboard_json', $5, 'application/json', $6, $7, $8, $9, $10)
 		RETURNING id
-	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, nodeRunID, put.StorageKey, put.ContentHash, rendered.RenderedHash, mustJSON(metadata), input.CreatedBy).Scan(&artifactID); err != nil {
+	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, nodeRunID, put.StorageKey, put.ContentHash, rendered.RenderedHash, mustJSON(metadata), input.CreatedBy, runCtx.ProductionGenerationID).Scan(&artifactID); err != nil {
 		return "", nil, err
 	}
-	shotRecords, err := upsertStoryboardShotsTx(ctx, tx, input, project, artifactID, shots)
+	shotRecords, err := upsertStoryboardShotsTx(ctx, tx, input, project, artifactID, runCtx.ProductionGenerationID, shots)
 	if err != nil {
 		return "", nil, err
 	}
@@ -486,7 +486,7 @@ func (a Activities) insertStoryboardArtifactAndShots(ctx context.Context, input 
 	return artifactID, shotRecords, nil
 }
 
-func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStoryboardTextInput, project ProjectProductionSettings, storyboardArtifactID string, shots []StoryboardShot) ([]StoryboardShotRecord, error) {
+func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStoryboardTextInput, project ProjectProductionSettings, storyboardArtifactID, productionGenerationID string, shots []StoryboardShot) ([]StoryboardShotRecord, error) {
 	records := make([]StoryboardShotRecord, 0, len(shots))
 	for shotIndex, shot := range shots {
 		var record StoryboardShotRecord
@@ -497,12 +497,12 @@ func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStory
 				shot_index, shot_no, title,
 				start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source, timing_confidence,
 				visual, camera, motion, mood, image_prompt, video_prompt, script_dialogue,
-				status, metadata
+				status, metadata, production_generation_id
 			)
 			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''),
 			        $8, $9, $10, $11, $12, $13,
 			        NULLIF($14, ''), NULLIF($15, ''), NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''), $20,
-			        'storyboard_ready', $21)
+			        'storyboard_ready', $21, $25)
 			ON CONFLICT (workflow_run_id, shot_index) DO UPDATE SET
 				storyboard_artifact_id = EXCLUDED.storyboard_artifact_id,
 				shot_no = EXCLUDED.shot_no,
@@ -583,7 +583,7 @@ func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStory
 				"endTick":              shot.EndTick,
 				"plannedDurationTicks": shot.DurationTicks,
 				"timelineTimebase":     project.TimelineTimebase,
-			}), project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator).Scan(
+			}), project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator, productionGenerationID).Scan(
 			&record.ID,
 			&record.WorkflowRunID,
 			&record.ScriptSceneID,
@@ -670,19 +670,12 @@ func workflowErrorFromPrompt(err error) error {
 	return workflowError{Code: codeActivityFailed, Message: err.Error()}
 }
 
-func (a Activities) projectAspectRatio(ctx context.Context, projectID string) (string, error) {
-	var aspectRatio sqlNullString
-	err := a.db.QueryRow(ctx, `SELECT COALESCE(video_ratio, aspect_ratio) FROM projects WHERE id = $1`, projectID).Scan(&aspectRatio)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "16:9", nil
-	}
+func (a Activities) projectAspectRatio(ctx context.Context, projectID, workflowRunID string) (string, error) {
+	project, err := a.projectProductionSettings(ctx, projectID, workflowRunID)
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(aspectRatio.String) == "" {
-		return "16:9", nil
-	}
-	return strings.TrimSpace(aspectRatio.String), nil
+	return firstNonEmptyString(project.VideoRatio, project.AspectRatio, "16:9"), nil
 }
 
 func (a Activities) ensureModelProfileConfigured(ctx context.Context, organizationID, profileKey string, modalities []string) error {
@@ -853,6 +846,18 @@ func workflowErrorFields(err error, fallbackCode string) (string, string) {
 	if errors.As(err, &workflowErr) {
 		return workflowErr.Code, workflowErr.Message
 	}
+	var applicationErr *temporal.ApplicationError
+	if errors.As(err, &applicationErr) {
+		code := strings.TrimSpace(applicationErr.Type())
+		if code == "" {
+			code = fallbackCode
+		}
+		message := strings.TrimSpace(applicationErr.Message())
+		if message == "" {
+			message = strings.TrimSpace(applicationErr.Error())
+		}
+		return code, message
+	}
 	return fallbackCode, err.Error()
 }
 
@@ -898,27 +903,4 @@ func mustJSON(value any) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return raw
-}
-
-type sqlNullString struct {
-	String string
-	Valid  bool
-}
-
-func (s *sqlNullString) Scan(value any) error {
-	if value == nil {
-		s.String = ""
-		s.Valid = false
-		return nil
-	}
-	s.Valid = true
-	switch typed := value.(type) {
-	case string:
-		s.String = typed
-	case []byte:
-		s.String = string(typed)
-	default:
-		s.String = fmt.Sprint(typed)
-	}
-	return nil
 }

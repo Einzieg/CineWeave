@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -176,7 +178,7 @@ func (c *GatewayClient) postJSON(ctx context.Context, path string, payload any, 
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return normalizeGatewayTransportError(err)
 	}
 	defer resp.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -203,6 +205,21 @@ func (c *GatewayClient) postJSON(ctx context.Context, path string, payload any, 
 		return fmt.Errorf("%w: provider gateway data is invalid", ErrValidation)
 	}
 	return nil
+}
+
+func normalizeGatewayTransportError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return &StandardErrorError{Standard: StandardError{
+			Code:      CodeUpstreamTimeout,
+			Message:   "provider request timed out",
+			Retryable: true,
+		}}
+	}
+	return err
 }
 
 func (c *GatewayClient) postStream(ctx context.Context, payload GatewayTextRequest, onDelta func(GatewayTextDelta) error) (GatewayTextResponse, error) {

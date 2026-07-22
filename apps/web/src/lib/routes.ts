@@ -1,15 +1,11 @@
 import {
   Boxes,
   FileCode2,
-  Download,
-  ClipboardCheck,
   FolderKanban,
   KeyRound,
-  Library,
-  ListChecks,
+  Landmark,
   Settings2,
   ShieldCheck,
-  Workflow,
   Clapperboard,
   FileText,
   Film,
@@ -17,11 +13,12 @@ import {
 } from "lucide-react";
 
 export const globalNavItems = [
-  { label: "项目", href: "/projects", icon: FolderKanban, section: "projects" },
-  { label: "供应商中心", href: "/providers", icon: KeyRound, section: "providers" },
-  { label: "提示词中心", href: "/prompts", icon: FileCode2, section: "prompts" },
-  { label: "权限管理", href: "/access", icon: ShieldCheck, section: "access" },
-  { label: "设置", href: "/settings", icon: Settings2, section: "settings" },
+  { label: "项目", href: "/projects", icon: FolderKanban, section: "projects", systemOnly: false },
+  { label: "供应商中心", href: "/providers", icon: KeyRound, section: "providers", systemOnly: false },
+  { label: "提示词中心", href: "/prompts", icon: FileCode2, section: "prompts", systemOnly: false },
+  { label: "组织与权限", href: "/access", icon: ShieldCheck, section: "access", systemOnly: false },
+  { label: "系统组织", href: "/system/organizations", icon: Landmark, section: "system-organizations", systemOnly: true },
+  { label: "设置", href: "/settings", icon: Settings2, section: "settings", systemOnly: false },
 ] as const;
 
 export const projectNavItems = [
@@ -32,20 +29,11 @@ export const projectNavItems = [
   { label: "分镜", segment: "storyboard", icon: Clapperboard },
   { label: "视频", segment: "video", icon: PlaySquare },
   { label: "成片", segment: "final", icon: Film },
-] as const;
-
-export const projectAdvancedNavItems = [
-  { label: "生产看板", segment: "production", icon: ListChecks },
-  { label: "审阅", segment: "review", icon: ClipboardCheck },
-  { label: "工作流", segment: "workflows", icon: Workflow },
-  { label: "素材库", segment: "vault", icon: Library },
-  { label: "时间线", segment: "timeline", icon: Film },
-  { label: "导出", segment: "export", icon: Download },
   { label: "项目设置", segment: "settings", icon: Settings2 },
 ] as const;
 
 export type GlobalSection = "dashboard" | (typeof globalNavItems)[number]["section"];
-export type ProjectSection = (typeof projectNavItems)[number]["segment"] | (typeof projectAdvancedNavItems)[number]["segment"];
+export type ProjectSection = (typeof projectNavItems)[number]["segment"];
 
 export function projectHref(projectId: string, segment = "") {
   return segment ? `/projects/${projectId}/${segment}` : `/projects/${projectId}`;
@@ -78,6 +66,8 @@ export function workflowLabel(value: string) {
       return "分析剧本资产";
     case "script_to_storyboard":
       return "生成分镜";
+    case "batch_generate_derived_asset_images":
+      return "批量生成镜头衍生资产";
     case "script_to_video":
       return "剧本生成视频";
     case "full_production":

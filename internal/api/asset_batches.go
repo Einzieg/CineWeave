@@ -3,8 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +12,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
 )
@@ -89,6 +90,11 @@ func (s *Server) retryFailedWorkflowRun(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		run, started, err = s.retryFailedSourceToScript(r, w, principal, original, req)
+	case derivedAssetBatchWorkflowType:
+		if !s.authorize(w, r, principal, authz.PermissionAssetGenerate, authz.Resource{ProjectID: original.ProjectID}) {
+			return
+		}
+		run, started, err = s.retryFailedDerivedAssetBatch(r, w, principal, original, req)
 	default:
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "WORKFLOW_RETRY_UNSUPPORTED", "this workflow type does not support failed-item retry", nil, false)
 		return
@@ -161,11 +167,11 @@ func (s *Server) retryFailedSourceToScript(r *http.Request, w http.ResponseWrite
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
-	failedIndexes, err := s.failedSourceToScriptEpisodeIndexes(r.Context(), original.ID, plan.EpisodeTotal)
+	failedChapterIDs, failedCount, err := s.failedSourceToScriptChapterIDs(r.Context(), original.ID)
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
-	if len(failedIndexes) == 0 {
+	if failedCount == 0 {
 		return WorkflowRun{}, false, newAPIError(http.StatusConflict, "NO_FAILED_ITEMS", "workflow has no failed script episodes to retry")
 	}
 	prompt, optionsRaw, err := sourceToScriptRetryOptions(original.Input)
@@ -182,6 +188,16 @@ func (s *Server) retryFailedSourceToScript(r *http.Request, w http.ResponseWrite
 	if options.SourceID != plan.SourceID {
 		return WorkflowRun{}, false, newAPIError(http.StatusConflict, "WORKFLOW_INPUT_INVALID", "source-to-script plan does not match the workflow input")
 	}
+	if plan.SourceType == "novel" {
+		if len(failedChapterIDs) != failedCount {
+			return WorkflowRun{}, false, newAPIError(http.StatusConflict, "WORKFLOW_INPUT_INVALID", "failed novel script results are missing source chapter identity")
+		}
+		options.ChapterIDs = failedChapterIDs
+	} else {
+		options.ChapterIDs = nil
+	}
+	options.TargetScriptID = plan.ScriptID
+	options.CreateNewScript = false
 	if req.MaxConcurrency > 0 {
 		options.MaxConcurrency = req.MaxConcurrency
 	}
@@ -191,14 +207,11 @@ func (s *Server) retryFailedSourceToScript(r *http.Request, w http.ResponseWrite
 	if attemptGeneration <= 1 {
 		attemptGeneration = 2
 	}
-	state := workflows.SourceToScriptWorkflowState{
-		Initialized: true, Plan: plan, EpisodeIndexes: failedIndexes,
-		AttemptGeneration: attemptGeneration,
-	}
+	state := workflows.SourceToScriptWorkflowState{AttemptGeneration: attemptGeneration}
 	requestHash := idempotencyRequestHash(map[string]any{
 		"projectId": project.ID, "workflowType": original.WorkflowType, "retryOfWorkflowRunId": original.ID,
 		"rootWorkflowRunId": rootID, "attemptGeneration": attemptGeneration,
-		"episodeIndexes": failedIndexes, "options": json.RawMessage(optionsRaw),
+		"sourceChapterIds": failedChapterIDs, "options": json.RawMessage(optionsRaw),
 		"expectedProjectRevision": req.ExpectedProjectRevision,
 	})
 	idempotencyScope := "workflow-runs:retry-failed:" + original.ID
@@ -236,7 +249,9 @@ func (s *Server) retryFailedSourceToScript(r *http.Request, w http.ResponseWrite
 		if status < 200 || status > 299 {
 			status = http.StatusOK
 		}
-		httpx.WriteJSON(w, r, status, replay, map[string]any{"idempotentReplay": true, "operationId": claim.state.operationID})
+		if w != nil {
+			httpx.WriteJSON(w, r, status, replay, map[string]any{"idempotentReplay": true, "operationId": claim.state.operationID})
+		}
 		return replay, false, nil
 	}
 	operationID, err := ensureRuntimeOperationTx(
@@ -247,7 +262,7 @@ func (s *Server) retryFailedSourceToScript(r *http.Request, w http.ResponseWrite
 	}
 	runInput := mustRawJSON(map[string]any{
 		"prompt": prompt, "workflowType": "source_to_script", "input": json.RawMessage(optionsRaw),
-		"retry": map[string]any{"rootWorkflowRunId": rootID, "retryOfWorkflowRunId": original.ID, "attemptGeneration": attemptGeneration, "episodeIndexes": failedIndexes},
+		"retry": map[string]any{"rootWorkflowRunId": rootID, "retryOfWorkflowRunId": original.ID, "attemptGeneration": attemptGeneration, "sourceChapterIds": failedChapterIDs},
 	})
 	run, err := s.enqueueProjectWorkflowTx(
 		r.Context(), tx, principal, lockedProject, "source_to_script", runInput, workflows.ScriptTaskQueue, workflows.SourceToScriptWorkflow,
@@ -264,7 +279,7 @@ func (s *Server) retryFailedSourceToScript(r *http.Request, w http.ResponseWrite
 				SET total_items = $2, root_workflow_run_id = $3, retry_of_workflow_run_id = $4,
 				    attempt_generation = $5, revision = revision + 1, updated_at = now()
 				WHERE id = $1
-			`, run.ID, len(failedIndexes), rootID, original.ID, attemptGeneration); err != nil {
+			`, run.ID, failedCount, rootID, original.ID, attemptGeneration); err != nil {
 				return err
 			}
 			startState := state
@@ -272,40 +287,18 @@ func (s *Server) retryFailedSourceToScript(r *http.Request, w http.ResponseWrite
 				OrganizationID: run.OrganizationID, ProjectID: run.ProjectID, WorkflowRunID: run.ID,
 				Prompt: prompt, CreatedBy: principal.UserID, Input: optionsRaw, SourceToScriptState: &startState,
 			}
-			for _, planIndex := range failedIndexes {
-				chapter := workflows.SourceToScriptChapterRef{}
-				if len(plan.Chapters) > 0 {
-					chapter = plan.Chapters[planIndex]
-				}
-				episode := workflows.GenerateSourceScriptEpisodeInput{
-					OrganizationID: run.OrganizationID, ProjectID: run.ProjectID, WorkflowRunID: run.ID,
-					CreatedBy: principal.UserID, SourceID: plan.SourceID, ScriptID: plan.ScriptID,
-					ScriptVersionID: plan.ScriptVersionID, Instruction: options.Instruction,
-					EpisodeIndex: planIndex + 1, EpisodeTotal: max(1, plan.EpisodeTotal), Chapter: chapter,
-					AttemptGeneration: attemptGeneration,
-				}
-				if _, err := tx.Exec(ctx, `
-					INSERT INTO workflow_node_runs(
-						organization_id, project_id, workflow_run_id, node_key, node_type,
-						status, input, output, attempt_generation
-					)
-					VALUES ($1, $2, $3, $4, $5, 'queued', $6, '{}', $7)
-				`, run.OrganizationID, run.ProjectID, run.ID,
-					workflows.SourceToScriptEpisodeNodeKey(chapter.ID, planIndex+1), workflows.SourceToScriptEpisodeNodeType,
-					mustRawJSON(episode), attemptGeneration); err != nil {
-					return err
-				}
-			}
 			snapshotRaw, snapshotHash, err := marshalWorkflowStartInput(startInput)
 			if err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO workflow_input_snapshots(
-					workflow_run_id, organization_id, project_id, project_revision, snapshot, snapshot_hash
+					workflow_run_id, organization_id, project_id, project_revision, snapshot, snapshot_hash,
+					production_generation_id
 				)
-				VALUES ($1, $2, $3, $4, $5, $6)
-			`, run.ID, run.OrganizationID, run.ProjectID, lockedProject.Revision, snapshotRaw, snapshotHash); err != nil {
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+			`, run.ID, run.OrganizationID, run.ProjectID, lockedProject.Revision, snapshotRaw, snapshotHash,
+				run.ProductionGenerationID); err != nil {
 				return err
 			}
 			updated, err := scanWorkflowRun(tx.QueryRow(ctx, workflowRunSelectSQL(`WHERE id = $1`), run.ID))
@@ -354,7 +347,7 @@ func (s *Server) loadSourceToScriptRetryPlan(ctx context.Context, workflowRunIDs
 		if err := json.Unmarshal(raw, &plan); err != nil {
 			return workflows.SourceToScriptPlan{}, newAPIError(http.StatusConflict, "WORKFLOW_INPUT_INVALID", "source-to-script plan cannot be replayed")
 		}
-		if strings.TrimSpace(plan.SourceID) == "" || strings.TrimSpace(plan.ScriptID) == "" || strings.TrimSpace(plan.ScriptVersionID) == "" || plan.EpisodeTotal <= 0 {
+		if strings.TrimSpace(plan.GenerationID) == "" || strings.TrimSpace(plan.SourceID) == "" || strings.TrimSpace(plan.ScriptID) == "" || plan.EpisodeTotal <= 0 {
 			return workflows.SourceToScriptPlan{}, newAPIError(http.StatusConflict, "WORKFLOW_INPUT_INVALID", "source-to-script plan is incomplete")
 		}
 		if len(plan.Chapters) > 0 && len(plan.Chapters) != plan.EpisodeTotal {
@@ -365,41 +358,35 @@ func (s *Server) loadSourceToScriptRetryPlan(ctx context.Context, workflowRunIDs
 	return workflows.SourceToScriptPlan{}, newAPIError(http.StatusConflict, "WORKFLOW_INPUT_INVALID", "source-to-script prepare plan was not found")
 }
 
-func (s *Server) failedSourceToScriptEpisodeIndexes(ctx context.Context, workflowRunID string, episodeTotal int) ([]int, error) {
+func (s *Server) failedSourceToScriptChapterIDs(ctx context.Context, workflowRunID string) ([]string, int, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT input
-		FROM workflow_node_runs
-		WHERE workflow_run_id = $1 AND node_type = $2 AND status = 'failed'
-		ORDER BY created_at, node_key
-	`, workflowRunID, workflows.SourceToScriptEpisodeNodeType)
+		SELECT COALESCE(source_chapter_id::text, '')
+		FROM script_episode_generation_results
+		WHERE workflow_run_id = $1 AND status = 'failed'
+		ORDER BY completed_at, item_key
+	`, workflowRunID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	seen := map[int]bool{}
-	indexes := make([]int, 0)
+	seen := map[string]bool{}
+	chapterIDs := make([]string, 0)
+	failedCount := 0
 	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return nil, err
+		var chapterID string
+		if err := rows.Scan(&chapterID); err != nil {
+			return nil, 0, err
 		}
-		var item struct {
-			EpisodeIndex int `json:"episodeIndex"`
-		}
-		if err := json.Unmarshal(raw, &item); err != nil || item.EpisodeIndex <= 0 || item.EpisodeIndex > episodeTotal {
-			return nil, newAPIError(http.StatusConflict, "WORKFLOW_INPUT_INVALID", "failed source-to-script node has an invalid episode index")
-		}
-		planIndex := item.EpisodeIndex - 1
-		if !seen[planIndex] {
-			seen[planIndex] = true
-			indexes = append(indexes, planIndex)
+		failedCount++
+		if chapterID != "" && !seen[chapterID] {
+			seen[chapterID] = true
+			chapterIDs = append(chapterIDs, chapterID)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	sort.Ints(indexes)
-	return indexes, nil
+	return chapterIDs, failedCount, nil
 }
 
 func sourceToScriptRetryOptions(raw json.RawMessage) (string, json.RawMessage, error) {
@@ -470,6 +457,14 @@ func (s *Server) createAssetBatchRun(
 	if lockedProject.OrganizationID != project.OrganizationID {
 		return WorkflowRun{}, false, newAPIError(http.StatusNotFound, "NOT_FOUND", "project was not found")
 	}
+	productionContext, err := videoproduction.LoadWritableContextTx(r.Context(), tx, lockedProject.ID, false)
+	if err != nil {
+		return WorkflowRun{}, false, err
+	}
+	lockedProject.VideoProductionBinding = &productionContext.Binding
+	lockedProject.ProductionGeneration = &productionContext.Generation
+	lockedProject.VideoProductionState = productionContext.State
+	lockedProject.VideoProductionLocked = productionContext.Locked
 	if req.ExpectedProjectRevision != lockedProject.Revision {
 		conflict := newAPIError(http.StatusConflict, "PROJECT_REVISION_CONFLICT", "project settings changed before the batch was created")
 		conflict.Details = map[string]any{"expectedRevision": req.ExpectedProjectRevision, "currentRevision": lockedProject.Revision}
@@ -507,7 +502,7 @@ func (s *Server) createAssetBatchRun(
 		return WorkflowRun{}, false, err
 	}
 
-	snapshot, err := s.buildAssetBatchSnapshot(r.Context(), tx, lockedProject, req, attemptGeneration)
+	snapshot, err := s.buildAssetBatchSnapshot(r.Context(), tx, lockedProject, req, attemptGeneration, retryOfWorkflowRunID)
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
@@ -548,11 +543,12 @@ func (s *Server) createAssetBatchRun(
 				if _, err := tx.Exec(ctx, `
 					INSERT INTO workflow_node_runs(
 						organization_id, project_id, workflow_run_id, node_key, node_type,
-						status, input, output, attempt_generation
+						status, input, output, attempt_generation, production_generation_id
 					)
-					VALUES ($1, $2, $3, $4, $5, 'queued', $6, '{}', $7)
+					VALUES ($1, $2, $3, $4, $5, 'queued', $6, '{}', $7, $8)
 					ON CONFLICT (workflow_run_id, node_key) DO NOTHING
-				`, lockedProject.OrganizationID, lockedProject.ID, run.ID, workflows.AssetBatchNodeKey(req.Operation, item.AssetID), nodeType, mustRawJSON(item), startInput.AttemptGeneration); err != nil {
+				`, lockedProject.OrganizationID, lockedProject.ID, run.ID, workflows.AssetBatchNodeKey(req.Operation, item.AssetID), nodeType,
+					mustRawJSON(item), startInput.AttemptGeneration, run.ProductionGenerationID); err != nil {
 					return err
 				}
 			}
@@ -562,10 +558,12 @@ func (s *Server) createAssetBatchRun(
 			}
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO workflow_input_snapshots(
-					workflow_run_id, organization_id, project_id, project_revision, snapshot, snapshot_hash
+					workflow_run_id, organization_id, project_id, project_revision, snapshot, snapshot_hash,
+					production_generation_id
 				)
-				VALUES ($1, $2, $3, $4, $5, $6)
-			`, run.ID, lockedProject.OrganizationID, lockedProject.ID, lockedProject.Revision, snapshotRaw, snapshotHash); err != nil {
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+			`, run.ID, lockedProject.OrganizationID, lockedProject.ID, lockedProject.Revision, snapshotRaw, snapshotHash,
+				run.ProductionGenerationID); err != nil {
 				return err
 			}
 			updated, err := scanWorkflowRun(tx.QueryRow(ctx, workflowRunSelectSQL(`WHERE id = $1`), run.ID))
@@ -594,7 +592,15 @@ func (s *Server) buildAssetBatchSnapshot(
 	project Project,
 	req createAssetBatchRequest,
 	attemptGeneration int,
+	retryOfWorkflowRunID string,
 ) (workflows.AssetBatchWorkflowInput, error) {
+	if project.VideoProductionBinding == nil || project.ProductionGeneration == nil || strings.TrimSpace(project.VideoProductionBinding.ProfileKey) == "" {
+		return workflows.AssetBatchWorkflowInput{}, videoproduction.NewError(
+			videoproduction.CodeGenerationMismatch,
+			"项目没有可用的视频生产代，请先完成视频生产配置",
+			false,
+		)
+	}
 	promptKey := "asset_card_generation"
 	if req.Operation == workflows.AssetBatchOperationGenerateImages {
 		promptKey = "canonical_asset_image_prompt"
@@ -618,7 +624,7 @@ func (s *Server) buildAssetBatchSnapshot(
 		AttemptGeneration: attemptGeneration,
 		Project: workflows.AssetBatchProjectSnapshot{
 			Revision: project.Revision, AspectRatio: aspectRatio, VideoRatio: aspectRatio,
-			ArtStyle: project.ArtStyle, ImageQuality: project.ImageQuality, ProductionMode: project.ProductionMode,
+			ArtStyle: project.ArtStyle, ImageQuality: project.ImageQuality, VideoProductionProfileKey: strings.TrimSpace(project.VideoProductionBinding.ProfileKey),
 			ScriptModelProfileKey: project.ScriptModelProfileKey, ImageModelProfileKey: project.ImageModelProfileKey,
 			PromptTemplateKey: promptKey, PromptVersionID: resolved.VersionID,
 		},
@@ -672,16 +678,90 @@ func (s *Server) buildAssetBatchSnapshot(
 		if err != nil {
 			return workflows.AssetBatchWorkflowInput{}, err
 		}
-		snapshot.Items = append(snapshot.Items, workflows.AssetBatchItemSnapshot{
+		itemSnapshot := workflows.AssetBatchItemSnapshot{
 			AssetID: asset.ID, AssetType: asset.AssetType, Name: asset.Name, Description: asset.Description,
 			Profile: asset.Profile, BasePrompt: stringValue(asset.BasePrompt),
 			ConsistencyPrompt: stringValue(asset.ConsistencyPrompt), NegativePrompt: stringValue(asset.NegativePrompt),
 			VisualTraits: asset.VisualTraits, ManualOverride: asset.ManualOverride,
 			Revision: asset.Revision, PromptRevision: asset.PromptRevision, SceneContext: sceneContext,
 			Visual: visual, References: lockedCanonicalAssetImageReferences(asset),
-		})
+		}
+		if req.Operation == workflows.AssetBatchOperationGenerateImages && strings.TrimSpace(retryOfWorkflowRunID) != "" {
+			recovered, err := assetBatchRecoveredImage(ctx, db, project, retryOfWorkflowRunID, asset.ID)
+			if err != nil {
+				return workflows.AssetBatchWorkflowInput{}, err
+			}
+			itemSnapshot.RecoveredImage = recovered
+		}
+		snapshot.Items = append(snapshot.Items, itemSnapshot)
 	}
 	return snapshot, nil
+}
+
+func assetBatchRecoveredImage(
+	ctx context.Context,
+	db snapshotQuerier,
+	project Project,
+	sourceWorkflowRunID, assetID string,
+) (*workflows.AssetBatchRecoveredImageSnapshot, error) {
+	var recovered workflows.AssetBatchRecoveredImageSnapshot
+	err := db.QueryRow(ctx, `
+		WITH RECURSIVE retry_chain AS (
+			SELECT run.id, run.retry_of_workflow_run_id, 0 AS depth, ARRAY[run.id] AS path
+			FROM workflow_runs run
+			WHERE run.id = $1
+			  AND run.project_id = $2
+			UNION ALL
+			SELECT parent.id, parent.retry_of_workflow_run_id, chain.depth + 1, chain.path || parent.id
+			FROM retry_chain chain
+			JOIN workflow_runs parent ON parent.id = chain.retry_of_workflow_run_id
+			WHERE parent.project_id = $2
+			  AND chain.depth < 32
+			  AND NOT parent.id = ANY(chain.path)
+		)
+		SELECT node.workflow_run_id::text, node.id::text, call.id::text,
+		       call.provider_model_id::text, call.prompt_hash,
+		       artifact.id::text, media.id::text, artifact.storage_key
+		FROM retry_chain chain
+		JOIN workflow_node_runs node ON node.workflow_run_id = chain.id
+		JOIN provider_call_logs call
+		  ON call.node_run_id = node.id
+		 AND call.status = 'succeeded'
+		 AND call.task_type = 'image.generate'
+		JOIN artifacts artifact
+		  ON artifact.id = NULLIF(call.artifact_ids->>0, '')::uuid
+		 AND artifact.organization_id = node.organization_id
+		 AND artifact.project_id = node.project_id
+		JOIN media_files media
+		  ON media.id = NULLIF(call.media_file_ids->>0, '')::uuid
+		 AND media.artifact_id = artifact.id
+		 AND media.organization_id = node.organization_id
+		 AND media.project_id = node.project_id
+		WHERE node.project_id = $2
+		  AND node.input->>'assetId' = $3
+		  AND call.provider_model_id IS NOT NULL
+		  AND COALESCE(call.prompt_hash, '') <> ''
+		  AND artifact.production_generation_id = $4
+		  AND media.production_generation_id = $4
+		ORDER BY chain.depth, call.completed_at DESC, call.created_at DESC
+		LIMIT 1
+	`, sourceWorkflowRunID, project.ID, assetID, project.ProductionGeneration.ID).Scan(
+		&recovered.SourceWorkflowRunID,
+		&recovered.SourceNodeRunID,
+		&recovered.ProviderCallID,
+		&recovered.ProviderModelID,
+		&recovered.PromptHash,
+		&recovered.ArtifactID,
+		&recovered.MediaFileID,
+		&recovered.StorageKey,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &recovered, nil
 }
 
 func assetBatchManualBindings(ctx context.Context, db snapshotQuerier, projectID string) ([]workflows.AssetBatchManualBindingSnapshot, error) {
@@ -759,7 +839,7 @@ func (s *Server) failedAssetBatchIDs(ctx context.Context, workflowRunID string) 
 		SELECT input->>'assetId'
 		FROM workflow_node_runs
 		WHERE workflow_run_id = $1
-		  AND status = 'failed'
+		  AND status IN ('failed', 'pending', 'queued', 'running')
 		  AND COALESCE(input->>'assetId', '') <> ''
 		ORDER BY created_at, node_key
 	`, workflowRunID)

@@ -283,6 +283,35 @@ func TestAssetBatchCancellationDrainsAllStartedChildrenBeforeFinalizing(t *testi
 	}
 }
 
+func TestRecoveredAssetBatchImageRequiresMatchingProviderAndPrompt(t *testing.T) {
+	item := AssetBatchItemSnapshot{RecoveredImage: &AssetBatchRecoveredImageSnapshot{
+		ProviderCallID: "call-1", ProviderModelID: "model-1", PromptHash: "sha256:prompt-1",
+		ArtifactID: "artifact-1", MediaFileID: "media-1", StorageKey: "images/result.png",
+	}}
+	response, ok := recoveredAssetBatchImage(item, "model-1", "sha256:prompt-1")
+	if !ok || response.ProviderCallID != "call-1" || response.Output.ArtifactID != "artifact-1" {
+		t.Fatalf("recovered response=%+v ok=%v", response, ok)
+	}
+	if _, ok := recoveredAssetBatchImage(item, "model-2", "sha256:prompt-1"); ok {
+		t.Fatal("recovered image accepted a different provider model")
+	}
+	if _, ok := recoveredAssetBatchImage(item, "model-1", "sha256:prompt-2"); ok {
+		t.Fatal("recovered image accepted a different prompt hash")
+	}
+}
+
+func TestAssetBatchOutputCannotSucceedWithActiveItems(t *testing.T) {
+	output := AssetBatchWorkflowOutput{
+		TotalItems:     12,
+		CompletedItems: 11,
+		ActiveItems:    1,
+	}
+	classifyAssetBatchOutput(&output)
+	if output.Status != "running" {
+		t.Fatalf("status = %q, want running while one item is active", output.Status)
+	}
+}
+
 func assetBatchTestInput(itemCount, maxConcurrency int) AssetBatchWorkflowInput {
 	items := make([]AssetBatchItemSnapshot, 0, itemCount)
 	for index := 1; index <= itemCount; index++ {

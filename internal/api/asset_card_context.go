@@ -120,10 +120,6 @@ func (s *Server) resolveAssetCardVisualContextWithDB(ctx context.Context, db sna
 	return visual, nil
 }
 
-func (s *Server) resolveAssetCardVisualRule(ctx context.Context, project Project, templateKey string) (promptsvc.RenderedPrompt, error) {
-	return s.resolveAssetCardVisualRuleWithDB(ctx, s.db, project, templateKey)
-}
-
 func (s *Server) resolveAssetCardVisualRuleWithDB(ctx context.Context, db promptsvc.QueryRower, project Project, templateKey string) (promptsvc.RenderedPrompt, error) {
 	resolved, err := promptsvc.NewService(db).Resolve(ctx, promptsvc.ResolveRequest{
 		OrganizationID: project.OrganizationID,

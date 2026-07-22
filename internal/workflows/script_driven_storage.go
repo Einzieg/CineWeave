@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/storage"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -40,57 +42,176 @@ func (a Activities) activeScript(ctx context.Context, projectID, scriptID string
 	return script, err
 }
 
-func (a Activities) projectProductionSettings(ctx context.Context, projectID string) (ProjectProductionSettings, error) {
+func (a Activities) projectProductionSettings(ctx context.Context, projectID string, workflowRunIDs ...string) (ProjectProductionSettings, error) {
 	var item ProjectProductionSettings
+	var continuationInputContracts json.RawMessage
+	var profileName, strategyFamily, profileDescription, lifecycleState, implementationState string
+	var profileConfiguration, capabilityRequirements, promptContract json.RawMessage
+	var profileSnapshot json.RawMessage
+	var configurationHash, promptContractHash string
+	workflowRunID := ""
+	if len(workflowRunIDs) > 0 {
+		workflowRunID = strings.TrimSpace(workflowRunIDs[0])
+	}
 	err := a.db.QueryRow(ctx, `
-		SELECT id::text,
-		       COALESCE(project_type, ''),
-		       COALESCE(content_type, ''),
-		       COALESCE(aspect_ratio, ''),
-		       COALESCE(video_ratio, '16:9'),
-		       COALESCE(art_style, ''),
-		       COALESCE(director_manual, ''),
-		       COALESCE(visual_manual, ''),
-		       COALESCE(image_model_profile_key, 'image_generation_default'),
-		       COALESCE(video_model_profile_key, 'video_generation_default'),
-		       COALESCE(script_model_profile_key, 'script_agent_default'),
-		       COALESCE(tts_model_profile_key, 'tts_generation_default'),
-		       COALESCE(asr_model_profile_key, 'audio_transcription_default'),
-		       COALESCE(audio_strategy, 'native_av'),
-		       COALESCE(audio_requirement, 'preferred'),
-		       COALESCE(image_quality, 'standard'),
-		       COALESCE(production_mode, 'silent_video'),
-		       timeline_timebase,
-		       fps_numerator,
-		       fps_denominator
-		FROM projects
-		WHERE id = $1
-	`, projectID).Scan(
+		WITH execution_identity AS (
+			SELECT project.id AS project_id,
+			       CASE
+			         WHEN $2 = '' THEN project.active_video_production_generation_id
+			         ELSE run.production_generation_id
+			       END AS generation_id,
+			       CASE
+			         WHEN $2 = '' THEN generation.binding_id
+			         ELSE run.video_production_binding_id
+			       END AS binding_id,
+			       CASE
+			         WHEN $2 = '' THEN binding.revision
+			         ELSE run.video_production_binding_revision
+			       END AS binding_revision
+			FROM projects project
+			LEFT JOIN workflow_runs run
+			  ON run.id = NULLIF($2, '')::uuid
+			 AND run.project_id = project.id
+			LEFT JOIN project_video_production_generations generation
+			  ON generation.id = project.active_video_production_generation_id
+			 AND generation.project_id = project.id
+			LEFT JOIN project_video_production_bindings binding
+			  ON binding.id = generation.binding_id
+			 AND binding.project_id = project.id
+			WHERE project.id = $1
+			  AND ($2 = '' OR run.id IS NOT NULL)
+		)
+		SELECT identity.project_id::text,
+		       profile.profile_key,
+		       profile.name,
+		       profile.strategy_family,
+		       profile.description,
+		       version.id::text,
+		       version.version,
+		       version.lifecycle_state,
+		       version.implementation_state,
+		       version.configuration,
+		       version.capability_requirements,
+		       version.prompt_contract,
+		       version.configuration_hash,
+		       version.prompt_contract_hash,
+		       binding.profile_snapshot, binding.profile_snapshot_hash,
+		       version.input_contract_version,
+		       COALESCE(
+		           version.capability_requirements->>'initialInputContract',
+		           version.capability_requirements->>'inputContract',
+		           ''
+		       ),
+		       COALESCE(version.capability_requirements->'allowedContinuationInputContracts', '[]'::jsonb),
+		       binding.compatibility_policy,
+		       binding.id::text,
+		       binding.revision,
+		       generation.id::text
+		FROM execution_identity identity
+		JOIN project_video_production_generations generation
+		  ON generation.id = identity.generation_id
+		 AND generation.project_id = identity.project_id
+		JOIN project_video_production_bindings binding
+		  ON binding.id = identity.binding_id
+		 AND binding.project_id = identity.project_id
+		 AND binding.id = generation.binding_id
+		 AND binding.revision = identity.binding_revision
+		JOIN video_production_profile_versions version ON version.id = binding.profile_version_id
+		JOIN video_production_profiles profile ON profile.id = version.profile_id
+	`, projectID, workflowRunID).Scan(
 		&item.ID,
-		&item.ProjectType,
-		&item.ContentType,
-		&item.AspectRatio,
-		&item.VideoRatio,
-		&item.ArtStyle,
-		&item.DirectorManual,
-		&item.VisualManual,
-		&item.ImageModelProfileKey,
-		&item.VideoModelProfileKey,
-		&item.ScriptModelProfileKey,
-		&item.TTSModelProfileKey,
-		&item.ASRModelProfileKey,
-		&item.AudioStrategy,
-		&item.AudioRequirement,
-		&item.ImageQuality,
-		&item.ProductionMode,
-		&item.TimelineTimebase,
-		&item.FPSNumerator,
-		&item.FPSDenominator,
+		&item.VideoProductionProfileKey,
+		&profileName,
+		&strategyFamily,
+		&profileDescription,
+		&item.VideoProductionProfileVersionID,
+		&item.VideoProductionProfileVersion,
+		&lifecycleState,
+		&implementationState,
+		&profileConfiguration,
+		&capabilityRequirements,
+		&promptContract,
+		&configurationHash,
+		&promptContractHash,
+		&profileSnapshot,
+		&item.VideoProductionProfileHash,
+		&item.VideoProductionInputContract,
+		&item.VideoProductionRequiredInitialInputContract,
+		&continuationInputContracts,
+		&item.VideoProductionCompatibilityPolicy,
+		&item.VideoProductionBindingID,
+		&item.VideoProductionBindingRevision,
+		&item.ProductionGenerationID,
 	)
+	if err != nil {
+		return item, err
+	}
+	productionConfiguration, err := videoproduction.DecodeProductionConfiguration(profileSnapshot)
+	if err != nil {
+		return ProjectProductionSettings{}, err
+	}
+	item.ProjectType = productionConfiguration.ProjectType
+	item.ContentType = productionConfiguration.ContentType
+	item.AspectRatio = productionConfiguration.AspectRatio
+	item.VideoRatio = productionConfiguration.VideoRatio
+	item.ArtStyle = productionConfiguration.ArtStyle
+	item.DirectorManual = productionConfiguration.DirectorManual
+	item.VisualManual = productionConfiguration.VisualManual
+	item.ImageModelProfileKey = productionConfiguration.ImageModelProfileKey
+	item.VideoModelProfileKey = productionConfiguration.VideoModelProfileKey
+	item.ScriptModelProfileKey = productionConfiguration.ScriptModelProfileKey
+	item.TTSModelProfileKey = productionConfiguration.TTSModelProfileKey
+	item.ASRModelProfileKey = productionConfiguration.ASRModelProfileKey
+	item.AudioStrategy = productionConfiguration.AudioStrategy
+	item.AudioRequirement = productionConfiguration.AudioRequirement
+	item.ImageQuality = productionConfiguration.ImageQuality
+	item.TimelineTimebase = productionConfiguration.TimelineTimebase
+	item.FPSNumerator = productionConfiguration.FPSNumerator
+	item.FPSDenominator = productionConfiguration.FPSDenominator
+	compiledProfile, err := videoproduction.NewProfileCompiler().Compile(videoproduction.ProfileVersion{
+		ID: item.VideoProductionProfileVersionID, ProfileKey: item.VideoProductionProfileKey,
+		ProfileName: profileName, StrategyFamily: strategyFamily, Description: profileDescription,
+		Version: item.VideoProductionProfileVersion, LifecycleState: lifecycleState,
+		ImplementationState: implementationState, Configuration: profileConfiguration,
+		CapabilityRequirements: capabilityRequirements, PromptContract: promptContract,
+		InputContractVersion: item.VideoProductionInputContract,
+		ConfigurationHash:    configurationHash, PromptContractHash: promptContractHash,
+	}, true)
+	if err != nil {
+		return ProjectProductionSettings{}, err
+	}
+	var declaredContinuationContracts []string
+	if err := json.Unmarshal(continuationInputContracts, &declaredContinuationContracts); err != nil {
+		return ProjectProductionSettings{}, fmt.Errorf("decode video continuation input contracts: %w", err)
+	}
+	if len(declaredContinuationContracts) > 0 && !sameVideoContractValues(declaredContinuationContracts, compiledProfile.ContinuationContracts) {
+		return ProjectProductionSettings{}, videoproduction.Error{
+			Code:    videoproduction.CodeProfileIncompatible,
+			Message: "Profile continuation input contracts 与运行时策略不一致",
+		}
+	}
+	item.VideoProductionRequiredInitialInputContract = compiledProfile.InitialInputContract
+	item.VideoProductionAllowedContinuationInputContracts = compiledProfile.ContinuationContracts
 	if item.AspectRatio == "" {
 		item.AspectRatio = item.VideoRatio
 	}
-	return item, err
+	return item, nil
+}
+
+func sameVideoContractValues(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]bool, len(left))
+	for _, value := range left {
+		seen[strings.ToLower(strings.TrimSpace(value))] = true
+	}
+	for _, value := range right {
+		if !seen[strings.ToLower(strings.TrimSpace(value))] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a Activities) listCanonicalAssets(ctx context.Context, projectID string) ([]CanonicalAssetRecord, error) {
@@ -238,14 +359,15 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 		return "", nil, nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+	runCtx, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution)
+	if err != nil {
 		return "", nil, nil, err
 	}
 	nodeRunID := execution.NodeRunID
 	var artifactID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, metadata, created_by)
-		VALUES ($1, $2, $3, $4, 'storyboard_json', $5, 'application/json', $6, $7, $8, $9)
+		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, metadata, created_by, production_generation_id)
+		VALUES ($1, $2, $3, $4, 'storyboard_json', $5, 'application/json', $6, $7, $8, $9, $10)
 		RETURNING id
 	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, nodeRunID, put.StorageKey, put.ContentHash, promptHash, mustJSON(map[string]any{
 		"source":          "script_to_storyboard",
@@ -259,7 +381,7 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 		"byteSize":        put.ByteSize,
 		"shotCount":       len(shots),
 		"durationMetrics": durationMetrics,
-	}), input.CreatedBy).Scan(&artifactID); err != nil {
+	}), input.CreatedBy, runCtx.ProductionGenerationID).Scan(&artifactID); err != nil {
 		return "", nil, nil, err
 	}
 	if input.ScriptEpisodeID != "" {
@@ -305,13 +427,13 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 				episode_index, episode_shot_index, shot_index, shot_no, title,
 				start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source, timing_confidence,
 				visual, camera, motion, mood, image_prompt, video_prompt, script_dialogue,
-				status, metadata
+				status, metadata, production_generation_id
 			)
 			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::uuid, NULLIF($8, '')::uuid, 'script_agent',
 			        NULLIF($9, 0), CASE WHEN NULLIF($8, '') IS NULL THEN NULL ELSE $10::integer END, $11, $12, NULLIF($13, ''),
 			        $14, $15, $16, $17, $18, $19,
 			        NULLIF($20, ''), NULLIF($21, ''), NULLIF($22, ''), NULLIF($23, ''), NULLIF($24, ''), NULLIF($25, ''), $26,
-			        'storyboard_ready', $27)
+			        'storyboard_ready', $27, $31)
 			ON CONFLICT (workflow_run_id, shot_index)
 				WHERE workflow_run_id IS NOT NULL AND deleted_at IS NULL
 			DO UPDATE SET
@@ -417,7 +539,7 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 				"endTick":              shot.EndTick,
 				"plannedDurationTicks": shot.DurationTicks,
 				"timelineTimebase":     project.TimelineTimebase,
-			}), project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator).Scan(
+			}), project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator, runCtx.ProductionGenerationID).Scan(
 			&record.ID,
 			&record.WorkflowRunID,
 			&record.ScriptSceneID,
@@ -590,11 +712,13 @@ func upsertShotAssetRequirementRecord(ctx context.Context, tx pgx.Tx, input Gene
 			INSERT INTO shot_asset_requirements(
 				organization_id, project_id, workflow_run_id, storyboard_shot_id, asset_id,
 				requirement_type, role_in_shot, costume, pose, expression, action,
-				camera_relation, scene_state, prop_state, prompt, status, stale_state, metadata
+				camera_relation, scene_state, prop_state, prompt, status, stale_state, metadata,
+				production_generation_id
 			)
 			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''),
 			        NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
-			        NULLIF($15, ''), 'pending', 'fresh', $16)
+			        NULLIF($15, ''), 'pending', 'fresh', $16,
+			        (SELECT production_generation_id FROM storyboard_shots WHERE id = $4))
 			RETURNING id::text, status, COALESCE(manual_override, false), COALESCE(stale_state, 'fresh')
 		`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, shot.ID, asset.ID,
 			req.RequirementType, req.RoleInShot, req.Costume, req.Pose, req.Expression, req.Action,
@@ -762,6 +886,7 @@ func (a Activities) storyboardShotByID(ctx context.Context, projectID, shotID st
 			COALESCE(s.image_artifact_id::text, ''),
 			COALESCE(s.image_media_file_id::text, ''),
 			COALESCE(s.image_storage_key, ''),
+			COALESCE(s.image_status, 'pending'),
 			COALESCE(s.video_artifact_id::text, ''),
 			COALESCE(s.video_media_file_id::text, ''),
 			COALESCE(s.video_storage_key, ''),
@@ -771,7 +896,18 @@ func (a Activities) storyboardShotByID(ctx context.Context, projectID, shotID st
 			COALESCE(s.manual_override, false),
 			COALESCE(s.stale_state, 'fresh')
 		FROM storyboard_shots s
-		JOIN projects p ON p.id = s.project_id
+		JOIN project_video_production_generations generation
+		  ON generation.id = s.production_generation_id
+		 AND generation.project_id = s.project_id
+		JOIN project_video_production_bindings binding
+		  ON binding.id = generation.binding_id
+		 AND binding.project_id = s.project_id
+		JOIN LATERAL (
+		  SELECT
+		    NULLIF(binding.profile_snapshot #>> '{productionConfiguration,timelineTimebase}', '')::bigint AS timeline_timebase,
+		    NULLIF(binding.profile_snapshot #>> '{productionConfiguration,fpsNumerator}', '')::integer AS fps_numerator,
+		    NULLIF(binding.profile_snapshot #>> '{productionConfiguration,fpsDenominator}', '')::integer AS fps_denominator
+		) p ON p.timeline_timebase > 0 AND p.fps_numerator > 0 AND p.fps_denominator > 0
 		WHERE s.project_id = $1 AND s.id = $2 AND s.deleted_at IS NULL
 	`, projectID, shotID))
 }
@@ -1165,9 +1301,9 @@ func (a Activities) shotVideoReferenceContext(ctx context.Context, projectID str
 			"sourceId":     shot.ID,
 		}),
 	}
-	hasShotImage := shot.ImageArtifactID != "" || shot.ImageMediaFileID != "" || shot.ImageStorageKey != ""
+	hasFreshShotImage := freshShotImageAvailable(shot)
 	if mode == "auto" {
-		if hasShotImage {
+		if hasFreshShotImage {
 			context.References = []provider.GatewayVideoReference{shotImage}
 			context.ResolvedReferenceKeys = []string{shotImageKey}
 			return context, nil
@@ -1185,7 +1321,7 @@ func (a Activities) shotVideoReferenceContext(ctx context.Context, projectID str
 		return ShotVideoReferenceContext{}, err
 	}
 	videoCandidates := make(map[string]provider.GatewayVideoReference, len(candidates)+1)
-	if hasShotImage {
+	if hasFreshShotImage {
 		videoCandidates[shotImageKey] = shotImage
 	}
 	for key, reference := range candidates {
@@ -1211,6 +1347,14 @@ func (a Activities) shotVideoReferenceContext(ctx context.Context, projectID str
 		}
 	}
 	return context, nil
+}
+
+func freshShotImageAvailable(shot StoryboardShotRecord) bool {
+	return strings.TrimSpace(shot.ImageStatus) == "succeeded" &&
+		strings.TrimSpace(shot.StaleState) == "fresh" &&
+		(strings.TrimSpace(shot.ImageArtifactID) != "" ||
+			strings.TrimSpace(shot.ImageMediaFileID) != "" ||
+			strings.TrimSpace(shot.ImageStorageKey) != "")
 }
 
 func videoReferenceFromImage(reference provider.GatewayImageReference) provider.GatewayVideoReference {
@@ -1390,11 +1534,35 @@ func (a Activities) completeDerivedAssetImage(ctx context.Context, input Generat
 		SET derived_artifact_id = NULLIF($2, '')::uuid,
 		    derived_media_file_id = NULLIF($3, '')::uuid,
 		    derived_storage_key = NULLIF($4, ''),
+		    prompt = NULLIF($5, ''),
+		    metadata = (COALESCE(metadata, '{}'::jsonb) - 'derivedImageWorkflowRunId') || jsonb_build_object(
+		      'providerCallId', $6::text,
+		      'modelId', $7::text,
+		      'promptTemplateKey', $8::text,
+		      'promptVersionId', $9::text,
+		      'promptHash', $10::text,
+		      'promptSource', $11::text,
+		      'generatedWorkflowRunId', $12::text,
+		      'generatedAt', now()
+		    ),
 		    status = 'image_succeeded',
 		    stale_state = 'fresh',
 		    updated_at = now()
 		WHERE id = $1
-	`, input.RequirementID, output.ImageArtifactID, output.ImageMediaFileID, output.ImageStorageKey); err != nil {
+	`, input.RequirementID, output.ImageArtifactID, output.ImageMediaFileID, output.ImageStorageKey,
+		output.RenderedPrompt, output.ProviderCallID, output.ModelID, output.PromptTemplateKey,
+		output.PromptVersionID, output.PromptHash, output.PromptSource, input.WorkflowRunID); err != nil {
+		return err
+	}
+	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "shot_asset_requirement.derived_image.generated", "shot_asset_requirement", input.RequirementID, mustJSON(map[string]any{
+		"requirementId":     input.RequirementID,
+		"providerCallId":    output.ProviderCallID,
+		"modelId":           output.ModelID,
+		"promptTemplateKey": output.PromptTemplateKey,
+		"promptVersionId":   output.PromptVersionID,
+		"promptHash":        output.PromptHash,
+		"workflowRunId":     input.WorkflowRunID,
+	})); err != nil {
 		return err
 	}
 	if _, err := completeNodeRunTx(ctx, tx, execution, mustJSON(output)); err != nil {

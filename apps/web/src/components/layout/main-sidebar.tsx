@@ -6,8 +6,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/cn";
 import { globalNavItems } from "@/lib/routes";
 import type { GlobalSection } from "@/lib/routes";
+import { useStudioSession } from "@/lib/session";
 
 export function MainSidebar({ active }: { active: GlobalSection }) {
+  const { session } = useStudioSession();
+  const visibleItems = globalNavItems.filter((item) => !item.systemOnly || session.user?.systemAdministrator);
   return (
     <aside className="hidden h-full w-16 shrink-0 border-r bg-sidebar lg:flex lg:flex-col">
       {/* Logo */}
@@ -19,7 +22,7 @@ export function MainSidebar({ active }: { active: GlobalSection }) {
 
       {/* Nav items */}
       <nav className="flex flex-1 flex-col gap-1 p-2" aria-label="全局导航">
-        {globalNavItems.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = item.icon;
           const isActive = active === item.section;
           return (
@@ -48,9 +51,11 @@ export function MainSidebar({ active }: { active: GlobalSection }) {
 }
 
 export function MobileGlobalNav({ active }: { active: GlobalSection }) {
+  const { session } = useStudioSession();
+  const visibleItems = globalNavItems.filter((item) => !item.systemOnly || session.user?.systemAdministrator);
   return (
     <nav className="flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar px-2 py-2 lg:hidden" aria-label="全局导航">
-      {globalNavItems.map((item) => {
+      {visibleItems.map((item) => {
         const Icon = item.icon;
         const isActive = active === item.section;
         return (

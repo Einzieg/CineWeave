@@ -188,6 +188,9 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 		} else {
 			image = imageResults[index].Output
 		}
+		if err := finalizeStoryboardSheetImage(ctx, input, image); err != nil {
+			return VideoProductionOutput{}, err
+		}
 		imagesByShotID[shot.ID] = image
 		if image.ProviderCallID != "" {
 			providerCalls.Images = append(providerCalls.Images, image.ProviderCallID)
@@ -209,7 +212,7 @@ func VideoProductionWorkflow(ctx workflow.Context, input TextToStoryboardInput) 
 		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL, RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	var videoBatch BatchShotProductionOutput
-	if err := workflow.ExecuteChildWorkflow(workflow.WithChildOptions(ctx, childOptions), BatchGenerateShotVideosWorkflow, videoBatchInput).Get(ctx, &videoBatch); err != nil {
+	if err := workflow.ExecuteChildWorkflow(workflow.WithChildOptions(ctx, childOptions), EpisodeBatchGenerateShotVideosWorkflow, videoBatchInput).Get(ctx, &videoBatch); err != nil {
 		return VideoProductionOutput{}, err
 	}
 	providerCalls.VideoCreates = append(providerCalls.VideoCreates, videoBatch.VideoCreateProviderCallIDs...)

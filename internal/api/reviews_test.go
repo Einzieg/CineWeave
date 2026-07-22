@@ -164,6 +164,7 @@ func (s *artifactPreviewSeed) registerOrgMember(t *testing.T, name string) auth.
 	t.Helper()
 	resp, err := s.authService.Register(s.ctx, auth.RegisterRequest{
 		Email:            name + "-" + randomStorageSegment() + "@example.test",
+		Username:         randomStorageSegment(),
 		Password:         "Password123!",
 		DisplayName:      name,
 		OrganizationName: name + " Org",

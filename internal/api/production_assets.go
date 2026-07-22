@@ -17,6 +17,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/production"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
 )
@@ -73,26 +74,27 @@ type AssetSceneLink struct {
 }
 
 type AssetReference struct {
-	ID              string          `json:"id"`
-	OrganizationID  string          `json:"organizationId"`
-	ProjectID       string          `json:"projectId"`
-	AssetID         string          `json:"assetId"`
-	ReferenceType   string          `json:"referenceType"`
-	Title           *string         `json:"title,omitempty"`
-	Description     *string         `json:"description,omitempty"`
-	ArtifactID      *string         `json:"artifactId,omitempty"`
-	MediaFileID     *string         `json:"mediaFileId,omitempty"`
-	StorageKey      *string         `json:"storageKey,omitempty"`
-	PreviewURL      *string         `json:"previewUrl,omitempty"`
-	Prompt          *string         `json:"prompt,omitempty"`
-	PromptVersionID *string         `json:"promptVersionId,omitempty"`
-	PromptHash      *string         `json:"promptHash,omitempty"`
-	IsPrimary       bool            `json:"isPrimary"`
-	Status          string          `json:"status"`
-	Metadata        json.RawMessage `json:"metadata"`
-	CreatedBy       *string         `json:"createdBy,omitempty"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	UpdatedAt       time.Time       `json:"updatedAt"`
+	ID               string          `json:"id"`
+	OrganizationID   string          `json:"organizationId"`
+	ProjectID        string          `json:"projectId"`
+	AssetID          string          `json:"assetId"`
+	ReferenceType    string          `json:"referenceType"`
+	Title            *string         `json:"title,omitempty"`
+	Description      *string         `json:"description,omitempty"`
+	ArtifactID       *string         `json:"artifactId,omitempty"`
+	MediaFileID      *string         `json:"mediaFileId,omitempty"`
+	StorageKey       *string         `json:"storageKey,omitempty"`
+	PreviewURL       *string         `json:"previewUrl,omitempty"`
+	PreviewExpiresAt *time.Time      `json:"previewExpiresAt,omitempty"`
+	Prompt           *string         `json:"prompt,omitempty"`
+	PromptVersionID  *string         `json:"promptVersionId,omitempty"`
+	PromptHash       *string         `json:"promptHash,omitempty"`
+	IsPrimary        bool            `json:"isPrimary"`
+	Status           string          `json:"status"`
+	Metadata         json.RawMessage `json:"metadata"`
+	CreatedBy        *string         `json:"createdBy,omitempty"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
 }
 
 type GenerateAssetCardRequest struct {
@@ -124,6 +126,8 @@ type ShotAssetRequirement struct {
 	WorkflowRunID      *string         `json:"workflowRunId,omitempty"`
 	StoryboardShotID   string          `json:"storyboardShotId"`
 	AssetID            string          `json:"assetId"`
+	AssetType          string          `json:"assetType,omitempty"`
+	AssetName          string          `json:"assetName,omitempty"`
 	RequirementType    string          `json:"requirementType"`
 	RoleInShot         *string         `json:"roleInShot,omitempty"`
 	Costume            *string         `json:"costume,omitempty"`
@@ -155,6 +159,11 @@ func (s *Server) listCanonicalAssets(w http.ResponseWriter, r *http.Request, pri
 		return
 	}
 	assetType := strings.TrimSpace(r.URL.Query().Get("filter[type]"))
+	includePreview := strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true")
+	if includePreview && s.storage == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
+		return
+	}
 	statusFilter, valid := parseArchivedStatusFilter(r.URL.Query().Get("filter[status]"))
 	if !valid {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "canonical asset status filter is invalid", nil, false)
@@ -194,7 +203,7 @@ func (s *Server) listCanonicalAssets(w http.ResponseWriter, r *http.Request, pri
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.attachCanonicalAssetReferences(r, project.ID, items, false); err != nil {
+	if err := s.attachCanonicalAssetReferences(r, project.ID, items, includePreview); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -508,7 +517,11 @@ func (s *Server) canonicalAssetImpact(r *http.Request, projectID, assetID string
 		SELECT
 			(SELECT count(*) FROM scene_asset_links WHERE project_id = $1 AND asset_id = $2),
 			(SELECT count(*) FROM asset_references WHERE project_id = $1 AND asset_id = $2 AND status <> 'archived'),
-			(SELECT count(*) FROM shot_asset_requirements WHERE project_id = $1 AND asset_id = $2),
+			(
+				SELECT count(*) FROM shot_asset_requirements
+				WHERE project_id = $1 AND asset_id = $2
+				  AND production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
+			),
 			(
 				SELECT count(*)
 				FROM (
@@ -519,6 +532,7 @@ func (s *Server) canonicalAssetImpact(r *http.Request, projectID, assetID string
 					UNION ALL
 					SELECT id FROM shot_asset_requirements
 					WHERE project_id = $1 AND asset_id = $2
+					  AND production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
 					  AND (derived_artifact_id IS NOT NULL OR derived_media_file_id IS NOT NULL OR COALESCE(derived_storage_key, '') <> '')
 				) media
 			)
@@ -578,24 +592,29 @@ func (s *Server) generateAssetCard(w http.ResponseWriter, r *http.Request, princ
 		s.writeError(w, r, err)
 		return
 	}
+	canonicalSource := assetprompts.BuildCanonicalCardSource(asset.AssetType, asset.Description, asset.VisualTraits, scenes)
 	variables := map[string]any{
 		"project": map[string]any{
-			"id":             project.ID,
-			"aspectRatio":    stringValue(project.AspectRatio),
-			"videoRatio":     project.VideoRatio,
-			"artStyle":       project.ArtStyle,
-			"imageQuality":   project.ImageQuality,
-			"productionMode": project.ProductionMode,
+			"id":                        project.ID,
+			"aspectRatio":               stringValue(project.AspectRatio),
+			"videoRatio":                project.VideoRatio,
+			"artStyle":                  project.ArtStyle,
+			"imageQuality":              project.ImageQuality,
+			"videoProductionProfileKey": project.VideoProductionBinding.ProfileKey,
 		},
 		"visualContext": visualContext.promptVariables(),
 		"asset": map[string]any{
 			"id":           asset.ID,
 			"assetType":    asset.AssetType,
 			"name":         asset.Name,
-			"description":  assetprompts.RuntimePromptField(asset.Description, 1200),
-			"visualTraits": asset.VisualTraits,
+			"description":  canonicalSource.Description,
+			"visualTraits": canonicalSource.VisualTraits,
+			"canonicalBaselinePolicy": map[string]any{
+				"stableIdentityOnly":   true,
+				"transientStateTarget": "shot_derived_asset",
+			},
 		},
-		"scenes":                assetprompts.RuntimePromptField(scenes, assetprompts.RuntimeAssetSceneContextMaxRunes),
+		"scenes":                canonicalSource.SceneContext,
 		"validationFeedback":    "",
 		"previousRejectedDraft": map[string]any{},
 	}
@@ -603,7 +622,7 @@ func (s *Server) generateAssetCard(w http.ResponseWriter, r *http.Request, princ
 	var gatewayResp provider.GatewayTextResponse
 	var draft assetCardDraft
 	providerCallIDs := make([]string, 0, 2)
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		rendered, gatewayResp, err = s.runTextGatewayPrompt(r, project, "asset_card_generation", variables, true)
 		if err != nil {
 			s.writeError(w, r, err)
@@ -615,9 +634,12 @@ func (s *Server) generateAssetCard(w http.ResponseWriter, r *http.Request, princ
 			err = assetprompts.ValidateGeneratedCardStyle(visualContext.StyleSlug, draft.BasePrompt, draft.ConsistencyPrompt)
 		}
 		if err == nil {
+			err = assetprompts.ValidateCanonicalAssetBaseline(asset.AssetType, draft.BasePrompt, draft.ConsistencyPrompt)
+		}
+		if err == nil {
 			break
 		}
-		if attempt == 1 {
+		if attempt == 2 {
 			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "ASSET_CARD_VISUAL_CONTRACT_FAILED", err.Error(), nil, false)
 			return
 		}
@@ -997,12 +1019,17 @@ func (s *Server) listShotAssetRequirements(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	if project.ProductionGeneration == nil || strings.TrimSpace(project.ProductionGeneration.ID) == "" {
+		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeGenerationMismatch, "项目没有活动的视频生产代", false))
+		return
+	}
 	shotID := strings.TrimSpace(r.URL.Query().Get("filter[storyboardShotId]"))
 	rows, err := s.db.Query(r.Context(), shotAssetRequirementSelectSQL(`
 		WHERE r.project_id = $1
 		  AND ($2 = '' OR r.storyboard_shot_id = $2::uuid)
+		  AND r.production_generation_id = $3
 		ORDER BY r.created_at ASC
-	`), project.ID, shotID)
+	`), project.ID, shotID, project.ProductionGeneration.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -1281,138 +1308,18 @@ func (s *Server) generateDerivedAssetImage(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	requirement, err := s.shotAssetRequirement(r, project.ID, r.PathValue("requirementId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	asset, err := s.canonicalAsset(r, project.ID, requirement.AssetID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if asset.Status == "archived" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "canonical asset is archived", nil, false)
-		return
-	}
-	shot, err := s.storyboardShotByID(r, project.ID, requirement.StoryboardShotID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	rendered, err := s.renderAPIProjectPrompt(r, project, "derived_asset_image_prompt", map[string]any{
-		"project": projectImagePromptVariables(project),
-		"baseAsset": map[string]any{
-			"name":        asset.Name,
-			"description": asset.Description,
-		},
-		"shot":        map[string]any{"summary": shotSummary(shot)},
-		"requirement": map[string]any{"summary": requirementSummary(requirement)},
+	result, err := s.createDerivedAssetBatchRun(r.Context(), principal, project, DerivedAssetBatchCreateOptions{
+		Mode:                    derivedAssetBatchModeExplicit,
+		RequirementIDs:          []string{r.PathValue("requirementId")},
+		MaxConcurrency:          1,
+		ExpectedProjectRevision: project.Revision,
+		IdempotencyKey:          idempotencyKey(r, ""),
 	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	rendered, err = s.withToonflowVisualPrompt(r, project, rendered, asset.AssetType, true)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	rendered = withRuntimeImagePromptLimit(rendered)
-	if _, err := s.db.Exec(r.Context(), `
-		UPDATE shot_asset_requirements
-		SET status = 'image_running',
-		    metadata = (COALESCE(metadata, '{}'::jsonb) - 'imageFailedAt' - 'imageFailedReason')
-		               || jsonb_build_object('imageStartedAt', now()),
-		    updated_at = now()
-		WHERE id = $1
-	`, requirement.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	refs := make([]provider.GatewayImageReference, 0, 1)
-	if asset.ReferenceArtifactID != nil || asset.ReferenceStorageKey != nil {
-		refs = append(refs, provider.GatewayImageReference{
-			Type:       "image",
-			AssetID:    asset.ID,
-			ArtifactID: stringValue(asset.ReferenceArtifactID),
-			StorageKey: stringValue(asset.ReferenceStorageKey),
-		})
-	}
-	gatewayResp, err := provider.NewGatewayClientFromEnv().GenerateImage(r.Context(), provider.GatewayImageRequest{
-		OrganizationID:    project.OrganizationID,
-		ProjectID:         project.ID,
-		ModelProfileKey:   project.ImageModelProfileKey,
-		PromptTemplateKey: rendered.TemplateKey,
-		PromptVersionID:   rendered.PromptVersionID,
-		PromptHash:        rendered.RenderedHash,
-		PromptSource:      rendered.Source,
-		Input: mustMarshal(map[string]any{
-			"prompt":  rendered.RenderedText,
-			"size":    "1024x1024",
-			"n":       1,
-			"quality": project.ImageQuality,
-		}),
-		References: refs,
-	})
-	if err != nil {
-		if markErr := s.markShotAssetRequirementImageFailed(requirement.ID, err); markErr != nil {
-			s.writeError(w, r, markErr)
-			return
-		}
-		s.writeError(w, r, err)
-		return
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	provenance := mustRawJSON(map[string]any{
-		"providerCallId":    gatewayResp.ProviderCallID,
-		"modelId":           gatewayResp.ModelID,
-		"promptTemplateKey": rendered.TemplateKey,
-		"promptVersionId":   rendered.PromptVersionID,
-		"promptHash":        rendered.RenderedHash,
-		"promptSource":      rendered.Source,
-	})
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE shot_asset_requirements
-		SET derived_artifact_id = NULLIF($2, '')::uuid,
-		    derived_media_file_id = NULLIF($3, '')::uuid,
-		    derived_storage_key = NULLIF($4, ''),
-		    prompt = $5,
-		    metadata = COALESCE(metadata, '{}'::jsonb) || $6::jsonb,
-		    status = 'image_succeeded',
-		    stale_state = 'fresh'
-		WHERE id = $1
-	`, requirement.ID, gatewayResp.Output.ArtifactID, gatewayResp.Output.MediaFileID, gatewayResp.Output.StorageKey, rendered.RenderedText, provenance); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "shot_asset_requirement.derived_image.generated", "shot_asset_requirement", requirement.ID, mustRawJSON(map[string]any{
-		"requirementId":     requirement.ID,
-		"assetId":           asset.ID,
-		"providerCallId":    gatewayResp.ProviderCallID,
-		"modelId":           gatewayResp.ModelID,
-		"promptTemplateKey": rendered.TemplateKey,
-		"promptVersionId":   rendered.PromptVersionID,
-		"promptHash":        rendered.RenderedHash,
-	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	updated, err := s.shotAssetRequirement(r, project.ID, requirement.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"requirement": updated, "providerCallId": gatewayResp.ProviderCallID}, nil)
+	httpx.WriteJSON(w, r, http.StatusAccepted, result, nil)
 }
 
 func (s *Server) startProjectWorkflow(w http.ResponseWriter, r *http.Request, principal auth.Principal, project Project, workflowType string, input map[string]any, workflowFunc any) (WorkflowRun, bool) {
@@ -1425,13 +1332,25 @@ func (s *Server) startProjectWorkflow(w http.ResponseWriter, r *http.Request, pr
 }
 
 func (s *Server) startProjectWorkflowCore(ctx context.Context, principal auth.Principal, project Project, workflowType string, input map[string]any, workflowFunc any) (WorkflowRun, error) {
+	return s.startProjectWorkflowCoreWithHook(ctx, principal, project, workflowType, input, workflowFunc, nil)
+}
+
+func (s *Server) startProjectWorkflowCoreWithHook(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	workflowType string,
+	input map[string]any,
+	workflowFunc any,
+	afterEnqueue func(context.Context, pgx.Tx, WorkflowRun) error,
+) (WorkflowRun, error) {
 	inputJSON := json.RawMessage(mustMarshal(input))
 	runInput := json.RawMessage(mustMarshal(map[string]any{
 		"prompt":       "",
 		"workflowType": workflowType,
 		"input":        input,
 	}))
-	return s.enqueueProjectWorkflow(
+	return s.enqueueProjectWorkflowWithHook(
 		ctx,
 		principal,
 		project,
@@ -1449,6 +1368,7 @@ func (s *Server) startProjectWorkflowCore(ctx context.Context, principal auth.Pr
 				Input:          inputJSON,
 			}
 		},
+		afterEnqueue,
 	)
 }
 
@@ -1466,16 +1386,16 @@ func (s *Server) renderAPIProjectPrompt(r *http.Request, project Project, templa
 
 func projectImagePromptVariables(project Project) map[string]any {
 	return map[string]any{
-		"id":             project.ID,
-		"projectType":    stringValue(project.ProjectType),
-		"contentType":    stringValue(project.ContentType),
-		"aspectRatio":    stringValue(project.AspectRatio),
-		"videoRatio":     project.VideoRatio,
-		"artStyle":       project.ArtStyle,
-		"directorManual": assetprompts.RuntimeManualSummary(project.DirectorManual, assetprompts.RuntimeDirectorManualMaxRunes),
-		"visualManual":   assetprompts.RuntimeManualSummary(project.VisualManual, assetprompts.RuntimeVisualManualMaxRunes),
-		"imageQuality":   project.ImageQuality,
-		"productionMode": project.ProductionMode,
+		"id":                        project.ID,
+		"projectType":               stringValue(project.ProjectType),
+		"contentType":               stringValue(project.ContentType),
+		"aspectRatio":               stringValue(project.AspectRatio),
+		"videoRatio":                project.VideoRatio,
+		"artStyle":                  project.ArtStyle,
+		"directorManual":            assetprompts.RuntimeManualSummary(project.DirectorManual, assetprompts.RuntimeDirectorManualMaxRunes),
+		"visualManual":              assetprompts.RuntimeManualSummary(project.VisualManual, assetprompts.RuntimeVisualManualMaxRunes),
+		"imageQuality":              project.ImageQuality,
+		"videoProductionProfileKey": project.VideoProductionBinding.ProfileKey,
 	}
 }
 
@@ -1646,6 +1566,7 @@ func (s *Server) assetScenePromptContextWithDB(ctx context.Context, db snapshotQ
 }
 
 func (s *Server) assetReferences(r *http.Request, projectID, assetID string, includePreview bool) ([]AssetReference, error) {
+	previewExpires := previewURLExpiryFromRequest(r)
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, organization_id, project_id, asset_id, reference_type, title, description,
 		       artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
@@ -1665,8 +1586,9 @@ func (s *Server) assetReferences(r *http.Request, projectID, assetID string, inc
 			return nil, err
 		}
 		if includePreview && s.storage != nil && item.StorageKey != nil && strings.TrimSpace(*item.StorageKey) != "" {
-			if presigned, err := s.storage.PresignGetObject(r.Context(), *item.StorageKey, 15*time.Minute); err == nil {
+			if presigned, err := s.storage.PresignGetObject(r.Context(), *item.StorageKey, previewExpires); err == nil {
 				item.PreviewURL = &presigned.URL
+				item.PreviewExpiresAt = &presigned.ExpiresAt
 			}
 		}
 		items = append(items, item)
@@ -1678,6 +1600,7 @@ func (s *Server) attachCanonicalAssetReferences(r *http.Request, projectID strin
 	if len(items) == 0 {
 		return nil
 	}
+	previewExpires := previewURLExpiryFromRequest(r)
 	index := map[string]int{}
 	for i := range items {
 		index[items[i].ID] = i
@@ -1704,8 +1627,9 @@ func (s *Server) attachCanonicalAssetReferences(r *http.Request, projectID strin
 			continue
 		}
 		if includePreview && s.storage != nil && ref.StorageKey != nil && strings.TrimSpace(*ref.StorageKey) != "" {
-			if presigned, err := s.storage.PresignGetObject(r.Context(), *ref.StorageKey, 15*time.Minute); err == nil {
+			if presigned, err := s.storage.PresignGetObject(r.Context(), *ref.StorageKey, previewExpires); err == nil {
 				ref.PreviewURL = &presigned.URL
+				ref.PreviewExpiresAt = &presigned.ExpiresAt
 			}
 		}
 		items[i].References = append(items[i].References, ref)
@@ -1724,6 +1648,9 @@ func (s *Server) attachCanonicalAssetShotRequirements(r *http.Request, projectID
 	}
 	rows, err := s.db.Query(r.Context(), shotAssetRequirementSelectSQL(`
 		WHERE r.project_id = $1
+		  AND r.production_generation_id = (
+		    SELECT active_video_production_generation_id FROM projects WHERE id = $1
+		  )
 		ORDER BY r.created_at DESC
 	`), projectID)
 	if err != nil {
@@ -1984,12 +1911,14 @@ func shotAssetRequirementSelectSQL(where string) string {
 	return `
 		SELECT
 			r.id, r.organization_id, r.project_id, r.workflow_run_id, r.storyboard_shot_id,
-			r.asset_id, r.requirement_type, r.role_in_shot, r.costume, r.pose,
+			r.asset_id, COALESCE(a.asset_type, ''), COALESCE(a.name, ''),
+			r.requirement_type, r.role_in_shot, r.costume, r.pose,
 			r.expression, r.action, r.camera_relation, r.scene_state, r.prop_state,
 			r.prompt, r.derived_artifact_id, r.derived_media_file_id, r.derived_storage_key,
 			r.status, r.review_status, r.manual_override, r.stale_state, r.edited_by, r.edited_at,
 			r.metadata, r.created_at, r.updated_at
 		FROM shot_asset_requirements r
+		LEFT JOIN canonical_assets a ON a.id = r.asset_id
 	` + where
 }
 
@@ -2006,6 +1935,8 @@ func scanShotAssetRequirement(row rowScan) (ShotAssetRequirement, error) {
 		&workflowRunID,
 		&item.StoryboardShotID,
 		&item.AssetID,
+		&item.AssetType,
+		&item.AssetName,
 		&item.RequirementType,
 		&roleInShot,
 		&costume,

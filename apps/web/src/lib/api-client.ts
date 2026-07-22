@@ -8,13 +8,25 @@ import type {
   ApiEnvelope,
   Artifact,
   AuthResponse,
+  LoginResponse,
+  OrganizationInvitation,
+  OrganizationInvitationList,
+  OrganizationAuditLogList,
+  OrganizationMember,
+  OrganizationMemberList,
+  MemberPasswordReset,
   CanonicalAsset,
   CreateAssetBatchRequest,
+  CreatedSystemOrganization,
+  CreateSystemOrganizationRequest,
   CharacterVoiceProfile,
   AssetReference,
   ComposeTimelineResponse,
+  CreateProjectRequest,
   CreateProjectExportResponse,
   DownloadUrlResponse,
+  DerivedAssetBatchCommandResult,
+  DerivedAssetBatchProjection,
   FinalVideoVersion,
   EpisodeAudio,
   GenerateAssetCardResponse,
@@ -29,6 +41,7 @@ import type {
   NovelEventLink,
   NativeAudioReview,
   Organization,
+  OrganizationChoice,
   OutputImpact,
   ParseScriptScenesResponse,
   Permission,
@@ -48,6 +61,7 @@ import type {
   RegenerateResponse,
   PromptTemplate,
   ProviderAccount,
+  ProviderCredential,
   ProviderCallLog,
   ProviderCatalogEntry,
   ProviderCatalogInstallResponse,
@@ -58,35 +72,63 @@ import type {
   ProviderManifestValidationResult,
   ProviderModel,
   ProviderModelDiscoveryResult,
+  VideoCapabilityAttestation,
+  VideoCapabilityAttestationList,
   ProviderTestResult,
   ProviderUsageSummary,
   ReviewResponse,
   RetryFailedWorkflowRequest,
   Role,
+  RoleBinding,
+  RoleBindingList,
+  RoleImpact,
   RuntimeOperation,
   Script,
   ScriptEpisode,
   ScriptScene,
   ScriptVersion,
   ShotProductionActionResponse,
+  ShotProductionBatchRequest,
   ShotProductionStatus,
+  ShotReferencePackResponse,
+  ShotVisualAnchor,
+  ShotVisualAnchorResponse,
   SetupState,
   ShotAssetRequirement,
+  BatchReviewShotAssetRequirementsResponse,
   StoryboardShot,
   StoryboardShotDetail,
+  StoryboardShotStateResponse,
+  StoryboardShotTransition,
+  StoryboardShotTransitionResponse,
+  StoryboardSheetResponse,
   StoryboardPlan,
   StoryboardPlanEditResponse,
   ScriptTimingAnalysis,
   StudioSession,
+  SystemOrganizationList,
   Team,
+  TeamImpact,
+  TeamMember,
   TimelineClip,
   TimelineDetail,
+  UpdateProjectRequest,
   UpdateModelProfileBindingRequest,
   CreateModelProfileBindingRequest,
   UpdateStoryboardShotRequest,
   VideoRenderPlan,
+  VideoPromptPlan,
+  VideoPromptPlanResponse,
+  VideoProductionCompatibility,
+  VideoProductionConfigurationInput,
+  VideoProductionProfileKey,
+  VideoProductionProfileVersion,
+  VideoProductionRebuild,
+  VideoProductionRebuildImpact,
+  VideoProductionRebuildItem,
   WorkflowNodeRun,
   WorkflowRun,
+  WorkflowVideoProductionActivity,
   Workspace,
 } from "./types";
 import { localizePlatformError } from "./error-localization";
@@ -99,10 +141,18 @@ type ApiRequestOptions = {
   session?: StudioSession;
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined | null>;
+  idempotencyKey?: string;
 };
 
 type ProviderListStatus = "active" | "disabled" | "all";
+type ProviderCredentialStatus = "active" | "rotated" | "revoked" | "expired" | "all";
 type ArchiveListStatus = "active" | "archived" | "all";
+type CanonicalAssetListOptions = {
+  status?: ArchiveListStatus;
+  assetType?: string;
+  includePreviewUrl?: boolean;
+  previewExpiresSeconds?: number;
+};
 
 export class StudioApiError extends Error {
   code: string;
@@ -140,6 +190,9 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
   if (organizationId) {
     headers.set("X-Organization-Id", organizationId);
   }
+  if (options.idempotencyKey?.trim()) {
+    headers.set("Idempotency-Key", options.idempotencyKey.trim());
+  }
   const requestBody = options.body === undefined ? undefined : isFormData ? (options.body as BodyInit) : JSON.stringify(options.body);
   const response = await fetch(url, {
     method: options.method ?? (options.body === undefined ? "GET" : "POST"),
@@ -168,23 +221,197 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
 export const studioApi = {
   getSetupState: () => apiRequest<SetupState>("/api/system/setup-state"),
   setupSystem: (body: JsonRecord) => apiRequest<AuthResponse>("/api/system/setup", { method: "POST", body }),
-  login: (body: JsonRecord) => apiRequest<AuthResponse>("/api/auth/login", { method: "POST", body }),
+  login: (body: JsonRecord) => apiRequest<LoginResponse>("/api/auth/login", { method: "POST", body }),
+  selectOrganization: (organizationSelectionToken: string, organizationId: string) =>
+    apiRequest<AuthResponse>("/api/auth/select-organization", {
+      method: "POST",
+      body: { organizationSelectionToken, organizationId },
+    }),
+  switchOrganization: (session: StudioSession, organizationId: string) =>
+    apiRequest<AuthResponse>("/api/auth/switch-organization", {
+      method: "POST",
+      session,
+      body: { refreshToken: session.refreshToken, organizationId },
+    }),
   refreshAuth: (refreshToken: string) => apiRequest<AuthResponse>("/api/auth/refresh", { method: "POST", body: { refreshToken } }),
   logout: (refreshToken: string) => apiRequest<{ ok: boolean }>("/api/auth/logout", { method: "POST", body: { refreshToken } }),
-  me: (session: StudioSession) => apiRequest<{ user: AuthResponse["user"]; organizationId: string; workspaceId?: string }>("/api/auth/me", { session }),
+  completePasswordReset: (resetToken: string, password: string) =>
+    apiRequest<{ completed: boolean }>("/api/auth/password-reset/complete", {
+      method: "POST",
+      body: { resetToken, password },
+    }),
+  me: (session: StudioSession) => apiRequest<{
+    user: AuthResponse["user"];
+    organizationId: string;
+    workspaceId?: string;
+    organizations: OrganizationChoice[];
+    membership: OrganizationMember;
+    permissions: string[];
+  }>("/api/auth/me", { session }),
+  updateProfile: (session: StudioSession, body: { displayName?: string; avatarUrl?: string }) =>
+    apiRequest<AuthResponse["user"]>("/api/auth/me", { method: "PATCH", session, body }),
+  setInitialUsername: (session: StudioSession, username: string) =>
+    apiRequest<AuthResponse["user"]>("/api/auth/me/username", { method: "POST", session, body: { username } }),
+  registerWithInvitation: (body: JsonRecord) =>
+    apiRequest<AuthResponse>("/api/auth/register-with-invitation", { method: "POST", body }),
+  resolveOrganizationInvitation: (invitationToken: string) =>
+    apiRequest<OrganizationInvitation>("/api/organization-invitations/resolve", {
+      method: "POST",
+      body: { invitationToken },
+    }),
+  acceptOrganizationInvitation: (session: StudioSession, invitationToken: string) =>
+    apiRequest<AuthResponse>("/api/organization-invitations/accept", {
+      method: "POST",
+      session,
+      body: { invitationToken },
+    }),
 
   listOrganizations: (session: StudioSession) => apiRequest<ListEnvelope<Organization>>("/api/organizations", { session }),
+  listSystemOrganizations: (session: StudioSession, query?: { search?: string; page?: number; pageSize?: number }) =>
+    apiRequest<SystemOrganizationList>("/api/system/organizations", { session, query }),
+  createSystemOrganization: (session: StudioSession, body: CreateSystemOrganizationRequest) =>
+    apiRequest<CreatedSystemOrganization>("/api/system/organizations", { method: "POST", session, body }),
+  updateOrganization: (session: StudioSession, organizationId: string, name: string) =>
+    apiRequest<Organization>(`/api/organizations/${organizationId}`, { method: "PATCH", session, body: { name } }),
+  leaveOrganization: (session: StudioSession, organizationId: string) =>
+    apiRequest<{ left: boolean }>(`/api/organizations/${organizationId}/leave`, { method: "POST", session }),
+  listOrganizationAuditLogs: (
+    session: StudioSession,
+    organizationId: string,
+    query?: { action?: string; resourceType?: string; actorUserId?: string; page?: number; pageSize?: number },
+  ) => apiRequest<OrganizationAuditLogList>(`/api/organizations/${organizationId}/audit-logs`, { session, query }),
+  listOrganizationMembers: (
+    session: StudioSession,
+    organizationId: string,
+    query?: { search?: string; status?: string; page?: number; pageSize?: number },
+  ) => apiRequest<OrganizationMemberList>(`/api/organizations/${organizationId}/members`, { session, query }),
+  getOrganizationMember: (session: StudioSession, organizationId: string, userId: string) =>
+    apiRequest<OrganizationMember>(`/api/organizations/${organizationId}/members/${userId}`, { session }),
+  updateOrganizationMemberStatus: (
+    session: StudioSession,
+    organizationId: string,
+    userId: string,
+    status: "active" | "disabled",
+  ) => apiRequest<OrganizationMember>(`/api/organizations/${organizationId}/members/${userId}`, {
+    method: "PATCH",
+    session,
+    body: { status },
+  }),
+  updateOrganizationMemberProfile: (
+    session: StudioSession,
+    organizationId: string,
+    userId: string,
+    body: { displayName?: string; avatarUrl?: string },
+  ) => apiRequest<OrganizationMember>(`/api/organizations/${organizationId}/members/${userId}/profile`, {
+    method: "PATCH",
+    session,
+    body,
+  }),
+  issueOrganizationMemberPasswordReset: (session: StudioSession, organizationId: string, userId: string) =>
+    apiRequest<MemberPasswordReset>(`/api/organizations/${organizationId}/members/${userId}/password-reset`, {
+      method: "POST",
+      session,
+    }),
+  removeOrganizationMember: (session: StudioSession, organizationId: string, userId: string) =>
+    apiRequest<{ removed: boolean }>(`/api/organizations/${organizationId}/members/${userId}`, {
+      method: "DELETE",
+      session,
+    }),
+  listOrganizationInvitations: (session: StudioSession, organizationId: string, page = 1, pageSize = 25) =>
+    apiRequest<OrganizationInvitationList>(`/api/organizations/${organizationId}/invitations`, { session, query: { page, pageSize } }),
+  createOrganizationInvitation: (session: StudioSession, organizationId: string, body: JsonRecord) =>
+    apiRequest<OrganizationInvitation>(`/api/organizations/${organizationId}/invitations`, {
+      method: "POST",
+      session,
+      body,
+    }),
+  revokeOrganizationInvitation: (session: StudioSession, organizationId: string, invitationId: string) =>
+    apiRequest<{ revoked: boolean }>(`/api/organizations/${organizationId}/invitations/${invitationId}`, {
+      method: "DELETE",
+      session,
+    }),
   listWorkspaces: (session: StudioSession) => apiRequest<ListEnvelope<Workspace>>("/api/workspaces", { session }),
   listTeams: (session: StudioSession) => apiRequest<ListEnvelope<Team>>("/api/teams", { session }),
   createTeam: (session: StudioSession, body: JsonRecord) => apiRequest<Team>("/api/teams", { method: "POST", session, body }),
+  getTeam: (session: StudioSession, teamId: string) => apiRequest<Team>(`/api/teams/${teamId}`, { session }),
+  updateTeam: (session: StudioSession, teamId: string, body: JsonRecord) => apiRequest<Team>(`/api/teams/${teamId}`, { method: "PATCH", session, body }),
+  getTeamImpact: (session: StudioSession, teamId: string) => apiRequest<TeamImpact>(`/api/teams/${teamId}/impact`, { session }),
+  listTeamMembers: (session: StudioSession, teamId: string) => apiRequest<ListEnvelope<TeamMember>>(`/api/teams/${teamId}/members`, { session }),
+  addTeamMember: (session: StudioSession, teamId: string, userId: string) => apiRequest<TeamMember>(`/api/teams/${teamId}/members`, { method: "POST", session, body: { userId } }),
+  removeTeamMember: (session: StudioSession, teamId: string, userId: string) => apiRequest<{ deleted: boolean }>(`/api/teams/${teamId}/members/${userId}`, { method: "DELETE", session }),
   listRoles: (session: StudioSession) => apiRequest<ListEnvelope<Role>>("/api/roles", { session }),
+  createCustomRole: (session: StudioSession, body: JsonRecord) => apiRequest<Role>("/api/roles", { method: "POST", session, body }),
+  getRole: (session: StudioSession, roleId: string) => apiRequest<Role>(`/api/roles/${roleId}`, { session }),
+  updateCustomRole: (session: StudioSession, roleId: string, body: JsonRecord) => apiRequest<Role>(`/api/roles/${roleId}`, { method: "PATCH", session, body }),
+  deleteCustomRole: (session: StudioSession, roleId: string) => apiRequest<{ deleted: boolean }>(`/api/roles/${roleId}`, { method: "DELETE", session }),
+  getRoleImpact: (session: StudioSession, roleId: string) => apiRequest<RoleImpact>(`/api/roles/${roleId}/impact`, { session }),
   listPermissions: (session: StudioSession) => apiRequest<ListEnvelope<Permission>>("/api/permissions", { session }),
+  listRoleBindings: (session: StudioSession, query?: { subjectType?: string; subjectId?: string; resourceType?: string; resourceId?: string; roleId?: string; page?: string; pageSize?: string }) =>
+	apiRequest<RoleBindingList>("/api/role-bindings", { session, query }),
+  createRoleBinding: (session: StudioSession, body: JsonRecord) => apiRequest<RoleBinding>("/api/role-bindings", { method: "POST", session, body }),
+  deleteRoleBinding: (session: StudioSession, roleBindingId: string) => apiRequest<{ deleted: boolean }>(`/api/role-bindings/${roleBindingId}`, { method: "DELETE", session }),
 
   listProjects: (session: StudioSession) => apiRequest<ListEnvelope<Project>>("/api/projects", { session }),
   getProject: (session: StudioSession, projectId: string) => apiRequest<Project>(`/api/projects/${projectId}`, { session }),
-  createProject: (session: StudioSession, body: JsonRecord) => apiRequest<Project>("/api/projects", { method: "POST", session, body }),
-  updateProject: (session: StudioSession, projectId: string, body: JsonRecord) =>
+  createProject: (session: StudioSession, body: CreateProjectRequest) => apiRequest<Project>("/api/projects", { method: "POST", session, body }),
+  updateProject: (session: StudioSession, projectId: string, body: UpdateProjectRequest) =>
     apiRequest<Project>(`/api/projects/${projectId}`, { method: "PATCH", session, body }),
+  listVideoProductionProfiles: (session: StudioSession) =>
+    apiRequest<ListEnvelope<VideoProductionProfileVersion>>("/api/video-production-profiles", { session }),
+  getProjectVideoProductionProfile: (session: StudioSession, projectId: string) =>
+    apiRequest<{
+      profile: VideoProductionProfileVersion;
+      binding: Project["videoProductionBinding"];
+      productionGeneration: Project["productionGeneration"];
+      state: NonNullable<Project["videoProductionState"]>;
+      locked: boolean;
+    }>(`/api/projects/${projectId}/video-production-profile`, { session }),
+  getProjectVideoProductionCompatibility: (
+    session: StudioSession,
+    projectId: string,
+    targetProfileKey?: VideoProductionProfileKey,
+    targetProfileVersion?: number,
+  ) =>
+    apiRequest<VideoProductionCompatibility>(`/api/projects/${projectId}/video-production-profile/compatibility`, {
+      session,
+      query: { targetProfileKey, targetProfileVersion },
+    }),
+  getProjectVideoProductionRebuildImpact: (
+    session: StudioSession,
+    projectId: string,
+    targetProfileKey: VideoProductionProfileKey,
+    targetProfileVersion?: number,
+    targetConfiguration?: VideoProductionConfigurationInput,
+  ) =>
+    apiRequest<{ impact: VideoProductionRebuildImpact; compatibility: VideoProductionCompatibility }>(
+      `/api/projects/${projectId}/video-production/rebuild-impact`,
+      { method: "POST", session, body: { targetProfileKey, targetProfileVersion, targetConfiguration } },
+    ),
+  createProjectVideoProductionRebuild: (
+    session: StudioSession,
+    projectId: string,
+    idempotencyKey: string,
+    body: { expectedProjectRevision: number; targetProfileKey: VideoProductionProfileKey; targetProfileVersion?: number; targetConfiguration: VideoProductionConfigurationInput; impactToken: string },
+  ) =>
+    apiRequest<VideoProductionRebuild>(`/api/projects/${projectId}/video-production/rebuilds`, {
+      method: "POST",
+      session,
+      idempotencyKey,
+      body,
+    }),
+  getCurrentProjectVideoProductionRebuild: (session: StudioSession, projectId: string) =>
+    apiRequest<VideoProductionRebuild | null>(`/api/projects/${projectId}/video-production/rebuilds/current`, { session }),
+  getProjectVideoProductionRebuild: (session: StudioSession, projectId: string, rebuildId: string) =>
+    apiRequest<VideoProductionRebuild>(`/api/projects/${projectId}/video-production/rebuilds/${rebuildId}`, { session }),
+  listProjectVideoProductionRebuildItems: (session: StudioSession, projectId: string, rebuildId: string) =>
+    apiRequest<ListEnvelope<VideoProductionRebuildItem>>(`/api/projects/${projectId}/video-production/rebuilds/${rebuildId}/items`, { session }),
+  retryFailedProjectVideoProductionRebuildItems: (session: StudioSession, projectId: string, rebuildId: string, idempotencyKey: string) =>
+    apiRequest<VideoProductionRebuild>(`/api/projects/${projectId}/video-production/rebuilds/${rebuildId}/retry-failed`, {
+      method: "POST",
+      session,
+      idempotencyKey,
+      body: {},
+    }),
   listProjectManualTemplates: (session: StudioSession, kind?: "director" | "visual") =>
     apiRequest<ListEnvelope<PromptTemplate>>("/api/project-manual-templates", {
       session,
@@ -240,6 +467,10 @@ export const studioApi = {
     apiRequest<ShotProductionStatus>(`/api/projects/${projectId}/shot-production/status`, { session, query }),
   runShotProductionAction: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<ShotProductionActionResponse>(`/api/projects/${projectId}/shot-production/actions`, { method: "POST", session, body }),
+  generateVideoPromptsBatch: (session: StudioSession, projectId: string, body: ShotProductionBatchRequest) =>
+    apiRequest<ShotProductionActionResponse>(`/api/projects/${projectId}/video-prompts/generate-batch`, { method: "POST", session, body }),
+  generateShotVideosBatch: (session: StudioSession, projectId: string, body: ShotProductionBatchRequest) =>
+    apiRequest<ShotProductionActionResponse>(`/api/projects/${projectId}/shot-videos/generate-batch`, { method: "POST", session, body }),
   regenerate: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<RegenerateResponse>(`/api/projects/${projectId}/regenerate`, { method: "POST", session, body }),
   listTimelines: (session: StudioSession, projectId: string) =>
@@ -407,13 +638,25 @@ export const studioApi = {
   resumeAgentTask: (session: StudioSession, projectId: string, taskId: string) =>
     apiRequest<AgentTask>(`/api/projects/${projectId}/agent/tasks/${taskId}/resume`, { method: "POST", session, body: {} }),
 
-  listCanonicalAssets: (session: StudioSession, projectId: string, status?: ArchiveListStatus) =>
+  listCanonicalAssets: (
+    session: StudioSession,
+    projectId: string,
+    options: CanonicalAssetListOptions = {},
+  ) =>
     apiRequest<ListEnvelope<CanonicalAsset>>(`/api/projects/${projectId}/canonical-assets`, {
       session,
-      query: status ? { "filter[status]": status } : undefined,
+      query: {
+        "filter[status]": options.status,
+        "filter[type]": options.assetType?.trim() || undefined,
+        includePreviewUrl: options.includePreviewUrl || undefined,
+        previewExpiresSeconds: options.includePreviewUrl ? options.previewExpiresSeconds ?? 900 : undefined,
+      },
     }),
-  getCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, includePreviewUrl = false) =>
-    apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, { session, query: includePreviewUrl ? { includePreviewUrl: "true" } : undefined }),
+  getCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, includePreviewUrl = false, previewExpiresSeconds = 900) =>
+    apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, {
+      session,
+      query: includePreviewUrl ? { includePreviewUrl: true, previewExpiresSeconds } : undefined,
+    }),
   updateCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
     apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, { method: "PATCH", session, body }),
   getCanonicalAssetImpact: (session: StudioSession, projectId: string, assetId: string) =>
@@ -426,8 +669,11 @@ export const studioApi = {
     }),
   generateAssetCard: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
     apiRequest<GenerateAssetCardResponse>(`/api/projects/${projectId}/canonical-assets/${assetId}/generate-card`, { method: "POST", session, body }),
-  listAssetReferences: (session: StudioSession, projectId: string, assetId: string, includePreviewUrl = false) =>
-    apiRequest<ListEnvelope<AssetReference>>(`/api/projects/${projectId}/canonical-assets/${assetId}/references`, { session, query: includePreviewUrl ? { includePreviewUrl: "true" } : undefined }),
+  listAssetReferences: (session: StudioSession, projectId: string, assetId: string, includePreviewUrl = false, previewExpiresSeconds = 900) =>
+    apiRequest<ListEnvelope<AssetReference>>(`/api/projects/${projectId}/canonical-assets/${assetId}/references`, {
+      session,
+      query: includePreviewUrl ? { includePreviewUrl: true, previewExpiresSeconds } : undefined,
+    }),
   createAssetReferenceUploadUrl: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
     apiRequest<{ storageKey: string; uploadUrl: string; method: string; headers: Record<string, string | string[]>; expiresAt: string }>(`/api/projects/${projectId}/canonical-assets/${assetId}/references/upload-url`, { method: "POST", session, body }),
   createAssetReference: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
@@ -448,9 +694,11 @@ export const studioApi = {
   listShotAssetRequirements: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<ShotAssetRequirement>>(`/api/projects/${projectId}/shot-asset-requirements`, { session }),
   generateDerivedAssetImage: (session: StudioSession, projectId: string, requirementId: string) =>
-    apiRequest<{ requirement: ShotAssetRequirement; providerCallId: string }>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}/generate-image`, { method: "POST", session, body: {} }),
+    apiRequest<DerivedAssetBatchCommandResult>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}/generate-image`, { method: "POST", session, body: {} }),
   reviewShotAssetRequirement: (session: StudioSession, projectId: string, requirementId: string, body: JsonRecord) =>
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}/review`, { method: "POST", session, body }),
+  batchReviewShotAssetRequirements: (session: StudioSession, projectId: string, body: JsonRecord) =>
+    apiRequest<BatchReviewShotAssetRequirementsResponse>(`/api/projects/${projectId}/shot-asset-requirements/review-batch`, { method: "POST", session, body }),
   updateShotAssetRequirement: (session: StudioSession, projectId: string, requirementId: string, body: JsonRecord) =>
     apiRequest<ShotAssetRequirement>(`/api/projects/${projectId}/shot-asset-requirements/${requirementId}`, { method: "PATCH", session, body }),
   skipShotAssetRequirement: (session: StudioSession, projectId: string, requirementId: string) =>
@@ -489,6 +737,10 @@ export const studioApi = {
     apiRequest<RuntimeOperation>(`/api/projects/${projectId}/operations/${operationId}/reconcile`, { method: "POST", session, body: {} }),
   listWorkflowNodes: (session: StudioSession, workflowRunId: string) =>
     apiRequest<ListEnvelope<WorkflowNodeRun>>(`/api/workflow-runs/${workflowRunId}/nodes`, { session }),
+  getWorkflowVideoProductionActivity: (session: StudioSession, workflowRunId: string) =>
+    apiRequest<WorkflowVideoProductionActivity>(`/api/workflow-runs/${workflowRunId}/video-production`, { session }),
+  getWorkflowDerivedAssetBatch: (session: StudioSession, workflowRunId: string) =>
+    apiRequest<DerivedAssetBatchProjection>(`/api/workflow-runs/${workflowRunId}/derived-asset-batch`, { session }),
   listWorkflowShots: (session: StudioSession, workflowRunId: string) =>
     apiRequest<ListEnvelope<StoryboardShot>>(`/api/workflow-runs/${workflowRunId}/shots`, {
       session,
@@ -505,8 +757,57 @@ export const studioApi = {
       session,
       query: { previewExpiresSeconds: 3600 },
     }),
+  getStoryboardShotState: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<StoryboardShotStateResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/state`, { session }),
+  replanStoryboardShotState: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<RegenerateResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/state/replan`, { method: "POST", session, body: {} }),
+  getStoryboardShotTransition: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<StoryboardShotTransitionResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/transition`, { session }),
+  updateStoryboardShotTransition: (
+    session: StudioSession,
+    projectId: string,
+    shotId: string,
+    body: { expectedRevision: number; transitionType: StoryboardShotTransition["transitionType"]; confidence?: number; reason?: string },
+  ) => apiRequest<StoryboardShotTransition>(`/api/projects/${projectId}/storyboard-shots/${shotId}/transition`, { method: "PATCH", session, body }),
+  listStoryboardShotAnchors: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<ShotVisualAnchorResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/anchors`, { session }),
+  generateStoryboardShotAnchor: (session: StudioSession, projectId: string, shotId: string, anchorRole?: string) =>
+    apiRequest<{ anchorId: string; anchorRole: string; workflowRunId: string; status: string; workflowType: string }>(
+      `/api/projects/${projectId}/storyboard-shots/${shotId}/anchors/generate`,
+      { method: "POST", session, body: anchorRole ? { anchorRole } : {} },
+    ),
+  reviewStoryboardShotAnchor: (
+    session: StudioSession,
+    projectId: string,
+    shotId: string,
+    anchorId: string,
+    decision: "approve" | "reject",
+    body: { expectedRevision: number; reason?: string },
+  ) => apiRequest<ShotVisualAnchor>(`/api/projects/${projectId}/storyboard-shots/${shotId}/anchors/${anchorId}/${decision}`, { method: "POST", session, body }),
+  getStoryboardShotReferencePack: (session: StudioSession, projectId: string, shotId: string, purpose: "anchor" | "video" = "anchor") =>
+    apiRequest<ShotReferencePackResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/reference-pack`, { session, query: { purpose } }),
+  getStoryboardShotStoryboardSheet: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<StoryboardSheetResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/storyboard-sheet`, { session }),
+  getStoryboardShotVideoPromptPlan: (session: StudioSession, projectId: string, shotId: string) =>
+    apiRequest<VideoPromptPlanResponse>(`/api/projects/${projectId}/storyboard-shots/${shotId}/video-prompt-plan`, { session }),
+  createManualVideoPromptPlanRevision: (
+    session: StudioSession,
+    projectId: string,
+    shotId: string,
+    body: { expectedRevision: number; renderedPrompt: string; reason?: string },
+  ) => apiRequest<VideoPromptPlan>(`/api/projects/${projectId}/storyboard-shots/${shotId}/video-prompt-plan/revisions`, { method: "POST", session, body }),
+  reviewVideoPromptPlan: (
+    session: StudioSession,
+    projectId: string,
+    promptPlanId: string,
+    decision: "approve" | "reject",
+    body: { expectedRevision: number; reason?: string },
+  ) => apiRequest<{ id: string; storyboardShotId: string; revision: number; status: "approved" | "rejected" }>(
+    `/api/projects/${projectId}/video-prompts/${promptPlanId}/${decision}`,
+    { method: "POST", session, body },
+  ),
   getStoryboardShotRenderPlan: (session: StudioSession, projectId: string, shotId: string) =>
-    apiRequest<VideoRenderPlan>(`/api/projects/${projectId}/storyboard-shots/${shotId}/render-plan`, { session }),
+    apiRequest<VideoRenderPlan>(`/api/projects/${projectId}/storyboard-shots/${shotId}/video-render-plan`, { session }),
   createStoryboardShotRenderPlan: (session: StudioSession, projectId: string, shotId: string, body: JsonRecord = {}) =>
     apiRequest<VideoRenderPlan>(`/api/projects/${projectId}/storyboard-shots/${shotId}/render-plan`, { method: "POST", session, body }),
   verifyStoryboardShotRenderPlanAudio: (session: StudioSession, projectId: string, shotId: string, body: { decision: "approve" | "reject"; notes?: string }) =>
@@ -553,8 +854,24 @@ export const studioApi = {
     apiRequest<ProviderAccount>(`/api/providers/accounts/${accountId}`, { method: "PATCH", session, body }),
   deleteProviderAccount: (session: StudioSession, accountId: string) =>
     apiRequest<{ deleted: boolean }>(`/api/providers/accounts/${accountId}`, { method: "DELETE", session }),
+  listProviderCredentials: (session: StudioSession, accountId: string, status: ProviderCredentialStatus = "active") =>
+    apiRequest<ListEnvelope<ProviderCredential>>(`/api/providers/accounts/${accountId}/credentials`, {
+      session,
+      query: { "filter[status]": status },
+    }),
+  createProviderCredential: (session: StudioSession, accountId: string, body: JsonRecord) =>
+    apiRequest<ProviderCredential>(`/api/providers/accounts/${accountId}/credentials`, { method: "POST", session, body }),
   rotateProviderCredential: (session: StudioSession, accountId: string, body: JsonRecord) =>
     apiRequest<ProviderAccount>(`/api/providers/accounts/${accountId}/credentials/rotate`, { method: "POST", session, body }),
+  rotateProviderCredentialById: (session: StudioSession, accountId: string, credentialId: string, body: JsonRecord) =>
+    apiRequest<ProviderCredential>(`/api/providers/accounts/${accountId}/credentials/${credentialId}/rotate`, { method: "POST", session, body }),
+  revokeProviderCredential: (session: StudioSession, accountId: string, credentialId: string) =>
+    apiRequest<{ revoked: boolean }>(`/api/providers/accounts/${accountId}/credentials/${credentialId}`, { method: "DELETE", session }),
+  discoverProviderCredentialModels: (session: StudioSession, accountId: string, credentialId: string) =>
+    apiRequest<ProviderModelDiscoveryResult>(`/api/providers/accounts/${accountId}/credentials/${credentialId}/discover-models`, {
+      method: "POST",
+      session,
+    }),
   discoverProviderModels: (session: StudioSession, accountId: string, body: JsonRecord = {}) =>
     apiRequest<ProviderModelDiscoveryResult>(`/api/providers/accounts/${accountId}/discover-models`, { method: "POST", session, body }),
   listProviderCatalog: (session: StudioSession) => apiRequest<ListEnvelope<ProviderCatalogEntry>>("/api/provider-catalog", { session }),
@@ -574,6 +891,14 @@ export const studioApi = {
     apiRequest<{ deleted: boolean }>(`/api/providers/models/${modelId}`, { method: "DELETE", session }),
   testProviderModel: (session: StudioSession, modelId: string, body: JsonRecord) =>
     apiRequest<ProviderTestResult>(`/api/providers/models/${modelId}/test`, { method: "POST", session, body }),
+  listProviderModelVideoCapabilities: (session: StudioSession, modelId: string) =>
+    apiRequest<VideoCapabilityAttestationList>(`/api/providers/models/${modelId}/video-capability-attestations`, { session }),
+  attestProviderModelVideoCapability: (session: StudioSession, modelId: string, body: JsonRecord) =>
+    apiRequest<VideoCapabilityAttestation>(`/api/providers/models/${modelId}/video-capability-attestations`, { method: "POST", session, body }),
+  revokeProviderModelVideoCapability: (session: StudioSession, modelId: string, attestationId: string, body: JsonRecord) =>
+    apiRequest<VideoCapabilityAttestation>(`/api/providers/models/${modelId}/video-capability-attestations/${attestationId}/revoke`, { method: "POST", session, body }),
+  verifyProviderModelVideoCapability: (session: StudioSession, modelId: string, body: JsonRecord) =>
+    apiRequest<VideoCapabilityAttestation>(`/api/providers/models/${modelId}/video-capabilities/verify`, { method: "POST", session, body }),
   validateProviderManifest: (session: StudioSession, body: JsonRecord) =>
     apiRequest<ProviderManifestValidationResult>("/api/providers/manifests/validate", { method: "POST", session, body }),
   runProviderManifestTest: (session: StudioSession, body: JsonRecord) =>

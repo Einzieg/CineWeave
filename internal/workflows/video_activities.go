@@ -8,10 +8,13 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Einzieg/cineweave/internal/production"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
+	"github.com/Einzieg/cineweave/internal/videocontracts"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -19,6 +22,21 @@ const (
 	nodeGenerateShotImagePrefix = "generate_shot_image"
 	nodeCreateShotVideoPrefix   = "create_shot_video"
 )
+
+func storyboardDialogueToGatewaySpans(lines []StoryboardDialogueLine) []provider.GatewayVideoDialogueSpan {
+	lines = SpokenStoryboardDialogue(lines)
+	result := make([]provider.GatewayVideoDialogueSpan, 0, len(lines))
+	for _, line := range lines {
+		result = append(result, provider.GatewayVideoDialogueSpan{
+			TimingUnitID: line.TimingUnitID, Speaker: line.Speaker, Text: line.Text,
+			Delivery: line.Delivery, Kind: line.Kind,
+			StartTick: line.SpanStartTick, EndTick: line.SpanEndTick,
+			ContinuesFromPrevious: line.ContinuesFromPrevious,
+			ContinuesToNext:       line.ContinuesToNext,
+		})
+	}
+	return result
+}
 
 var storyboardImageSizesByAspectRatio = map[string]string{
 	"1:1":  "1024x1024",
@@ -49,10 +67,13 @@ type GenerateShotImageInput struct {
 	ProjectID      string `json:"projectId"`
 	WorkflowRunID  string `json:"workflowRunId"`
 	CreatedBy      string `json:"createdBy"`
+	FailureScope   string `json:"failureScope,omitempty"`
 
-	ShotID    string `json:"shotId"`
-	ShotIndex int    `json:"shotIndex"`
-	ShotNo    int    `json:"shotNo"`
+	ShotID     string `json:"shotId"`
+	ShotIndex  int    `json:"shotIndex"`
+	ShotNo     int    `json:"shotNo"`
+	AnchorRole string `json:"anchorRole,omitempty"`
+	ProfileKey string `json:"profileKey,omitempty"`
 
 	WorkflowPrompt string `json:"workflowPrompt"`
 	AspectRatio    string `json:"aspectRatio"`
@@ -64,6 +85,8 @@ type GenerateShotImageOutput struct {
 	ExecutionToken    string `json:"executionToken"`
 	AttemptGeneration int    `json:"attemptGeneration"`
 	ShotID            string `json:"shotId"`
+	AnchorRole        string `json:"anchorRole"`
+	VisualAnchorID    string `json:"visualAnchorId,omitempty"`
 	ProviderCallID    string `json:"providerCallId"`
 	ImageArtifactID   string `json:"imageArtifactId"`
 	ImageMediaFileID  string `json:"imageMediaFileId"`
@@ -71,38 +94,44 @@ type GenerateShotImageOutput struct {
 }
 
 type CreateShotVideoTaskInput struct {
-	OrganizationID string `json:"organizationId"`
-	ProjectID      string `json:"projectId"`
-	WorkflowRunID  string `json:"workflowRunId"`
-	CreatedBy      string `json:"createdBy"`
+	OrganizationID       string `json:"organizationId"`
+	ProjectID            string `json:"projectId"`
+	WorkflowRunID        string `json:"workflowRunId"`
+	CreatedBy            string `json:"createdBy"`
+	OperationID          string `json:"operationId,omitempty"`
+	OperationItemID      string `json:"operationItemId,omitempty"`
+	OperationItemAttempt int    `json:"operationItemAttempt,omitempty"`
 
 	ShotID    string `json:"shotId"`
 	ShotIndex int    `json:"shotIndex"`
 	ShotNo    int    `json:"shotNo"`
 
-	WorkflowPrompt             string                        `json:"workflowPrompt"`
-	FailureScope               string                        `json:"failureScope,omitempty"`
-	Duration                   float64                       `json:"duration"`
-	PlannedDuration            float64                       `json:"plannedDuration,omitempty"`
-	AspectRatio                string                        `json:"aspectRatio"`
-	Resolution                 string                        `json:"resolution"`
-	Force                      bool                          `json:"force,omitempty"`
-	ExecutionPlanID            string                        `json:"executionPlanId,omitempty"`
-	RenderSegmentID            string                        `json:"renderSegmentId,omitempty"`
-	CapabilitySnapshotHash     string                        `json:"capabilitySnapshotHash,omitempty"`
-	SegmentIndex               int                           `json:"segmentIndex,omitempty"`
-	SegmentCount               int                           `json:"segmentCount,omitempty"`
-	RetryGeneration            int                           `json:"retryGeneration,omitempty"`
-	SegmentStartTick           int64                         `json:"segmentStartTick,omitempty"`
-	SegmentEndTick             int64                         `json:"segmentEndTick,omitempty"`
-	DialogueLines              []StoryboardDialogueLine      `json:"dialogueLines,omitempty"`
-	AudioStrategy              string                        `json:"audioStrategy,omitempty"`
-	AudioRequirement           string                        `json:"audioRequirement,omitempty"`
-	ContinuityMode             string                        `json:"continuityMode,omitempty"`
-	PreviousSegmentArtifactID  string                        `json:"previousSegmentArtifactId,omitempty"`
-	PreviousSegmentMediaFileID string                        `json:"previousSegmentMediaFileId,omitempty"`
-	PreviousSegmentStorageKey  string                        `json:"previousSegmentStorageKey,omitempty"`
-	ContinuityFirstFrame       *ShotContinuityFrameReference `json:"continuityFirstFrame,omitempty"`
+	WorkflowPrompt                 string                          `json:"workflowPrompt"`
+	FailureScope                   string                          `json:"failureScope,omitempty"`
+	Duration                       float64                         `json:"duration"`
+	PlannedDuration                float64                         `json:"plannedDuration,omitempty"`
+	AspectRatio                    string                          `json:"aspectRatio"`
+	Resolution                     string                          `json:"resolution"`
+	Force                          bool                            `json:"force,omitempty"`
+	ExecutionPlanID                string                          `json:"executionPlanId,omitempty"`
+	RenderSegmentID                string                          `json:"renderSegmentId,omitempty"`
+	CapabilitySnapshotHash         string                          `json:"capabilitySnapshotHash,omitempty"`
+	InputContractKey               string                          `json:"inputContractKey,omitempty"`
+	InputContractHash              string                          `json:"inputContractHash,omitempty"`
+	SegmentIndex                   int                             `json:"segmentIndex,omitempty"`
+	SegmentCount                   int                             `json:"segmentCount,omitempty"`
+	RetryGeneration                int                             `json:"retryGeneration,omitempty"`
+	SegmentStartTick               int64                           `json:"segmentStartTick,omitempty"`
+	SegmentEndTick                 int64                           `json:"segmentEndTick,omitempty"`
+	DialogueLines                  []StoryboardDialogueLine        `json:"dialogueLines,omitempty"`
+	AudioStrategy                  string                          `json:"audioStrategy,omitempty"`
+	AudioRequirement               string                          `json:"audioRequirement,omitempty"`
+	ContinuityMode                 string                          `json:"continuityMode,omitempty"`
+	PreviousSegmentArtifactID      string                          `json:"previousSegmentArtifactId,omitempty"`
+	PreviousSegmentRenderSegmentID string                          `json:"previousSegmentRenderSegmentId,omitempty"`
+	PreviousSegmentMediaFileID     string                          `json:"previousSegmentMediaFileId,omitempty"`
+	PreviousSegmentStorageKey      string                          `json:"previousSegmentStorageKey,omitempty"`
+	PreviousSegmentTailFrame       *ShotSegmentTailAnchorReference `json:"previousSegmentTailFrame,omitempty"`
 
 	Prompt                   string `json:"prompt"`
 	NegativePrompt           string `json:"negativePrompt,omitempty"`
@@ -327,41 +356,6 @@ func (input PollStoryboardVideoTaskInput) nodeExecution() NodeExecution {
 	}
 }
 
-func applyCrossShotContinuityReference(context ShotVideoReferenceContext, frame ShotContinuityFrameReference) (ShotVideoReferenceContext, error) {
-	if strings.TrimSpace(frame.SourceShotID) == "" || strings.TrimSpace(frame.ArtifactID) == "" || strings.TrimSpace(frame.MediaFileID) == "" || strings.TrimSpace(frame.StorageKey) == "" {
-		return ShotVideoReferenceContext{}, workflowError{
-			Code:    provider.CodeInvalidRequest,
-			Message: "cross-shot continuity requires a persisted predecessor tail frame",
-		}
-	}
-	referenceKey := "continuity_tail:" + frame.SourceShotID
-	references := []provider.GatewayVideoReference{{
-		Type: "first_frame", ArtifactID: frame.ArtifactID, MediaFileID: frame.MediaFileID,
-		StorageKey: frame.StorageKey, MimeType: "image/png",
-		Metadata: mustJSON(map[string]any{
-			"referenceKey":          referenceKey,
-			"sourceType":            "continuity_tail_frame",
-			"sourceId":              frame.SourceShotID,
-			"sourceVideoArtifactId": frame.SourceVideoArtifactID,
-		}),
-	}}
-	resolvedKeys := []string{referenceKey}
-	for index, reference := range context.References {
-		if reference.Type == "first_frame" {
-			continue
-		}
-		references = append(references, reference)
-		if index < len(context.ResolvedReferenceKeys) {
-			resolvedKeys = append(resolvedKeys, context.ResolvedReferenceKeys[index])
-		}
-	}
-	return ShotVideoReferenceContext{
-		References: references, ReferenceMode: "custom",
-		ConfiguredReferenceKeys: append([]string{referenceKey}, context.ConfiguredReferenceKeys...),
-		ResolvedReferenceKeys:   resolvedKeys,
-	}, nil
-}
-
 func (a Activities) ListStoryboardShots(ctx context.Context, input ListStoryboardShotsInput) ([]StoryboardShotRecord, error) {
 	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.WorkflowRunID) == "" {
 		return nil, fmt.Errorf("organizationId, projectId, and workflowRunId are required")
@@ -376,6 +370,7 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 		WorkflowRunID:  input.WorkflowRunID,
 		Prompt:         input.WorkflowPrompt,
 		CreatedBy:      input.CreatedBy,
+		FailureScope:   input.FailureScope,
 	}
 	if err := validateStoryboardInput(baseInput); err != nil {
 		return GenerateShotImageOutput{}, err
@@ -384,34 +379,75 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 	if err != nil {
 		return GenerateShotImageOutput{}, err
 	}
-	if !input.Force && shot.ImageStatus != "stale" && shot.ImageArtifactID != "" && shot.ImageMediaFileID != "" && shot.ImageStorageKey != "" {
-		return GenerateShotImageOutput{
-			ShotID:           shot.ID,
-			ImageArtifactID:  shot.ImageArtifactID,
-			ImageMediaFileID: shot.ImageMediaFileID,
-			ImageStorageKey:  shot.ImageStorageKey,
-		}, nil
-	}
-	projectSettings, err := a.projectProductionSettings(ctx, input.ProjectID)
+	projectSettings, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
+	anchorRole, err := resolveShotAnchorRole(projectSettings.VideoProductionProfileKey, input.AnchorRole)
+	if err != nil {
+		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", err)
+	}
+	input.AnchorRole = anchorRole
+	input.ProfileKey = projectSettings.VideoProductionProfileKey
+	anchor, err := a.latestShotVisualAnchor(ctx, input.ProjectID, shot.ID, anchorRole)
+	if err != nil {
+		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", err)
+	}
+	if !input.Force && anchor.Status == "ready" && anchor.ReviewStatus == "approved" && anchor.ArtifactID != "" && anchor.MediaFileID != "" && anchor.StorageKey != "" {
+		return GenerateShotImageOutput{
+			ShotID:           shot.ID,
+			AnchorRole:       anchorRole,
+			VisualAnchorID:   anchor.ID,
+			ImageArtifactID:  anchor.ArtifactID,
+			ImageMediaFileID: anchor.MediaFileID,
+			ImageStorageKey:  anchor.StorageKey,
+		}, nil
+	}
 	aspectRatio := firstNonEmptyString(projectSettings.VideoRatio, projectSettings.AspectRatio, input.AspectRatio, "16:9")
+	pinnedImageModelID := ""
+	if projectSettings.VideoProductionProfileKey == videoproduction.ProfileStoryboardSheet {
+		manifest, ok, manifestErr := a.findStoryboardSheetManifest(ctx, shot.ID, "", false)
+		if manifestErr != nil {
+			return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", manifestErr)
+		}
+		if !ok {
+			return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", workflowError{Code: videoproduction.CodePanelManifestInvalid, Message: "分镜板模式缺少 PanelManifest，请先生成图片提示词"})
+		}
+		aspectRatio = manifest.Manifest.SheetAspectRatio
+	}
 	imageSize := storyboardImageSizeForAspectRatio(aspectRatio)
 	assetContext, err := a.shotAssetContext(ctx, input.ProjectID, shot.ID)
 	if err != nil {
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	promptTrace, err := a.reviewedShotImagePrompt(ctx, shot.ID)
+	promptTrace, err := a.reviewedShotImagePrompt(ctx, shot.ID, anchorRole)
 	if err != nil {
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
-	finalPrompt := strings.TrimSpace(shot.ImagePrompt)
+	finalPrompt := strings.TrimSpace(promptTrace.Prompt)
 	if promptTrace.Status != "succeeded" || finalPrompt == "" {
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", workflowError{
 			Code:    provider.CodeInvalidRequest,
 			Message: "an agent-reviewed or manually saved image prompt is required",
 		})
+	}
+	pinnedImageModelID = promptTrace.ImageProviderModelID
+	if projectSettings.VideoProductionProfileKey == videoproduction.ProfileStoryboardSheet && pinnedImageModelID == "" {
+		if a.gateway == nil {
+			return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
+		}
+		constraints, constraintErr := a.gateway.ResolveModelConstraints(ctx, provider.GatewayModelConstraintsRequest{
+			OrganizationID: input.OrganizationID, ModelProfileKey: projectSettings.ImageModelProfileKey,
+			TaskType: provider.TaskTypeImageGenerate, Modality: "image",
+		})
+		if constraintErr != nil {
+			return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", workflowErrorFromProvider(constraintErr, codeActivityFailed))
+		}
+		candidate, ok := selectStoryboardSheetImageModel(constraints.Candidates)
+		if !ok {
+			return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "image_failed", "storyboard.shot.image.failed", workflowError{Code: provider.CodeModelCapabilityUnavailable, Message: "分镜板模式要求图片业务模型绑定可用的 gpt-image-2"})
+		}
+		pinnedImageModelID = candidate.ProviderModelID
 	}
 	modelProfileKey := projectSettings.ImageModelProfileKey
 	promptHash := strings.TrimSpace(promptTrace.PromptHash)
@@ -419,7 +455,7 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 		promptHash = promptsvc.HashText(finalPrompt)
 	}
 	promptSource := firstNonEmptyString(promptTrace.PromptSource, "shot_image_prompt")
-	nodeKey := nodeKeyForShot(nodeGenerateShotImagePrefix, shot.ShotIndex)
+	nodeKey := nodeKeyForShot(nodeGenerateShotImagePrefix, shot.ShotIndex) + "_" + anchorRole
 	nodeExecution, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
 		ProjectID:      input.ProjectID,
@@ -430,9 +466,12 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 			"shotId":                       shot.ID,
 			"shotIndex":                    shot.ShotIndex,
 			"shotNo":                       shot.ShotNo,
+			"anchorRole":                   anchorRole,
+			"visualAnchorId":               anchor.ID,
 			"aspectRatio":                  aspectRatio,
 			"size":                         imageSize,
 			"modelProfileKey":              modelProfileKey,
+			"providerModelId":              pinnedImageModelID,
 			"promptTemplateKey":            promptTrace.TemplateKey,
 			"promptVersionId":              promptTrace.PromptVersionID,
 			"promptHash":                   promptHash,
@@ -453,6 +492,9 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 	if recovered, ok, err := a.recoverCompletedShotImage(ctx, input, nodeExecution); err != nil {
 		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeExecution, "image_failed", "storyboard.shot.image.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
 	} else if ok {
+		if err := a.validateShotImageAspectRatio(ctx, input.ProjectID, recovered.ImageMediaFileID, aspectRatio); err != nil {
+			return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeExecution, "image_failed", "storyboard.shot.image.failed", err)
+		}
 		if err := a.completeShotImage(ctx, input, shot, recovered); err != nil {
 			return GenerateShotImageOutput{}, err
 		}
@@ -466,18 +508,13 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 	}
 
 	idempotencyKey := "shot-image:" + nodeExecution.NodeRunID
-	stopHeartbeat := startWorkflowActivityHeartbeat(ctx, map[string]any{
-		"nodeRunId": nodeExecution.NodeRunID,
-		"shotId":    shot.ID,
-		"phase":     "provider_image_generate",
-	})
-	defer stopHeartbeat()
-	gatewayResp, err := a.gateway.GenerateImage(ctx, provider.GatewayImageRequest{
+	gatewayResp, err := a.generateProviderImage(ctx, nodeExecution, provider.GatewayImageRequest{
 		OrganizationID:    input.OrganizationID,
 		ProjectID:         input.ProjectID,
 		WorkflowRunID:     input.WorkflowRunID,
 		NodeRunID:         nodeExecution.NodeRunID,
 		ModelProfileKey:   modelProfileKey,
+		ProviderModelID:   pinnedImageModelID,
 		PromptTemplateKey: promptTrace.TemplateKey,
 		PromptVersionID:   promptTrace.PromptVersionID,
 		PromptHash:        promptHash,
@@ -505,10 +542,15 @@ func (a Activities) GenerateShotImage(ctx context.Context, input GenerateShotIma
 		ExecutionToken:    nodeExecution.ExecutionToken,
 		AttemptGeneration: nodeExecution.AttemptGeneration,
 		ShotID:            shot.ID,
+		AnchorRole:        anchorRole,
+		VisualAnchorID:    anchor.ID,
 		ProviderCallID:    gatewayResp.ProviderCallID,
 		ImageArtifactID:   gatewayResp.Output.ArtifactID,
 		ImageMediaFileID:  gatewayResp.Output.MediaFileID,
 		ImageStorageKey:   gatewayResp.Output.StorageKey,
+	}
+	if err := a.validateShotImageAspectRatio(ctx, input.ProjectID, output.ImageMediaFileID, aspectRatio); err != nil {
+		return GenerateShotImageOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeExecution, "image_failed", "storyboard.shot.image.failed", err)
 	}
 	if err := a.completeShotImage(ctx, input, shot, output); err != nil {
 		return GenerateShotImageOutput{}, err
@@ -554,18 +596,32 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 	if resolution == "" {
 		resolution = "720p"
 	}
-	projectSettings, err := a.projectProductionSettings(ctx, input.ProjectID)
+	projectSettings, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
 	aspectRatio := firstNonEmptyString(projectSettings.VideoRatio, projectSettings.AspectRatio, input.AspectRatio, "16:9")
-	assetContext, err := a.shotAssetContext(ctx, input.ProjectID, shot.ID)
-	if err != nil {
-		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", workflowError{Code: codeActivityFailed, Message: err.Error()})
-	}
-	videoReferences, err := a.shotVideoReferenceContext(ctx, input.ProjectID, shot, assetContext)
-	if err != nil {
-		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", err)
+	var approvedContract approvedShotVideoExecutionContract
+	var videoReferences ShotVideoReferenceContext
+	usesApprovedContract := strings.TrimSpace(input.ExecutionPlanID) != ""
+	if usesApprovedContract {
+		approvedContract, err = a.loadApprovedShotVideoExecutionContract(ctx, input.OrganizationID, projectSettings, shot)
+		if err != nil {
+			return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", err)
+		}
+		videoReferences = ShotVideoReferenceContext{
+			ReferenceMode: videoReferenceModeForProfile(projectSettings.VideoProductionProfileKey),
+			References:    append([]provider.GatewayVideoReference(nil), approvedContract.References...),
+		}
+	} else {
+		assetContext, loadErr := a.shotAssetContext(ctx, input.ProjectID, shot.ID)
+		if loadErr != nil {
+			return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", workflowError{Code: codeActivityFailed, Message: loadErr.Error()})
+		}
+		videoReferences, err = a.shotVideoReferenceContext(ctx, input.ProjectID, shot, assetContext)
+		if err != nil {
+			return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", err)
+		}
 	}
 	if input.SegmentIndex > 0 {
 		if strings.TrimSpace(input.PreviousSegmentArtifactID) == "" {
@@ -574,19 +630,62 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 		videoReferences.ReferenceMode = "custom"
 		videoReferences.ConfiguredReferenceKeys = []string{"render_segment_previous"}
 		videoReferences.ResolvedReferenceKeys = []string{"render_segment_previous"}
-		videoReferences.References = []provider.GatewayVideoReference{{
-			Type: "video", ArtifactID: input.PreviousSegmentArtifactID, MediaFileID: input.PreviousSegmentMediaFileID,
-			StorageKey: input.PreviousSegmentStorageKey,
-		}}
-	} else if input.ContinuityFirstFrame != nil {
-		videoReferences, err = applyCrossShotContinuityReference(videoReferences, *input.ContinuityFirstFrame)
-		if err != nil {
-			return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", err)
+		switch input.InputContractKey {
+		case provider.VideoInputContractVideoExtension:
+			videoReferences.References = []provider.GatewayVideoReference{{
+				ReferenceKey: "video-extension:" + input.RenderSegmentID,
+				Role:         "video_extension_source", Required: true, Type: "video_reference",
+				SourceType: "video_render_segment", SourceID: input.PreviousSegmentRenderSegmentID,
+				SourceVersion: input.PreviousSegmentArtifactID,
+				ArtifactID:    input.PreviousSegmentArtifactID, MediaFileID: input.PreviousSegmentMediaFileID,
+				StorageKey: input.PreviousSegmentStorageKey,
+			}}
+		case provider.VideoInputContractFirstFrame:
+			frame := input.PreviousSegmentTailFrame
+			if frame == nil || frame.SourceVideoArtifactID != input.PreviousSegmentArtifactID {
+				return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", workflowError{Code: provider.CodeInvalidRequest, Message: "首帧续接缺少前一片段的 fresh 尾帧"})
+			}
+			videoReferences.References = []provider.GatewayVideoReference{{
+				ReferenceKey: "tail-frame:" + frame.SourceRenderSegmentID,
+				Role:         "first_frame", Required: true, Type: "image_reference",
+				SourceType: "video_render_segment_tail_anchor", SourceID: frame.AnchorID,
+				SourceVersion: frame.SourceRenderSegmentID,
+				ArtifactID:    frame.ArtifactID, MediaFileID: frame.MediaFileID, StorageKey: frame.StorageKey,
+				ContentHash: frame.ContentHash, GeneratedAt: frame.GeneratedAt.UTC().Format(time.RFC3339Nano),
+			}}
+		case provider.VideoInputContractFirstFramePlusReferences:
+			frame := input.PreviousSegmentTailFrame
+			if frame == nil || frame.SourceVideoArtifactID != input.PreviousSegmentArtifactID {
+				return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", workflowError{Code: provider.CodeInvalidRequest, Message: "多模态续接缺少前一片段的 fresh 尾帧"})
+			}
+			continued := []provider.GatewayVideoReference{{
+				ReferenceKey: "tail-frame:" + frame.SourceRenderSegmentID,
+				Role:         "first_frame", Required: true, Type: "image",
+				SourceType: "video_render_segment_tail_anchor", SourceID: frame.AnchorID,
+				SourceVersion: frame.SourceRenderSegmentID,
+				ArtifactID:    frame.ArtifactID, MediaFileID: frame.MediaFileID,
+				StorageKey: frame.StorageKey, MimeType: "image/png",
+				ContentHash: frame.ContentHash, GeneratedAt: frame.GeneratedAt.UTC().Format(time.RFC3339Nano),
+			}}
+			for _, reference := range approvedContract.References {
+				if reference.Role == videoproduction.ReferenceRoleFirstFrame || reference.Role == videoproduction.ReferenceRoleLastFrame {
+					continue
+				}
+				continued = append(continued, reference)
+			}
+			videoReferences.References = continued
+		default:
+			return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", workflowError{Code: provider.CodeModelInputContractUnsupported, Message: "当前视频片段没有可执行的续接输入契约"})
 		}
 	}
-	if input.SegmentIndex == 0 && input.ContinuityFirstFrame != nil {
-		if err := a.validateShotImageAspectRatio(ctx, input.ProjectID, input.ContinuityFirstFrame.MediaFileID, aspectRatio); err != nil {
-			return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", err)
+	if usesApprovedContract && input.SegmentIndex == 0 {
+		for _, reference := range videoReferences.References {
+			if strings.TrimSpace(reference.MediaFileID) == "" || strings.Contains(strings.ToLower(reference.Type), "video") {
+				continue
+			}
+			if err := a.validateShotImageAspectRatio(ctx, input.ProjectID, reference.MediaFileID, aspectRatio); err != nil {
+				return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", err)
+			}
 		}
 	} else if shotVideoReferencesStoryboardImage(videoReferences, shot.ID) {
 		if err := a.validateShotImageAspectRatio(ctx, input.ProjectID, shot.ImageMediaFileID, aspectRatio); err != nil {
@@ -595,6 +694,16 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 	}
 	if videoReferences.ReferenceMode != "none" && len(videoReferences.References) == 0 {
 		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", workflowError{Code: provider.CodeInvalidRequest, Message: "shot video generation requires an available reference image or reference mode none"})
+	}
+	var referenceManifest *videocontracts.ReferenceManifestV2
+	var referenceManifestHash string
+	if usesApprovedContract {
+		videoReferences.References, referenceManifest, referenceManifestHash, err = a.prepareVideoReferenceManifest(
+			ctx, input.OrganizationID, input.InputContractKey, input.CapabilitySnapshotHash, videoReferences.References,
+		)
+		if err != nil {
+			return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, NodeExecution{}, "video_failed", "storyboard.shot.video.failed", err)
+		}
 	}
 	generationMode := "image_to_video"
 	if len(videoReferences.References) == 0 {
@@ -649,7 +758,8 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 			"segmentCount":                 input.SegmentCount,
 			"retryGeneration":              input.RetryGeneration,
 			"continuityMode":               input.ContinuityMode,
-			"continuityFirstFrame":         input.ContinuityFirstFrame,
+			"previousSegmentTailAnchor":    input.PreviousSegmentTailFrame,
+			"referenceManifestHash":        referenceManifestHash,
 		}),
 	})
 	if err != nil {
@@ -662,21 +772,45 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 		return CreateShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeExecution, "video_failed", "storyboard.shot.video.failed", workflowError{Code: provider.CodeProviderGatewayRequired, Message: "provider gateway client is not configured"})
 	}
 	gatewayRequest := provider.GatewayVideoCreateTaskRequest{
-		OrganizationID:         input.OrganizationID,
-		ProjectID:              input.ProjectID,
-		WorkflowRunID:          input.WorkflowRunID,
-		NodeRunID:              nodeExecution.NodeRunID,
-		NodeExecutionToken:     nodeExecution.ExecutionToken,
-		NodeAttemptGeneration:  nodeExecution.AttemptGeneration,
-		ModelProfileKey:        modelProfileKey,
-		PromptTemplateKey:      input.ReviewTemplateKey,
-		PromptVersionID:        input.ReviewPromptVersionID,
-		PromptHash:             promptHash,
-		PromptSource:           promptSource,
-		IdempotencyKey:         shotVideoSegmentIdempotencyKey(input.WorkflowRunID, shot.ShotIndex, input.ExecutionPlanID, input.SegmentIndex, input.RetryGeneration),
-		ExecutionPlanID:        input.ExecutionPlanID,
-		RenderSegmentID:        input.RenderSegmentID,
-		CapabilitySnapshotHash: input.CapabilitySnapshotHash,
+		OrganizationID:                 input.OrganizationID,
+		ProjectID:                      input.ProjectID,
+		OperationID:                    input.OperationID,
+		OperationItemID:                input.OperationItemID,
+		OperationItemAttempt:           input.OperationItemAttempt,
+		ProductionGenerationID:         nodeExecution.ProductionGenerationID,
+		VideoProductionBindingID:       nodeExecution.VideoProductionBindingID,
+		VideoProductionBindingRevision: nodeExecution.VideoProductionBindingRevision,
+		StoryboardShotID:               shot.ID,
+		ProductionProfileVersionID:     approvedContract.ProductionProfileVersionID,
+		ProductionProfileSnapshotHash:  approvedContract.ProductionProfileSnapshotHash,
+		InputContractKey:               input.InputContractKey,
+		InputContractHash:              input.InputContractHash,
+		InputContractVersion:           approvedContract.InputContractVersion,
+		ShotStateRevision:              approvedContract.ShotStateRevision,
+		ShotStateHash:                  approvedContract.ShotStateHash,
+		TransitionHash:                 approvedContract.TransitionHash,
+		ReferencePackID:                approvedContract.ReferencePackID,
+		ReferencePackHash:              approvedContract.ReferencePackHash,
+		PromptContextPlanID:            approvedContract.PromptContextPlanID,
+		PromptContextPlanHash:          approvedContract.PromptContextPlanHash,
+		VideoPromptPlanID:              approvedContract.VideoPromptPlanID,
+		NativeAudioRequired:            approvedContract.NativeAudioRequired,
+		DialogueCues:                   storyboardDialogueToGatewaySpans(input.DialogueLines),
+		WorkflowRunID:                  input.WorkflowRunID,
+		NodeRunID:                      nodeExecution.NodeRunID,
+		NodeExecutionToken:             nodeExecution.ExecutionToken,
+		NodeAttemptGeneration:          nodeExecution.AttemptGeneration,
+		ModelProfileKey:                modelProfileKey,
+		PromptTemplateKey:              input.ReviewTemplateKey,
+		PromptVersionID:                input.ReviewPromptVersionID,
+		PromptHash:                     promptHash,
+		PromptSource:                   promptSource,
+		IdempotencyKey:                 shotVideoSegmentIdempotencyKey(input.WorkflowRunID, shot.ShotIndex, input.ExecutionPlanID, input.SegmentIndex, input.RetryGeneration),
+		ExecutionPlanID:                input.ExecutionPlanID,
+		RenderSegmentID:                input.RenderSegmentID,
+		CapabilitySnapshotHash:         input.CapabilitySnapshotHash,
+		ReferenceManifest:              referenceManifest,
+		ReferenceManifestHash:          referenceManifestHash,
 		Input: mustJSON(map[string]any{
 			"prompt":         finalPrompt,
 			"negativePrompt": input.NegativePrompt,
@@ -962,16 +1096,19 @@ func (a Activities) CreateStoryboardVideoTask(ctx context.Context, input CreateS
 	}
 
 	gatewayResp, err := a.gateway.CreateVideoTask(ctx, provider.GatewayVideoCreateTaskRequest{
-		OrganizationID:        input.OrganizationID,
-		ProjectID:             input.ProjectID,
-		WorkflowRunID:         input.WorkflowRunID,
-		NodeRunID:             nodeExecution.NodeRunID,
-		NodeExecutionToken:    nodeExecution.ExecutionToken,
-		NodeAttemptGeneration: nodeExecution.AttemptGeneration,
-		ModelProfileKey:       videoGenerationModelProfileKey,
-		PromptHash:            promptHash,
-		PromptSource:          "direct_video_prompt",
-		IdempotencyKey:        videoTaskIdempotencyKey(input.WorkflowRunID),
+		OrganizationID:                 input.OrganizationID,
+		ProjectID:                      input.ProjectID,
+		ProductionGenerationID:         nodeExecution.ProductionGenerationID,
+		VideoProductionBindingID:       nodeExecution.VideoProductionBindingID,
+		VideoProductionBindingRevision: nodeExecution.VideoProductionBindingRevision,
+		WorkflowRunID:                  input.WorkflowRunID,
+		NodeRunID:                      nodeExecution.NodeRunID,
+		NodeExecutionToken:             nodeExecution.ExecutionToken,
+		NodeAttemptGeneration:          nodeExecution.AttemptGeneration,
+		ModelProfileKey:                videoGenerationModelProfileKey,
+		PromptHash:                     promptHash,
+		PromptSource:                   "direct_video_prompt",
+		IdempotencyKey:                 videoTaskIdempotencyKey(input.WorkflowRunID),
 		Input: mustJSON(map[string]any{
 			"prompt":      videoPrompt,
 			"duration":    duration,
@@ -1300,31 +1437,7 @@ func storyboardShotRecordSelectSQL(where string) string {
 			COALESCE(s.image_prompt_error_message, ''),
 			COALESCE(s.image_prompt_workflow_run_id::text, ''),
 			COALESCE(s.video_prompt, ''),
-			CASE
-			  WHEN EXISTS (
-			    SELECT 1 FROM storyboard_shot_timing_spans timing_span
-			    WHERE timing_span.storyboard_shot_id = s.id
-			  ) THEN COALESCE((
-			    SELECT jsonb_agg(jsonb_build_object(
-			      'timingUnitId', timing_unit.id::text,
-			      'speaker', COALESCE(timing_unit.speaker, ''),
-			      'text', timing_unit.source_text,
-			      'delivery', COALESCE(timing_unit.delivery, ''),
-			      'kind', timing_unit.unit_type,
-			      'spanStartTick', timing_span.span_start_tick,
-			      'spanEndTick', timing_span.span_end_tick,
-			      'sourceStartOffset', timing_unit.source_start_offset,
-			      'sourceEndOffset', timing_unit.source_end_offset,
-			      'continuesFromPrevious', timing_span.span_start_tick > timing_unit.start_tick,
-			      'continuesToNext', timing_span.span_end_tick < timing_unit.end_tick
-			    ) ORDER BY timing_span.ordinal, timing_unit.unit_ordinal)
-			    FROM storyboard_shot_timing_spans timing_span
-			    JOIN script_timing_units timing_unit ON timing_unit.id = timing_span.timing_unit_id
-			    WHERE timing_span.storyboard_shot_id = s.id
-			      AND timing_unit.unit_type IN ('dialogue', 'voiceover', 'narration', 'system')
-			  ), '[]'::jsonb)
-			  ELSE COALESCE(s.script_dialogue, '[]'::jsonb)
-			END,
+			COALESCE(s.script_dialogue, '[]'::jsonb),
 			COALESCE(s.video_prompt_status, 'not_started'),
 			COALESCE(s.video_prompt_error_code, ''),
 			COALESCE(s.video_prompt_error_message, ''),
@@ -1344,7 +1457,18 @@ func storyboardShotRecordSelectSQL(where string) string {
 			COALESCE(s.manual_override, false),
 			COALESCE(s.stale_state, 'fresh')
 		FROM storyboard_shots s
-		JOIN projects p ON p.id = s.project_id
+		JOIN project_video_production_generations generation
+		  ON generation.id = s.production_generation_id
+		 AND generation.project_id = s.project_id
+		JOIN project_video_production_bindings binding
+		  ON binding.id = generation.binding_id
+		 AND binding.project_id = s.project_id
+		JOIN LATERAL (
+		  SELECT
+		    NULLIF(binding.profile_snapshot #>> '{productionConfiguration,timelineTimebase}', '')::bigint AS timeline_timebase,
+		    NULLIF(binding.profile_snapshot #>> '{productionConfiguration,fpsNumerator}', '')::integer AS fps_numerator,
+		    NULLIF(binding.profile_snapshot #>> '{productionConfiguration,fpsDenominator}', '')::integer AS fps_denominator
+		) p ON p.timeline_timebase > 0 AND p.fps_numerator > 0 AND p.fps_denominator > 0
 		WHERE ` + where
 }
 
@@ -1462,10 +1586,31 @@ func (a Activities) markShotImageStarted(ctx context.Context, input GenerateShot
 	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, nodeExecution); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE shot_visual_anchors
+		SET status = 'generating', review_status = 'pending',
+		    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+		      'imageGeneration', jsonb_build_object(
+		        'status', 'running', 'workflowRunId', $3::text,
+		        'nodeRunId', $4::text, 'startedAt', now()
+		      )
+		    )
+		WHERE id = (
+			SELECT id FROM shot_visual_anchors
+			WHERE storyboard_shot_id = $1 AND anchor_role = $2 AND status <> 'archived'
+			ORDER BY revision DESC LIMIT 1
+		)
+	`, shot.ID, input.AnchorRole, input.WorkflowRunID, nodeExecution.NodeRunID); err != nil {
+		return err
+	}
 	if err := updateShotProductionStatusTx(ctx, tx, shot.ID, input.WorkflowRunID, "image_running", "", ""); err != nil {
 		return err
 	}
-	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "storyboard.shot.image.started", "storyboard_shot", shot.ID, storyboardShotEventPayload(input.WorkflowRunID, shot, "image_running")); err != nil {
+	payload := storyboardShotEventPayload(input.WorkflowRunID, shot, "image_running")
+	var payloadValue map[string]any
+	_ = json.Unmarshal(payload, &payloadValue)
+	payloadValue["anchorRole"] = input.AnchorRole
+	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "storyboard.shot.image.started", "storyboard_shot", shot.ID, mustJSON(payloadValue)); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -1636,97 +1781,415 @@ func isTerminalVideoAttemptFailure(status string) bool {
 }
 
 func (a Activities) completeShotImage(ctx context.Context, input GenerateShotImageInput, shot StoryboardShotRecord, output GenerateShotImageOutput) error {
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
+	if err != nil {
+		return err
+	}
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	outputJSON := mustJSON(output)
 	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, output.nodeExecution()); err != nil {
 		return err
 	}
-	imageChanged := strings.TrimSpace(shot.ImageArtifactID) != "" && shot.ImageArtifactID != output.ImageArtifactID
-	hasRenderedVideo := strings.TrimSpace(shot.VideoArtifactID) != "" || strings.TrimSpace(shot.VideoMediaFileID) != "" || strings.TrimSpace(shot.VideoStorageKey) != ""
-	invalidateVideo := imageChanged && hasRenderedVideo
+	anchorID, err := completePlannedAnchorTx(
+		ctx, tx, input, shot, output,
+		inputProfileKey(input), input.AnchorRole, project.TimelineTimebase,
+	)
+	if err != nil {
+		return err
+	}
+	output.VisualAnchorID = anchorID
+	profileKey := inputProfileKey(input)
+	allAnchorsReady, err := profileRequiredAnchorsReadyTx(ctx, tx, shot.ID, profileKey)
+	if err != nil {
+		return err
+	}
+	isPrimaryVisual := input.AnchorRole == videoproduction.AnchorRolePlannedFirstFrame || input.AnchorRole == videoproduction.AnchorRoleStoryboardSheet
+	aggregateStatus := "image_running"
+	aggregateImageStatus := "running"
+	if allAnchorsReady {
+		aggregateStatus = "image_succeeded"
+		aggregateImageStatus = "succeeded"
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
-		SET image_artifact_id = $2,
-		    image_media_file_id = $3,
-		    image_storage_key = NULLIF($4, ''),
-		    status = 'image_succeeded',
-		    image_status = 'succeeded',
+		SET image_artifact_id = CASE WHEN $6 THEN NULLIF($2, '')::uuid ELSE image_artifact_id END,
+		    image_media_file_id = CASE WHEN $6 THEN NULLIF($3, '')::uuid ELSE image_media_file_id END,
+		    image_storage_key = CASE WHEN $6 THEN NULLIF($4, '') ELSE image_storage_key END,
+		    status = $7,
+		    image_status = $8,
 		    image_error_code = NULL,
 		    image_error_message = NULL,
 		    image_started_at = COALESCE(image_started_at, now()),
-		    image_completed_at = now(),
+		    image_completed_at = CASE WHEN $9 THEN now() ELSE NULL END,
 		    image_workflow_run_id = NULLIF($5, '')::uuid,
-		    video_status = CASE WHEN $6 THEN 'stale' ELSE video_status END,
-		    active_video_render_plan_id = CASE WHEN $6 THEN NULL ELSE active_video_render_plan_id END,
-		    production_readiness = CASE WHEN $6 THEN 'preview_only' ELSE production_readiness END,
-		    stale_state = CASE WHEN $6 THEN 'needs_regeneration' ELSE 'fresh' END,
-		    metadata = (COALESCE(metadata, '{}'::jsonb)
-		      - 'imageAspectRatioMismatch'
-		      - 'imageAspectRatioMismatchDetectedAt')
-		      || jsonb_build_object('imageAspectRatioValidatedAt', now()),
+		    metadata = CASE WHEN $6 THEN
+		      (COALESCE(metadata, '{}'::jsonb)
+		        - 'imageAspectRatioMismatch'
+		        - 'imageAspectRatioMismatchDetectedAt')
+		        || jsonb_build_object('imageAspectRatioValidatedAt', now())
+		      ELSE COALESCE(metadata, '{}'::jsonb)
+		    END,
+		    stale_state = CASE
+		      WHEN $9
+		       AND active_video_render_plan_id IS NULL
+		       AND video_artifact_id IS NULL
+		       AND video_media_file_id IS NULL
+		       AND COALESCE(video_storage_key, '') = ''
+		       AND video_provider_async_task_id IS NULL
+		       AND COALESCE(video_external_task_id, '') = ''
+		       AND COALESCE(video_status, 'not_started') IN ('not_started', 'failed', 'cancelled')
+		       AND COALESCE(video_prompt_status, 'not_started') IN ('not_started', 'failed')
+		       AND EXISTS (
+		         SELECT 1
+		         FROM storyboard_plans plan
+		         WHERE plan.id = storyboard_shots.storyboard_plan_id
+		           AND plan.active = true
+		           AND COALESCE(plan.stale_state, 'fresh') = 'fresh'
+		       )
+		      THEN 'fresh'
+		      ELSE stale_state
+		    END,
 		    updated_at = now()
 		WHERE id = $1
-	`, shot.ID, nullIfEmpty(output.ImageArtifactID), nullIfEmpty(output.ImageMediaFileID), output.ImageStorageKey, input.WorkflowRunID, invalidateVideo); err != nil {
+	`, shot.ID, output.ImageArtifactID, output.ImageMediaFileID, output.ImageStorageKey,
+		input.WorkflowRunID, isPrimaryVisual, aggregateStatus, aggregateImageStatus, allAnchorsReady); err != nil {
 		return err
-	}
-	if invalidateVideo {
-		if _, err := tx.Exec(ctx, `
-			UPDATE video_render_plans
-			SET active = false,
-			    status = CASE WHEN status IN ('planned', 'running', 'succeeded') THEN 'stale' ELSE status END,
-			    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-			      'staleReason', 'shot_image_changed',
-			      'staleAt', now(),
-			      'replacementImageArtifactId', $2::text
-			    ),
-			    updated_at = now()
-			WHERE storyboard_shot_id = $1 AND active = true
-		`, shot.ID, output.ImageArtifactID); err != nil {
-			return err
-		}
-		if err := production.MarkFinalVideoStale(ctx, tx, input.ProjectID, ""); err != nil {
-			return err
-		}
-		if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "storyboard.shot.video.stale", "storyboard_shot", shot.ID, mustJSON(map[string]any{
-			"reason":                     "shot_image_changed",
-			"previousImageArtifactId":    shot.ImageArtifactID,
-			"replacementImageArtifactId": output.ImageArtifactID,
-		})); err != nil {
-			return err
-		}
 	}
 	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "storyboard.shot.image.completed", "storyboard_shot", shot.ID, storyboardShotEventPayload(input.WorkflowRunID, StoryboardShotRecord{
 		ID:        shot.ID,
 		ShotIndex: shot.ShotIndex,
 		ShotNo:    shot.ShotNo,
-		Status:    "image_succeeded",
-	}, "image_succeeded")); err != nil {
+		Status:    aggregateStatus,
+	}, aggregateStatus)); err != nil {
 		return err
 	}
 	if strings.TrimSpace(output.ImageArtifactID) != "" {
 		if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "artifact.created", "artifact", output.ImageArtifactID, mustJSON(map[string]any{
-			"artifactId":    output.ImageArtifactID,
-			"workflowRunId": input.WorkflowRunID,
-			"nodeRunId":     output.NodeRunID,
-			"shotId":        shot.ID,
-			"shotIndex":     shot.ShotIndex,
-			"storageKey":    output.ImageStorageKey,
-			"type":          "generated_image",
-			"mediaFileId":   output.ImageMediaFileID,
+			"artifactId":     output.ImageArtifactID,
+			"workflowRunId":  input.WorkflowRunID,
+			"nodeRunId":      output.NodeRunID,
+			"shotId":         shot.ID,
+			"shotIndex":      shot.ShotIndex,
+			"storageKey":     output.ImageStorageKey,
+			"type":           "generated_image",
+			"mediaFileId":    output.ImageMediaFileID,
+			"anchorRole":     input.AnchorRole,
+			"visualAnchorId": anchorID,
 		})); err != nil {
 			return err
 		}
 	}
+	outputJSON := mustJSON(output)
 	if applied, err := completeNodeRunTx(ctx, tx, output.nodeExecution(), outputJSON); err != nil {
 		return err
 	} else if !applied {
 		return ErrWorkflowWriteFenced
 	}
 	return tx.Commit(ctx)
+}
+
+func completePlannedAnchorTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	input GenerateShotImageInput,
+	shot StoryboardShotRecord,
+	output GenerateShotImageOutput,
+	profileKey string,
+	anchorRole string,
+	timelineTimebase int64,
+) (string, error) {
+	anchorRole = strings.TrimSpace(anchorRole)
+	if anchorRole == "" {
+		anchorRole = videoproduction.AnchorRolePlannedFirstFrame
+	}
+	stateRole, err := profileAnchorStateRole(profileKey, anchorRole)
+	if err != nil {
+		return "", err
+	}
+	type anchorRecord struct {
+		ID                     string
+		Revision               int
+		Status                 string
+		ReviewStatus           string
+		ArtifactID             string
+		StateVersionID         string
+		ProductionGenerationID string
+	}
+	var current anchorRecord
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, revision, status, review_status,
+		       COALESCE(artifact_id::text, ''), COALESCE(shot_state_version_id::text, ''),
+		       production_generation_id::text
+		FROM shot_visual_anchors
+		WHERE project_id = $1 AND storyboard_shot_id = $2 AND anchor_role = $3
+		ORDER BY revision DESC
+		LIMIT 1
+		FOR UPDATE
+	`, input.ProjectID, shot.ID, anchorRole).Scan(
+		&current.ID, &current.Revision, &current.Status, &current.ReviewStatus,
+		&current.ArtifactID, &current.StateVersionID, &current.ProductionGenerationID,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := tx.QueryRow(ctx, `
+			SELECT state.id::text, shot.production_generation_id::text
+			FROM storyboard_shots shot
+			JOIN storyboard_shot_state_versions state
+			  ON state.storyboard_shot_id = shot.id
+			 AND state.production_generation_id = shot.production_generation_id
+			 AND state.state_role = $3
+			 AND state.status = 'approved'
+			WHERE shot.project_id = $1 AND shot.id = $2
+		`, input.ProjectID, shot.ID, stateRole).Scan(&current.StateVersionID, &current.ProductionGenerationID); err != nil {
+			return "", err
+		}
+		current.Revision = 1
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO shot_visual_anchors(
+				organization_id, project_id, production_generation_id, storyboard_shot_id,
+				shot_state_version_id, anchor_role, revision, status, review_status, metadata
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, 1, 'generating', 'pending',
+			        jsonb_build_object('workflowRunId', $7::text, 'source', 'shot_image_generation'))
+			RETURNING id::text
+		`, input.OrganizationID, input.ProjectID, current.ProductionGenerationID, shot.ID,
+			current.StateVersionID, anchorRole, input.WorkflowRunID).Scan(&current.ID); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
+
+	if current.ArtifactID == output.ImageArtifactID && current.Status == "ready" && current.ReviewStatus == "approved" {
+		return current.ID, nil
+	}
+	if current.Status == "ready" || current.Status == "stale" || current.Status == "archived" || current.ArtifactID != "" {
+		previousID := current.ID
+		if _, err := tx.Exec(ctx, `
+			UPDATE shot_visual_anchors
+			SET status = 'stale', review_status = 'needs_edit', reference_pack_id = NULL,
+			    metadata = metadata || jsonb_build_object('supersededAt', now())
+			WHERE id = $1
+		`, previousID); err != nil {
+			return "", err
+		}
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO shot_visual_anchors(
+				organization_id, project_id, production_generation_id, storyboard_shot_id,
+				shot_state_version_id, anchor_role, revision, status, review_status, metadata
+			)
+			SELECT organization_id, project_id, production_generation_id, storyboard_shot_id,
+			       shot_state_version_id, anchor_role, revision + 1, 'generating', 'pending',
+			       metadata || jsonb_build_object(
+			         'workflowRunId', $2::text, 'source', 'shot_image_regeneration',
+			         'previousAnchorId', id::text
+			       )
+			FROM shot_visual_anchors WHERE id = $1
+			RETURNING id::text, revision, production_generation_id::text
+		`, previousID, input.WorkflowRunID).Scan(&current.ID, &current.Revision, &current.ProductionGenerationID); err != nil {
+			return "", err
+		}
+	}
+
+	finalReviewStatus := "approved"
+	approvalSource := "successful_shot_image_generation"
+	if profileKey == videoproduction.ProfileFirstLastFrame || profileKey == videoproduction.ProfileStoryboardSheet {
+		finalReviewStatus = "pending"
+		approvalSource = "awaiting_profile_output_review"
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE shot_visual_anchors anchor
+		SET status = 'ready',
+		    review_status = $7,
+		    artifact_id = NULLIF($2, '')::uuid,
+		    media_file_id = NULLIF($3, '')::uuid,
+		    storage_key = NULLIF($4, ''),
+		    prompt = COALESCE(NULLIF(anchor.prompt, ''), CASE WHEN $8 = 'planned_first_frame' THEN shot.image_prompt ELSE '' END),
+		    prompt_version_id = COALESCE(
+		      anchor.prompt_version_id,
+		      CASE WHEN $8 = 'planned_first_frame' THEN NULLIF(shot.metadata #>> '{imagePromptAgent,generationPromptVersionId}', '')::uuid ELSE NULL END
+		    ),
+		    prompt_hash = COALESCE(
+		      anchor.prompt_hash,
+		      CASE WHEN $8 = 'planned_first_frame' THEN NULLIF(regexp_replace(shot.metadata #>> '{imagePromptAgent,promptHash}', '^sha256:', ''), '') ELSE NULL END
+		    ),
+		    provider_call_id = NULLIF($5, '')::uuid,
+		    model_id = COALESCE(call.provider_model_id, anchor.model_id),
+		    reference_pack_id = NULL,
+		    metadata = anchor.metadata || jsonb_build_object(
+		      'completedAt', now(),
+		      'reviewUpdatedAt', now(),
+		      'approvalSource', $9::text,
+		      'workflowRunId', $6::text,
+		      'providerCallId', $5::text,
+		      'artifactId', $2::text,
+		      'mediaFileId', $3::text
+		    )
+		FROM storyboard_shots shot
+		LEFT JOIN provider_call_logs call ON call.id = NULLIF($5, '')::uuid
+		WHERE anchor.id = $1 AND shot.id = anchor.storyboard_shot_id
+	`, current.ID, output.ImageArtifactID, output.ImageMediaFileID, output.ImageStorageKey,
+		output.ProviderCallID, input.WorkflowRunID, finalReviewStatus, anchorRole, approvalSource); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE shot_visual_anchors
+		SET status = 'stale', review_status = 'needs_edit', reference_pack_id = NULL,
+		    metadata = metadata || jsonb_build_object('supersededAt', now(), 'supersededByAnchorId', $3::text)
+		WHERE project_id = $1 AND storyboard_shot_id = $2 AND anchor_role = $4
+		  AND id <> $3 AND status = 'ready' AND review_status = 'approved'
+	`, input.ProjectID, shot.ID, current.ID, anchorRole); err != nil {
+		return "", err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE shot_reference_packs SET status = 'stale'
+		WHERE project_id = $1 AND storyboard_shot_id = $2 AND status = 'active'
+	`, input.ProjectID, shot.ID); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE prompt_context_plans SET status = 'stale', stale_at = now()
+		WHERE project_id = $1 AND storyboard_shot_id = $2 AND status = 'active'
+	`, input.ProjectID, shot.ID); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE video_prompt_plans
+		SET status = 'stale', stale_at = now(),
+		    metadata = metadata || jsonb_build_object('staleReason', 'planned_anchor_changed', 'anchorRole', $3::text, 'staleAt', now())
+		WHERE project_id = $1 AND storyboard_shot_id = $2 AND status NOT IN ('stale', 'archived')
+	`, input.ProjectID, shot.ID, anchorRole); err != nil {
+		return "", err
+	}
+	var staleRenderPlanCount int64
+	if result, err := tx.Exec(ctx, `
+		UPDATE video_render_plans
+		SET active = false,
+		    status = CASE WHEN status IN ('planned', 'running', 'succeeded') THEN 'stale' ELSE status END,
+		    metadata = metadata || jsonb_build_object('staleReason', 'planned_anchor_changed', 'anchorRole', $3::text, 'staleAt', now()),
+		    updated_at = now()
+		WHERE project_id = $1 AND storyboard_shot_id = $2 AND active = true
+	`, input.ProjectID, shot.ID, anchorRole); err != nil {
+		return "", err
+	} else {
+		staleRenderPlanCount = result.RowsAffected()
+	}
+	if staleRenderPlanCount > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE storyboard_shots
+			SET active_video_render_plan_id = NULL,
+			    video_status = CASE WHEN video_status IN ('queued', 'running', 'succeeded') THEN 'stale' ELSE video_status END,
+			    production_readiness = 'preview_only', stale_state = 'needs_regeneration', updated_at = now()
+			WHERE project_id = $1 AND id = $2
+		`, input.ProjectID, shot.ID); err != nil {
+			return "", err
+		}
+		if err := production.MarkFinalVideoStale(ctx, tx, input.ProjectID, ""); err != nil {
+			return "", err
+		}
+	}
+	pairReviewed := false
+	if profileKey == videoproduction.ProfileFirstLastFrame {
+		pairReviewed, err = reviewFirstLastAnchorPairTx(ctx, tx, input.ProjectID, shot.ID, timelineTimebase)
+		if err != nil {
+			return "", err
+		}
+		if pairReviewed {
+			finalReviewStatus = "approved"
+			approvalSource = "deterministic_first_last_pair_review"
+		}
+	}
+
+	var generationID, bindingID, episodeID, sourceWorkflowRunID string
+	var bindingRevision int64
+	if err := tx.QueryRow(ctx, `
+		SELECT shot.production_generation_id::text, generation.binding_id::text,
+		       binding.revision, plan.script_episode_id::text,
+		       COALESCE(shot.workflow_run_id::text, $3::text)
+		FROM storyboard_shots shot
+		JOIN storyboard_plans plan ON plan.id = shot.storyboard_plan_id
+		JOIN project_video_production_generations generation ON generation.id = shot.production_generation_id
+		JOIN project_video_production_bindings binding ON binding.id = generation.binding_id
+		WHERE shot.project_id = $1 AND shot.id = $2
+	`, input.ProjectID, shot.ID, input.WorkflowRunID).Scan(
+		&generationID, &bindingID, &bindingRevision, &episodeID, &sourceWorkflowRunID,
+	); err != nil {
+		return "", err
+	}
+	payload := map[string]any{
+		"bindingId": bindingID, "bindingRevision": bindingRevision,
+		"productionGenerationId": generationID, "episodeId": episodeID,
+		"storyboardShotId": shot.ID, "workflowRunId": input.WorkflowRunID,
+		"sourceWorkflowRunId": sourceWorkflowRunID, "anchorId": current.ID,
+		"revision": current.Revision, "artifactId": output.ImageArtifactID,
+		"mediaFileId": output.ImageMediaFileID, "providerCallId": output.ProviderCallID,
+		"anchorRole": anchorRole,
+	}
+	if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "storyboard.shot.anchor.completed", "shot_visual_anchor", current.ID, mustJSON(payload)); err != nil {
+		return "", err
+	}
+	if finalReviewStatus == "approved" {
+		reviewedAnchors := []struct{ ID, Role string }{{ID: current.ID, Role: anchorRole}}
+		if pairReviewed {
+			reviewedAnchors = reviewedAnchors[:0]
+			rows, queryErr := tx.Query(ctx, `
+				SELECT DISTINCT ON (anchor_role) id::text, anchor_role
+				FROM shot_visual_anchors
+				WHERE storyboard_shot_id = $1
+				  AND anchor_role IN ('planned_first_frame', 'planned_last_frame')
+				  AND status = 'ready' AND review_status = 'approved'
+				ORDER BY anchor_role, revision DESC
+			`, shot.ID)
+			if queryErr != nil {
+				return "", queryErr
+			}
+			for rows.Next() {
+				var reviewed struct{ ID, Role string }
+				if scanErr := rows.Scan(&reviewed.ID, &reviewed.Role); scanErr != nil {
+					rows.Close()
+					return "", scanErr
+				}
+				reviewedAnchors = append(reviewedAnchors, reviewed)
+			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				rows.Close()
+				return "", rowsErr
+			}
+			rows.Close()
+		}
+		for _, reviewed := range reviewedAnchors {
+			reviewPayload := make(map[string]any, len(payload)+3)
+			for key, value := range payload {
+				reviewPayload[key] = value
+			}
+			reviewPayload["anchorId"] = reviewed.ID
+			reviewPayload["anchorRole"] = reviewed.Role
+			reviewPayload["decision"] = "approved"
+			reviewPayload["reviewSource"] = approvalSource
+			if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, "storyboard.shot.anchor.reviewed", "shot_visual_anchor", reviewed.ID, mustJSON(reviewPayload)); err != nil {
+				return "", err
+			}
+		}
+	}
+	return current.ID, nil
+}
+
+func completePlannedFirstFrameAnchorTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	input GenerateShotImageInput,
+	shot StoryboardShotRecord,
+	output GenerateShotImageOutput,
+) (string, error) {
+	return completePlannedAnchorTx(
+		ctx, tx, input, shot, output,
+		videoproduction.ProfileSingleFrameI2V,
+		videoproduction.AnchorRolePlannedFirstFrame,
+		90_000,
+	)
 }
 
 func (a Activities) recoverCompletedShotImage(ctx context.Context, input GenerateShotImageInput, nodeExecution NodeExecution) (GenerateShotImageOutput, bool, error) {
@@ -1764,6 +2227,7 @@ func (a Activities) recoverCompletedShotImage(ctx context.Context, input Generat
 		ExecutionToken:    nodeExecution.ExecutionToken,
 		AttemptGeneration: nodeExecution.AttemptGeneration,
 		ShotID:            input.ShotID,
+		AnchorRole:        input.AnchorRole,
 		ProviderCallID:    providerCallID,
 		ImageArtifactID:   gatewayOutput.ArtifactID,
 		ImageMediaFileID:  gatewayOutput.MediaFileID,
@@ -1922,13 +2386,20 @@ func (a Activities) markShotVideoSegmentCreated(ctx context.Context, input Creat
 	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, output.nodeExecution()); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
+	shotTag, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
 		SET status = 'video_running', video_status = 'running',
-		    video_started_at = COALESCE(video_started_at, now()), updated_at = now()
+		    video_error_code = NULL, video_error_message = NULL,
+		    video_started_at = COALESCE(video_started_at, now()), video_completed_at = NULL,
+		    video_workflow_run_id = NULLIF($3, '')::uuid,
+		    updated_at = now()
 		WHERE id = $1 AND active_video_render_plan_id = NULLIF($2, '')::uuid
-	`, shot.ID, output.ExecutionPlanID); err != nil {
+	`, shot.ID, output.ExecutionPlanID, input.WorkflowRunID)
+	if err != nil {
 		return err
+	}
+	if shotTag.RowsAffected() != 1 {
+		return ErrWorkflowWriteFenced
 	}
 	if applied, err := progressNodeRunTx(ctx, tx, output.nodeExecution(), mustJSON(output)); err != nil {
 		return err

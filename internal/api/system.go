@@ -109,6 +109,7 @@ func (s *Server) systemSetupState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) systemSetup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var req auth.RegisterRequest
 	if !decode(w, r, &req) {
 		return

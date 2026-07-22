@@ -1316,7 +1316,6 @@ script_markdown
 script_json
 storyboard_json
 shot_image
-grid_image
 video_clip
 audio_clip
 timeline_json
@@ -3404,17 +3403,6 @@ Task 025: Add prompt_templates and prompt_versions schema.
 - `text_to_storyboard` and `video_production` now resolve and render prompt versions before Provider Gateway calls. Gateway text/image/video-create requests carry `promptTemplateKey`, `promptVersionId`, `promptHash`, and `promptSource`.
 - New workflow paths populate `provider_call_logs.prompt_version_id`, `provider_call_logs.prompt_hash`, `artifacts.prompt_hash`, and Artifact metadata fields `promptTemplateKey`, `promptVersionId`, `promptHash`, and `promptSource`.
 - 提示词中心 lists seeded prompts, shows active content, supports render-test, creates versions, and activates versions.
-
-## Implementation Note: Multi-Shot Video Production v1
-
-- Migration `000011_storyboard_shots` upgrades `storyboard_shots` for workflow-based production with `workflow_run_id`, `storyboard_artifact_id`, normalized shot text fields, per-shot image/video artifact and media links, provider async task fields, and status indexes.
-- `GenerateStoryboardText` now parses storyboard JSON into up to 3 normalized shots, writes `storyboard_shots`, and adds `shotCount` / `shotIds` to the storyboard artifact metadata.
-- `text_to_storyboard` remains compatible but stops after storyboard JSON and shot persistence; it does not call image or video Gateway paths.
-- `video_production` processes shots sequentially for v1: `GenerateShotImage`, `CreateShotVideoTask`, and `PollShotVideoTask` run per shot, fail fast on any failed shot, and store per-shot generated image/video artifacts.
-- Workflow output now includes `shots[]` plus grouped provider call IDs for `images`, `videoCreates`, and `videoPolls`. The first shot also fills the legacy single image/video fields for compatibility.
-- `GET /api/workflow-runs/{workflowRunId}/shots` returns shot status, artifact/media/storage links, and optional signed image/video preview URLs.
-- Cancellation now cancels only the current running shot provider async task, keeps completed video shots succeeded, and marks pending/running unfinished shots cancelled.
-- Final FFmpeg composition is implemented by Media Compose v1. TTS, subtitles, BGM, transitions, watermarking, cover images, and multi-track timeline editing remain out of scope.
 
 ## Implementation Note: Media Compose / Final Video Export v1
 

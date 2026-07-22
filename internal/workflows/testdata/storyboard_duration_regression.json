@@ -1,9 +1,7 @@
 {
-  "name": "6355-character episode legacy duration clamp regression",
+  "name": "6355-character episode duration preservation regression",
   "scriptCharacterCount": 6355,
-  "rawTotalSeconds": 410,
-  "legacyMaxShotSeconds": 15,
-  "legacyStoredTotalSeconds": 240,
+  "expectedTotalSeconds": 410,
   "shots": [
     {"shotNo": 1, "duration": 28, "visual": "shot 1"},
     {"shotNo": 2, "duration": 22, "visual": "shot 2"},

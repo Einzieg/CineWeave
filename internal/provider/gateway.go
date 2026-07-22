@@ -283,7 +283,13 @@ func (s *Service) executeGatewayDiscovery(ctx context.Context, req GatewayDiscov
 	if account.Status != "active" {
 		return GatewayDiscoverModelsResponse{}, fmt.Errorf("%w: provider account is not active", ErrValidation)
 	}
-	credential, credentialID, err := s.activeCredentialPayload(ctx, req.OrganizationID, account.ID)
+	var credential map[string]any
+	var credentialID string
+	if strings.TrimSpace(req.CredentialID) != "" {
+		credential, credentialID, err = s.activeCredentialPayloadByID(ctx, req.OrganizationID, account.ID, req.CredentialID)
+	} else {
+		credential, credentialID, err = s.activeCredentialPayload(ctx, req.OrganizationID, account.ID)
+	}
 	if err != nil {
 		return GatewayDiscoverModelsResponse{}, err
 	}
@@ -719,7 +725,7 @@ func (s *Service) completeGatewaySelection(ctx context.Context, organizationID s
 	if account.Status != "active" {
 		return gatewayModelSelection{}, fmt.Errorf("%w: provider account is not active", ErrValidation)
 	}
-	credential, credentialID, err := s.activeCredentialPayload(ctx, organizationID, account.ID)
+	credential, credentialID, err := s.credentialPayloadForModel(ctx, organizationID, account.ID, model.ID)
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}

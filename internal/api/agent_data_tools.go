@@ -8,8 +8,181 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/production"
 	sourceutil "github.com/Einzieg/cineweave/internal/sources"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 )
+
+type clearProjectProductionContentResult struct {
+	PreviousGenerationID   string `json:"previousGenerationId"`
+	ActiveGenerationID     string `json:"activeGenerationId"`
+	ActiveGenerationNo     int64  `json:"activeGenerationNo"`
+	NovelSourceCount       int64  `json:"novelSourceCount"`
+	NovelChapterCount      int64  `json:"novelChapterCount"`
+	DeletedSourceCount     int64  `json:"deletedSourceCount"`
+	DeletedEventCount      int64  `json:"deletedEventCount"`
+	DeletedPlanCount       int64  `json:"deletedPlanCount"`
+	DeletedScriptCount     int64  `json:"deletedScriptCount"`
+	DeletedAssetCount      int64  `json:"deletedAssetCount"`
+	DeletedStoryboardCount int64  `json:"deletedStoryboardCount"`
+	DeletedReviewCount     int64  `json:"deletedReviewCount"`
+	DeletedExportCount     int64  `json:"deletedExportCount"`
+}
+
+func (s *Server) agentToolClearProjectProductionContent(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
+	if agentStringArg(args, "confirmation") != "preserve_novel_sources" {
+		return agentToolError("project.clear_production_content", args, newAPIError(http.StatusUnprocessableEntity, "PROJECT_CLEAR_CONFIRMATION_REQUIRED", "必须明确确认保留小说原文后才能清空生产内容"))
+	}
+	result, err := s.clearProjectProductionContent(r, principal, project, task, step, agentStringArg(args, "reason"))
+	if err != nil {
+		return agentToolError("project.clear_production_content", args, err)
+	}
+	return agentToolOK("project.clear_production_content", args, "已保留小说原文和分卷分集，并清空其余生产内容。", map[string]any{
+		"previousGenerationId":   result.PreviousGenerationID,
+		"activeGenerationId":     result.ActiveGenerationID,
+		"activeGenerationNo":     result.ActiveGenerationNo,
+		"novelSourceCount":       result.NovelSourceCount,
+		"novelChapterCount":      result.NovelChapterCount,
+		"deletedSourceCount":     result.DeletedSourceCount,
+		"deletedEventCount":      result.DeletedEventCount,
+		"deletedPlanCount":       result.DeletedPlanCount,
+		"deletedScriptCount":     result.DeletedScriptCount,
+		"deletedAssetCount":      result.DeletedAssetCount,
+		"deletedStoryboardCount": result.DeletedStoryboardCount,
+		"deletedReviewCount":     result.DeletedReviewCount,
+		"deletedExportCount":     result.DeletedExportCount,
+	})
+}
+
+func (s *Server) clearProjectProductionContent(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, reason string) (clearProjectProductionContentResult, error) {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	defer tx.Rollback(r.Context())
+
+	var activeWorkflowCount, activeProviderTaskCount int
+	if err := tx.QueryRow(r.Context(), `
+		SELECT
+		  (SELECT count(*) FROM workflow_runs
+		   WHERE project_id = $1
+		     AND status IN ('queued', 'running', 'cancelling')
+		     AND workflow_type <> 'project_agent'),
+		  (SELECT count(*) FROM provider_async_tasks
+		   WHERE project_id = $1 AND status IN ('queued', 'running', 'cancelling'))
+	`, project.ID).Scan(&activeWorkflowCount, &activeProviderTaskCount); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	if activeWorkflowCount > 0 || activeProviderTaskCount > 0 {
+		return clearProjectProductionContentResult{}, newAPIError(http.StatusConflict, "PROJECT_PRODUCTION_BUSY", "项目仍有生产任务运行，请先取消或等待任务结束后再清空")
+	}
+
+	previousGenerationID, generation, err := videoproduction.ResetActiveGeneration(r.Context(), tx, project.ID)
+	if err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	result := clearProjectProductionContentResult{
+		PreviousGenerationID: previousGenerationID,
+		ActiveGenerationID:   generation.ID,
+		ActiveGenerationNo:   generation.GenerationNo,
+	}
+	if err := tx.QueryRow(r.Context(), `
+		SELECT count(*) FILTER (WHERE source_type = 'novel'),
+		       (SELECT count(*) FROM novel_chapters chapter
+		        JOIN project_sources source ON source.id = chapter.source_id
+		        WHERE source.project_id = $1 AND source.source_type = 'novel')
+		FROM project_sources
+		WHERE project_id = $1
+	`, project.ID).Scan(&result.NovelSourceCount, &result.NovelChapterCount); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+
+	deleteCount := func(statement string) (int64, error) {
+		tag, execErr := tx.Exec(r.Context(), statement, project.ID)
+		if execErr != nil {
+			return 0, execErr
+		}
+		return tag.RowsAffected(), nil
+	}
+	if result.DeletedReviewCount, err = deleteCount(`DELETE FROM review_fixes WHERE project_id = $1`); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	for _, statement := range []string{
+		`DELETE FROM review_items WHERE project_id = $1`,
+		`DELETE FROM review_runs WHERE project_id = $1`,
+		`DELETE FROM review_tasks WHERE project_id = $1`,
+	} {
+		count, execErr := deleteCount(statement)
+		if execErr != nil {
+			return clearProjectProductionContentResult{}, execErr
+		}
+		result.DeletedReviewCount += count
+	}
+	if result.DeletedPlanCount, err = deleteCount(`DELETE FROM adaptation_plans WHERE project_id = $1`); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	if result.DeletedEventCount, err = deleteCount(`DELETE FROM novel_events WHERE project_id = $1`); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	if result.DeletedStoryboardCount, err = deleteCount(`DELETE FROM storyboard_shots WHERE project_id = $1`); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	storyboardCount, err := deleteCount(`DELETE FROM storyboards WHERE project_id = $1`)
+	if err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	result.DeletedStoryboardCount += storyboardCount
+	if result.DeletedScriptCount, err = deleteCount(`DELETE FROM scripts WHERE project_id = $1`); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	if result.DeletedAssetCount, err = deleteCount(`DELETE FROM canonical_assets WHERE project_id = $1`); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	legacyAssets, err := deleteCount(`DELETE FROM assets WHERE project_id = $1`)
+	if err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	result.DeletedAssetCount += legacyAssets
+	if result.DeletedExportCount, err = deleteCount(`DELETE FROM project_exports WHERE project_id = $1`); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	if result.DeletedSourceCount, err = deleteCount(`DELETE FROM project_sources WHERE project_id = $1 AND source_type <> 'novel'`); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE novel_chapters chapter
+		SET event_state = 'pending', event_summary = NULL, error_message = NULL, updated_at = now()
+		FROM project_sources source
+		WHERE source.id = chapter.source_id
+		  AND source.project_id = $1
+		  AND source.source_type = 'novel'
+	`, project.ID); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE project_sources
+		SET metadata = COALESCE(metadata, '{}'::jsonb) - 'sourceChangedAt' - 'downstreamStaleAt' - 'changedFields',
+		    updated_at = now()
+		WHERE project_id = $1 AND source_type = 'novel'
+	`, project.ID); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	payload := mustRawJSON(map[string]any{
+		"agentTaskId":          task.ID,
+		"agentStepId":          step.ID,
+		"clearedBy":            nullableMetadataValue(principal.UserID),
+		"reason":               reason,
+		"previousGenerationId": result.PreviousGenerationID,
+		"activeGenerationId":   result.ActiveGenerationID,
+		"counts":               result,
+	})
+	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "project.production_content.cleared", "project", project.ID, payload); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		return clearProjectProductionContentResult{}, err
+	}
+	return result, nil
+}
 
 func (s *Server) agentToolUpdateSource(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
 	sourceID := agentReferenceStringArg(args, "sourceId")

@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -14,27 +16,55 @@ import (
 )
 
 type videoExecutionSegment struct {
-	ExecutionPlanID        string
-	RenderSegmentID        string
-	ProviderAccountID      string
-	ProviderModelID        string
-	ModelProfileID         string
-	ModelProfileBindingID  string
-	ModelProfileKey        string
-	VariantKey             string
-	CapabilitySnapshotHash string
-	RequestedDuration      float64
-	SegmentIndex           int
-	ContinuityMode         string
-	ReferenceMode          string
-	AspectRatio            string
-	Resolution             string
-	AudioRequirement       string
-	Status                 string
-	ProviderAsyncTaskID    string
-	ProviderCallID         string
-	ExternalTaskID         string
-	ProviderTaskStatus     string
+	ExecutionPlanID                string
+	RenderSegmentID                string
+	OperationID                    string
+	OperationItemID                string
+	OperationItemAttempt           int
+	OrganizationID                 string
+	ProjectID                      string
+	ProductionGenerationID         string
+	VideoProductionBindingID       string
+	VideoProductionBindingRevision int64
+	StoryboardShotID               string
+	ProviderAccountID              string
+	ProviderModelID                string
+	ModelProfileID                 string
+	ModelProfileBindingID          string
+	ModelProfileKey                string
+	VariantKey                     string
+	CapabilitySnapshotHash         string
+	CapabilityAttestationID        string
+	RequestedDuration              float64
+	SegmentIndex                   int
+	ContinuityMode                 string
+	ReferenceMode                  string
+	AspectRatio                    string
+	Resolution                     string
+	AudioRequirement               string
+	Status                         string
+	ProviderAsyncTaskID            string
+	ProviderCallID                 string
+	ExternalTaskID                 string
+	ProviderTaskStatus             string
+	ProductionProfileVersionID     string
+	ProductionProfileSnapshotHash  string
+	InputContractVersion           string
+	InputContractKey               string
+	InputContract                  VideoInputContract
+	InputContractHash              string
+	ShotStateRevision              int
+	ShotStateHash                  string
+	TransitionHash                 string
+	ReferencePackID                string
+	ReferencePackHash              string
+	PromptContextPlanID            string
+	PromptContextPlanHash          string
+	VideoPromptPlanID              string
+	NativeAudioRequired            bool
+	Prompt                         string
+	PromptHash                     string
+	DialogueCues                   []GatewayVideoDialogueSpan
 }
 
 func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *GatewayVideoCreateTaskRequest, input gatewayVideoInput) (*videoExecutionSegment, error) {
@@ -50,33 +80,116 @@ func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *Gatewa
 	if planID == "" || segmentID == "" || hash == "" {
 		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "executionPlanId, renderSegmentId, and capabilitySnapshotHash must be provided together", Retryable: false}}
 	}
+	operationIdentityCount := 0
+	if strings.TrimSpace(req.OperationID) != "" {
+		operationIdentityCount++
+	}
+	if strings.TrimSpace(req.OperationItemID) != "" {
+		operationIdentityCount++
+	}
+	if req.OperationItemAttempt > 0 {
+		operationIdentityCount++
+	}
+	if operationIdentityCount != 0 && operationIdentityCount != 3 {
+		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "operationId、operationItemId 与 operationItemAttempt 必须同时提供", Retryable: false}}
+	}
 	var segment videoExecutionSegment
-	var modelProfileID, bindingID, modelProfileKey, providerTaskID, providerCallID, externalTaskID, providerTaskStatus sql.NullString
+	var modelProfileID, bindingID, modelProfileKey, providerTaskID, providerCallID, externalTaskID, providerTaskStatus, capabilityAttestationID sql.NullString
 	var expiresAt time.Time
+	var inputContractSnapshot, dialogueCues []byte
 	if err := s.db.QueryRow(ctx, `
-		SELECT plan.id::text, segment.id::text, model.provider_account_id::text, model.id::text,
+		SELECT plan.id::text, segment.id::text,
+		       COALESCE(checkpoint.id::text, ''), COALESCE(plan.operation_item_id::text, ''), COALESCE(plan.operation_item_attempt, 0),
+		       plan.organization_id::text, plan.project_id::text,
+		       plan.production_generation_id::text, plan.video_production_binding_id::text,
+		       plan.video_production_binding_revision, segment.storyboard_shot_id::text,
+		       model.provider_account_id::text, model.id::text,
 		       plan.model_profile_id::text, plan.model_profile_binding_id::text, plan.model_profile_key,
-		       plan.variant_key, plan.capability_snapshot_hash, segment.requested_duration_seconds::float8,
+		       plan.variant_key, plan.capability_snapshot_hash, plan.capability_attestation_id::text,
+		       segment.requested_duration_seconds::float8,
 		       segment.segment_index, segment.continuity_mode,
 		       plan.reference_mode, plan.aspect_ratio, plan.resolution, plan.audio_requirement,
 		       plan.expires_at, segment.status,
 		       segment.provider_async_task_id::text, segment.provider_call_id::text, segment.external_task_id,
-		       task.status
+		       task.status,
+		       plan.profile_version_id::text, plan.production_profile_snapshot_hash,
+		       COALESCE(plan.metadata->>'inputContractVersion', ''),
+		       CASE WHEN segment.segment_index = 0
+		            THEN plan.initial_input_contract_snapshot
+		            ELSE plan.continuation_input_contract_snapshot END,
+		       segment.input_contract_key, segment.input_contract_hash,
+		       plan.shot_state_revision, plan.shot_state_hash, COALESCE(plan.transition_hash, ''),
+		       plan.reference_pack_id::text, plan.reference_pack_hash,
+		       plan.prompt_context_plan_id::text, plan.prompt_context_plan_hash,
+		       plan.video_prompt_plan_id::text, plan.native_audio_required,
+		       COALESCE(segment.prompt, ''),
+		       COALESCE(segment.execution_prompt_hash, ''),
+		       segment.dialogue
 		FROM video_render_plans plan
 		JOIN video_render_segments segment ON segment.video_render_plan_id = plan.id
 		JOIN provider_models model ON model.id = COALESCE(segment.provider_model_id, plan.provider_model_id)
 		JOIN provider_accounts account ON account.id = model.provider_account_id
+		JOIN storyboard_shots shot
+		  ON shot.id = segment.storyboard_shot_id
+		 AND shot.project_id = plan.project_id
+		 AND shot.production_generation_id = plan.production_generation_id
+		 AND shot.deleted_at IS NULL
 		LEFT JOIN provider_async_tasks task ON task.id = segment.provider_async_task_id
+		LEFT JOIN episode_video_production_items item
+		  ON item.id = plan.operation_item_id
+		 AND item.video_render_plan_id = plan.id
+		 AND item.execution_identity_version = 2
+		 AND item.attempt = plan.operation_item_attempt
+		LEFT JOIN episode_video_production_batches batch ON batch.id = item.batch_id
+		LEFT JOIN episode_video_production_checkpoints checkpoint ON checkpoint.id = batch.checkpoint_id
 		WHERE plan.id = $1 AND segment.id = $2 AND plan.organization_id = $3
+		  AND plan.project_id::text = $4
+		  AND plan.production_generation_id::text = $5
+		  AND plan.video_production_binding_id::text = $6
+		  AND plan.video_production_binding_revision = $7
+		  AND segment.project_id = plan.project_id
+		  AND segment.production_generation_id = plan.production_generation_id
+		  AND segment.storyboard_shot_id::text = $8
+		  AND (
+		    (plan.operation_item_id IS NULL AND $9 = '' AND $10 = '' AND $11 = 0)
+		    OR (
+		      plan.operation_item_id::text = $9 AND plan.operation_item_attempt = $11
+		      AND checkpoint.id::text = $10
+		      AND checkpoint.organization_id = plan.organization_id
+		      AND checkpoint.project_id = plan.project_id
+		      AND checkpoint.production_generation_id = plan.production_generation_id
+		      AND checkpoint.video_production_binding_id = plan.video_production_binding_id
+		      AND checkpoint.video_production_binding_revision = plan.video_production_binding_revision
+		      AND checkpoint.workflow_run_id = plan.workflow_run_id
+		      AND checkpoint.workflow_run_id::text = $12
+		    )
+		  )
 		  AND plan.active = true AND plan.status NOT IN ('stale', 'archived', 'cancelled', 'replan_required')
 		  AND account.status = 'active' AND model.status = 'active'
-	`, planID, segmentID, req.OrganizationID).Scan(
-		&segment.ExecutionPlanID, &segment.RenderSegmentID, &segment.ProviderAccountID, &segment.ProviderModelID,
+	`, planID, segmentID, req.OrganizationID, strings.TrimSpace(req.ProjectID),
+		strings.TrimSpace(req.ProductionGenerationID), strings.TrimSpace(req.VideoProductionBindingID),
+		req.VideoProductionBindingRevision, strings.TrimSpace(req.StoryboardShotID),
+		strings.TrimSpace(req.OperationItemID), strings.TrimSpace(req.OperationID), req.OperationItemAttempt,
+		strings.TrimSpace(req.WorkflowRunID)).Scan(
+		&segment.ExecutionPlanID, &segment.RenderSegmentID,
+		&segment.OperationID, &segment.OperationItemID, &segment.OperationItemAttempt,
+		&segment.OrganizationID, &segment.ProjectID,
+		&segment.ProductionGenerationID, &segment.VideoProductionBindingID,
+		&segment.VideoProductionBindingRevision, &segment.StoryboardShotID,
+		&segment.ProviderAccountID, &segment.ProviderModelID,
 		&modelProfileID, &bindingID, &modelProfileKey, &segment.VariantKey, &segment.CapabilitySnapshotHash,
+		&capabilityAttestationID,
 		&segment.RequestedDuration, &segment.SegmentIndex, &segment.ContinuityMode,
 		&segment.ReferenceMode, &segment.AspectRatio, &segment.Resolution,
 		&segment.AudioRequirement, &expiresAt, &segment.Status,
 		&providerTaskID, &providerCallID, &externalTaskID, &providerTaskStatus,
+		&segment.ProductionProfileVersionID, &segment.ProductionProfileSnapshotHash,
+		&segment.InputContractVersion, &inputContractSnapshot, &segment.InputContractKey, &segment.InputContractHash,
+		&segment.ShotStateRevision, &segment.ShotStateHash, &segment.TransitionHash,
+		&segment.ReferencePackID, &segment.ReferencePackHash,
+		&segment.PromptContextPlanID, &segment.PromptContextPlanHash,
+		&segment.VideoPromptPlanID, &segment.NativeAudioRequired,
+		&segment.Prompt, &segment.PromptHash, &dialogueCues,
 	); err != nil {
 		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "video execution plan or segment is no longer active", Retryable: false}}
 	}
@@ -87,11 +200,21 @@ func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *Gatewa
 	segment.ProviderCallID = nullStringText(providerCallID)
 	segment.ExternalTaskID = nullStringText(externalTaskID)
 	segment.ProviderTaskStatus = nullStringText(providerTaskStatus)
+	segment.CapabilityAttestationID = nullStringText(capabilityAttestationID)
+	if err := json.Unmarshal(inputContractSnapshot, &segment.InputContract); err != nil {
+		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "视频执行计划的输入契约已损坏", Retryable: false}}
+	}
+	if err := json.Unmarshal(dialogueCues, &segment.DialogueCues); err != nil {
+		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "视频执行计划的台词契约已损坏", Retryable: false}}
+	}
 	if time.Now().UTC().After(expiresAt) {
 		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "video execution plan expired before task creation", Retryable: false}}
 	}
 	if hash != segment.CapabilitySnapshotHash {
 		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "video capability snapshot hash does not match the execution plan", Retryable: false}}
+	}
+	if strings.TrimSpace(req.StoryboardShotID) == "" || req.StoryboardShotID != segment.StoryboardShotID {
+		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "storyboardShotId does not match the execution plan", Retryable: false}}
 	}
 	model, err := s.GetModel(ctx, req.OrganizationID, segment.ProviderModelID)
 	if err != nil {
@@ -102,6 +225,7 @@ func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *Gatewa
 		return nil, err
 	}
 	currentHash := ""
+	var currentVariant *VideoGenerationVariant
 	for _, variant := range variants {
 		if variant.VariantKey != segment.VariantKey {
 			continue
@@ -111,10 +235,35 @@ func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *Gatewa
 		if err != nil {
 			return nil, err
 		}
+		variantCopy := variant
+		currentVariant = &variantCopy
 		break
 	}
 	if currentHash == "" || currentHash != segment.CapabilitySnapshotHash {
 		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "video model capabilities changed after the execution plan was created", Retryable: false}}
+	}
+	attestationID, err := s.resolveVideoCapabilityAttestation(ctx, req.OrganizationID, segment.ProviderModelID, *currentVariant, currentHash)
+	if err != nil {
+		return nil, err
+	}
+	if attestationID == "" || attestationID != segment.CapabilityAttestationID {
+		return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelCapabilityApprovalRequired, Message: "视频模型能力审批已变化，请重新规划视频", Retryable: false}}
+	}
+	account, err := s.GetAccount(ctx, req.OrganizationID, model.ProviderAccountID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.validateVideoInputContractsAdapterFixture(ctx, account, model, []VideoInputContract{segment.InputContract}); err != nil {
+		return nil, err
+	}
+	if err := validateVideoCreateProductionContract(*req, input, segment); err != nil {
+		return nil, err
+	}
+	if err := validateGatewayVideoReferenceManifest(*req, segment); err != nil {
+		return nil, err
+	}
+	if err := s.validateGatewayVideoReferenceManifestSources(ctx, *req, segment); err != nil {
+		return nil, err
 	}
 	if math.Abs(input.DurationSeconds-segment.RequestedDuration) > 0.001 || !equalVideoOption(input.AspectRatio, segment.AspectRatio) || !equalVideoOption(input.Resolution, segment.Resolution) {
 		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "video task input does not match the planned segment capability snapshot", Retryable: false}}
@@ -130,13 +279,52 @@ func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *Gatewa
 		return nil, &StandardErrorError{Standard: StandardError{Code: CodeInvalidRequest, Message: "planned video segment requires a continuity reference", Retryable: false}}
 	}
 	if segment.SegmentIndex > 0 && segment.ContinuityMode != "none" {
-		var previousArtifactID sql.NullString
+		var previousSegmentID, previousArtifact string
 		if err := s.db.QueryRow(ctx, `
-			SELECT artifact_id::text
+			SELECT id::text, COALESCE(artifact_id::text, '')
 			FROM video_render_segments
 			WHERE video_render_plan_id = $1 AND segment_index = $2 AND status = 'succeeded'
-		`, segment.ExecutionPlanID, segment.SegmentIndex-1).Scan(&previousArtifactID); err != nil || !videoReferencesContainArtifact(req.References, nullStringText(previousArtifactID)) {
-			return nil, &StandardErrorError{Standard: StandardError{Code: CodeInvalidRequest, Message: "continuation segment requires the succeeded previous segment artifact as a reference", Retryable: false}}
+		`, segment.ExecutionPlanID, segment.SegmentIndex-1).Scan(&previousSegmentID, &previousArtifact); err != nil {
+			return nil, &StandardErrorError{Standard: StandardError{Code: CodeInvalidRequest, Message: "同镜头续接片段缺少已成功的前一片段", Retryable: false}}
+		}
+		switch segment.InputContractKey {
+		case VideoInputContractVideoExtension:
+			if len(req.References) != 1 || gatewayVideoReferenceRole(req.References[0]) != "video_extension_source" || strings.TrimSpace(req.References[0].ArtifactID) != previousArtifact {
+				return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "视频延长必须且只能使用同镜头前一成功片段", Retryable: false}}
+			}
+		case VideoInputContractFirstFrame, VideoInputContractFirstFramePlusReferences:
+			if len(req.References) == 0 || gatewayVideoReferenceRole(req.References[0]) != "first_frame" {
+				return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "尾帧续接必须使用前一片段提取的 fresh 首帧输入", Retryable: false}}
+			}
+			if req.References[0].SourceType != "video_render_segment_tail_anchor" || req.References[0].SourceVersion != previousSegmentID {
+				return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "尾帧续接来源版本与前一片段不一致", Retryable: false}}
+			}
+			if segment.InputContractKey == VideoInputContractFirstFrame && len(req.References) != 1 {
+				return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "first_frame 续接只能携带一个 fresh 首帧", Retryable: false}}
+			}
+			var valid bool
+			if err := s.db.QueryRow(ctx, `
+				SELECT EXISTS (
+					SELECT 1
+					FROM shot_visual_anchors anchor
+					JOIN artifacts artifact ON artifact.id = anchor.artifact_id
+					WHERE anchor.storyboard_shot_id = $1
+					  AND anchor.source_render_segment_id = $2
+					  AND anchor.source_video_artifact_id = $3
+					  AND anchor.artifact_id = $4
+					  AND anchor.id::text = $5
+					  AND lower(COALESCE(artifact.content_hash, '')) = $6
+					  AND anchor.created_at = $7::timestamptz
+					  AND anchor.anchor_role = 'observed_tail_frame'
+					  AND anchor.source_role = 'previous_segment_tail'
+					  AND anchor.status = 'ready' AND anchor.review_status = 'approved'
+				)
+			`, req.StoryboardShotID, previousSegmentID, previousArtifact, req.References[0].ArtifactID,
+				req.References[0].SourceID, cleanVideoContractHash(req.References[0].ContentHash), req.References[0].GeneratedAt).Scan(&valid); err != nil || !valid {
+				return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "尾帧续接引用不是前一片段的 fresh 尾帧", Retryable: false}}
+			}
+		default:
+			return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "当前模型没有可执行的同镜头续接契约", Retryable: false}}
 		}
 	}
 	if strings.TrimSpace(req.ProviderModelID) != "" && req.ProviderModelID != segment.ProviderModelID {
@@ -145,6 +333,182 @@ func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *Gatewa
 	req.ProviderModelID = segment.ProviderModelID
 	req.ModelProfileKey = segment.ModelProfileKey
 	return &segment, nil
+}
+
+func validateVideoCreateProductionContract(req GatewayVideoCreateTaskRequest, input gatewayVideoInput, segment videoExecutionSegment) error {
+	checks := []struct {
+		name     string
+		actual   string
+		expected string
+	}{
+		{"organizationId", req.OrganizationID, segment.OrganizationID},
+		{"projectId", req.ProjectID, segment.ProjectID},
+		{"productionGenerationId", req.ProductionGenerationID, segment.ProductionGenerationID},
+		{"videoProductionBindingId", req.VideoProductionBindingID, segment.VideoProductionBindingID},
+		{"productionProfileVersionId", req.ProductionProfileVersionID, segment.ProductionProfileVersionID},
+		{"productionProfileSnapshotHash", cleanVideoContractHash(req.ProductionProfileSnapshotHash), cleanVideoContractHash(segment.ProductionProfileSnapshotHash)},
+		{"inputContractKey", req.InputContractKey, segment.InputContractKey},
+		{"inputContractHash", cleanVideoContractHash(req.InputContractHash), cleanVideoContractHash(segment.InputContractHash)},
+		{"inputContractVersion", req.InputContractVersion, segment.InputContractVersion},
+		{"shotStateHash", cleanVideoContractHash(req.ShotStateHash), cleanVideoContractHash(segment.ShotStateHash)},
+		{"transitionHash", cleanVideoContractHash(req.TransitionHash), cleanVideoContractHash(segment.TransitionHash)},
+		{"referencePackId", req.ReferencePackID, segment.ReferencePackID},
+		{"referencePackHash", cleanVideoContractHash(req.ReferencePackHash), cleanVideoContractHash(segment.ReferencePackHash)},
+		{"promptContextPlanId", req.PromptContextPlanID, segment.PromptContextPlanID},
+		{"promptContextPlanHash", cleanVideoContractHash(req.PromptContextPlanHash), cleanVideoContractHash(segment.PromptContextPlanHash)},
+		{"videoPromptPlanId", req.VideoPromptPlanID, segment.VideoPromptPlanID},
+	}
+	for _, check := range checks {
+		if strings.TrimSpace(check.actual) == "" || !strings.EqualFold(strings.TrimSpace(check.actual), strings.TrimSpace(check.expected)) {
+			return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "视频创建契约字段不一致：" + check.name, Retryable: false}}
+		}
+	}
+	if req.ShotStateRevision != segment.ShotStateRevision {
+		return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "镜头状态版本已变化，请重新规划视频", Retryable: false}}
+	}
+	if req.VideoProductionBindingRevision <= 0 || req.VideoProductionBindingRevision != segment.VideoProductionBindingRevision {
+		return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "视频生产配置版本与 Render Plan 不一致", Retryable: false}}
+	}
+	if req.NativeAudioRequired != segment.NativeAudioRequired {
+		return &StandardErrorError{Standard: StandardError{Code: CodeVideoDialogueContractViolation, Message: "原生音频要求与 Render Plan 不一致", Retryable: false}}
+	}
+	if strings.TrimSpace(segment.Prompt) == "" {
+		return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "已审核视频执行提示词为空，请重新生成视频提示词", Retryable: false}}
+	}
+	if strings.TrimSpace(segment.PromptHash) == "" || videoPromptTextHash(segment.Prompt) != segment.PromptHash {
+		return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "已审核视频执行提示词的完整性校验失败，请重新生成视频提示词", Retryable: false}}
+	}
+	if input.Prompt != segment.Prompt {
+		return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "实际发送的视频提示词文本与已审核版本不一致", Retryable: false}}
+	}
+	if videoPromptTextHash(input.Prompt) != segment.PromptHash || req.PromptHash != segment.PromptHash {
+		return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "实际发送的视频提示词哈希与已审核版本不一致", Retryable: false}}
+	}
+	if !sameGatewayVideoDialogueCues(req.DialogueCues, segment.DialogueCues) {
+		return &StandardErrorError{Standard: StandardError{Code: CodeVideoDialogueContractViolation, Message: "实际发送的逐段台词与 Render Plan 不一致", Retryable: false}}
+	}
+	for _, cue := range segment.DialogueCues {
+		if !strings.Contains(input.Prompt, strings.TrimSpace(cue.Text)) {
+			return &StandardErrorError{Standard: StandardError{Code: CodeVideoDialogueContractViolation, Message: "实际发送的视频提示词丢失中文台词：" + cue.Text, Retryable: false}}
+		}
+	}
+	if err := validateGatewayVideoReferencesForContract(req.References, segment.InputContract); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateGatewayVideoReferencesForContract(references []GatewayVideoReference, contract VideoInputContract) error {
+	declared := make(map[string]VideoInputSlot, len(contract.Slots))
+	for _, slot := range contract.Slots {
+		declared[strings.ToLower(strings.TrimSpace(slot.Role))] = slot
+	}
+	counts := make(map[string]int)
+	for _, reference := range references {
+		role := gatewayVideoReferenceRole(reference)
+		if role == "" {
+			return &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "视频参考输入缺少 canonical role", Retryable: false}}
+		}
+		mediaType := gatewayVideoReferenceMediaType(reference)
+		slotRole := videoReferenceInputSlotRole(role, mediaType, declared)
+		slot, ok := declared[slotRole]
+		if !ok {
+			return &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: fmt.Sprintf("输入契约 %s 不支持 %s", contract.ContractKey, role), Retryable: false}}
+		}
+		if mediaType == "" || !strings.EqualFold(mediaType, slot.MediaType) {
+			return &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: fmt.Sprintf("输入 %s 的媒体类型必须为 %s", role, slot.MediaType), Retryable: false}}
+		}
+		counts[slotRole]++
+	}
+	for role, count := range counts {
+		slot, ok := declared[role]
+		if !ok || count > slot.Max {
+			return &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: fmt.Sprintf("输入契约 %s 不支持 %s x%d", contract.ContractKey, role, count), Retryable: false}}
+		}
+	}
+	for role, slot := range declared {
+		if counts[role] < slot.Min {
+			return &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: fmt.Sprintf("输入契约 %s 缺少必需输入 %s", contract.ContractKey, role), Retryable: false}}
+		}
+	}
+	for _, group := range contract.MutuallyExclusiveRoles {
+		present := 0
+		for _, role := range group {
+			if counts[strings.ToLower(strings.TrimSpace(role))] > 0 {
+				present++
+			}
+		}
+		if present > 1 {
+			return &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "视频请求包含互斥的参考输入角色", Retryable: false}}
+		}
+	}
+	return nil
+}
+
+func videoReferenceInputSlotRole(role, mediaType string, declared map[string]VideoInputSlot) string {
+	role = strings.ToLower(strings.TrimSpace(role))
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if _, ok := declared[role]; ok {
+		return role
+	}
+	if mediaType == "image" {
+		switch role {
+		case "character_identity", "character_costume", "scene_identity", "scene_spatial", "prop_identity", "continuity_hint", "style_reference", "motion_reference":
+			if _, ok := declared["semantic_reference"]; ok {
+				return "semantic_reference"
+			}
+		}
+	}
+	if mediaType == "video" && role == "motion_reference" {
+		if _, ok := declared["video_reference"]; ok {
+			return "video_reference"
+		}
+	}
+	return role
+}
+
+func gatewayVideoReferenceMediaType(reference GatewayVideoReference) string {
+	mimeType := strings.ToLower(strings.TrimSpace(reference.MimeType))
+	switch {
+	case strings.HasPrefix(mimeType, "image/"):
+		return "image"
+	case strings.HasPrefix(mimeType, "video/"):
+		return "video"
+	case strings.HasPrefix(mimeType, "audio/"):
+		return "audio"
+	}
+	typeName := strings.ToLower(strings.TrimSpace(reference.Type))
+	switch {
+	case typeName == "image" || strings.Contains(typeName, "image") || strings.Contains(typeName, "frame"):
+		return "image"
+	case typeName == "video" || strings.Contains(typeName, "video"):
+		return "video"
+	case typeName == "audio" || strings.Contains(typeName, "audio"):
+		return "audio"
+	default:
+		return ""
+	}
+}
+
+func gatewayVideoReferenceRole(reference GatewayVideoReference) string {
+	role := strings.ToLower(strings.TrimSpace(reference.Role))
+	if role != "" {
+		return role
+	}
+	role = strings.ToLower(strings.TrimSpace(reference.Type))
+	switch role {
+	case "image":
+		return "first_frame"
+	case "video":
+		return "video_reference"
+	default:
+		return role
+	}
+}
+
+func videoPromptTextHash(prompt string) string {
+	sum := sha256.Sum256([]byte(prompt))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func equalVideoOption(actual, planned string) bool {

@@ -143,7 +143,12 @@ func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVid
 	if strings.TrimSpace(input.TimelineID) != "" {
 		clips, err = a.composeTimelineClips(ctx, strings.TrimSpace(input.TimelineID))
 	} else {
-		clips, err = a.composeVideoClips(ctx, sourceWorkflowRunID)
+		project, settingsErr := a.projectProductionSettings(ctx, input.ProjectID, sourceWorkflowRunID)
+		if settingsErr != nil {
+			err = settingsErr
+		} else {
+			clips, err = a.composeVideoClips(ctx, sourceWorkflowRunID, project)
+		}
 	}
 	if err != nil {
 		return ComposeFinalVideoOutput{}, a.failComposeFinalVideo(ctx, input, nodeExecution, codeActivityFailed, err.Error())
@@ -222,7 +227,7 @@ func (a Activities) existingComposeFinalVideo(ctx context.Context, workflowRunID
 	return output, output.ArtifactID != "" && output.MediaFileID != "" && output.StorageKey != "", nil
 }
 
-func (a Activities) composeVideoClips(ctx context.Context, workflowRunID string) ([]composeClipRecord, error) {
+func (a Activities) composeVideoClips(ctx context.Context, workflowRunID string, project ProjectProductionSettings) ([]composeClipRecord, error) {
 	rows, err := a.db.Query(ctx, `
 		SELECT
 			s.id::text,
@@ -236,20 +241,20 @@ func (a Activities) composeVideoClips(ctx context.Context, workflowRunID string)
 			s.start_tick,
 			s.end_tick,
 			s.planned_duration_ticks,
-			p.timeline_timebase,
-			p.fps_numerator,
-			p.fps_denominator,
+			$3::bigint,
+			$4::integer,
+			$5::integer,
 			COALESCE(s.native_audio_status, 'not_requested'),
 			COALESCE(s.production_readiness, 'ready')
 		FROM storyboard_shots s
-		JOIN projects p ON p.id = s.project_id
 		LEFT JOIN media_files mf ON mf.id = s.video_media_file_id
 		WHERE s.workflow_run_id = $1
+		  AND s.production_generation_id = $2
 		  AND s.status = 'video_succeeded'
 		  AND COALESCE(s.video_storage_key, mf.storage_key, '') <> ''
 		  AND s.deleted_at IS NULL
 		ORDER BY s.shot_index ASC
-	`, workflowRunID)
+	`, workflowRunID, project.ProductionGenerationID, project.TimelineTimebase, project.FPSNumerator, project.FPSDenominator)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +415,8 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution); err != nil {
+	runCtx, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution)
+	if err != nil {
 		return ComposeFinalVideoOutput{}, err
 	}
 
@@ -423,14 +429,14 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 
 	var timelineArtifactID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, metadata, created_by)
-		VALUES ($1, $2, $3, $4, 'timeline_json', $5, 'application/json', $6, $7, $8)
+		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, metadata, created_by, production_generation_id)
+		VALUES ($1, $2, $3, $4, 'timeline_json', $5, 'application/json', $6, $7, $8, $9)
 		RETURNING id
 	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, execution.NodeRunID, timelinePut.StorageKey, timelinePut.ContentHash, mustJSON(map[string]any{
 		"source":   "media_worker",
 		"type":     "timeline_manifest",
 		"byteSize": timelinePut.ByteSize,
-	}), nullIfEmpty(input.CreatedBy)).Scan(&timelineArtifactID); err != nil {
+	}), nullIfEmpty(input.CreatedBy), runCtx.ProductionGenerationID).Scan(&timelineArtifactID); err != nil {
 		return ComposeFinalVideoOutput{}, err
 	}
 
@@ -461,16 +467,16 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 	}
 	var finalArtifactID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, metadata, created_by)
-		VALUES ($1, $2, $3, $4, 'final_video', $5, $6, $7, $8, $9)
+		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, metadata, created_by, production_generation_id)
+		VALUES ($1, $2, $3, $4, 'final_video', $5, $6, $7, $8, $9, $10)
 		RETURNING id
-	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, execution.NodeRunID, result.StorageKey, result.MimeType, result.ContentHash, mustJSON(finalMetadata), nullIfEmpty(input.CreatedBy)).Scan(&finalArtifactID); err != nil {
+	`, input.OrganizationID, input.ProjectID, input.WorkflowRunID, execution.NodeRunID, result.StorageKey, result.MimeType, result.ContentHash, mustJSON(finalMetadata), nullIfEmpty(input.CreatedBy), runCtx.ProductionGenerationID).Scan(&finalArtifactID); err != nil {
 		return ComposeFinalVideoOutput{}, err
 	}
 	var mediaFileID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO media_files(organization_id, project_id, artifact_id, storage_key, mime_type, byte_size, width, height, duration_seconds, checksum, metadata, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO media_files(organization_id, project_id, artifact_id, storage_key, mime_type, byte_size, width, height, duration_seconds, checksum, metadata, created_by, production_generation_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id
 	`, input.OrganizationID, input.ProjectID, finalArtifactID, result.StorageKey, result.MimeType, nullInt64(result.ByteSize), nullInt(result.Width), nullInt(result.Height), nullFloat(result.DurationSeconds), nullIfEmpty(result.ContentHash), mustJSON(map[string]any{
 		"source":              "media_worker",
@@ -479,7 +485,7 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 		"timelineId":          input.TimelineID,
 		"shotIds":             shotIDs,
 		"clipCount":           len(clips),
-	}), nullIfEmpty(input.CreatedBy)).Scan(&mediaFileID); err != nil {
+	}), nullIfEmpty(input.CreatedBy), runCtx.ProductionGenerationID).Scan(&mediaFileID); err != nil {
 		return ComposeFinalVideoOutput{}, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -509,8 +515,8 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 		if err := tx.QueryRow(ctx, `
 			SELECT COALESCE(MAX(version), 0) + 1
 			FROM final_video_versions
-			WHERE project_id = $1
-		`, input.ProjectID).Scan(&version); err != nil {
+			WHERE project_id = $1 AND production_generation_id = $2
+		`, input.ProjectID, runCtx.ProductionGenerationID).Scan(&version); err != nil {
 			return ComposeFinalVideoOutput{}, err
 		}
 		title := strings.TrimSpace(input.Title)
@@ -521,9 +527,10 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 			INSERT INTO final_video_versions(
 				organization_id, project_id, timeline_id, workflow_run_id, version, title, status,
 				artifact_id, media_file_id, storage_key, duration_ticks, resolution, aspect_ratio,
-				compose_settings, metadata, created_by, native_audio_status, production_readiness
+				compose_settings, metadata, created_by, native_audio_status, production_readiness,
+				production_generation_id
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 			RETURNING id::text
 		`, input.OrganizationID, input.ProjectID, input.TimelineID, input.WorkflowRunID, version, title, status,
 			finalArtifactID, mediaFileID, result.StorageKey, nullInt64(resultDurationTicks),
@@ -542,6 +549,7 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 			nullIfEmpty(input.CreatedBy),
 			nativeAudioStatus,
 			productionReadiness,
+			runCtx.ProductionGenerationID,
 		).Scan(&finalVideoVersionID); err != nil {
 			return ComposeFinalVideoOutput{}, err
 		}

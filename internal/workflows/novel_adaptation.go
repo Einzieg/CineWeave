@@ -184,13 +184,15 @@ type AdaptationPlanDraft struct {
 }
 
 type novelChapterRecord struct {
-	ID           string
-	ChapterIndex int
-	VolumeIndex  int
-	SectionIndex int
-	VolumeTitle  string
-	ChapterTitle string
-	Content      string
+	ID              string
+	ChapterIndex    int
+	VolumeIndex     int
+	SectionIndex    int
+	VolumeTitle     string
+	ChapterTitle    string
+	Content         string
+	ContentRevision int64
+	ContentHash     string
 }
 
 type adaptationPlanRecord struct {
@@ -315,7 +317,7 @@ func (a Activities) ExtractNovelEvents(ctx context.Context, input ExtractNovelEv
 	if err := validateExtractNovelEventsInput(input); err != nil {
 		return ExtractNovelEventsOutput{}, err
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return ExtractNovelEventsOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -417,7 +419,7 @@ func (a Activities) GenerateAdaptationPlan(ctx context.Context, input GenerateAd
 	if err := validateGenerateAdaptationPlanInput(input); err != nil {
 		return AdaptationPlanOutput{}, err
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return AdaptationPlanOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -505,7 +507,7 @@ func (a Activities) GenerateScriptFromAdaptationPlan(ctx context.Context, input 
 	if strings.TrimSpace(input.OrganizationID) == "" || strings.TrimSpace(input.ProjectID) == "" || strings.TrimSpace(input.PlanID) == "" {
 		return AdaptationScriptOutput{}, fmt.Errorf("organizationId, projectId, and planId are required")
 	}
-	project, err := a.projectProductionSettings(ctx, input.ProjectID)
+	project, err := a.projectProductionSettings(ctx, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return AdaptationScriptOutput{}, a.failActivity(ctx, baseInput, NodeExecution{}, workflowError{Code: codeActivityFailed, Message: err.Error()})
 	}
@@ -855,7 +857,8 @@ func validateGenerateAdaptationPlanInput(input GenerateAdaptationPlanInput) erro
 
 func (a Activities) loadNovelChapters(ctx context.Context, projectID, sourceID string, chapterIDs []string) ([]novelChapterRecord, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT id::text, chapter_index, volume_index, section_index, COALESCE(volume_title, ''), COALESCE(chapter_title, ''), content
+		SELECT id::text, chapter_index, volume_index, section_index, COALESCE(volume_title, ''), COALESCE(chapter_title, ''), content,
+		       content_revision, content_hash
 		FROM novel_chapters
 		WHERE project_id = $1 AND source_id = $2
 		ORDER BY COALESCE(volume_index, 0) ASC, COALESCE(section_index, chapter_index) ASC, chapter_index ASC
@@ -872,7 +875,7 @@ func (a Activities) loadNovelChapters(ctx context.Context, projectID, sourceID s
 	for rows.Next() {
 		var item novelChapterRecord
 		var volumeIndex, sectionIndex sql.NullInt32
-		if err := rows.Scan(&item.ID, &item.ChapterIndex, &volumeIndex, &sectionIndex, &item.VolumeTitle, &item.ChapterTitle, &item.Content); err != nil {
+		if err := rows.Scan(&item.ID, &item.ChapterIndex, &volumeIndex, &sectionIndex, &item.VolumeTitle, &item.ChapterTitle, &item.Content, &item.ContentRevision, &item.ContentHash); err != nil {
 			return nil, err
 		}
 		if volumeIndex.Valid {
@@ -1351,7 +1354,10 @@ func workflowScriptEpisodeInstruction(base string, index, total int, chapter scr
 	}
 	parts = append(parts,
 		"本次只改编当前单个分集，禁止合并其它章节，禁止跳到后续分集。",
-		"保持原文事件顺序和重要台词，删除旁白时必须保留剧情因果。",
+		"严格保持原文事件顺序、人物关系、剧情因果和所有关键台词，不得新增、合并、删改剧情。",
+		"台词零捏造：普通角色对白只能逐字取自当前分集原文引号中的直接话语；心声必须逐字取自明确的角色心理内容，禁止补写、改写、概括或把模型推断内容变成可听见的话。",
+		"小说叙述禁止逐句复制成旁白、解说或画外音，必须转化为可见动作、表情、构图、环境、场面调度或非语言音效。",
+		"保留原文中的中文台词原句和说话人；环境音、动作音和音乐只能写成舞台说明，不得写进人物台词。",
 		"输出该分集可直接进入分镜解析的完整剧本正文。",
 		"分集序号："+strconv.Itoa(index)+"/"+strconv.Itoa(total),
 		"原文分集："+chapter.Title,
@@ -1556,6 +1562,9 @@ func (a Activities) createGeneratedScriptFromPlan(ctx context.Context, input Gen
 		return AdaptationScriptOutput{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE scripts SET current_version_id = $2 WHERE id = $1`, scriptID, versionID); err != nil {
+		return AdaptationScriptOutput{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE projects SET active_script_id = $2 WHERE id = $1`, input.ProjectID, scriptID); err != nil {
 		return AdaptationScriptOutput{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE adaptation_plans SET script_id = $2, updated_at = now() WHERE id = $1`, plan.ID, scriptID); err != nil {

@@ -24,3 +24,26 @@ func TestValidateGeneratedCardStyleRejectsCrossFamilyPrompts(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateCanonicalAssetBaselineRejectsTransientCharacterInjuries(t *testing.T) {
+	tests := []struct {
+		name      string
+		assetType string
+		base      string
+		stable    string
+		wantError bool
+	}{
+		{name: "neutral character", assetType: "character", base: "国风3D成年男性角色四视图，素色长袍", stable: "固定面容、体型和基础服装", wantError: false},
+		{name: "explicitly excluded injuries", assetType: "character", base: "国风3D成年男性，无血迹、无流血、无开放伤口、无战损", stable: "核心资产不固化血迹、流血、开放伤口等剧情瞬时状态", wantError: false},
+		{name: "blood soaked character", assetType: "character", base: "国风3D成年男性，残袍被鲜血浸透", stable: "保持浑身浴血与遍体伤口", wantError: true},
+		{name: "scene may contain old blood trace", assetType: "scene", base: "风化山巅地表有陈旧血迹", stable: "固定岩石结构", wantError: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateCanonicalAssetBaseline(test.assetType, test.base, test.stable)
+			if (err != nil) != test.wantError {
+				t.Fatalf("ValidateCanonicalAssetBaseline() error = %v, wantError=%v", err, test.wantError)
+			}
+		})
+	}
+}

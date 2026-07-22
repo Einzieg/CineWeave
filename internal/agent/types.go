@@ -46,16 +46,17 @@ type ToolContext struct {
 }
 
 type ToolResult struct {
-	Name         string           `json:"name"`
-	Label        string           `json:"label"`
-	Status       string           `json:"status"`
-	Summary      string           `json:"summary"`
-	Arguments    map[string]any   `json:"arguments,omitempty"`
-	Data         map[string]any   `json:"data,omitempty"`
-	Retryable    bool             `json:"retryable,omitempty"`
-	NextActions  []ToolNextAction `json:"nextActions,omitempty"`
-	ErrorCode    string           `json:"errorCode,omitempty"`
-	ErrorMessage string           `json:"errorMessage,omitempty"`
+	Name                string           `json:"name"`
+	Label               string           `json:"label"`
+	Status              string           `json:"status"`
+	Summary             string           `json:"summary"`
+	Arguments           map[string]any   `json:"arguments,omitempty"`
+	Data                map[string]any   `json:"data,omitempty"`
+	ChildWorkflowRunIDs []string         `json:"childWorkflowRunIds,omitempty"`
+	Retryable           bool             `json:"retryable,omitempty"`
+	NextActions         []ToolNextAction `json:"nextActions,omitempty"`
+	ErrorCode           string           `json:"errorCode,omitempty"`
+	ErrorMessage        string           `json:"errorMessage,omitempty"`
 }
 
 type ToolNextAction struct {
@@ -75,6 +76,7 @@ type AgentTool struct {
 	Permission       string
 	InputSchema      json.RawMessage
 	RequiresApproval bool
+	StartsWorkflow   bool
 	DryRun           ToolFunc
 	Execute          ToolFunc
 	Verifier         ToolFunc

@@ -154,7 +154,7 @@ func TestPlanShotBoundariesIncludesSemanticMinimumInOptimization(t *testing.T) {
 	}
 }
 
-func TestPlanShotBoundariesDoesNotApplyLegacyShotOrDurationCaps(t *testing.T) {
+func TestPlanShotBoundariesPreservesAllUnitsAndDuration(t *testing.T) {
 	timebase := DefaultTimebase()
 	units := make([]TimingUnit, 0, 64)
 	frameTicks, err := timebase.TicksPerFrame()
@@ -183,7 +183,7 @@ func TestPlanShotBoundariesDoesNotApplyLegacyShotOrDurationCaps(t *testing.T) {
 		t.Fatalf("PlanShotBoundaries: %v", err)
 	}
 	if len(shots) <= 24 {
-		t.Fatalf("shot count = %d, legacy 24-shot cap appears active", len(shots))
+		t.Fatalf("shot count = %d, want more than 24 for this timing fixture", len(shots))
 	}
 	total := int64(0)
 	for _, shot := range shots {

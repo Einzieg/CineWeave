@@ -93,46 +93,38 @@ func TestStoryboardShotImageReferenceOptionsAllowsOtherCurrentProjectAsset(t *te
 
 func TestNormalizeShotProductionStatusKeepsExplicitMediaState(t *testing.T) {
 	tests := []struct {
-		name         string
-		current      string
-		legacyStatus string
-		staleState   string
-		hasArtifact  bool
-		mediaKind    string
-		want         string
+		name        string
+		current     string
+		staleState  string
+		hasArtifact bool
+		want        string
 	}{
 		{
-			name:         "new image succeeds while existing video is stale",
-			current:      "succeeded",
-			legacyStatus: "image_succeeded",
-			staleState:   "needs_regeneration",
-			hasArtifact:  true,
-			mediaKind:    "image",
-			want:         "succeeded",
+			name:        "new image succeeds while existing video is stale",
+			current:     "succeeded",
+			staleState:  "needs_regeneration",
+			hasArtifact: true,
+			want:        "succeeded",
 		},
 		{
-			name:         "invalidated video remains stale",
-			current:      "stale",
-			legacyStatus: "image_succeeded",
-			staleState:   "needs_regeneration",
-			hasArtifact:  true,
-			mediaKind:    "video",
-			want:         "stale",
+			name:        "invalidated video remains stale",
+			current:     "stale",
+			staleState:  "needs_regeneration",
+			hasArtifact: true,
+			want:        "stale",
 		},
 		{
-			name:         "explicit image stale remains stale",
-			current:      "stale",
-			legacyStatus: "image_succeeded",
-			staleState:   "needs_regeneration",
-			hasArtifact:  true,
-			mediaKind:    "image",
-			want:         "stale",
+			name:        "explicit image stale remains stale",
+			current:     "stale",
+			staleState:  "needs_regeneration",
+			hasArtifact: true,
+			want:        "stale",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeShotProductionStatus(tt.current, tt.legacyStatus, tt.staleState, tt.hasArtifact, tt.mediaKind)
+			got := normalizeShotProductionStatus(tt.current, tt.staleState, tt.hasArtifact)
 			if got != tt.want {
 				t.Fatalf("normalizeShotProductionStatus() = %q, want %q", got, tt.want)
 			}

@@ -3,6 +3,8 @@ package provider
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/Einzieg/cineweave/internal/videocontracts"
 )
 
 type Connector struct {
@@ -127,9 +129,27 @@ type Account struct {
 	Status            string          `json:"status"`
 	Config            json.RawMessage `json:"config"`
 	CredentialPreview *string         `json:"credentialPreview,omitempty"`
+	CredentialCount   int             `json:"credentialCount"`
 	CreatedBy         string          `json:"createdBy"`
 	CreatedAt         time.Time       `json:"createdAt"`
 	UpdatedAt         time.Time       `json:"updatedAt"`
+}
+
+type Credential struct {
+	ID                  string     `json:"id"`
+	OrganizationID      string     `json:"organizationId"`
+	ProviderAccountID   string     `json:"providerAccountId"`
+	CredentialKey       string     `json:"credentialKey"`
+	CredentialType      string     `json:"credentialType"`
+	MaskedPreview       string     `json:"maskedPreview"`
+	Status              string     `json:"status"`
+	IsActive            bool       `json:"isActive"`
+	AvailableModelCount int        `json:"availableModelCount"`
+	LastDiscoveredAt    *time.Time `json:"lastDiscoveredAt,omitempty"`
+	CreatedBy           *string    `json:"createdBy,omitempty"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	ExpiresAt           *time.Time `json:"expiresAt,omitempty"`
+	RotatedAt           *time.Time `json:"rotatedAt,omitempty"`
 }
 
 type CreateAccountRequest struct {
@@ -153,6 +173,12 @@ type UpdateAccountRequest struct {
 type RotateCredentialRequest struct {
 	CredentialKey string         `json:"credentialKey"`
 	Credential    map[string]any `json:"credential"`
+}
+
+type CreateCredentialRequest struct {
+	CredentialKey  string         `json:"credentialKey"`
+	CredentialType string         `json:"credentialType"`
+	Credential     map[string]any `json:"credential"`
 }
 
 type Model struct {
@@ -202,6 +228,67 @@ type UpdateModelRequest struct {
 	Modality     *string          `json:"modality"`
 	Status       *string          `json:"status"`
 	Capabilities *CapabilityInput `json:"capabilities"`
+}
+
+type VideoCapabilityAttestation struct {
+	ID                      string          `json:"id"`
+	OrganizationID          string          `json:"organizationId"`
+	ProviderModelID         string          `json:"providerModelId"`
+	VariantKey              string          `json:"variantKey"`
+	CapabilitySnapshotHash  string          `json:"capabilitySnapshotHash"`
+	VerificationStatus      string          `json:"verificationStatus"`
+	EvidenceType            string          `json:"evidenceType"`
+	Evidence                json.RawMessage `json:"evidence"`
+	Decision                string          `json:"decision"`
+	Reason                  string          `json:"reason"`
+	DecidedBy               *string         `json:"decidedBy,omitempty"`
+	DecidedAt               time.Time       `json:"decidedAt"`
+	SupersedesAttestationID *string         `json:"supersedesAttestationId,omitempty"`
+	RevokedBy               *string         `json:"revokedBy,omitempty"`
+	RevokedAt               *time.Time      `json:"revokedAt,omitempty"`
+	CurrentSnapshot         bool            `json:"currentSnapshot"`
+	Active                  bool            `json:"active"`
+	CreatedAt               time.Time       `json:"createdAt"`
+}
+
+type VideoCapabilityVariantStatus struct {
+	VariantKey             string                      `json:"variantKey"`
+	CapabilitySnapshotHash string                      `json:"capabilitySnapshotHash"`
+	VerificationStatus     string                      `json:"verificationStatus"`
+	Source                 string                      `json:"source,omitempty"`
+	SourceURL              string                      `json:"sourceUrl,omitempty"`
+	VerifiedAt             string                      `json:"verifiedAt,omitempty"`
+	InitialInputContract   VideoInputContract          `json:"initialInputContract"`
+	ContinuationContracts  []VideoInputContract        `json:"continuationInputContracts"`
+	NativeAudio            VideoNativeAudioCapability  `json:"nativeAudio"`
+	Duration               VideoDurationCapability     `json:"duration"`
+	CurrentAttestation     *VideoCapabilityAttestation `json:"currentAttestation,omitempty"`
+}
+
+type VideoCapabilityAttestationList struct {
+	Variants     []VideoCapabilityVariantStatus `json:"variants"`
+	Attestations []VideoCapabilityAttestation   `json:"attestations"`
+}
+
+type CreateVideoCapabilityAttestationRequest struct {
+	VariantKey             string          `json:"variantKey"`
+	CapabilitySnapshotHash string          `json:"capabilitySnapshotHash"`
+	Decision               string          `json:"decision"`
+	Reason                 string          `json:"reason"`
+	Evidence               json.RawMessage `json:"evidence,omitempty"`
+}
+
+type VerifyVideoCapabilityRequest struct {
+	VariantKey             string `json:"variantKey"`
+	CapabilitySnapshotHash string `json:"capabilitySnapshotHash"`
+	VerificationMode       string `json:"verificationMode"`
+	ProviderTestRunID      string `json:"providerTestRunId,omitempty"`
+	Reason                 string `json:"reason,omitempty"`
+}
+
+type RevokeVideoCapabilityAttestationRequest struct {
+	CapabilitySnapshotHash string `json:"capabilitySnapshotHash"`
+	Reason                 string `json:"reason"`
 }
 
 type ModelProfile struct {
@@ -337,6 +424,7 @@ type CallLog struct {
 	AttemptSequence          int             `json:"attemptSequence"`
 	OrganizationID           string          `json:"organizationId"`
 	ProjectID                *string         `json:"projectId,omitempty"`
+	ProductionGenerationID   *string         `json:"productionGenerationId,omitempty"`
 	WorkflowRunID            *string         `json:"workflowRunId,omitempty"`
 	NodeRunID                *string         `json:"nodeRunId,omitempty"`
 	ProviderAccountID        string          `json:"providerAccountId"`
@@ -377,6 +465,12 @@ type RecordCallRequest struct {
 	AttemptSequence          int             `json:"attemptSequence,omitempty"`
 	OrganizationID           string          `json:"organizationId"`
 	ProjectID                string          `json:"projectId"`
+	ProductionGenerationID   string          `json:"productionGenerationId"`
+	OperationID              string          `json:"operationId,omitempty"`
+	OperationItemID          string          `json:"operationItemId,omitempty"`
+	OperationItemAttempt     int             `json:"operationItemAttempt,omitempty"`
+	ExecutionPlanID          string          `json:"executionPlanId,omitempty"`
+	RenderSegmentID          string          `json:"renderSegmentId,omitempty"`
 	WorkflowRunID            string          `json:"workflowRunId"`
 	NodeRunID                string          `json:"nodeRunId"`
 	ProviderAccountID        string          `json:"providerAccountId"`
@@ -503,8 +597,19 @@ type DiscoveredModel struct {
 }
 
 type ModelDiscoveryResult struct {
-	Models      []DiscoveredModel `json:"models"`
-	Unsupported []any             `json:"unsupported"`
+	CredentialID  string             `json:"credentialId,omitempty"`
+	CredentialKey string             `json:"credentialKey,omitempty"`
+	Models        []DiscoveredModel  `json:"models"`
+	Unsupported   []any              `json:"unsupported"`
+	Sync          ModelDiscoverySync `json:"sync"`
+}
+
+type ModelDiscoverySync struct {
+	DiscoveredCount      int `json:"discoveredCount"`
+	CreatedCount         int `json:"createdCount"`
+	ExistingCount        int `json:"existingCount"`
+	SkippedDisabledCount int `json:"skippedDisabledCount"`
+	IgnoredCount         int `json:"ignoredCount"`
 }
 
 type GatewayTextOptions struct {
@@ -739,37 +844,71 @@ type GatewayVideoOptions struct {
 }
 
 type GatewayVideoReference struct {
-	Type        string          `json:"type"`
-	AssetID     string          `json:"assetId,omitempty"`
-	ArtifactID  string          `json:"artifactId,omitempty"`
-	MediaFileID string          `json:"mediaFileId,omitempty"`
-	URL         string          `json:"url,omitempty"`
-	StorageKey  string          `json:"storageKey,omitempty"`
-	MimeType    string          `json:"mimeType,omitempty"`
-	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	ReferenceKey  string          `json:"referenceKey,omitempty"`
+	Role          string          `json:"role,omitempty"`
+	Required      bool            `json:"required,omitempty"`
+	Priority      int             `json:"priority,omitempty"`
+	Type          string          `json:"type"`
+	Semantics     string          `json:"semantics,omitempty"`
+	SourceType    string          `json:"sourceType,omitempty"`
+	SourceID      string          `json:"sourceId,omitempty"`
+	SourceVersion string          `json:"sourceVersion,omitempty"`
+	AssetID       string          `json:"assetId,omitempty"`
+	ArtifactID    string          `json:"artifactId,omitempty"`
+	MediaFileID   string          `json:"mediaFileId,omitempty"`
+	ContentHash   string          `json:"contentHash,omitempty"`
+	GeneratedAt   string          `json:"generatedAt,omitempty"`
+	URL           string          `json:"url,omitempty"`
+	StorageKey    string          `json:"storageKey,omitempty"`
+	MimeType      string          `json:"mimeType,omitempty"`
+	Metadata      json.RawMessage `json:"metadata,omitempty"`
 }
 
 type GatewayVideoCreateTaskRequest struct {
-	OrganizationID         string                  `json:"organizationId"`
-	WorkspaceID            string                  `json:"workspaceId,omitempty"`
-	ProjectID              string                  `json:"projectId,omitempty"`
-	WorkflowRunID          string                  `json:"workflowRunId,omitempty"`
-	NodeRunID              string                  `json:"nodeRunId,omitempty"`
-	NodeExecutionToken     string                  `json:"nodeExecutionToken,omitempty"`
-	NodeAttemptGeneration  int                     `json:"nodeAttemptGeneration,omitempty"`
-	ModelProfileKey        string                  `json:"modelProfileKey,omitempty"`
-	ProviderModelID        string                  `json:"providerModelId,omitempty"`
-	PromptTemplateKey      string                  `json:"promptTemplateKey,omitempty"`
-	PromptVersionID        string                  `json:"promptVersionId,omitempty"`
-	PromptHash             string                  `json:"promptHash,omitempty"`
-	PromptSource           string                  `json:"promptSource,omitempty"`
-	IdempotencyKey         string                  `json:"idempotencyKey,omitempty"`
-	ExecutionPlanID        string                  `json:"executionPlanId,omitempty"`
-	RenderSegmentID        string                  `json:"renderSegmentId,omitempty"`
-	CapabilitySnapshotHash string                  `json:"capabilitySnapshotHash,omitempty"`
-	Input                  json.RawMessage         `json:"input"`
-	References             []GatewayVideoReference `json:"references,omitempty"`
-	Options                GatewayVideoOptions     `json:"options"`
+	OrganizationID                 string                              `json:"organizationId"`
+	WorkspaceID                    string                              `json:"workspaceId,omitempty"`
+	ProjectID                      string                              `json:"projectId,omitempty"`
+	OperationID                    string                              `json:"operationId,omitempty"`
+	OperationItemID                string                              `json:"operationItemId,omitempty"`
+	OperationItemAttempt           int                                 `json:"operationItemAttempt,omitempty"`
+	StoryboardShotID               string                              `json:"storyboardShotId,omitempty"`
+	ProductionGenerationID         string                              `json:"productionGenerationId,omitempty"`
+	VideoProductionBindingID       string                              `json:"videoProductionBindingId,omitempty"`
+	VideoProductionBindingRevision int64                               `json:"videoProductionBindingRevision,omitempty"`
+	ProductionProfileVersionID     string                              `json:"productionProfileVersionId,omitempty"`
+	ProductionProfileSnapshotHash  string                              `json:"productionProfileSnapshotHash,omitempty"`
+	InputContractKey               string                              `json:"inputContractKey,omitempty"`
+	InputContractHash              string                              `json:"inputContractHash,omitempty"`
+	InputContractVersion           string                              `json:"inputContractVersion,omitempty"`
+	ShotStateRevision              int                                 `json:"shotStateRevision,omitempty"`
+	ShotStateHash                  string                              `json:"shotStateHash,omitempty"`
+	TransitionHash                 string                              `json:"transitionHash,omitempty"`
+	ReferencePackID                string                              `json:"referencePackId,omitempty"`
+	ReferencePackHash              string                              `json:"referencePackHash,omitempty"`
+	PromptContextPlanID            string                              `json:"promptContextPlanId,omitempty"`
+	PromptContextPlanHash          string                              `json:"promptContextPlanHash,omitempty"`
+	VideoPromptPlanID              string                              `json:"videoPromptPlanId,omitempty"`
+	NativeAudioRequired            bool                                `json:"nativeAudioRequired,omitempty"`
+	DialogueCues                   []GatewayVideoDialogueSpan          `json:"dialogueCues,omitempty"`
+	WorkflowRunID                  string                              `json:"workflowRunId,omitempty"`
+	NodeRunID                      string                              `json:"nodeRunId,omitempty"`
+	NodeExecutionToken             string                              `json:"nodeExecutionToken,omitempty"`
+	NodeAttemptGeneration          int                                 `json:"nodeAttemptGeneration,omitempty"`
+	ModelProfileKey                string                              `json:"modelProfileKey,omitempty"`
+	ProviderModelID                string                              `json:"providerModelId,omitempty"`
+	PromptTemplateKey              string                              `json:"promptTemplateKey,omitempty"`
+	PromptVersionID                string                              `json:"promptVersionId,omitempty"`
+	PromptHash                     string                              `json:"promptHash,omitempty"`
+	PromptSource                   string                              `json:"promptSource,omitempty"`
+	IdempotencyKey                 string                              `json:"idempotencyKey,omitempty"`
+	ExecutionPlanID                string                              `json:"executionPlanId,omitempty"`
+	RenderSegmentID                string                              `json:"renderSegmentId,omitempty"`
+	CapabilitySnapshotHash         string                              `json:"capabilitySnapshotHash,omitempty"`
+	ReferenceManifest              *videocontracts.ReferenceManifestV2 `json:"referenceManifest,omitempty"`
+	ReferenceManifestHash          string                              `json:"referenceManifestHash,omitempty"`
+	Input                          json.RawMessage                     `json:"input"`
+	References                     []GatewayVideoReference             `json:"references,omitempty"`
+	Options                        GatewayVideoOptions                 `json:"options"`
 }
 
 type GatewayVideoCreateTaskResponse struct {
@@ -788,17 +927,20 @@ type GatewayVideoCreateTaskResponse struct {
 }
 
 type GatewayVideoPollTaskRequest struct {
-	OrganizationID        string              `json:"organizationId"`
-	ProviderAsyncTaskID   string              `json:"providerAsyncTaskId,omitempty"`
-	ExternalTaskID        string              `json:"externalTaskId,omitempty"`
-	ProviderModelID       string              `json:"providerModelId,omitempty"`
-	ProviderAccountID     string              `json:"providerAccountId,omitempty"`
-	ProjectID             string              `json:"projectId,omitempty"`
-	WorkflowRunID         string              `json:"workflowRunId,omitempty"`
-	NodeRunID             string              `json:"nodeRunId,omitempty"`
-	NodeExecutionToken    string              `json:"nodeExecutionToken,omitempty"`
-	NodeAttemptGeneration int                 `json:"nodeAttemptGeneration,omitempty"`
-	Options               GatewayVideoOptions `json:"options"`
+	OrganizationID                 string              `json:"organizationId"`
+	ProviderAsyncTaskID            string              `json:"providerAsyncTaskId,omitempty"`
+	ExternalTaskID                 string              `json:"externalTaskId,omitempty"`
+	ProviderModelID                string              `json:"providerModelId,omitempty"`
+	ProviderAccountID              string              `json:"providerAccountId,omitempty"`
+	ProjectID                      string              `json:"projectId,omitempty"`
+	ProductionGenerationID         string              `json:"productionGenerationId,omitempty"`
+	VideoProductionBindingID       string              `json:"videoProductionBindingId,omitempty"`
+	VideoProductionBindingRevision int64               `json:"videoProductionBindingRevision,omitempty"`
+	WorkflowRunID                  string              `json:"workflowRunId,omitempty"`
+	NodeRunID                      string              `json:"nodeRunId,omitempty"`
+	NodeExecutionToken             string              `json:"nodeExecutionToken,omitempty"`
+	NodeAttemptGeneration          int                 `json:"nodeAttemptGeneration,omitempty"`
+	Options                        GatewayVideoOptions `json:"options"`
 }
 
 type GatewayVideoMediaProbe struct {
@@ -963,6 +1105,7 @@ func (event GatewayTextStreamEvent) Payload() any {
 type GatewayDiscoverModelsRequest struct {
 	OrganizationID string `json:"organizationId"`
 	AccountID      string `json:"accountId"`
+	CredentialID   string `json:"credentialId,omitempty"`
 	TestType       string `json:"testType,omitempty"`
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 	Retry          bool   `json:"retry,omitempty"`

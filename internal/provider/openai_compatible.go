@@ -39,7 +39,11 @@ type openAICompatibleConfig struct {
 	VideoCreateEndpoint         string `json:"videoCreateEndpoint"`
 	VideoPollEndpoint           string `json:"videoPollEndpoint"`
 	VideoCancelEndpoint         string `json:"videoCancelEndpoint"`
+	VideoExtensionField         string `json:"videoExtensionField"`
+	VideoExtensionModeField     string `json:"videoExtensionModeField"`
+	VideoExtensionModeValue     string `json:"videoExtensionModeValue"`
 	TimeoutMS                   int    `json:"timeoutMs"`
+	VideoPollTimeoutMS          int    `json:"videoPollTimeoutMs"`
 	DisableV1Prefix             bool   `json:"disableV1Prefix"`
 }
 
@@ -109,6 +113,9 @@ func parseOpenAICompatibleConfig(raw json.RawMessage) openAICompatibleConfig {
 	}
 	if cfg.TimeoutMS <= 0 {
 		cfg.TimeoutMS = defaultOpenAICompatibleTimeoutMS
+	}
+	if cfg.VideoPollTimeoutMS <= 0 {
+		cfg.VideoPollTimeoutMS = defaultOpenAIVideoPollTimeoutMS
 	}
 	return cfg
 }
@@ -319,8 +326,24 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 		observability.RecordProviderStreamTerminal(terminalMode, "truncated")
 		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks, "terminalMode": terminalMode, "sawDoneMarker": sawDoneMarker, "sawFinishReason": sawFinishReason}), Text: text.String(), Usage: usage}, fmt.Errorf("%w: provider stream ended without the required %s terminal", io.ErrUnexpectedEOF, terminalMode)
 	}
-	observability.RecordProviderStreamTerminal(terminalMode, "succeeded")
 	outputText := text.String()
+	if responseFormatRequiresJSON(requestBody["response_format"]) {
+		if err := validateStructuredStreamOutput(outputText); err != nil {
+			result := "invalid_event"
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				result = "truncated"
+			}
+			observability.RecordProviderStreamTerminal(terminalMode, result)
+			return chatCompletionResult{
+				LatencyMS:        latencyMS,
+				RequestSnapshot:  requestBytes,
+				ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks, "structuredOutputError": err.Error()}),
+				Text:             outputText,
+				Usage:            usage,
+			}, err
+		}
+	}
+	observability.RecordProviderStreamTerminal(terminalMode, "succeeded")
 	normalizedOutput, err := json.Marshal(map[string]any{"text": outputText})
 	if err != nil {
 		return chatCompletionResult{}, err
@@ -333,6 +356,38 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 		Usage:            usage,
 		LatencyMS:        latencyMS,
 	}, nil
+}
+
+func responseFormatRequiresJSON(value any) bool {
+	format, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	typeValue, _ := format["type"].(string)
+	switch strings.ToLower(strings.TrimSpace(typeValue)) {
+	case "json", "json_object", "json_schema":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateStructuredStreamOutput(value string) error {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "```") {
+		if newline := strings.IndexByte(value, '\n'); newline >= 0 {
+			value = strings.TrimSpace(value[newline+1:])
+		}
+		value = strings.TrimSpace(strings.TrimSuffix(value, "```"))
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unexpected end of json input") {
+			return fmt.Errorf("%w: provider JSON stream ended with incomplete output", io.ErrUnexpectedEOF)
+		}
+		return fmt.Errorf("%w: provider JSON stream output is invalid: %v", ErrValidation, err)
+	}
+	return nil
 }
 
 func openAIStreamTerminalMode(model Model) string {
