@@ -145,6 +145,8 @@ export function MembersPanel({ canManage }: { canManage: boolean }) {
                   <TableCell className="text-right">
                     {!canManage ? (
                       <span className="text-xs text-muted-foreground">只读</span>
+                    ) : member.user.systemAdministrator ? (
+                      <span className="text-xs text-muted-foreground">系统账号受保护</span>
                     ) : member.status === "removed" ? (
                       <span className="text-xs text-muted-foreground">需重新邀请</span>
                     ) : (
@@ -247,7 +249,7 @@ function MemberDetail({ member, canManage, onMemberUpdated, onOpenChange }: {
   const targetIsDirectOwner = member?.roles.some((role) => !role.viaTeam && isOwnerRole(role.roleKey)) ?? false;
   const targetIsSelf = member?.user.id === session.user?.id;
   const ownerProtected = targetIsDirectOwner && !targetIsSelf && !actorIsDirectOwner;
-  const accountManageable = Boolean(member && member.status !== "removed" && member.accountManagementAllowed && !ownerProtected);
+  const accountManageable = Boolean(member && member.status !== "removed" && !member.user.systemAdministrator && member.accountManagementAllowed && !ownerProtected);
   const canEditAccount = canManage && accountManageable;
   const profileDirty = Boolean(member) && (
     displayName.trim() !== (member?.user.displayName ?? "") || avatarUrl.trim() !== (member?.user.avatarUrl ?? "")
@@ -255,7 +257,9 @@ function MemberDetail({ member, canManage, onMemberUpdated, onOpenChange }: {
   const resetLink = resetToken && typeof window !== "undefined"
     ? `${window.location.origin}/reset-password#token=${encodeURIComponent(resetToken)}`
     : "";
-  const managementNotice = member?.status === "removed"
+  const managementNotice = member?.user.systemAdministrator
+    ? "系统管理员账号受到平台级保护，不能通过组织成员操作修改。"
+    : member?.status === "removed"
     ? "已移除成员不能继续管理账号，需重新邀请后操作。"
     : member && !member.accountManagementAllowed
       ? "该账号同时属于多个组织。为避免影响其他组织，当前组织不能修改其全局资料或密码。"

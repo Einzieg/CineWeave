@@ -194,24 +194,36 @@ type Model struct {
 }
 
 type Capability struct {
-	ID                    string          `json:"id"`
-	ProviderModelID       string          `json:"providerModelId"`
-	TaskTypes             json.RawMessage `json:"taskTypes"`
-	InputLimits           json.RawMessage `json:"inputLimits"`
-	OutputLimits          json.RawMessage `json:"outputLimits"`
-	QualityTiers          json.RawMessage `json:"qualityTiers"`
-	ProviderOptionsSchema json.RawMessage `json:"providerOptionsSchema"`
-	PricingPolicy         json.RawMessage `json:"pricingPolicy"`
-	CreatedAt             time.Time       `json:"createdAt"`
+	ID                            string          `json:"id"`
+	ProviderModelID               string          `json:"providerModelId"`
+	TaskTypes                     json.RawMessage `json:"taskTypes"`
+	InputLimits                   json.RawMessage `json:"inputLimits"`
+	OutputLimits                  json.RawMessage `json:"outputLimits"`
+	QualityTiers                  json.RawMessage `json:"qualityTiers"`
+	ProviderOptionsSchema         json.RawMessage `json:"providerOptionsSchema"`
+	PricingPolicy                 json.RawMessage `json:"pricingPolicy"`
+	SupportedInputLanguages       []string        `json:"supportedInputLanguages"`
+	SupportedOutputLanguages      []string        `json:"supportedOutputLanguages"`
+	SupportedPromptLanguages      []string        `json:"supportedPromptLanguages"`
+	SupportedNativeAudioLanguages []string        `json:"supportedNativeAudioLanguages"`
+	Source                        string          `json:"source"`
+	ApprovalStatus                string          `json:"approvalStatus"`
+	CreatedAt                     time.Time       `json:"createdAt"`
 }
 
 type CapabilityInput struct {
-	TaskTypes             json.RawMessage `json:"taskTypes"`
-	InputLimits           json.RawMessage `json:"inputLimits"`
-	OutputLimits          json.RawMessage `json:"outputLimits"`
-	QualityTiers          json.RawMessage `json:"qualityTiers"`
-	ProviderOptionsSchema json.RawMessage `json:"providerOptionsSchema"`
-	PricingPolicy         json.RawMessage `json:"pricingPolicy"`
+	TaskTypes                     json.RawMessage `json:"taskTypes"`
+	InputLimits                   json.RawMessage `json:"inputLimits"`
+	OutputLimits                  json.RawMessage `json:"outputLimits"`
+	QualityTiers                  json.RawMessage `json:"qualityTiers"`
+	ProviderOptionsSchema         json.RawMessage `json:"providerOptionsSchema"`
+	PricingPolicy                 json.RawMessage `json:"pricingPolicy"`
+	SupportedInputLanguages       []string        `json:"supportedInputLanguages"`
+	SupportedOutputLanguages      []string        `json:"supportedOutputLanguages"`
+	SupportedPromptLanguages      []string        `json:"supportedPromptLanguages"`
+	SupportedNativeAudioLanguages []string        `json:"supportedNativeAudioLanguages"`
+	Source                        string          `json:"source"`
+	ApprovalStatus                string          `json:"approvalStatus"`
 }
 
 type CreateModelRequest struct {
@@ -322,16 +334,21 @@ type FallbackStrategy struct {
 }
 
 type RoutingRequest struct {
-	OrganizationID       string
-	ModelProfileKey      string
-	TaskType             string
-	Modality             string
-	EstimatedInputTokens int
-	MaxOutputTokens      int
-	ImageSize            string
-	ImageQuality         string
-	VideoDurationSeconds float64
-	VideoResolution      string
+	OrganizationID                      string
+	ModelProfileKey                     string
+	TaskType                            string
+	Modality                            string
+	EstimatedInputTokens                int
+	MaxOutputTokens                     int
+	ImageSize                           string
+	ImageQuality                        string
+	VideoDurationSeconds                float64
+	VideoResolution                     string
+	InputLanguage                       string
+	OutputLanguage                      string
+	PromptLanguage                      string
+	NativeAudioLanguage                 string
+	RequireApprovedLanguageCapabilities bool
 }
 
 type RoutingCandidate struct {
@@ -619,20 +636,24 @@ type GatewayTextOptions struct {
 }
 
 type GatewayTextRequest struct {
-	OrganizationID    string             `json:"organizationId"`
-	WorkspaceID       string             `json:"workspaceId,omitempty"`
-	ProjectID         string             `json:"projectId,omitempty"`
-	WorkflowRunID     string             `json:"workflowRunId,omitempty"`
-	NodeRunID         string             `json:"nodeRunId,omitempty"`
-	ModelProfileKey   string             `json:"modelProfileKey,omitempty"`
-	ProviderModelID   string             `json:"providerModelId,omitempty"`
-	PromptTemplateKey string             `json:"promptTemplateKey,omitempty"`
-	PromptVersionID   string             `json:"promptVersionId,omitempty"`
-	PromptHash        string             `json:"promptHash,omitempty"`
-	PromptSource      string             `json:"promptSource,omitempty"`
-	IdempotencyKey    string             `json:"idempotencyKey,omitempty"`
-	Input             json.RawMessage    `json:"input"`
-	Options           GatewayTextOptions `json:"options"`
+	OrganizationID                      string                  `json:"organizationId"`
+	WorkspaceID                         string                  `json:"workspaceId,omitempty"`
+	ProjectID                           string                  `json:"projectId,omitempty"`
+	WorkflowRunID                       string                  `json:"workflowRunId,omitempty"`
+	NodeRunID                           string                  `json:"nodeRunId,omitempty"`
+	ModelProfileKey                     string                  `json:"modelProfileKey,omitempty"`
+	ProviderModelID                     string                  `json:"providerModelId,omitempty"`
+	PromptTemplateKey                   string                  `json:"promptTemplateKey,omitempty"`
+	PromptVersionID                     string                  `json:"promptVersionId,omitempty"`
+	PromptHash                          string                  `json:"promptHash,omitempty"`
+	PromptSource                        string                  `json:"promptSource,omitempty"`
+	InputLanguage                       string                  `json:"inputLanguage,omitempty"`
+	OutputLanguage                      string                  `json:"outputLanguage,omitempty"`
+	RequireApprovedLanguageCapabilities bool                    `json:"requireApprovedLanguageCapabilities,omitempty"`
+	IdempotencyKey                      string                  `json:"idempotencyKey,omitempty"`
+	Input                               json.RawMessage         `json:"input"`
+	References                          []GatewayImageReference `json:"references,omitempty"`
+	Options                             GatewayTextOptions      `json:"options"`
 }
 
 type GatewayTextOutput struct {
@@ -692,21 +713,23 @@ type GatewayImageReference struct {
 }
 
 type GatewayImageRequest struct {
-	OrganizationID    string                  `json:"organizationId"`
-	WorkspaceID       string                  `json:"workspaceId,omitempty"`
-	ProjectID         string                  `json:"projectId,omitempty"`
-	WorkflowRunID     string                  `json:"workflowRunId,omitempty"`
-	NodeRunID         string                  `json:"nodeRunId,omitempty"`
-	ModelProfileKey   string                  `json:"modelProfileKey,omitempty"`
-	ProviderModelID   string                  `json:"providerModelId,omitempty"`
-	PromptTemplateKey string                  `json:"promptTemplateKey,omitempty"`
-	PromptVersionID   string                  `json:"promptVersionId,omitempty"`
-	PromptHash        string                  `json:"promptHash,omitempty"`
-	PromptSource      string                  `json:"promptSource,omitempty"`
-	IdempotencyKey    string                  `json:"idempotencyKey,omitempty"`
-	Input             json.RawMessage         `json:"input"`
-	References        []GatewayImageReference `json:"references,omitempty"`
-	Options           GatewayImageOptions     `json:"options"`
+	OrganizationID                      string                  `json:"organizationId"`
+	WorkspaceID                         string                  `json:"workspaceId,omitempty"`
+	ProjectID                           string                  `json:"projectId,omitempty"`
+	WorkflowRunID                       string                  `json:"workflowRunId,omitempty"`
+	NodeRunID                           string                  `json:"nodeRunId,omitempty"`
+	ModelProfileKey                     string                  `json:"modelProfileKey,omitempty"`
+	ProviderModelID                     string                  `json:"providerModelId,omitempty"`
+	PromptTemplateKey                   string                  `json:"promptTemplateKey,omitempty"`
+	PromptVersionID                     string                  `json:"promptVersionId,omitempty"`
+	PromptHash                          string                  `json:"promptHash,omitempty"`
+	PromptSource                        string                  `json:"promptSource,omitempty"`
+	PromptLanguage                      string                  `json:"promptLanguage,omitempty"`
+	RequireApprovedLanguageCapabilities bool                    `json:"requireApprovedLanguageCapabilities,omitempty"`
+	IdempotencyKey                      string                  `json:"idempotencyKey,omitempty"`
+	Input                               json.RawMessage         `json:"input"`
+	References                          []GatewayImageReference `json:"references,omitempty"`
+	Options                             GatewayImageOptions     `json:"options"`
 }
 
 type GatewayImageOutput struct {

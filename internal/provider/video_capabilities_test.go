@@ -303,12 +303,48 @@ func TestMatchVideoGenerationVariantKeepsNativeAudioUnknownDistinct(t *testing.T
 		TaskType: "video.image_to_video", ReferenceMode: "first_frame", AspectRatio: "16:9", Resolution: "720p",
 		PromptLanguage: "zh-CN", DialogueLanguage: "zh-CN", HasDialogue: true, AudioStrategy: "native_av", AudioRequirement: "preferred",
 	})
-	if !matched || score != 2 || audioStatus != "audio_unverified" || readiness != "preview_only" {
+	if !matched || score < 2 || audioStatus != "audio_unverified" || readiness != "preview_only" {
 		t.Fatalf("match = %v %d %s %s", matched, score, audioStatus, readiness)
 	}
 	matched, _, _, _ = matchVideoGenerationVariant(variant, videoVariantMatchRequest{AudioStrategy: "native_av", AudioRequirement: "required"})
+	if !matched {
+		t.Fatal("native audio support is advisory and must not reject an otherwise executable variant")
+	}
+}
+
+func TestMatchVideoGenerationVariantHardFiltersOnlyResolution(t *testing.T) {
+	supportsDialogue := false
+	variant := VideoGenerationVariant{
+		VariantKey: "soft-capability-mismatch",
+		When: VideoGenerationVariantWhen{
+			TaskTypes:      []string{"video.text_to_video"},
+			ReferenceModes: []string{"none"},
+		},
+		InputContract:            VideoInputContract{ContractKey: VideoInputContractTextOnly},
+		Duration:                 VideoDurationCapability{Mode: VideoDurationFixed, Values: []float64{5}},
+		AspectRatios:             []string{"9:16"},
+		Resolutions:              []string{"720p"},
+		SupportedPromptLanguages: []string{"en-US"},
+		NativeAudio: VideoNativeAudioCapability{
+			Support: VideoSupportFalse, SupportsDialogue: &supportsDialogue,
+		},
+	}
+	request := videoVariantMatchRequest{
+		TaskType: "video.image_to_video", ReferenceMode: "first_frame",
+		RequiredInitialInputContract: VideoInputContractFirstFrame,
+		AspectRatio:                  "16:9", Resolution: "720p",
+		PromptLanguage: "zh-CN", DialogueLanguage: "zh-CN",
+		HasDialogue: true, AudioStrategy: "native_av", AudioRequirement: "required",
+	}
+
+	matched, _, audioStatus, _ := matchVideoGenerationVariant(variant, request)
+	if !matched || audioStatus != "native_audio_unavailable" {
+		t.Fatalf("soft capability mismatch = %v / %s", matched, audioStatus)
+	}
+	request.Resolution = "1080p"
+	matched, _, _, _ = matchVideoGenerationVariant(variant, request)
 	if matched {
-		t.Fatal("unknown native audio must not satisfy required")
+		t.Fatal("unsupported resolution must remain a hard rejection")
 	}
 }
 

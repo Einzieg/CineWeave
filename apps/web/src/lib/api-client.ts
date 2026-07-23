@@ -18,10 +18,48 @@ import type {
   CanonicalAsset,
   CreateAssetBatchRequest,
   CreatedSystemOrganization,
+  CreateSystemOrganizationMemberRequest,
   CreateSystemOrganizationRequest,
   CharacterVoiceProfile,
   AssetReference,
   ComposeTimelineResponse,
+  CommerceLanguageResolution,
+  CommerceLanguageConfirmationAccepted,
+  CommerceProduct,
+  CommerceProductMutationResult,
+  CommerceProductRebuildImpact,
+  CommerceProductRebuildResult,
+  CommerceProductReference,
+  CommerceProductReferencePack,
+  CommerceProductReferenceUpload,
+  CommerceProductVersion,
+  CommerceProjectProductionStatus,
+  CommerceProductionRun,
+  CommerceProductionRunDetail,
+  CommerceProductionRunType,
+  CommerceScriptUnitBatch,
+  CommerceScriptUnitBatchAdvanceItem,
+  CommerceScriptUnitBatchStage,
+  CommerceProjectOptions,
+  CommerceScriptLocalization,
+  CommerceStoryboardPlan,
+  CommerceStoryboardPlanDetail,
+  CommerceVideoBatchRequest,
+  CommerceScriptUnit,
+  CommerceScriptUnitList,
+  CommerceScriptVersion,
+  CommerceScriptVersionMutation,
+  CommerceScriptUnitRebuildImpact,
+  CommerceTimeline,
+  CommerceTimelineDetail,
+  CommerceTimelineOverlay,
+  CommerceFinalVideoVersion,
+  CommerceUnitProductionStatus,
+  CommerceSetupCompletionResult,
+  CommerceSetupLanguageConfirmationResult,
+  CommerceSetupSession,
+  CompleteCommerceSetupSessionRequest,
+  ConfirmCommerceSetupLanguageRequest,
   CreateProjectRequest,
   CreateProjectExportResponse,
   DownloadUrlResponse,
@@ -113,6 +151,8 @@ import type {
   TimelineClip,
   TimelineDetail,
   UpdateProjectRequest,
+  UpdateSystemOrganizationMemberRequest,
+  UpdateCommerceScriptUnitDefaultsRequest,
   UpdateModelProfileBindingRequest,
   CreateModelProfileBindingRequest,
   UpdateStoryboardShotRequest,
@@ -142,6 +182,7 @@ type ApiRequestOptions = {
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined | null>;
   idempotencyKey?: string;
+  headers?: Record<string, string>;
 };
 
 type ProviderListStatus = "active" | "disabled" | "all";
@@ -192,6 +233,9 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
   }
   if (options.idempotencyKey?.trim()) {
     headers.set("Idempotency-Key", options.idempotencyKey.trim());
+  }
+  for (const [name, value] of Object.entries(options.headers ?? {})) {
+    if (value.trim()) headers.set(name, value.trim());
   }
   const requestBody = options.body === undefined ? undefined : isFormData ? (options.body as BodyInit) : JSON.stringify(options.body);
   const response = await fetch(url, {
@@ -271,6 +315,30 @@ export const studioApi = {
     apiRequest<SystemOrganizationList>("/api/system/organizations", { session, query }),
   createSystemOrganization: (session: StudioSession, body: CreateSystemOrganizationRequest) =>
     apiRequest<CreatedSystemOrganization>("/api/system/organizations", { method: "POST", session, body }),
+  listSystemOrganizationMembers: (
+    session: StudioSession,
+    organizationId: string,
+    query?: { search?: string; status?: string; page?: number; pageSize?: number },
+  ) => apiRequest<OrganizationMemberList>(`/api/system/organizations/${organizationId}/members`, { session, query }),
+  createSystemOrganizationMember: (
+    session: StudioSession,
+    organizationId: string,
+    body: CreateSystemOrganizationMemberRequest,
+  ) => apiRequest<OrganizationMember>(`/api/system/organizations/${organizationId}/members`, {
+    method: "POST",
+    session,
+    body,
+  }),
+  updateSystemOrganizationMember: (
+    session: StudioSession,
+    organizationId: string,
+    userId: string,
+    body: UpdateSystemOrganizationMemberRequest,
+  ) => apiRequest<OrganizationMember>(`/api/system/organizations/${organizationId}/members/${userId}`, {
+    method: "PATCH",
+    session,
+    body,
+  }),
   updateOrganization: (session: StudioSession, organizationId: string, name: string) =>
     apiRequest<Organization>(`/api/organizations/${organizationId}`, { method: "PATCH", session, body: { name } }),
   leaveOrganization: (session: StudioSession, organizationId: string) =>
@@ -353,7 +421,551 @@ export const studioApi = {
 
   listProjects: (session: StudioSession) => apiRequest<ListEnvelope<Project>>("/api/projects", { session }),
   getProject: (session: StudioSession, projectId: string) => apiRequest<Project>(`/api/projects/${projectId}`, { session }),
-  createProject: (session: StudioSession, body: CreateProjectRequest) => apiRequest<Project>("/api/projects", { method: "POST", session, body }),
+  createProject: (session: StudioSession, body: CreateProjectRequest, idempotencyKey?: string) =>
+    apiRequest<Project>("/api/projects", { method: "POST", session, body, idempotencyKey }),
+  getCommerceProjectOptions: (session: StudioSession, workspaceId: string) =>
+    apiRequest<CommerceProjectOptions>(`/api/workspaces/${workspaceId}/commerce/project-options`, { session }),
+  getCommerceSetupSession: (session: StudioSession, projectId: string, setupSessionId: string) =>
+    apiRequest<CommerceSetupSession>(`/api/projects/${projectId}/commerce/setup-sessions/${setupSessionId}`, { session }),
+  completeCommerceSetupSession: (
+    session: StudioSession,
+    projectId: string,
+    setupSessionId: string,
+    body: CompleteCommerceSetupSessionRequest,
+    idempotencyKey: string,
+  ) => apiRequest<CommerceSetupCompletionResult>(`/api/projects/${projectId}/commerce/setup-sessions/${setupSessionId}/complete`, {
+    method: "POST", session, body, idempotencyKey,
+  }),
+  confirmCommerceSetupLanguage: (
+    session: StudioSession,
+    projectId: string,
+    setupSessionId: string,
+    body: ConfirmCommerceSetupLanguageRequest,
+  ) => apiRequest<CommerceSetupLanguageConfirmationResult>(`/api/projects/${projectId}/commerce/setup-sessions/${setupSessionId}/language-confirmation`, {
+    method: "POST", session, body,
+  }),
+  abandonCommerceSetupSession: (session: StudioSession, projectId: string, setupSessionId: string, expectedRevision: number) =>
+    apiRequest<CommerceSetupSession>(`/api/projects/${projectId}/commerce/setup-sessions/${setupSessionId}/abandon`, {
+      method: "POST", session, body: { expectedRevision },
+    }),
+  getCommerceProduct: (session: StudioSession, projectId: string) =>
+    apiRequest<CommerceProduct>(`/api/projects/${projectId}/commerce/product`, { session }),
+  createCommerceProductVersion: (
+    session: StudioSession,
+    projectId: string,
+    body: {
+      expectedRevision?: number;
+      name: string;
+      brand?: string;
+      sellingPoints?: string[];
+      immutableFeatures?: JsonRecord;
+      prohibitedClaims?: string[];
+      metadata?: JsonRecord;
+    },
+  ) => apiRequest<CommerceProductMutationResult>(`/api/projects/${projectId}/commerce/product/versions`, { method: "POST", session, body }),
+  listCommerceProductVersions: (session: StudioSession, projectId: string) =>
+    apiRequest<ListEnvelope<CommerceProductVersion>>(`/api/projects/${projectId}/commerce/product/versions`, { session }),
+  getCommerceProductVersion: (session: StudioSession, projectId: string, versionId: string) =>
+    apiRequest<CommerceProductVersion>(`/api/projects/${projectId}/commerce/product/versions/${versionId}`, { session }),
+  listCommerceProductReferences: (session: StudioSession, projectId: string, status: ArchiveListStatus = "active") =>
+    apiRequest<ListEnvelope<CommerceProductReference>>(`/api/projects/${projectId}/commerce/product/references`, {
+      session, query: { "filter[status]": status },
+    }),
+  listCommerceProductReferencePacks: (session: StudioSession, projectId: string, status: "active" | "stale" | "archived" | "all" = "active") =>
+    apiRequest<ListEnvelope<CommerceProductReferencePack>>(`/api/projects/${projectId}/commerce/product/reference-packs`, {
+      session, query: { "filter[status]": status },
+    }),
+  getCommerceProductReferencePack: (session: StudioSession, projectId: string, packId: string) =>
+    apiRequest<CommerceProductReferencePack>(`/api/projects/${projectId}/commerce/product/reference-packs/${packId}`, { session }),
+  createCommerceProductReferenceUpload: (
+    session: StudioSession,
+    projectId: string,
+    body: { setupSessionId?: string; fileName: string; mimeType: string; expiresSeconds?: number },
+    idempotencyKey: string,
+  ) => apiRequest<CommerceProductReferenceUpload>(`/api/projects/${projectId}/commerce/product/references/upload-url`, {
+    method: "POST", session, body, idempotencyKey,
+  }),
+  uploadCommerceProductReferenceFile: async (upload: CommerceProductReferenceUpload, file: File) => {
+    const response = await fetch(upload.uploadUrl, { method: upload.method || "PUT", headers: upload.headers, body: file });
+    if (!response.ok) throw new StudioApiError(`商品图片上传失败：HTTP ${response.status}`, "UPLOAD_FAILED", response.status, true);
+  },
+  completeCommerceProductReferenceUpload: (
+    session: StudioSession,
+    projectId: string,
+    body: { uploadId: string; referenceRole?: string; setPrimary?: boolean },
+  ) => apiRequest<CommerceProductReference>(`/api/projects/${projectId}/commerce/product/references`, { method: "POST", session, body }),
+  updateCommerceProductReference: (
+    session: StudioSession,
+    projectId: string,
+    referenceId: string,
+    body: { expectedRevision: number; referenceRole?: string; ordinal?: number; setPrimary?: boolean },
+  ) => apiRequest<CommerceProductReference>(`/api/projects/${projectId}/commerce/product/references/${referenceId}`, {
+    method: "PATCH", session, body,
+  }),
+  archiveCommerceProductReference: (session: StudioSession, projectId: string, referenceId: string, expectedRevision: number) =>
+    apiRequest<CommerceProductReference>(`/api/projects/${projectId}/commerce/product/references/${referenceId}`, {
+      method: "DELETE", session, body: { expectedRevision },
+    }),
+  getCommerceProductRebuildImpact: (
+    session: StudioSession,
+    projectId: string,
+    body: { targetProductVersionId: string; targetReferenceIds: string[]; expectedProductRevision: number },
+  ) => apiRequest<CommerceProductRebuildImpact>(`/api/projects/${projectId}/commerce/product/rebuild-impact`, {
+    method: "POST", session, body,
+  }),
+  createCommerceProductRebuild: (
+    session: StudioSession,
+    projectId: string,
+    body: { impactToken: string; expectedProductRevision: number },
+    idempotencyKey: string,
+  ) => apiRequest<CommerceProductRebuildResult>(`/api/projects/${projectId}/commerce/product/rebuilds`, {
+    method: "POST", session, body, idempotencyKey,
+  }),
+  listCommerceScriptUnits: (
+    session: StudioSession,
+    projectId: string,
+    options: { status?: ArchiveListStatus; cursor?: string; limit?: number; includeProductionSummary?: boolean } = {},
+  ) => apiRequest<CommerceScriptUnitList>(`/api/projects/${projectId}/commerce/script-units`, {
+    session,
+    query: {
+      "filter[status]": options.status ?? "active",
+      cursor: options.cursor,
+      limit: options.limit,
+      include: options.includeProductionSummary ? "productionSummary" : undefined,
+    },
+  }),
+  getCommerceProjectProductionStatus: (session: StudioSession, projectId: string) =>
+    apiRequest<CommerceProjectProductionStatus>(`/api/projects/${projectId}/commerce/production-status`, { session }),
+  updateCommerceScriptUnitDefaults: (
+    session: StudioSession,
+    projectId: string,
+    body: UpdateCommerceScriptUnitDefaultsRequest,
+  ) => apiRequest<Project>(`/api/projects/${projectId}/commerce/script-unit-defaults`, { method: "PATCH", session, body }),
+  getCommerceUnitProductionStatus: (session: StudioSession, projectId: string, scriptUnitId: string) =>
+    apiRequest<CommerceUnitProductionStatus>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/production-status`, { session }),
+  getCommerceScriptUnit: (session: StudioSession, projectId: string, scriptUnitId: string) =>
+    apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}`, { session }),
+  createCommerceScriptUnit: (
+    session: StudioSession,
+    projectId: string,
+    body: {
+      expectedScriptUnitsRevision: number;
+      title: string;
+      content: string;
+      languageMode: "auto" | "explicit";
+      explicitTargetLanguage?: string;
+      targetDurationSeconds: number;
+      targetPlatform?: string;
+      sourceLanguageHint?: string;
+    },
+  ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units`, { method: "POST", session, body }),
+  updateCommerceScriptUnit: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: {
+      expectedRevision: number;
+      title?: string;
+      draftContent?: string;
+      languageMode?: "auto" | "explicit";
+      explicitTargetLanguage?: string | null;
+      targetDurationSeconds?: number;
+      targetPlatform?: string;
+    },
+  ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}`, { method: "PATCH", session, body }),
+  archiveCommerceScriptUnit: (session: StudioSession, projectId: string, scriptUnitId: string, expectedRevision: number) =>
+    apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}`, {
+      method: "DELETE", session, body: { expectedRevision },
+    }),
+  reorderCommerceScriptUnits: (
+    session: StudioSession,
+    projectId: string,
+    body: { expectedScriptUnitsRevision: number; items: Array<{ scriptUnitId: string; sortOrder: number }> },
+  ) => apiRequest<{ scriptUnitsRevision: number }>(`/api/projects/${projectId}/commerce/script-units/reorder`, { method: "POST", session, body }),
+  duplicateCommerceScriptUnit: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    expectedScriptUnitsRevision: number,
+  ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/duplicate`, {
+    method: "POST", session, body: { expectedScriptUnitsRevision },
+  }),
+  createCommerceScriptLanguageVariant: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: { expectedScriptUnitsRevision: number; targetLanguage: string },
+  ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/language-variants`, {
+    method: "POST", session, body,
+  }),
+  prepareCommerceScriptUnit: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    expectedRevision: number,
+  ) => apiRequest<WorkflowRun>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/prepare`, {
+    method: "POST", session, body: { expectedRevision },
+  }),
+  organizeCommerceScriptUnit: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    expectedUnitGenerationId: string,
+    idempotencyKey: string,
+  ) => apiRequest<WorkflowRun>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/organize`, {
+    method: "POST", session, body: { expectedUnitGenerationId }, idempotencyKey,
+  }),
+  getCommerceScriptUnitRebuildImpact: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: {
+      expectedRevision: number;
+      targetSourceScriptVersionId: string;
+      targetLanguageMode: "explicit" | "auto";
+      targetLanguage?: string;
+      targetDurationSeconds: number;
+      targetPlatform: string;
+    },
+  ) => apiRequest<CommerceScriptUnitRebuildImpact>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/rebuild-impact`, {
+    method: "POST", session, body,
+  }),
+  createCommerceScriptUnitRebuild: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: { impactToken: string; expectedRevision: number },
+    idempotencyKey: string,
+  ) => apiRequest<WorkflowRun>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/rebuilds`, {
+    method: "POST", session, body, idempotencyKey,
+  }),
+  listCommerceScriptVersions: (session: StudioSession, projectId: string, scriptUnitId: string) =>
+    apiRequest<ListEnvelope<CommerceScriptVersion>>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/versions`, { session }),
+  getCommerceScriptVersion: (session: StudioSession, projectId: string, scriptUnitId: string, versionId: string) =>
+    apiRequest<CommerceScriptVersion>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/versions/${versionId}`, { session }),
+  createCommerceScriptVersion: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: { expectedRevision: number; content: string; sourceLanguageHint?: string; activate?: boolean },
+  ) => apiRequest<CommerceScriptVersionMutation>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/versions`, {
+    method: "POST", session, body,
+  }),
+  activateCommerceScriptVersion: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    versionId: string,
+    expectedRevision: number,
+  ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/versions/${versionId}/activate`, {
+    method: "POST", session, body: { expectedRevision },
+  }),
+  resolveCommerceScriptLanguage: (session: StudioSession, projectId: string, scriptUnitId: string) =>
+    apiRequest<CommerceLanguageResolution>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/language-resolution`, {
+      method: "POST", session, body: {},
+    }),
+  getCommerceScriptLanguageResolution: (session: StudioSession, projectId: string, scriptUnitId: string) =>
+    apiRequest<CommerceLanguageResolution>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/language-resolution`, { session }),
+  confirmCommerceScriptLanguage: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: { languageResolutionId: string; targetLanguage: string },
+  ) => apiRequest<CommerceLanguageResolution | CommerceLanguageConfirmationAccepted>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/language-confirmation`, {
+    method: "POST", session, body,
+  }),
+  listCommerceScriptLocalizations: (session: StudioSession, projectId: string, scriptUnitId: string) =>
+    apiRequest<ListEnvelope<CommerceScriptLocalization>>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/localizations`, { session }),
+  getCommerceScriptLocalization: (session: StudioSession, projectId: string, scriptUnitId: string, localizationId: string) =>
+    apiRequest<CommerceScriptLocalization>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/localizations/${localizationId}`, { session }),
+  createCommerceScriptLocalization: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: {
+      sourceScriptVersionId: string;
+      languageResolutionId: string;
+      sourceLanguage: string;
+      targetLanguage: string;
+      localizedContent: string;
+      structuredContract?: JsonRecord;
+      reviewerOutput?: JsonRecord;
+      approve?: boolean;
+    },
+  ) => apiRequest<CommerceScriptLocalization>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/localizations`, {
+    method: "POST", session, body,
+  }),
+  activateCommerceScriptLocalization: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    localizationId: string,
+    expectedRevision: number,
+  ) => apiRequest<CommerceScriptLocalization>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/localizations/${localizationId}/activate`, {
+    method: "POST", session, body: { expectedRevision },
+  }),
+  listCommerceStoryboardPlans: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    status: "active" | "archived" | "all" = "active",
+  ) => apiRequest<ListEnvelope<CommerceStoryboardPlan>>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/storyboard-plans`,
+    { session, query: { "filter[status]": status } },
+  ),
+  createCommerceStoryboardPlan: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    expectedUnitGenerationId: string,
+    idempotencyKey: string,
+  ) => apiRequest<WorkflowRun>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/storyboard-plans`, {
+    method: "POST", session, body: { expectedUnitGenerationId }, idempotencyKey,
+  }),
+  getCommerceStoryboardPlan: (session: StudioSession, projectId: string, scriptUnitId: string, planId: string) =>
+    apiRequest<CommerceStoryboardPlanDetail>(
+      `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/storyboard-plans/${planId}`,
+      { session },
+    ),
+  activateCommerceStoryboardPlan: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    planId: string,
+    expectedRevision: number,
+  ) => apiRequest<CommerceStoryboardPlanDetail>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/storyboard-plans/${planId}/activate`,
+    { method: "POST", session, body: { expectedRevision } },
+  ),
+  updateCommerceStoryboardShot: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    shotId: string,
+    body: {
+      expectedPlanRevision: number;
+      expectedShotRevision: number;
+      visualAction?: string;
+      shotPurpose?: string;
+      composition?: string;
+      camera?: JsonRecord;
+      voiceoverText?: string;
+      onscreenText?: string;
+      durationSeconds?: number;
+      productReferenceIds?: string[];
+    },
+  ) => apiRequest<CommerceStoryboardPlanDetail>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/shots/${shotId}`,
+    { method: "PATCH", session, body },
+  ),
+  archiveCommerceStoryboardShot: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    shotId: string,
+    planId: string,
+    expectedPlanRevision: number,
+  ) => apiRequest<CommerceStoryboardPlanDetail>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/shots/${shotId}`,
+    {
+      method: "DELETE", session,
+      headers: { "If-Match": `W/"commerce-storyboard:${planId}:${expectedPlanRevision}"` },
+    },
+  ),
+  reorderCommerceStoryboardShots: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: { planId: string; expectedPlanRevision: number; items: Array<{ shotId: string; durationSeconds?: number }> },
+  ) => apiRequest<CommerceStoryboardPlanDetail>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/shots/reorder`,
+    { method: "POST", session, body },
+  ),
+  generateCommerceReferenceImageBatch: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: {
+      operation: "generate_prompts" | "generate_images";
+      planId: string;
+      expectedPlanRevision: number;
+      expectedUnitGenerationId: string;
+      shotIds: string[];
+      force?: boolean;
+      concurrency?: number;
+    },
+    idempotencyKey: string,
+  ) => apiRequest<CommerceProductionRun>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/reference-images/generate-batch`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  generateCommerceVideoPrompts: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: CommerceVideoBatchRequest,
+    idempotencyKey: string,
+  ) => apiRequest<CommerceProductionRun>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/video-prompts/generate-batch`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  generateCommerceShotVideos: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: CommerceVideoBatchRequest,
+    idempotencyKey: string,
+  ) => apiRequest<CommerceProductionRun>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/shot-videos/generate-batch`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  listCommerceTimelines: (session: StudioSession, projectId: string, scriptUnitId: string) =>
+    apiRequest<{ items: CommerceTimeline[]; unitGenerationId: string }>(
+      `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/timelines`,
+      { session },
+    ),
+  prepareCommerceTimeline: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: {
+      storyboardPlanId: string;
+      expectedPlanRevision: number;
+      expectedUnitGenerationId: string;
+      title?: string;
+      resolution?: string;
+    },
+    idempotencyKey: string,
+  ) => apiRequest<CommerceTimeline>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/timelines/prepare`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  getCommerceTimeline: (session: StudioSession, projectId: string, scriptUnitId: string, timelineId: string) =>
+    apiRequest<CommerceTimelineDetail>(
+      `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/timelines/${timelineId}`,
+      { session },
+    ),
+  updateCommerceTimeline: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    timelineId: string,
+    body: {
+      expectedRevision: number;
+      title?: string;
+      overlays?: Array<Omit<CommerceTimelineOverlay, "id" | "timelineId" | "contentHash">>;
+    },
+  ) => apiRequest<CommerceTimeline>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/timelines/${timelineId}`,
+    { method: "PATCH", session, body },
+  ),
+  composeCommerceFinalVideo: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: {
+      timelineId: string;
+      expectedTimelineRevision: number;
+      expectedUnitGenerationId: string;
+      title?: string;
+      resolution?: string;
+    },
+    idempotencyKey: string,
+  ) => apiRequest<CommerceProductionRun>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/final-videos/compose`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  listCommerceFinalVideos: (session: StudioSession, projectId: string, scriptUnitId: string) =>
+    apiRequest<{ items: CommerceFinalVideoVersion[]; unitGenerationId: string }>(
+      `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/final-videos`,
+      { session },
+    ),
+  getCommerceFinalVideo: (session: StudioSession, projectId: string, scriptUnitId: string, finalVideoVersionId: string) =>
+    apiRequest<CommerceFinalVideoVersion>(
+      `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/final-videos/${finalVideoVersionId}`,
+      { session },
+    ),
+  activateCommerceFinalVideo: (session: StudioSession, projectId: string, scriptUnitId: string, finalVideoVersionId: string) =>
+    apiRequest<{ activated: boolean }>(
+      `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/final-videos/${finalVideoVersionId}/activate`,
+      { method: "POST", session },
+    ),
+  listCommerceProductionRuns: (
+    session: StudioSession,
+    projectId: string,
+    filters: { scriptUnitId?: string; runType?: CommerceProductionRunType; limit?: number } = {},
+  ) => apiRequest<ListEnvelope<CommerceProductionRun>>(`/api/projects/${projectId}/commerce/production-runs`, {
+    session,
+    query: {
+      "filter[scriptUnitId]": filters.scriptUnitId,
+      "filter[runType]": filters.runType,
+      limit: filters.limit,
+    },
+  }),
+  getCommerceProductionRun: (session: StudioSession, projectId: string, runId: string) =>
+    apiRequest<CommerceProductionRunDetail>(`/api/projects/${projectId}/commerce/production-runs/${runId}`, { session }),
+  retryFailedCommerceProductionRun: (
+    session: StudioSession,
+    projectId: string,
+    runId: string,
+    body: { itemIds?: string[]; concurrency?: number },
+    idempotencyKey: string,
+  ) => apiRequest<CommerceProductionRun>(
+    `/api/projects/${projectId}/commerce/production-runs/${runId}/retry-failed`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  cancelCommerceProductionRun: (
+    session: StudioSession,
+    projectId: string,
+    runId: string,
+    reason = "用户取消带货视频生产批次",
+  ) => apiRequest<CommerceProductionRunDetail>(
+    `/api/projects/${projectId}/commerce/production-runs/${runId}/cancel`,
+    { method: "POST", session, body: { reason } },
+  ),
+  listCommerceScriptUnitBatches: (session: StudioSession, projectId: string) =>
+    apiRequest<ListEnvelope<CommerceScriptUnitBatch>>(
+      `/api/projects/${projectId}/commerce/script-unit-batches`,
+      { session },
+    ),
+  getCommerceScriptUnitBatch: (session: StudioSession, projectId: string, coordinatorId: string) =>
+    apiRequest<CommerceScriptUnitBatch>(
+      `/api/projects/${projectId}/commerce/script-unit-batches/${coordinatorId}`,
+      { session },
+    ),
+  createCommerceScriptUnitBatch: (
+    session: StudioSession,
+    projectId: string,
+    body: {
+      targetStage: CommerceScriptUnitBatchStage;
+      items: CommerceScriptUnitBatchAdvanceItem[];
+      unitConcurrency?: number;
+      maxConcurrency?: number;
+    },
+    idempotencyKey: string,
+  ) => apiRequest<CommerceScriptUnitBatch>(
+    `/api/projects/${projectId}/commerce/script-unit-batches`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  retryCommerceScriptUnitBatch: (
+    session: StudioSession,
+    projectId: string,
+    coordinatorId: string,
+    body: { scriptUnitIds?: string[]; maxConcurrency?: number },
+    idempotencyKey: string,
+  ) => apiRequest<CommerceScriptUnitBatch>(
+    `/api/projects/${projectId}/commerce/script-unit-batches/${coordinatorId}/retry-failed`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  cancelCommerceScriptUnitBatch: (
+    session: StudioSession,
+    projectId: string,
+    coordinatorId: string,
+    reason = "用户取消跨脚本批量任务",
+  ) => apiRequest<CommerceScriptUnitBatch>(
+    `/api/projects/${projectId}/commerce/script-unit-batches/${coordinatorId}/cancel`,
+    { method: "POST", session, body: { reason } },
+  ),
   updateProject: (session: StudioSession, projectId: string, body: UpdateProjectRequest) =>
     apiRequest<Project>(`/api/projects/${projectId}`, { method: "PATCH", session, body }),
   listVideoProductionProfiles: (session: StudioSession) =>

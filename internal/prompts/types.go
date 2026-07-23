@@ -1,6 +1,9 @@
 package prompts
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 const (
 	CodePromptTemplateNotFound = "PROMPT_TEMPLATE_NOT_FOUND"
@@ -33,6 +36,7 @@ type ResolvedPrompt struct {
 	Version     int
 	Content     string
 	ContentHash string
+	Metadata    json.RawMessage
 	Source      string
 }
 
@@ -47,5 +51,6 @@ type RenderedPrompt struct {
 	RenderedText    string
 	RenderedHash    string
 	ContentHash     string
+	Metadata        json.RawMessage
 	Source          string
 }

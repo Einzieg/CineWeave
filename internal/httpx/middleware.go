@@ -59,7 +59,7 @@ func WithCORS(next http.Handler) http.Handler {
 		if originAllowed(origin, allowedOrigins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Cache-Control, Content-Type, X-Organization-Id, X-Request-Id, Last-Event-ID")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Cache-Control, Content-Type, Idempotency-Key, If-Match, X-Organization-Id, X-Request-Id, Last-Event-ID")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, X-CineWeave-Stream-High-Watermark")
 		}

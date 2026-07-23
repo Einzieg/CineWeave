@@ -2,6 +2,22 @@
 
 本文档记录当前 MVP 之后需要继续落实的工程任务。`mock-provider` 从 CI 移除、Docker Compose 默认端口与 host 映射收口已在当前修复中处理，不再列入本计划。
 
+## 2026-07-23 Commerce 发布收口
+
+带货视频的详细领域、API、Workflow 和验收标准维护在 `docs/commerce-video-development-plan.md`，本文只保留跨模块发布任务：
+
+- [x] 源码 migration/baseline 扩展至 `000056`，并完成隔离 Up/Down/Up 与 schema 等价验证。
+- [x] Commerce 项目、商品、多脚本、多语言、分镜、参考图、视频提示词、镜头视频、时间线、成片和 Project Agent 已接真实 API/Workflow。
+- [x] OpenAPI/API client/事件目录收口至 393 条公开路由。
+- [x] Playwright Chromium E2E 固化到 CI 和 release check；Provider Gateway 图片请求 contract test 已落地。
+- [x] 新增 `scripts/test-runtime-hardening.ps1 -CommerceOnly` 隔离专项入口。
+- [x] 新增带显式费用确认的 `scripts/smoke-commerce-real-provider.ps1`，证据默认写入 `tmp/` 且不保存凭据。
+- [ ] 在 Provider/Workflow 排空窗口保存配置快照，将主环境从 v44 升级至 v56。
+- [ ] 使用真实图片和视频模型完成 3 镜头、失败项重试、非中文原生音频和 provenance 验收。
+- [ ] 完成多 ScriptUnit 独立分镜/视频/成片的主环境浏览器 smoke，确认刷新和 Worker 重启后状态可恢复。
+
+以上三项运行态任务完成前，`commerce_video_v1` 不得标记为生产 available；不能用 mock contract 或源码测试替代真实计费链路证据。
+
 ## 执行原则
 
 - 每个任务都必须能独立验收，避免只写“优化”或“完善”。

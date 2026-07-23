@@ -35,5 +35,11 @@ jobs:
       - name: Validate
         run: pnpm run test
 
+      - name: Install Playwright Chromium
+        run: pnpm --filter @cineweave/web exec playwright install --with-deps chromium
+
+      - name: Commerce browser E2E
+        run: pnpm run test:commerce:e2e
+
       - name: Compose build
         run: docker compose -f compose.yml build api provider-gateway script-worker media-worker web

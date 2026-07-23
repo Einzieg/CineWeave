@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+type providerTimeoutError struct{}
+
+func (providerTimeoutError) Error() string   { return "TLS handshake timeout" }
+func (providerTimeoutError) Timeout() bool   { return true }
+func (providerTimeoutError) Temporary() bool { return true }
+
 func TestNormalizeHTTPError(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -80,6 +86,21 @@ func TestNormalizedProviderFailureClassifiesTransportEOF(t *testing.T) {
 	}
 	if !standardErrorFromRunError(io.ErrUnexpectedEOF, CodeUpstreamStreamTruncated, "provider stream ended before a completion marker").Retryable {
 		t.Fatalf("unexpected EOF standard error should be retryable")
+	}
+}
+
+func TestNormalizedProviderFailureClassifiesTransportTimeout(t *testing.T) {
+	raw := fmt.Errorf(`Post "https://example.test/v1/chat/completions": %w`, providerTimeoutError{})
+	status, code, message, upstreamStatus, upstreamCode := normalizedProviderFailure(raw)
+	if status != "failed" || code != CodeUpstreamTimeout || message != "provider request timed out" {
+		t.Fatalf("normalized timeout = status=%s code=%s message=%q", status, code, message)
+	}
+	if upstreamStatus != nil || upstreamCode != "" {
+		t.Fatalf("upstream status/code = %v/%q, want empty", upstreamStatus, upstreamCode)
+	}
+	standard := standardErrorFromRunError(raw, code, message)
+	if standard == nil || !standard.Retryable {
+		t.Fatalf("transport timeout standard error = %#v, want retryable", standard)
 	}
 }
 

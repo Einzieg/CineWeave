@@ -14,6 +14,10 @@ type InvalidationHandler =
   | "asset"
   | "audio"
   | "content"
+  | "commerceProduct"
+  | "commerceProject"
+  | "commerceScript"
+  | "commerceStoryboard"
   | "export"
   | "final"
   | "project"
@@ -58,6 +62,54 @@ export const projectEventInvalidation = {
   "audio.tts.prepared": "audio",
   "audio.tts.timing_revision.created": "audio",
   "canonical_asset.archived": "asset",
+  "commerce.final_video.activated": "final",
+  "commerce.final_video.completed": "final",
+  "commerce.language.confirmation_required": "commerceScript",
+  "commerce.language.resolved": "commerceScript",
+  "commerce.product.reference.added": "commerceProduct",
+  "commerce.product.reference.archived": "commerceProduct",
+  "commerce.product.reference.updated": "commerceProduct",
+  "commerce.product.updated": "commerceProduct",
+  "commerce.product.version.activated": "commerceProduct",
+  "commerce.product.version.created": "commerceProduct",
+  "commerce.production.final_compose.completed": "final",
+  "commerce.production.run.cancelled": "storyboard",
+  "commerce.production.run.completed": "storyboard",
+  "commerce.production.run.failed": "storyboard",
+  "commerce.production.run.partially_succeeded": "storyboard",
+  "commerce.production.video.completed": "storyboard",
+  "commerce.production.video_prompt.completed": "storyboard",
+  "commerce.project.defaults.updated": "commerceProject",
+  "commerce.project_generation.activated": "commerceProject",
+  "commerce.reference_pack.created": "commerceProduct",
+  "commerce.script.localization.activated": "commerceScript",
+  "commerce.script.localization.approved": "commerceScript",
+  "commerce.script.localization.created": "commerceScript",
+  "commerce.script.version.activated": "commerceScript",
+  "commerce.script.version.created": "commerceScript",
+  "commerce.script_unit.archived": "commerceScript",
+  "commerce.script_unit.created": "commerceScript",
+  "commerce.script_unit.generation.archived": "commerceScript",
+  "commerce.script_unit.generation.created": "commerceScript",
+  "commerce.script_unit.reordered": "commerceScript",
+  "commerce.script_unit.updated": "commerceScript",
+  "commerce.setup.completed": "commerceProject",
+  "commerce.shot.updated": "commerceStoryboard",
+  "commerce.timeline.updated": "final",
+  "commerce.shot.image_prompt.failed": "storyboard",
+  "commerce.shot.image_prompt.succeeded": "storyboard",
+  "commerce.shot.reference_image.failed": "storyboard",
+  "commerce.shot.reference_image.succeeded": "storyboard",
+  "commerce.shot.video.failed": "storyboard",
+  "commerce.shot.video.succeeded": "storyboard",
+  "commerce.shot.video_prompt.approved": "storyboard",
+  "commerce.shot.video_prompt.failed": "storyboard",
+  "commerce.storyboard.plan.activated": "commerceStoryboard",
+  "commerce.storyboard.plan.cancelled": "commerceStoryboard",
+  "commerce.storyboard.plan.completed": "commerceStoryboard",
+  "commerce.storyboard.plan.failed": "commerceStoryboard",
+  "commerce.storyboard.plan.started": "commerceStoryboard",
+  "commerce.workflow_binding.created": "commerceProject",
   "derived_asset.batch.completed": "asset",
   "derived_asset.batch.created": "asset",
   "derived_asset.batch.reconciled": "asset",
@@ -244,7 +296,53 @@ export function keysForProjectEvent(
   const scriptId = stringPayload(payload, "scriptId");
   const providerModelId = stringPayload(payload, "providerModelId");
   const rebuildId = stringPayload(payload, "rebuildId");
+  const commerceScriptUnitId = stringPayload(payload, "commerceScriptUnitId");
+  const commerceProductionRunId = stringPayload(payload, "commerceProductionRunId");
+  const commerceStoryboardPlanId = stringPayload(payload, "commerceStoryboardPlanId");
+  const commerceReferencePackId = stringPayload(payload, "referencePackId");
+  const commerceSetupSessionId = stringPayload(payload, "setupSessionId");
+  const commerceSetupRunId = stringPayload(payload, "setupRunId");
   const keys: QueryKey[] = [];
+
+  if (eventType.startsWith("commerce.shot.") || eventType.startsWith("commerce.production.")) {
+    return uniqueQueryKeys([
+      qk.workflowRuns(projectId),
+      qk.artifacts(projectId),
+      ...(workflowRunId ? [qk.workflowNodes(workflowRunId)] : []),
+      ...(commerceScriptUnitId
+        ? [
+            qk.commerceScriptUnitsRoot(projectId),
+            qk.commerceProjectProductionStatus(projectId),
+            qk.commerceUnitProductionStatus(projectId, commerceScriptUnitId),
+            qk.commerceStoryboardPlans(projectId, commerceScriptUnitId),
+            qk.commerceProductionRuns(projectId, commerceScriptUnitId, "reference_images"),
+            qk.commerceProductionRuns(projectId, commerceScriptUnitId, "video_prompts"),
+            qk.commerceProductionRuns(projectId, commerceScriptUnitId, "shot_videos"),
+            qk.commerceProductionRuns(projectId, commerceScriptUnitId, "final_compose"),
+            qk.commerceTimelines(projectId, commerceScriptUnitId),
+            qk.commerceFinalVideos(projectId, commerceScriptUnitId),
+          ]
+        : []),
+      ...(commerceScriptUnitId && commerceStoryboardPlanId
+        ? [qk.commerceStoryboardPlan(projectId, commerceScriptUnitId, commerceStoryboardPlanId)]
+        : []),
+      ...(commerceProductionRunId ? [qk.commerceProductionRun(projectId, commerceProductionRunId)] : []),
+    ]);
+  }
+
+  if (eventType === "commerce.timeline.updated" || eventType.startsWith("commerce.final_video.")) {
+    return uniqueQueryKeys([
+      qk.commerceScriptUnitsRoot(projectId),
+      qk.commerceProjectProductionStatus(projectId),
+      ...(commerceScriptUnitId
+        ? [
+            qk.commerceUnitProductionStatus(projectId, commerceScriptUnitId),
+            qk.commerceTimelines(projectId, commerceScriptUnitId),
+            qk.commerceFinalVideos(projectId, commerceScriptUnitId),
+          ]
+        : []),
+    ]);
+  }
 
   if (eventType === "project.production_content.cleared") {
     return uniqueQueryKeys([
@@ -280,6 +378,66 @@ export function keysForProjectEvent(
   }
 
   switch (handler) {
+    case "commerceProduct":
+      keys.push(
+        qk.commerceProduct(projectId),
+        qk.commerceProductVersions(projectId),
+        qk.commerceProductReferencesRoot(projectId),
+        qk.commerceProductReferencePacksRoot(projectId),
+        ...(commerceReferencePackId ? [qk.commerceProductReferencePack(projectId, commerceReferencePackId)] : []),
+      );
+      if (eventType === "commerce.product.version.activated"
+        || eventType === "commerce.reference_pack.created"
+        || (eventType === "commerce.product.updated" && payload.activated === true)) {
+        keys.push(qk.commerceScriptUnitsRoot(projectId), qk.commerceProjectProductionStatus(projectId));
+      }
+      break;
+    case "commerceProject":
+      keys.push(
+        qk.project(projectId),
+        qk.commerceProduct(projectId),
+        qk.commerceScriptUnitsRoot(projectId),
+        qk.commerceProjectProductionStatus(projectId),
+        qk.workflowRuns(projectId),
+        ...(commerceSetupSessionId ? [qk.commerceSetupSession(projectId, commerceSetupSessionId)] : []),
+        ...(commerceSetupRunId ? [qk.commerceSetupRun(projectId, commerceSetupRunId)] : []),
+      );
+      break;
+    case "commerceScript": {
+      const listChanged = eventType.startsWith("commerce.script_unit.")
+        || eventType === "commerce.script.version.activated"
+        || eventType === "commerce.script.localization.activated";
+      if (listChanged) keys.push(qk.commerceScriptUnitsRoot(projectId));
+      if (commerceScriptUnitId) {
+        keys.push(
+          qk.commerceScriptUnit(projectId, commerceScriptUnitId),
+          qk.commerceScriptVersions(projectId, commerceScriptUnitId),
+          qk.commerceLanguageResolution(projectId, commerceScriptUnitId),
+          qk.commerceLocalizations(projectId, commerceScriptUnitId),
+          qk.commerceScriptUnitRebuild(projectId, commerceScriptUnitId),
+          qk.commerceStoryboardPlansRoot(projectId, commerceScriptUnitId),
+          qk.commerceUnitProductionStatus(projectId, commerceScriptUnitId),
+        );
+      }
+      if (eventType.startsWith("commerce.script_unit.generation.")) {
+        keys.push(qk.commerceProjectProductionStatus(projectId), qk.workflowRuns(projectId));
+      }
+      break;
+    }
+    case "commerceStoryboard":
+      keys.push(qk.workflowRuns(projectId));
+      if (commerceScriptUnitId) {
+        keys.push(
+          qk.commerceStoryboardPlansRoot(projectId, commerceScriptUnitId),
+          qk.commerceUnitProductionStatus(projectId, commerceScriptUnitId),
+          qk.commerceProjectProductionStatus(projectId),
+          qk.commerceProductionRunsRoot(projectId),
+          ...(commerceStoryboardPlanId
+            ? [qk.commerceStoryboardPlan(projectId, commerceScriptUnitId, commerceStoryboardPlanId)]
+            : []),
+        );
+      }
+      break;
     case "agent":
       keys.push(
         qk.agentTasks(projectId),

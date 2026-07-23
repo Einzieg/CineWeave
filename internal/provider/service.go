@@ -575,6 +575,9 @@ func (s *Service) CreateModel(ctx context.Context, organizationID, accountID str
 		return Model{}, err
 	}
 	capability := req.Capabilities
+	if capability != nil {
+		capability = capabilityWithManualProvenance(capability)
+	}
 	if capability == nil {
 		if preset, ok, err := s.lookupModelCapabilityPreset(ctx, s.db, modelKey); err != nil {
 			return Model{}, err
@@ -676,6 +679,9 @@ func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID strin
 		return Model{}, fmt.Errorf("%w: modelKey, displayName, and modality are required", ErrValidation)
 	}
 	capability := req.Capabilities
+	if capability != nil {
+		capability = capabilityWithManualProvenance(capability)
+	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -2537,6 +2543,13 @@ func scanCapability(row rowScanner) (Capability, error) {
 	item.QualityTiers = rawOrDefault(qualityTiers, "[]")
 	item.ProviderOptionsSchema = rawOrDefault(providerOptionsSchema, "{}")
 	item.PricingPolicy = rawOrDefault(pricingPolicy, "{}")
+	metadata := capabilityLanguageMetadataFromSchema(item.ProviderOptionsSchema)
+	item.SupportedInputLanguages = metadata.SupportedInputLanguages
+	item.SupportedOutputLanguages = metadata.SupportedOutputLanguages
+	item.SupportedPromptLanguages = metadata.SupportedPromptLanguages
+	item.SupportedNativeAudioLanguages = metadata.SupportedNativeAudioLanguages
+	item.Source = metadata.Source
+	item.ApprovalStatus = metadata.ApprovalStatus
 	return item, err
 }
 
@@ -2629,14 +2642,40 @@ func normalizeCapabilityInput(input CapabilityInput) (CapabilityInput, error) {
 		return CapabilityInput{}, fmt.Errorf("%w: pricingPolicy must be valid JSON", ErrValidation)
 	}
 	providerOptionsSchema = normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimits, outputLimits, qualityTiers)
-	return CapabilityInput{
-		TaskTypes:             taskTypes,
-		InputLimits:           inputLimits,
-		OutputLimits:          outputLimits,
-		QualityTiers:          qualityTiers,
-		ProviderOptionsSchema: providerOptionsSchema,
-		PricingPolicy:         pricingPolicy,
-	}, nil
+	normalized := CapabilityInput{
+		TaskTypes:                     taskTypes,
+		InputLimits:                   inputLimits,
+		OutputLimits:                  outputLimits,
+		QualityTiers:                  qualityTiers,
+		ProviderOptionsSchema:         providerOptionsSchema,
+		PricingPolicy:                 pricingPolicy,
+		SupportedInputLanguages:       input.SupportedInputLanguages,
+		SupportedOutputLanguages:      input.SupportedOutputLanguages,
+		SupportedPromptLanguages:      input.SupportedPromptLanguages,
+		SupportedNativeAudioLanguages: input.SupportedNativeAudioLanguages,
+		Source:                        input.Source,
+		ApprovalStatus:                input.ApprovalStatus,
+	}
+	normalized, providerOptionsSchema, err = normalizeCapabilityLanguageMetadata(normalized, providerOptionsSchema)
+	if err != nil {
+		return CapabilityInput{}, err
+	}
+	normalized.ProviderOptionsSchema = providerOptionsSchema
+	return normalized, nil
+}
+
+func capabilityWithManualProvenance(input *CapabilityInput) *CapabilityInput {
+	if input == nil {
+		return nil
+	}
+	copy := *input
+	if strings.TrimSpace(copy.Source) == "" {
+		copy.Source = CapabilitySourceManual
+	}
+	if strings.TrimSpace(copy.ApprovalStatus) == "" {
+		copy.ApprovalStatus = CapabilityApprovalApproved
+	}
+	return &copy
 }
 
 func scanModelProfile(row rowScanner) (ModelProfile, error) {
@@ -2989,6 +3028,9 @@ func normalizedProviderFailure(err error) (status string, code string, message s
 		return status, standard.Code, standard.Message, &statusValue, upstreamErr.Code
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
+		return status, CodeUpstreamTimeout, "provider request timed out", nil, ""
+	}
+	if isProviderTransportTimeout(err) {
 		return status, CodeUpstreamTimeout, "provider request timed out", nil, ""
 	}
 	if errors.Is(err, io.ErrUnexpectedEOF) {

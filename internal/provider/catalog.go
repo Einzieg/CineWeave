@@ -429,6 +429,8 @@ func insertCatalogModel(ctx context.Context, tx pgx.Tx, accountID string, model 
 		QualityTiers:          model.QualityTiers,
 		ProviderOptionsSchema: providerOptionsSchema,
 		PricingPolicy:         pricingPolicy,
+		Source:                CapabilitySourcePreset,
+		ApprovalStatus:        CapabilityApprovalApproved,
 	}); err != nil {
 		return "", err
 	}

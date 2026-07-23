@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -55,6 +56,20 @@ func TestRenderedHashStable(t *testing.T) {
 	}
 	if first.RenderedHash != second.RenderedHash {
 		t.Fatalf("hashes differ: %s != %s", first.RenderedHash, second.RenderedHash)
+	}
+}
+
+func TestRenderPreservesVersionMetadata(t *testing.T) {
+	prompt := testResolvedPrompt("Hello.")
+	prompt.Metadata = json.RawMessage(`{"outputContract":{"type":"object"}}`)
+
+	rendered, err := Render(prompt, nil)
+
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if string(rendered.Metadata) != string(prompt.Metadata) {
+		t.Fatalf("metadata = %s, want %s", rendered.Metadata, prompt.Metadata)
 	}
 }
 

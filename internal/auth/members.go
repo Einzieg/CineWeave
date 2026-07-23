@@ -81,7 +81,7 @@ func (s *Service) ListOrganizationMembers(ctx context.Context, organizationID, s
 	}
 	rows, err := s.db.Query(ctx, `
 		SELECT om.organization_id, u.id, u.email, COALESCE(u.username, ''), COALESCE(u.display_name, ''), COALESCE(u.avatar_url, ''),
-		       om.status,
+		       u.is_system_admin, om.status,
 		       om.status <> 'removed' AND NOT u.is_system_admin AND (
 		           SELECT count(*) FROM organization_members memberships
 		           WHERE memberships.user_id = u.id AND memberships.status <> 'removed'
@@ -103,7 +103,7 @@ func (s *Service) ListOrganizationMembers(ctx context.Context, organizationID, s
 		var item OrganizationMember
 		if err := rows.Scan(
 			&item.OrganizationID, &item.User.ID, &item.User.Email, &item.User.Username, &item.User.DisplayName, &item.User.AvatarURL,
-			&item.Status, &item.AccountManagementAllowed, &item.CreatedAt, &item.UpdatedAt, &item.DisabledAt, &item.RemovedAt,
+			&item.User.SystemAdministrator, &item.Status, &item.AccountManagementAllowed, &item.CreatedAt, &item.UpdatedAt, &item.DisabledAt, &item.RemovedAt,
 		); err != nil {
 			return MemberList{}, err
 		}
@@ -122,7 +122,7 @@ func (s *Service) GetOrganizationMember(ctx context.Context, organizationID, use
 	var item OrganizationMember
 	err := s.db.QueryRow(ctx, `
 		SELECT om.organization_id, u.id, u.email, COALESCE(u.username, ''), COALESCE(u.display_name, ''), COALESCE(u.avatar_url, ''),
-		       om.status,
+		       u.is_system_admin, om.status,
 		       om.status <> 'removed' AND NOT u.is_system_admin AND (
 		           SELECT count(*) FROM organization_members memberships
 		           WHERE memberships.user_id = u.id AND memberships.status <> 'removed'
@@ -133,7 +133,7 @@ func (s *Service) GetOrganizationMember(ctx context.Context, organizationID, use
 		WHERE om.organization_id = $1 AND om.user_id = $2
 	`, organizationID, userID).Scan(
 		&item.OrganizationID, &item.User.ID, &item.User.Email, &item.User.Username, &item.User.DisplayName, &item.User.AvatarURL,
-		&item.Status, &item.AccountManagementAllowed, &item.CreatedAt, &item.UpdatedAt, &item.DisabledAt, &item.RemovedAt,
+		&item.User.SystemAdministrator, &item.Status, &item.AccountManagementAllowed, &item.CreatedAt, &item.UpdatedAt, &item.DisabledAt, &item.RemovedAt,
 	)
 	if err != nil {
 		return OrganizationMember{}, err

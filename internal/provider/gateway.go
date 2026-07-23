@@ -389,11 +389,14 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	}
 
 	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
-		OrganizationID:  req.OrganizationID,
-		ModelProfileKey: req.ModelProfileKey,
-		TaskType:        taskType,
-		Modality:        "text",
-		MaxOutputTokens: firstPositive(intFieldFromJSON(req.Input, "maxOutputTokens"), intFieldFromJSON(req.Input, "max_tokens")),
+		OrganizationID:                      req.OrganizationID,
+		ModelProfileKey:                     req.ModelProfileKey,
+		TaskType:                            taskType,
+		Modality:                            "text",
+		MaxOutputTokens:                     firstPositive(intFieldFromJSON(req.Input, "maxOutputTokens"), intFieldFromJSON(req.Input, "max_tokens")),
+		InputLanguage:                       req.InputLanguage,
+		OutputLanguage:                      req.OutputLanguage,
+		RequireApprovedLanguageCapabilities: req.RequireApprovedLanguageCapabilities,
 	})
 	if err != nil {
 		return GatewayTextResponse{}, err
@@ -451,6 +454,23 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 		cfg.TimeoutMS = gatewayTextTimeoutMSFromEnv()
 	}
 	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
+	upstreamInput := req.Input
+	requestSnapshot := gatewayTextRequestSnapshot(req.Input, req.References)
+	if len(req.References) > 0 {
+		if !modelSupportsTextImageInput(selection.Model) {
+			return GatewayTextResponse{}, GatewayAttempt{}, &StandardErrorError{Standard: StandardError{
+				Code: CodeModelCapabilityUnavailable, Message: "selected text model does not support image input", Retryable: false,
+			}}
+		}
+		materials, materializeErr := s.materializeOpenAICompatibleImageReferences(ctx, selection.Account, req.References, timeout)
+		if materializeErr != nil {
+			return GatewayTextResponse{}, GatewayAttempt{}, materializeErr
+		}
+		upstreamInput, err = injectGatewayTextImageReferences(req.Input, materials)
+		if err != nil {
+			return GatewayTextResponse{}, GatewayAttempt{}, err
+		}
+	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	callID := uuid.NewString()
@@ -475,7 +495,7 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 		TaskType:              taskType,
 		ExecutionMode:         executionMode,
 		Status:                "running",
-		RequestSnapshot:       req.Input,
+		RequestSnapshot:       requestSnapshot,
 	}
 	if _, err := recordCall(ctx, s.db, baseCall); err != nil {
 		return GatewayTextResponse{}, GatewayAttempt{}, err
@@ -551,7 +571,7 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 	var result chatCompletionResult
 	if stream {
 		var sequence int64
-		result, err = client.streamChatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input, func(text string) error {
+		result, err = client.streamChatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, upstreamInput, func(text string) error {
 			if emit == nil {
 				return nil
 			}
@@ -568,7 +588,7 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 			return emitGatewayTextEvent(emit, GatewayTextStreamEvent{Type: GatewayTextEventDelta, Delta: delta})
 		})
 	} else {
-		result, err = client.chatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, req.Input)
+		result, err = client.chatCompletion(callCtx, selection.Account, selection.Model, selection.APIKey, cfg, upstreamInput)
 	}
 
 	status := "succeeded"
@@ -610,7 +630,7 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 	finalCall.ErrorMessage = errorMessage
 	finalCall.UpstreamStatus = upstreamStatus
 	finalCall.UpstreamErrorCode = upstreamErrorCode
-	finalCall.RequestSnapshot = result.RequestSnapshot
+	finalCall.RequestSnapshot = requestSnapshot
 	finalCall.ResponseSnapshot = responseSnapshot
 	finalCall.NormalizedOutput = normalizedOutput
 	call, err := s.recordGatewayTextCall(ctx, selection, req, finalCall, usage)
@@ -681,6 +701,12 @@ func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextReq
 		if !modelSupportsTaskType(model, taskType) {
 			return gatewayModelSelection{}, fmt.Errorf("%w: provider model does not support %s", ErrValidation, taskType)
 		}
+		if err := ValidateModelLanguageCapabilities(model, taskType, LanguageCapabilityRequirement{
+			InputLanguage: req.InputLanguage, OutputLanguage: req.OutputLanguage,
+			RequireApproved: req.RequireApprovedLanguageCapabilities,
+		}); err != nil {
+			return gatewayModelSelection{}, err
+		}
 		account, err := s.GetAccount(ctx, req.OrganizationID, model.ProviderAccountID)
 		if err != nil {
 			return gatewayModelSelection{}, err
@@ -693,10 +719,13 @@ func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextReq
 		return gatewayModelSelection{}, fmt.Errorf("%w: modelProfileKey or providerModelId is required", ErrValidation)
 	}
 	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
-		OrganizationID:  req.OrganizationID,
-		ModelProfileKey: profileKey,
-		TaskType:        taskType,
-		Modality:        "text",
+		OrganizationID:                      req.OrganizationID,
+		ModelProfileKey:                     profileKey,
+		TaskType:                            taskType,
+		Modality:                            "text",
+		InputLanguage:                       req.InputLanguage,
+		OutputLanguage:                      req.OutputLanguage,
+		RequireApprovedLanguageCapabilities: req.RequireApprovedLanguageCapabilities,
 	})
 	if err != nil {
 		return gatewayModelSelection{}, err

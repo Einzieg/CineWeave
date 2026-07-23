@@ -1,6 +1,8 @@
 param(
   [switch]$SkipMigrationIntegration,
+  [switch]$SkipCommerceBrowserE2E,
   [switch]$SkipImageBuild,
+  [switch]$RunCommerceRealProviderSmoke,
   [switch]$CheckProviderDrain,
   [switch]$RequireClean
 )
@@ -86,6 +88,12 @@ try {
   Invoke-ReleaseStep 'Web production build' { pnpm --filter @cineweave/web build }
   Invoke-ReleaseStep 'Compose validation' { docker compose -f compose.yml config --quiet }
 
+  if (-not $SkipCommerceBrowserE2E) {
+    Invoke-ReleaseStep 'Commerce browser E2E' {
+      pwsh -NoProfile -File scripts/test-commerce-e2e.ps1 -SkipBuild
+    }
+  }
+
   if (-not $SkipMigrationIntegration) {
     Invoke-ReleaseStep 'Isolated migration roundtrip and baseline equivalence' {
       pwsh -NoProfile -File scripts/test-migrations.ps1
@@ -94,6 +102,11 @@ try {
   if ($CheckProviderDrain) {
     Invoke-ReleaseStep 'Provider runtime drain check' {
       pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode DrainCheck
+    }
+  }
+  if ($RunCommerceRealProviderSmoke) {
+    Invoke-ReleaseStep 'Commerce real-provider smoke' {
+      pwsh -NoProfile -File scripts/smoke-commerce-real-provider.ps1 -ConfirmProviderSpend
     }
   }
   if (-not $SkipImageBuild) {

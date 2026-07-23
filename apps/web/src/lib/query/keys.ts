@@ -25,6 +25,8 @@ export const qk = {
   organizations: () => ["organizations"] as const,
   systemOrganizationsRoot: () => ["system-organizations"] as const,
   systemOrganizations: (search = "", page = 1) => ["system-organizations", search, page] as const,
+  systemOrganizationMembers: (organizationId: string, search = "", status = "", page = 1) =>
+    ["system-organization-members", organizationId, search, status, page] as const,
   organizationMembers: (search = "", status = "", page = 1) => ["organization-members", search, status, page] as const,
   organizationMember: (userId: string) => ["organization-member", userId] as const,
   organizationInvitations: () => ["organization-invitations"] as const,
@@ -39,6 +41,7 @@ export const qk = {
   roleBindings: (filters?: Record<string, string>) => ["role-bindings", filters ?? {}] as const,
   permissions: () => ["permissions"] as const,
   projects: () => ["projects"] as const,
+  commerceProjectOptions: (workspaceId: string) => ["workspace", workspaceId, "commerce-project-options"] as const,
   videoProductionProfiles: () => ["video-production-profiles"] as const,
   providerAccounts: () => ["provider-accounts"] as const,
   providerCredentials: (accountId: string) => ["provider-credentials", accountId] as const,
@@ -56,6 +59,47 @@ export const qk = {
 
   // 项目域
   project: (projectId: string) => ["project", projectId] as const,
+  commerceSetupSession: (projectId: string, setupSessionId: string) => ["project", projectId, "commerce-setup", setupSessionId] as const,
+  commerceSetupRun: (projectId: string, setupRunId: string) => ["project", projectId, "commerce-setup-run", setupRunId] as const,
+  commerceProduct: (projectId: string) => ["project", projectId, "commerce-product"] as const,
+  commerceProductVersions: (projectId: string) => ["project", projectId, "commerce-product-versions"] as const,
+  commerceProductReferences: (projectId: string, status = "active") => ["project", projectId, "commerce-product-references", status] as const,
+  commerceProductReferencesRoot: (projectId: string) => ["project", projectId, "commerce-product-references"] as const,
+  commerceProductReferencePacks: (projectId: string, status = "active") => ["project", projectId, "commerce-product-reference-packs", status] as const,
+  commerceProductReferencePacksRoot: (projectId: string) => ["project", projectId, "commerce-product-reference-packs"] as const,
+  commerceProductReferencePack: (projectId: string, packId: string) => ["project", projectId, "commerce-product-reference-pack", packId] as const,
+  commerceScriptUnits: (projectId: string, status = "active", cursor = "") => ["project", projectId, "commerce-script-units", status, cursor] as const,
+  commerceScriptUnitsRoot: (projectId: string) => ["project", projectId, "commerce-script-units"] as const,
+  commerceScriptUnit: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-script-unit", scriptUnitId] as const,
+  commerceScriptVersions: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-script-versions", scriptUnitId] as const,
+  commerceScriptUnitRebuild: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-script-unit-rebuild", scriptUnitId] as const,
+  commerceLanguageResolution: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-language-resolution", scriptUnitId] as const,
+  commerceLocalizations: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-localizations", scriptUnitId] as const,
+  commerceStoryboardPlans: (projectId: string, scriptUnitId: string, status = "active") =>
+    ["project", projectId, "commerce-storyboard-plans", scriptUnitId, status] as const,
+  commerceStoryboardPlansRoot: (projectId: string, scriptUnitId: string) =>
+    ["project", projectId, "commerce-storyboard-plans", scriptUnitId] as const,
+  commerceStoryboardPlan: (projectId: string, scriptUnitId: string, planId: string) =>
+    ["project", projectId, "commerce-storyboard-plan", scriptUnitId, planId] as const,
+  commerceProductionRuns: (projectId: string, scriptUnitId = "all", runType = "all") =>
+    ["project", projectId, "commerce-production-runs", scriptUnitId, runType] as const,
+  commerceProductionRunsRoot: (projectId: string) => ["project", projectId, "commerce-production-runs"] as const,
+  commerceProductionRun: (projectId: string, runId: string) =>
+    ["project", projectId, "commerce-production-run", runId] as const,
+  commerceScriptUnitBatches: (projectId: string) => ["project", projectId, "commerce-script-unit-batches"] as const,
+  commerceScriptUnitBatch: (projectId: string, coordinatorId: string) =>
+    ["project", projectId, "commerce-script-unit-batch", coordinatorId] as const,
+  commerceProjectProductionStatus: (projectId: string) => ["project", projectId, "commerce-production-status"] as const,
+  commerceUnitProductionStatus: (projectId: string, scriptUnitId: string) =>
+    ["project", projectId, "commerce-unit-production-status", scriptUnitId] as const,
+  commerceTimelines: (projectId: string, scriptUnitId: string) =>
+    ["project", projectId, "commerce-timelines", scriptUnitId] as const,
+  commerceTimeline: (projectId: string, scriptUnitId: string, timelineId: string) =>
+    ["project", projectId, "commerce-timeline", scriptUnitId, timelineId] as const,
+  commerceFinalVideos: (projectId: string, scriptUnitId: string) =>
+    ["project", projectId, "commerce-final-videos", scriptUnitId] as const,
+  commerceFinalVideo: (projectId: string, scriptUnitId: string, finalVideoVersionId: string) =>
+    ["project", projectId, "commerce-final-video", scriptUnitId, finalVideoVersionId] as const,
   projectVideoProductionProfile: (projectId: string) => ["project", projectId, "video-production-profile"] as const,
   currentProjectVideoProductionRebuild: (projectId: string) => ["project", projectId, "video-production-rebuild", "current"] as const,
   projectVideoProductionRebuild: (projectId: string, rebuildId: string) => ["project", projectId, "video-production-rebuild", rebuildId] as const,

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -260,4 +261,54 @@ func gatewayImageReferenceSnapshots(references []GatewayImageReference) []map[st
 		})
 	}
 	return items
+}
+
+func gatewayTextRequestSnapshot(input json.RawMessage, references []GatewayImageReference) json.RawMessage {
+	if len(references) == 0 {
+		return input
+	}
+	return mustJSON(map[string]any{
+		"input":          rawJSONValue(input),
+		"referenceCount": len(references),
+		"referenceKeys":  gatewayImageReferenceKeys(references),
+		"references":     gatewayImageReferenceSnapshots(references),
+	})
+}
+
+func injectGatewayTextImageReferences(input json.RawMessage, references []openAICompatibleImageReference) (json.RawMessage, error) {
+	if len(references) == 0 {
+		return input, nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(input, &decoded); err != nil {
+		return nil, fmt.Errorf("%w: text input must be valid JSON", ErrValidation)
+	}
+	if decoded == nil {
+		decoded = map[string]any{}
+	}
+	prompt, _ := decoded["prompt"].(string)
+	content := make([]any, 0, len(references)+1)
+	if strings.TrimSpace(prompt) != "" {
+		content = append(content, map[string]any{"type": "text", "text": prompt})
+	} else {
+		content = append(content, map[string]any{"type": "text", "text": "Review the attached reference images using the supplied context."})
+	}
+	for _, reference := range references {
+		content = append(content, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url":    "data:" + reference.MimeType + ";base64," + base64.StdEncoding.EncodeToString(reference.Body),
+				"detail": "high",
+			},
+		})
+	}
+	messages, _ := decoded["messages"].([]any)
+	if len(messages) == 0 {
+		messages = []any{map[string]any{"role": "user", "content": content}}
+	} else {
+		messages = append(messages, map[string]any{"role": "user", "content": content})
+	}
+	decoded["messages"] = messages
+	delete(decoded, "prompt")
+	return json.Marshal(decoded)
 }

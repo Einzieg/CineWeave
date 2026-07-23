@@ -598,7 +598,7 @@ func (s *Server) buildAgentPlannerPrompt(r *http.Request, principal auth.Princip
 	builder.WriteString("生成分镜时直接使用 script_to_storyboard。该工作流会读取活动剧本的 script_episodes，按集串行生成并逐集写库；不要在它之前自动插入 parse_script_scenes，也不要为每集规划多个 workflow.start。需要限定集数时把 scriptEpisodeIds 放进 input。\n")
 	builder.WriteString("workflow.start 执行器会等待子工作流到达真实终态。启动新工作流后不要再规划 workflow.read_runs 或 workflow.read_nodes 轮询，因为静态计划不能把上一步返回的 workflowRunId 写入后续参数；终态后直接使用对应业务读取工具核对结果。只有用户提供了真实 workflowRunId 时才可规划 workflow.read_nodes。\n")
 	builder.WriteString("分镜生成后必须检查 productionStatus.stages.shotAssets。存在 reviewPendingCount 时，先用 shot_asset.list_requirements 检查具体需求，再用 shot_asset.review_requirements 批量校验确认；用户限定某一分集时，两个工具都必须传递该分集的 scriptEpisodeId，禁止把当前生产代的其他分集一并读取或审核。该工具只批准结构化校验通过的需求，失败项会转为 needs_edit 并返回原因。重新审核 needs_edit 时，必须把 list_requirements 返回的 requirementId 明确传给 review_requirements，不能省略 ID 后误用默认 pending 范围。若需求关联了错误资产，先用 asset.list 找到正确资产，再用 shot_asset.update_requirement 修正 assetId、requirementType 或镜头状态字段；确认该需求确实不适用时才使用 shot_asset.skip_requirement。修正后必须重新审核。存在 approvedMissingDerivedImageCount 时，再使用 batch_generate_derived_asset_images 按当前生产代并发补齐镜头衍生资产；用户限定某一分集时，该 workflow 的 input 也必须传递 scriptEpisodeId。不要为了补衍生图重新运行 script_to_storyboard。衍生资产完成后，先用 shot.generate_image_prompts 生成该分集镜头图片提示词，再用 shot.generate_missing_images 生成镜头图片；所有镜头生产工具在限定分集时都必须传 scriptEpisodeId。\n")
-	builder.WriteString("遇到 MODEL_CAPABILITY_APPROVAL_REQUIRED 时先使用 provider.list_status 读取当前绑定视频模型的 variantKey 和 capabilitySnapshotHash；推断能力使用 provider.attest_video_capability 审批，未知能力先使用 provider.verify_video_capability 完成 Adapter 契约验证。管理动作必须服从权限模式。遇到 RENDER_PLAN_REPLAN_REQUIRED 时使用 shot.generate_video_prompts 重新生成并审核目标镜头提示词，完成后再生成视频。\n")
+	builder.WriteString("视频模型能力不需要人工审批。视频路由只把目标时长和分辨率作为硬条件；任务类型、参考模式、画幅、语言和原生音频能力只用于排序、适配和结果提示。遇到 MODEL_CAPABILITY_UNAVAILABLE 时先读取项目时长、分辨率和当前业务模型绑定，再调整对应配置；不要规划 capability attestation。遇到 RENDER_PLAN_REPLAN_REQUIRED 时使用 shot.generate_video_prompts 重新生成并审核目标镜头提示词，完成后再生成视频。\n")
 	builder.WriteString("JSON 格式必须为：{\"summary\":\"中文摘要\",\"steps\":[{\"tool\":\"工具名\",\"args\":{},\"expectedResult\":\"预期结果\"}]}。\n")
 	builder.WriteString("plan_only 模式只允许产出计划，不代表会执行。权限模式由后端监督器裁决，require_approval 需要人工批准，auto_approve 自动放行写入/工作流/成本步骤，full_access 自动放行管理步骤。\n\n")
 	builder.WriteString("用户目标：\n")
@@ -819,6 +819,9 @@ func (s *Server) agentStepDryRunOutput(r *http.Request, project Project, toolNam
 	if err != nil {
 		return map[string]any{"status": "failed", "errorCode": "VALIDATION_FAILED", "errorMessage": "step input must be a JSON object"}
 	}
+	if strings.HasPrefix(toolName, "commerce.") {
+		return s.agentCommerceStepDryRunOutput(r, project, toolName, args)
+	}
 	switch toolName {
 	case agentAskUserToolName:
 		question := firstNonEmpty(agentStringArg(args, "question"), "请选择下一步。")
@@ -1028,6 +1031,11 @@ func (s *Server) superviseAgentStepState(r *http.Request, project Project, task 
 	}
 	if task.Mode != string(agent.TaskModePlanOnly) && agentGlobalKillSwitchEnabled() && !agentToolReadOnly(toolName) {
 		return fail("agent_kill_switch_enabled", "Agent 全局停止开关已开启，非只读步骤已暂停。", map[string]any{"tool": toolName})
+	}
+	if toolName == "commerce.script_unit.batch.retry_failed" {
+		if err := s.hydrateAgentCommerceBatchArgs(r.Context(), project, toolName, args); err != nil {
+			return fail("commerce_batch_state_unavailable", err.Error(), nil)
+		}
 	}
 	constraints := rawObject(task.Constraints)
 	if !agentConstraintAllowsVideo(constraints) && agentToolMayGenerateVideo(toolName, args) {
@@ -1378,7 +1386,18 @@ func agentToolReadOnly(toolName string) bool {
 		"artifact.list",
 		"artifact.preview_url",
 		"provider.list_status",
-		"shot.status":
+		"shot.status",
+		"commerce.product.get",
+		"commerce.product.version.list",
+		"commerce.product.reference.list",
+		"commerce.script_unit.list",
+		"commerce.script_unit.get",
+		"commerce.script_unit.version.list",
+		"commerce.script_unit.language.get",
+		"commerce.script_unit.localization.list",
+		"commerce.script_unit.storyboard.list",
+		"commerce.script_unit.timeline.get",
+		"commerce.script_unit.final.list":
 		return true
 	default:
 		return false
@@ -1402,8 +1421,11 @@ func agentConstraintFloat(constraints map[string]any, key string) (float64, bool
 
 func agentToolMayGenerateVideo(toolName string, args map[string]any) bool {
 	switch toolName {
-	case "shot.generate_missing_videos", "timeline.compose":
+	case "shot.generate_missing_videos", "timeline.compose", "commerce.script_unit.shot_videos.generate", "commerce.script_unit.shot_videos.retry_failed", "commerce.script_unit.final.compose", "commerce.script_unit.batch.retry_failed":
 		return true
+	case "commerce.script_unit.batch.advance":
+		stage := agentStringArg(args, "targetStage")
+		return stage == "shot_videos" || stage == "final_compose"
 	case "workflow.start":
 		switch agentStringArg(args, "workflowType") {
 		case "video_production", "script_to_video", "full_production", "compose_timeline":
@@ -1418,7 +1440,12 @@ func agentToolMayGenerateVideo(toolName string, args map[string]any) bool {
 
 func agentToolRequiresReviewGate(toolName string) bool {
 	switch toolName {
-	case "workflow.start", "shot.generate_image_prompts", "shot.generate_video_prompts", "shot.generate_missing_images", "shot.generate_missing_videos", "timeline.compose", "final_video.activate":
+	case "workflow.start", "shot.generate_image_prompts", "shot.generate_video_prompts", "shot.generate_missing_images", "shot.generate_missing_videos", "timeline.compose", "final_video.activate",
+		"commerce.script_unit.storyboard.generate", "commerce.script_unit.reference_images.generate", "commerce.script_unit.reference_images.retry_failed",
+		"commerce.script_unit.video_prompts.generate", "commerce.script_unit.video_prompts.retry_failed",
+		"commerce.script_unit.shot_videos.generate", "commerce.script_unit.shot_videos.retry_failed",
+		"commerce.script_unit.final.compose", "commerce.script_unit.final.activate",
+		"commerce.script_unit.batch.advance", "commerce.script_unit.batch.retry_failed":
 		return true
 	default:
 		return false
@@ -1436,6 +1463,15 @@ func agentToolMaySpendProvider(toolName string, args map[string]any) bool {
 		return true
 	case "workflow.start", "asset.batch_generate_prompts", "asset.batch_generate_images", "shot.generate_image_prompts", "shot.generate_video_prompts", "shot.generate_missing_images", "shot.generate_missing_videos", "timeline.compose":
 		return true
+	case "commerce.script_unit.storyboard.generate",
+		"commerce.script_unit.reference_images.generate", "commerce.script_unit.reference_images.retry_failed",
+		"commerce.script_unit.video_prompts.generate", "commerce.script_unit.video_prompts.retry_failed",
+		"commerce.script_unit.shot_videos.generate", "commerce.script_unit.shot_videos.retry_failed":
+		return true
+	case "commerce.script_unit.batch.advance":
+		return agentStringArg(args, "targetStage") != "final_compose"
+	case "commerce.script_unit.batch.retry_failed":
+		return true
 	default:
 		return false
 	}
@@ -1448,7 +1484,14 @@ func agentEstimatedProviderCostCents(toolName string, args map[string]any, targe
 		}
 	}
 	if targetCount < 1 {
-		targetCount = 1
+		if strings.HasPrefix(toolName, "commerce.script_unit.batch.") {
+			targetCount = agentCommerceBatchTargetCount(args)
+		} else {
+			targetCount = len(agentReferenceStringSliceArg(args, "shotIds"))
+		}
+		if targetCount < 1 {
+			targetCount = 1
+		}
 	}
 	switch toolName {
 	case "asset.batch_generate_prompts":
@@ -1476,6 +1519,34 @@ func agentEstimatedProviderCostCents(toolName string, args map[string]any, targe
 		}
 	case "timeline.compose":
 		return 15
+	case "commerce.script_unit.storyboard.generate":
+		return 10
+	case "commerce.script_unit.reference_images.generate":
+		if agentStringArg(args, "operation") == "generate_prompts" {
+			return float64(targetCount) * 2
+		}
+		return float64(targetCount) * 10
+	case "commerce.script_unit.reference_images.retry_failed":
+		return float64(targetCount) * 10
+	case "commerce.script_unit.video_prompts.generate", "commerce.script_unit.video_prompts.retry_failed":
+		return float64(targetCount) * 2
+	case "commerce.script_unit.shot_videos.generate", "commerce.script_unit.shot_videos.retry_failed":
+		return float64(targetCount) * 50
+	case "commerce.script_unit.batch.advance":
+		switch agentStringArg(args, "targetStage") {
+		case "storyboard":
+			return float64(targetCount) * 10
+		case "reference_images":
+			return float64(targetCount) * 10
+		case "video_prompts":
+			return float64(targetCount) * 2
+		case "shot_videos":
+			return float64(targetCount) * 50
+		default:
+			return 0
+		}
+	case "commerce.script_unit.batch.retry_failed":
+		return float64(targetCount) * 50
 	case "provider.test_model", "prompt.render_test":
 		return 1
 	default:

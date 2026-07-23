@@ -176,6 +176,18 @@ func (c *Client) PutObject(ctx context.Context, key string, body []byte, content
 	}, nil
 }
 
+func (c *Client) DeleteObject(ctx context.Context, key string) error {
+	normalizedKey, err := validateObjectKey(key)
+	if err != nil {
+		return err
+	}
+	_, err = c.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(normalizedKey),
+	})
+	return err
+}
+
 func (c *Client) PutFile(ctx context.Context, key, filePath, contentType string) (PutResult, error) {
 	normalizedKey, err := validateObjectKey(key)
 	if err != nil {

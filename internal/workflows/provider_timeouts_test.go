@@ -7,9 +7,46 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Einzieg/cineweave/internal/provider"
 )
+
+func TestProviderTextGatewayOptionsRetryOnlyAfterFirstActivityAttempt(t *testing.T) {
+	initial := provider.GatewayTextOptions{IdempotencyKey: "request-1"}
+	first := providerTextGatewayOptionsForAttempt(initial, 1)
+	if first.TimeoutMS != providerTextGatewayTimeoutMS || first.Retry {
+		t.Fatalf("first attempt options = %+v", first)
+	}
+	if first.IdempotencyKey != initial.IdempotencyKey {
+		t.Fatalf("first attempt lost idempotency key: %+v", first)
+	}
+
+	retry := providerTextGatewayOptionsForAttempt(first, 2)
+	if !retry.Retry || retry.TimeoutMS != providerTextGatewayTimeoutMS || retry.IdempotencyKey != initial.IdempotencyKey {
+		t.Fatalf("retry attempt options = %+v", retry)
+	}
+}
+
+func TestCommerceAgentActivityOptionsRetryTransientFailures(t *testing.T) {
+	options := commerceAgentActivityOptions()
+	if options.RetryPolicy == nil || options.RetryPolicy.MaximumAttempts != 3 {
+		t.Fatalf("commerce agent retry policy = %#v, want 3 attempts", options.RetryPolicy)
+	}
+}
+
+func TestCommerceVideoPromptItemActivityOptionsCoverSupervisedRounds(t *testing.T) {
+	options := commerceVideoPromptItemActivityOptions()
+	if options.StartToCloseTimeout != 75*time.Minute {
+		t.Fatalf("commerce video prompt timeout = %s, want 75m", options.StartToCloseTimeout)
+	}
+	if options.HeartbeatTimeout != providerTextHeartbeatTimeout {
+		t.Fatalf("commerce video prompt heartbeat = %s, want %s", options.HeartbeatTimeout, providerTextHeartbeatTimeout)
+	}
+	if options.RetryPolicy == nil || options.RetryPolicy.MaximumAttempts != 1 {
+		t.Fatalf("commerce video prompt retry policy = %#v, want one explicit attempt", options.RetryPolicy)
+	}
+}
 
 func TestGenerateProviderTextDoesNotFallbackAfterFirstDelta(t *testing.T) {
 	var generateCalls atomic.Int64

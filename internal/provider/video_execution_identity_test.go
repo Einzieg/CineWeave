@@ -51,3 +51,35 @@ func TestValidateVideoCreateProductionContractRejectsRenderPlanIdentityMismatch(
 		})
 	}
 }
+
+func TestValidateVideoCreateProductionContractAcceptsEmptyCommerceTransition(t *testing.T) {
+	prompt := "approved prompt"
+	promptHash := videoPromptTextHash(prompt)
+	request := GatewayVideoCreateTaskRequest{
+		OrganizationID: "organization", ProjectID: "project",
+		ProductionGenerationID: "generation", VideoProductionBindingID: "binding",
+		VideoProductionBindingRevision: 3,
+		ProductionProfileVersionID:     "profile", ProductionProfileSnapshotHash: "profile-hash",
+		InputContractKey: "first_frame", InputContractHash: "input-hash", InputContractVersion: "v1",
+		ShotStateRevision: 2, ShotStateHash: "shot-hash",
+		ReferencePackID: "reference-pack", ReferencePackHash: "reference-hash",
+		PromptContextPlanID: "context-plan", PromptContextPlanHash: "context-hash",
+		VideoPromptPlanID: "prompt-plan", PromptHash: promptHash,
+	}
+	segment := videoExecutionSegment{
+		OrganizationID: "organization", ProjectID: "project",
+		ProductionGenerationID: "generation", VideoProductionBindingID: "binding",
+		VideoProductionBindingRevision: 3,
+		ProductionProfileVersionID:     "profile", ProductionProfileSnapshotHash: "profile-hash",
+		InputContractKey: "first_frame", InputContractHash: "input-hash", InputContractVersion: "v1",
+		ShotStateRevision: 2, ShotStateHash: "shot-hash",
+		ReferencePackID: "reference-pack", ReferencePackHash: "reference-hash",
+		PromptContextPlanID: "context-plan", PromptContextPlanHash: "context-hash",
+		VideoPromptPlanID: "prompt-plan", PromptHash: promptHash, Prompt: prompt,
+		InputContract: VideoInputContract{ContractKey: "first_frame", Slots: []VideoInputSlot{}},
+	}
+
+	if err := validateVideoCreateProductionContract(request, gatewayVideoInput{Prompt: prompt}, segment); err != nil {
+		t.Fatalf("validateVideoCreateProductionContract: %v", err)
+	}
+}

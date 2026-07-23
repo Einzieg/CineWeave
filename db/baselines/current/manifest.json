@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
-  "headVersion": 44,
-  "migrationCount": 44,
-  "bundleSha256": "8ac09ab2e8ea0b87726f7efe586b6da8c177a66e93489247f9504b47eda01301",
+  "headVersion": 58,
+  "migrationCount": 58,
+  "bundleSha256": "247c8c6ef71eec69d30febc0637eb916d0e992cf00a04e5af940e81437fb2a69",
   "migrations": [
     {
       "version": 1,
@@ -223,6 +223,76 @@
       "version": 44,
       "name": "000044_provider_model_attestation_history.sql",
       "sha256": "e5ec1b3a48855f238063806946016d19e591e82720b936f7b58ba98a30234650"
+    },
+    {
+      "version": 45,
+      "name": "000045_commerce_project_identity.sql",
+      "sha256": "207e9736cb90afaf6f6ce1c77862c293be81159f4c4c27a2824796adf4bfd467"
+    },
+    {
+      "version": 46,
+      "name": "000046_commerce_product_and_script.sql",
+      "sha256": "a48172d5c9837a2eeae3a59df908d8de55052b70aaed6a880a77b5b30a694b5f"
+    },
+    {
+      "version": 47,
+      "name": "000047_commerce_storyboard_contracts.sql",
+      "sha256": "2f46749f6c25d3578318cc367a73b305b680b219f7ef19613a1824ab6c4075fc"
+    },
+    {
+      "version": 48,
+      "name": "000048_commerce_production_checkpoints.sql",
+      "sha256": "190b2d5ab1d176d93e7f82db726d30f44c6a23dea0dbb7bcefa3d7a8988fb073"
+    },
+    {
+      "version": 49,
+      "name": "000049_commerce_prompt_registry.sql",
+      "sha256": "1e5add169a419f5a31fd3e94b3c028e42b1409d26618d3e083d24c415cc29d16"
+    },
+    {
+      "version": 50,
+      "name": "000050_commerce_workflow_v1_seed.sql",
+      "sha256": "3841fcb05952cb9a984c174252800933930f8b163ffb139145aab4087fd76d87"
+    },
+    {
+      "version": 51,
+      "name": "000051_commerce_setup_runs.sql",
+      "sha256": "42a02e6d838d40038673e61a7be8a48b76649b727e6aa61aabae89229440c8ee"
+    },
+    {
+      "version": 52,
+      "name": "000052_commerce_setup_retry_attempts.sql",
+      "sha256": "42fd603b9b6d2b91f0642bd50ee28c46bbdd3566904159da16a7a0ae2460f98a"
+    },
+    {
+      "version": 53,
+      "name": "000053_commerce_storyboard_edit_revisions.sql",
+      "sha256": "6fdaecd64e5d9c7e478c2099061329267741465d980f1a3a6502dcc4cc77c89e"
+    },
+    {
+      "version": 54,
+      "name": "000054_commerce_reference_image_runtime.sql",
+      "sha256": "94d5ef79529d144b8e7d5c0e1809f133f532c77fa95a09aa3fd2e5b5c5e241a7"
+    },
+    {
+      "version": 55,
+      "name": "000055_commerce_video_runtime.sql",
+      "sha256": "430d8547524523b10d4f6aa24945070f0471f3d4c23d407ef6ff8f0cadee785d"
+    },
+    {
+      "version": 56,
+      "name": "000056_commerce_timeline_runtime.sql",
+      "sha256": "f48169de0b0364f56cd81766ee3dee14f803e5df6252fec038b02ee63d1e4d95"
+    },
+    {
+      "version": 57,
+      "name": "000057_commerce_script_contracts_and_unit_rebuilds.sql",
+      "sha256": "74107fd73e0f8bf60a9501d4700bff88e7e579d0c3495dcacf2c1134ab1e5290"
+    },
+    {
+      "version": 58,
+      "name": "000058_commerce_timeline_identity_repair.sql",
+      "sha256": "5577d7306bcf70c6bf840c4c10fe601eeac8b528a076a153ab0865120a75fdbe"
     }
   ]
 }

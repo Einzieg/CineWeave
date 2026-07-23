@@ -40,6 +40,12 @@ export function statusLabel(status?: string) {
       return "结果未知";
     case "queued":
       return "排队中";
+    case "uploading":
+      return "上传中";
+    case "waiting_user_confirmation":
+      return "等待确认";
+    case "abandoned":
+      return "已放弃";
     case "cancelling":
       return "取消中";
     case "draft":
@@ -97,6 +103,7 @@ export function statusLabel(status?: string) {
     case "partial":
       return "部分完成";
     case "partial_succeeded":
+    case "partially_succeeded":
       return "部分完成";
     case "failed_retryable":
       return "失败，可重试";
@@ -108,6 +115,8 @@ export function statusLabel(status?: string) {
       return "未就绪";
     case "reconfiguration_required":
       return "需要重新配置";
+    case "replan_required":
+      return "需要重新规划";
     case "preview_only":
       return "仅可预览";
     case "not_requested":
@@ -182,6 +191,23 @@ export function sourceTypeLabel(value?: string) {
       return "创意文案";
     default:
       return value || "未知";
+  }
+}
+
+export function commerceLanguageModeLabel(value?: string) {
+  switch (value) {
+    case "auto": return "自动判断";
+    case "explicit": return "用户指定";
+    default: return value || "未设置";
+  }
+}
+
+export function commerceDerivationKindLabel(value?: string) {
+  switch (value) {
+    case "copy": return "复制脚本";
+    case "language_variant": return "语言版本";
+    case "agent_idea": return "助手创意";
+    default: return value || "原始脚本";
   }
 }
 
@@ -585,6 +611,18 @@ export function productionStageLabel(value?: string) {
 
 export function projectTypeLabel(value?: string | null) {
   switch (value) {
+    case "short_film":
+      return "短片";
+    case "comic_drama":
+      return "漫剧";
+    case "brand_ad":
+      return "品牌广告";
+    case "character_ip":
+      return "角色 IP";
+    case "other":
+      return "其他";
+    case "commerce_video":
+      return "带货视频";
     case "silent_video":
       return "无对白视频";
     case "short_video":
@@ -604,6 +642,66 @@ export function contentTypeLabel(value?: string | null) {
       return "剧本";
     case "original":
       return "原创";
+    case "storyboard_first":
+      return "分镜先行";
+    default:
+      return value || "未设置";
+  }
+}
+
+export function commerceSalesBeatLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    hook: "开场钩子",
+    problem: "需求痛点",
+    pain_point: "需求痛点",
+    benefit: "核心卖点",
+    feature: "核心卖点",
+    demonstration: "使用演示",
+    proof: "效果证明",
+    cta: "购买引导",
+  };
+  return labels[value || ""] || value || "销售镜头";
+}
+
+export function localeLabel(
+  value?: string | null,
+  available: Array<{ locale: string; label: string }> = [],
+) {
+  const normalized = (value || "").trim();
+  if (!normalized) return "未确认";
+  if (normalized.toLowerCase() === "auto") return "自动判断";
+  const configured = available.find((item) => item.locale.toLowerCase() === normalized.toLowerCase());
+  if (configured?.label) return configured.label;
+  const labels: Record<string, string> = {
+    "zh-cn": "简体中文",
+    "zh-tw": "繁体中文",
+    "en-us": "英语（美国）",
+    "ja-jp": "日语",
+    "ko-kr": "韩语",
+    "es-es": "西班牙语",
+    "fr-fr": "法语",
+    "de-de": "德语",
+  };
+  return labels[normalized.toLowerCase()] || normalized;
+}
+
+export function commerceReferenceRoleLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    primary: "主商品图",
+    detail: "产品细节",
+    logo: "品牌标识",
+    usage: "使用场景",
+    context: "环境参考",
+  };
+  return labels[value || ""] || value || "商品参考";
+}
+
+export function projectKindLabel(value?: string | null) {
+  switch (value) {
+    case "narrative":
+      return "叙事项目";
+    case "commerce_video":
+      return "带货视频";
     default:
       return value || "未设置";
   }
@@ -714,6 +812,8 @@ export function auditActionLabel(value?: string) {
     "organization.member.password_reset_completed": "完成成员密码重置",
     "organization.updated": "更新组织资料",
     "system.organization.created": "系统管理员创建组织",
+    "system.organization.member.created": "系统管理员直接新增成员",
+    "system.organization.member.updated": "系统管理员编辑成员",
     "team.created": "创建团队",
     "team.updated": "更新团队",
     "team.disabled": "停用团队",

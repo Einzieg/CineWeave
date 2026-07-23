@@ -414,6 +414,9 @@ func (s *Server) requireProjectAccess(w http.ResponseWriter, r *http.Request, pr
 	if !s.authorize(w, r, principal, permission, authz.Resource{ProjectID: project.ID}) {
 		return Project{}, false
 	}
+	if !s.enforceProjectRouteKind(w, r, project) {
+		return Project{}, false
+	}
 	return project, true
 }
 

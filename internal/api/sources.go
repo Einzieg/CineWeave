@@ -221,6 +221,9 @@ func (s *Server) createProjectSource(w http.ResponseWriter, r *http.Request, pri
 	if !s.authorizeAny(w, r, principal, []string{authz.PermissionSourceWrite, authz.PermissionProjectWrite}, authz.Resource{ProjectID: project.ID}) {
 		return
 	}
+	if !s.enforceProjectRouteKind(w, r, project) {
+		return
+	}
 	var req importProjectSourceRequest
 	if !decode(w, r, &req) {
 		return
@@ -241,6 +244,9 @@ func (s *Server) importProjectSourceFile(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if !s.authorizeAny(w, r, principal, []string{authz.PermissionSourceWrite, authz.PermissionProjectWrite}, authz.Resource{ProjectID: project.ID}) {
+		return
+	}
+	if !s.enforceProjectRouteKind(w, r, project) {
 		return
 	}
 	if err := r.ParseMultipartForm(16 << 20); err != nil {

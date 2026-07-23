@@ -225,7 +225,6 @@ func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *Gatewa
 		return nil, err
 	}
 	currentHash := ""
-	var currentVariant *VideoGenerationVariant
 	for _, variant := range variants {
 		if variant.VariantKey != segment.VariantKey {
 			continue
@@ -235,19 +234,10 @@ func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *Gatewa
 		if err != nil {
 			return nil, err
 		}
-		variantCopy := variant
-		currentVariant = &variantCopy
 		break
 	}
 	if currentHash == "" || currentHash != segment.CapabilitySnapshotHash {
 		return nil, &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "video model capabilities changed after the execution plan was created", Retryable: false}}
-	}
-	attestationID, err := s.resolveVideoCapabilityAttestation(ctx, req.OrganizationID, segment.ProviderModelID, *currentVariant, currentHash)
-	if err != nil {
-		return nil, err
-	}
-	if attestationID == "" || attestationID != segment.CapabilityAttestationID {
-		return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelCapabilityApprovalRequired, Message: "视频模型能力审批已变化，请重新规划视频", Retryable: false}}
 	}
 	account, err := s.GetAccount(ctx, req.OrganizationID, model.ProviderAccountID)
 	if err != nil {
@@ -351,7 +341,6 @@ func validateVideoCreateProductionContract(req GatewayVideoCreateTaskRequest, in
 		{"inputContractHash", cleanVideoContractHash(req.InputContractHash), cleanVideoContractHash(segment.InputContractHash)},
 		{"inputContractVersion", req.InputContractVersion, segment.InputContractVersion},
 		{"shotStateHash", cleanVideoContractHash(req.ShotStateHash), cleanVideoContractHash(segment.ShotStateHash)},
-		{"transitionHash", cleanVideoContractHash(req.TransitionHash), cleanVideoContractHash(segment.TransitionHash)},
 		{"referencePackId", req.ReferencePackID, segment.ReferencePackID},
 		{"referencePackHash", cleanVideoContractHash(req.ReferencePackHash), cleanVideoContractHash(segment.ReferencePackHash)},
 		{"promptContextPlanId", req.PromptContextPlanID, segment.PromptContextPlanID},
@@ -362,6 +351,11 @@ func validateVideoCreateProductionContract(req GatewayVideoCreateTaskRequest, in
 		if strings.TrimSpace(check.actual) == "" || !strings.EqualFold(strings.TrimSpace(check.actual), strings.TrimSpace(check.expected)) {
 			return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "视频创建契约字段不一致：" + check.name, Retryable: false}}
 		}
+	}
+	actualTransition := cleanVideoContractHash(req.TransitionHash)
+	expectedTransition := cleanVideoContractHash(segment.TransitionHash)
+	if (expectedTransition != "" && actualTransition != expectedTransition) || (expectedTransition == "" && actualTransition != "") {
+		return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "视频创建契约字段不一致：transitionHash", Retryable: false}}
 	}
 	if req.ShotStateRevision != segment.ShotStateRevision {
 		return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "镜头状态版本已变化，请重新规划视频", Retryable: false}}

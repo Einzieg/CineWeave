@@ -65,7 +65,30 @@ func ComposeClipsWithStore(ctx context.Context, req ComposeRequest, objectStore 
 		); err != nil {
 			return ComposeResult{}, fmt.Errorf("normalize clip %d: %w", index, err)
 		}
+		if len(clip.TextOverlays) > 0 {
+			overlaidPath := filepath.Join(tempDir, fmt.Sprintf("overlaid-%03d.mp4", index))
+			if err := BurnTextOverlays(ctx, normalizedPath, overlaidPath, width, height, clip.TextOverlays); err != nil {
+				return ComposeResult{}, fmt.Errorf("render clip %d overlays: %w", index, err)
+			}
+			normalizedPath = overlaidPath
+		}
 		normalizedPaths = append(normalizedPaths, normalizedPath)
+	}
+	if req.EndCard != nil && strings.TrimSpace(req.EndCard.Text) != "" && len(normalizedPaths) > 0 {
+		endCardPath := filepath.Join(tempDir, "cta-end-card.mp4")
+		if err := CreateEndCardFromVideo(
+			ctx,
+			normalizedPaths[len(normalizedPaths)-1],
+			endCardPath,
+			width,
+			height,
+			req.FPSNumerator,
+			req.FPSDenominator,
+			*req.EndCard,
+		); err != nil {
+			return ComposeResult{}, fmt.Errorf("render CTA end card: %w", err)
+		}
+		normalizedPaths = append(normalizedPaths, endCardPath)
 	}
 
 	outputPath := filepath.Join(tempDir, "final.mp4")

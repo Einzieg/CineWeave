@@ -37,7 +37,7 @@ type matchedVideoPlanCandidate struct {
 	ContinuationInputContract *VideoInputContract
 	CapabilityAttestationID   string
 	SnapshotHash              string
-	AudioScore                int
+	SelectionScore            int
 	NativeAudioStatus         string
 	ProductionReadiness       string
 	Segments                  []GatewayVideoPlanSegment
@@ -88,7 +88,6 @@ func (s *Service) PlanVideo(ctx context.Context, req GatewayVideoPlanRequest) (G
 	}
 	matches := make([]matchedVideoPlanCandidate, 0)
 	var storyboardReplanErr error
-	var capabilityApprovalErr error
 	var adapterMappingErr error
 	for _, candidate := range candidates {
 		variants, err := videoGenerationVariants(candidate.Model.Capabilities, candidate.Model)
@@ -96,7 +95,7 @@ func (s *Service) PlanVideo(ctx context.Context, req GatewayVideoPlanRequest) (G
 			return GatewayVideoPlanResponse{}, err
 		}
 		for _, variant := range variants {
-			matched, audioScore, audioStatus, readiness := matchVideoGenerationVariant(variant, matchReq)
+			matched, selectionScore, audioStatus, readiness := matchVideoGenerationVariant(variant, matchReq)
 			if !matched {
 				continue
 			}
@@ -157,19 +156,10 @@ func (s *Service) PlanVideo(ctx context.Context, req GatewayVideoPlanRequest) (G
 					segments[index].InputContractHash = continuationContractHash
 				}
 			}
-			attestationID, err := s.resolveVideoCapabilityAttestation(ctx, req.OrganizationID, candidate.Model.ID, variant, hash)
-			if err != nil {
-				var standard *StandardErrorError
-				if errors.As(err, &standard) && standard.Standard.Code == CodeModelCapabilityApprovalRequired {
-					capabilityApprovalErr = err
-					continue
-				}
-				return GatewayVideoPlanResponse{}, err
-			}
 			matches = append(matches, matchedVideoPlanCandidate{
-				Candidate: candidate, Variant: variant, SnapshotHash: hash, AudioScore: audioScore,
-				ContinuationInputContract: continuationContract, CapabilityAttestationID: attestationID,
-				NativeAudioStatus: audioStatus, ProductionReadiness: readiness, Segments: segments,
+				Candidate: candidate, Variant: variant, SnapshotHash: hash, SelectionScore: selectionScore,
+				ContinuationInputContract: continuationContract,
+				NativeAudioStatus:         audioStatus, ProductionReadiness: readiness, Segments: segments,
 			})
 		}
 	}
@@ -177,19 +167,16 @@ func (s *Service) PlanVideo(ctx context.Context, req GatewayVideoPlanRequest) (G
 		if storyboardReplanErr != nil {
 			return GatewayVideoPlanResponse{}, storyboardReplanErr
 		}
-		if capabilityApprovalErr != nil {
-			return GatewayVideoPlanResponse{}, capabilityApprovalErr
-		}
 		if adapterMappingErr != nil {
 			return GatewayVideoPlanResponse{}, adapterMappingErr
 		}
 		return GatewayVideoPlanResponse{}, &StandardErrorError{Standard: StandardError{
-			Code: CodeModelCapabilityUnavailable, Message: "no video model variant satisfies the requested duration, references, resolution, language, and audio requirements", Retryable: false,
+			Code: CodeModelCapabilityUnavailable, Message: "没有视频模型能够覆盖目标时长和分辨率", Retryable: false,
 		}}
 	}
 	selected := matches[0]
 	for _, candidate := range matches[1:] {
-		if candidate.AudioScore > selected.AudioScore || (candidate.AudioScore == selected.AudioScore && candidate.Candidate.RoutingIndex < selected.Candidate.RoutingIndex) {
+		if candidate.SelectionScore > selected.SelectionScore || (candidate.SelectionScore == selected.SelectionScore && candidate.Candidate.RoutingIndex < selected.Candidate.RoutingIndex) {
 			selected = candidate
 		}
 	}
@@ -485,7 +472,13 @@ func (s *Service) persistVideoRenderPlan(ctx context.Context, req GatewayVideoPl
 			dialogue_cues, native_audio_required, fallback_candidates, plan_key,
 			target_duration_ticks, timeline_timebase, fps_numerator, fps_denominator,
 			task_type, reference_mode, aspect_ratio, resolution,
-			audio_strategy, audio_requirement, native_audio_status, production_readiness, expires_at, metadata
+			audio_strategy, audio_requirement, native_audio_status, production_readiness,
+			commerce_script_unit_id, commerce_script_unit_generation_id,
+			commerce_product_id, product_version_id, localization_id,
+			product_reference_pack_id, commerce_workflow_binding_id,
+			localized_contract_hash, target_language, verbatim_voiceover_hash,
+			timing_policy_version, language_capability_snapshot_hash,
+			expires_at, metadata
 		)
 		VALUES (
 			@organization_id, @project_id, NULLIF(@storyboard_plan_id, '')::uuid, @storyboard_shot_id,
@@ -504,7 +497,20 @@ func (s *Service) persistVideoRenderPlan(ctx context.Context, req GatewayVideoPl
 			@dialogue_cues::jsonb, @native_audio_required, @fallback_candidates::jsonb, @plan_key,
 			@target_duration_ticks, @timeline_timebase, @fps_numerator, @fps_denominator,
 			@task_type, @reference_mode, @aspect_ratio, @resolution,
-			@audio_strategy, @audio_requirement, @native_audio_status, @production_readiness, @expires_at,
+			@audio_strategy, @audio_requirement, @native_audio_status, @production_readiness,
+			NULLIF(@commerce_script_unit_id, '')::uuid,
+			NULLIF(@commerce_script_unit_generation_id, '')::uuid,
+			NULLIF(@commerce_product_id, '')::uuid,
+			NULLIF(@product_version_id, '')::uuid,
+			NULLIF(@localization_id, '')::uuid,
+			NULLIF(@product_reference_pack_id, '')::uuid,
+			NULLIF(@commerce_workflow_binding_id, '')::uuid,
+			NULLIF(@localized_contract_hash, ''),
+			NULLIF(@target_language, ''),
+			NULLIF(@verbatim_voiceover_hash, ''),
+			NULLIF(@timing_policy_version, ''),
+			NULLIF(@language_capability_snapshot_hash, ''),
+			@expires_at,
 			@metadata::jsonb
 		)
 		RETURNING id::text
@@ -538,7 +544,19 @@ func (s *Service) persistVideoRenderPlan(ctx context.Context, req GatewayVideoPl
 		"task_type": req.TaskType, "reference_mode": req.ReferenceMode, "aspect_ratio": req.AspectRatio,
 		"resolution": req.Resolution, "audio_strategy": req.AudioStrategy, "audio_requirement": req.AudioRequirement,
 		"native_audio_status": selected.NativeAudioStatus, "production_readiness": selected.ProductionReadiness,
-		"expires_at": expiresAt, "metadata": mustJSON(map[string]any{
+		"commerce_script_unit_id":            contract.CommerceScriptUnitID,
+		"commerce_script_unit_generation_id": contract.CommerceScriptUnitGenerationID,
+		"commerce_product_id":                contract.CommerceProductID,
+		"product_version_id":                 contract.ProductVersionID,
+		"localization_id":                    contract.LocalizationID,
+		"product_reference_pack_id":          contract.ProductReferencePackID,
+		"commerce_workflow_binding_id":       contract.CommerceWorkflowBindingID,
+		"localized_contract_hash":            cleanVideoContractHash(contract.LocalizedContractHash),
+		"target_language":                    contract.TargetLanguage,
+		"verbatim_voiceover_hash":            cleanVideoContractHash(contract.VerbatimVoiceoverHash),
+		"timing_policy_version":              contract.TimingPolicyVersion,
+		"language_capability_snapshot_hash":  cleanVideoContractHash(contract.LanguageCapabilitySnapshotHash),
+		"expires_at":                         expiresAt, "metadata": mustJSON(map[string]any{
 			"hasDialogue": req.HasDialogue, "dialogueLanguage": req.DialogueLanguage,
 			"promptLanguage": req.PromptLanguage, "previousExecutionPlanId": req.PreviousExecutionPlanID,
 			"excludedProviderModelIds": req.ExcludeProviderModelIDs, "inputContractVersion": contract.InputContractVersion,
@@ -738,7 +756,7 @@ func videoPlanFallbackCandidates(matches []matchedVideoPlanCandidate) json.RawMe
 		items = append(items, map[string]any{
 			"providerModelId": match.Candidate.Model.ID, "providerAccountId": match.Candidate.ProviderAccountID,
 			"modelFamily": match.Variant.ModelFamily, "variantKey": match.Variant.VariantKey,
-			"capabilitySnapshotHash": match.SnapshotHash, "audioScore": match.AudioScore,
+			"capabilitySnapshotHash": match.SnapshotHash, "selectionScore": match.SelectionScore,
 			"capabilityAttestationId": match.CapabilityAttestationID,
 			"initialInputContract":    match.Variant.InputContract.ContractKey,
 			"continuationInputContract": func() string {

@@ -10,7 +10,9 @@ import {
   FileText,
   Film,
   PlaySquare,
+  ShoppingBag,
 } from "lucide-react";
+import type { ProjectKind } from "./types";
 
 export const globalNavItems = [
   { label: "项目", href: "/projects", icon: FolderKanban, section: "projects", systemOnly: false },
@@ -21,7 +23,7 @@ export const globalNavItems = [
   { label: "设置", href: "/settings", icon: Settings2, section: "settings", systemOnly: false },
 ] as const;
 
-export const projectNavItems = [
+export const narrativeProjectNavItems = [
   { label: "项目概览", segment: "", icon: FolderKanban },
   { label: "内容", segment: "content", icon: FileText },
   { label: "剧本", segment: "scripts", icon: FileCode2 },
@@ -32,8 +34,26 @@ export const projectNavItems = [
   { label: "项目设置", segment: "settings", icon: Settings2 },
 ] as const;
 
+export const commerceProjectNavItems = [
+  { label: "项目概览", segment: "", icon: FolderKanban },
+  { label: "商品与脚本", segment: "commerce/materials", icon: ShoppingBag },
+  { label: "分镜方案", segment: "commerce/storyboard", icon: Clapperboard },
+  { label: "视频制作", segment: "commerce/video", icon: PlaySquare },
+  { label: "成片", segment: "commerce/final", icon: Film },
+  { label: "项目设置", segment: "settings", icon: Settings2 },
+] as const;
+
+// 保留现有导出，避免叙事页面的静态引用被业务导航分流影响。
+export const projectNavItems = narrativeProjectNavItems;
+
 export type GlobalSection = "dashboard" | (typeof globalNavItems)[number]["section"];
-export type ProjectSection = (typeof projectNavItems)[number]["segment"];
+export type ProjectSection =
+  | (typeof narrativeProjectNavItems)[number]["segment"]
+  | (typeof commerceProjectNavItems)[number]["segment"];
+
+export function projectNavItemsForKind(projectKind: ProjectKind | undefined) {
+  return projectKind === "commerce_video" ? commerceProjectNavItems : narrativeProjectNavItems;
+}
 
 export function projectHref(projectId: string, segment = "") {
   return segment ? `/projects/${projectId}/${segment}` : `/projects/${projectId}`;
@@ -48,6 +68,9 @@ export function isProjectNavActive(currentSegment: string, itemSegment: ProjectS
   }
   if (currentSegment === "timeline" || currentSegment === "export") {
     return itemSegment === "final";
+  }
+  if (currentSegment === "commerce/final") {
+    return itemSegment === "commerce/final";
   }
   return false;
 }
@@ -104,6 +127,32 @@ export function workflowLabel(value: string) {
       return "时间线合成成片";
     case "export_project":
       return "项目导出";
+    case "commerce_project_setup":
+      return "初始化带货项目";
+    case "commerce_script_unit_preparation":
+      return "准备广告脚本";
+    case "commerce_script_organization":
+      return "整理广告脚本";
+    case "commerce_storyboard_planning":
+      return "生成带货分镜";
+    case "commerce_reference_image_prompts":
+      return "生成商品分镜提示词";
+    case "commerce_reference_images":
+      return "生成商品分镜参考图";
+    case "commerce_video_prompts":
+      return "生成带货视频提示词";
+    case "commerce_shot_videos":
+      return "生成带货镜头视频";
+    case "commerce_final_compose":
+      return "合成带货成片";
+    case "commerce_script_unit_batch_coordinator":
+      return "批量处理广告脚本";
+    case "commerce_reference_image_batch":
+      return "批量生成商品分镜参考图";
+    case "commerce_video_prompt_batch":
+      return "批量生成带货视频提示词";
+    case "commerce_shot_video_batch":
+      return "批量生成带货镜头视频";
     default:
       return value;
   }

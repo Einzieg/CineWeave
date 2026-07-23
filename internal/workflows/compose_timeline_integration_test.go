@@ -35,7 +35,12 @@ func TestComposeTimelineClipsSkipsDisabledAndCarriesTrim(t *testing.T) {
 	}
 
 	activities := NewActivities(pool, nil, nil)
-	clips, err := activities.composeTimelineClips(ctx, timelineID)
+	clips, err := activities.composeTimelineClips(ctx, ComposeFinalVideoInput{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		WorkflowRunID:  workflowRunID,
+		TimelineID:     timelineID,
+	})
 	if err != nil {
 		t.Fatalf("composeTimelineClips: %v", err)
 	}

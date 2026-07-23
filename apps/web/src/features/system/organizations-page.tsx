@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, ChevronLeft, ChevronRight, Loader2, Plus, Search, ShieldAlert } from "lucide-react";
+import { Building2, ChevronLeft, ChevronRight, Loader2, Plus, Search, ShieldAlert, Users } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/layout/app-shell";
 import { ErrorPanel } from "@/components/shared/error-panel";
@@ -23,7 +23,8 @@ import { StudioApiError, studioApi } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { useStudioSession } from "@/lib/session";
-import type { CreateSystemOrganizationRequest } from "@/lib/types";
+import type { CreateSystemOrganizationRequest, SystemOrganization } from "@/lib/types";
+import { SystemOrganizationMembersDialog } from "@/features/system/organization-members-dialog";
 
 const pageSize = 25;
 
@@ -37,6 +38,7 @@ export function SystemOrganizationsPage() {
   const [name, setName] = useState("");
   const [workspaceName, setWorkspaceName] = useState("默认工作区");
   const [ownerIdentifier, setOwnerIdentifier] = useState("");
+  const [membersOrganization, setMembersOrganization] = useState<SystemOrganization | null>(null);
   const invalidateKeys = useInvalidateKeys();
 
   const organizations = useApiQuery({
@@ -198,6 +200,7 @@ export function SystemOrganizationsPage() {
                       <TableHead className="text-right">工作区</TableHead>
                       <TableHead className="text-right">项目</TableHead>
                       <TableHead className="min-w-36 text-right">创建时间</TableHead>
+                      <TableHead className="w-28 text-right">操作</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -212,6 +215,12 @@ export function SystemOrganizationsPage() {
                         <TableCell className="text-right tabular-nums">{organization.workspaceCount}</TableCell>
                         <TableCell className="text-right tabular-nums">{organization.projectCount}</TableCell>
                         <TableCell className="text-right text-xs text-muted-foreground">{formatDate(organization.createdAt)}</TableCell>
+                        <TableCell className="text-right">
+                          <Button size="sm" variant="ghost" onClick={() => setMembersOrganization(organization)}>
+                            <Users className="mr-1.5 h-3.5 w-3.5" />
+                            成员
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -251,6 +260,11 @@ export function SystemOrganizationsPage() {
           )}
         </section>
       )}
+      <SystemOrganizationMembersDialog
+        key={membersOrganization?.id ?? "no-organization"}
+        organization={membersOrganization}
+        onOpenChange={(open) => { if (!open) setMembersOrganization(null); }}
+      />
     </AppShell>
   );
 }

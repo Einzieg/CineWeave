@@ -19,8 +19,18 @@ const (
 	providerRequestPollInterval  = 2 * time.Second
 )
 
+func providerTextGatewayOptionsForAttempt(options provider.GatewayTextOptions, attempt int32) provider.GatewayTextOptions {
+	if options.TimeoutMS <= 0 {
+		options.TimeoutMS = providerTextGatewayTimeoutMS
+	}
+	if attempt > 1 {
+		options.Retry = true
+	}
+	return options
+}
+
 func providerTextGatewayOptions() provider.GatewayTextOptions {
-	return provider.GatewayTextOptions{TimeoutMS: providerTextGatewayTimeoutMS}
+	return providerTextGatewayOptionsForAttempt(provider.GatewayTextOptions{}, 1)
 }
 
 func providerTextActivityOptions() workflow.ActivityOptions {
@@ -41,6 +51,22 @@ func shotImagePromptReviewActivityOptions() workflow.ActivityOptions {
 	// Replaying the whole activity would multiply those rounds and duplicate
 	// already completed provider work; failed items are retried explicitly by
 	// the batch workflow instead.
+	if options.RetryPolicy != nil {
+		options.RetryPolicy.MaximumAttempts = 1
+	}
+	return options
+}
+
+func commerceVideoPromptItemActivityOptions() workflow.ActivityOptions {
+	options := defaultActivityOptions()
+	// One Commerce shot may consume three generate/review rounds. Each text
+	// request has its own ten-minute Gateway budget, so the enclosing supervised
+	// loop needs a larger deadline without widening unrelated activities.
+	options.StartToCloseTimeout = 75 * time.Minute
+	options.HeartbeatTimeout = providerTextHeartbeatTimeout
+	// Provider requests and node runs are persisted inside the loop. A failed
+	// item is retried through the production-run retry contract instead of
+	// replaying the entire multi-call activity.
 	if options.RetryPolicy != nil {
 		options.RetryPolicy.MaximumAttempts = 1
 	}
@@ -96,9 +122,7 @@ func (a Activities) generateProviderText(ctx context.Context, execution NodeExec
 	if !execution.valid() || strings.TrimSpace(req.NodeRunID) != execution.NodeRunID {
 		return provider.GatewayTextResponse{}, ErrWorkflowWriteFenced
 	}
-	if req.Options.TimeoutMS <= 0 {
-		req.Options = providerTextGatewayOptions()
-	}
+	req.Options = providerTextGatewayOptionsForAttempt(req.Options, currentActivityAttempt(ctx))
 	var text strings.Builder
 	receivedDelta := false
 	stopHeartbeat := startProviderTextHeartbeat(ctx, execution.NodeRunID)

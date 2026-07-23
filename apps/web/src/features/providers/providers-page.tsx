@@ -15,6 +15,8 @@ import type {
   ProviderCatalogModelTemplate,
   ProviderModel,
   ProviderModelCapability,
+  ProviderCapabilityApprovalStatus,
+  ProviderCapabilitySource,
   VideoCapabilityAttestation,
   VideoCapabilityVariantStatus,
   VideoInputContract,
@@ -158,6 +160,12 @@ type ModelForm = {
   supportsReasoningLevels: boolean;
   reasoningLevelsText: string;
   supportsMultimodalInput: boolean;
+  supportedInputLanguagesText: string;
+  supportedOutputLanguagesText: string;
+  supportedPromptLanguagesText: string;
+  supportedNativeAudioLanguagesText: string;
+  capabilitySource: ProviderCapabilitySource;
+  capabilityApprovalStatus: ProviderCapabilityApprovalStatus;
   maxInputTokens: string;
   maxOutputTokens: string;
   supportedInputTypesText: string;
@@ -2572,6 +2580,44 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
   const isAudio = modelForm.modality === "audio" || modelForm.modality === "multimodal";
   return (
     <div className="space-y-4 rounded-lg border p-4">
+      <div className="space-y-3">
+        <div className="grid gap-3 md:grid-cols-2">
+          {isText ? (
+            <>
+              <LabeledListInput label="支持的输入语言" value={modelForm.supportedInputLanguagesText} onChange={(value) => update({ supportedInputLanguagesText: value })} />
+              <LabeledListInput label="支持的输出语言" value={modelForm.supportedOutputLanguagesText} onChange={(value) => update({ supportedOutputLanguagesText: value })} />
+            </>
+          ) : null}
+          {isImage && !isVideo ? (
+            <LabeledListInput label="支持的提示词语言" value={modelForm.supportedPromptLanguagesText} onChange={(value) => update({ supportedPromptLanguagesText: value })} />
+          ) : null}
+          <LabeledSelect
+            label="能力来源"
+            value={modelForm.capabilitySource}
+            options={[
+              { value: "official", label: "官方资料" },
+              { value: "provider", label: "供应商声明" },
+              { value: "preset", label: "预设库" },
+              { value: "discovered", label: "渠道发现" },
+              { value: "inferred", label: "系统推断" },
+              { value: "manual", label: "管理员录入" },
+              { value: "unknown", label: "未知" },
+            ]}
+            onChange={(value) => update({ capabilitySource: value as ProviderCapabilitySource })}
+          />
+          <LabeledSelect
+            label="批准状态"
+            value={modelForm.capabilityApprovalStatus}
+            options={[
+              { value: "approved", label: "已批准" },
+              { value: "inferred", label: "推断待批准" },
+              { value: "rejected", label: "已拒绝" },
+              { value: "unknown", label: "未知" },
+            ]}
+            onChange={(value) => update({ capabilityApprovalStatus: value as ProviderCapabilityApprovalStatus })}
+          />
+        </div>
+      </div>
       <div className="grid gap-3 md:grid-cols-2">
         <LabeledInput label="Prompt 最大长度" value={modelForm.promptMaxLength} onChange={(value) => update({ promptMaxLength: value })} />
         <div className="space-y-1.5">
@@ -3134,6 +3180,12 @@ function defaultCapabilityFormFields(modality: string, taskTypes: string[]) {
     supportsReasoningLevels: false,
     reasoningLevelsText: "",
     supportsMultimodalInput: modality === "multimodal",
+    supportedInputLanguagesText: "",
+    supportedOutputLanguagesText: "",
+    supportedPromptLanguagesText: "",
+    supportedNativeAudioLanguagesText: "",
+    capabilitySource: "manual" as ProviderCapabilitySource,
+    capabilityApprovalStatus: "approved" as ProviderCapabilityApprovalStatus,
     maxInputTokens: "",
     maxOutputTokens: "",
     supportedInputTypesText: listText(isText && modality === "multimodal" ? ["text", "image"] : ["text"]),
@@ -3188,7 +3240,7 @@ function emptyVideoVariant(index: number, taskTypes: string[]): VideoVariantForm
     aspectRatiosText: listText(["16:9", "9:16", "1:1"]),
     frameRateMode: "unknown",
     frameRatesText: "",
-    promptLanguagesText: listText(["zh-CN", "en"]),
+    promptLanguagesText: "",
     nativeAudioSupport: "unknown",
     nativeAudioCanDisable: "unknown",
     supportsDialogue: "unknown",
@@ -3196,14 +3248,14 @@ function emptyVideoVariant(index: number, taskTypes: string[]): VideoVariantForm
     supportsAmbientSound: "unknown",
     supportsMusic: "unknown",
     supportsLipSync: "unknown",
-    dialogueLanguagesText: listText(["zh-CN"]),
+    dialogueLanguagesText: "",
     audioTrackSeparable: false,
     supportsExtension: false,
     supportsFirstFrame: true,
     supportsLastFrame: false,
     supportsVideoReference: false,
     requestModesText: listText(["async_create", "poll", "cancel"]),
-    source: "user",
+    source: "inferred",
     sourceUrl: "",
     capabilityVersion: "1",
   };
@@ -3241,6 +3293,12 @@ function capabilityFormFieldsFromValues(
     supportsReasoningLevels: booleanFromValue(xCapabilities.supportsReasoningLevels, defaults.supportsReasoningLevels),
     reasoningLevelsText: listText(arrayFromValue(xCapabilities.reasoningLevels)),
     supportsMultimodalInput: booleanFromValue(xCapabilities.supportsMultimodalInput, defaults.supportsMultimodalInput),
+    supportedInputLanguagesText: listText(arrayFromValue(xCapabilities.supportedInputLanguages)),
+    supportedOutputLanguagesText: listText(arrayFromValue(xCapabilities.supportedOutputLanguages)),
+    supportedPromptLanguagesText: listText(arrayFromValue(xCapabilities.supportedPromptLanguages)),
+    supportedNativeAudioLanguagesText: listText(arrayFromValue(xCapabilities.supportedNativeAudioLanguages)),
+    capabilitySource: capabilitySourceFromValue(xCapabilities.capabilitySource, defaults.capabilitySource),
+    capabilityApprovalStatus: capabilityApprovalStatusFromValue(xCapabilities.capabilityApprovalStatus, defaults.capabilityApprovalStatus),
     maxInputTokens: textFromValue(inputLimits.maxTokens),
     maxOutputTokens: textFromValue(outputLimits.maxTokens),
     supportedInputTypesText: listText(supportedInputTypes.length ? supportedInputTypes : splitList(defaults.supportedInputTypesText)),
@@ -3367,6 +3425,23 @@ function videoFrameRateModeFromValue(value: JsonValue | undefined): VideoVariant
   return mode === "fixed" || mode === "selectable" ? mode : "unknown";
 }
 
+function capabilitySourceFromValue(value: JsonValue | undefined, fallback: ProviderCapabilitySource): ProviderCapabilitySource {
+  const source = textFromValue(value);
+  return ["official", "provider", "preset", "discovered", "inferred", "manual", "unknown"].includes(source)
+    ? source as ProviderCapabilitySource
+    : fallback;
+}
+
+function capabilityApprovalStatusFromValue(
+  value: JsonValue | undefined,
+  fallback: ProviderCapabilityApprovalStatus,
+): ProviderCapabilityApprovalStatus {
+  const status = textFromValue(value);
+  return ["approved", "inferred", "rejected", "unknown"].includes(status)
+    ? status as ProviderCapabilityApprovalStatus
+    : fallback;
+}
+
 function capabilityTruthFromValue<T extends "unknown" | "any" = "unknown">(
   value: JsonValue | undefined,
   empty: T = "unknown" as T,
@@ -3409,6 +3484,8 @@ function modelCreateBody(model: ProviderCatalogModelTemplate | ModelDraft): Json
       qualityTiers: installBody.qualityTiers,
       providerOptionsSchema: installBody.providerOptionsSchema,
       pricingPolicy: installBody.pricingPolicy,
+      source: "source" in model && model.source === "catalog" ? "preset" : "manual",
+      approvalStatus: "approved",
     },
   };
 }
@@ -3444,6 +3521,8 @@ function modelFormFromTemplate(template: ProviderCatalogModelTemplate): ModelFor
     status: "active",
     supportsAsyncTask: readSupportsAsyncTask(template.providerOptionsSchema, taskTypes, template.modality),
     ...capabilityFields,
+    capabilitySource: "preset",
+    capabilityApprovalStatus: "approved",
     taskTypesText: taskTypes.join("\n"),
     inputLimitsText: jsonText(template.inputLimits || {}),
     outputLimitsText: jsonText(template.outputLimits || {}),
@@ -3471,6 +3550,12 @@ function modelFormFromModel(model: ProviderModel): ModelForm {
     status: model.status,
     supportsAsyncTask: readSupportsAsyncTask(capability?.providerOptionsSchema, taskTypes, model.modality),
     ...capabilityFields,
+    supportedInputLanguagesText: listText(capability?.supportedInputLanguages || splitList(capabilityFields.supportedInputLanguagesText)),
+    supportedOutputLanguagesText: listText(capability?.supportedOutputLanguages || splitList(capabilityFields.supportedOutputLanguagesText)),
+    supportedPromptLanguagesText: listText(capability?.supportedPromptLanguages || splitList(capabilityFields.supportedPromptLanguagesText)),
+    supportedNativeAudioLanguagesText: listText(capability?.supportedNativeAudioLanguages || splitList(capabilityFields.supportedNativeAudioLanguagesText)),
+    capabilitySource: capability?.source || capabilityFields.capabilitySource,
+    capabilityApprovalStatus: capability?.approvalStatus || capabilityFields.capabilityApprovalStatus,
     taskTypesText: taskTypes.join("\n"),
     inputLimitsText: jsonText(capability?.inputLimits || {}),
     outputLimitsText: jsonText(capability?.outputLimits || {}),
@@ -3529,6 +3614,10 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
   }
 
   const xCapabilities = isPlainRecord(providerOptionsSchema.xCapabilities) ? { ...providerOptionsSchema.xCapabilities } : {};
+  const supportedInputLanguages = splitList(modelForm.supportedInputLanguagesText);
+  const supportedOutputLanguages = splitList(modelForm.supportedOutputLanguagesText);
+  let supportedPromptLanguages = splitList(modelForm.supportedPromptLanguagesText);
+  let supportedNativeAudioLanguages = splitList(modelForm.supportedNativeAudioLanguagesText);
   const supportedInputTypes = splitList(modelForm.supportedInputTypesText);
   const supportedOutputTypes = splitList(modelForm.supportedOutputTypesText);
   const textInputTokens = parseOptionalNumber(modelForm.maxInputTokens, "最大输入 Token");
@@ -3596,6 +3685,10 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
     delete xCapabilities.reasoningLevels;
   }
   xCapabilities.supportsMultimodalInput = modelForm.supportsMultimodalInput;
+  xCapabilities.supportedInputLanguages = supportedInputLanguages;
+  xCapabilities.supportedOutputLanguages = supportedOutputLanguages;
+  xCapabilities.capabilitySource = modelForm.capabilitySource;
+  xCapabilities.capabilityApprovalStatus = modelForm.capabilityApprovalStatus;
 
   let qualityTiers = Array.isArray(qualityTiersFromState) ? qualityTiersFromState : [];
   if (modelForm.modality === "image" || modelForm.modality === "multimodal") {
@@ -3647,6 +3740,17 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
       return Array.isArray(when.referenceModes) ? when.referenceModes.map(String) : [];
     }));
     const continuations = videoVariants.map((variant) => variant.continuation as JsonRecord);
+    supportedPromptLanguages = uniqueStrings([
+      ...supportedPromptLanguages,
+      ...videoVariants.flatMap((variant) => arrayFromValue(variant.supportedPromptLanguages)),
+    ]);
+    supportedNativeAudioLanguages = uniqueStrings([
+      ...supportedNativeAudioLanguages,
+      ...videoVariants.flatMap((variant) => {
+        const nativeAudio = isPlainRecord(variant.nativeAudio) ? variant.nativeAudio : {};
+        return arrayFromValue(nativeAudio.supportedDialogueLanguages);
+      }),
+    ]);
     xCapabilities.videoGenerationVariants = videoVariants;
     xCapabilities.requestModes = videoRequestModes;
     xCapabilities.supportsReferenceImages = referenceModes.includes("first_frame");
@@ -3706,6 +3810,9 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
     }
   }
 
+  xCapabilities.supportedPromptLanguages = supportedPromptLanguages;
+  xCapabilities.supportedNativeAudioLanguages = supportedNativeAudioLanguages;
+
   return {
     taskTypes,
     inputLimits,
@@ -3716,6 +3823,12 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
       xCapabilities,
     },
     pricingPolicy,
+    supportedInputLanguages,
+    supportedOutputLanguages,
+    supportedPromptLanguages,
+    supportedNativeAudioLanguages,
+    source: modelForm.capabilitySource,
+    approvalStatus: modelForm.capabilityApprovalStatus,
   };
 }
 

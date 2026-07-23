@@ -11,7 +11,7 @@ func DefaultRegistry() (*Registry, error) {
 }
 
 func DefaultTools() []AgentTool {
-	return []AgentTool{
+	tools := []AgentTool{
 		draftTool("agent.ask_user", "询问用户", "当目标存在多种合理路径或缺少关键偏好时，暂停任务并向用户提出一个可选择的问题。", authz.PermissionProjectRead, objectSchemaRequired(map[string]any{
 			"question": stringSchema("需要用户回答的问题。"),
 			"options": arraySchema("建议选项，通常 2 到 4 个。", objectSchemaRequired(map[string]any{
@@ -351,6 +351,7 @@ func DefaultTools() []AgentTool {
 			"versionId": stringSchema("Prompt version ID。"),
 		}, "versionId")),
 	}
+	return append(tools, commerceDefaultTools()...)
 }
 
 func readTool(name, label, description, permission string, schema json.RawMessage) AgentTool {

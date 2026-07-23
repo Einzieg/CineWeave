@@ -146,6 +146,108 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/system/organizations/{organizationId}/members:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    get:
+      operationId: listSystemOrganizationMembers
+      description: Lists members of any organization. Requires a live system administrator account and does not require membership in the target organization.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, disabled, removed]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        "200":
+          description: Paginated organization members
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createSystemOrganizationMember
+      description: Directly creates a new account or attaches an existing active account, activates its organization membership, and grants the base organization-member role. Requires a live system administrator account.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSystemOrganizationMemberRequest"
+      responses:
+        "201":
+          description: Directly created or attached organization member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/system/organizations/{organizationId}/members/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/UserId"
+    patch:
+      operationId: updateSystemOrganizationMember
+      description: Updates a member account identity, profile, password, or active/disabled membership state. Password changes revoke every account session. System-administrator target accounts remain protected.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSystemOrganizationMemberRequest"
+      responses:
+        "200":
+          description: Updated organization member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/auth/register:
     post:
       operationId: register
@@ -867,6 +969,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkspaceEnvelope"
+  /api/workspaces/{workspaceId}/commerce/project-options:
+    get:
+      operationId: getCommerceProjectOptions
+      description: Returns the published commerce workflow template options and organization-scoped provider readiness used by project creation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Commerce project configuration options and readiness
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProjectOptionsEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/teams:
     get:
       operationId: listTeams
@@ -1337,8 +1467,11 @@ paths:
                 $ref: "#/components/schemas/ProjectListEnvelope"
     post:
       operationId: createProject
+      description: Creates a narrative project or a recoverable commerce-video draft. Idempotency-Key is required when projectKind is commerce_video.
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -1352,6 +1485,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProjectEnvelope"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}:
     get:
       operationId: getProject
@@ -1401,6 +1538,2004 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Envelope"
+  /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}:
+    get:
+      operationId: getCommerceSetupSession
+      description: Returns the recoverable setup session for a commerce-video project.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceSetupSessionId"
+      responses:
+        "200":
+          description: Commerce setup session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceSetupSessionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/complete:
+    post:
+      operationId: completeCommerceSetupSession
+      description: Starts or replays the idempotent asynchronous setup workflow for a recoverable commerce-video project draft.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceSetupSessionId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteCommerceSetupSessionRequest"
+      responses:
+        "202":
+          description: Setup workflow accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceSetupCompletionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/language-confirmation:
+    post:
+      operationId: confirmCommerceSetupLanguage
+      description: Confirms the requested target language and signals the existing asynchronous setup workflow without creating another run.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceSetupSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmCommerceSetupLanguageRequest"
+      responses:
+        "202":
+          description: Language confirmation accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceSetupLanguageConfirmationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/abandon:
+    post:
+      operationId: abandonCommerceSetupSession
+      description: Abandons an unfinished setup session and releases its pending product-image uploads.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceSetupSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AbandonCommerceSetupSessionRequest"
+      responses:
+        "200":
+          description: Abandoned setup session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceSetupSessionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product:
+    get:
+      operationId: getCommerceProduct
+      description: Returns the commerce product and its active immutable facts version.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Commerce product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createCommerceProduct
+      description: Creates the product record and its first immutable facts version.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceProductVersionMutationRequest"
+      responses:
+        "201":
+          description: Product and initial version created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductMutationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateCommerceProduct
+      description: Creates a new immutable product facts version; activation may require a confirmed product rebuild.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceProductVersionMutationRequest"
+      responses:
+        "200":
+          description: Product version created and activation decision returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductMutationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product/versions:
+    get:
+      operationId: listCommerceProductVersions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Immutable product version history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductVersionListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createCommerceProductVersion
+      description: Creates another immutable product facts version.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceProductVersionMutationRequest"
+      responses:
+        "201":
+          description: Product version created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductMutationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product/versions/{versionId}:
+    get:
+      operationId: getCommerceProductVersion
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceProductVersionId"
+      responses:
+        "200":
+          description: Immutable product version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductVersionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product/reference-packs:
+    get:
+      operationId: listCommerceProductReferencePacks
+      description: Lists immutable product/version/reference snapshots and their frozen reference items.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+            enum: [active, stale, archived, all]
+            default: active
+      responses:
+        "200":
+          description: Product reference packs with short-lived item preview URLs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductReferencePackListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product/reference-packs/{packId}:
+    get:
+      operationId: getCommerceProductReferencePack
+      description: Returns one immutable product reference pack and all frozen reference items.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceProductReferencePackId"
+      responses:
+        "200":
+          description: Product reference pack with short-lived item preview URLs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductReferencePackEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product/references:
+    get:
+      operationId: listCommerceProductReferences
+      description: Lists product reference images and short-lived signed preview URLs.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
+      responses:
+        "200":
+          description: Product reference images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductReferenceListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: completeCommerceProductReferenceUpload
+      description: Validates a previously uploaded image, deduplicates by content hash, and creates the product reference.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteCommerceProductReferenceUploadRequest"
+      responses:
+        "200":
+          description: Existing reference returned for an idempotent completion replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductReferenceCompletionEnvelope"
+        "201":
+          description: Product reference created or deduplicated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductReferenceCompletionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product/references/upload-url:
+    post:
+      operationId: createCommerceProductReferenceUploadUrl
+      description: Creates an idempotent, short-lived signed PUT URL for a JPEG, PNG, or WebP product image.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceProductReferenceUploadRequest"
+      responses:
+        "201":
+          description: Signed product-reference upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductReferenceUploadEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product/references/{referenceId}:
+    patch:
+      operationId: updateCommerceProductReference
+      description: Updates role, ordering, or primary-image selection using optimistic concurrency.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceProductReferenceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommerceProductReferenceRequest"
+      responses:
+        "200":
+          description: Updated product reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductReferenceEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: archiveCommerceProductReference
+      description: Archives an unused product reference without deleting its artifact or media file.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceProductReferenceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceExpectedRevisionRequest"
+      responses:
+        "200":
+          description: Archived product reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductReferenceEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product/rebuild-impact:
+    post:
+      operationId: getCommerceProductRebuildImpact
+      description: Plans a product-version/reference-set switch and returns a short-lived impact token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceProductRebuildImpactRequest"
+      responses:
+        "200":
+          description: Product rebuild impact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductRebuildImpactEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/product/rebuilds:
+    post:
+      operationId: createCommerceProductRebuild
+      description: Applies a confirmed product switch, archives affected unit generations, and creates fresh writable generations.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceProductRebuildRequest"
+      responses:
+        "202":
+          description: Product rebuild accepted and applied transactionally
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductRebuildResultEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/production-status:
+    get:
+      operationId: getCommerceProjectProductionStatus
+      description: Returns a fixed-size aggregate across active commerce script units.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Commerce project production status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProjectProductionStatusEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-unit-defaults:
+    patch:
+      operationId: updateCommerceScriptUnitDefaults
+      description: Updates defaults copied into future commerce script units without rebuilding or mutating existing units.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommerceScriptUnitDefaultsRequest"
+      responses:
+        "200":
+          description: Updated project and script-unit defaults
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units:
+    get:
+      operationId: listCommerceScriptUnits
+      description: Lists commerce script units using stable sort-order cursor pagination.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+        - name: include
+          in: query
+          description: Set to productionSummary to include a bounded per-unit production summary.
+          schema:
+            type: string
+            enum: [productionSummary]
+      responses:
+        "200":
+          description: Commerce script unit page and collection revision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createCommerceScriptUnit
+      description: Creates one independently versioned production script unit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceScriptUnitRequest"
+      responses:
+        "201":
+          description: Script unit and optional initial active version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptVersionMutationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/reorder:
+    post:
+      operationId: reorderCommerceScriptUnits
+      description: Reorders the complete active script-unit collection using collection-level optimistic concurrency.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReorderCommerceScriptUnitsRequest"
+      responses:
+        "200":
+          description: Updated script-unit collection revision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitReorderEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}:
+    get:
+      operationId: getCommerceScriptUnit
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      responses:
+        "200":
+          description: Script unit with its current source version, language decision, and active localization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateCommerceScriptUnit
+      description: Updates editable script-unit fields using optimistic concurrency.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommerceScriptUnitRequest"
+      responses:
+        "200":
+          description: Updated script unit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: archiveCommerceScriptUnit
+      description: Archives one script unit while retaining its immutable history and production provenance.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceExpectedRevisionRequest"
+      responses:
+        "200":
+          description: Archived script unit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/production-status:
+    get:
+      operationId: getCommerceUnitProductionStatus
+      description: Returns database-aggregated stage status for one active commerce script unit generation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      responses:
+        "200":
+          description: Commerce script unit production status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceUnitProductionStatusEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/duplicate:
+    post:
+      operationId: duplicateCommerceScriptUnit
+      description: Creates an independently editable copy without overwriting the source unit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeriveCommerceScriptUnitRequest"
+      responses:
+        "201":
+          description: Duplicated script unit and initial version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptVersionMutationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-variants:
+    post:
+      operationId: createCommerceScriptLanguageVariant
+      description: Creates a separate script unit derived for an explicit BCP 47 target language.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceScriptLanguageVariantRequest"
+      responses:
+        "201":
+          description: Language-variant script unit and initial version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptVersionMutationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/prepare:
+    post:
+      operationId: prepareCommerceScriptUnit
+      description: Freezes the current script-unit inputs and starts localization followed by storyboard planning.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceExpectedRevisionRequest"
+      responses:
+        "202":
+          description: Existing or newly queued script-unit preparation workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/organize:
+    post:
+      operationId: organizeCommerceScriptUnit
+      description: Creates or reuses the durable sales-script contract for the active script-unit generation. Concurrent storyboard planning reuses the same contract and never starts a duplicate organizer provider call.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrganizeCommerceScriptUnitRequest"
+      responses:
+        "202":
+          description: Existing idempotent result or newly queued sales-script organization workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/rebuild-impact:
+    post:
+      operationId: getCommerceScriptUnitRebuildImpact
+      description: Persists a short-lived impact snapshot for switching one script unit to a new script, language, duration, or platform configuration.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceScriptUnitRebuildImpactRequest"
+      responses:
+        "200":
+          description: Persisted script-unit rebuild impact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitRebuildImpactEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/rebuilds:
+    post:
+      operationId: createCommerceScriptUnitRebuild
+      description: Confirms a persisted impact and queues an atomic script-unit generation rebuild. The old generation stays active until the target localization and generation are ready.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceScriptUnitRebuildRequest"
+      responses:
+        "202":
+          description: Existing idempotent result or newly queued script-unit rebuild workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions:
+    get:
+      operationId: listCommerceScriptVersions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      responses:
+        "200":
+          description: Immutable source-script version history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptVersionListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createCommerceScriptVersion
+      description: Creates an immutable source-script version and optionally activates it.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceScriptVersionRequest"
+      responses:
+        "201":
+          description: Script version mutation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptVersionMutationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions/{versionId}:
+    get:
+      operationId: getCommerceScriptVersion
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceScriptVersionId"
+      responses:
+        "200":
+          description: Immutable source-script version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptVersionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions/{versionId}/activate:
+    post:
+      operationId: activateCommerceScriptVersion
+      description: Activates an immutable source-script version when no production generation requires a rebuild.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceScriptVersionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceExpectedRevisionRequest"
+      responses:
+        "200":
+          description: Script unit with the selected active version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-resolution:
+    get:
+      operationId: getCommerceScriptLanguageResolution
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      responses:
+        "200":
+          description: Latest language resolution for the active source-script version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceLanguageResolutionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: resolveCommerceScriptLanguage
+      description: Resolves source and target language from the current immutable script version.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      responses:
+        "200":
+          description: Language resolution or confirmation candidate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceLanguageResolutionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-confirmation:
+    post:
+      operationId: confirmCommerceScriptLanguage
+      description: Confirms the target language against the latest source-script resolution.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmCommerceScriptLanguageRequest"
+      responses:
+        "200":
+          description: Confirmed language resolution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceLanguageResolutionEnvelope"
+        "202":
+          description: Confirmation was signalled to the active script-unit preparation workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceLanguageConfirmationAcceptedEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/localizations:
+    get:
+      operationId: listCommerceScriptLocalizations
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      responses:
+        "200":
+          description: Immutable localization version history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptLocalizationListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createCommerceScriptLocalization
+      description: Creates a localized script with a structured contract and timing analysis.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceScriptLocalizationRequest"
+      responses:
+        "201":
+          description: Localization and timing estimate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptLocalizationCreationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/localizations/{localizationId}:
+    get:
+      operationId: getCommerceScriptLocalization
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceScriptLocalizationId"
+      responses:
+        "200":
+          description: Immutable script localization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptLocalizationEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/localizations/{localizationId}/activate:
+    post:
+      operationId: activateCommerceScriptLocalization
+      description: Activates an approved localization for the current source-script version.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceScriptLocalizationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceExpectedRevisionRequest"
+      responses:
+        "200":
+          description: Script unit with the selected active localization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans:
+    get:
+      operationId: listCommerceStoryboardPlans
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
+      responses:
+        "200":
+          description: Storyboard plan revisions for one commerce script unit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceStoryboardPlanListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createCommerceStoryboardPlan
+      description: Starts a new immutable storyboard planning workflow for the active script-unit generation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceStoryboardPlanRequest"
+      responses:
+        "202":
+          description: Existing idempotent result or newly queued storyboard workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans/{planId}:
+    get:
+      operationId: getCommerceStoryboardPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceStoryboardPlanId"
+      responses:
+        "200":
+          description: Storyboard plan with its ordered shots
+          headers:
+            ETag:
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceStoryboardPlanDetailEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans/{planId}/activate:
+    post:
+      operationId: activateCommerceStoryboardPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceStoryboardPlanId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceExpectedRevisionRequest"
+      responses:
+        "200":
+          description: Activated storyboard plan
+          headers:
+            ETag:
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceStoryboardPlanDetailEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans/{planId}/shots:
+    get:
+      operationId: listCommerceStoryboardShots
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceStoryboardPlanId"
+      responses:
+        "200":
+          description: Ordered storyboard shots for one plan
+          headers:
+            ETag:
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceStoryboardPlanDetailEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/shots/{shotId}:
+    patch:
+      operationId: updateCommerceStoryboardShot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceStoryboardShotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommerceStoryboardShotRequest"
+      responses:
+        "200":
+          description: Updated plan projection
+          headers:
+            ETag:
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceStoryboardPlanDetailEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: archiveCommerceStoryboardShot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceStoryboardShotId"
+        - name: If-Match
+          in: header
+          required: true
+          description: ETag returned by the storyboard plan read endpoint.
+          schema: {type: string}
+      responses:
+        "200":
+          description: Plan projection after the shot was archived
+          headers:
+            ETag:
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceStoryboardPlanDetailEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "428":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/shots/reorder:
+    post:
+      operationId: reorderCommerceStoryboardShots
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReorderCommerceStoryboardShotsRequest"
+      responses:
+        "200":
+          description: Reordered plan projection
+          headers:
+            ETag:
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceStoryboardPlanDetailEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/reference-images/generate-batch:
+    post:
+      operationId: generateCommerceReferenceImageBatch
+      description: Creates an immutable per-shot production run for image prompt generation or paid reference-image generation. Empty shot selections are rejected.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceReferenceImageBatchRequest"
+      responses:
+        "202":
+          description: Existing idempotent production run or newly queued reference-image workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductionRunEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/video-prompts/generate-batch:
+    post:
+      operationId: generateCommerceVideoPromptBatch
+      description: Generates and reviews immutable per-shot video prompt plans. The operation never starts paid video generation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceVideoBatchRequest"
+      responses:
+        "202":
+          description: Existing idempotent production run or newly queued video-prompt workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductionRunEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/shot-videos/generate-batch:
+    post:
+      operationId: generateCommerceShotVideoBatch
+      description: Generates selected shot videos concurrently from approved, current video prompt plans and reference packs. Prompt agents are not rerun.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceVideoBatchRequest"
+      responses:
+        "202":
+          description: Existing idempotent production run or newly queued shot-video workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductionRunEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/timelines:
+    get:
+      operationId: listCommerceTimelines
+      description: Lists current-generation timelines for one commerce script unit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      responses:
+        "200":
+          description: Commerce timelines
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceTimelineListEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/timelines/prepare:
+    post:
+      operationId: prepareCommerceTimeline
+      description: Freezes succeeded shot videos and deterministic overlays into a revisioned unit timeline.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrepareCommerceTimelineRequest"
+      responses:
+        "200":
+          description: Existing timeline with an identical frozen input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceTimelineEnvelope"
+        "201":
+          description: Prepared timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceTimelineEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/timelines/{timelineId}:
+    get:
+      operationId: getCommerceTimeline
+      description: Returns one timeline with clips, normalized overlays, and unit-scoped final versions.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/TimelineId"
+      responses:
+        "200":
+          description: Commerce timeline detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceTimelineDetailEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+    patch:
+      operationId: updateCommerceTimeline
+      description: Replaces editable overlays with optimistic concurrency and marks existing finals stale.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/TimelineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommerceTimelineRequest"
+      responses:
+        "200":
+          description: Updated commerce timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceTimelineEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/final-videos/compose:
+    post:
+      operationId: composeCommerceFinalVideo
+      description: Starts a generation-fenced final compose run for one immutable timeline revision.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComposeCommerceFinalVideoRequest"
+      responses:
+        "202":
+          description: Final compose run queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductionRunEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/final-videos:
+    get:
+      operationId: listCommerceFinalVideos
+      description: Lists current-generation final video versions for one commerce script unit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      responses:
+        "200":
+          description: Commerce final video versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceFinalVideoListEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/final-videos/{finalVideoVersionId}:
+    get:
+      operationId: getCommerceFinalVideo
+      description: Returns one unit-scoped final video version with a signed preview URL.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/FinalVideoVersionId"
+      responses:
+        "200":
+          description: Commerce final video version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceFinalVideoEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/final-videos/{finalVideoVersionId}/activate:
+    post:
+      operationId: activateCommerceFinalVideo
+      description: Activates a ready non-stale final version only within the selected commerce script unit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/FinalVideoVersionId"
+      responses:
+        "200":
+          description: Commerce final video activated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceFinalVideoActivationEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/production-runs:
+    get:
+      operationId: listCommerceProductionRuns
+      description: Lists durable commerce production runs without loading per-item details.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: filter[scriptUnitId]
+          in: query
+          schema: {type: string, format: uuid}
+        - name: filter[runType]
+          in: query
+          schema:
+            type: string
+            enum: [storyboard_plan, reference_images, video_prompts, shot_videos, final_compose]
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+      responses:
+        "200":
+          description: Commerce production runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductionRunListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/production-runs/{runId}:
+    get:
+      operationId: getCommerceProductionRun
+      description: Returns one production run and the independently retryable state of every subject.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: runId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Commerce production run detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductionRunDetailEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/production-runs/{runId}/retry-failed:
+    post:
+      operationId: retryFailedCommerceProductionRun
+      description: Creates a new durable run for explicitly selected failed items, or all failed items when itemIds is omitted. Paid work is only retried after this user action.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: runId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceRetryProductionRunRequest"
+      responses:
+        "202":
+          description: Retry run queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductionRunEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/production-runs/{runId}/cancel:
+    post:
+      operationId: cancelCommerceProductionRun
+      description: Cancels queued or running items, requests Temporal cancellation, and preserves completed outputs.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: runId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceCancelProductionRunRequest"
+      responses:
+        "200":
+          description: Cancelled or cancelling production run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductionRunDetailEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-unit-batches:
+    get:
+      operationId: listCommerceScriptUnitBatches
+      description: Lists durable cross-script Commerce coordinator tasks and their unit-scoped children.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Commerce script unit batches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitBatchListEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: createCommerceScriptUnitBatch
+      description: Atomically freezes selected script units, creates one child run per unit, and queues a bounded parent coordinator.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceScriptUnitBatchAdvanceRequest"
+      responses:
+        "202":
+          description: Coordinator queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitBatchEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-unit-batches/{coordinatorId}:
+    get:
+      operationId: getCommerceScriptUnitBatch
+      description: Returns coordinator progress and the durable status of every selected script unit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: coordinatorId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Commerce script unit batch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitBatchEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-unit-batches/{coordinatorId}/retry-failed:
+    post:
+      operationId: retryCommerceScriptUnitBatch
+      description: Creates a new coordinator containing only failed units from the frozen source batch.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: coordinatorId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceScriptUnitBatchRetryRequest"
+      responses:
+        "202":
+          description: Failed units queued in a new coordinator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitBatchEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+  /api/projects/{projectId}/commerce/script-unit-batches/{coordinatorId}/cancel:
+    post:
+      operationId: cancelCommerceScriptUnitBatch
+      description: Cancels the parent coordinator and all unfinished unit child workflows while preserving successful units.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: coordinatorId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceScriptUnitBatchCancelRequest"
+      responses:
+        "200":
+          description: Coordinator cancelling or terminal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptUnitBatchEnvelope"
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
   /api/video-production-profiles:
     get:
       operationId: listVideoProductionProfiles
@@ -7107,6 +9242,69 @@ components:
       schema:
         type: string
         format: uuid
+    CommerceSetupSessionId:
+      name: setupSessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommerceProductVersionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommerceProductReferenceId:
+      name: referenceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommerceProductReferencePackId:
+      name: packId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommerceScriptUnitId:
+      name: scriptUnitId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommerceScriptVersionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommerceScriptLocalizationId:
+      name: localizationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommerceStoryboardPlanId:
+      name: planId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommerceStoryboardShotId:
+      name: shotId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     VideoProductionRebuildId:
       name: rebuildId
       in: path
@@ -7933,6 +10131,66 @@ components:
           minLength: 1
           maxLength: 320
           description: Exact username or email address of an existing active user.
+    CreateSystemOrganizationMemberRequest:
+      type: object
+      additionalProperties: false
+      description: Provide either existingUserIdentifier to attach an existing account, or email, username, and password to create a new account.
+      oneOf:
+        - required: [existingUserIdentifier]
+        - required: [email, username, password]
+      properties:
+        existingUserIdentifier:
+          type: string
+          minLength: 1
+          maxLength: 320
+          description: Exact username or email address of an existing active account.
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        username:
+          $ref: "#/components/schemas/Username"
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          writeOnly: true
+        displayName:
+          type: string
+          maxLength: 100
+        avatarUrl:
+          type: string
+          format: uri
+          maxLength: 2048
+    UpdateSystemOrganizationMemberRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        username:
+          $ref: "#/components/schemas/Username"
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          writeOnly: true
+          description: When supplied, replaces the password and revokes every active account session.
+        displayName:
+          type: string
+          maxLength: 100
+        avatarUrl:
+          type: string
+          format: uri
+          maxLength: 2048
+        status:
+          type: string
+          enum: [active, disabled]
     SystemOrganization:
       type: object
       required: [id, name, slug, createdAt, activeMemberCount, workspaceCount, projectCount, ownerCount]
@@ -8069,7 +10327,7 @@ components:
           format: date-time
     Project:
       type: object
-      required: [id, organizationId, workspaceId, name, audioConfigurationRevision, revision, timelineTimebase, fpsNumerator, fpsDenominator, settings, createdAt, updatedAt]
+      required: [id, organizationId, workspaceId, name, projectKind, audioConfigurationRevision, revision, timelineTimebase, fpsNumerator, fpsDenominator, settings, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -8084,10 +10342,16 @@ components:
           type: string
         description:
           type: string
+        projectKind:
+          type: string
+          enum: [narrative, commerce_video]
         projectType:
           type: string
+          enum: [short_film, comic_drama, brand_ad, character_ip, other, commerce_video]
         contentType:
           type: string
+          nullable: true
+          enum: [novel, script, storyboard_first, original]
         aspectRatio:
           type: string
         videoRatio:
@@ -8124,8 +10388,6 @@ components:
           default: audio_transcription_default
         audioStrategy:
           type: string
-          enum: [native_av, hybrid, tts_postdub]
-          default: native_av
         audioRequirement:
           type: string
           enum: [preferred, required, disabled]
@@ -8161,9 +10423,10 @@ components:
           allOf:
             - $ref: "#/components/schemas/ProductionGeneration"
           readOnly: true
+          nullable: true
         videoProductionState:
           type: string
-          enum: [storyboard_required, ready, rebuilding, blocked, reconfiguration_required]
+          enum: [unconfigured, storyboard_required, ready, rebuilding, blocked, reconfiguration_required]
           readOnly: true
         videoProductionLocked:
           type: boolean
@@ -8180,6 +10443,24 @@ components:
           default: 1
         settings:
           type: object
+        setupSessionId:
+          type: string
+          format: uuid
+          readOnly: true
+        setupState:
+          type: string
+          readOnly: true
+        workflowTemplateVersionId:
+          type: string
+          format: uuid
+          readOnly: true
+        setupConfigurationHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          readOnly: true
+        scriptUnitDefaults:
+          $ref: "#/components/schemas/CommerceScriptUnitDefaults"
+          readOnly: true
         createdAt:
           type: string
           format: date-time
@@ -16580,9 +18861,19 @@ components:
         verificationStatus:
           type: string
           enum: [official, tested, inferred, unknown]
+    ProviderCapabilityLanguageTag:
+      type: string
+      description: Canonical BCP 47 language tag or wildcard.
+      pattern: '^(\*|[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*)$'
+    ProviderCapabilitySource:
+      type: string
+      enum: [official, provider, preset, discovered, inferred, manual, unknown]
+    ProviderCapabilityApprovalStatus:
+      type: string
+      enum: [approved, inferred, rejected, unknown]
     ProviderCapability:
       type: object
-      required: [id, providerModelId, taskTypes, inputLimits, outputLimits, qualityTiers, providerOptionsSchema, pricingPolicy, createdAt]
+      required: [id, providerModelId, taskTypes, inputLimits, outputLimits, qualityTiers, providerOptionsSchema, pricingPolicy, supportedInputLanguages, supportedOutputLanguages, supportedPromptLanguages, supportedNativeAudioLanguages, source, approvalStatus, createdAt]
       properties:
         id:
           type: string
@@ -16608,6 +18899,26 @@ components:
         pricingPolicy:
           type: object
           additionalProperties: true
+        supportedInputLanguages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        supportedOutputLanguages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        supportedPromptLanguages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        supportedNativeAudioLanguages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        source:
+          $ref: "#/components/schemas/ProviderCapabilitySource"
+        approvalStatus:
+          $ref: "#/components/schemas/ProviderCapabilityApprovalStatus"
         createdAt:
           type: string
           format: date-time
@@ -16756,6 +19067,26 @@ components:
         pricingPolicy:
           type: object
           additionalProperties: true
+        supportedInputLanguages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        supportedOutputLanguages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        supportedPromptLanguages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        supportedNativeAudioLanguages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        source:
+          $ref: "#/components/schemas/ProviderCapabilitySource"
+        approvalStatus:
+          $ref: "#/components/schemas/ProviderCapabilityApprovalStatus"
     CreateProviderModelRequest:
       type: object
       required: [modelKey, displayName, modality]
@@ -17317,6 +19648,13 @@ components:
           type: string
         promptSource:
           type: string
+        inputLanguage:
+          $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        outputLanguage:
+          $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        requireApprovedLanguageCapabilities:
+          type: boolean
+          default: false
         idempotencyKey:
           type: string
         executionPlanId:
@@ -17489,6 +19827,11 @@ components:
           type: string
         promptSource:
           type: string
+        promptLanguage:
+          $ref: "#/components/schemas/ProviderCapabilityLanguageTag"
+        requireApprovedLanguageCapabilities:
+          type: boolean
+          default: false
         idempotencyKey:
           type: string
         input:
@@ -18033,6 +20376,9 @@ components:
           type: string
         promptLanguage:
           type: string
+        requireApprovedLanguageCapabilities:
+          type: boolean
+          default: false
         expiresInSeconds:
           type: integer
           minimum: 1
@@ -19902,8 +22248,17 @@ components:
         name:
           type: string
     CreateProjectRequest:
+      oneOf:
+        - $ref: "#/components/schemas/CreateNarrativeProjectRequest"
+        - $ref: "#/components/schemas/CreateCommerceVideoProjectRequest"
+      discriminator:
+        propertyName: projectKind
+        mapping:
+          narrative: "#/components/schemas/CreateNarrativeProjectRequest"
+          commerce_video: "#/components/schemas/CreateCommerceVideoProjectRequest"
+    CreateProjectBaseRequest:
       type: object
-      required: [workspaceId, name]
+      required: [workspaceId, name, projectKind]
       properties:
         workspaceId:
           type: string
@@ -19912,38 +22267,14 @@ components:
           type: string
         description:
           type: string
-        projectType:
+        projectKind:
           type: string
-        contentType:
-          type: string
+          enum: [narrative, commerce_video]
         aspectRatio:
           type: string
         videoRatio:
           type: string
           default: "16:9"
-        artStyle:
-          type: string
-        directorManualPromptVersionId:
-          type: string
-          format: uuid
-        visualManualPromptVersionId:
-          type: string
-          format: uuid
-        imageModelProfileKey:
-          type: string
-          default: image_generation_default
-        videoModelProfileKey:
-          type: string
-          default: video_generation_default
-        scriptModelProfileKey:
-          type: string
-          default: script_agent_default
-        ttsModelProfileKey:
-          type: string
-          default: tts_generation_default
-        asrModelProfileKey:
-          type: string
-          default: audio_transcription_default
         audioStrategy:
           type: string
           enum: [native_av, hybrid, tts_postdub]
@@ -19955,17 +22286,6 @@ components:
         imageQuality:
           type: string
           default: standard
-        videoProductionProfileKey:
-          allOf:
-            - $ref: "#/components/schemas/VideoProductionProfileKey"
-          default: single_frame_i2v
-        videoProductionProfileVersion:
-          type: integer
-          minimum: 1
-        compatibilityPolicy:
-          type: string
-          enum: [strict, compatible_fallback]
-          default: strict
         timelineTimebase:
           type: integer
           format: int64
@@ -19978,6 +22298,2218 @@ components:
           default: 1
         settings:
           type: object
+    CreateNarrativeProjectRequest:
+      allOf:
+        - $ref: "#/components/schemas/CreateProjectBaseRequest"
+        - type: object
+          required: [projectKind]
+          properties:
+            projectKind:
+              type: string
+              enum: [narrative]
+            projectType:
+              type: string
+              enum: [short_film, comic_drama, brand_ad, character_ip, other]
+            contentType:
+              type: string
+              enum: [novel, script, storyboard_first, original]
+            artStyle:
+              type: string
+            directorManualPromptVersionId:
+              type: string
+              format: uuid
+            visualManualPromptVersionId:
+              type: string
+              format: uuid
+            imageModelProfileKey:
+              type: string
+              default: image_generation_default
+            videoModelProfileKey:
+              type: string
+              default: video_generation_default
+            scriptModelProfileKey:
+              type: string
+              default: script_agent_default
+            ttsModelProfileKey:
+              type: string
+              default: tts_generation_default
+            asrModelProfileKey:
+              type: string
+              default: audio_transcription_default
+            videoProductionProfileKey:
+              allOf:
+                - $ref: "#/components/schemas/VideoProductionProfileKey"
+              default: single_frame_i2v
+            videoProductionProfileVersion:
+              type: integer
+              minimum: 1
+            compatibilityPolicy:
+              type: string
+              enum: [strict, compatible_fallback]
+              default: strict
+            audioStrategy:
+              type: string
+              enum: [native_av, hybrid, tts_postdub]
+              default: native_av
+    CreateCommerceVideoProjectRequest:
+      allOf:
+        - $ref: "#/components/schemas/CreateProjectBaseRequest"
+        - type: object
+          required: [projectKind]
+          properties:
+            projectKind:
+              type: string
+              enum: [commerce_video]
+            defaultTargetDurationSeconds:
+              type: integer
+              enum: [15, 30, 60]
+              default: 30
+            defaultTargetPlatform:
+              type: string
+              minLength: 1
+              default: douyin
+            defaultLanguageMode:
+              type: string
+              enum: [auto, explicit]
+              default: auto
+            defaultTargetLanguage:
+              type: string
+              description: BCP 47 language tag. Required when defaultLanguageMode is explicit.
+            audioStrategy:
+              type: string
+              enum: [native_av, external_audio]
+              default: native_av
+      description: Idempotency-Key is required. Narrative manuals and direct model/profile fields are rejected.
+    CommerceScriptUnitDefaults:
+      type: object
+      required: [targetDurationSeconds, targetPlatform, languageMode]
+      properties:
+        targetDurationSeconds:
+          type: integer
+          enum: [15, 30, 60]
+        targetPlatform:
+          type: string
+          minLength: 1
+        languageMode:
+          type: string
+          enum: [auto, explicit]
+        targetLanguage:
+          allOf:
+            - $ref: "#/components/schemas/CommerceLocale"
+          nullable: true
+    UpdateCommerceScriptUnitDefaultsRequest:
+      allOf:
+        - $ref: "#/components/schemas/CommerceScriptUnitDefaults"
+        - type: object
+          required: [expectedRevision]
+          properties:
+            expectedRevision:
+              type: integer
+              format: int64
+              minimum: 1
+    CommerceLocale:
+      type: string
+      description: Canonical BCP 47 language tag.
+      pattern: "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$"
+    CommerceProjectLanguageOption:
+      type: object
+      required: [locale, label, textAvailable, imagePromptAvailable, videoPromptAvailable, nativeAudioAvailable, blockers]
+      properties:
+        locale:
+          $ref: "#/components/schemas/CommerceLocale"
+        label: {type: string}
+        textAvailable: {type: boolean}
+        imagePromptAvailable: {type: boolean}
+        videoPromptAvailable: {type: boolean}
+        nativeAudioAvailable: {type: boolean}
+        blockers:
+          type: array
+          items: {type: string}
+    CommerceProjectModelRequirement:
+      type: object
+      required: [role, label, profileKey, taskType, modality, usesInputLanguage, usesOutputLanguage, usesPromptLanguage, usesNativeAudio, ready, candidateCount]
+      properties:
+        role: {type: string}
+        label: {type: string}
+        profileKey: {type: string}
+        taskType: {type: string}
+        modality:
+          type: string
+          enum: [text, image, video, audio, multimodal]
+        usesInputLanguage: {type: boolean}
+        usesOutputLanguage: {type: boolean}
+        usesPromptLanguage: {type: boolean}
+        usesNativeAudio: {type: boolean}
+        ready: {type: boolean}
+        candidateCount:
+          type: integer
+          minimum: 0
+        blocker: {type: string}
+    CommerceProjectOptions:
+      type: object
+      required: [workflowTemplateVersionId, workflowTemplateVersion, templateContentHash, videoProductionProfileKey, videoProductionProfileVersion, available, blockers, durations, aspectRatios, imageQualities, languageModes, audioStrategies, audioRequirements, languages, modelRequirements]
+      properties:
+        workflowTemplateVersionId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: string
+              const: ""
+          description: Empty when no published commerce workflow template is available.
+        workflowTemplateVersion:
+          type: integer
+          minimum: 0
+        templateContentHash:
+          oneOf:
+            - type: string
+              pattern: "^[0-9a-f]{64}$"
+            - type: string
+              const: ""
+        videoProductionProfileKey:
+          oneOf:
+            - $ref: "#/components/schemas/VideoProductionProfileKey"
+            - type: string
+              const: ""
+        videoProductionProfileVersion:
+          type: integer
+          minimum: 0
+        available: {type: boolean}
+        blockers:
+          type: array
+          items: {type: string}
+        durations:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            minimum: 1
+        aspectRatios:
+          type: array
+          minItems: 1
+          items: {type: string}
+        imageQualities:
+          type: array
+          minItems: 1
+          items: {type: string}
+        languageModes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [auto, explicit]
+        audioStrategies:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [native_av, external_audio]
+        audioRequirements:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [preferred, required, disabled]
+        languages:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceProjectLanguageOption"
+        modelRequirements:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceProjectModelRequirement"
+    CommerceProjectOptionsEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProjectOptions"
+    CommerceWorkflowTemplateVersion:
+      type: object
+      required: [id, templateId, templateKey, version, contentHash, configurationSnapshot, promptBindings, agentModelContracts, languageContract, imageCapabilityContract, videoCapabilityContract, videoProfileKey, videoProfileVersion]
+      properties:
+        id: {type: string, format: uuid}
+        templateId: {type: string, format: uuid}
+        templateKey: {type: string}
+        version: {type: integer, minimum: 1}
+        contentHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        configurationSnapshot: {type: object, additionalProperties: true}
+        promptBindings: {type: object, additionalProperties: true}
+        agentModelContracts: {type: object, additionalProperties: true}
+        languageContract: {type: object, additionalProperties: true}
+        imageCapabilityContract: {type: object, additionalProperties: true}
+        videoCapabilityContract: {type: object, additionalProperties: true}
+        videoProfileKey:
+          $ref: "#/components/schemas/VideoProductionProfileKey"
+        videoProfileVersion: {type: integer, minimum: 1}
+    CommerceSetupSessionState:
+      type: string
+      enum: [draft, uploading, resolving_language, waiting_user_confirmation, localizing, validating, needs_user_review, ready, starting, started, completed, failed, abandoned]
+    CommerceSetupSession:
+      type: object
+      required: [id, organizationId, workspaceId, projectId, workflowTemplateVersionId, clientRequestId, scopeType, state, step, revision, inputSnapshot, setupAttempt, createdAt, updatedAt, expiresAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        workspaceId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        workflowTemplateVersionId: {type: string, format: uuid}
+        clientRequestId: {type: string}
+        scopeType: {type: string, enum: [project, script_unit]}
+        state:
+          $ref: "#/components/schemas/CommerceSetupSessionState"
+        step: {type: string}
+        revision: {type: integer, format: int64, minimum: 1}
+        inputSnapshot: {type: object, additionalProperties: true}
+        setupAttempt: {type: integer, minimum: 0}
+        setupWorkflowRunId: {type: string, format: uuid, nullable: true}
+        productionWorkflowRunId: {type: string, format: uuid, nullable: true}
+        productId: {type: string, format: uuid, nullable: true}
+        scriptUnitId: {type: string, format: uuid, nullable: true}
+        sourceScriptVersionId: {type: string, format: uuid, nullable: true}
+        localizationId: {type: string, format: uuid, nullable: true}
+        lastErrorCode: {type: string, nullable: true}
+        lastErrorMessage: {type: string, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time, nullable: true}
+    CommerceSetupSessionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceSetupSession"
+    CommerceSetupRunState:
+      type: string
+      enum: [queued, running, waiting_user_confirmation, needs_user_review, succeeded, failed, cancelled]
+    CommerceSetupRun:
+      type: object
+      required: [id, organizationId, projectId, setupSessionId, attemptNo, temporalWorkflowId, status, input, output, createdAt, updatedAt, revision]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        setupSessionId: {type: string, format: uuid}
+        attemptNo: {type: integer, minimum: 1}
+        temporalWorkflowId: {type: string}
+        status:
+          $ref: "#/components/schemas/CommerceSetupRunState"
+        input: {type: object, additionalProperties: true}
+        output: {type: object, additionalProperties: true}
+        errorCode: {type: string, nullable: true}
+        errorMessage: {type: string, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time, nullable: true}
+        completedAt: {type: string, format: date-time, nullable: true}
+        revision: {type: integer, format: int64, minimum: 1}
+    CompleteCommerceSetupSessionRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    CommerceSetupCompletion:
+      type: object
+      required: [setupWorkflowRunId, setupSession]
+      properties:
+        setupWorkflowRunId: {type: string, format: uuid}
+        setupSession:
+          $ref: "#/components/schemas/CommerceSetupSession"
+    CommerceSetupCompletionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceSetupCompletion"
+    ConfirmCommerceSetupLanguageRequest:
+      type: object
+      required: [expectedRevision, resolutionId, targetLanguage]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        resolutionId: {type: string, format: uuid}
+        targetLanguage:
+          $ref: "#/components/schemas/CommerceLocale"
+    CommerceSetupLanguageConfirmation:
+      type: object
+      required: [setupSession, setupRun]
+      properties:
+        setupSession:
+          $ref: "#/components/schemas/CommerceSetupSession"
+        setupRun:
+          $ref: "#/components/schemas/CommerceSetupRun"
+    CommerceSetupLanguageConfirmationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceSetupLanguageConfirmation"
+    AbandonCommerceSetupSessionRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    CommerceExpectedRevisionRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    CommerceProduct:
+      type: object
+      required: [id, organizationId, projectId, status, revision, scriptUnitsRevision, metadata, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        currentVersionId: {type: string, format: uuid, nullable: true}
+        status:
+          type: string
+          enum: [draft, ready, archived]
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        scriptUnitsRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        metadata:
+          type: object
+          additionalProperties: true
+        currentVersion:
+          $ref: "#/components/schemas/CommerceProductVersion"
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CommerceProductVersion:
+      type: object
+      required: [id, organizationId, projectId, productId, version, name, brand, sellingPoints, immutableFeatures, prohibitedClaims, factsSnapshot, factsHash, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        version:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+        brand: {type: string}
+        sellingPoints:
+          type: array
+          items: {}
+        immutableFeatures:
+          type: object
+          additionalProperties: true
+        prohibitedClaims:
+          type: array
+          items: {}
+        factsSnapshot:
+          type: object
+          additionalProperties: true
+        factsHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        sourceVersionId: {type: string, format: uuid, nullable: true}
+        createdAt: {type: string, format: date-time}
+    CommerceProductVersionMutationRequest:
+      type: object
+      required: [name]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        name:
+          type: string
+          minLength: 1
+        brand: {type: string}
+        sellingPoints:
+          type: array
+          items: {}
+          default: []
+        immutableFeatures:
+          type: object
+          additionalProperties: true
+          default: {}
+        prohibitedClaims:
+          type: array
+          items: {}
+          default: []
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+    CommerceProductMutationResult:
+      type: object
+      required: [product, version, activated, requiresRebuild]
+      properties:
+        product:
+          $ref: "#/components/schemas/CommerceProduct"
+        version:
+          $ref: "#/components/schemas/CommerceProductVersion"
+        activated: {type: boolean}
+        requiresRebuild: {type: boolean}
+    CommerceProductEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProduct"
+    CommerceProductMutationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductMutationResult"
+    CommerceProductVersionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductVersion"
+    CommerceProductVersionListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceProductVersion"
+    CommerceProductReferenceRole:
+      type: string
+      enum: [primary, front, back, detail, usage, logo, other]
+    CommerceProductReference:
+      type: object
+      required: [id, organizationId, projectId, productId, artifactId, mediaFileId, referenceRole, ordinal, isPrimary, status, width, height, mimeType, contentHash, qualityReview, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        artifactId: {type: string, format: uuid}
+        mediaFileId: {type: string, format: uuid}
+        referenceRole:
+          $ref: "#/components/schemas/CommerceProductReferenceRole"
+        ordinal:
+          type: integer
+          minimum: 0
+        isPrimary: {type: boolean}
+        status:
+          type: string
+          enum: [active, archived]
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        mimeType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        contentHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        qualityReview:
+          type: object
+          additionalProperties: true
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        previewUrl:
+          type: string
+          format: uri
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        archivedAt: {type: string, format: date-time, nullable: true}
+    CommerceProductReferencePackItem:
+      type: object
+      required: [id, referencePackId, productReferenceId, ordinal, referenceRole, artifactId, mediaFileId, contentHash, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        referencePackId: {type: string, format: uuid}
+        productReferenceId: {type: string, format: uuid}
+        ordinal:
+          type: integer
+          minimum: 0
+        referenceRole:
+          $ref: "#/components/schemas/CommerceProductReferenceRole"
+        artifactId: {type: string, format: uuid}
+        mediaFileId: {type: string, format: uuid}
+        contentHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        previewUrl:
+          type: string
+          format: uri
+        createdAt: {type: string, format: date-time}
+    CommerceProductReferencePack:
+      type: object
+      required: [id, organizationId, projectId, productId, productVersionId, productFactsHash, referenceSetHash, packHash, status, createdAt, items]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        productVersionId: {type: string, format: uuid}
+        productFactsHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        referenceSetHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        packHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        status:
+          type: string
+          enum: [active, stale, archived]
+        workflowRunId: {type: string, format: uuid, nullable: true}
+        createdAt: {type: string, format: date-time}
+        staleAt: {type: string, format: date-time, nullable: true}
+        archivedAt: {type: string, format: date-time, nullable: true}
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceProductReferencePackItem"
+    CommerceProductReferencePackEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductReferencePack"
+    CommerceProductReferencePackListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceProductReferencePack"
+    CreateCommerceProductReferenceUploadRequest:
+      type: object
+      required: [fileName, mimeType]
+      properties:
+        setupSessionId: {type: string, format: uuid}
+        fileName:
+          type: string
+          minLength: 1
+        mimeType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        expiresSeconds:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          default: 900
+    CommerceProductReferenceUpload:
+      type: object
+      required: [uploadId, uploadUrl, method, headers, expiresAt]
+      properties:
+        uploadId: {type: string, format: uuid}
+        uploadUrl: {type: string, format: uri}
+        method:
+          type: string
+          enum: [PUT]
+        headers:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string}
+        expiresAt: {type: string, format: date-time}
+    CompleteCommerceProductReferenceUploadRequest:
+      type: object
+      required: [uploadId]
+      properties:
+        uploadId: {type: string, format: uuid}
+        referenceRole:
+          allOf:
+            - $ref: "#/components/schemas/CommerceProductReferenceRole"
+          default: other
+        setPrimary:
+          type: boolean
+          default: false
+    UpdateCommerceProductReferenceRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        referenceRole:
+          $ref: "#/components/schemas/CommerceProductReferenceRole"
+        ordinal:
+          type: integer
+          minimum: 0
+        setPrimary: {type: boolean}
+    CommerceProductReferenceEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductReference"
+    CommerceProductReferenceListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceProductReference"
+    CommerceProductReferenceUploadEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductReferenceUpload"
+            meta:
+              type: object
+              required: [idempotentReplay]
+              properties:
+                idempotentReplay: {type: boolean}
+    CommerceProductReferenceCompletionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductReference"
+            meta:
+              type: object
+              properties:
+                duplicate: {type: boolean}
+                idempotentReplay: {type: boolean}
+    CommerceProductRebuildImpactRequest:
+      type: object
+      required: [targetProductVersionId, targetReferenceIds, expectedProductRevision]
+      properties:
+        targetProductVersionId: {type: string, format: uuid}
+        targetReferenceIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        expectedProductRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    CommerceProductRebuildUnitImpact:
+      type: object
+      required: [scriptUnitId, unitNo, title, sourceUnitGenerationId, sourceReferencePackId]
+      properties:
+        scriptUnitId: {type: string, format: uuid}
+        unitNo:
+          type: integer
+          format: int64
+          minimum: 1
+        title: {type: string}
+        sourceUnitGenerationId: {type: string, format: uuid}
+        sourceReferencePackId: {type: string, format: uuid}
+    CommerceProductRebuildImpact:
+      type: object
+      required: [projectId, projectGenerationId, productId, sourceProductVersionId, targetProductVersionId, expectedProductRevision, targetReferenceIds, targetReferenceSetHash, impactToken, expiresAt, affectedUnits, reusableArtifactCount, blockers]
+      properties:
+        projectId: {type: string, format: uuid}
+        projectGenerationId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        sourceProductVersionId: {type: string, format: uuid}
+        targetProductVersionId: {type: string, format: uuid}
+        expectedProductRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        targetReferenceIds:
+          type: array
+          items: {type: string, format: uuid}
+        targetReferenceSetHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        impactToken:
+          type: string
+          minLength: 1
+        expiresAt: {type: string, format: date-time}
+        affectedUnits:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceProductRebuildUnitImpact"
+        reusableArtifactCount:
+          type: integer
+          minimum: 0
+        blockers:
+          type: array
+          items: {type: string}
+    CreateCommerceProductRebuildRequest:
+      type: object
+      required: [impactToken, expectedProductRevision]
+      properties:
+        impactToken:
+          type: string
+          minLength: 1
+        expectedProductRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    CommerceProductRebuildResult:
+      type: object
+      required: [rebuildId, status, productVersionId, referencePackId, affectedUnitCount, idempotentReplay]
+      properties:
+        rebuildId: {type: string, format: uuid}
+        status:
+          type: string
+          enum: [succeeded]
+        productVersionId: {type: string, format: uuid}
+        referencePackId: {type: string, format: uuid}
+        affectedUnitCount:
+          type: integer
+          minimum: 0
+        idempotentReplay: {type: boolean}
+    CommerceProductRebuildImpactEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductRebuildImpact"
+    CommerceProductRebuildResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductRebuildResult"
+    CommerceScriptUnit:
+      type: object
+      required: [id, organizationId, projectId, productId, unitNo, title, sortOrder, status, languageMode, targetDurationSeconds, targetPlatform, draftContent, unitGenerationNo, revision, metadata, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        unitNo:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+        sortOrder:
+          type: integer
+          format: int64
+          minimum: 1
+        status:
+          type: string
+          enum: [draft, ready, archived]
+        currentSourceVersionId: {type: string, format: uuid, nullable: true}
+        currentLocalizationId: {type: string, format: uuid, nullable: true}
+        languageMode:
+          type: string
+          enum: [auto, explicit]
+        explicitTargetLanguage:
+          allOf:
+            - $ref: "#/components/schemas/CommerceLocale"
+          nullable: true
+        targetDurationSeconds:
+          type: integer
+          enum: [15, 30, 60]
+        targetPlatform:
+          type: string
+          minLength: 1
+        draftContent: {type: string}
+        draftContentHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          nullable: true
+        draftUpdatedAt: {type: string, format: date-time, nullable: true}
+        activeUnitGenerationId: {type: string, format: uuid, nullable: true}
+        unitGenerationNo:
+          type: integer
+          format: int64
+          minimum: 0
+        derivedFromScriptUnitId: {type: string, format: uuid, nullable: true}
+        derivationKind:
+          type: string
+          enum: [copy, language_variant, agent_idea]
+          nullable: true
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        metadata:
+          type: object
+          additionalProperties: true
+        currentSourceVersion:
+          $ref: "#/components/schemas/CommerceScriptVersion"
+        currentLocalization:
+          $ref: "#/components/schemas/CommerceScriptLocalization"
+        languageResolution:
+          $ref: "#/components/schemas/CommerceLanguageResolution"
+        productionSummary:
+          $ref: "#/components/schemas/CommerceScriptUnitProductionSummary"
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        archivedAt: {type: string, format: date-time, nullable: true}
+    CreateCommerceScriptUnitRequest:
+      type: object
+      required: [expectedScriptUnitsRevision, title]
+      properties:
+        expectedScriptUnitsRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        title:
+          type: string
+          minLength: 1
+        content: {type: string}
+        languageMode:
+          type: string
+          enum: [auto, explicit]
+          default: auto
+        explicitTargetLanguage:
+          $ref: "#/components/schemas/CommerceLocale"
+        targetDurationSeconds:
+          type: integer
+          enum: [15, 30, 60]
+          default: 30
+        targetPlatform:
+          type: string
+          minLength: 1
+          default: generic
+        sourceLanguageHint:
+          $ref: "#/components/schemas/CommerceLocale"
+    UpdateCommerceScriptUnitRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+        draftContent: {type: string}
+        languageMode:
+          type: string
+          enum: [auto, explicit]
+        explicitTargetLanguage:
+          $ref: "#/components/schemas/CommerceLocale"
+        targetDurationSeconds:
+          type: integer
+          enum: [15, 30, 60]
+        targetPlatform:
+          type: string
+          minLength: 1
+    ReorderCommerceScriptUnitItem:
+      type: object
+      required: [scriptUnitId, sortOrder]
+      properties:
+        scriptUnitId: {type: string, format: uuid}
+        sortOrder:
+          type: integer
+          format: int64
+          minimum: 1
+    ReorderCommerceScriptUnitsRequest:
+      type: object
+      required: [expectedScriptUnitsRevision, items]
+      properties:
+        expectedScriptUnitsRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        items:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/ReorderCommerceScriptUnitItem"
+    DeriveCommerceScriptUnitRequest:
+      type: object
+      required: [expectedScriptUnitsRevision]
+      properties:
+        expectedScriptUnitsRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    CreateCommerceScriptLanguageVariantRequest:
+      allOf:
+        - $ref: "#/components/schemas/DeriveCommerceScriptUnitRequest"
+        - type: object
+          required: [targetLanguage]
+          properties:
+            targetLanguage:
+              $ref: "#/components/schemas/CommerceLocale"
+    CommerceScriptVersion:
+      type: object
+      required: [id, organizationId, projectId, productId, scriptUnitId, version, content, contentHash, manualOverride, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        version:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+          minLength: 1
+        contentHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        sourceLanguageHint:
+          allOf:
+            - $ref: "#/components/schemas/CommerceLocale"
+          nullable: true
+        detectedSourceLanguage:
+          allOf:
+            - $ref: "#/components/schemas/CommerceLocale"
+          nullable: true
+        manualOverride: {type: boolean}
+        sourceVersionId: {type: string, format: uuid, nullable: true}
+        createdAt: {type: string, format: date-time}
+    CommerceEmptyScriptVersion:
+      type: object
+      description: Zero-value version currently returned when a new script unit is created without initial content.
+      required: [id, version]
+      properties:
+        id:
+          type: string
+          const: ""
+        version:
+          type: integer
+          const: 0
+      additionalProperties: true
+    CommerceScriptVersionMutation:
+      type: object
+      required: [scriptUnit, version, activated, requiresRebuild]
+      properties:
+        scriptUnit:
+          $ref: "#/components/schemas/CommerceScriptUnit"
+        version:
+          oneOf:
+            - $ref: "#/components/schemas/CommerceScriptVersion"
+            - $ref: "#/components/schemas/CommerceEmptyScriptVersion"
+        activated: {type: boolean}
+        requiresRebuild: {type: boolean}
+    OrganizeCommerceScriptUnitRequest:
+      type: object
+      required: [expectedUnitGenerationId]
+      properties:
+        expectedUnitGenerationId:
+          type: string
+          format: uuid
+    CommerceScriptUnitRebuildImpactRequest:
+      type: object
+      required: [expectedRevision, targetSourceScriptVersionId, targetLanguageMode, targetDurationSeconds, targetPlatform]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        targetSourceScriptVersionId:
+          type: string
+          format: uuid
+        targetLanguageMode:
+          type: string
+          enum: [auto, explicit]
+        targetLanguage:
+          allOf:
+            - $ref: "#/components/schemas/CommerceLocale"
+          nullable: true
+        targetDurationSeconds:
+          type: integer
+          enum: [15, 30, 60]
+        targetPlatform:
+          type: string
+          minLength: 1
+    CommerceScriptUnitRebuildAffectedCounts:
+      type: object
+      required: [storyboardPlans, storyboardShots, referenceImages, videoPrompts, shotVideos, timelines, finalVideos]
+      properties:
+        storyboardPlans: {type: integer, minimum: 0}
+        storyboardShots: {type: integer, minimum: 0}
+        referenceImages: {type: integer, minimum: 0}
+        videoPrompts: {type: integer, minimum: 0}
+        shotVideos: {type: integer, minimum: 0}
+        timelines: {type: integer, minimum: 0}
+        finalVideos: {type: integer, minimum: 0}
+    CommerceScriptUnitRebuildImpact:
+      type: object
+      required:
+        - projectId
+        - projectGenerationId
+        - scriptUnitId
+        - sourceUnitGenerationId
+        - sourceScriptVersionId
+        - targetSourceScriptVersionId
+        - expectedRevision
+        - targetLanguageMode
+        - targetDurationSeconds
+        - targetPlatform
+        - targetConfigurationHash
+        - impactToken
+        - expiresAt
+        - affected
+        - estimatedAgentCalls
+        - blockers
+      properties:
+        projectId: {type: string, format: uuid}
+        projectGenerationId: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        sourceUnitGenerationId: {type: string, format: uuid}
+        sourceScriptVersionId: {type: string, format: uuid}
+        targetSourceScriptVersionId: {type: string, format: uuid}
+        expectedRevision: {type: integer, format: int64, minimum: 1}
+        targetLanguageMode:
+          type: string
+          enum: [auto, explicit]
+        targetLanguage:
+          allOf:
+            - $ref: "#/components/schemas/CommerceLocale"
+          nullable: true
+        targetDurationSeconds:
+          type: integer
+          enum: [15, 30, 60]
+        targetPlatform: {type: string, minLength: 1}
+        targetConfigurationHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        impactToken:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        expiresAt: {type: string, format: date-time}
+        affected:
+          $ref: "#/components/schemas/CommerceScriptUnitRebuildAffectedCounts"
+        estimatedAgentCalls: {type: integer, minimum: 0}
+        blockers:
+          type: array
+          items: {type: string}
+    CommerceScriptUnitRebuildRequest:
+      type: object
+      required: [impactToken, expectedRevision]
+      properties:
+        impactToken:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    CreateCommerceScriptVersionRequest:
+      type: object
+      required: [expectedRevision, content]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        content:
+          type: string
+          minLength: 1
+        sourceLanguageHint:
+          $ref: "#/components/schemas/CommerceLocale"
+        activate:
+          type: boolean
+          default: false
+    CommerceLanguageResolution:
+      type: object
+      required: [id, scriptUnitId, sourceScriptVersionId, languageMode, reasoning, needsUserConfirmation, status, inputHash, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        sourceScriptVersionId: {type: string, format: uuid}
+        languageMode:
+          type: string
+          enum: [auto, explicit]
+        sourceLanguage:
+          allOf:
+            - $ref: "#/components/schemas/CommerceLocale"
+          nullable: true
+        targetLanguage:
+          allOf:
+            - $ref: "#/components/schemas/CommerceLocale"
+          nullable: true
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          nullable: true
+        reasoning: {type: string}
+        needsUserConfirmation: {type: boolean}
+        status:
+          type: string
+          enum: [pending, needs_confirmation, confirmed, rejected]
+        inputHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        confirmedAt: {type: string, format: date-time, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ConfirmCommerceScriptLanguageRequest:
+      type: object
+      required: [languageResolutionId, targetLanguage]
+      properties:
+        languageResolutionId: {type: string, format: uuid}
+        targetLanguage:
+          $ref: "#/components/schemas/CommerceLocale"
+    CommerceScriptLocalization:
+      type: object
+      required: [id, scriptUnitId, sourceScriptVersionId, languageResolutionId, version, sourceLanguage, targetLanguage, localizedContent, localizedContentHash, structuredContract, estimatedVoiceoverSeconds, timingAnalysis, timingPolicyVersion, reviewStatus, reviewerOutput, status, revision, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        sourceScriptVersionId: {type: string, format: uuid}
+        languageResolutionId: {type: string, format: uuid}
+        version:
+          type: integer
+          minimum: 1
+        sourceLanguage:
+          $ref: "#/components/schemas/CommerceLocale"
+        targetLanguage:
+          $ref: "#/components/schemas/CommerceLocale"
+        localizedContent:
+          type: string
+          minLength: 1
+        localizedContentHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        structuredContract:
+          type: object
+          additionalProperties: true
+        estimatedVoiceoverSeconds:
+          type: number
+          minimum: 0
+        timingAnalysis:
+          type: object
+          additionalProperties: true
+        timingPolicyVersion: {type: string}
+        reviewStatus:
+          type: string
+          enum: [pending, approved, rejected, changes_requested]
+        reviewerOutput:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [draft, reviewing, approved, rejected, archived]
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        createdAt: {type: string, format: date-time}
+        approvedAt: {type: string, format: date-time, nullable: true}
+        archivedAt: {type: string, format: date-time, nullable: true}
+    CreateCommerceScriptLocalizationRequest:
+      type: object
+      required: [sourceScriptVersionId, languageResolutionId, sourceLanguage, targetLanguage, localizedContent]
+      properties:
+        sourceScriptVersionId: {type: string, format: uuid}
+        languageResolutionId: {type: string, format: uuid}
+        sourceLanguage:
+          $ref: "#/components/schemas/CommerceLocale"
+        targetLanguage:
+          $ref: "#/components/schemas/CommerceLocale"
+        localizedContent:
+          type: string
+          minLength: 1
+        structuredContract:
+          type: object
+          additionalProperties: true
+          default: {}
+        reviewerOutput:
+          type: object
+          additionalProperties: true
+          default: {}
+        approve:
+          type: boolean
+          default: false
+    CommerceScriptTimingEstimate:
+      type: object
+      required: [locale, policyVersion, units, unitsPerSecond, estimatedVoiceoverSeconds, targetDurationSeconds, exceeded]
+      properties:
+        locale:
+          $ref: "#/components/schemas/CommerceLocale"
+        policyVersion: {type: string}
+        units:
+          type: integer
+          minimum: 0
+        unitsPerSecond:
+          type: number
+          exclusiveMinimum: 0
+        estimatedVoiceoverSeconds:
+          type: number
+          minimum: 0
+        targetDurationSeconds:
+          type: integer
+          minimum: 1
+        exceeded: {type: boolean}
+    CommerceScriptUnitEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptUnit"
+    CommerceScriptUnitListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items, hasMore, scriptUnitsRevision]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceScriptUnit"
+                nextCursor: {type: string}
+                hasMore: {type: boolean}
+                scriptUnitsRevision:
+                  type: integer
+                  format: int64
+                  minimum: 1
+    CommerceScriptUnitReorderEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [scriptUnitsRevision]
+              properties:
+                scriptUnitsRevision:
+                  type: integer
+                  format: int64
+                  minimum: 1
+    CommerceScriptVersionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptVersion"
+    CommerceScriptVersionListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceScriptVersion"
+    CommerceScriptVersionMutationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptVersionMutation"
+    CommerceLanguageResolutionEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceLanguageResolution"
+    CommerceLanguageConfirmationAcceptedEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [languageResolution, workflowRun]
+              properties:
+                languageResolution:
+                  $ref: "#/components/schemas/CommerceLanguageResolution"
+                workflowRun:
+                  $ref: "#/components/schemas/WorkflowRun"
+    CommerceScriptUnitRebuildImpactEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptUnitRebuildImpact"
+    CommerceScriptLocalizationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptLocalization"
+    CommerceScriptLocalizationListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceScriptLocalization"
+    CommerceScriptLocalizationCreationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptLocalization"
+            meta:
+              type: object
+              required: [timing]
+              properties:
+                timing:
+                  $ref: "#/components/schemas/CommerceScriptTimingEstimate"
+    CommerceStoryboardPlanStatus:
+      type: string
+      enum: [planning, reviewing, ready, failed, stale, archived]
+    CommerceStoryboardPlan:
+      type: object
+      required: [id, organizationId, projectId, productId, productVersionId, scriptUnitId, sourceScriptVersionId, localizationId, referencePackId, projectProductionGenerationId, scriptUnitGenerationId, commerceWorkflowBindingId, commerceWorkflowBindingRevision, salesScriptContractId, salesScriptContractHash, planRevision, revision, status, active, staleState, targetLanguage, targetDurationSeconds, aspectRatio, timelineTimebase, fpsNumerator, fpsDenominator, allowedShotDurations, shotCount, reviewStatus, planHash, projectionHash, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        productVersionId: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        sourceScriptVersionId: {type: string, format: uuid}
+        localizationId: {type: string, format: uuid}
+        referencePackId: {type: string, format: uuid}
+        projectProductionGenerationId: {type: string, format: uuid}
+        scriptUnitGenerationId: {type: string, format: uuid}
+        commerceWorkflowBindingId: {type: string, format: uuid}
+        commerceWorkflowBindingRevision: {type: integer, format: int64, minimum: 1}
+        salesScriptContractId: {type: string, format: uuid}
+        salesScriptContractHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        workflowRunId: {type: string, format: uuid, nullable: true}
+        planRevision: {type: integer, minimum: 1}
+        revision: {type: integer, format: int64, minimum: 1}
+        status:
+          $ref: "#/components/schemas/CommerceStoryboardPlanStatus"
+        active: {type: boolean}
+        staleState:
+          type: string
+          enum: [fresh, upstream_changed, needs_regeneration]
+        targetLanguage: {$ref: "#/components/schemas/CommerceLocale"}
+        targetDurationSeconds: {type: integer, enum: [15, 30, 60]}
+        aspectRatio: {type: string, minLength: 1}
+        timelineTimebase: {type: integer, format: int64, minimum: 1}
+        fpsNumerator: {type: integer, minimum: 1}
+        fpsDenominator: {type: integer, minimum: 1}
+        allowedShotDurations:
+          type: array
+          minItems: 1
+          items: {type: integer, minimum: 1}
+        shotCount: {type: integer, minimum: 0}
+        reviewStatus:
+          type: string
+          enum: [pending, approved, rejected, changes_requested]
+        planHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        projectionHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        createdAt: {type: string, format: date-time}
+        activatedAt: {type: string, format: date-time, nullable: true}
+    CommerceStoryboardShotSegmentLink:
+      type: object
+      required: [id, localizationSegmentId, sourceSegmentId, usage, ordinal]
+      properties:
+        id: {type: string, format: uuid}
+        localizationSegmentId: {type: string, format: uuid}
+        sourceSegmentId: {type: string, format: uuid}
+        usage:
+          type: string
+          enum: [visual, voiceover, onscreen, cta, context]
+        ordinal: {type: integer, minimum: 0}
+        verbatimStart: {type: integer, minimum: 0, nullable: true}
+        verbatimEnd: {type: integer, minimum: 1, nullable: true}
+    CommerceStoryboardShotProductReference:
+      type: object
+      required: [id, productReferenceId, sourcePackId, sourcePackItemId, role, ordinal, required, artifactId, mediaFileId, contentHash]
+      properties:
+        id: {type: string, format: uuid}
+        productReferenceId: {type: string, format: uuid}
+        sourcePackId: {type: string, format: uuid}
+        sourcePackItemId: {type: string, format: uuid}
+        role:
+          type: string
+          enum: [primary, detail, logo, usage, context]
+        ordinal: {type: integer, minimum: 0}
+        required: {type: boolean}
+        artifactId: {type: string, format: uuid}
+        mediaFileId: {type: string, format: uuid}
+        contentHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        previewUrl: {type: string, format: uri}
+    CommerceStoryboardShot:
+      type: object
+      required: [id, storyboardPlanId, scriptUnitId, scriptUnitGenerationId, revision, shotOrdinal, title, durationSeconds, startTick, endTick, salesBeat, visualAction, shotPurpose, composition, camera, voiceoverText, onscreenText, targetLanguage, soundEffects, musicCue, requiredProductFeatures, reviewStatus, manualOverride, staleState, imagePromptStatus, imageStatus, videoPromptStatus, videoStatus, segmentLinks, productReferences]
+      properties:
+        id: {type: string, format: uuid}
+        storyboardPlanId: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        scriptUnitGenerationId: {type: string, format: uuid}
+        revision: {type: integer, format: int64, minimum: 1}
+        shotOrdinal: {type: integer, minimum: 1}
+        title: {type: string}
+        durationSeconds: {type: integer, minimum: 1}
+        startTick: {type: integer, format: int64, minimum: 0}
+        endTick: {type: integer, format: int64, minimum: 1}
+        salesBeat: {type: string}
+        visualAction: {type: string}
+        shotPurpose: {type: string}
+        composition: {type: string}
+        camera: {type: object, additionalProperties: true}
+        voiceoverText: {type: string}
+        onscreenText: {type: string}
+        targetLanguage: {$ref: "#/components/schemas/CommerceLocale"}
+        soundEffects:
+          type: array
+          items: {}
+        musicCue: {type: string}
+        requiredProductFeatures:
+          type: array
+          items: {type: string}
+        reviewStatus: {type: string}
+        manualOverride: {type: boolean}
+        staleState: {type: string}
+        imagePrompt: {type: string}
+        imagePromptStatus: {type: string}
+        imageStatus: {type: string}
+        imageArtifactId: {type: string, format: uuid, nullable: true}
+        imagePreviewUrl: {type: string, format: uri, nullable: true}
+        videoPrompt: {type: string}
+        videoPromptStatus: {type: string}
+        videoRenderPlanId: {type: string, format: uuid, nullable: true}
+        videoRenderPlanStatus:
+          type: string
+          nullable: true
+          enum: [planned, running, partial_succeeded, succeeded, failed, cancelled, stale, archived, replan_required]
+        videoStatus: {type: string}
+        videoArtifactId: {type: string, format: uuid, nullable: true}
+        videoPreviewUrl: {type: string, format: uri, nullable: true}
+        imageErrorCode: {type: string, nullable: true}
+        imageErrorMessage: {type: string, nullable: true}
+        videoErrorCode: {type: string, nullable: true}
+        videoErrorMessage: {type: string, nullable: true}
+        segmentLinks:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceStoryboardShotSegmentLink"
+        productReferences:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceStoryboardShotProductReference"
+        editedBy: {type: string, format: uuid, nullable: true}
+        editedAt: {type: string, format: date-time, nullable: true}
+    CommerceStoryboardPlanDetail:
+      type: object
+      required: [plan, shots]
+      properties:
+        plan:
+          $ref: "#/components/schemas/CommerceStoryboardPlan"
+        shots:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceStoryboardShot"
+    CommerceStoryboardPlanDetailEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceStoryboardPlanDetail"
+    CommerceStoryboardPlanListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceStoryboardPlan"
+    CreateCommerceStoryboardPlanRequest:
+      type: object
+      properties:
+        expectedUnitGenerationId:
+          type: string
+          format: uuid
+    UpdateCommerceStoryboardShotRequest:
+      type: object
+      required: [expectedPlanRevision, expectedShotRevision]
+      properties:
+        expectedPlanRevision: {type: integer, format: int64, minimum: 1}
+        expectedShotRevision: {type: integer, format: int64, minimum: 1}
+        visualAction: {type: string, minLength: 1}
+        shotPurpose: {type: string, minLength: 1}
+        composition: {type: string, minLength: 1}
+        camera: {type: object, additionalProperties: true}
+        voiceoverText: {type: string}
+        onscreenText: {type: string}
+        durationSeconds: {type: integer, minimum: 1}
+        productReferenceIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, format: uuid}
+    ReorderCommerceStoryboardShotItem:
+      type: object
+      required: [shotId]
+      properties:
+        shotId: {type: string, format: uuid}
+        durationSeconds: {type: integer, minimum: 1}
+    ReorderCommerceStoryboardShotsRequest:
+      type: object
+      required: [planId, expectedPlanRevision, items]
+      properties:
+        planId: {type: string, format: uuid}
+        expectedPlanRevision: {type: integer, format: int64, minimum: 1}
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReorderCommerceStoryboardShotItem"
+    CommerceReferenceImageBatchRequest:
+      type: object
+      required: [operation, planId, expectedPlanRevision, expectedUnitGenerationId, shotIds]
+      properties:
+        operation:
+          type: string
+          enum: [generate_prompts, generate_images]
+        planId: {type: string, format: uuid}
+        expectedPlanRevision: {type: integer, format: int64, minimum: 1}
+        expectedUnitGenerationId: {type: string, format: uuid}
+        shotIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        force: {type: boolean, default: false}
+        concurrency: {type: integer, minimum: 1, maximum: 16, default: 5}
+    CommerceVideoBatchRequest:
+      type: object
+      required: [planId, expectedPlanRevision, expectedUnitGenerationId, shotIds]
+      properties:
+        planId: {type: string, format: uuid}
+        expectedPlanRevision: {type: integer, format: int64, minimum: 1}
+        expectedUnitGenerationId: {type: string, format: uuid}
+        shotIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        force: {type: boolean, default: false}
+        concurrency: {type: integer, minimum: 1, maximum: 16, default: 5}
+        resolution: {type: string, default: 1080p}
+    CommerceRetryProductionRunRequest:
+      type: object
+      properties:
+        itemIds:
+          type: array
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        concurrency: {type: integer, minimum: 1, maximum: 16}
+    CommerceCancelProductionRunRequest:
+      type: object
+      properties:
+        reason: {type: string, maxLength: 500}
+    CommerceScriptUnitBatchAdvanceItem:
+      type: object
+      required: [scriptUnitId, expectedUnitGenerationId]
+      properties:
+        scriptUnitId: {type: string, format: uuid}
+        expectedUnitGenerationId: {type: string, format: uuid}
+        planId: {type: string, format: uuid}
+        expectedPlanRevision: {type: integer, format: int64, minimum: 1}
+        timelineId: {type: string, format: uuid}
+        expectedTimelineRevision: {type: integer, format: int64, minimum: 1}
+        shotIds:
+          type: array
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        force: {type: boolean, default: false}
+        resolution: {type: string, default: 1080p}
+        title: {type: string, maxLength: 200}
+    CommerceScriptUnitBatchAdvanceRequest:
+      type: object
+      required: [targetStage, items]
+      properties:
+        targetStage:
+          type: string
+          enum: [storyboard, reference_images, video_prompts, shot_videos, final_compose]
+        items:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/CommerceScriptUnitBatchAdvanceItem"
+        unitConcurrency: {type: integer, minimum: 1, maximum: 16, default: 5}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 16, default: 4}
+    CommerceScriptUnitBatchRetryRequest:
+      type: object
+      properties:
+        scriptUnitIds:
+          type: array
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        maxConcurrency: {type: integer, minimum: 1, maximum: 16}
+    CommerceScriptUnitBatchCancelRequest:
+      type: object
+      properties:
+        reason: {type: string, maxLength: 500}
+    CommerceScriptUnitBatchItem:
+      type: object
+      required: [id, scriptUnitId, unitGenerationId, ordinal, status, attemptGeneration, inputSnapshot, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        unitGenerationId: {type: string, format: uuid}
+        childRunId: {type: string, format: uuid}
+        childWorkflowRunId: {type: string, format: uuid}
+        ordinal: {type: integer, minimum: 0}
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled, skipped]
+        attemptGeneration: {type: integer, minimum: 1}
+        inputSnapshot: {type: object, additionalProperties: true}
+        errorCode: {type: string}
+        errorMessage: {type: string}
+        createdAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+    CommerceScriptUnitBatch:
+      type: object
+      required: [id, organizationId, projectId, projectGenerationId, targetStage, status, maxConcurrency, workflowRunId, totalItems, completedItems, failedItems, cancelledItems, revision, createdAt, items]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        projectGenerationId: {type: string, format: uuid}
+        targetStage:
+          type: string
+          enum: [storyboard, reference_images, video_prompts, shot_videos, final_compose]
+        status:
+          type: string
+          enum: [queued, running, partially_succeeded, succeeded, failed, cancelling, cancelled]
+        maxConcurrency: {type: integer, minimum: 1, maximum: 16}
+        retryOfCoordinatorId: {type: string, format: uuid}
+        workflowRunId: {type: string, format: uuid}
+        totalItems: {type: integer, minimum: 0}
+        completedItems: {type: integer, minimum: 0}
+        failedItems: {type: integer, minimum: 0}
+        cancelledItems: {type: integer, minimum: 0}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+        cancelledAt: {type: string, format: date-time}
+        errorCode: {type: string}
+        errorMessage: {type: string}
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceScriptUnitBatchItem"
+    CommerceScriptUnitBatchEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptUnitBatch"
+    CommerceScriptUnitBatchListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceScriptUnitBatch"
+    CommerceExecutionIdentity:
+      type: object
+      required: [organizationId, projectId, projectGenerationId, videoProductionBindingId, videoProductionBindingRevision, videoProfileSnapshotHash, commerceWorkflowBindingId, commerceWorkflowBindingRevision, commerceConfigurationHash]
+      properties:
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        projectGenerationId: {type: string, format: uuid}
+        videoProductionBindingId: {type: string, format: uuid}
+        videoProductionBindingRevision: {type: integer, format: int64, minimum: 1}
+        videoProfileSnapshotHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        commerceWorkflowBindingId: {type: string, format: uuid}
+        commerceWorkflowBindingRevision: {type: integer, format: int64, minimum: 1}
+        commerceConfigurationHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+    CommerceUnitGenerationIdentity:
+      allOf:
+        - $ref: "#/components/schemas/CommerceExecutionIdentity"
+        - type: object
+          required: [productId, scriptUnitId, scriptUnitRevision, scriptUnitGenerationId, scriptUnitGenerationNo, unitConfigurationHash]
+          properties:
+            productId: {type: string, format: uuid}
+            scriptUnitId: {type: string, format: uuid}
+            scriptUnitRevision: {type: integer, format: int64, minimum: 1}
+            scriptUnitGenerationId: {type: string, format: uuid}
+            scriptUnitGenerationNo: {type: integer, format: int64, minimum: 1}
+            unitConfigurationHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+    CommerceProductionSubject:
+      type: object
+      required: [type, key, inputHash]
+      properties:
+        type:
+          type: string
+          enum: [plan_phase, candidate_shot, storyboard_shot, final_compose]
+        key: {type: string, minLength: 1}
+        storyboardShotId: {type: string, format: uuid}
+        inputHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+    CommerceProductionRunStatus:
+      type: string
+      enum: [queued, running, partially_succeeded, succeeded, failed, cancelling, cancelled]
+    CommerceProductionItemStatus:
+      type: string
+      enum: [queued, running, succeeded, failed_retryable, failed_terminal, cancelled, discarded, skipped]
+    CommerceProductionRun:
+      type: object
+      required: [id, identity, runType, status, payloadHash, inputSnapshot, revision, totalItems, completedItems, failedItems, cancelledItems, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        identity:
+          $ref: "#/components/schemas/CommerceUnitGenerationIdentity"
+        workflowRunId: {type: string, format: uuid}
+        runType:
+          type: string
+          enum: [storyboard_plan, reference_images, video_prompts, shot_videos, final_compose]
+        status:
+          $ref: "#/components/schemas/CommerceProductionRunStatus"
+        payloadHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        inputSnapshot: {type: object, additionalProperties: true}
+        revision: {type: integer, format: int64, minimum: 1}
+        totalItems: {type: integer, minimum: 0}
+        completedItems: {type: integer, minimum: 0}
+        failedItems: {type: integer, minimum: 0}
+        cancelledItems: {type: integer, minimum: 0}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time, nullable: true}
+        completedAt: {type: string, format: date-time, nullable: true}
+        errorCode: {type: string}
+        errorMessage: {type: string}
+    CommerceProductionRunItem:
+      type: object
+      required: [id, runId, identity, subject, status, currentAttempt, outputSnapshot, retryable]
+      properties:
+        id: {type: string, format: uuid}
+        runId: {type: string, format: uuid}
+        identity:
+          $ref: "#/components/schemas/CommerceUnitGenerationIdentity"
+        subject:
+          $ref: "#/components/schemas/CommerceProductionSubject"
+        status:
+          $ref: "#/components/schemas/CommerceProductionItemStatus"
+        currentAttempt: {type: integer, minimum: 0}
+        outputSnapshot: {type: object, additionalProperties: true}
+        outputArtifactId: {type: string, format: uuid}
+        outputMediaFileId: {type: string, format: uuid}
+        outputStoryboardPlanId: {type: string, format: uuid}
+        outputVideoPromptPlanId: {type: string, format: uuid}
+        outputVideoRenderPlanId: {type: string, format: uuid}
+        outputFinalVideoVersionId: {type: string, format: uuid}
+        providerRequestId: {type: string, format: uuid}
+        providerCallId: {type: string, format: uuid}
+        providerAsyncTaskId: {type: string, format: uuid}
+        errorCode: {type: string}
+        errorMessage: {type: string}
+        retryable: {type: boolean}
+        startedAt: {type: string, format: date-time, nullable: true}
+        completedAt: {type: string, format: date-time, nullable: true}
+    CommerceProductionRunDetail:
+      type: object
+      required: [run, items]
+      properties:
+        run:
+          $ref: "#/components/schemas/CommerceProductionRun"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceProductionRunItem"
+    CommerceProductionRunEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductionRun"
+    CommerceProductionRunListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceProductionRun"
+    CommerceProductionRunDetailEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProductionRunDetail"
+    CommerceScriptUnitProductionSummary:
+      type: object
+      required: [status, currentStage, progress, failedCount, finalVideoStatus]
+      properties:
+        status: {type: string}
+        currentStage: {type: string}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        failedCount: {type: integer, minimum: 0}
+        finalVideoStatus: {type: string}
+    CommerceProjectProductionStatus:
+      type: object
+      required: [overall, product, scriptUnitsRevision]
+      properties:
+        overall:
+          type: object
+          required: [status, commerceWorkflowBindingRevision, videoProductionBindingRevision, scriptUnitCount, completedScriptUnitCount, runningScriptUnitCount, failedScriptUnitCount, needsReviewScriptUnitCount]
+          properties:
+            status: {type: string, enum: [unconfigured, pending, running, needs_review, failed, completed]}
+            projectGenerationId: {type: string, format: uuid}
+            commerceWorkflowBindingRevision: {type: integer, format: int64, minimum: 0}
+            videoProductionBindingRevision: {type: integer, format: int64, minimum: 0}
+            scriptUnitCount: {type: integer, minimum: 0}
+            completedScriptUnitCount: {type: integer, minimum: 0}
+            runningScriptUnitCount: {type: integer, minimum: 0}
+            failedScriptUnitCount: {type: integer, minimum: 0}
+            needsReviewScriptUnitCount: {type: integer, minimum: 0}
+        product:
+          type: object
+          required: [status, referenceCount]
+          properties:
+            status: {type: string}
+            productVersionId: {type: string, format: uuid}
+            referenceCount: {type: integer, minimum: 0}
+        scriptUnitsRevision: {type: integer, format: int64, minimum: 1}
+    CommerceProjectProductionStatusEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceProjectProductionStatus"
+    CommerceCountStageStatus:
+      type: object
+      required: [total, succeeded, failed, running]
+      properties:
+        total: {type: integer, minimum: 0}
+        succeeded: {type: integer, minimum: 0}
+        failed: {type: integer, minimum: 0}
+        running: {type: integer, minimum: 0}
+    CommercePromptStageStatus:
+      type: object
+      required: [total, approved, failed, running]
+      properties:
+        total: {type: integer, minimum: 0}
+        approved: {type: integer, minimum: 0}
+        failed: {type: integer, minimum: 0}
+        running: {type: integer, minimum: 0}
+    CommerceUnitProductionStatus:
+      type: object
+      required: [scriptUnitId, unitNo, sortOrder, title, unitGenerationNo, targetDurationSeconds, status, progress, nextAction, stages]
+      properties:
+        scriptUnitId: {type: string, format: uuid}
+        unitNo: {type: integer, format: int64, minimum: 1}
+        sortOrder: {type: integer, format: int64, minimum: 1}
+        title: {type: string}
+        unitGenerationId: {type: string, format: uuid}
+        unitGenerationNo: {type: integer, format: int64, minimum: 0}
+        targetLanguage: {type: string}
+        targetDurationSeconds: {type: integer, enum: [15, 30, 60]}
+        status: {type: string, enum: [pending, running, needs_review, failed, completed]}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        nextAction: {type: string}
+        stages:
+          type: object
+          required: [setup, language, script, storyboard, referenceImages, videoPrompts, shotVideos, finalVideo]
+          properties:
+            setup:
+              type: object
+              required: [status, revision]
+              properties:
+                status: {type: string}
+                revision: {type: integer, format: int64, minimum: 1}
+            language:
+              type: object
+              required: [status, mode]
+              properties:
+                status: {type: string}
+                mode: {type: string, enum: [auto, explicit]}
+                sourceLanguage: {type: string}
+                targetLanguage: {type: string}
+                confidence: {type: number, minimum: 0, maximum: 1}
+            script:
+              type: object
+              required: [status, sourceVersion, localizationVersion]
+              properties:
+                status: {type: string}
+                sourceVersion: {type: integer, minimum: 0}
+                localizationVersion: {type: integer, minimum: 0}
+            storyboard:
+              type: object
+              required: [status, planRevision, shotCount]
+              properties:
+                status: {type: string}
+                planId: {type: string, format: uuid}
+                planRevision: {type: integer, format: int64, minimum: 0}
+                shotCount: {type: integer, minimum: 0}
+            referenceImages:
+              $ref: "#/components/schemas/CommerceCountStageStatus"
+            videoPrompts:
+              $ref: "#/components/schemas/CommercePromptStageStatus"
+            shotVideos:
+              $ref: "#/components/schemas/CommerceCountStageStatus"
+            finalVideo:
+              type: object
+              required: [status]
+              properties:
+                status: {type: string}
+                timelineId: {type: string, format: uuid}
+                finalVideoVersionId: {type: string, format: uuid}
+    CommerceUnitProductionStatusEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceUnitProductionStatus"
+    CommerceTimeline:
+      type: object
+      required: [id, organizationId, projectId, projectGenerationId, scriptUnitId, unitGenerationId, revision, title, status, aspectRatio, resolution, timelineTimebase, fpsNumerator, fpsDenominator, metadata, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        projectGenerationId: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        unitGenerationId: {type: string, format: uuid}
+        workflowRunId: {type: string, format: uuid}
+        revision: {type: integer, format: int64, minimum: 1}
+        title: {type: string}
+        status: {type: string, enum: [draft, active, archived]}
+        aspectRatio: {type: string}
+        resolution: {type: string}
+        timelineTimebase: {type: integer, format: int64, minimum: 1}
+        fpsNumerator: {type: integer, minimum: 1}
+        fpsDenominator: {type: integer, minimum: 1}
+        metadata: {type: object, additionalProperties: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CommerceTimelineOverlay:
+      type: object
+      required: [id, timelineId, role, ordinal, text, startTick, endTick, style, contentHash]
+      properties:
+        id: {type: string, format: uuid}
+        timelineId: {type: string, format: uuid}
+        timelineClipId: {type: string, format: uuid}
+        storyboardShotId: {type: string, format: uuid}
+        role: {type: string, enum: [onscreen_text, cta_end_card]}
+        ordinal: {type: integer, minimum: 0}
+        text: {type: string, minLength: 1}
+        startTick: {type: integer, format: int64, minimum: 0}
+        endTick: {type: integer, format: int64, minimum: 1}
+        style: {type: object, additionalProperties: true}
+        contentHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+    CommerceTimelineOverlayRequest:
+      type: object
+      required: [role, ordinal, text, startTick, endTick, style]
+      properties:
+        timelineClipId: {type: string, format: uuid}
+        storyboardShotId: {type: string, format: uuid}
+        role: {type: string, enum: [onscreen_text, cta_end_card]}
+        ordinal: {type: integer, minimum: 0}
+        text: {type: string, minLength: 1}
+        startTick: {type: integer, format: int64, minimum: 0}
+        endTick: {type: integer, format: int64, minimum: 1}
+        style: {type: object, additionalProperties: true}
+    PrepareCommerceTimelineRequest:
+      type: object
+      required: [storyboardPlanId, expectedPlanRevision, expectedUnitGenerationId]
+      properties:
+        storyboardPlanId: {type: string, format: uuid}
+        expectedPlanRevision: {type: integer, format: int64, minimum: 1}
+        expectedUnitGenerationId: {type: string, format: uuid}
+        title: {type: string}
+        resolution: {type: string}
+    UpdateCommerceTimelineRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision: {type: integer, format: int64, minimum: 1}
+        title: {type: string}
+        overlays:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceTimelineOverlayRequest"
+    ComposeCommerceFinalVideoRequest:
+      type: object
+      required: [timelineId, expectedTimelineRevision, expectedUnitGenerationId]
+      properties:
+        timelineId: {type: string, format: uuid}
+        expectedTimelineRevision: {type: integer, format: int64, minimum: 1}
+        expectedUnitGenerationId: {type: string, format: uuid}
+        title: {type: string}
+        resolution: {type: string}
+    CommerceFinalVideoVersion:
+      allOf:
+        - $ref: "#/components/schemas/FinalVideoVersion"
+        - type: object
+          required: [scriptUnitId, unitGenerationId]
+          properties:
+            scriptUnitId: {type: string, format: uuid}
+            unitGenerationId: {type: string, format: uuid}
+    CommerceTimelineDetail:
+      type: object
+      required: [timeline, clips, overlays, finalVideoVersions]
+      properties:
+        timeline:
+          $ref: "#/components/schemas/CommerceTimeline"
+        clips:
+          type: array
+          items:
+            $ref: "#/components/schemas/TimelineClipDetail"
+        overlays:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceTimelineOverlay"
+        finalVideoVersions:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceFinalVideoVersion"
+    CommerceTimelineEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceTimeline"
+    CommerceTimelineListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items, unitGenerationId]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceTimeline"
+                unitGenerationId: {type: string, format: uuid}
+    CommerceTimelineDetailEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceTimelineDetail"
+    CommerceFinalVideoEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceFinalVideoVersion"
+    CommerceFinalVideoListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items, unitGenerationId]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceFinalVideoVersion"
+                unitGenerationId: {type: string, format: uuid}
+    CommerceFinalVideoActivationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [activated]
+              properties:
+                activated: {type: boolean}
+    CommerceProductionAttempt:
+      type: object
+      required: [id, runId, itemId, attemptNumber, inputHash, status]
+      properties:
+        id: {type: string, format: uuid}
+        runId: {type: string, format: uuid}
+        itemId: {type: string, format: uuid}
+        attemptNumber: {type: integer, minimum: 1}
+        inputHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        status:
+          $ref: "#/components/schemas/CommerceProductionItemStatus"
     BindProjectManualRequest:
       type: object
       required: [promptVersionId]

@@ -8,7 +8,6 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { AlertCircle, ArrowRight, Boxes, Clapperboard, FileCode2, FileText, Film, Play, Video } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
@@ -23,7 +22,6 @@ type FlowStage = {
   key: string;
   label: string;
   href: string;
-  status: string;
   countLabel: string;
   summary: string[];
   buttonLabel: string;
@@ -87,7 +85,6 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
     return <div>项目不存在</div>;
   }
 
-  const overallProgress = productionStatus?.overall?.progress || 0;
   const nextAction = productionStatus ? nextProductionAction(productionStatus) : "";
   const flowStages = productionStatus ? buildFlowStages(projectId, productionStatus, nextAction) : [];
 
@@ -119,30 +116,24 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
       </Surface>
 
       {/* 主CTA：继续下一步 */}
-      <div className="flex justify-center">
-        <Button
-          size="lg"
-          className="h-14 gap-3 px-8 text-base font-semibold"
-          onClick={() => nextAction && nextActionMutation.mutate(nextAction)}
-          disabled={!nextAction || nextActionMutation.isPending}
-        >
-          <Play className="h-5 w-5" />
-          {nextAction ? productionActionLabel(nextAction) : "开始制作"}
-        </Button>
-      </div>
+      {nextAction !== "parse_script_scenes" ? (
+        <div className="flex justify-center">
+          <Button
+            size="lg"
+            className="h-14 gap-3 px-8 text-base font-semibold"
+            onClick={() => nextAction && nextActionMutation.mutate(nextAction)}
+            disabled={!nextAction || nextActionMutation.isPending}
+          >
+            <Play className="h-5 w-5" />
+            {nextAction ? productionActionLabel(nextAction) : "开始制作"}
+          </Button>
+        </div>
+      ) : null}
 
       {/* 主流程 */}
       <Surface>
         <SectionTitle title="主流程" description="内容、剧本、资产、分镜、视频、成片" />
         <div className="p-5">
-          <div className="mb-6">
-            <div className="mb-2 flex items-center justify-between text-sm">
-              <span className="font-medium">整体进度</span>
-              <span className="text-muted-foreground">{Math.round(overallProgress)}%</span>
-            </div>
-            <Progress value={overallProgress} className="h-2" />
-          </div>
-
           <div className="grid gap-3 xl:grid-cols-6">
             {flowStages.map((stage) => (
               <FlowStageCard
@@ -196,11 +187,10 @@ function FlowStageCard({
   return (
     <div className="grid min-h-64 content-between gap-4 rounded-lg border p-4">
       <div className="grid gap-3">
-        <div className="flex items-start justify-between gap-2">
+        <div>
           <div className="grid h-9 w-9 place-items-center rounded-md bg-muted">
             <Icon className="h-4 w-4" />
           </div>
-          <StatusBadge status={stage.status} />
         </div>
         <div>
           <div className="font-semibold">{stage.label}</div>
@@ -240,14 +230,12 @@ function buildFlowStages(projectId: string, status: ProductionStatus, nextAction
   const shotVideos = status.stages.shotVideos;
   const finalVideo = status.stages.finalVideo;
   const sourceCount = source.novelSourceCount + source.scriptSourceCount + source.briefSourceCount;
-  const videoStatus = mergedMediaStatus(shotImages, shotVideos);
 
   return [
     {
       key: "content",
       label: "内容",
       href: projectHref(projectId, "content"),
-      status: sourceCount > 0 ? source.status : "pending",
       countLabel: `${sourceCount} 个内容 · ${source.chapterCount} 个分集`,
       summary: summaryOrFallback(source.summary, sourceCount > 0 ? "内容已添加，可继续生成剧本" : "先添加小说原文、剧本或创意文案"),
       buttonLabel: "管理内容",
@@ -257,7 +245,6 @@ function buildFlowStages(projectId: string, status: ProductionStatus, nextAction
       key: "scripts",
       label: "剧本",
       href: projectHref(projectId, "scripts"),
-      status: source.activeScriptId ? "completed" : source.status,
       countLabel: source.activeScriptId ? `已激活 · ${source.scriptSceneCount ?? 0} 场` : "未激活剧本",
       summary: [
         source.activeScriptTitle ? `当前剧本：${source.activeScriptTitle}` : "根据内容生成或导入剧本",
@@ -271,7 +258,6 @@ function buildFlowStages(projectId: string, status: ProductionStatus, nextAction
       key: "assets",
       label: "资产",
       href: projectHref(projectId, "assets"),
-      status: assets.status,
       countLabel: `${assets.characterCount} 角色 · ${assets.sceneCount} 场景 · ${assets.propCount} 道具`,
       summary: [
         assets.missingAssetCardCount ? `${assets.missingAssetCardCount} 个资产卡待补齐` : "资产卡已归档到项目",
@@ -285,7 +271,6 @@ function buildFlowStages(projectId: string, status: ProductionStatus, nextAction
       key: "storyboard",
       label: "分镜",
       href: projectHref(projectId, "storyboard"),
-      status: storyboard.status,
       countLabel: `${storyboard.shotCount} 个镜头 · ${shotAssets.requirementCount} 个资产需求`,
       summary: [
         storyboard.staleShotCount ? `${storyboard.staleShotCount} 个镜头需要重生成` : "分镜表可查看、编辑和删除",
@@ -299,7 +284,6 @@ function buildFlowStages(projectId: string, status: ProductionStatus, nextAction
       key: "video",
       label: "视频",
       href: projectHref(projectId, "video"),
-      status: videoStatus,
       countLabel: `${shotVideos.succeeded}/${shotVideos.total} 个镜头视频完成`,
       summary: [
         shotImages.pending + shotImages.stale ? `${shotImages.pending + shotImages.stale} 个镜头图片待生成` : "镜头图片已满足视频生成条件",
@@ -313,7 +297,6 @@ function buildFlowStages(projectId: string, status: ProductionStatus, nextAction
       key: "final",
       label: "成片",
       href: projectHref(projectId, "final"),
-      status: finalVideo.status,
       countLabel: `${finalVideo.enabledClipCount ?? 0} 个片段 · ${finalVideo.timelineCount ?? 0} 条时间线`,
       summary: [
         finalVideo.finalVideoVersionId ? "已有可用成片版本" : "镜头视频完成后可合成成片",
@@ -327,23 +310,4 @@ function buildFlowStages(projectId: string, status: ProductionStatus, nextAction
 
 function summaryOrFallback(summary: string[] | undefined, fallback: string) {
   return summary && summary.length > 0 ? summary : [fallback];
-}
-
-function mergedMediaStatus(
-  images: ProductionStatus["stages"]["shotImages"],
-  videos: ProductionStatus["stages"]["shotVideos"],
-) {
-  if (images.running > 0 || videos.running > 0) {
-    return "running";
-  }
-  if (images.failed > 0 || videos.failed > 0) {
-    return "failed";
-  }
-  if (videos.total > 0 && videos.succeeded >= videos.total) {
-    return "completed";
-  }
-  if (images.pending > 0 || videos.pending > 0 || images.stale > 0 || videos.stale > 0) {
-    return "pending";
-  }
-  return videos.status || images.status || "pending";
 }

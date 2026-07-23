@@ -39,6 +39,32 @@ func TestSnapshotHashIsStableForMapOrder(t *testing.T) {
 	}
 }
 
+func TestCanonicalJSONSurvivesJSONBObjectReordering(t *testing.T) {
+	type nestedSnapshot struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		VideoRatio    string `json:"videoRatio"`
+	}
+	created, err := canonicalJSON(map[string]any{
+		"profileKey":              "single_frame_i2v",
+		"productionConfiguration": nestedSnapshot{SchemaVersion: 2, VideoRatio: "9:16"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := canonicalJSON(json.RawMessage(
+		`{"productionConfiguration": {"videoRatio": "9:16", "schemaVersion": 2}, "profileKey": "single_frame_i2v"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(created) != string(loaded) {
+		t.Fatalf("canonical JSON differs after JSONB-style reordering:\ncreated: %s\nloaded:  %s", created, loaded)
+	}
+	if hashBytes(created) != hashBytes(loaded) {
+		t.Fatalf("canonical hashes differ after JSONB-style reordering: %s != %s", hashBytes(created), hashBytes(loaded))
+	}
+}
+
 func TestCompatibilityPolicy(t *testing.T) {
 	for _, value := range []string{CompatibilityStrict, CompatibilityCompatibleFallback} {
 		if err := validateCompatibilityPolicy(value); err != nil {

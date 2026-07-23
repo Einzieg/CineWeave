@@ -37,6 +37,7 @@ type workflowStartOutboxItem struct {
 	ID                     string
 	WorkflowRunID          *string
 	AgentTaskID            *string
+	CommerceSetupRunID     *string
 	OrganizationID         string
 	ProjectID              string
 	ProductionGenerationID string
@@ -78,37 +79,46 @@ func decodeWorkflowStartInput[T any](raw json.RawMessage) (any, error) {
 }
 
 var workflowStartDefinitions = map[string]workflowStartDefinition{
-	"text_to_storyboard":                  {workflows.TextToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"extract_novel_events":                {workflows.ExtractNovelEventsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"generate_adaptation_plan":            {workflows.GenerateAdaptationPlanWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"adaptation_plan_to_script":           {workflows.AdaptationPlanToScriptWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"source_to_script":                    {workflows.SourceToScriptWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"parse_script_scenes":                 {workflows.ParseScriptScenesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"script_to_assets":                    {workflows.ScriptToAssetsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"script_to_storyboard":                {workflows.ScriptToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"script_episode_timing":               {workflows.AnalyzeScriptEpisodeTimingWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"video_production":                    {workflows.VideoProductionWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"compose_timeline":                    {workflows.ComposeTimelineWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_canonical_asset_image":    {workflows.RegenerateCanonicalAssetImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_derived_asset_image":      {workflows.RegenerateDerivedAssetImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_shot_image":               {workflows.RegenerateShotImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_shot_video":               {workflows.RegenerateShotVideoWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_final_video":              {workflows.RegenerateFinalVideoWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_script_scene":             {workflows.RegenerateScriptSceneWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"regenerate_scene_storyboard":         {workflows.RegenerateSceneStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_shot_image_prompts":   {workflows.BatchGenerateShotImagePromptsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_shot_images":          {workflows.BatchGenerateShotImagesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_shot_video_prompts":   {workflows.BatchGenerateShotVideoPromptsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_shot_videos":          {workflows.EpisodeBatchGenerateShotVideosWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_cancel_shot_videos":            {workflows.BatchCancelShotVideosWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"batch_generate_asset_cards":          {workflows.BatchGenerateAssetCardsWorkflow, decodeWorkflowStartInput[workflows.AssetBatchWorkflowInput]},
-	"batch_generate_asset_images":         {workflows.BatchGenerateCanonicalAssetImagesWorkflow, decodeWorkflowStartInput[workflows.AssetBatchWorkflowInput]},
-	"batch_generate_derived_asset_images": {workflows.BatchGenerateDerivedAssetImagesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
-	"episode_audio_production":            {workflows.EpisodeAudioProductionWorkflow, decodeWorkflowStartInput[workflows.EpisodeAudioProductionInput]},
-	"native_audio_review":                 {workflows.NativeAudioReviewWorkflow, decodeWorkflowStartInput[workflows.NativeAudioReviewWorkflowInput]},
-	"export_project":                      {workflows.ExportProjectWorkflow, decodeWorkflowStartInput[workflows.ExportProjectInput]},
-	"project_agent":                       {workflows.ProjectAgentWorkflow, decodeWorkflowStartInput[workflows.ProjectAgentWorkflowInput]},
-	"project_video_production_rebuild":    {workflows.ProjectVideoProductionRebuildWorkflow, decodeWorkflowStartInput[workflows.ProjectVideoProductionRebuildInput]},
+	"commerce_project_setup":                 {workflows.CommerceProjectSetupWorkflow, decodeWorkflowStartInput[workflows.CommerceProjectSetupInput]},
+	"commerce_script_unit_preparation":       {workflows.CommerceScriptUnitPreparationWorkflow, decodeWorkflowStartInput[workflows.CommerceScriptUnitPreparationInput]},
+	"commerce_script_organization":           {workflows.CommerceScriptOrganizationWorkflow, decodeWorkflowStartInput[workflows.CommerceScriptOrganizationInput]},
+	"commerce_storyboard_planning":           {workflows.CommerceStoryboardPlanningWorkflow, decodeWorkflowStartInput[workflows.CommerceStoryboardPlanningInput]},
+	"commerce_reference_image_batch":         {workflows.CommerceReferenceImageBatchWorkflow, decodeWorkflowStartInput[workflows.CommerceReferenceImageBatchInput]},
+	"commerce_video_prompt_batch":            {workflows.CommerceVideoPromptBatchWorkflow, decodeWorkflowStartInput[workflows.CommerceVideoBatchInput]},
+	"commerce_shot_video_batch":              {workflows.CommerceShotVideoBatchWorkflow, decodeWorkflowStartInput[workflows.CommerceVideoBatchInput]},
+	"commerce_final_compose":                 {workflows.CommerceFinalComposeWorkflow, decodeWorkflowStartInput[workflows.CommerceFinalComposeInput]},
+	"commerce_script_unit_batch_coordinator": {workflows.CommerceScriptUnitBatchCoordinatorWorkflow, decodeWorkflowStartInput[workflows.CommerceScriptUnitBatchCoordinatorInput]},
+	"text_to_storyboard":                     {workflows.TextToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"extract_novel_events":                   {workflows.ExtractNovelEventsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"generate_adaptation_plan":               {workflows.GenerateAdaptationPlanWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"adaptation_plan_to_script":              {workflows.AdaptationPlanToScriptWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"source_to_script":                       {workflows.SourceToScriptWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"parse_script_scenes":                    {workflows.ParseScriptScenesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"script_to_assets":                       {workflows.ScriptToAssetsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"script_to_storyboard":                   {workflows.ScriptToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"script_episode_timing":                  {workflows.AnalyzeScriptEpisodeTimingWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"video_production":                       {workflows.VideoProductionWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"compose_timeline":                       {workflows.ComposeTimelineWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_canonical_asset_image":       {workflows.RegenerateCanonicalAssetImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_derived_asset_image":         {workflows.RegenerateDerivedAssetImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_shot_image":                  {workflows.RegenerateShotImageWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_shot_video":                  {workflows.RegenerateShotVideoWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_final_video":                 {workflows.RegenerateFinalVideoWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_script_scene":                {workflows.RegenerateScriptSceneWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"regenerate_scene_storyboard":            {workflows.RegenerateSceneStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_shot_image_prompts":      {workflows.BatchGenerateShotImagePromptsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_shot_images":             {workflows.BatchGenerateShotImagesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_shot_video_prompts":      {workflows.BatchGenerateShotVideoPromptsWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_shot_videos":             {workflows.EpisodeBatchGenerateShotVideosWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_cancel_shot_videos":               {workflows.BatchCancelShotVideosWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"batch_generate_asset_cards":             {workflows.BatchGenerateAssetCardsWorkflow, decodeWorkflowStartInput[workflows.AssetBatchWorkflowInput]},
+	"batch_generate_asset_images":            {workflows.BatchGenerateCanonicalAssetImagesWorkflow, decodeWorkflowStartInput[workflows.AssetBatchWorkflowInput]},
+	"batch_generate_derived_asset_images":    {workflows.BatchGenerateDerivedAssetImagesWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
+	"episode_audio_production":               {workflows.EpisodeAudioProductionWorkflow, decodeWorkflowStartInput[workflows.EpisodeAudioProductionInput]},
+	"native_audio_review":                    {workflows.NativeAudioReviewWorkflow, decodeWorkflowStartInput[workflows.NativeAudioReviewWorkflowInput]},
+	"export_project":                         {workflows.ExportProjectWorkflow, decodeWorkflowStartInput[workflows.ExportProjectInput]},
+	"project_agent":                          {workflows.ProjectAgentWorkflow, decodeWorkflowStartInput[workflows.ProjectAgentWorkflowInput]},
+	"project_video_production_rebuild":       {workflows.ProjectVideoProductionRebuildWorkflow, decodeWorkflowStartInput[workflows.ProjectVideoProductionRebuildInput]},
 }
 
 func workflowHandlerForFunction(workflowFunc any) (string, error) {
@@ -177,6 +187,9 @@ func workflowStartVisibility(item workflowStartOutboxItem) (map[string]interface
 	memo["WorkflowType"] = item.WorkflowType
 	if item.WorkflowRunID != nil && strings.TrimSpace(*item.WorkflowRunID) != "" {
 		memo["WorkflowRunId"] = strings.TrimSpace(*item.WorkflowRunID)
+	}
+	if item.CommerceSetupRunID != nil && strings.TrimSpace(*item.CommerceSetupRunID) != "" {
+		memo["CommerceSetupRunId"] = strings.TrimSpace(*item.CommerceSetupRunID)
 	}
 	return searchAttributes, memo
 }
@@ -300,6 +313,56 @@ func (s *Server) enqueueWorkflowStartTx(
 	`, workflowRunID, agentTaskID, organizationID, projectID, productionGenerationID, workflowType, workflowHandler,
 		temporalWorkflowID, taskQueue, raw, inputHash, workflowStartDefaultMaxAttempts)
 	return err
+}
+
+func (s *Server) enqueueCommerceSetupRunTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	principal auth.Principal,
+	project Project,
+	setupSessionID string,
+	input any,
+) (string, error) {
+	if s.temporal == nil {
+		return "", apiError{Status: 503, Code: "TEMPORAL_UNAVAILABLE", Message: "Temporal client is not configured", Retryable: true}
+	}
+	const handler = "commerce_project_setup"
+	if _, ok := workflowStartDefinitions[handler]; !ok {
+		return "", errors.New("commerce project setup workflow is not registered")
+	}
+	raw, inputHash, err := marshalWorkflowStartInput(input)
+	if err != nil {
+		return "", err
+	}
+	var runID, temporalWorkflowID string
+	if err := tx.QueryRow(ctx, `
+		WITH new_run AS (SELECT gen_random_uuid() AS id)
+		INSERT INTO commerce_setup_runs(
+			id, organization_id, project_id, setup_session_id, temporal_workflow_id,
+			attempt_no, status, input, input_hash, output, created_by
+		)
+		SELECT id, $1, $2, $3, 'commerce-setup-' || id::text,
+		       COALESCE((SELECT MAX(attempt_no) + 1 FROM commerce_setup_runs WHERE setup_session_id = $3), 1),
+		       'queued', $4, $5, '{}', $6
+		FROM new_run
+		RETURNING id::text, temporal_workflow_id
+	`, project.OrganizationID, project.ID, setupSessionID, raw, inputHash, principal.UserID).Scan(&runID, &temporalWorkflowID); err != nil {
+		return "", err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO workflow_start_outbox(
+			workflow_run_id, agent_task_id, commerce_setup_run_id,
+			organization_id, project_id, production_generation_id,
+			workflow_type, workflow_handler, temporal_workflow_id, task_queue,
+			input, input_hash, max_attempts
+		)
+		VALUES (NULL, NULL, $1, $2, $3, NULL, $4, $4, $5, $6, $7, $8, $9)
+	`, runID, project.OrganizationID, project.ID, handler, temporalWorkflowID,
+		workflows.ScriptTaskQueue, raw, inputHash, workflowStartDefaultMaxAttempts)
+	if err != nil {
+		return "", err
+	}
+	return runID, nil
 }
 
 func (s *Server) enqueueProjectWorkflow(
@@ -535,8 +598,9 @@ func (s *Server) claimWorkflowStart(ctx context.Context, workerID string, leaseT
 		FROM candidate
 		WHERE outbox.id = candidate.id
 		RETURNING outbox.id::text, outbox.workflow_run_id::text, outbox.agent_task_id::text,
+		          outbox.commerce_setup_run_id::text,
 		          outbox.organization_id::text, outbox.project_id::text,
-		          outbox.production_generation_id::text,
+		          COALESCE(outbox.production_generation_id::text, ''),
 		          COALESCE((
 		            SELECT binding.profile_version_id::text
 		            FROM project_video_production_generations generation
@@ -550,6 +614,7 @@ func (s *Server) claimWorkflowStart(ctx context.Context, workerID string, leaseT
 		&item.ID,
 		&item.WorkflowRunID,
 		&item.AgentTaskID,
+		&item.CommerceSetupRunID,
 		&item.OrganizationID,
 		&item.ProjectID,
 		&item.ProductionGenerationID,
@@ -615,16 +680,9 @@ func (s *Server) executeWorkflowStart(ctx context.Context, workerID string, item
 		}
 		return workflowStartResultCancelledFenced, nil
 	}
-	if _, err := videoproduction.AssertGenerationWritableTx(
-		ctx,
-		tx,
-		item.ProjectID,
-		item.ProductionGenerationID,
-		workflowStartAllowsLockedProject(item.WorkflowType),
-	); err != nil {
-		if domainErr, ok := videoproduction.AsError(err); ok &&
-			(domainErr.Code == videoproduction.CodeProjectLocked || domainErr.Code == videoproduction.CodeGenerationMismatch) {
-			if err := s.cancelFencedWorkflowStartTx(ctx, tx, workerID, item, domainErr.Code, domainErr.Error()); err != nil {
+	if item.CommerceSetupRunID != nil {
+		if err := assertCommerceSetupStartWritableTx(ctx, tx, item); err != nil {
+			if err := s.cancelFencedWorkflowStartTx(ctx, tx, workerID, item, "COMMERCE_SETUP_STALE", err.Error()); err != nil {
 				return "", err
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -632,7 +690,26 @@ func (s *Server) executeWorkflowStart(ctx context.Context, workerID string, item
 			}
 			return workflowStartResultCancelledFenced, nil
 		}
-		return "", err
+	} else {
+		if _, err := videoproduction.AssertGenerationWritableTx(
+			ctx,
+			tx,
+			item.ProjectID,
+			item.ProductionGenerationID,
+			workflowStartAllowsLockedProject(item.WorkflowType),
+		); err != nil {
+			if domainErr, ok := videoproduction.AsError(err); ok &&
+				(domainErr.Code == videoproduction.CodeProjectLocked || domainErr.Code == videoproduction.CodeGenerationMismatch) {
+				if err := s.cancelFencedWorkflowStartTx(ctx, tx, workerID, item, domainErr.Code, domainErr.Error()); err != nil {
+					return "", err
+				}
+				if err := tx.Commit(ctx); err != nil {
+					return "", err
+				}
+				return workflowStartResultCancelledFenced, nil
+			}
+			return "", err
+		}
 	}
 
 	alreadyStartedExecution := false
@@ -685,6 +762,23 @@ func (s *Server) executeWorkflowStart(ctx context.Context, workerID string, item
 			})); err != nil {
 				return "", err
 			}
+		}
+	}
+	if item.CommerceSetupRunID != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE commerce_setup_runs
+			SET status = 'running', started_at = COALESCE(started_at, now()),
+			    updated_at = now(), revision = revision + 1
+			WHERE id = $1 AND status = 'queued'
+		`, *item.CommerceSetupRunID); err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE commerce_setup_sessions
+			SET state = 'started', step = 'workflow_started', updated_at = now(), revision = revision + 1
+			WHERE setup_workflow_run_id = $1 AND state = 'starting'
+		`, *item.CommerceSetupRunID); err != nil {
+			return "", err
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -769,6 +863,25 @@ func (s *Server) cancelFencedWorkflowStartTx(
 			return err
 		}
 	}
+	if item.CommerceSetupRunID != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE commerce_setup_runs
+			SET status = 'cancelled', error_code = $2, error_message = $3,
+			    completed_at = now(), updated_at = now(), revision = revision + 1
+			WHERE id = $1 AND status IN ('queued', 'running')
+		`, *item.CommerceSetupRunID, code, message); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE commerce_setup_sessions
+			SET state = 'failed', step = 'workflow_start_cancelled',
+			    last_error_code = $2, last_error_message = $3,
+			    updated_at = now(), revision = revision + 1
+			WHERE setup_workflow_run_id = $1 AND state NOT IN ('completed', 'abandoned')
+		`, *item.CommerceSetupRunID, code, message); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -834,6 +947,9 @@ func logWorkflowStartAttempt(ctx context.Context, item workflowStartOutboxItem, 
 	}
 	if item.AgentTaskID != nil {
 		args = append(args, "agentTaskId", *item.AgentTaskID)
+	}
+	if item.CommerceSetupRunID != nil {
+		args = append(args, "commerceSetupRunId", *item.CommerceSetupRunID)
 	}
 	if runErr != nil {
 		args = append(args, "error", runErr)
@@ -913,7 +1029,55 @@ func (s *Server) markWorkflowStartFailed(ctx context.Context, workerID string, i
 			return err
 		}
 	}
+	if item.CommerceSetupRunID != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE commerce_setup_runs
+			SET status = 'failed', error_code = $2, error_message = $3,
+			    completed_at = now(), updated_at = now(), revision = revision + 1
+			WHERE id = $1 AND status = 'queued'
+		`, *item.CommerceSetupRunID, failure.code, failure.err.Error()); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE commerce_setup_sessions
+			SET state = 'failed', step = 'workflow_start_failed',
+			    last_error_code = $2, last_error_message = $3,
+			    updated_at = now(), revision = revision + 1
+			WHERE setup_workflow_run_id = $1 AND state NOT IN ('completed', 'abandoned')
+		`, *item.CommerceSetupRunID, failure.code, failure.err.Error()); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
+}
+
+func assertCommerceSetupStartWritableTx(ctx context.Context, tx pgx.Tx, item workflowStartOutboxItem) error {
+	if item.CommerceSetupRunID == nil || strings.TrimSpace(*item.CommerceSetupRunID) == "" {
+		return errors.New("commerce setup run identity is missing")
+	}
+	var count int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*)
+		FROM commerce_setup_runs run
+		JOIN commerce_setup_sessions session ON session.id = run.setup_session_id
+		JOIN projects project ON project.id = run.project_id AND project.organization_id = run.organization_id
+		WHERE run.id = $1
+		  AND run.organization_id = $2
+		  AND run.project_id = $3
+		  AND run.status = 'queued'
+		  AND session.setup_workflow_run_id = run.id
+		  AND session.state = 'starting'
+		  AND session.expires_at > now()
+		  AND project.project_kind = 'commerce_video'
+		  AND project.active_video_production_generation_id IS NULL
+		  AND project.video_production_state = 'unconfigured'
+	`, *item.CommerceSetupRunID, item.OrganizationID, item.ProjectID).Scan(&count); err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("commerce setup run is no longer writable")
+	}
+	return nil
 }
 
 func workflowStartRetryDelay(attempt int) time.Duration {

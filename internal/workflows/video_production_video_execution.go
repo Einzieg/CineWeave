@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Einzieg/cineweave/internal/commerce"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/videoproduction"
@@ -177,7 +178,14 @@ func (a Activities) loadApprovedShotVideoExecutionContract(
 ) (approvedShotVideoExecutionContract, error) {
 	var contract approvedShotVideoExecutionContract
 	var storedDialogue json.RawMessage
-	err := a.db.QueryRow(ctx, `
+	var projectKind string
+	if err := a.db.QueryRow(ctx, `
+		SELECT project_kind FROM projects
+		WHERE id = $1 AND organization_id = $2
+	`, project.ID, organizationID).Scan(&projectKind); err != nil {
+		return approvedShotVideoExecutionContract{}, err
+	}
+	query := `
 		SELECT prompt.profile_version_id::text, prompt.profile_snapshot_hash,
 		       binding.compatibility_policy,
 		       COALESCE(
@@ -221,7 +229,57 @@ func (a Activities) loadApprovedShotVideoExecutionContract(
 		  AND prompt.reference_pack_hash = reference_pack.manifest_hash
 		  AND prompt.prompt_context_plan_hash = context_plan.plan_hash
 		  AND prompt.input_contract_version = version.input_contract_version
-	`, organizationID, project.ID, shot.ID, project.ProductionGenerationID,
+	`
+	if commerce.ProjectKind(projectKind).IsCommerce() {
+		query = `
+			SELECT prompt.profile_version_id::text, prompt.profile_snapshot_hash,
+			       binding.compatibility_policy,
+			       COALESCE(
+			           version.capability_requirements->>'initialInputContract',
+			           version.capability_requirements->>'inputContract',
+			           ''
+			       ),
+			       prompt.input_contract_version,
+			       state.revision, state.state_hash,
+			       COALESCE(prompt.transition_hash, ''),
+			       reference_pack.id::text, reference_pack.manifest_hash,
+			       context_plan.id::text, context_plan.plan_hash,
+			       prompt.id::text, prompt.prompt_hash, prompt.rendered_prompt,
+			       audio.native_audio_required, audio.audio_strategy, audio.audio_requirement,
+			       prompt.dialogue_cues
+			FROM video_prompt_plans prompt
+			JOIN project_video_production_bindings binding
+			  ON binding.id = prompt.video_production_binding_id AND binding.status = 'active'
+			JOIN video_production_profile_versions version ON version.id = prompt.profile_version_id
+			JOIN storyboard_shots shot
+			  ON shot.id = prompt.storyboard_shot_id
+			 AND shot.commerce_storyboard_plan_id IS NOT NULL AND shot.deleted_at IS NULL
+			JOIN storyboard_shot_state_versions state
+			  ON state.storyboard_shot_id = prompt.storyboard_shot_id
+			 AND state.state_role = 'planned_entry' AND state.status = 'approved'
+			JOIN shot_reference_packs reference_pack
+			  ON reference_pack.storyboard_shot_id = prompt.storyboard_shot_id
+			 AND reference_pack.status = 'active' AND reference_pack.purpose = 'video'
+			JOIN prompt_context_plans context_plan
+			  ON context_plan.id = prompt.prompt_context_plan_id AND context_plan.status = 'active'
+			JOIN video_native_audio_contracts audio
+			  ON audio.video_prompt_plan_id = prompt.id AND audio.status = 'active'
+			WHERE prompt.organization_id = $1 AND prompt.project_id = $2
+			  AND prompt.storyboard_shot_id = $3 AND prompt.status = 'approved'
+			  AND prompt.production_generation_id = $4
+			  AND prompt.video_production_binding_id = $5
+			  AND prompt.video_production_binding_revision = $6
+			  AND prompt.profile_version_id = $7
+			  AND prompt.profile_snapshot_hash = $8
+			  AND prompt.commerce_script_unit_generation_id IS NOT NULL
+			  AND prompt.shot_state_hash = state.state_hash
+			  AND prompt.transition_hash IS NULL
+			  AND prompt.reference_pack_hash = reference_pack.manifest_hash
+			  AND prompt.prompt_context_plan_hash = context_plan.plan_hash
+			  AND prompt.input_contract_version = version.input_contract_version
+		`
+	}
+	err := a.db.QueryRow(ctx, query, organizationID, project.ID, shot.ID, project.ProductionGenerationID,
 		project.VideoProductionBindingID, project.VideoProductionBindingRevision,
 		project.VideoProductionProfileVersionID, cleanContractHash(project.VideoProductionProfileHash)).Scan(
 		&contract.ProductionProfileVersionID, &contract.ProductionProfileSnapshotHash,

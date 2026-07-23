@@ -126,6 +126,10 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, CodeModelProfileNotConfigured)
 	}
+	candidates, err = filterRoutingCandidatesByLanguage(candidates, req)
+	if err != nil {
+		return nil, err
+	}
 
 	strategy := RoutingStrategy(candidates[0].RoutingStrategy)
 	switch strategy {
@@ -162,6 +166,46 @@ func (s *Service) ResolveRoutingCandidates(ctx context.Context, req RoutingReque
 		})
 	}
 	return candidates, nil
+}
+
+func filterRoutingCandidatesByLanguage(candidates []RoutingCandidate, req RoutingRequest) ([]RoutingCandidate, error) {
+	requirement := LanguageCapabilityRequirement{
+		InputLanguage:       req.InputLanguage,
+		OutputLanguage:      req.OutputLanguage,
+		PromptLanguage:      req.PromptLanguage,
+		NativeAudioLanguage: req.NativeAudioLanguage,
+		RequireApproved:     req.RequireApprovedLanguageCapabilities,
+	}
+	if requirement.InputLanguage == "" && requirement.OutputLanguage == "" && requirement.PromptLanguage == "" && requirement.NativeAudioLanguage == "" {
+		return candidates, nil
+	}
+	filtered := make([]RoutingCandidate, 0, len(candidates))
+	var approvalErr error
+	var unsupportedErr error
+	for _, candidate := range candidates {
+		model := Model{ID: candidate.ProviderModelID, Modality: candidate.Modality, Status: "active", Capabilities: candidate.Capabilities}
+		if err := ValidateModelLanguageCapabilities(model, req.TaskType, requirement); err != nil {
+			if standard, ok := StandardErrorFromError(err); ok && standard.Code == CodeModelCapabilityApprovalRequired {
+				if approvalErr == nil {
+					approvalErr = err
+				}
+			} else if unsupportedErr == nil {
+				unsupportedErr = err
+			}
+			continue
+		}
+		filtered = append(filtered, candidate)
+	}
+	if len(filtered) > 0 {
+		return filtered, nil
+	}
+	if approvalErr != nil {
+		return nil, approvalErr
+	}
+	if unsupportedErr != nil {
+		return nil, unsupportedErr
+	}
+	return nil, unsupportedLanguageCapability("没有模型满足请求的语言能力")
 }
 
 func (s *Service) ensureDefaultCapabilitiesForRoutingProfile(ctx context.Context, organizationID, profileKey string) error {

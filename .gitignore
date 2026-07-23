@@ -11,6 +11,9 @@ out/
 dist/
 coverage/
 *.tsbuildinfo
+apps/web/playwright-report/
+apps/web/test-results/
+apps/web/blob-report/
 
 *.log
 

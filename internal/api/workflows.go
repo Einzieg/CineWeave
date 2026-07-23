@@ -11,6 +11,7 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
+	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
@@ -106,6 +107,13 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 		return
 	}
 	if !s.authorize(w, r, principal, authz.PermissionWorkflowRun, authz.Resource{ProjectID: project.ID}) {
+		return
+	}
+	if project.ProjectKind.IsCommerce() {
+		httpx.WriteError(w, r, http.StatusConflict, "PROJECT_KIND_MISMATCH", "带货视频必须通过专用生产流程启动任务", map[string]any{
+			"actualProjectKind":   project.ProjectKind,
+			"expectedProjectKind": commercepkg.ProjectKindNarrative,
+		}, false)
 		return
 	}
 

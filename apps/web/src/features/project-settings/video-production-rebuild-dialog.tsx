@@ -45,6 +45,7 @@ export function VideoProductionRebuildDialog({
   const [impactResult, setImpactResult] = useState<ImpactResult>();
   const [activeRebuildId, setActiveRebuildId] = useState("");
   const notifiedRebuildId = useRef("");
+  const unitLabel = project.projectKind === "commerce_video" ? "脚本单元" : "分集";
 
   const { data: profiles = [], isLoading: profilesLoading } = useApiQuery({
     key: qk.videoProductionProfiles(),
@@ -184,7 +185,7 @@ export function VideoProductionRebuildDialog({
                   <div>
                     <div className="font-medium">重建进度</div>
                     <div className="mt-1 text-sm text-muted-foreground">
-                      已处理 {processedItems}/{Math.max(rebuildItems.length, rebuild.episodeCount)} 个分集
+                      已处理 {processedItems}/{Math.max(rebuildItems.length, rebuild.episodeCount)} 个{unitLabel}
                     </div>
                   </div>
                   <Badge variant={rebuild.status === "succeeded" ? "default" : "outline"}>{statusLabel(rebuild.status)}</Badge>
@@ -199,7 +200,7 @@ export function VideoProductionRebuildDialog({
                   {rebuildItems.map((item) => (
                     <div key={item.id} className="flex items-start justify-between gap-4 py-3">
                       <div className="min-w-0">
-                        <div className="text-sm font-medium">第 {item.episodeOrdinal} 集</div>
+                        <div className="text-sm font-medium">{unitLabel} {item.episodeOrdinal}</div>
                         {item.failureMessage ? (
                           <div className="mt-1 text-xs text-destructive">
                             {localizePlatformError(item.failureMessage, item.failureCode ?? undefined)}
@@ -213,7 +214,7 @@ export function VideoProductionRebuildDialog({
                 {failedItems > 0 && !isActiveRebuildStatus(rebuild.status) ? (
                   <Button onClick={() => retryMutation.mutate(rebuild)} disabled={retryMutation.isPending}>
                     {retryMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                    重试失败分集（{failedItems}）
+                    重试失败{unitLabel}（{failedItems}）
                   </Button>
                 ) : null}
               </>
@@ -284,7 +285,7 @@ export function VideoProductionRebuildDialog({
                   <ImpactMetric label="镜头视频" value={impactResult.impact.counts.shotVideos ?? 0} />
                 </div>
                 <div className="rounded-md border border-status-warning/30 bg-status-warning/10 p-3 text-sm">
-                  旧生产代的分镜、镜头图片、镜头视频、时间线与成片将归档；{impactResult.impact.counts.retainedAssets ?? 0} 个项目资产会保留。新生产代只按分集重建分镜，不会自动生成图片和视频。
+                  旧生产代的分镜、镜头图片、镜头视频、时间线与成片将归档；{impactResult.impact.counts.retainedAssets ?? 0} 个项目资产会保留。新生产代只按{unitLabel}重建分镜，不会自动生成图片和视频。
                 </div>
               </div>
             ) : null}

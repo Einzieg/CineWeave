@@ -41,7 +41,7 @@ func TestWithCORSAllowsCurrentWebOriginAndRealtimeHeaders(t *testing.T) {
 	request := httptest.NewRequest(http.MethodOptions, "/api/realtime/events", nil)
 	request.Header.Set("Origin", "http://localhost:19285")
 	request.Header.Set("Access-Control-Request-Method", http.MethodGet)
-	request.Header.Set("Access-Control-Request-Headers", "Authorization, Cache-Control, Last-Event-ID")
+	request.Header.Set("Access-Control-Request-Headers", "Authorization, Cache-Control, Idempotency-Key, If-Match, Last-Event-ID")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -52,7 +52,7 @@ func TestWithCORSAllowsCurrentWebOriginAndRealtimeHeaders(t *testing.T) {
 	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:19285" {
 		t.Fatalf("allow origin = %q", got)
 	}
-	for _, required := range []string{"Authorization", "Cache-Control", "Last-Event-ID"} {
+	for _, required := range []string{"Authorization", "Cache-Control", "Idempotency-Key", "If-Match", "Last-Event-ID"} {
 		if !headerListContains(response.Header().Get("Access-Control-Allow-Headers"), required) {
 			t.Fatalf("allow headers %q does not include %q", response.Header().Get("Access-Control-Allow-Headers"), required)
 		}

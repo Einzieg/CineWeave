@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Einzieg/cineweave/internal/commerce"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 )
 
 type videoPlanProductionContract struct {
+	ProjectKind                       string
 	ProfileVersionID                  string
 	ProfileSnapshot                   json.RawMessage
 	ProfileSnapshotHash               string
@@ -33,6 +36,18 @@ type videoPlanProductionContract struct {
 	AudioStrategy                     string
 	AudioRequirement                  string
 	DialogueCues                      []GatewayVideoDialogueSpan
+	CommerceScriptUnitID              string
+	CommerceScriptUnitGenerationID    string
+	CommerceProductID                 string
+	ProductVersionID                  string
+	LocalizationID                    string
+	ProductReferencePackID            string
+	CommerceWorkflowBindingID         string
+	LocalizedContractHash             string
+	TargetLanguage                    string
+	VerbatimVoiceoverHash             string
+	TimingPolicyVersion               string
+	LanguageCapabilitySnapshotHash    string
 }
 
 type videoProductionContractQueryer interface {
@@ -43,7 +58,13 @@ type videoProductionContractQueryer interface {
 func (s *Service) loadVideoPlanProductionContract(ctx context.Context, db videoProductionContractQueryer, req GatewayVideoPlanRequest) (videoPlanProductionContract, error) {
 	var contract videoPlanProductionContract
 	var allowedContinuationContracts []byte
-	err := db.QueryRow(ctx, `
+	if err := db.QueryRow(ctx, `
+		SELECT project_kind FROM projects
+		WHERE id = $1 AND organization_id = $2
+	`, req.ProjectID, req.OrganizationID).Scan(&contract.ProjectKind); err != nil {
+		return videoPlanProductionContract{}, err
+	}
+	query := `
 		SELECT binding.profile_version_id::text, binding.profile_snapshot,
 		       binding.profile_snapshot_hash, binding.compatibility_policy,
 		       COALESCE(version.capability_requirements->>'initialInputContract', version.capability_requirements->>'inputContract', ''),
@@ -118,7 +139,76 @@ func (s *Service) loadVideoPlanProductionContract(ctx context.Context, db videoP
 		  AND prompt_plan.shot_state_hash = state.state_hash
 		  AND prompt_plan.reference_pack_hash = reference_pack.manifest_hash
 		  AND prompt_plan.input_contract_version = version.input_contract_version
-	`, req.ProjectID, req.OrganizationID, req.StoryboardShotID,
+	`
+	if commerce.ProjectKind(contract.ProjectKind).IsCommerce() {
+		query = `
+			SELECT binding.profile_version_id::text, binding.profile_snapshot,
+			       binding.profile_snapshot_hash, binding.compatibility_policy,
+			       COALESCE(version.capability_requirements->>'initialInputContract', version.capability_requirements->>'inputContract', ''),
+			       COALESCE(version.capability_requirements->'allowedContinuationInputContracts', '[]'::jsonb),
+			       version.input_contract_version,
+			       state.revision, state.state_hash,
+			       '{}'::jsonb, COALESCE(prompt_plan.transition_hash, ''),
+			       reference_pack.id::text, reference_pack.manifest_hash,
+			       context_plan.id::text, context_plan.plan_hash,
+			       prompt_plan.id::text, prompt_plan.prompt_hash,
+			       audio_contract.native_audio_required,
+			       audio_contract.audio_strategy, audio_contract.audio_requirement
+			FROM projects project
+			JOIN project_video_production_generations generation
+			  ON generation.id = project.active_video_production_generation_id
+			 AND generation.project_id = project.id AND generation.status = 'active'
+			JOIN project_video_production_bindings binding
+			  ON binding.id = generation.binding_id AND binding.project_id = project.id
+			 AND binding.status = 'active'
+			JOIN video_production_profile_versions version ON version.id = binding.profile_version_id
+			JOIN storyboard_shots shot
+			  ON shot.id = $3 AND shot.project_id = project.id
+			 AND shot.production_generation_id = generation.id
+			 AND shot.commerce_storyboard_plan_id IS NOT NULL AND shot.deleted_at IS NULL
+			JOIN storyboard_shot_state_versions state
+			  ON state.storyboard_shot_id = shot.id
+			 AND state.production_generation_id = generation.id
+			 AND state.state_role = 'planned_entry' AND state.status = 'approved'
+			JOIN shot_reference_packs reference_pack
+			  ON reference_pack.storyboard_shot_id = shot.id
+			 AND reference_pack.production_generation_id = generation.id
+			 AND reference_pack.status = 'active' AND reference_pack.purpose = 'video'
+			JOIN prompt_context_plans context_plan
+			  ON context_plan.storyboard_shot_id = shot.id
+			 AND context_plan.production_generation_id = generation.id
+			 AND context_plan.status = 'active'
+			JOIN video_prompt_plans prompt_plan
+			  ON prompt_plan.storyboard_shot_id = shot.id
+			 AND prompt_plan.production_generation_id = generation.id
+			 AND prompt_plan.status = 'approved'
+			 AND prompt_plan.prompt_context_plan_id = context_plan.id
+			 AND prompt_plan.commerce_script_unit_generation_id IS NOT NULL
+			JOIN video_native_audio_contracts audio_contract
+			  ON audio_contract.storyboard_shot_id = shot.id
+			 AND audio_contract.production_generation_id = generation.id
+			 AND audio_contract.video_prompt_plan_id = prompt_plan.id
+			 AND audio_contract.status = 'active'
+			WHERE project.id = $1 AND project.organization_id = $2
+			  AND generation.id = NULLIF($4, '')::uuid
+			  AND binding.id = NULLIF($5, '')::uuid
+			  AND binding.revision = $6
+			  AND reference_pack.profile_snapshot_hash = binding.profile_snapshot_hash
+			  AND reference_pack.shot_state_hash = state.state_hash
+			  AND context_plan.video_production_binding_id = binding.id
+			  AND context_plan.video_production_binding_revision = binding.revision
+			  AND prompt_plan.profile_version_id = binding.profile_version_id
+			  AND prompt_plan.video_production_binding_id = binding.id
+			  AND prompt_plan.video_production_binding_revision = binding.revision
+			  AND prompt_plan.prompt_context_plan_hash = context_plan.plan_hash
+			  AND prompt_plan.profile_snapshot_hash = binding.profile_snapshot_hash
+			  AND prompt_plan.shot_state_hash = state.state_hash
+			  AND prompt_plan.transition_hash IS NULL
+			  AND prompt_plan.reference_pack_hash = reference_pack.manifest_hash
+			  AND prompt_plan.input_contract_version = version.input_contract_version
+		`
+	}
+	err := db.QueryRow(ctx, query, req.ProjectID, req.OrganizationID, req.StoryboardShotID,
 		req.ProductionGenerationID, req.VideoProductionBindingID, req.VideoProductionBindingRevision).Scan(
 		&contract.ProfileVersionID, &contract.ProfileSnapshot,
 		&contract.ProfileSnapshotHash, &contract.CompatibilityPolicy,
@@ -135,12 +225,47 @@ func (s *Service) loadVideoPlanProductionContract(ctx context.Context, db videoP
 			Code: CodeRenderPlanReplanRequired, Message: "视频生产契约已变化或尚未完成审核，请重新生成视频提示词", Retryable: false,
 		}}
 	}
+	if commerce.ProjectKind(contract.ProjectKind).IsCommerce() {
+		if err := db.QueryRow(ctx, `
+			SELECT commerce_script_unit_id::text,
+			       commerce_script_unit_generation_id::text,
+			       commerce_product_id::text, product_version_id::text,
+			       localization_id::text, product_reference_pack_id::text,
+			       commerce_workflow_binding_id::text,
+			       localized_contract_hash, target_language,
+			       verbatim_voiceover_hash, timing_policy_version,
+			       language_capability_snapshot_hash
+			FROM video_prompt_plans
+			WHERE id = $1 AND organization_id = $2 AND project_id = $3
+			  AND storyboard_shot_id = $4 AND status = 'approved'
+		`, contract.VideoPromptPlanID, req.OrganizationID, req.ProjectID, req.StoryboardShotID).Scan(
+			&contract.CommerceScriptUnitID,
+			&contract.CommerceScriptUnitGenerationID,
+			&contract.CommerceProductID,
+			&contract.ProductVersionID,
+			&contract.LocalizationID,
+			&contract.ProductReferencePackID,
+			&contract.CommerceWorkflowBindingID,
+			&contract.LocalizedContractHash,
+			&contract.TargetLanguage,
+			&contract.VerbatimVoiceoverHash,
+			&contract.TimingPolicyVersion,
+			&contract.LanguageCapabilitySnapshotHash,
+		); err != nil {
+			return videoPlanProductionContract{}, &StandardErrorError{Standard: StandardError{
+				Code: CodeRenderPlanReplanRequired, Message: "带货视频提示词生产身份不完整，请重新生成视频提示词", Retryable: false,
+			}}
+		}
+	}
 	if err := json.Unmarshal(allowedContinuationContracts, &contract.AllowedContinuationInputContracts); err != nil {
 		return videoPlanProductionContract{}, &StandardErrorError{Standard: StandardError{
 			Code: CodeProductionProfileIncompatible, Message: "项目视频生产方案的续接输入契约无效", Retryable: false,
 		}}
 	}
 	contract.AllowedContinuationInputContracts = normalizeVideoStringSlice(contract.AllowedContinuationInputContracts)
+	if err := applyCompiledVideoPlanProfileContract(ctx, db, &contract); err != nil {
+		return videoPlanProductionContract{}, err
+	}
 	rows, err := db.Query(ctx, `
 		SELECT COALESCE(timing_unit_id, ''), speaker, dialogue_text, COALESCE(delivery, ''), kind,
 		       start_tick, end_tick, continues_from_previous, continues_to_next
@@ -174,6 +299,65 @@ func (s *Service) loadVideoPlanProductionContract(ctx context.Context, db videoP
 	return contract, nil
 }
 
+func applyCompiledVideoPlanProfileContract(
+	ctx context.Context,
+	db videoProductionContractQueryer,
+	contract *videoPlanProductionContract,
+) error {
+	if contract == nil {
+		return &StandardErrorError{Standard: StandardError{
+			Code: CodeProductionProfileIncompatible, Message: "项目视频生产方案契约不存在", Retryable: false,
+		}}
+	}
+	version, err := videoproduction.ResolveProfileVersionByID(ctx, db, contract.ProfileVersionID, true)
+	if err != nil {
+		return &StandardErrorError{Standard: StandardError{
+			Code: CodeProductionProfileIncompatible, Message: "项目视频生产方案版本不可执行", Retryable: false,
+		}}
+	}
+	return applyCompiledVideoPlanProfileVersion(contract, version)
+}
+
+func applyCompiledVideoPlanProfileVersion(
+	contract *videoPlanProductionContract,
+	version videoproduction.ProfileVersion,
+) error {
+	if contract == nil {
+		return &StandardErrorError{Standard: StandardError{
+			Code: CodeProductionProfileIncompatible, Message: "项目视频生产方案契约不存在", Retryable: false,
+		}}
+	}
+	compiled, err := videoproduction.NewProfileCompiler().Compile(version, true)
+	if err != nil {
+		return &StandardErrorError{Standard: StandardError{
+			Code: CodeProductionProfileIncompatible, Message: "项目视频生产方案运行时契约无效", Retryable: false,
+		}}
+	}
+	declaredInitial := strings.TrimSpace(contract.RequiredInitialInputContract)
+	if declaredInitial != "" && declaredInitial != compiled.InitialInputContract {
+		return &StandardErrorError{Standard: StandardError{
+			Code: CodeProductionProfileIncompatible, Message: "项目视频生产方案的首段输入契约与运行时策略不一致", Retryable: false,
+		}}
+	}
+	declaredContinuation := normalizeVideoStringSlice(contract.AllowedContinuationInputContracts)
+	compiledContinuation := normalizeVideoStringSlice(compiled.ContinuationContracts)
+	if len(declaredContinuation) > 0 && !sameNormalizedVideoStringSlice(declaredContinuation, compiledContinuation) {
+		return &StandardErrorError{Standard: StandardError{
+			Code: CodeProductionProfileIncompatible, Message: "项目视频生产方案的续接输入契约与运行时策略不一致", Retryable: false,
+		}}
+	}
+	if strings.TrimSpace(contract.InputContractVersion) != "" &&
+		!strings.EqualFold(strings.TrimSpace(contract.InputContractVersion), strings.TrimSpace(version.InputContractVersion)) {
+		return &StandardErrorError{Standard: StandardError{
+			Code: CodeProductionProfileIncompatible, Message: "项目视频生产方案的输入契约版本与运行时策略不一致", Retryable: false,
+		}}
+	}
+	contract.RequiredInitialInputContract = compiled.InitialInputContract
+	contract.AllowedContinuationInputContracts = compiledContinuation
+	contract.InputContractVersion = version.InputContractVersion
+	return nil
+}
+
 func validateVideoPlanContractRequest(req *GatewayVideoPlanRequest, contract videoPlanProductionContract) error {
 	if req == nil {
 		return fmt.Errorf("%w: video plan request is required", ErrValidation)
@@ -189,7 +373,6 @@ func validateVideoPlanContractRequest(req *GatewayVideoPlanRequest, contract vid
 		{"requiredInitialInputContract", req.RequiredInitialInputContract, contract.RequiredInitialInputContract},
 		{"inputContractVersion", req.InputContractVersion, contract.InputContractVersion},
 		{"shotStateHash", cleanVideoContractHash(req.ShotStateHash), cleanVideoContractHash(contract.ShotStateHash)},
-		{"transitionHash", cleanVideoContractHash(req.TransitionHash), cleanVideoContractHash(contract.TransitionHash)},
 		{"referencePackId", req.ReferencePackID, contract.ReferencePackID},
 		{"referencePackHash", cleanVideoContractHash(req.ReferencePackHash), cleanVideoContractHash(contract.ReferencePackHash)},
 		{"promptContextPlanId", req.PromptContextPlanID, contract.PromptContextPlanID},
@@ -204,6 +387,13 @@ func validateVideoPlanContractRequest(req *GatewayVideoPlanRequest, contract vid
 				Code: CodeRenderPlanReplanRequired, Message: "视频生产契约字段不一致：" + check.name, Retryable: false,
 			}}
 		}
+	}
+	actualTransition := cleanVideoContractHash(req.TransitionHash)
+	expectedTransition := cleanVideoContractHash(contract.TransitionHash)
+	if (expectedTransition != "" && actualTransition != expectedTransition) || (expectedTransition == "" && actualTransition != "") {
+		return &StandardErrorError{Standard: StandardError{
+			Code: CodeRenderPlanReplanRequired, Message: "视频生产契约字段不一致：transitionHash", Retryable: false,
+		}}
 	}
 	if req.ShotStateRevision != contract.ShotStateRevision {
 		return &StandardErrorError{Standard: StandardError{Code: CodeRenderPlanReplanRequired, Message: "镜头状态版本已变化，请重新生成视频提示词", Retryable: false}}

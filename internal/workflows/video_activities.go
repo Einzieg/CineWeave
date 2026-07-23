@@ -147,6 +147,7 @@ type CreateShotVideoTaskOutput struct {
 	ExecutionToken      string `json:"executionToken"`
 	AttemptGeneration   int    `json:"attemptGeneration"`
 	ShotID              string `json:"shotId"`
+	ProviderRequestID   string `json:"providerRequestId"`
 	ProviderCallID      string `json:"providerCallId"`
 	ProviderAsyncTaskID string `json:"providerAsyncTaskId"`
 	ExternalTaskID      string `json:"externalTaskId,omitempty"`
@@ -182,6 +183,7 @@ type PollShotVideoTaskInput struct {
 }
 
 type PollShotVideoTaskOutput struct {
+	ProviderRequestID         string                           `json:"providerRequestId"`
 	ProviderCallID            string                           `json:"providerCallId"`
 	ProviderAsyncTaskID       string                           `json:"providerAsyncTaskId"`
 	ExternalTaskID            string                           `json:"externalTaskId,omitempty"`
@@ -836,6 +838,7 @@ func (a Activities) CreateShotVideoTask(ctx context.Context, input CreateShotVid
 		ExecutionToken:      nodeExecution.ExecutionToken,
 		AttemptGeneration:   nodeExecution.AttemptGeneration,
 		ShotID:              shot.ID,
+		ProviderRequestID:   gatewayResp.ProviderRequestID,
 		ProviderCallID:      gatewayResp.ProviderCallID,
 		ProviderAsyncTaskID: gatewayResp.ProviderAsyncTaskID,
 		ExternalTaskID:      gatewayResp.ExternalTaskID,
@@ -911,6 +914,7 @@ func (a Activities) PollShotVideoTask(ctx context.Context, input PollShotVideoTa
 		return PollShotVideoTaskOutput{}, a.failShotActivity(ctx, baseInput, shot, nodeExecution, "video_failed", "storyboard.shot.video.failed", workflowErrorFromProvider(err, codeActivityFailed))
 	}
 	output := PollShotVideoTaskOutput{
+		ProviderRequestID:        gatewayResp.ProviderRequestID,
 		ProviderCallID:           gatewayResp.ProviderCallID,
 		ProviderAsyncTaskID:      gatewayResp.ProviderAsyncTaskID,
 		ExternalTaskID:           gatewayResp.ExternalTaskID,

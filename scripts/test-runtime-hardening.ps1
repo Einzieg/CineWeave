@@ -3,6 +3,7 @@ param(
   [switch]$ProviderModelDeleteOnly,
   [switch]$SourceToScriptOnly,
   [switch]$DerivedAssetOnly,
+  [switch]$CommerceOnly,
   [switch]$KeepEnvironment
 )
 
@@ -45,7 +46,10 @@ function Invoke-GoContainer {
     '-w', '/workspace'
   )
   if ($Integration) {
-    $dockerArguments += @('-e', 'CINEWEAVE_INTEGRATION_TEST=1')
+    $dockerArguments += @(
+      '-e', 'CINEWEAVE_INTEGRATION_TEST=1',
+      '-e', 'CINEWEAVE_COMMERCE_INTEGRATION_TEST=1'
+    )
   }
   $dockerArguments += $goImage
   $dockerArguments += $Arguments
@@ -110,7 +114,7 @@ try {
   if ($SourceToScriptOnly) {
     $sourceToScriptTests = '^(TestSourceToScriptRetryCreatesNewGenerationForFailedEpisodes|TestPrepareSourceToScriptAppendsSecondChapterToCurrentScriptIntegration|TestFinalizeSourceToScriptKeepsPreviousProjectScriptWhenAllEpisodesFailIntegration|TestSourceToScriptMixedFailureKeepsFallbackEpisodeAndActivatesCompleteVersionIntegration|TestSourceToScriptMissingFailedEpisodeCreatesUnactivatedPartialVersionIntegration|TestSourceToScriptRejectsSourceAndScriptChangesBeforePublicationIntegration|TestSourceToScriptManifestReindexesAfterChapterDeletionWithoutDroppingRetainedEpisodeIntegration)$'
     Invoke-GoContainer -Integration -Arguments @(
-      'go', 'test', '-count=1', './internal/api', './internal/workflows',
+      'go', 'test', '-count=1', './internal/api', './internal/commerce', './internal/workflows',
       '-run', $sourceToScriptTests
     )
     Write-Host 'Source-to-script migration and integration tests passed.'
@@ -124,6 +128,24 @@ try {
       '-run', $derivedAssetTests
     )
     Write-Host 'Derived-asset V2 migration and integration tests passed.'
+    return
+  }
+
+  if ($CommerceOnly) {
+    $commerceTests = '^(TestCommerce|TestInvokeAgentCommerce|TestValidateCommerce|TestNormalizeCommerce|TestSelectRetryableCommerce).*'
+    Invoke-GoContainer -Integration -Arguments @(
+      'go', 'test', '-count=1', './internal/api', './internal/workflows',
+      '-run', $commerceTests
+    )
+    Invoke-GoContainer -Integration -Arguments @(
+      'go', 'test', '-count=1', './internal/commerce'
+    )
+    $commerceProviderTests = '^(TestNormalizeCapabilityInput|TestValidateModelLanguageCapabilities|TestFilterRoutingCandidatesByLanguage|TestVideoVariantMetadataDerivesLanguageProvenance|TestInjectGatewayTextImageReferences|TestGatewayTextRequestSnapshot).*'
+    Invoke-GoContainer -Arguments @(
+      'go', 'test', '-count=1', './internal/provider',
+      '-run', $commerceProviderTests
+    )
+    Write-Host 'Commerce migration, API, workflow, Gateway contract, and language capability tests passed.'
     return
   }
 

@@ -188,12 +188,14 @@ func (s *Service) executeGatewayImage(ctx context.Context, req GatewayImageReque
 	}
 
 	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
-		OrganizationID:  req.OrganizationID,
-		ModelProfileKey: req.ModelProfileKey,
-		TaskType:        TaskTypeImageGenerate,
-		Modality:        "image",
-		ImageSize:       imageInput.Size,
-		ImageQuality:    imageInput.Quality,
+		OrganizationID:                      req.OrganizationID,
+		ModelProfileKey:                     req.ModelProfileKey,
+		TaskType:                            TaskTypeImageGenerate,
+		Modality:                            "image",
+		ImageSize:                           imageInput.Size,
+		ImageQuality:                        imageInput.Quality,
+		PromptLanguage:                      req.PromptLanguage,
+		RequireApprovedLanguageCapabilities: req.RequireApprovedLanguageCapabilities,
 	})
 	if err != nil {
 		return GatewayImageResponse{}, err
@@ -475,6 +477,11 @@ func (s *Service) selectGatewayImageModel(ctx context.Context, req GatewayImageR
 		if !modelSupportsTaskType(model, TaskTypeImageGenerate) {
 			return gatewayModelSelection{}, fmt.Errorf("%w: provider model does not support %s", ErrValidation, TaskTypeImageGenerate)
 		}
+		if err := ValidateModelLanguageCapabilities(model, TaskTypeImageGenerate, LanguageCapabilityRequirement{
+			PromptLanguage: req.PromptLanguage, RequireApproved: req.RequireApprovedLanguageCapabilities,
+		}); err != nil {
+			return gatewayModelSelection{}, err
+		}
 		account, err := s.GetAccount(ctx, req.OrganizationID, model.ProviderAccountID)
 		if err != nil {
 			return gatewayModelSelection{}, err
@@ -487,10 +494,12 @@ func (s *Service) selectGatewayImageModel(ctx context.Context, req GatewayImageR
 		return gatewayModelSelection{}, fmt.Errorf("%w: modelProfileKey or providerModelId is required", ErrValidation)
 	}
 	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
-		OrganizationID:  req.OrganizationID,
-		ModelProfileKey: profileKey,
-		TaskType:        TaskTypeImageGenerate,
-		Modality:        "image",
+		OrganizationID:                      req.OrganizationID,
+		ModelProfileKey:                     profileKey,
+		TaskType:                            TaskTypeImageGenerate,
+		Modality:                            "image",
+		PromptLanguage:                      req.PromptLanguage,
+		RequireApprovedLanguageCapabilities: req.RequireApprovedLanguageCapabilities,
 	})
 	if err != nil {
 		return gatewayModelSelection{}, err

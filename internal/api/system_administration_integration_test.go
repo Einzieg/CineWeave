@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -121,6 +122,135 @@ func TestSystemAdministratorOrganizationManagement(t *testing.T) {
 		t.Fatalf("created organization %s missing from %+v", created.Organization.ID, listed.Items)
 	}
 
+	systemMembersPath := "/api/system/organizations/" + created.Organization.ID + "/members"
+	assertAPIErrorCode(t, handler, http.MethodGet, systemMembersPath, ordinary.AccessToken, ordinary.OrganizationID, nil, http.StatusForbidden, "SYSTEM_ADMINISTRATOR_REQUIRED")
+	assertAPIErrorCode(t, handler, http.MethodPost, systemMembersPath, ordinary.AccessToken, ordinary.OrganizationID, map[string]any{
+		"email": "forbidden-" + suffix + "@example.test", "username": "forbidden-" + suffix, "password": "Password123!",
+	}, http.StatusForbidden, "SYSTEM_ADMINISTRATOR_REQUIRED")
+
+	var directMember auth.OrganizationMember
+	directEmail := "direct-" + suffix + "@example.test"
+	directUsername := "direct-" + suffix
+	doAPISuccess(t, handler, http.MethodPost, systemMembersPath, administrator.AccessToken, administrator.OrganizationID, map[string]any{
+		"email":       strings.ToUpper(directEmail),
+		"username":    directUsername,
+		"password":    "Password123!",
+		"displayName": "直接成员",
+	}, &directMember)
+	userIDs = append(userIDs, directMember.User.ID)
+	if directMember.OrganizationID != created.Organization.ID || directMember.Status != "active" ||
+		directMember.User.Email != directEmail || directMember.User.Username != directUsername {
+		t.Fatalf("direct member = %+v", directMember)
+	}
+
+	var directRoleCount, directCreateAuditCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM role_bindings rb
+		JOIN roles r ON r.id = rb.role_id
+		WHERE rb.organization_id = $1 AND rb.subject_user_id = $2
+		  AND rb.resource_organization_id = $1
+		  AND r.role_key IN ('org_member', 'organization_member')
+	`, created.Organization.ID, directMember.User.ID).Scan(&directRoleCount); err != nil {
+		t.Fatalf("count direct member role: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM audit_logs
+		WHERE organization_id = $1 AND actor_user_id = $2
+		  AND resource_id = $3 AND action = 'system.organization.member.created'
+	`, created.Organization.ID, administrator.User.ID, directMember.User.ID).Scan(&directCreateAuditCount); err != nil {
+		t.Fatalf("count direct member audit: %v", err)
+	}
+	if directRoleCount != 1 || directCreateAuditCount != 1 {
+		t.Fatalf("direct member persistence mismatch: roles=%d audits=%d", directRoleCount, directCreateAuditCount)
+	}
+
+	var systemMembers auth.MemberList
+	doAPISuccess(t, handler, http.MethodGet, systemMembersPath+"?search="+directUsername, administrator.AccessToken, administrator.OrganizationID, nil, &systemMembers)
+	if systemMembers.Total != 1 || len(systemMembers.Items) != 1 || systemMembers.Items[0].User.ID != directMember.User.ID {
+		t.Fatalf("system member search = %+v", systemMembers)
+	}
+
+	updatedEmail := "updated-" + suffix + "@example.test"
+	updatedUsername := "updated-" + suffix
+	var updatedMember auth.OrganizationMember
+	doAPISuccess(t, handler, http.MethodPatch, systemMembersPath+"/"+directMember.User.ID, administrator.AccessToken, administrator.OrganizationID, map[string]any{
+		"email":       strings.ToUpper(updatedEmail),
+		"username":    updatedUsername,
+		"password":    "NewPassword456!",
+		"displayName": "更新成员",
+		"avatarUrl":   "https://example.test/member.png",
+	}, &updatedMember)
+	if updatedMember.User.Email != updatedEmail || updatedMember.User.Username != updatedUsername ||
+		updatedMember.User.DisplayName != "更新成员" || updatedMember.User.AvatarURL != "https://example.test/member.png" {
+		t.Fatalf("updated system member = %+v", updatedMember)
+	}
+	if _, err := authService.Login(ctx, auth.LoginRequest{Identifier: directUsername, Password: "Password123!"}, httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatalf("old member credentials error = %v, want ErrInvalidCredentials", err)
+	}
+	updatedLogin, err := authService.Login(ctx, auth.LoginRequest{Identifier: updatedUsername, Password: "NewPassword456!"}, httptest.NewRequest(http.MethodPost, "/api/auth/login", nil))
+	if err != nil || updatedLogin.TokenResponse == nil || updatedLogin.OrganizationID != created.Organization.ID {
+		t.Fatalf("updated member login = %+v, %v", updatedLogin, err)
+	}
+
+	doAPISuccess(t, handler, http.MethodPatch, systemMembersPath+"/"+directMember.User.ID, administrator.AccessToken, administrator.OrganizationID, map[string]any{
+		"status": "disabled",
+	}, &updatedMember)
+	if updatedMember.Status != "disabled" {
+		t.Fatalf("disabled system member = %+v", updatedMember)
+	}
+	doAPISuccess(t, handler, http.MethodPatch, systemMembersPath+"/"+directMember.User.ID, administrator.AccessToken, administrator.OrganizationID, map[string]any{
+		"status": "active",
+	}, &updatedMember)
+	if updatedMember.Status != "active" {
+		t.Fatalf("restored system member = %+v", updatedMember)
+	}
+
+	var attachedMember auth.OrganizationMember
+	doAPISuccess(t, handler, http.MethodPost, systemMembersPath, administrator.AccessToken, administrator.OrganizationID, map[string]any{
+		"existingUserIdentifier": strings.ToUpper(ordinary.User.Username),
+	}, &attachedMember)
+	if attachedMember.User.ID != ordinary.User.ID || attachedMember.OrganizationID != created.Organization.ID || attachedMember.Status != "active" {
+		t.Fatalf("attached existing member = %+v", attachedMember)
+	}
+	assertAPIErrorCode(t, handler, http.MethodPost, systemMembersPath, administrator.AccessToken, administrator.OrganizationID, map[string]any{
+		"existingUserIdentifier": ordinary.User.Email,
+	}, http.StatusConflict, "SYSTEM_MEMBER_CONFLICT")
+	if err := authService.RemoveOrganizationMember(ctx, created.Organization.ID, ordinary.User.ID, owner.User.ID); err != nil {
+		t.Fatalf("remove attached member before direct restore: %v", err)
+	}
+	doAPISuccess(t, handler, http.MethodPost, systemMembersPath, administrator.AccessToken, administrator.OrganizationID, map[string]any{
+		"existingUserIdentifier": ordinary.User.Email,
+	}, &attachedMember)
+	if attachedMember.Status != "active" {
+		t.Fatalf("directly restored member = %+v", attachedMember)
+	}
+
+	var protectedMember auth.OrganizationMember
+	doAPISuccess(t, handler, http.MethodPost, systemMembersPath, administrator.AccessToken, administrator.OrganizationID, map[string]any{
+		"existingUserIdentifier": administrator.User.Username,
+	}, &protectedMember)
+	if !protectedMember.User.SystemAdministrator {
+		t.Fatalf("attached system administrator = %+v", protectedMember)
+	}
+	assertAPIErrorCode(t, handler, http.MethodPatch, systemMembersPath+"/"+administrator.User.ID, administrator.AccessToken, administrator.OrganizationID, map[string]any{
+		"displayName": "不允许修改",
+	}, http.StatusForbidden, "MEMBER_ACCOUNT_PROTECTED")
+
+	var directUpdateAuditCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM audit_logs
+		WHERE organization_id = $1 AND actor_user_id = $2
+		  AND resource_id = $3 AND action = 'system.organization.member.updated'
+	`, created.Organization.ID, administrator.User.ID, directMember.User.ID).Scan(&directUpdateAuditCount); err != nil {
+		t.Fatalf("count direct update audits: %v", err)
+	}
+	if directUpdateAuditCount != 3 {
+		t.Fatalf("direct update audit count = %d, want 3", directUpdateAuditCount)
+	}
+
 	assertAPIErrorCode(t, handler, http.MethodPost, "/api/system/organizations", administrator.AccessToken, administrator.OrganizationID, map[string]any{
 		"name": "Missing Owner", "ownerIdentifier": "missing-" + suffix,
 	}, http.StatusNotFound, "SYSTEM_OWNER_NOT_FOUND")
@@ -134,7 +264,11 @@ func TestSystemAdministratorOrganizationManagement(t *testing.T) {
 	}
 
 	login, err := authService.Login(ctx, auth.LoginRequest{Identifier: administrator.User.Username, Password: "Password123!"}, httptest.NewRequest(http.MethodPost, "/api/auth/login", nil))
-	if err != nil || login.TokenResponse == nil || !login.User.SystemAdministrator {
+	if err != nil || !login.RequiresOrganizationSelection || len(login.Organizations) != 2 {
 		t.Fatalf("system administrator login = %+v, %v", login, err)
+	}
+	administratorUser, err := authService.Me(ctx, auth.Principal{UserID: administrator.User.ID})
+	if err != nil || !administratorUser.SystemAdministrator {
+		t.Fatalf("system administrator identity = %+v, %v", administratorUser, err)
 	}
 }

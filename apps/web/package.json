@@ -6,6 +6,7 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test src/lib/*.test.mjs",
+    "test:e2e:commerce": "playwright test e2e/commerce",
     "start": "next start --port 3000",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
@@ -26,6 +27,7 @@
     "zustand": "5.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@tailwindcss/postcss": "4.3.1",
     "@types/node": "24.0.0",
     "@types/react": "19.2.17",

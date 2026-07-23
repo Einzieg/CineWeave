@@ -463,6 +463,9 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 	if err := validateAgentRuntimeArguments(args); err != nil {
 		return agentToolError(step.ToolName, args, err)
 	}
+	if strings.HasPrefix(step.ToolName, "commerce.") {
+		return s.agentToolCommerce(r, principal, project, task, step, args)
+	}
 	switch step.ToolName {
 	case agentAskUserToolName:
 		return s.agentToolAskUser(r, project, task, step, args)

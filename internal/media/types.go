@@ -7,14 +7,27 @@ import (
 )
 
 type Clip struct {
-	ShotID                string   `json:"shotId"`
-	ShotIndex             int      `json:"shotIndex"`
-	StorageKey            string   `json:"storageKey"`
-	MimeType              string   `json:"mimeType"`
-	DurationSeconds       float64  `json:"durationSeconds,omitempty"`
-	TrimStartSeconds      float64  `json:"trimStartSeconds,omitempty"`
-	TrimEndSeconds        *float64 `json:"trimEndSeconds,omitempty"`
-	TargetDurationSeconds *float64 `json:"targetDurationSeconds,omitempty"`
+	ShotID                string        `json:"shotId"`
+	ShotIndex             int           `json:"shotIndex"`
+	StorageKey            string        `json:"storageKey"`
+	MimeType              string        `json:"mimeType"`
+	DurationSeconds       float64       `json:"durationSeconds,omitempty"`
+	TrimStartSeconds      float64       `json:"trimStartSeconds,omitempty"`
+	TrimEndSeconds        *float64      `json:"trimEndSeconds,omitempty"`
+	TargetDurationSeconds *float64      `json:"targetDurationSeconds,omitempty"`
+	TextOverlays          []TextOverlay `json:"textOverlays,omitempty"`
+}
+
+type TextOverlay struct {
+	Text         string  `json:"text"`
+	StartSeconds float64 `json:"startSeconds"`
+	EndSeconds   float64 `json:"endSeconds"`
+	Position     string  `json:"position,omitempty"`
+}
+
+type EndCard struct {
+	Text            string  `json:"text"`
+	DurationSeconds float64 `json:"durationSeconds"`
 }
 
 type ComposeRequest struct {
@@ -22,13 +35,14 @@ type ComposeRequest struct {
 	ProjectID      string `json:"projectId"`
 	WorkflowRunID  string `json:"workflowRunId"`
 
-	Clips            []Clip `json:"clips"`
-	AspectRatio      string `json:"aspectRatio"`
-	Resolution       string `json:"resolution"`
-	FPSNumerator     int    `json:"fpsNumerator,omitempty"`
-	FPSDenominator   int    `json:"fpsDenominator,omitempty"`
-	OutputMimeType   string `json:"outputMimeType"`
-	OutputStorageKey string `json:"outputStorageKey,omitempty"`
+	Clips            []Clip   `json:"clips"`
+	EndCard          *EndCard `json:"endCard,omitempty"`
+	AspectRatio      string   `json:"aspectRatio"`
+	Resolution       string   `json:"resolution"`
+	FPSNumerator     int      `json:"fpsNumerator,omitempty"`
+	FPSDenominator   int      `json:"fpsDenominator,omitempty"`
+	OutputMimeType   string   `json:"outputMimeType"`
+	OutputStorageKey string   `json:"outputStorageKey,omitempty"`
 }
 
 type ComposeResult struct {

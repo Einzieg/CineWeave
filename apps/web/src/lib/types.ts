@@ -175,14 +175,26 @@ export type SetupState = {
   organizationCount: number;
 };
 
+export type ProjectKind = "narrative" | "commerce_video";
+
+export type NarrativeProjectType =
+  | "short_film"
+  | "comic_drama"
+  | "brand_ad"
+  | "character_ip"
+  | "other";
+
+export type NarrativeContentType = "novel" | "script" | "storyboard_first" | "original";
+
 export type Project = {
   id: string;
   organizationId: string;
   workspaceId?: string;
   name: string;
   description?: string | null;
-  projectType?: string | null;
-  contentType?: string | null;
+  projectKind: ProjectKind;
+  projectType?: NarrativeProjectType | "commerce_video" | null;
+  contentType?: NarrativeContentType | null;
   aspectRatio?: string | null;
   videoRatio?: string;
   artStyle?: string;
@@ -210,6 +222,11 @@ export type Project = {
   status?: string;
   settings?: JsonRecord;
   revision: number;
+  setupSessionId?: string;
+  setupState?: CommerceSetupState;
+  workflowTemplateVersionId?: string;
+  setupConfigurationHash?: string;
+  scriptUnitDefaults?: CommerceScriptUnitDefaults;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -427,14 +444,25 @@ export type VideoProductionRebuildItem = {
   failureMessage?: string | null;
 };
 
-export type CreateProjectRequest = {
+type CreateProjectBaseRequest = {
   workspaceId: string;
   name: string;
   description?: string;
-  projectType?: string;
-  contentType?: string;
   aspectRatio?: string;
   videoRatio?: string;
+  audioStrategy?: "native_av" | "hybrid" | "tts_postdub" | "external_audio";
+  audioRequirement?: "preferred" | "required" | "disabled";
+  imageQuality?: string;
+  timelineTimebase?: number;
+  fpsNumerator?: number;
+  fpsDenominator?: number;
+  settings?: JsonRecord;
+};
+
+export type CreateNarrativeProjectRequest = CreateProjectBaseRequest & {
+  projectKind: "narrative";
+  projectType?: NarrativeProjectType;
+  contentType?: NarrativeContentType;
   artStyle?: string;
   directorManualPromptVersionId?: string;
   visualManualPromptVersionId?: string;
@@ -443,16 +471,800 @@ export type CreateProjectRequest = {
   scriptModelProfileKey?: string;
   ttsModelProfileKey?: string;
   asrModelProfileKey?: string;
-  audioStrategy?: "native_av" | "hybrid" | "tts_postdub";
-  audioRequirement?: "preferred" | "required" | "disabled";
-  imageQuality?: string;
   videoProductionProfileKey?: VideoProductionProfileKey;
   videoProductionProfileVersion?: number;
   compatibilityPolicy?: "strict" | "compatible_fallback";
-  timelineTimebase?: number;
-  fpsNumerator?: number;
-  fpsDenominator?: number;
-  settings?: JsonRecord;
+};
+
+export type CreateCommerceVideoProjectRequest = CreateProjectBaseRequest & {
+  projectKind: "commerce_video";
+  defaultTargetDurationSeconds?: 15 | 30 | 60;
+  defaultTargetPlatform?: string;
+  defaultLanguageMode?: "auto" | "explicit";
+  defaultTargetLanguage?: string;
+};
+
+export type CreateProjectRequest = CreateNarrativeProjectRequest | CreateCommerceVideoProjectRequest;
+
+export type CommerceSetupState =
+  | "draft"
+  | "uploading"
+  | "resolving_language"
+  | "waiting_user_confirmation"
+  | "localizing"
+  | "validating"
+  | "needs_user_review"
+  | "ready"
+  | "starting"
+  | "started"
+  | "completed"
+  | "failed"
+  | "abandoned";
+
+export type CommerceSetupRunState =
+  | "queued"
+  | "running"
+  | "waiting_user_confirmation"
+  | "needs_user_review"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type CommerceLanguageMode = "auto" | "explicit";
+
+export type CommerceScriptUnitDefaults = {
+  targetDurationSeconds: number;
+  targetPlatform: string;
+  languageMode: CommerceLanguageMode;
+  targetLanguage?: string | null;
+};
+
+export type UpdateCommerceScriptUnitDefaultsRequest = CommerceScriptUnitDefaults & {
+  expectedRevision: number;
+};
+
+export type CommerceSetupSession = {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  projectId: string;
+  workflowTemplateVersionId: string;
+  clientRequestId: string;
+  scopeType: string;
+  state: CommerceSetupState;
+  step: string;
+  revision: number;
+  inputSnapshot: JsonRecord;
+  setupAttempt: number;
+  setupWorkflowRunId?: string;
+  productionWorkflowRunId?: string;
+  productId?: string;
+  scriptUnitId?: string;
+  sourceScriptVersionId?: string;
+  localizationId?: string;
+  lastErrorCode?: string;
+  lastErrorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  completedAt?: string;
+};
+
+export type CommerceSetupRun = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  setupSessionId: string;
+  attemptNo: number;
+  temporalWorkflowId: string;
+  status: CommerceSetupRunState;
+  input: JsonRecord;
+  output: JsonRecord;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  revision: number;
+};
+
+export type CompleteCommerceSetupSessionRequest = {
+  expectedRevision: number;
+};
+
+export type CommerceSetupCompletionResult = {
+  setupWorkflowRunId: string;
+  setupSession: CommerceSetupSession;
+};
+
+export type ConfirmCommerceSetupLanguageRequest = {
+  expectedRevision: number;
+  resolutionId: string;
+  targetLanguage: string;
+};
+
+export type CommerceSetupLanguageConfirmationResult = {
+  setupSession: CommerceSetupSession;
+  setupRun: CommerceSetupRun;
+};
+
+export type CommerceProjectLanguageOption = {
+  locale: string;
+  label: string;
+  textAvailable: boolean;
+  imagePromptAvailable: boolean;
+  videoPromptAvailable: boolean;
+  nativeAudioAvailable: boolean;
+  blockers: string[];
+};
+
+export type CommerceProjectModelRequirement = {
+  role: string;
+  label: string;
+  profileKey: string;
+  taskType: string;
+  modality: "text" | "image" | "video" | string;
+  usesInputLanguage: boolean;
+  usesOutputLanguage: boolean;
+  usesPromptLanguage: boolean;
+  usesNativeAudio: boolean;
+  ready: boolean;
+  candidateCount: number;
+  blocker?: string;
+};
+
+export type CommerceProjectOptions = {
+  workflowTemplateVersionId: string;
+  workflowTemplateVersion: number;
+  templateContentHash: string;
+  videoProductionProfileKey: VideoProductionProfileKey;
+  videoProductionProfileVersion: number;
+  available: boolean;
+  blockers: string[];
+  durations: number[];
+  aspectRatios: string[];
+  imageQualities: string[];
+  languageModes: CommerceLanguageMode[];
+  audioStrategies: Array<"native_av" | "external_audio">;
+  audioRequirements: Array<"preferred" | "required" | "disabled">;
+  languages: CommerceProjectLanguageOption[];
+  modelRequirements: CommerceProjectModelRequirement[];
+};
+
+export type CommerceProductVersion = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  version: number;
+  name: string;
+  brand: string;
+  sellingPoints: JsonValue;
+  immutableFeatures: JsonValue;
+  prohibitedClaims: JsonValue;
+  factsSnapshot: JsonValue;
+  factsHash: string;
+  sourceVersionId?: string;
+  createdAt: string;
+};
+
+export type CommerceProduct = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  currentVersionId?: string;
+  status: string;
+  revision: number;
+  scriptUnitsRevision: number;
+  metadata: JsonRecord;
+  currentVersion?: CommerceProductVersion;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CommerceProductMutationResult = {
+  product: CommerceProduct;
+  version: CommerceProductVersion;
+  activated: boolean;
+  requiresRebuild: boolean;
+};
+
+export type CommerceProductReference = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  artifactId: string;
+  mediaFileId: string;
+  referenceRole: string;
+  ordinal: number;
+  isPrimary: boolean;
+  status: "active" | "archived" | string;
+  width: number;
+  height: number;
+  mimeType: string;
+  contentHash: string;
+  qualityReview: JsonValue;
+  revision: number;
+  previewUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+};
+
+export type CommerceProductReferenceUpload = {
+  uploadId: string;
+  uploadUrl: string;
+  method: string;
+  headers: Record<string, string>;
+  expiresAt: string;
+};
+
+export type CommerceProductReferencePackItem = {
+  id: string;
+  referencePackId: string;
+  productReferenceId: string;
+  ordinal: number;
+  referenceRole: string;
+  artifactId: string;
+  mediaFileId: string;
+  contentHash: string;
+  previewUrl?: string;
+  createdAt: string;
+};
+
+export type CommerceProductReferencePack = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  productVersionId: string;
+  productFactsHash: string;
+  referenceSetHash: string;
+  packHash: string;
+  status: "active" | "stale" | "archived";
+  workflowRunId?: string;
+  createdAt: string;
+  staleAt?: string;
+  archivedAt?: string;
+  items: CommerceProductReferencePackItem[];
+};
+
+export type CommerceProductRebuildImpact = {
+  projectId: string;
+  projectGenerationId: string;
+  productId: string;
+  sourceProductVersionId: string;
+  targetProductVersionId: string;
+  expectedProductRevision: number;
+  targetReferenceIds: string[];
+  targetReferenceSetHash: string;
+  impactToken: string;
+  expiresAt: string;
+  affectedUnits: Array<{
+    scriptUnitId: string;
+    unitNo: number;
+    title: string;
+    sourceUnitGenerationId: string;
+    sourceReferencePackId: string;
+  }>;
+  reusableArtifactCount: number;
+  blockers: string[];
+};
+
+export type CommerceProductRebuildResult = {
+  rebuildId: string;
+  status: string;
+  productVersionId: string;
+  referencePackId: string;
+  affectedUnitCount: number;
+  idempotentReplay: boolean;
+};
+
+export type CommerceScriptVersion = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  scriptUnitId: string;
+  version: number;
+  content: string;
+  contentHash: string;
+  sourceLanguageHint?: string;
+  detectedSourceLanguage?: string;
+  manualOverride: boolean;
+  sourceVersionId?: string;
+  createdAt: string;
+};
+
+export type CommerceLanguageResolution = {
+  id: string;
+  scriptUnitId: string;
+  sourceScriptVersionId: string;
+  languageMode: CommerceLanguageMode;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  confidence?: number;
+  reasoning: string;
+  needsUserConfirmation: boolean;
+  status: string;
+  inputHash: string;
+  revision: number;
+  confirmedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CommerceScriptLocalization = {
+  id: string;
+  scriptUnitId: string;
+  sourceScriptVersionId: string;
+  languageResolutionId: string;
+  version: number;
+  sourceLanguage: string;
+  targetLanguage: string;
+  localizedContent: string;
+  localizedContentHash: string;
+  structuredContract: JsonValue;
+  estimatedVoiceoverSeconds: number;
+  timingAnalysis: JsonValue;
+  timingPolicyVersion: string;
+  reviewStatus: string;
+  reviewerOutput: JsonValue;
+  status: string;
+  revision: number;
+  createdAt: string;
+  approvedAt?: string;
+  archivedAt?: string;
+};
+
+export type CommerceScriptUnit = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  unitNo: number;
+  title: string;
+  sortOrder: number;
+  status: string;
+  currentSourceVersionId?: string;
+  currentLocalizationId?: string;
+  languageMode: CommerceLanguageMode;
+  explicitTargetLanguage?: string;
+  targetDurationSeconds: number;
+  targetPlatform: string;
+  draftContent: string;
+  draftContentHash?: string;
+  draftUpdatedAt?: string;
+  activeUnitGenerationId?: string;
+  unitGenerationNo: number;
+  derivedFromScriptUnitId?: string;
+  derivationKind?: "copy" | "language_variant" | "agent_idea" | string;
+  revision: number;
+  metadata: JsonRecord;
+  currentSourceVersion?: CommerceScriptVersion;
+  currentLocalization?: CommerceScriptLocalization;
+  languageResolution?: CommerceLanguageResolution;
+  productionSummary?: CommerceScriptUnitProductionSummary;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+};
+
+export type CommerceScriptUnitProductionSummary = {
+  status: string;
+  currentStage: string;
+  progress: number;
+  failedCount: number;
+  finalVideoStatus: string;
+};
+
+export type CommerceScriptUnitList = {
+  items: CommerceScriptUnit[];
+  nextCursor?: string;
+  hasMore: boolean;
+  scriptUnitsRevision: number;
+};
+
+export type CommerceScriptVersionMutation = {
+  scriptUnit: CommerceScriptUnit;
+  version: CommerceScriptVersion;
+  activated: boolean;
+  requiresRebuild: boolean;
+};
+
+export type CommerceScriptUnitRebuildAffectedCounts = {
+  storyboardPlans: number;
+  storyboardShots: number;
+  referenceImages: number;
+  videoPrompts: number;
+  shotVideos: number;
+  timelines: number;
+  finalVideos: number;
+};
+
+export type CommerceScriptUnitRebuildImpact = {
+  projectId: string;
+  projectGenerationId: string;
+  scriptUnitId: string;
+  sourceUnitGenerationId: string;
+  sourceScriptVersionId: string;
+  targetSourceScriptVersionId: string;
+  expectedRevision: number;
+  targetLanguageMode: CommerceLanguageMode;
+  targetLanguage?: string;
+  targetDurationSeconds: number;
+  targetPlatform: string;
+  targetConfigurationHash: string;
+  impactToken: string;
+  expiresAt: string;
+  affected: CommerceScriptUnitRebuildAffectedCounts;
+  estimatedAgentCalls: number;
+  blockers: string[];
+};
+
+export type CommerceLanguageConfirmationAccepted = {
+  languageResolution: CommerceLanguageResolution;
+  workflowRun: WorkflowRun;
+};
+
+export type CommerceTimingEstimate = {
+  locale: string;
+  policyVersion: string;
+  units: number;
+  unitsPerSecond: number;
+  estimatedVoiceoverSeconds: number;
+  targetDurationSeconds: number;
+  exceeded: boolean;
+};
+
+export type CommerceStoryboardPlanStatus = "planning" | "reviewing" | "ready" | "failed" | "stale" | "archived";
+
+export type CommerceStoryboardPlan = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  productVersionId: string;
+  scriptUnitId: string;
+  sourceScriptVersionId: string;
+  localizationId: string;
+  referencePackId: string;
+  projectProductionGenerationId: string;
+  scriptUnitGenerationId: string;
+  commerceWorkflowBindingId: string;
+  commerceWorkflowBindingRevision: number;
+  salesScriptContractId: string;
+  salesScriptContractHash: string;
+  workflowRunId?: string;
+  planRevision: number;
+  revision: number;
+  status: CommerceStoryboardPlanStatus;
+  active: boolean;
+  staleState: "fresh" | "upstream_changed" | "needs_regeneration";
+  targetLanguage: string;
+  targetDurationSeconds: number;
+  aspectRatio: string;
+  timelineTimebase: number;
+  fpsNumerator: number;
+  fpsDenominator: number;
+  allowedShotDurations: number[];
+  shotCount: number;
+  reviewStatus: string;
+  planHash: string;
+  projectionHash: string;
+  createdAt: string;
+  activatedAt?: string;
+};
+
+export type CommerceStoryboardShotSegmentLink = {
+  id: string;
+  localizationSegmentId: string;
+  sourceSegmentId: string;
+  usage: "visual" | "voiceover" | "onscreen" | "cta" | "context";
+  ordinal: number;
+  verbatimStart?: number;
+  verbatimEnd?: number;
+};
+
+export type CommerceStoryboardShotProductReference = {
+  id: string;
+  productReferenceId: string;
+  sourcePackId: string;
+  sourcePackItemId: string;
+  role: "primary" | "detail" | "logo" | "usage" | "context";
+  ordinal: number;
+  required: boolean;
+  artifactId: string;
+  mediaFileId: string;
+  contentHash: string;
+  previewUrl?: string;
+};
+
+export type CommerceStoryboardShot = {
+  id: string;
+  storyboardPlanId: string;
+  scriptUnitId: string;
+  scriptUnitGenerationId: string;
+  revision: number;
+  shotOrdinal: number;
+  title: string;
+  durationSeconds: number;
+  startTick: number;
+  endTick: number;
+  salesBeat: string;
+  visualAction: string;
+  shotPurpose: string;
+  composition: string;
+  camera: JsonRecord;
+  voiceoverText: string;
+  onscreenText: string;
+  targetLanguage: string;
+  soundEffects: JsonValue;
+  musicCue: string;
+  requiredProductFeatures: string[];
+  reviewStatus: string;
+  manualOverride: boolean;
+  staleState: string;
+  imagePrompt?: string;
+  imagePromptStatus: string;
+  imageStatus: string;
+  imageArtifactId?: string;
+  imagePreviewUrl?: string;
+  videoPrompt?: string;
+  videoPromptStatus: string;
+  videoRenderPlanId?: string;
+  videoRenderPlanStatus?: string;
+  videoStatus: string;
+  videoArtifactId?: string;
+  videoPreviewUrl?: string;
+  imageErrorCode?: string;
+  imageErrorMessage?: string;
+  videoErrorCode?: string;
+  videoErrorMessage?: string;
+  segmentLinks: CommerceStoryboardShotSegmentLink[];
+  productReferences: CommerceStoryboardShotProductReference[];
+  editedBy?: string;
+  editedAt?: string;
+};
+
+export type CommerceStoryboardPlanDetail = {
+  plan: CommerceStoryboardPlan;
+  shots: CommerceStoryboardShot[];
+};
+
+export type CommerceUnitGenerationIdentity = {
+  organizationId: string;
+  projectId: string;
+  projectGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  videoProfileSnapshotHash: string;
+  commerceWorkflowBindingId: string;
+  commerceWorkflowBindingRevision: number;
+  commerceConfigurationHash: string;
+  productId: string;
+  scriptUnitId: string;
+  scriptUnitRevision: number;
+  scriptUnitGenerationId: string;
+  scriptUnitGenerationNo: number;
+  unitConfigurationHash: string;
+};
+
+export type CommerceProductionRunType = "storyboard_plan" | "reference_images" | "video_prompts" | "shot_videos" | "final_compose";
+export type CommerceProductionRunStatus = "queued" | "running" | "partially_succeeded" | "succeeded" | "failed" | "cancelling" | "cancelled";
+export type CommerceProductionItemStatus = "queued" | "running" | "succeeded" | "failed_retryable" | "failed_terminal" | "cancelled" | "discarded" | "skipped";
+
+export type CommerceVideoBatchRequest = {
+  planId: string;
+  expectedPlanRevision: number;
+  expectedUnitGenerationId: string;
+  shotIds: string[];
+  force?: boolean;
+  concurrency?: number;
+  resolution?: string;
+};
+
+export type CommerceProductionRun = {
+  id: string;
+  identity: CommerceUnitGenerationIdentity;
+  workflowRunId?: string;
+  runType: CommerceProductionRunType;
+  status: CommerceProductionRunStatus;
+  payloadHash: string;
+  inputSnapshot: JsonRecord;
+  revision: number;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  cancelledItems: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  errorCode?: string;
+  errorMessage?: string;
+};
+
+export type CommerceProductionRunItem = {
+  id: string;
+  runId: string;
+  identity: CommerceUnitGenerationIdentity;
+  subject: {
+    type: "plan_phase" | "candidate_shot" | "storyboard_shot" | "final_compose";
+    key: string;
+    storyboardShotId?: string;
+    inputHash: string;
+  };
+  status: CommerceProductionItemStatus;
+  currentAttempt: number;
+  outputSnapshot: JsonRecord;
+  outputArtifactId?: string;
+  outputMediaFileId?: string;
+  outputStoryboardPlanId?: string;
+  outputVideoPromptPlanId?: string;
+  outputVideoRenderPlanId?: string;
+  outputFinalVideoVersionId?: string;
+  providerRequestId?: string;
+  providerCallId?: string;
+  providerAsyncTaskId?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  retryable: boolean;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type CommerceProductionRunDetail = {
+  run: CommerceProductionRun;
+  items: CommerceProductionRunItem[];
+};
+
+export type CommerceScriptUnitBatchStage = "storyboard" | "reference_images" | "video_prompts" | "shot_videos" | "final_compose";
+export type CommerceScriptUnitBatchStatus = "queued" | "running" | "partially_succeeded" | "succeeded" | "failed" | "cancelling" | "cancelled";
+
+export type CommerceScriptUnitBatchAdvanceItem = {
+  scriptUnitId: string;
+  expectedUnitGenerationId: string;
+  planId?: string;
+  expectedPlanRevision?: number;
+  timelineId?: string;
+  expectedTimelineRevision?: number;
+  shotIds?: string[];
+  force?: boolean;
+  resolution?: string;
+  title?: string;
+};
+
+export type CommerceScriptUnitBatchItem = {
+  id: string;
+  scriptUnitId: string;
+  unitGenerationId: string;
+  childRunId?: string;
+  childWorkflowRunId?: string;
+  ordinal: number;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
+  attemptGeneration: number;
+  inputSnapshot: JsonRecord;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
+  completedAt?: string;
+};
+
+export type CommerceScriptUnitBatch = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  projectGenerationId: string;
+  targetStage: CommerceScriptUnitBatchStage;
+  status: CommerceScriptUnitBatchStatus;
+  maxConcurrency: number;
+  retryOfCoordinatorId?: string;
+  workflowRunId: string;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  cancelledItems: number;
+  revision: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  cancelledAt?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  items: CommerceScriptUnitBatchItem[];
+};
+
+export type CommerceProjectProductionStatus = {
+  overall: {
+    status: string;
+    projectGenerationId?: string;
+    commerceWorkflowBindingRevision: number;
+    videoProductionBindingRevision: number;
+    scriptUnitCount: number;
+    completedScriptUnitCount: number;
+    runningScriptUnitCount: number;
+    failedScriptUnitCount: number;
+    needsReviewScriptUnitCount: number;
+  };
+  product: {
+    status: string;
+    productVersionId?: string;
+    referenceCount: number;
+  };
+  scriptUnitsRevision: number;
+};
+
+export type CommerceUnitProductionStatus = {
+  scriptUnitId: string;
+  unitNo: number;
+  sortOrder: number;
+  title: string;
+  unitGenerationId?: string;
+  unitGenerationNo: number;
+  targetLanguage?: string;
+  targetDurationSeconds: number;
+  status: string;
+  progress: number;
+  nextAction: string;
+  stages: {
+    setup: { status: string; revision: number };
+    language: { status: string; mode: string; sourceLanguage?: string; targetLanguage?: string; confidence?: number };
+    script: { status: string; sourceVersion: number; localizationVersion: number };
+    storyboard: { status: string; planId?: string; planRevision: number; shotCount: number };
+    referenceImages: { total: number; succeeded: number; failed: number; running: number };
+    videoPrompts: { total: number; approved: number; failed: number; running: number };
+    shotVideos: { total: number; succeeded: number; failed: number; running: number };
+    finalVideo: { status: string; timelineId?: string; finalVideoVersionId?: string };
+  };
+};
+
+export type CommerceTimeline = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  projectGenerationId: string;
+  scriptUnitId: string;
+  unitGenerationId: string;
+  workflowRunId?: string;
+  revision: number;
+  title: string;
+  status: string;
+  aspectRatio: string;
+  resolution: string;
+  timelineTimebase: number;
+  fpsNumerator: number;
+  fpsDenominator: number;
+  metadata: JsonRecord;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CommerceTimelineOverlay = {
+  id: string;
+  timelineId: string;
+  timelineClipId?: string;
+  storyboardShotId?: string;
+  role: "onscreen_text" | "cta_end_card";
+  ordinal: number;
+  text: string;
+  startTick: number;
+  endTick: number;
+  style: JsonRecord;
+  contentHash: string;
+};
+
+export type CommerceFinalVideoVersion = FinalVideoVersion & {
+  scriptUnitId: string;
+  unitGenerationId: string;
+};
+
+export type CommerceTimelineDetail = {
+  timeline: CommerceTimeline;
+  clips: TimelineClipDetail[];
+  overlays: CommerceTimelineOverlay[];
+  finalVideoVersions: CommerceFinalVideoVersion[];
 };
 
 export type UpdateProjectRequest = {
@@ -2623,7 +3435,17 @@ export type ProviderModelCapability = {
   qualityTiers?: JsonValue;
   providerOptionsSchema?: ProviderModelCapabilityOptions;
   pricingPolicy?: JsonRecord;
+  supportedInputLanguages: string[];
+  supportedOutputLanguages: string[];
+  supportedPromptLanguages: string[];
+  supportedNativeAudioLanguages: string[];
+  source: ProviderCapabilitySource;
+  approvalStatus: ProviderCapabilityApprovalStatus;
 };
+
+export type ProviderCapabilitySource = "official" | "provider" | "preset" | "discovered" | "inferred" | "manual" | "unknown";
+
+export type ProviderCapabilityApprovalStatus = "approved" | "inferred" | "rejected" | "unknown";
 
 export type ProviderModelCapabilityOptions = JsonRecord & {
   xCapabilities?: ProviderModelXCapabilities;
@@ -2800,6 +3622,12 @@ export type ProviderModelXCapabilities = JsonRecord & {
   minDurationSeconds?: number;
   maxDurationSeconds?: number;
   videoGenerationVariants?: VideoGenerationVariant[];
+  supportedInputLanguages?: string[];
+  supportedOutputLanguages?: string[];
+  supportedPromptLanguages?: string[];
+  supportedNativeAudioLanguages?: string[];
+  capabilitySource?: ProviderCapabilitySource;
+  capabilityApprovalStatus?: ProviderCapabilityApprovalStatus;
 };
 
 export type ProviderModel = {
@@ -3156,6 +3984,25 @@ export type CreateSystemOrganizationRequest = {
   name: string;
   workspaceName?: string;
   ownerIdentifier: string;
+};
+
+export type CreateSystemOrganizationMemberRequest =
+  | { existingUserIdentifier: string }
+  | {
+      email: string;
+      username: string;
+      password: string;
+      displayName?: string;
+      avatarUrl?: string;
+    };
+
+export type UpdateSystemOrganizationMemberRequest = {
+  email?: string;
+  username?: string;
+  password?: string;
+  displayName?: string;
+  avatarUrl?: string;
+  status?: "active" | "disabled";
 };
 
 export type CreatedSystemOrganization = {

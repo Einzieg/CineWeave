@@ -12,6 +12,7 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
+	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/events"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/provider"
@@ -33,6 +34,8 @@ type Server struct {
 	auth                         *auth.Service
 	authorizer                   *authz.Authorizer
 	providers                    *provider.Service
+	commerce                     *commercepkg.Service
+	commerceCatalog              *commercepkg.CatalogService
 	storage                      *storage.Client
 	temporal                     temporalClient
 	assetBatchSnapshotLockedHook func()
@@ -53,41 +56,47 @@ type Workspace struct {
 }
 
 type Project struct {
-	ID                         string                      `json:"id"`
-	OrganizationID             string                      `json:"organizationId"`
-	WorkspaceID                string                      `json:"workspaceId"`
-	Name                       string                      `json:"name"`
-	Description                *string                     `json:"description,omitempty"`
-	ProjectType                *string                     `json:"projectType,omitempty"`
-	ContentType                *string                     `json:"contentType,omitempty"`
-	AspectRatio                *string                     `json:"aspectRatio,omitempty"`
-	VideoRatio                 string                      `json:"videoRatio"`
-	ArtStyle                   string                      `json:"artStyle"`
-	DirectorManual             string                      `json:"directorManual"`
-	VisualManual               string                      `json:"visualManual"`
-	ImageModelProfileKey       string                      `json:"imageModelProfileKey"`
-	VideoModelProfileKey       string                      `json:"videoModelProfileKey"`
-	ScriptModelProfileKey      string                      `json:"scriptModelProfileKey"`
-	TTSModelProfileKey         string                      `json:"ttsModelProfileKey"`
-	ASRModelProfileKey         string                      `json:"asrModelProfileKey"`
-	AudioStrategy              string                      `json:"audioStrategy"`
-	AudioRequirement           string                      `json:"audioRequirement"`
-	AudioConfigurationRevision int                         `json:"audioConfigurationRevision"`
-	Revision                   int64                       `json:"revision"`
-	ImageQuality               string                      `json:"imageQuality"`
-	TimelineTimebase           int64                       `json:"timelineTimebase"`
-	FPSNumerator               int                         `json:"fpsNumerator"`
-	FPSDenominator             int                         `json:"fpsDenominator"`
-	ActiveScriptID             *string                     `json:"activeScriptId,omitempty"`
-	ActiveFinalVideoVersionID  *string                     `json:"activeFinalVideoVersionId,omitempty"`
-	ActiveAudioMixVersionID    *string                     `json:"activeAudioMixVersionId,omitempty"`
-	VideoProductionBinding     *videoproduction.Binding    `json:"videoProductionBinding,omitempty"`
-	ProductionGeneration       *videoproduction.Generation `json:"productionGeneration,omitempty"`
-	VideoProductionState       string                      `json:"videoProductionState"`
-	VideoProductionLocked      bool                        `json:"videoProductionLocked"`
-	Settings                   json.RawMessage             `json:"settings"`
-	CreatedAt                  time.Time                   `json:"createdAt"`
-	UpdatedAt                  time.Time                   `json:"updatedAt"`
+	ID                         string                          `json:"id"`
+	OrganizationID             string                          `json:"organizationId"`
+	WorkspaceID                string                          `json:"workspaceId"`
+	Name                       string                          `json:"name"`
+	Description                *string                         `json:"description,omitempty"`
+	ProjectKind                commercepkg.ProjectKind         `json:"projectKind"`
+	ProjectType                *string                         `json:"projectType,omitempty"`
+	ContentType                *string                         `json:"contentType,omitempty"`
+	AspectRatio                *string                         `json:"aspectRatio,omitempty"`
+	VideoRatio                 string                          `json:"videoRatio"`
+	ArtStyle                   string                          `json:"artStyle"`
+	DirectorManual             string                          `json:"directorManual"`
+	VisualManual               string                          `json:"visualManual"`
+	ImageModelProfileKey       string                          `json:"imageModelProfileKey"`
+	VideoModelProfileKey       string                          `json:"videoModelProfileKey"`
+	ScriptModelProfileKey      string                          `json:"scriptModelProfileKey"`
+	TTSModelProfileKey         string                          `json:"ttsModelProfileKey"`
+	ASRModelProfileKey         string                          `json:"asrModelProfileKey"`
+	AudioStrategy              string                          `json:"audioStrategy"`
+	AudioRequirement           string                          `json:"audioRequirement"`
+	AudioConfigurationRevision int                             `json:"audioConfigurationRevision"`
+	Revision                   int64                           `json:"revision"`
+	ImageQuality               string                          `json:"imageQuality"`
+	TimelineTimebase           int64                           `json:"timelineTimebase"`
+	FPSNumerator               int                             `json:"fpsNumerator"`
+	FPSDenominator             int                             `json:"fpsDenominator"`
+	ActiveScriptID             *string                         `json:"activeScriptId,omitempty"`
+	ActiveFinalVideoVersionID  *string                         `json:"activeFinalVideoVersionId,omitempty"`
+	ActiveAudioMixVersionID    *string                         `json:"activeAudioMixVersionId,omitempty"`
+	VideoProductionBinding     *videoproduction.Binding        `json:"videoProductionBinding,omitempty"`
+	ProductionGeneration       *videoproduction.Generation     `json:"productionGeneration,omitempty"`
+	VideoProductionState       string                          `json:"videoProductionState"`
+	VideoProductionLocked      bool                            `json:"videoProductionLocked"`
+	Settings                   json.RawMessage                 `json:"settings"`
+	CreatedAt                  time.Time                       `json:"createdAt"`
+	UpdatedAt                  time.Time                       `json:"updatedAt"`
+	SetupSessionID             *string                         `json:"setupSessionId,omitempty"`
+	SetupState                 *string                         `json:"setupState,omitempty"`
+	WorkflowTemplateVersionID  *string                         `json:"workflowTemplateVersionId,omitempty"`
+	SetupConfigurationHash     *string                         `json:"setupConfigurationHash,omitempty"`
+	ScriptUnitDefaults         *commercepkg.ScriptUnitDefaults `json:"scriptUnitDefaults,omitempty"`
 }
 
 func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provider.Service, storageClient *storage.Client, temporalClient client.Client, authorizers ...*authz.Authorizer) *Server {
@@ -95,7 +104,12 @@ func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provide
 	if len(authorizers) > 0 && authorizers[0] != nil {
 		authorizer = authorizers[0]
 	}
-	return &Server{db: pool, auth: authService, authorizer: authorizer, providers: providerService, storage: storageClient, temporal: temporalClient}
+	return &Server{
+		db: pool, auth: authService, authorizer: authorizer, providers: providerService,
+		commerce:        commercepkg.NewService(commercepkg.NewRepository()),
+		commerceCatalog: commercepkg.NewCatalogService(commercepkg.NewRepository()),
+		storage:         storageClient, temporal: temporalClient,
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -107,6 +121,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/system/setup", s.systemSetup)
 	mux.HandleFunc("GET /api/system/organizations", s.withAuth(s.listSystemOrganizations))
 	mux.HandleFunc("POST /api/system/organizations", s.withAuth(s.createSystemOrganization))
+	mux.HandleFunc("GET /api/system/organizations/{organizationId}/members", s.withAuth(s.listSystemOrganizationMembers))
+	mux.HandleFunc("POST /api/system/organizations/{organizationId}/members", s.withAuth(s.createSystemOrganizationMember))
+	mux.HandleFunc("PATCH /api/system/organizations/{organizationId}/members/{userId}", s.withAuth(s.updateSystemOrganizationMember))
 
 	mux.HandleFunc("POST /api/auth/register", s.register)
 	mux.HandleFunc("POST /api/auth/register-with-invitation", s.registerWithOrganizationInvitation)
@@ -162,6 +179,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/role-bindings/{roleBindingId}", s.withAuth(s.deleteRoleBinding))
 
 	mux.HandleFunc("GET /api/projects", s.withAuth(s.listProjects))
+	mux.HandleFunc("GET /api/workspaces/{workspaceId}/commerce/project-options", s.withAuth(s.getCommerceProjectOptions))
 	mux.HandleFunc("GET /api/video-production-profiles", s.withAuth(s.listVideoProductionProfiles))
 	mux.HandleFunc("POST /api/projects", s.withAuth(s.createProject))
 	mux.HandleFunc("GET /api/projects/{projectId}", s.withAuth(s.getProject))
@@ -175,6 +193,79 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/video-production/rebuilds/{rebuildId}/retry-failed", s.withAuth(s.retryFailedProjectVideoProductionRebuildItems))
 	mux.HandleFunc("PATCH /api/projects/{projectId}", s.withAuth(s.updateProject))
 	mux.HandleFunc("DELETE /api/projects/{projectId}", s.withAuth(s.deleteProject))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}", s.withAuth(s.getCommerceSetupSession))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/complete", s.withAuth(s.completeCommerceSetupSession))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/language-confirmation", s.withAuth(s.confirmCommerceSetupLanguage))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/abandon", s.withAuth(s.abandonCommerceSetupSession))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product", s.withAuth(s.getCommerceProduct))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/product", s.withAuth(s.createCommerceProductVersion))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/commerce/product", s.withAuth(s.createCommerceProductVersion))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product/versions", s.withAuth(s.listCommerceProductVersions))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product/versions/{versionId}", s.withAuth(s.getCommerceProductVersion))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/product/versions", s.withAuth(s.createCommerceProductVersion))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product/references", s.withAuth(s.listCommerceProductReferences))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/product/references/upload-url", s.withAuth(s.createCommerceProductReferenceUploadURL))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/product/references", s.withAuth(s.completeCommerceProductReferenceUpload))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/commerce/product/references/{referenceId}", s.withAuth(s.updateCommerceProductReference))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/commerce/product/references/{referenceId}", s.withAuth(s.archiveCommerceProductReference))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product/reference-packs", s.withAuth(s.listCommerceProductReferencePacks))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product/reference-packs/{packId}", s.withAuth(s.getCommerceProductReferencePack))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/product/rebuild-impact", s.withAuth(s.getCommerceProductRebuildImpact))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/product/rebuilds", s.withAuth(s.createCommerceProductRebuild))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units", s.withAuth(s.listCommerceScriptUnits))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/production-status", s.withAuth(s.getCommerceProjectProductionStatus))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/commerce/script-unit-defaults", s.withAuth(s.updateCommerceScriptUnitDefaults))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units", s.withAuth(s.createCommerceScriptUnit))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/reorder", s.withAuth(s.reorderCommerceScriptUnits))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}", s.withAuth(s.getCommerceScriptUnit))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/production-status", s.withAuth(s.getCommerceUnitProductionStatus))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/commerce/script-units/{scriptUnitId}", s.withAuth(s.updateCommerceScriptUnit))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/commerce/script-units/{scriptUnitId}", s.withAuth(s.archiveCommerceScriptUnit))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/duplicate", s.withAuth(s.duplicateCommerceScriptUnit))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-variants", s.withAuth(s.createCommerceScriptLanguageVariant))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions", s.withAuth(s.listCommerceScriptVersions))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions/{versionId}", s.withAuth(s.getCommerceScriptVersion))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions", s.withAuth(s.createCommerceScriptVersion))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions/{versionId}/activate", s.withAuth(s.activateCommerceScriptVersion))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-resolution", s.withAuth(s.resolveCommerceScriptLanguage))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-resolution", s.withAuth(s.getCommerceScriptLanguageResolution))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-confirmation", s.withAuth(s.confirmCommerceScriptLanguage))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/prepare", s.withAuth(s.prepareCommerceScriptUnit))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/organize", s.withAuth(s.organizeCommerceScriptUnit))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/rebuild-impact", s.withAuth(s.getCommerceScriptUnitRebuildImpact))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/rebuilds", s.withAuth(s.createCommerceScriptUnitRebuild))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/localizations", s.withAuth(s.listCommerceScriptLocalizations))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/localizations/{localizationId}", s.withAuth(s.getCommerceScriptLocalization))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/localizations", s.withAuth(s.createCommerceScriptLocalization))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/localizations/{localizationId}/activate", s.withAuth(s.activateCommerceScriptLocalization))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans", s.withAuth(s.listCommerceStoryboardPlans))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans", s.withAuth(s.createCommerceStoryboardPlan))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans/{planId}", s.withAuth(s.getCommerceStoryboardPlan))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans/{planId}/activate", s.withAuth(s.activateCommerceStoryboardPlan))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans/{planId}/shots", s.withAuth(s.listCommerceStoryboardShots))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/shots/{shotId}", s.withAuth(s.updateCommerceStoryboardShot))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/shots/{shotId}", s.withAuth(s.deleteCommerceStoryboardShot))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/shots/reorder", s.withAuth(s.reorderCommerceStoryboardShots))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/reference-images/generate-batch", s.withAuth(s.generateCommerceReferenceImageBatch))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/video-prompts/generate-batch", s.withAuth(s.generateCommerceVideoPromptBatch))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/shot-videos/generate-batch", s.withAuth(s.generateCommerceShotVideoBatch))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/timelines", s.withAuth(s.listCommerceTimelines))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/timelines/prepare", s.withAuth(s.prepareCommerceTimeline))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/timelines/{timelineId}", s.withAuth(s.getCommerceTimeline))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/timelines/{timelineId}", s.withAuth(s.updateCommerceTimeline))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/final-videos/compose", s.withAuth(s.composeCommerceFinalVideo))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/final-videos", s.withAuth(s.listCommerceFinalVideos))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/final-videos/{finalVideoVersionId}", s.withAuth(s.getCommerceFinalVideo))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/final-videos/{finalVideoVersionId}/activate", s.withAuth(s.activateCommerceFinalVideo))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/production-runs", s.withAuth(s.listCommerceProductionRuns))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/production-runs/{runId}", s.withAuth(s.getCommerceProductionRun))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/production-runs/{runId}/retry-failed", s.withAuth(s.retryFailedCommerceProductionRun))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/production-runs/{runId}/cancel", s.withAuth(s.cancelCommerceProductionRun))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-unit-batches", s.withAuth(s.listCommerceScriptUnitBatches))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-unit-batches", s.withAuth(s.createCommerceScriptUnitBatch))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-unit-batches/{coordinatorId}", s.withAuth(s.getCommerceScriptUnitBatch))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-unit-batches/{coordinatorId}/retry-failed", s.withAuth(s.retryCommerceScriptUnitBatch))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-unit-batches/{coordinatorId}/cancel", s.withAuth(s.cancelCommerceScriptUnitBatch))
 	mux.HandleFunc("GET /api/project-manual-templates", s.withAuth(s.listProjectManualTemplates))
 	mux.HandleFunc("GET /api/projects/{projectId}/manual-bindings", s.withAuth(s.listProjectManualBindings))
 	mux.HandleFunc("PUT /api/projects/{projectId}/manual-bindings/{manualKind}", s.withAuth(s.bindProjectManual))
@@ -725,7 +816,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 	}
 
 	query := `
-		SELECT id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
+		SELECT id, organization_id, workspace_id, name, description, project_kind, project_type, content_type, aspect_ratio,
 		       video_ratio, art_style, director_manual, visual_manual,
 		       image_model_profile_key, video_model_profile_key, script_model_profile_key,
 		       tts_model_profile_key, asr_model_profile_key, audio_strategy, audio_requirement, audio_configuration_revision,
@@ -766,38 +857,17 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	var req struct {
-		WorkspaceID                   string          `json:"workspaceId"`
-		Name                          string          `json:"name"`
-		Description                   *string         `json:"description"`
-		ProjectType                   *string         `json:"projectType"`
-		ContentType                   *string         `json:"contentType"`
-		AspectRatio                   *string         `json:"aspectRatio"`
-		VideoRatio                    *string         `json:"videoRatio"`
-		ArtStyle                      *string         `json:"artStyle"`
-		DirectorManualPromptVersionID *string         `json:"directorManualPromptVersionId"`
-		VisualManualPromptVersionID   *string         `json:"visualManualPromptVersionId"`
-		ImageModelProfileKey          *string         `json:"imageModelProfileKey"`
-		VideoModelProfileKey          *string         `json:"videoModelProfileKey"`
-		ScriptModelProfileKey         *string         `json:"scriptModelProfileKey"`
-		TTSModelProfileKey            *string         `json:"ttsModelProfileKey"`
-		ASRModelProfileKey            *string         `json:"asrModelProfileKey"`
-		AudioStrategy                 *string         `json:"audioStrategy"`
-		AudioRequirement              *string         `json:"audioRequirement"`
-		ImageQuality                  *string         `json:"imageQuality"`
-		VideoProductionProfileKey     *string         `json:"videoProductionProfileKey"`
-		VideoProductionProfileVersion *int            `json:"videoProductionProfileVersion"`
-		CompatibilityPolicy           *string         `json:"compatibilityPolicy"`
-		TimelineTimebase              *int64          `json:"timelineTimebase"`
-		FPSNumerator                  *int            `json:"fpsNumerator"`
-		FPSDenominator                *int            `json:"fpsDenominator"`
-		Settings                      json.RawMessage `json:"settings"`
-	}
+	var req createProjectRequest
 	if !decode(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.WorkspaceID) == "" || strings.TrimSpace(req.Name) == "" {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workspaceId and name are required", nil, false)
+		return
+	}
+	classification, err := commercepkg.ResolveProjectClassification(req.ProjectKind, req.ProjectType, req.ContentType)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "PROJECT_KIND_CONFIGURATION_INVALID", "项目类型配置无效", map[string]any{"reason": err.Error()}, false)
 		return
 	}
 	settings := req.Settings
@@ -819,6 +889,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 	asrModelProfileKey := normalizedProjectString(req.ASRModelProfileKey, "audio_transcription_default")
 	audioStrategy := normalizedProjectString(req.AudioStrategy, "native_av")
 	audioRequirement := normalizedProjectString(req.AudioRequirement, "preferred")
+	if classification.Kind.IsCommerce() && audioStrategy == "external_audio" {
+		// Commerce exposes a provider-neutral external audio choice while the
+		// shared production schema stores the existing post-dub strategy.
+		audioStrategy = "tts_postdub"
+	}
 	if !validProjectAudioSettings(audioStrategy, audioRequirement) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "audioStrategy or audioRequirement is invalid", nil, false)
 		return
@@ -856,12 +931,26 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 	}
 
 	var orgID string
-	err := s.db.QueryRow(r.Context(), `SELECT organization_id FROM workspaces WHERE id = $1`, req.WorkspaceID).Scan(&orgID)
+	err = s.db.QueryRow(r.Context(), `SELECT organization_id FROM workspaces WHERE id = $1`, req.WorkspaceID).Scan(&orgID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	if !s.authorize(w, r, principal, authz.PermissionProjectWrite, authz.Resource{WorkspaceID: req.WorkspaceID}) {
+		return
+	}
+	if classification.Kind.IsCommerce() {
+		s.createCommerceProjectDraft(w, r, principal, orgID, req, projectCreateOptions{
+			Settings:         settings,
+			VideoRatio:       videoRatio,
+			AspectRatio:      aspectRatio,
+			ImageQuality:     imageQuality,
+			AudioStrategy:    audioStrategy,
+			AudioRequirement: audioRequirement,
+			TimelineTimebase: timelineTimebase,
+			FPSNumerator:     fpsNumerator,
+			FPSDenominator:   fpsDenominator,
+		})
 		return
 	}
 
@@ -887,7 +976,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 	var item Project
 	err = tx.QueryRow(r.Context(), `
 		INSERT INTO projects(
-			id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
+			id, organization_id, workspace_id, name, description, project_kind, project_type, content_type, aspect_ratio,
 			video_ratio, art_style, director_manual, visual_manual,
 			image_model_profile_key, video_model_profile_key, script_model_profile_key,
 			tts_model_profile_key, asr_model_profile_key, audio_strategy, audio_requirement,
@@ -895,20 +984,20 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 			active_video_production_generation_id, video_production_generation_no,
 			video_production_state, video_production_locked
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 1, 'storyboard_required', false)
-		RETURNING id, organization_id, workspace_id, name, description, project_type, content_type, aspect_ratio,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, 1, 'storyboard_required', false)
+		RETURNING id, organization_id, workspace_id, name, description, project_kind, project_type, content_type, aspect_ratio,
 		          video_ratio, art_style, director_manual, visual_manual,
 		          image_model_profile_key, video_model_profile_key, script_model_profile_key,
 		          tts_model_profile_key, asr_model_profile_key, audio_strategy, audio_requirement, audio_configuration_revision,
 		          image_quality, timeline_timebase, fps_numerator, fps_denominator,
 			active_script_id::text, active_final_video_version_id::text, active_audio_mix_version_id::text,
 			settings, revision, created_at, updated_at
-	`, identity.ProjectID, orgID, req.WorkspaceID, strings.TrimSpace(req.Name), req.Description, req.ProjectType, req.ContentType, aspectRatio,
+	`, identity.ProjectID, orgID, req.WorkspaceID, strings.TrimSpace(req.Name), req.Description, classification.Kind, classification.ProjectType, classification.ContentType, aspectRatio,
 		videoRatio, artStyle, "", "", imageModelProfileKey, videoModelProfileKey, scriptModelProfileKey,
 		ttsModelProfileKey, asrModelProfileKey, audioStrategy, audioRequirement,
 		imageQuality, timelineTimebase, fpsNumerator, fpsDenominator, settings, principal.UserID,
 		identity.GenerationID).
-		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectType, &item.ContentType, &item.AspectRatio,
+		Scan(&item.ID, &item.OrganizationID, &item.WorkspaceID, &item.Name, &item.Description, &item.ProjectKind, &item.ProjectType, &item.ContentType, &item.AspectRatio,
 			&item.VideoRatio, &item.ArtStyle, &item.DirectorManual, &item.VisualManual,
 			&item.ImageModelProfileKey, &item.VideoModelProfileKey, &item.ScriptModelProfileKey,
 			&item.TTSModelProfileKey, &item.ASRModelProfileKey, &item.AudioStrategy, &item.AudioRequirement, &item.AudioConfigurationRevision,
@@ -920,30 +1009,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 		return
 	}
 
-	if _, err := tx.Exec(r.Context(), `
-		INSERT INTO project_members(project_id, user_id, status)
-		VALUES ($1, $2, 'active')
-	`, item.ID, principal.UserID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-
-	var roleID string
-	if err := tx.QueryRow(r.Context(), `
-		SELECT id FROM roles
-		WHERE organization_id IS NULL AND role_key = 'project_owner' AND scope = 'project'
-	`).Scan(&roleID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `
-		INSERT INTO role_bindings(
-			organization_id, role_id, subject_type, subject_user_id,
-			resource_type, resource_project_id, created_by
-		)
-		VALUES ($1, $2, 'user', $3, 'project', $4, $3)
-		ON CONFLICT DO NOTHING
-	`, orgID, roleID, principal.UserID, item.ID); err != nil {
+	if err := createProjectAccessTx(r.Context(), tx, orgID, item.ID, principal.UserID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -1217,7 +1283,7 @@ func (s *Server) project(r *http.Request, projectID string) (Project, error) {
 
 func projectSelectSQL(where string) string {
 	return `
-		SELECT p.id, p.organization_id, p.workspace_id, p.name, p.description, p.project_type, p.content_type, p.aspect_ratio,
+		SELECT p.id, p.organization_id, p.workspace_id, p.name, p.description, p.project_kind, p.project_type, p.content_type, p.aspect_ratio,
 		       p.video_ratio, p.art_style,
 		       COALESCE((
 		         SELECT pv.content
@@ -1296,6 +1362,7 @@ func scanProject(row pgx.Row) (Project, error) {
 		&item.WorkspaceID,
 		&item.Name,
 		&item.Description,
+		&item.ProjectKind,
 		&item.ProjectType,
 		&item.ContentType,
 		&item.AspectRatio,
@@ -1323,6 +1390,13 @@ func scanProject(row pgx.Row) (Project, error) {
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
+	if err == nil && item.ProjectKind.IsCommerce() {
+		defaults, defaultsErr := commerceScriptUnitDefaultsFromSettings(item.Settings)
+		if defaultsErr != nil {
+			return Project{}, defaultsErr
+		}
+		item.ScriptUnitDefaults = &defaults
+	}
 	return item, err
 }
 
@@ -1377,6 +1451,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var accessErr authz.AccessError
 	var catalogErr provider.CatalogError
 	var videoProductionErr videoproduction.Error
+	var commerceErr commercepkg.Error
 	var appErr apiError
 	standardErr, hasStandardErr := provider.StandardErrorFromError(err)
 	switch {
@@ -1392,6 +1467,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, status, catalogErr.Code, catalogErr.Message, nil, false)
 	case errors.As(err, &videoProductionErr):
 		httpx.WriteError(w, r, videoProductionErrorStatus(videoProductionErr.Code), videoProductionErr.Code, videoProductionErr.Message, nil, videoProductionErr.Retryable)
+	case errors.As(err, &commerceErr):
+		httpx.WriteError(w, r, commerceErrorStatus(commerceErr.Code), commerceErr.Code, commerceErr.Message, commerceErr.Details, commerceErr.Retryable)
 	case errors.Is(err, authz.ErrAccessDenied):
 		httpx.WriteError(w, r, http.StatusForbidden, "ACCESS_DENIED", "access denied", nil, false)
 	case errors.Is(err, auth.ErrInvalidCredentials):
@@ -1415,6 +1492,12 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SYSTEM_ORGANIZATION_VALIDATION_FAILED", "system organization request is invalid", nil, false)
 	case errors.Is(err, auth.ErrSystemOwnerNotFound):
 		httpx.WriteError(w, r, http.StatusNotFound, "SYSTEM_OWNER_NOT_FOUND", "initial organization owner was not found", nil, false)
+	case errors.Is(err, auth.ErrSystemMemberValidation):
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SYSTEM_MEMBER_VALIDATION_FAILED", "system member request is invalid", nil, false)
+	case errors.Is(err, auth.ErrSystemMemberConflict):
+		httpx.WriteError(w, r, http.StatusConflict, "SYSTEM_MEMBER_CONFLICT", "member already belongs to the organization", nil, false)
+	case errors.Is(err, auth.ErrSystemMemberNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "SYSTEM_MEMBER_NOT_FOUND", "member account was not found", nil, false)
 	case errors.Is(err, auth.ErrNoActiveOrganization):
 		httpx.WriteError(w, r, http.StatusForbidden, "NO_ACTIVE_ORGANIZATION", "no active organization is available", nil, false)
 	case errors.Is(err, auth.ErrOrganizationSelection):
@@ -1466,6 +1549,33 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, http.StatusNotFound, "NOT_FOUND", "resource was not found", nil, false)
 	default:
 		httpx.WriteError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error", fmt.Sprintf("%v", err), false)
+	}
+}
+
+func commerceErrorStatus(code string) int {
+	switch code {
+	case commercepkg.CodeProjectKindMismatch:
+		return http.StatusConflict
+	case commercepkg.CodeBindingMismatch, commercepkg.CodeGenerationMismatch,
+		commercepkg.CodeRevisionConflict, commercepkg.CodeProjectLocked,
+		commercepkg.CodeProjectRebuildBlocked, commercepkg.CodeIdempotencyKeyReused,
+		commercepkg.CodeRunStateConflict, commercepkg.CodeSetupRevisionConflict,
+		commercepkg.CodeSetupAbandoned, commercepkg.CodeProductVersionStale,
+		commercepkg.CodeProductReconfigure, commercepkg.CodeProductPrimaryImage,
+		commercepkg.CodeScriptUnitArchived, commercepkg.CodeScriptUnitRevision,
+		commercepkg.CodeScriptVersionStale, commercepkg.CodeScriptRebuildRequired,
+		commercepkg.CodeScriptRebuildStale, commercepkg.CodeScriptRebuildBlocked,
+		commercepkg.CodeScriptOrganization, commercepkg.CodeScriptOrganizationBusy,
+		commercepkg.CodeScriptOrganizationNeed, commercepkg.CodeLanguageConfirmation,
+		commercepkg.CodeStoryboardPlanStale, commercepkg.CodeStoryboardRevision,
+		commercepkg.CodeImagePromptRequired:
+		return http.StatusConflict
+	case commercepkg.CodeStoryboardPlanRequired, commercepkg.CodeStoryboardShotRequired:
+		return http.StatusNotFound
+	case commercepkg.CodeProjectNotConfigured:
+		return http.StatusPreconditionFailed
+	default:
+		return http.StatusUnprocessableEntity
 	}
 }
 

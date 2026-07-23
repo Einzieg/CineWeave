@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useApiQuery } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
+import { contentTypeLabel, projectTypeLabel } from "@/lib/labels";
 import { projectHref } from "@/lib/routes";
 import type { Project } from "@/lib/types";
 
@@ -111,8 +112,8 @@ function ProjectCard({ project }: { project: Project }) {
         <StatusBadge status={project.status ?? "active"} />
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
-        <Badge variant="outline">{project.projectType || "未设置类型"}</Badge>
-        <Badge variant="outline">{project.contentType || "未设置内容"}</Badge>
+        <Badge variant="outline">{projectTypeLabel(project.projectType)}</Badge>
+        {project.contentType ? <Badge variant="outline">{contentTypeLabel(project.contentType)}</Badge> : null}
         <Badge variant="outline">{project.videoRatio || project.aspectRatio || "16:9"}</Badge>
         <Badge variant="outline">{project.artStyle || "未设置画风"}</Badge>
       </div>

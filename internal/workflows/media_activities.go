@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Einzieg/cineweave/internal/commerce"
 	mediapkg "github.com/Einzieg/cineweave/internal/media"
 	"github.com/Einzieg/cineweave/internal/storage"
 	storyboardtiming "github.com/Einzieg/cineweave/internal/storyboard"
@@ -21,12 +22,14 @@ type ComposeFinalVideoInput struct {
 	WorkflowRunID  string `json:"workflowRunId"`
 	CreatedBy      string `json:"createdBy"`
 
-	SourceWorkflowRunID string `json:"sourceWorkflowRunId,omitempty"`
-	TimelineID          string `json:"timelineId,omitempty"`
-	Title               string `json:"title,omitempty"`
-	AspectRatio         string `json:"aspectRatio"`
-	Resolution          string `json:"resolution"`
-	ProductionPartial   bool   `json:"productionPartial,omitempty"`
+	SourceWorkflowRunID      string                           `json:"sourceWorkflowRunId,omitempty"`
+	TimelineID               string                           `json:"timelineId,omitempty"`
+	Title                    string                           `json:"title,omitempty"`
+	AspectRatio              string                           `json:"aspectRatio"`
+	Resolution               string                           `json:"resolution"`
+	ProductionPartial        bool                             `json:"productionPartial,omitempty"`
+	CommerceIdentity         *commerce.UnitGenerationIdentity `json:"commerceIdentity,omitempty"`
+	ExpectedTimelineRevision int64                            `json:"expectedTimelineRevision,omitempty"`
 }
 
 type ComposeFinalVideoOutput struct {
@@ -75,6 +78,7 @@ type composeClipRecord struct {
 	TargetDurationSeconds *float64
 	NativeAudioStatus     string
 	ProductionReadiness   string
+	TextOverlays          []mediapkg.TextOverlay
 }
 
 type timelineManifest struct {
@@ -86,29 +90,31 @@ type timelineManifest struct {
 	FPSDenominator   int                    `json:"fpsDenominator"`
 	Clips            []timelineManifestClip `json:"clips"`
 	Compose          map[string]string      `json:"compose"`
+	EndCard          *mediapkg.EndCard      `json:"endCard,omitempty"`
 }
 
 type timelineManifestClip struct {
-	TimelineClipID        string   `json:"timelineClipId,omitempty"`
-	ShotID                string   `json:"shotId"`
-	ShotNo                int      `json:"shotNo"`
-	ShotIndex             int      `json:"shotIndex"`
-	ClipIndex             int      `json:"clipIndex"`
-	Title                 string   `json:"title,omitempty"`
-	Enabled               bool     `json:"enabled"`
-	VideoArtifactID       string   `json:"videoArtifactId"`
-	VideoMediaFileID      string   `json:"videoMediaFileId"`
-	StorageKey            string   `json:"storageKey"`
-	StartTick             int64    `json:"startTick"`
-	EndTick               int64    `json:"endTick"`
-	DurationTicks         int64    `json:"durationTicks"`
-	SourceDurationTicks   int64    `json:"sourceDurationTicks,omitempty"`
-	TrimStartTick         int64    `json:"trimStartTick,omitempty"`
-	TrimEndTick           *int64   `json:"trimEndTick,omitempty"`
-	DurationSeconds       float64  `json:"durationSeconds,omitempty"`
-	TrimStartSeconds      float64  `json:"trimStartSeconds,omitempty"`
-	TrimEndSeconds        *float64 `json:"trimEndSeconds,omitempty"`
-	TargetDurationSeconds *float64 `json:"targetDurationSeconds,omitempty"`
+	TimelineClipID        string                 `json:"timelineClipId,omitempty"`
+	ShotID                string                 `json:"shotId"`
+	ShotNo                int                    `json:"shotNo"`
+	ShotIndex             int                    `json:"shotIndex"`
+	ClipIndex             int                    `json:"clipIndex"`
+	Title                 string                 `json:"title,omitempty"`
+	Enabled               bool                   `json:"enabled"`
+	VideoArtifactID       string                 `json:"videoArtifactId"`
+	VideoMediaFileID      string                 `json:"videoMediaFileId"`
+	StorageKey            string                 `json:"storageKey"`
+	StartTick             int64                  `json:"startTick"`
+	EndTick               int64                  `json:"endTick"`
+	DurationTicks         int64                  `json:"durationTicks"`
+	SourceDurationTicks   int64                  `json:"sourceDurationTicks,omitempty"`
+	TrimStartTick         int64                  `json:"trimStartTick,omitempty"`
+	TrimEndTick           *int64                 `json:"trimEndTick,omitempty"`
+	DurationSeconds       float64                `json:"durationSeconds,omitempty"`
+	TrimStartSeconds      float64                `json:"trimStartSeconds,omitempty"`
+	TrimEndSeconds        *float64               `json:"trimEndSeconds,omitempty"`
+	TargetDurationSeconds *float64               `json:"targetDurationSeconds,omitempty"`
+	TextOverlays          []mediapkg.TextOverlay `json:"textOverlays,omitempty"`
 }
 
 func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVideoInput) (ComposeFinalVideoOutput, error) {
@@ -119,6 +125,9 @@ func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVid
 		return ComposeFinalVideoOutput{}, err
 	} else if ok {
 		return existing, nil
+	}
+	if err := a.validateComposeTimelineIdentity(ctx, input); err != nil {
+		return ComposeFinalVideoOutput{}, err
 	}
 
 	nodeExecution, err := StartNodeRun(ctx, a.db, NodeRunInput{
@@ -141,7 +150,7 @@ func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVid
 	sourceWorkflowRunID := firstNonEmptyString(input.SourceWorkflowRunID, input.WorkflowRunID)
 	var clips []composeClipRecord
 	if strings.TrimSpace(input.TimelineID) != "" {
-		clips, err = a.composeTimelineClips(ctx, strings.TrimSpace(input.TimelineID))
+		clips, err = a.composeTimelineClips(ctx, input)
 	} else {
 		project, settingsErr := a.projectProductionSettings(ctx, input.ProjectID, sourceWorkflowRunID)
 		if settingsErr != nil {
@@ -161,7 +170,15 @@ func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVid
 		return ComposeFinalVideoOutput{}, a.failComposeFinalVideo(ctx, input, nodeExecution, codeActivityFailed, "object storage does not support media compose")
 	}
 
+	var endCard *mediapkg.EndCard
+	if strings.TrimSpace(input.TimelineID) != "" {
+		endCard, err = a.composeTimelineEndCard(ctx, input)
+		if err != nil {
+			return ComposeFinalVideoOutput{}, a.failComposeFinalVideo(ctx, input, nodeExecution, codeActivityFailed, err.Error())
+		}
+	}
 	manifest := buildTimelineManifest(input, clips)
+	manifest.EndCard = endCard
 	timelinePut, err := a.storage.PutJSON(ctx, timelineStorageKey(input), manifest)
 	if err != nil {
 		return ComposeFinalVideoOutput{}, a.failComposeFinalVideo(ctx, input, nodeExecution, codeActivityFailed, err.Error())
@@ -188,8 +205,10 @@ func (a Activities) ComposeFinalVideo(ctx context.Context, input ComposeFinalVid
 			TrimStartSeconds:      clip.TrimStartSeconds,
 			TrimEndSeconds:        clip.TrimEndSeconds,
 			TargetDurationSeconds: clip.TargetDurationSeconds,
+			TextOverlays:          clip.TextOverlays,
 		})
 	}
+	composeReq.EndCard = endCard
 	result, err := mediapkg.ComposeClipsWithStore(ctx, composeReq, objectStore)
 	if err != nil {
 		code := codeActivityFailed
@@ -300,7 +319,61 @@ func (a Activities) composeVideoClips(ctx context.Context, workflowRunID string,
 	return clips, rows.Err()
 }
 
-func (a Activities) composeTimelineClips(ctx context.Context, timelineID string) ([]composeClipRecord, error) {
+func (a Activities) validateComposeTimelineIdentity(ctx context.Context, input ComposeFinalVideoInput) error {
+	if strings.TrimSpace(input.TimelineID) == "" {
+		if input.CommerceIdentity != nil {
+			return fmt.Errorf("commerce final compose requires a timeline")
+		}
+		return nil
+	}
+	var organizationID, projectID, productionGenerationID string
+	var timelineOrganizationID, timelineProjectID, timelineGenerationID string
+	var scriptUnitID, unitGenerationID sql.NullString
+	var revision int64
+	err := a.db.QueryRow(ctx, `
+		SELECT run.organization_id::text, run.project_id::text, run.production_generation_id::text,
+		       timeline.organization_id::text, timeline.project_id::text,
+		       timeline.production_generation_id::text,
+		       timeline.commerce_script_unit_id::text,
+		       timeline.commerce_script_unit_generation_id::text,
+		       timeline.revision
+		FROM workflow_runs run
+		JOIN project_timelines timeline ON timeline.id = $2
+		WHERE run.id = $1
+	`, input.WorkflowRunID, input.TimelineID).Scan(
+		&organizationID, &projectID, &productionGenerationID,
+		&timelineOrganizationID, &timelineProjectID, &timelineGenerationID,
+		&scriptUnitID, &unitGenerationID, &revision,
+	)
+	if err != nil {
+		return err
+	}
+	if organizationID != input.OrganizationID || projectID != input.ProjectID ||
+		timelineOrganizationID != input.OrganizationID || timelineProjectID != input.ProjectID ||
+		timelineGenerationID != productionGenerationID {
+		return fmt.Errorf("timeline and workflow production identity mismatch")
+	}
+	if input.CommerceIdentity == nil {
+		if scriptUnitID.Valid || unitGenerationID.Valid {
+			return fmt.Errorf("commerce timeline requires commerce compose identity")
+		}
+		return nil
+	}
+	identity := input.CommerceIdentity
+	if err := ValidateCommerceUnitGenerationIdentity(*identity); err != nil {
+		return err
+	}
+	if identity.OrganizationID != organizationID || identity.ProjectID != projectID ||
+		identity.ProjectGenerationID != productionGenerationID ||
+		!scriptUnitID.Valid || scriptUnitID.String != identity.ScriptUnitID ||
+		!unitGenerationID.Valid || unitGenerationID.String != identity.UnitGenerationID ||
+		input.ExpectedTimelineRevision < 1 || revision != input.ExpectedTimelineRevision {
+		return commerce.Error{Code: CommerceCodeGenerationMismatch, Message: "成片时间线与当前脚本单元生产代不一致"}
+	}
+	return nil
+}
+
+func (a Activities) composeTimelineClips(ctx context.Context, input ComposeFinalVideoInput) ([]composeClipRecord, error) {
 	rows, err := a.db.Query(ctx, `
 		SELECT
 			c.id::text,
@@ -324,17 +397,32 @@ func (a Activities) composeTimelineClips(ctx context.Context, timelineID string)
 			t.fps_numerator,
 			t.fps_denominator,
 			COALESCE(s.native_audio_status, 'not_requested'),
-			COALESCE(s.production_readiness, 'ready')
+			COALESCE(s.production_readiness, 'ready'),
+			COALESCE((
+				SELECT jsonb_agg(jsonb_build_object(
+					'text', overlay.text_content,
+					'startTick', overlay.start_tick,
+					'endTick', overlay.end_tick,
+					'position', COALESCE(NULLIF(overlay.style->>'position', ''), 'bottom')
+				) ORDER BY overlay.ordinal)
+				FROM commerce_timeline_overlays overlay
+				WHERE overlay.timeline_clip_id = c.id AND overlay.role = 'onscreen_text'
+			), '[]'::jsonb)
 		FROM timeline_clips c
 		JOIN project_timelines t ON t.id = c.timeline_id
 		LEFT JOIN storyboard_shots s ON s.id = c.storyboard_shot_id
 		LEFT JOIN media_files mf ON mf.id = COALESCE(c.video_media_file_id, s.video_media_file_id)
 		LEFT JOIN artifacts va ON va.id = COALESCE(c.video_artifact_id, s.video_artifact_id)
 		WHERE c.timeline_id = $1
+		  AND t.organization_id = $2
+		  AND t.project_id = $3
+		  AND t.production_generation_id = (
+		      SELECT production_generation_id FROM workflow_runs WHERE id = $4
+		  )
 		  AND c.enabled = true
 		  AND COALESCE(c.source_storage_key, s.video_storage_key, mf.storage_key, va.storage_key, '') <> ''
 		ORDER BY c.clip_index ASC
-	`, timelineID)
+	`, input.TimelineID, input.OrganizationID, input.ProjectID, input.WorkflowRunID)
 	if err != nil {
 		return nil, err
 	}
@@ -343,6 +431,7 @@ func (a Activities) composeTimelineClips(ctx context.Context, timelineID string)
 	for rows.Next() {
 		var clip composeClipRecord
 		var sourceDuration, trimEnd sql.NullInt64
+		var overlaysRaw json.RawMessage
 		if err := rows.Scan(
 			&clip.TimelineClipID,
 			&clip.ShotID,
@@ -366,6 +455,7 @@ func (a Activities) composeTimelineClips(ctx context.Context, timelineID string)
 			&clip.FPSDenominator,
 			&clip.NativeAudioStatus,
 			&clip.ProductionReadiness,
+			&overlaysRaw,
 		); err != nil {
 			return nil, err
 		}
@@ -379,9 +469,62 @@ func (a Activities) composeTimelineClips(ctx context.Context, timelineID string)
 			return nil, err
 		}
 		clip.deriveSeconds()
+		var overlayRows []struct {
+			Text      string `json:"text"`
+			StartTick int64  `json:"startTick"`
+			EndTick   int64  `json:"endTick"`
+			Position  string `json:"position"`
+		}
+		if err := json.Unmarshal(overlaysRaw, &overlayRows); err != nil {
+			return nil, err
+		}
+		for _, overlay := range overlayRows {
+			startTick := overlay.StartTick - clip.StartTick
+			endTick := overlay.EndTick - clip.StartTick
+			if startTick < 0 {
+				startTick = 0
+			}
+			if endTick > clip.DurationTicks {
+				endTick = clip.DurationTicks
+			}
+			if endTick <= startTick {
+				continue
+			}
+			clip.TextOverlays = append(clip.TextOverlays, mediapkg.TextOverlay{
+				Text: overlay.Text, StartSeconds: float64(startTick) / float64(clip.TimelineTimebase),
+				EndSeconds: float64(endTick) / float64(clip.TimelineTimebase), Position: overlay.Position,
+			})
+		}
 		clips = append(clips, clip)
 	}
 	return clips, rows.Err()
+}
+
+func (a Activities) composeTimelineEndCard(ctx context.Context, input ComposeFinalVideoInput) (*mediapkg.EndCard, error) {
+	var text string
+	var duration float64
+	err := a.db.QueryRow(ctx, `
+		SELECT overlay.text_content,
+		       (overlay.end_tick - overlay.start_tick)::float8 / timeline.timeline_timebase::float8
+		FROM commerce_timeline_overlays overlay
+		JOIN project_timelines timeline ON timeline.id = overlay.timeline_id
+		WHERE overlay.timeline_id = $1
+		  AND overlay.role = 'cta_end_card'
+		  AND overlay.organization_id = $2
+		  AND overlay.project_id = $3
+		  AND overlay.production_generation_id = (
+		      SELECT production_generation_id FROM workflow_runs WHERE id = $4
+		  )
+		ORDER BY overlay.ordinal
+		LIMIT 1
+	`, input.TimelineID, input.OrganizationID, input.ProjectID, input.WorkflowRunID).Scan(&text, &duration)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &mediapkg.EndCard{Text: text, DurationSeconds: duration}, nil
 }
 
 func (a Activities) completeComposeFinalVideo(ctx context.Context, input ComposeFinalVideoInput, execution NodeExecution, clips []composeClipRecord, timelinePut storage.PutResult, result mediapkg.ComposeResult) (ComposeFinalVideoOutput, error) {
@@ -418,6 +561,33 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 	runCtx, err := lockNodeBusinessWrite(ctx, tx, input.WorkflowRunID, execution)
 	if err != nil {
 		return ComposeFinalVideoOutput{}, err
+	}
+	var timelineScriptUnitID, timelineUnitGenerationID sql.NullString
+	var timelineRevision int64
+	if strings.TrimSpace(input.TimelineID) != "" {
+		if err := tx.QueryRow(ctx, `
+			SELECT commerce_script_unit_id::text,
+			       commerce_script_unit_generation_id::text,
+			       revision
+			FROM project_timelines
+			WHERE id = $1 AND organization_id = $2 AND project_id = $3
+			  AND production_generation_id = $4
+			FOR UPDATE
+		`, input.TimelineID, input.OrganizationID, input.ProjectID, runCtx.ProductionGenerationID).Scan(
+			&timelineScriptUnitID, &timelineUnitGenerationID, &timelineRevision,
+		); err != nil {
+			return ComposeFinalVideoOutput{}, err
+		}
+		if input.CommerceIdentity == nil {
+			if timelineScriptUnitID.Valid || timelineUnitGenerationID.Valid {
+				return ComposeFinalVideoOutput{}, fmt.Errorf("commerce timeline requires commerce compose identity")
+			}
+		} else if input.CommerceIdentity.ProjectGenerationID != runCtx.ProductionGenerationID ||
+			!timelineScriptUnitID.Valid || timelineScriptUnitID.String != input.CommerceIdentity.ScriptUnitID ||
+			!timelineUnitGenerationID.Valid || timelineUnitGenerationID.String != input.CommerceIdentity.UnitGenerationID ||
+			input.ExpectedTimelineRevision < 1 || timelineRevision != input.ExpectedTimelineRevision {
+			return ComposeFinalVideoOutput{}, commerce.Error{Code: CommerceCodeGenerationMismatch, Message: "成片时间线已变化，请重新提交合成任务"}
+		}
 	}
 
 	shotIDs := make([]string, 0, len(clips))
@@ -465,6 +635,11 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 		"productionReadiness": productionReadiness,
 		"mediaProbe":          result.Probe,
 	}
+	if input.CommerceIdentity != nil {
+		finalMetadata["commerceScriptUnitId"] = input.CommerceIdentity.ScriptUnitID
+		finalMetadata["commerceScriptUnitGenerationId"] = input.CommerceIdentity.UnitGenerationID
+		finalMetadata["timelineRevision"] = input.ExpectedTimelineRevision
+	}
 	var finalArtifactID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO artifacts(organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, metadata, created_by, production_generation_id)
@@ -500,23 +675,46 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 	if strings.TrimSpace(input.TimelineID) != "" {
 		status := "ready"
 		var activeFinalVideoVersionID sql.NullString
-		if err := tx.QueryRow(ctx, `
-			SELECT active_final_video_version_id::text
-			FROM projects
-			WHERE id = $1
-			FOR UPDATE
-		`, input.ProjectID).Scan(&activeFinalVideoVersionID); err != nil {
-			return ComposeFinalVideoOutput{}, err
+		if input.CommerceIdentity == nil {
+			if err := tx.QueryRow(ctx, `
+				SELECT active_final_video_version_id::text
+				FROM projects
+				WHERE id = $1
+				FOR UPDATE
+			`, input.ProjectID).Scan(&activeFinalVideoVersionID); err != nil {
+				return ComposeFinalVideoOutput{}, err
+			}
+		} else {
+			if err := tx.QueryRow(ctx, `
+				SELECT id::text
+				FROM final_video_versions
+				WHERE project_id = $1 AND commerce_script_unit_id = $2 AND status = 'active'
+				ORDER BY version DESC
+				LIMIT 1
+				FOR UPDATE
+			`, input.ProjectID, input.CommerceIdentity.ScriptUnitID).Scan(&activeFinalVideoVersionID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return ComposeFinalVideoOutput{}, err
+			}
 		}
 		if productionReadiness == "ready" && (!activeFinalVideoVersionID.Valid || strings.TrimSpace(activeFinalVideoVersionID.String) == "") {
 			status = "active"
 		}
 		var version int
-		if err := tx.QueryRow(ctx, `
+		versionQuery := `
 			SELECT COALESCE(MAX(version), 0) + 1
 			FROM final_video_versions
 			WHERE project_id = $1 AND production_generation_id = $2
-		`, input.ProjectID, runCtx.ProductionGenerationID).Scan(&version); err != nil {
+		`
+		versionArgs := []any{input.ProjectID, runCtx.ProductionGenerationID}
+		if input.CommerceIdentity != nil {
+			versionQuery = `
+				SELECT COALESCE(MAX(version), 0) + 1
+				FROM final_video_versions
+				WHERE project_id = $1 AND commerce_script_unit_id = $2
+			`
+			versionArgs = []any{input.ProjectID, input.CommerceIdentity.ScriptUnitID}
+		}
+		if err := tx.QueryRow(ctx, versionQuery, versionArgs...).Scan(&version); err != nil {
 			return ComposeFinalVideoOutput{}, err
 		}
 		title := strings.TrimSpace(input.Title)
@@ -528,9 +726,11 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 				organization_id, project_id, timeline_id, workflow_run_id, version, title, status,
 				artifact_id, media_file_id, storage_key, duration_ticks, resolution, aspect_ratio,
 				compose_settings, metadata, created_by, native_audio_status, production_readiness,
-				production_generation_id
+				production_generation_id, commerce_script_unit_id,
+				commerce_script_unit_generation_id
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+			        NULLIF($20, '')::uuid, NULLIF($21, '')::uuid)
 			RETURNING id::text
 		`, input.OrganizationID, input.ProjectID, input.TimelineID, input.WorkflowRunID, version, title, status,
 			finalArtifactID, mediaFileID, result.StorageKey, nullInt64(resultDurationTicks),
@@ -550,10 +750,12 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 			nativeAudioStatus,
 			productionReadiness,
 			runCtx.ProductionGenerationID,
+			optionalCommerceIdentityValue(input.CommerceIdentity, func(identity commerce.UnitGenerationIdentity) string { return identity.ScriptUnitID }),
+			optionalCommerceIdentityValue(input.CommerceIdentity, func(identity commerce.UnitGenerationIdentity) string { return identity.UnitGenerationID }),
 		).Scan(&finalVideoVersionID); err != nil {
 			return ComposeFinalVideoOutput{}, err
 		}
-		if status == "active" {
+		if status == "active" && input.CommerceIdentity == nil {
 			if _, err := tx.Exec(ctx, `
 				UPDATE projects
 				SET active_final_video_version_id = $2
@@ -625,6 +827,26 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 			"clipCount":           len(clips),
 		})},
 	}
+	if input.CommerceIdentity != nil && finalVideoVersionID != "" {
+		events = append(events, struct {
+			eventType     string
+			aggregateType string
+			aggregateID   string
+			payload       json.RawMessage
+		}{
+			eventType: "commerce.final_video.completed", aggregateType: "final_video_version", aggregateID: finalVideoVersionID,
+			payload: mustJSON(map[string]any{
+				"workflowRunId":                   input.WorkflowRunID,
+				"finalVideoVersionId":             finalVideoVersionID,
+				"timelineId":                      input.TimelineID,
+				"commerceScriptUnitId":            input.CommerceIdentity.ScriptUnitID,
+				"scriptUnitGenerationId":          input.CommerceIdentity.UnitGenerationID,
+				"commerceWorkflowBindingId":       input.CommerceIdentity.CommerceWorkflowBindingID,
+				"commerceWorkflowBindingRevision": input.CommerceIdentity.CommerceWorkflowBindingRevision,
+				"status":                          statusForCommerceFinalEvent(productionReadiness),
+			}),
+		})
+	}
 	for _, event := range events {
 		if err := insertEvent(ctx, tx, input.OrganizationID, input.ProjectID, event.eventType, event.aggregateType, event.aggregateID, event.payload); err != nil {
 			return ComposeFinalVideoOutput{}, err
@@ -634,6 +856,20 @@ func (a Activities) completeComposeFinalVideo(ctx context.Context, input Compose
 		return ComposeFinalVideoOutput{}, err
 	}
 	return output, nil
+}
+
+func optionalCommerceIdentityValue(identity *commerce.UnitGenerationIdentity, selector func(commerce.UnitGenerationIdentity) string) string {
+	if identity == nil || selector == nil {
+		return ""
+	}
+	return strings.TrimSpace(selector(*identity))
+}
+
+func statusForCommerceFinalEvent(readiness string) string {
+	if readiness == "ready" {
+		return "ready"
+	}
+	return "preview_only"
 }
 
 func composeClipProductionState(clips []composeClipRecord) (string, string) {
@@ -719,6 +955,9 @@ func buildTimelineManifest(input ComposeFinalVideoInput, clips []composeClipReco
 			"title":               strings.TrimSpace(input.Title),
 		},
 	}
+	// The end card is loaded and rendered from the same frozen timeline overlay
+	// contract in ComposeFinalVideo. It is attached to the artifact metadata by
+	// the caller rather than inferred from prompt text.
 	if len(clips) > 0 {
 		manifest.TimelineTimebase = clips[0].TimelineTimebase
 		manifest.FPSNumerator = clips[0].FPSNumerator
@@ -746,6 +985,7 @@ func buildTimelineManifest(input ComposeFinalVideoInput, clips []composeClipReco
 			TrimStartSeconds:      clip.TrimStartSeconds,
 			TrimEndSeconds:        clip.TrimEndSeconds,
 			TargetDurationSeconds: clip.TargetDurationSeconds,
+			TextOverlays:          append([]mediapkg.TextOverlay(nil), clip.TextOverlays...),
 		})
 	}
 	return manifest

@@ -10,7 +10,7 @@ COPY . .
 RUN go build -o /out/service ./${SERVICE_PATH}
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates ffmpeg \
+RUN apk add --no-cache ca-certificates ffmpeg font-noto-cjk \
     && adduser -D -H cineweave
 USER cineweave
 COPY --from=build /out/service /service

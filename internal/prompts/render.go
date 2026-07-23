@@ -41,6 +41,7 @@ func Render(prompt ResolvedPrompt, variables map[string]any) (RenderedPrompt, er
 		RenderedText:    rendered,
 		RenderedHash:    HashText(rendered),
 		ContentHash:     prompt.ContentHash,
+		Metadata:        append(json.RawMessage(nil), prompt.Metadata...),
 		Source:          prompt.Source,
 	}, nil
 }

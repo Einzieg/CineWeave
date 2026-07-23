@@ -29,7 +29,13 @@ import {
   type ProjectBasicFormState,
   type ProjectBasicSubmission,
 } from "@/lib/project-basic-form-state";
-import type { CharacterVoiceProfile, Project, VideoProductionConfigurationInput } from "@/lib/types";
+import type {
+  CharacterVoiceProfile,
+  NarrativeContentType,
+  NarrativeProjectType,
+  Project,
+  VideoProductionConfigurationInput,
+} from "@/lib/types";
 import {
   buildManualStyleOptions,
   DEFAULT_DIRECTOR_MANUAL_KEY,
@@ -39,6 +45,7 @@ import {
   type ManualStyleOption,
 } from "@/features/projects/manual-style-selector";
 import { VideoProductionRebuildDialog } from "@/features/project-settings/video-production-rebuild-dialog";
+import { CommerceProjectSettingsPage } from "@/features/project-settings/commerce-settings-page";
 
 const defaultArtStyle = "写实电影感";
 
@@ -81,6 +88,20 @@ function basicSnapshotFromProject(project: Project) {
 }
 
 export function ProjectSettingsPage({ projectId }: { projectId: string }) {
+  const { data: project, isLoading, error } = useApiQuery({
+    key: qk.project(projectId),
+    queryFn: (session) => studioApi.getProject(session, projectId),
+  });
+  if (isLoading) return <Skeleton className="h-64" />;
+  if (error) return <ErrorPanel message={error.message} />;
+  if (!project) return <div>项目不存在</div>;
+  if (project.projectKind === "commerce_video") {
+    return <CommerceProjectSettingsPage projectId={projectId} project={project} />;
+  }
+  return <NarrativeProjectSettingsPage projectId={projectId} />;
+}
+
+function NarrativeProjectSettingsPage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const { session } = useStudioSession();
   const { data: project, isLoading } = useApiQuery({
@@ -338,11 +359,37 @@ export function ProjectSettingsPage({ projectId }: { projectId: string }) {
         <div className="grid gap-4 p-5 md:grid-cols-2">
         <div className="space-y-2">
           <Label>项目类型</Label>
-          <Input value={form.projectType ?? ""} onChange={(e) => setDraft({ ...draft, projectType: e.target.value })} />
+          <Select
+            value={form.projectType ?? "short_film"}
+            onValueChange={(value: NarrativeProjectType) => setDraft({ ...draft, projectType: value })}
+            disabled={project.projectKind === "commerce_video"}
+          >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="short_film">短片</SelectItem>
+              <SelectItem value="comic_drama">漫剧</SelectItem>
+              <SelectItem value="brand_ad">品牌广告</SelectItem>
+              <SelectItem value="character_ip">角色 IP</SelectItem>
+              <SelectItem value="other">其他</SelectItem>
+              {project.projectKind === "commerce_video" ? <SelectItem value="commerce_video">带货视频</SelectItem> : null}
+            </SelectContent>
+          </Select>
         </div>
         <div className="space-y-2">
           <Label>内容类型</Label>
-          <Input value={form.contentType ?? ""} onChange={(e) => setDraft({ ...draft, contentType: e.target.value })} />
+          <Select
+            value={form.contentType ?? "script"}
+            onValueChange={(value: NarrativeContentType) => setDraft({ ...draft, contentType: value })}
+            disabled={project.projectKind === "commerce_video"}
+          >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="novel">小说改编</SelectItem>
+              <SelectItem value="script">剧本创作</SelectItem>
+              <SelectItem value="storyboard_first">分镜先行</SelectItem>
+              <SelectItem value="original">自定义</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div className="space-y-2">
           <Label>视频比例</Label>

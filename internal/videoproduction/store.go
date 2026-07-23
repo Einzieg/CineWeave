@@ -20,6 +20,21 @@ type queryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
+type profileVersionScanner interface {
+	Scan(...any) error
+}
+
+const profileVersionSelect = `
+	SELECT version.id::text, profile.id::text, profile.profile_key, profile.name,
+	       profile.strategy_family, profile.description, version.version,
+	       version.lifecycle_state, version.implementation_state,
+	       version.configuration, version.capability_requirements, version.prompt_contract,
+	       version.input_contract_version, version.configuration_hash, version.prompt_contract_hash,
+	       version.created_at, version.published_at, version.retired_at
+	FROM video_production_profiles profile
+	JOIN video_production_profile_versions version ON version.profile_id = profile.id
+`
+
 func NewIdentity() Identity {
 	return Identity{
 		ProjectID:    uuid.NewString(),
@@ -33,17 +48,7 @@ func ResolveProfileVersion(ctx context.Context, db queryer, profileKey string, v
 	if profileKey == "" {
 		profileKey = ProfileSingleFrameI2V
 	}
-	query := `
-		SELECT version.id::text, profile.id::text, profile.profile_key, profile.name,
-		       profile.strategy_family, profile.description, version.version,
-		       version.lifecycle_state, version.implementation_state,
-		       version.configuration, version.capability_requirements, version.prompt_contract,
-		       version.input_contract_version, version.configuration_hash, version.prompt_contract_hash,
-		       version.created_at, version.published_at, version.retired_at
-		FROM video_production_profiles profile
-		JOIN video_production_profile_versions version ON version.profile_id = profile.id
-		WHERE profile.profile_key = $1
-	`
+	query := profileVersionSelect + " WHERE profile.profile_key = $1"
 	args := []any{profileKey}
 	if version != nil {
 		query += " AND version.version = $2"
@@ -51,9 +56,22 @@ func ResolveProfileVersion(ctx context.Context, db queryer, profileKey string, v
 	} else {
 		query += " ORDER BY version.version DESC LIMIT 1"
 	}
+	return scanResolvedProfileVersion(db.QueryRow(ctx, query, args...), requireAvailable)
+}
+
+func ResolveProfileVersionByID(ctx context.Context, db queryer, profileVersionID string, requireAvailable bool) (ProfileVersion, error) {
+	parsedID, err := uuid.Parse(strings.TrimSpace(profileVersionID))
+	if err != nil {
+		return ProfileVersion{}, Error{Code: CodeProfileNotFound, Message: "视频生产方案版本不存在", Cause: err}
+	}
+	query := profileVersionSelect + " WHERE version.id = $1"
+	return scanResolvedProfileVersion(db.QueryRow(ctx, query, parsedID), requireAvailable)
+}
+
+func scanResolvedProfileVersion(row profileVersionScanner, requireAvailable bool) (ProfileVersion, error) {
 	var item ProfileVersion
 	var publishedAt, retiredAt sql.NullTime
-	err := db.QueryRow(ctx, query, args...).Scan(
+	err := row.Scan(
 		&item.ID,
 		&item.ProfileID,
 		&item.ProfileKey,
@@ -660,6 +678,13 @@ func archiveGenerationProductionData(ctx context.Context, tx pgx.Tx, projectID, 
 	return nil
 }
 
+// ArchiveGenerationProductionData invalidates every mutable production result
+// owned by a superseded project generation. Domain-specific rebuild services use
+// this inside the same transaction that switches the active generation.
+func ArchiveGenerationProductionData(ctx context.Context, tx pgx.Tx, projectID, generationID string) error {
+	return archiveGenerationProductionData(ctx, tx, projectID, generationID)
+}
+
 // ResetActiveGeneration archives the current production generation and switches the
 // project to an empty generation under the same immutable profile binding.
 func ResetActiveGeneration(ctx context.Context, tx pgx.Tx, projectID string) (string, Generation, error) {
@@ -780,11 +805,18 @@ func buildProfileSnapshot(ctx context.Context, tx pgx.Tx, params InitialBindingP
 		"productionConfiguration": productionConfiguration,
 		"overrides":               overrides,
 	}
-	raw, err := json.Marshal(snapshot)
+	raw, err := canonicalJSON(snapshot)
 	if err != nil {
 		return nil, "", err
 	}
 	return raw, hashBytes(raw), nil
+}
+
+// BuildProfileSnapshot compiles the immutable runtime snapshot without writing
+// a binding. Callers that coordinate multiple aligned bindings can persist the
+// returned snapshot in their own transaction.
+func BuildProfileSnapshot(ctx context.Context, tx pgx.Tx, params InitialBindingParams) (json.RawMessage, string, error) {
+	return buildProfileSnapshot(ctx, tx, params)
 }
 
 func loadManualBindingSnapshots(ctx context.Context, db queryer, projectID string) (map[string]ManualBindingSnapshot, error) {
@@ -1034,4 +1066,20 @@ func scanContext(row pgx.Row) (Context, error) {
 func hashBytes(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+func canonicalJSON(value any) (json.RawMessage, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var canonical any
+	if err := json.Unmarshal(raw, &canonical); err != nil {
+		return nil, err
+	}
+	raw, err = json.Marshal(canonical)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
 }

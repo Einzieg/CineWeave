@@ -18,6 +18,10 @@ const commands = [
     ],
   ],
   ["python", ["scripts/check-openapi-routes.py"]],
+  ["python", ["scripts/check-commerce-development-contract.py"]],
+  ["pwsh", ["-NoProfile", "-File", "scripts/test-commerce-smoke-script.ps1"]],
+  ["pwsh", ["-NoProfile", "-File", "scripts/test-commerce-deploy-script.ps1"]],
+  ["pwsh", ["-NoProfile", "-File", "scripts/test-provider-data-guard.ps1"]],
   ["docker", ["compose", "-f", "compose.yml", "config", "--quiet"]],
 ];
 

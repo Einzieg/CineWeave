@@ -49,6 +49,9 @@ func (s *Server) regenerateCreativeObject(w http.ResponseWriter, r *http.Request
 	if !s.authorizeAny(w, r, principal, permissions, authz.Resource{ProjectID: project.ID}) {
 		return
 	}
+	if !s.enforceProjectRouteKind(w, r, project) {
+		return
+	}
 	resolvedTargetID, ok := s.requireRegenerationTarget(w, r, project.ID, targetType, targetID)
 	if !ok {
 		return

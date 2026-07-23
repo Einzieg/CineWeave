@@ -50,3 +50,26 @@ func TestAppendTxRejectsMissingRequiredPayloadAndProjectScope(t *testing.T) {
 		t.Fatal("project-scoped event without project was accepted")
 	}
 }
+
+func TestCommerceCatalogContractsAcceptCompletePayloads(t *testing.T) {
+	for name, definition := range Catalog {
+		if !strings.HasPrefix(name, "commerce.") {
+			continue
+		}
+		payload := make(map[string]any, len(definition.RequiredPayloadFields))
+		for _, field := range definition.RequiredPayloadFields {
+			payload[field] = "test-value"
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("marshal %s payload: %v", name, err)
+		}
+		exec := &recordingExecer{}
+		if err := AppendTx(
+			context.Background(), exec, "org-1", "project-1",
+			name, definition.AggregateType, "aggregate-1", raw,
+		); err != nil {
+			t.Errorf("%s rejected its complete catalog payload: %v", name, err)
+		}
+	}
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { use, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
 import { usePathname } from "next/navigation";
@@ -11,7 +11,9 @@ import { TopBar } from "@/components/layout/top-bar";
 import { cn } from "@/lib/cn";
 import { studioApi } from "@/lib/api-client";
 import { useStudioSession, useBindCurrentProject } from "@/lib/session";
-import { isProjectNavActive, projectNavItems, projectHref } from "@/lib/routes";
+import { isProjectNavActive, projectNavItemsForKind, projectHref } from "@/lib/routes";
+import { qk } from "@/lib/query/keys";
+import { useApiQuery } from "@/lib/query/use-api";
 import { useProjectEvents } from "@/lib/realtime/use-project-events";
 import { ActivityDrawer } from "@/features/activity/activity-drawer";
 import { AgentDrawer } from "@/features/assistant/agent-drawer";
@@ -36,6 +38,10 @@ function ProjectShellContent({ projectId, children }: { projectId: string; child
   const router = useRouter();
   const pathname = usePathname();
   const { session, clearSession } = useStudioSession();
+  const { data: project } = useApiQuery({
+    key: qk.project(projectId),
+    queryFn: (activeSession) => studioApi.getProject(activeSession, projectId),
+  });
 
   useBindCurrentProject(projectId);
   useProjectEvents(projectId);
@@ -48,9 +54,16 @@ function ProjectShellContent({ projectId, children }: { projectId: string; child
     router.replace("/login" as Route);
   }
 
-  // 从pathname提取当前segment
   const segments = pathname.split("/").filter(Boolean);
-  const currentSegment = segments.length > 2 ? segments[2] : "";
+  const currentSegment = segments.length > 2 ? segments.slice(2).join("/") : "";
+  const navItems = projectNavItemsForKind(project?.projectKind);
+
+  useEffect(() => {
+    if (project?.projectKind !== "commerce_video") return;
+    if (["content", "sources", "scripts", "assets", "storyboard", "video"].includes(currentSegment)) {
+      router.replace(projectHref(projectId) as Route);
+    }
+  }, [currentSegment, project?.projectKind, projectId, router]);
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
@@ -60,7 +73,7 @@ function ProjectShellContent({ projectId, children }: { projectId: string; child
         <MobileGlobalNav active="projects" />
 
         <nav className="flex shrink-0 gap-1 overflow-x-auto border-b px-4 pt-3" aria-label="项目内部导航">
-          {projectNavItems.map((item) => {
+          {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = isProjectNavActive(currentSegment, item.segment);
             return (

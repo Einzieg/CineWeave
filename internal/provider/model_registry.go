@@ -84,6 +84,8 @@ func (preset modelCapabilityPreset) capabilityInput() CapabilityInput {
 		QualityTiers:          preset.QualityTiers,
 		ProviderOptionsSchema: preset.ProviderOptionsSchema,
 		PricingPolicy:         preset.PricingPolicy,
+		Source:                CapabilitySourcePreset,
+		ApprovalStatus:        CapabilityApprovalApproved,
 	}
 }
 
@@ -95,6 +97,8 @@ func defaultCapabilityInput(modality string) CapabilityInput {
 		QualityTiers:          json.RawMessage(`[]`),
 		ProviderOptionsSchema: json.RawMessage(`{}`),
 		PricingPolicy:         json.RawMessage(`{}`),
+		Source:                CapabilitySourceInferred,
+		ApprovalStatus:        CapabilityApprovalInferred,
 	}
 }
 
@@ -487,6 +491,35 @@ func modelSupportsTaskType(model Model, taskType string) bool {
 			if value == taskType || (taskType == TaskTypeVideoCreateTask && value == "video.generate") {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func modelSupportsTextImageInput(model Model) bool {
+	if strings.EqualFold(strings.TrimSpace(model.Modality), "multimodal") {
+		return true
+	}
+	for _, capability := range model.Capabilities {
+		if capability.ApprovalStatus != CapabilityApprovalApproved {
+			continue
+		}
+		taskTypes := stringsFromRawJSON(capability.TaskTypes)
+		if !containsNormalizedString(taskTypes, TaskTypeTextGenerate) &&
+			!containsNormalizedString(taskTypes, TaskTypeTextStream) {
+			continue
+		}
+		var schema struct {
+			XCapabilities struct {
+				SupportsMultimodalInput bool `json:"supportsMultimodalInput"`
+			} `json:"xCapabilities"`
+		}
+		if json.Unmarshal(capability.ProviderOptionsSchema, &schema) == nil &&
+			schema.XCapabilities.SupportsMultimodalInput {
+			return true
+		}
+		if containsNormalizedString(stringsFromJSONField(capability.InputLimits, "inputTypes"), "image") {
+			return true
 		}
 	}
 	return false

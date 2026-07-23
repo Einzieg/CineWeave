@@ -116,56 +116,57 @@ type VideoContinuationCapability struct {
 }
 
 type GatewayVideoPlanRequest struct {
-	OrganizationID                    string                     `json:"organizationId"`
-	ProjectID                         string                     `json:"projectId"`
-	OperationID                       string                     `json:"operationId,omitempty"`
-	OperationItemID                   string                     `json:"operationItemId,omitempty"`
-	OperationItemAttempt              int                        `json:"operationItemAttempt,omitempty"`
-	ProductionGenerationID            string                     `json:"productionGenerationId"`
-	VideoProductionBindingID          string                     `json:"videoProductionBindingId"`
-	VideoProductionBindingRevision    int64                      `json:"videoProductionBindingRevision"`
-	ProductionProfileVersionID        string                     `json:"productionProfileVersionId"`
-	ProductionProfileSnapshotHash     string                     `json:"productionProfileSnapshotHash"`
-	CompatibilityPolicy               string                     `json:"compatibilityPolicy"`
-	RequiredInitialInputContract      string                     `json:"requiredInitialInputContract"`
-	AllowedContinuationInputContracts []string                   `json:"allowedContinuationInputContracts,omitempty"`
-	InputContractVersion              string                     `json:"inputContractVersion"`
-	ShotStateRevision                 int                        `json:"shotStateRevision"`
-	ShotStateHash                     string                     `json:"shotStateHash"`
-	TransitionHash                    string                     `json:"transitionHash,omitempty"`
-	ReferencePackID                   string                     `json:"referencePackId"`
-	ReferencePackHash                 string                     `json:"referencePackHash"`
-	PromptContextPlanID               string                     `json:"promptContextPlanId"`
-	PromptContextPlanHash             string                     `json:"promptContextPlanHash"`
-	VideoPromptPlanID                 string                     `json:"videoPromptPlanId"`
-	NativeAudioRequired               bool                       `json:"nativeAudioRequired"`
-	WorkflowRunID                     string                     `json:"workflowRunId,omitempty"`
-	NodeRunID                         string                     `json:"nodeRunId,omitempty"`
-	NodeExecutionToken                string                     `json:"nodeExecutionToken,omitempty"`
-	NodeAttemptGeneration             int                        `json:"nodeAttemptGeneration,omitempty"`
-	StoryboardPlanID                  string                     `json:"storyboardPlanId,omitempty"`
-	StoryboardShotID                  string                     `json:"storyboardShotId"`
-	ModelProfileKey                   string                     `json:"modelProfileKey,omitempty"`
-	ProviderModelID                   string                     `json:"providerModelId,omitempty"`
-	TaskType                          string                     `json:"taskType"`
-	TargetDurationTicks               int64                      `json:"targetDurationTicks"`
-	TimelineTimebase                  int64                      `json:"timelineTimebase"`
-	FPSNumerator                      int64                      `json:"fpsNumerator"`
-	FPSDenominator                    int64                      `json:"fpsDenominator"`
-	AudioStrategy                     string                     `json:"audioStrategy"`
-	AudioRequirement                  string                     `json:"audioRequirement"`
-	DialogueLanguage                  string                     `json:"dialogueLanguage,omitempty"`
-	HasDialogue                       bool                       `json:"hasDialogue"`
-	ReferenceMode                     string                     `json:"referenceMode"`
-	AspectRatio                       string                     `json:"aspectRatio"`
-	Resolution                        string                     `json:"resolution"`
-	PromptLanguage                    string                     `json:"promptLanguage,omitempty"`
-	ExpiresInSeconds                  int                        `json:"expiresInSeconds,omitempty"`
-	Force                             bool                       `json:"force,omitempty"`
-	ExcludeProviderModelIDs           []string                   `json:"excludeProviderModelIds,omitempty"`
-	PreviousExecutionPlanID           string                     `json:"previousExecutionPlanId,omitempty"`
-	DialogueSpans                     []GatewayVideoDialogueSpan `json:"dialogueSpans,omitempty"`
-	validatedContract                 *videoPlanProductionContract
+	OrganizationID                      string                     `json:"organizationId"`
+	ProjectID                           string                     `json:"projectId"`
+	OperationID                         string                     `json:"operationId,omitempty"`
+	OperationItemID                     string                     `json:"operationItemId,omitempty"`
+	OperationItemAttempt                int                        `json:"operationItemAttempt,omitempty"`
+	ProductionGenerationID              string                     `json:"productionGenerationId"`
+	VideoProductionBindingID            string                     `json:"videoProductionBindingId"`
+	VideoProductionBindingRevision      int64                      `json:"videoProductionBindingRevision"`
+	ProductionProfileVersionID          string                     `json:"productionProfileVersionId"`
+	ProductionProfileSnapshotHash       string                     `json:"productionProfileSnapshotHash"`
+	CompatibilityPolicy                 string                     `json:"compatibilityPolicy"`
+	RequiredInitialInputContract        string                     `json:"requiredInitialInputContract"`
+	AllowedContinuationInputContracts   []string                   `json:"allowedContinuationInputContracts,omitempty"`
+	InputContractVersion                string                     `json:"inputContractVersion"`
+	ShotStateRevision                   int                        `json:"shotStateRevision"`
+	ShotStateHash                       string                     `json:"shotStateHash"`
+	TransitionHash                      string                     `json:"transitionHash,omitempty"`
+	ReferencePackID                     string                     `json:"referencePackId"`
+	ReferencePackHash                   string                     `json:"referencePackHash"`
+	PromptContextPlanID                 string                     `json:"promptContextPlanId"`
+	PromptContextPlanHash               string                     `json:"promptContextPlanHash"`
+	VideoPromptPlanID                   string                     `json:"videoPromptPlanId"`
+	NativeAudioRequired                 bool                       `json:"nativeAudioRequired"`
+	WorkflowRunID                       string                     `json:"workflowRunId,omitempty"`
+	NodeRunID                           string                     `json:"nodeRunId,omitempty"`
+	NodeExecutionToken                  string                     `json:"nodeExecutionToken,omitempty"`
+	NodeAttemptGeneration               int                        `json:"nodeAttemptGeneration,omitempty"`
+	StoryboardPlanID                    string                     `json:"storyboardPlanId,omitempty"`
+	StoryboardShotID                    string                     `json:"storyboardShotId"`
+	ModelProfileKey                     string                     `json:"modelProfileKey,omitempty"`
+	ProviderModelID                     string                     `json:"providerModelId,omitempty"`
+	TaskType                            string                     `json:"taskType"`
+	TargetDurationTicks                 int64                      `json:"targetDurationTicks"`
+	TimelineTimebase                    int64                      `json:"timelineTimebase"`
+	FPSNumerator                        int64                      `json:"fpsNumerator"`
+	FPSDenominator                      int64                      `json:"fpsDenominator"`
+	AudioStrategy                       string                     `json:"audioStrategy"`
+	AudioRequirement                    string                     `json:"audioRequirement"`
+	DialogueLanguage                    string                     `json:"dialogueLanguage,omitempty"`
+	HasDialogue                         bool                       `json:"hasDialogue"`
+	ReferenceMode                       string                     `json:"referenceMode"`
+	AspectRatio                         string                     `json:"aspectRatio"`
+	Resolution                          string                     `json:"resolution"`
+	PromptLanguage                      string                     `json:"promptLanguage,omitempty"`
+	RequireApprovedLanguageCapabilities bool                       `json:"requireApprovedLanguageCapabilities,omitempty"`
+	ExpiresInSeconds                    int                        `json:"expiresInSeconds,omitempty"`
+	Force                               bool                       `json:"force,omitempty"`
+	ExcludeProviderModelIDs             []string                   `json:"excludeProviderModelIds,omitempty"`
+	PreviousExecutionPlanID             string                     `json:"previousExecutionPlanId,omitempty"`
+	DialogueSpans                       []GatewayVideoDialogueSpan `json:"dialogueSpans,omitempty"`
+	validatedContract                   *videoPlanProductionContract
 }
 
 type GatewayVideoDialogueSpan struct {
@@ -591,59 +592,68 @@ func validateVideoGenerationVariant(variant VideoGenerationVariant) error {
 }
 
 func matchVideoGenerationVariant(variant VideoGenerationVariant, req videoVariantMatchRequest) (bool, int, string, string) {
-	if strings.TrimSpace(req.RequiredInitialInputContract) != "" {
-		if strings.EqualFold(strings.TrimSpace(req.CompatibilityPolicy), "strict") {
-			if !strings.EqualFold(strings.TrimSpace(variant.InputContract.ContractKey), strings.TrimSpace(req.RequiredInitialInputContract)) {
-				return false, 0, "", ""
-			}
-		} else if !videoInputContractSatisfies(variant.InputContract, req.RequiredInitialInputContract) {
-			return false, 0, "", ""
+	// Duration planning happens after this filter because it also needs dialogue
+	// boundaries. Resolution is the only variant field that hard-rejects a
+	// candidate here; the remaining declared capabilities are advisory ranking
+	// signals and are still sent to the provider.
+	if !matchesOptionalValue(variant.Resolutions, req.Resolution) {
+		return false, 0, "", ""
+	}
+
+	score := 0
+	requiredContract := strings.TrimSpace(req.RequiredInitialInputContract)
+	if requiredContract != "" {
+		switch {
+		case strings.EqualFold(strings.TrimSpace(variant.InputContract.ContractKey), requiredContract):
+			score += 32
+		case videoInputContractSatisfies(variant.InputContract, requiredContract):
+			score += 16
 		}
 	}
-	if !matchesOptionalValue(variant.When.TaskTypes, req.TaskType) || !matchesOptionalValue(variant.When.ReferenceModes, req.ReferenceMode) {
-		return false, 0, "", ""
+	score += videoOptionalCapabilityPreference(variant.When.TaskTypes, req.TaskType, 16)
+	score += videoOptionalCapabilityPreference(variant.When.ReferenceModes, req.ReferenceMode, 8)
+	score += videoOptionalCapabilityPreference(variant.AspectRatios, req.AspectRatio, 4)
+	if strings.TrimSpace(req.PromptLanguage) != "" && matchesLanguage(variant.SupportedPromptLanguages, req.PromptLanguage) {
+		score += 2
 	}
-	if !matchesOptionalValue(variant.AspectRatios, req.AspectRatio) || !matchesOptionalValue(variant.Resolutions, req.Resolution) {
-		return false, 0, "", ""
-	}
-	if !matchesLanguage(variant.SupportedPromptLanguages, req.PromptLanguage) {
-		return false, 0, "", ""
-	}
+
 	wantsNative := strings.EqualFold(strings.TrimSpace(req.AudioStrategy), "native_av") && !strings.EqualFold(strings.TrimSpace(req.AudioRequirement), "disabled")
-	if variant.When.NativeAudioRequested != nil && *variant.When.NativeAudioRequested != wantsNative {
-		return false, 0, "", ""
+	if variant.When.NativeAudioRequested != nil && *variant.When.NativeAudioRequested == wantsNative {
+		score += 2
 	}
 	support := normalizeVideoSupport(variant.NativeAudio.Support)
 	if !wantsNative {
-		if variant.NativeAudio.CanDisable != nil && !*variant.NativeAudio.CanDisable && support == VideoSupportTrue {
-			return false, 0, "", ""
-		}
-		return true, 1, "not_requested", "ready"
-	}
-	if strings.EqualFold(strings.TrimSpace(req.AudioRequirement), "required") && support != VideoSupportTrue {
-		return false, 0, "", ""
+		return true, score + 1, "not_requested", "ready"
 	}
 	if req.HasDialogue {
-		if support == VideoSupportTrue && variant.NativeAudio.SupportsDialogue != nil && !*variant.NativeAudio.SupportsDialogue {
-			return false, 0, "", ""
+		if variant.NativeAudio.SupportsDialogue != nil && *variant.NativeAudio.SupportsDialogue {
+			score += 2
 		}
-		if support == VideoSupportTrue && !matchesLanguage(variant.NativeAudio.SupportedDialogueLanguages, req.DialogueLanguage) {
-			return false, 0, "", ""
+		if strings.TrimSpace(req.DialogueLanguage) != "" && matchesLanguage(variant.NativeAudio.SupportedDialogueLanguages, req.DialogueLanguage) {
+			score++
 		}
 	}
 	switch support {
 	case VideoSupportTrue:
-		return true, 3, "audio_unverified", "preview_only"
+		return true, score + 3, "audio_unverified", "preview_only"
 	case VideoSupportUnknown:
-		return true, 2, "audio_unverified", "preview_only"
+		return true, score + 2, "audio_unverified", "preview_only"
 	case VideoSupportFalse:
-		if strings.EqualFold(strings.TrimSpace(req.AudioRequirement), "required") {
-			return false, 0, "", ""
-		}
-		return true, 1, "native_audio_unavailable", "preview_only"
+		return true, score + 1, "native_audio_unavailable", "preview_only"
 	default:
-		return false, 0, "", ""
+		return true, score, "audio_unverified", "preview_only"
 	}
+}
+
+func videoOptionalCapabilityPreference(values []string, requested string, score int) int {
+	requested = strings.TrimSpace(requested)
+	if requested == "" || len(normalizeVideoStringSlice(values)) == 0 {
+		return 0
+	}
+	if matchesOptionalValue(values, requested) {
+		return score
+	}
+	return 0
 }
 
 func planVideoSegments(targetTicks, timebase int64, variant VideoGenerationVariant, referenceMode string, continuation *VideoInputContract) ([]GatewayVideoPlanSegment, error) {

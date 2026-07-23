@@ -95,6 +95,7 @@ func (s *Service) resolveOne(ctx context.Context, query string, args ...any) (Re
 		&resolved.Version,
 		&resolved.Content,
 		&resolved.ContentHash,
+		&resolved.Metadata,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -106,7 +107,8 @@ func (s *Service) resolveOne(ctx context.Context, query string, args ...any) (Re
 }
 
 const resolveProjectBindingSQL = `
-	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash
+	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash,
+	       COALESCE(pv.metadata, '{}'::jsonb)
 	FROM prompt_bindings b
 	JOIN prompt_versions pv ON pv.id = b.prompt_version_id
 	JOIN prompt_templates pt ON pt.id = COALESCE(pv.template_id, pv.prompt_template_id)
@@ -119,7 +121,8 @@ const resolveProjectBindingSQL = `
 `
 
 const resolveOrganizationBindingSQL = `
-	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash
+	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash,
+	       COALESCE(pv.metadata, '{}'::jsonb)
 	FROM prompt_bindings b
 	JOIN prompt_versions pv ON pv.id = b.prompt_version_id
 	JOIN prompt_templates pt ON pt.id = COALESCE(pv.template_id, pv.prompt_template_id)
@@ -132,7 +135,8 @@ const resolveOrganizationBindingSQL = `
 `
 
 const resolveOrganizationActiveSQL = `
-	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash
+	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash,
+	       COALESCE(pv.metadata, '{}'::jsonb)
 	FROM prompt_templates pt
 	JOIN prompt_versions pv ON pt.id = COALESCE(pv.template_id, pv.prompt_template_id)
 	WHERE pt.organization_id = $1
@@ -144,7 +148,8 @@ const resolveOrganizationActiveSQL = `
 `
 
 const resolveSystemActiveSQL = `
-	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash
+	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash,
+	       COALESCE(pv.metadata, '{}'::jsonb)
 	FROM prompt_templates pt
 	JOIN prompt_versions pv ON pt.id = COALESCE(pv.template_id, pv.prompt_template_id)
 	WHERE pt.organization_id IS NULL
@@ -156,7 +161,8 @@ const resolveSystemActiveSQL = `
 `
 
 const resolveVersionSQL = `
-	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash
+	SELECT pt.id::text, pt.template_key, pv.id::text, COALESCE(pv.version, pv.version_no), pv.content, pv.content_hash,
+	       COALESCE(pv.metadata, '{}'::jsonb)
 	FROM prompt_versions pv
 	JOIN prompt_templates pt ON pt.id = COALESCE(pv.template_id, pv.prompt_template_id)
 	WHERE pv.id = $1
