@@ -162,7 +162,8 @@ func (r *Repository) LockUnitGenerationContext(
 	err := tx.QueryRow(ctx, `
 		SELECT generation.organization_id::text, generation.project_id::text,
 		       generation.product_id::text, generation.script_unit_id::text,
-		       unit.revision, generation.id::text, generation.unit_generation_no, generation.status,
+		       generation.script_unit_revision, generation.id::text,
+		       generation.unit_generation_no, generation.status,
 		       generation.project_production_generation_id::text,
 		       generation.commerce_workflow_binding_id::text,
 		       generation.commerce_workflow_binding_revision,

@@ -17,6 +17,7 @@ import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
 import { contentTypeLabel, projectTypeLabel } from "@/lib/labels";
 import { projectHref } from "@/lib/routes";
+import { sessionHasPermission, useStudioSession } from "@/lib/session";
 import type { Project } from "@/lib/types";
 
 export function ProjectsPage() {
@@ -28,6 +29,8 @@ export function ProjectsPage() {
 }
 
 function ProjectsContent() {
+  const { session } = useStudioSession();
+  const canCreateProject = sessionHasPermission(session, "project.write");
   const { data: projects = [], isLoading } = useApiQuery({
     key: qk.projects(),
     queryFn: (session) => studioApi.listProjects(session).then((r) => r.items),
@@ -68,12 +71,14 @@ function ProjectsContent() {
               <SelectItem value="archived">已归档</SelectItem>
             </SelectContent>
           </Select>
-          <Button asChild>
-            <Link href="/projects/new">
-              <Plus className="mr-2 h-4 w-4" />
-              新建项目
-            </Link>
-          </Button>
+          {canCreateProject ? (
+            <Button asChild>
+              <Link href="/projects/new">
+                <Plus className="mr-2 h-4 w-4" />
+                新建项目
+              </Link>
+            </Button>
+          ) : null}
         </div>
       </Surface>
 

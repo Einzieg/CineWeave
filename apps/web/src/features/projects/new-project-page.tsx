@@ -29,7 +29,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ErrorPanel } from "@/components/shared/error-panel";
-import { useStudioSession } from "@/lib/session";
+import { sessionHasPermission, useStudioSession } from "@/lib/session";
 import { studioApi, StudioApiError } from "@/lib/api-client";
 import { projectHref } from "@/lib/routes";
 import { useApiQuery } from "@/lib/query/use-api";
@@ -158,6 +158,7 @@ function NewProjectContent() {
   const productImagesRef = useRef<ProductImageDraft[]>([]);
   const { session, ready } = useStudioSession();
   const workspaceId = session.workspaceId?.trim() ?? "";
+  const canCreateProject = sessionHasPermission(session, "project.write");
   const [selectedProjectType, setSelectedProjectType] = useState<NarrativeProjectType | "commerce_video">("short_film");
   const projectKind: ProjectKind = selectedProjectType === "commerce_video" ? "commerce_video" : "narrative";
   const [busy, setBusy] = useState(false);
@@ -204,19 +205,22 @@ function NewProjectContent() {
   const { data: manualTemplates = [], isLoading: manualTemplatesLoading } = useApiQuery({
     key: qk.projectManualTemplates(),
     queryFn: (activeSession) => studioApi.listProjectManualTemplates(activeSession).then((response) => response.items),
-    enabled: projectKind === "narrative",
+    enabled: canCreateProject && projectKind === "narrative",
   });
   const { data: videoProductionProfileVersions = [], isLoading: videoProductionProfilesLoading } = useApiQuery({
     key: qk.videoProductionProfiles(),
     queryFn: (activeSession) => studioApi.listVideoProductionProfiles(activeSession).then((response) => response.items),
-    enabled: projectKind === "narrative",
+    enabled: canCreateProject && projectKind === "narrative",
   });
-  const { data: commerceOptions, isLoading: commerceOptionsLoading } = useApiQuery({
+  const commerceOptionsQuery = useApiQuery({
     key: qk.commerceProjectOptions(workspaceId),
     queryFn: (activeSession) => studioApi.getCommerceProjectOptions(activeSession, workspaceId),
-    enabled: projectKind === "commerce_video" && Boolean(workspaceId),
+    enabled: canCreateProject && projectKind === "commerce_video" && Boolean(workspaceId),
     staleTime: 30_000,
   });
+  const commerceOptions = commerceOptionsQuery.data;
+  const commerceOptionsLoading = commerceOptionsQuery.isLoading || commerceOptionsQuery.isFetching;
+  const commerceOptionsError = commerceOptionsQuery.error?.message ?? "";
 
   const directorManualOptions = useMemo(() => buildManualStyleOptions(manualTemplates, "director"), [manualTemplates]);
   const visualManualOptions = useMemo(() => buildManualStyleOptions(manualTemplates, "visual"), [manualTemplates]);
@@ -276,6 +280,10 @@ function NewProjectContent() {
 
   async function submit() {
     setError("");
+    if (!canCreateProject) {
+      setError("当前账号没有创建项目的权限，请联系组织管理员授权。");
+      return;
+    }
     if (!ready || !workspaceId) {
       setError("当前账号没有可用工作区，请在权限管理中创建或分配工作区。");
       return;
@@ -339,8 +347,16 @@ function NewProjectContent() {
       setError("创建请求标识尚未准备完成，请稍后重试。");
       return;
     }
+    if (commerceOptionsQuery.error) {
+      setError(commerceOptionsQuery.error.message);
+      return;
+    }
+    if (!commerceOptions) {
+      setError("带货视频创建配置尚未加载完成，请稍后重试。");
+      return;
+    }
     if (!commerceOptions?.workflowTemplateVersionId) {
-      setError("带货视频工作流模板尚未发布。");
+      setError(commerceOptions.blockers[0] || "带货视频工作流模板尚未发布。");
       return;
     }
     if (commerceForm.languageMode === "explicit" && !commerceForm.targetLanguage) {
@@ -506,6 +522,15 @@ function NewProjectContent() {
     });
   }
 
+  if (!canCreateProject) {
+    return (
+      <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm md:p-6">
+        <ErrorPanel message="当前账号没有创建项目的权限，请联系组织管理员授权。" />
+        <Button variant="outline" onClick={() => router.push("/projects" as Route)}>返回项目列表</Button>
+      </section>
+    );
+  }
+
   return (
     <section className="space-y-6 rounded-lg border bg-card p-4 shadow-sm md:p-6">
       <ConfigSection title="项目类型">
@@ -530,8 +555,10 @@ function NewProjectContent() {
           images={productImages}
           languages={commerceLanguages}
           optionsLoading={commerceOptionsLoading}
+          optionsError={commerceOptionsError}
           blockers={commerceOptions?.blockers ?? []}
           fileInputRef={fileInputRef}
+          onRetryOptions={() => { void commerceOptionsQuery.refetch(); }}
           onFiles={addProductImages}
           onRemoveImage={removeProductImage}
           onSetPrimary={(id) => setProductImages((current) => current.map((item) => ({ ...item, primary: item.id === id })))}
@@ -556,7 +583,14 @@ function NewProjectContent() {
         </div>
         <div className="ml-auto flex shrink-0 gap-2">
           <Button variant="outline" onClick={() => router.back()} disabled={busy}>取消</Button>
-          <Button onClick={submit} disabled={busy || (projectKind === "commerce_video" && commerceOptionsLoading)}>
+          <Button
+            onClick={submit}
+            disabled={busy || (projectKind === "commerce_video" && (
+              commerceOptionsLoading
+              || Boolean(commerceOptionsError)
+              || !commerceOptions?.workflowTemplateVersionId
+            ))}
+          >
             {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
             {projectKind === "commerce_video" ? "创建并准备分镜方案" : "创建项目"}
           </Button>
@@ -641,8 +675,10 @@ function CommerceProjectFormView({
   images,
   languages,
   optionsLoading,
+  optionsError,
   blockers,
   fileInputRef,
+  onRetryOptions,
   onFiles,
   onRemoveImage,
   onSetPrimary,
@@ -652,8 +688,10 @@ function CommerceProjectFormView({
   images: ProductImageDraft[];
   languages: CommerceProjectLanguageOption[];
   optionsLoading: boolean;
+  optionsError: string;
   blockers: string[];
   fileInputRef: React.RefObject<HTMLInputElement | null>;
+  onRetryOptions: () => void;
   onFiles: (files: FileList | null) => void;
   onRemoveImage: (id: string) => void;
   onSetPrimary: (id: string) => void;
@@ -772,7 +810,14 @@ function CommerceProjectFormView({
             </div>
           </div>
         </details>
-        {blockers.length > 0 ? (
+        {optionsError ? (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            <span>{optionsError}</span>
+            <Button type="button" size="sm" variant="outline" disabled={optionsLoading} onClick={onRetryOptions}>
+              {optionsLoading ? "正在重试" : "重试"}
+            </Button>
+          </div>
+        ) : blockers.length > 0 ? (
           <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
             {blockers.join("；")}
           </div>

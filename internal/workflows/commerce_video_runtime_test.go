@@ -58,6 +58,75 @@ func TestFrozenCommercePromptAgentLimitsRejectModelMismatch(t *testing.T) {
 	}
 }
 
+func TestCommerceAllowedVideoDurationsNormalizesFrozenFlatCapability(t *testing.T) {
+	t.Parallel()
+
+	snapshot := json.RawMessage(`{
+		"videoGenerator": {
+			"providerModelId": "model-1",
+			"capabilities": [{
+				"id": "capability-1",
+				"providerModelId": "model-1",
+				"taskTypes": [
+					"video.text_to_video",
+					"video.image_to_video",
+					"video.create_task",
+					"video.poll_task"
+				],
+				"qualityTiers": ["480p", "720p"],
+				"providerOptionsSchema": {
+					"xCapabilities": {
+						"durations": [1, 2, 3, 4, 5],
+						"resolutions": ["480p", "720p"],
+						"supportsFirstFrame": true,
+						"requestModes": ["async_create", "poll"]
+					}
+				},
+				"source": "preset"
+			}]
+		}
+	}`)
+
+	values, err := commerceAllowedVideoDurations(snapshot)
+	if err != nil {
+		t.Fatalf("commerceAllowedVideoDurations() error = %v", err)
+	}
+	want := []int{1, 2, 3, 4, 5}
+	if len(values) != len(want) {
+		t.Fatalf("values = %+v, want %+v", values, want)
+	}
+	for index := range want {
+		if values[index] != want[index] {
+			t.Fatalf("values = %+v, want %+v", values, want)
+		}
+	}
+}
+
+func TestCommerceAllowedVideoDurationsRejectsCapabilityWithoutDuration(t *testing.T) {
+	t.Parallel()
+
+	snapshot := json.RawMessage(`{
+		"videoGenerator": {
+			"providerModelId": "model-1",
+			"capabilities": [{
+				"id": "capability-1",
+				"providerModelId": "model-1",
+				"taskTypes": ["video.image_to_video"],
+				"providerOptionsSchema": {
+					"xCapabilities": {
+						"supportsFirstFrame": true,
+						"requestModes": ["async_create"]
+					}
+				}
+			}]
+		}
+	}`)
+
+	if _, err := commerceAllowedVideoDurations(snapshot); err == nil {
+		t.Fatal("commerceAllowedVideoDurations() error = nil, want generation mismatch")
+	}
+}
+
 func TestCommerceAgentIdentityAcceptsEveryGenerationPhase(t *testing.T) {
 	t.Parallel()
 

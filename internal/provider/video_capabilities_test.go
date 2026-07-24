@@ -356,17 +356,68 @@ func TestVideoGenerationVariantsRejectDuplicateKeys(t *testing.T) {
 	}
 }
 
-func TestVideoGenerationVariantsRequireStructuredVariants(t *testing.T) {
+func TestVideoGenerationVariantsNormalizeFlatFirstFrameCapability(t *testing.T) {
 	capability := Capability{
+		ID:                    "capability-1",
 		TaskTypes:             []byte(`["video.image_to_video"]`),
-		ProviderOptionsSchema: []byte(`{"xCapabilities":{"durations":[5],"supportsFirstFrame":true,"requestModes":["async_create"]}}`),
+		ProviderOptionsSchema: []byte(`{"xCapabilities":{"durations":[5,10],"resolutions":["720p"],"supportsFirstFrame":true,"requestModes":["async_create","poll"]}}`),
 	}
 	variants, err := videoGenerationVariants([]Capability{capability}, Model{ModelKey: "video-model"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(variants) != 0 {
-		t.Fatalf("variants = %+v, want no inferred compatibility variant", variants)
+	if len(variants) != 1 {
+		t.Fatalf("variants = %+v, want one normalized variant", variants)
+	}
+	variant := variants[0]
+	if variant.InputContract.ContractKey != VideoInputContractFirstFrame ||
+		variant.InputContract.RequestMode != "async_create" ||
+		len(variant.InputContract.Slots) != 1 ||
+		variant.InputContract.Slots[0].Role != "first_frame" {
+		t.Fatalf("input contract = %+v, want canonical first-frame contract", variant.InputContract)
+	}
+	if variant.Duration.Mode != VideoDurationDiscrete ||
+		len(variant.Duration.Values) != 2 ||
+		variant.Duration.Values[0] != 5 ||
+		variant.Duration.Values[1] != 10 {
+		t.Fatalf("duration = %+v, want discrete 5/10 seconds", variant.Duration)
+	}
+	if len(variant.Resolutions) != 1 || variant.Resolutions[0] != "720p" {
+		t.Fatalf("resolutions = %+v, want 720p", variant.Resolutions)
+	}
+}
+
+func TestExecutableWholeSecondVideoDurationsNormalizesFlatAndStructuredCapabilities(t *testing.T) {
+	capabilities := []Capability{
+		{
+			ID:                    "flat",
+			TaskTypes:             []byte(`["video.image_to_video"]`),
+			ProviderOptionsSchema: []byte(`{"xCapabilities":{"durations":[5,10,10.5],"supportsFirstFrame":true,"requestModes":["async_create"]}}`),
+		},
+		{
+			ID: "structured",
+			ProviderOptionsSchema: []byte(`{"xCapabilities":{"videoGenerationVariants":[{
+				"variantKey":"continuous",
+				"duration":{"mode":"continuous_range","minSeconds":1.5,"maxSeconds":4.5,"stepSeconds":0.5},
+				"frameRate":{"mode":"unknown"},
+				"nativeAudio":{"support":"unknown"},
+				"requestModes":["async_create"]
+			}]}}`),
+		},
+	}
+
+	values, err := ExecutableWholeSecondVideoDurations(capabilities, Model{ModelKey: "video-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []int{2, 3, 4, 5, 10}
+	if len(values) != len(want) {
+		t.Fatalf("values = %+v, want %+v", values, want)
+	}
+	for index := range want {
+		if values[index] != want[index] {
+			t.Fatalf("values = %+v, want %+v", values, want)
+		}
 	}
 }
 

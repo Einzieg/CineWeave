@@ -171,6 +171,9 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 	if setupContainsUpload(setupAfterRelease.InputSnapshot, storageKey) {
 		t.Fatalf("rejected upload remains in setup snapshot: %s", setupAfterRelease.InputSnapshot)
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM commerce_products WHERE id = $1`, productMutation.Product.ID); err != nil {
+		t.Fatalf("remove rejected upload fixture product: %v", err)
+	}
 
 	var memberCount, ownerBindingCount, setupCount int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM project_members WHERE project_id = $1 AND user_id = $2 AND status = 'active'`, draft.ProjectID, userID).Scan(&memberCount); err != nil {
@@ -179,11 +182,11 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM role_bindings WHERE resource_project_id = $1 AND subject_user_id = $2`, draft.ProjectID, userID).Scan(&ownerBindingCount); err != nil {
 		t.Fatalf("count owner binding: %v", err)
 	}
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM commerce_setup_sessions WHERE id = $1 AND project_id = $2 AND state = 'draft'`, draft.SetupSessionID, draft.ProjectID).Scan(&setupCount); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM commerce_setup_sessions WHERE id = $1 AND project_id = $2 AND state = 'uploading'`, draft.SetupSessionID, draft.ProjectID).Scan(&setupCount); err != nil {
 		t.Fatalf("count setup session: %v", err)
 	}
 	if memberCount != 1 || ownerBindingCount != 1 || setupCount != 1 {
-		t.Fatalf("draft side effects member=%d owner=%d setup=%d", memberCount, ownerBindingCount, setupCount)
+		t.Fatalf("draft side effects member=%d owner=%d uploading-setup=%d", memberCount, ownerBindingCount, setupCount)
 	}
 
 	bindings, err := service.PrepareInitialBindings(ctx, tx, InitialBindingParams{
@@ -307,6 +310,36 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 	}
 	if targetScript.Activated || !targetScript.RequiresRebuild {
 		t.Fatalf("target script mutation = %+v, want rebuild without activation", targetScript)
+	}
+	updatedTitle := currentScriptUnit.Title + "（标题已编辑）"
+	currentScriptUnit, err = catalog.UpdateScriptUnit(
+		ctx, tx, organizationID, draft.ProjectID, currentScriptUnit.ID,
+		currentScriptUnit.Revision, UpdateScriptUnitInput{Title: &updatedTitle},
+	)
+	if err != nil {
+		t.Fatalf("update commerce script unit title: %v", err)
+	}
+	if currentScriptUnit.Revision <= unitIdentity.ScriptUnitRevision {
+		t.Fatalf("script unit revision = %d, want newer than frozen generation revision %d",
+			currentScriptUnit.Revision, unitIdentity.ScriptUnitRevision)
+	}
+	frozenGeneration, err := service.AssertWritableUnitGeneration(ctx, tx, unitIdentity)
+	if err != nil {
+		t.Fatalf("draft script version changed active generation identity: %v", err)
+	}
+	if frozenGeneration.Identity.ScriptUnitRevision != unitIdentity.ScriptUnitRevision {
+		t.Fatalf("frozen generation revision = %d, want %d",
+			frozenGeneration.Identity.ScriptUnitRevision, unitIdentity.ScriptUnitRevision)
+	}
+	storyboardIdentity, err := catalog.LockActiveStoryboardGeneration(
+		ctx, tx, organizationID, draft.ProjectID, unitIdentity.ScriptUnitID,
+	)
+	if err != nil {
+		t.Fatalf("lock storyboard generation after draft version: %v", err)
+	}
+	if storyboardIdentity != unitIdentity {
+		t.Fatalf("storyboard generation identity = %+v, want frozen identity %+v",
+			storyboardIdentity, unitIdentity)
 	}
 	scriptImpact, err := catalog.PlanScriptUnitRebuild(ctx, tx, organizationID, draft.ProjectID,
 		currentScriptUnit.ID, ScriptUnitRebuildTarget{
@@ -463,10 +496,11 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 		t.Fatalf("product rebuild replay = %+v", replay)
 	}
 	var rebuiltGenerationID, rebuiltGenerationStatus, sourceProductGenerationStatus, activeProductVersionID string
-	var rebuiltGenerationNo, stableUnitNo int64
+	var rebuiltGenerationNo, rebuiltScriptUnitRevision, stableUnitNo int64
 	if err := tx.QueryRow(ctx, `
 		SELECT unit.active_unit_generation_id::text, unit.unit_generation_no, unit.unit_no,
-		       target.status, source.status, product.current_version_id::text
+		       target.script_unit_revision, target.status, source.status,
+		       product.current_version_id::text
 		FROM commerce_script_units unit
 		JOIN commerce_script_unit_generations target ON target.id = unit.active_unit_generation_id
 		JOIN commerce_script_unit_generations source ON source.id = $2
@@ -474,6 +508,7 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 		WHERE unit.id = $1
 	`, unitIdentity.ScriptUnitID, unitIdentity.UnitGenerationID).Scan(
 		&rebuiltGenerationID, &rebuiltGenerationNo, &stableUnitNo,
+		&rebuiltScriptUnitRevision,
 		&rebuiltGenerationStatus, &sourceProductGenerationStatus, &activeProductVersionID,
 	); err != nil {
 		t.Fatalf("load product rebuild state: %v", err)
@@ -487,7 +522,7 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 	}
 	unitIdentity.UnitGenerationID = rebuiltGenerationID
 	unitIdentity.UnitGenerationNo = rebuiltGenerationNo
-	unitIdentity.ScriptUnitRevision++
+	unitIdentity.ScriptUnitRevision = rebuiltScriptUnitRevision
 	if err := tx.QueryRow(ctx, `SELECT unit_configuration_hash FROM commerce_script_unit_generations WHERE id = $1`, rebuiltGenerationID).Scan(&unitIdentity.UnitConfigurationHash); err != nil {
 		t.Fatalf("load rebuilt unit configuration hash: %v", err)
 	}
@@ -1114,13 +1149,14 @@ func insertCommerceUnitGenerationFixture(
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO commerce_script_unit_generations(
 			organization_id, project_id, product_id, script_unit_id,
-			project_production_generation_id, unit_generation_no, status,
+			script_unit_revision, project_production_generation_id,
+			unit_generation_no, status,
 			commerce_workflow_binding_id, commerce_workflow_binding_revision,
 			product_version_id, source_script_version_id, localization_id,
 			reference_pack_id, unit_configuration_snapshot, unit_configuration_hash,
 			created_by, activated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, 1, 'active', $6, $7, $8, $9, $10, $11, '{}', $12, $13, now())
+		VALUES ($1, $2, $3, $4, 1, $5, 1, 'active', $6, $7, $8, $9, $10, $11, '{}', $12, $13, now())
 		RETURNING id::text
 	`, production.OrganizationID, production.ProjectID, productID, scriptUnitID,
 		production.Generation.ID, production.CommerceBinding.ID, production.CommerceBinding.Revision,

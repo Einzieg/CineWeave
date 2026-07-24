@@ -220,16 +220,17 @@ func (r *Repository) InsertInitialUnitGeneration(
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO commerce_script_unit_generations(
 			organization_id, project_id, product_id, script_unit_id,
-			project_production_generation_id, unit_generation_no, status,
+			script_unit_revision, project_production_generation_id,
+			unit_generation_no, status,
 			commerce_workflow_binding_id, commerce_workflow_binding_revision,
 			product_version_id, source_script_version_id, localization_id,
 			reference_pack_id, unit_configuration_snapshot, unit_configuration_hash,
 			created_by
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, 'preparing', $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'preparing', $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING id::text
 	`, params.OrganizationID, params.ProjectID, params.ProductID, params.ScriptUnitID,
-		bindings.ProjectGenerationID, unitGenerationNo, bindings.CommerceBindingID,
+		unit.Revision+1, bindings.ProjectGenerationID, unitGenerationNo, bindings.CommerceBindingID,
 		bindings.CommerceBindingRevision, params.ProductVersionID, params.SourceScriptVersionID,
 		params.LocalizationID, referencePackID, raw, hash, params.CreatedBy).Scan(&id); err != nil {
 		return "", 0, "", err

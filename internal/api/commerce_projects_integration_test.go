@@ -21,6 +21,72 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCommerceProjectOptionsRequireProjectWrite(t *testing.T) {
+	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
+		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run commerce project API tests")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is required for commerce project API tests")
+	}
+
+	ctx := context.Background()
+	pool, err := db.Open(ctx, databaseURL)
+	require.NoError(t, err)
+	authService := auth.NewService(pool, "commerce-project-options-test-secret", time.Hour, 24*time.Hour)
+	handler := New(pool, authService, nil, nil, nil).Handler()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	registration, err := authService.Setup(ctx, auth.RegisterRequest{
+		Email:            "commerce-options-owner-" + suffix + "@example.test",
+		Username:         "commerce_owner_" + suffix[:12],
+		Password:         "Password123!",
+		DisplayName:      "Commerce Options Owner",
+		OrganizationName: "Commerce Options Org " + suffix,
+		WorkspaceName:    "Commerce Options Workspace",
+	}, httptest.NewRequest(http.MethodPost, "/api/auth/register", nil))
+	require.NoError(t, err)
+	userIDs := []string{registration.User.ID}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, registration.OrganizationID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1::uuid[])`, userIDs)
+		pool.Close()
+	})
+
+	seedCommerceWorkflowTemplate(t, ctx, pool, registration.OrganizationID, registration.User.ID)
+	ownerRequest := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+registration.WorkspaceID+"/commerce/project-options", nil)
+	ownerRequest.Header.Set("Authorization", "Bearer "+registration.AccessToken)
+	ownerRequest.Header.Set("X-Organization-Id", registration.OrganizationID)
+	ownerResponse := httptest.NewRecorder()
+	handler.ServeHTTP(ownerResponse, ownerRequest)
+	require.Equal(t, http.StatusOK, ownerResponse.Code, ownerResponse.Body.String())
+	var ownerEnvelope struct {
+		Data commercepkg.ProjectOptions `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(ownerResponse.Body.Bytes(), &ownerEnvelope))
+	require.NotEmpty(t, ownerEnvelope.Data.WorkflowTemplateVersionID)
+
+	member, err := authService.CreateSystemOrganizationMember(ctx, registration.User.ID, registration.OrganizationID, auth.CreateSystemOrganizationMemberRequest{
+		Email:       "commerce-options-member-" + suffix + "@example.test",
+		Username:    "commerce_member_" + suffix[:12],
+		Password:    "Password123!",
+		DisplayName: "Commerce Read Only Member",
+	})
+	require.NoError(t, err)
+	userIDs = append(userIDs, member.User.ID)
+	memberLogin, err := authService.Login(ctx, auth.LoginRequest{
+		Identifier: member.User.Username,
+		Password:   "Password123!",
+	}, httptest.NewRequest(http.MethodPost, "/api/auth/login", nil))
+	require.NoError(t, err)
+	require.NotNil(t, memberLogin.TokenResponse)
+	memberRequest := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+registration.WorkspaceID+"/commerce/project-options", nil)
+	memberRequest.Header.Set("Authorization", "Bearer "+memberLogin.AccessToken)
+	memberRequest.Header.Set("X-Organization-Id", registration.OrganizationID)
+	memberResponse := httptest.NewRecorder()
+	handler.ServeHTTP(memberResponse, memberRequest)
+	assertCommerceProjectError(t, memberResponse, http.StatusForbidden, "ACCESS_DENIED")
+}
+
 func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
 		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run commerce project API tests")
@@ -47,6 +113,7 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, registration.OrganizationID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, registration.User.ID)
 		pool.Close()
 	})
 

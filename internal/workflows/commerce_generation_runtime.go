@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Einzieg/cineweave/internal/commerce"
+	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -674,7 +675,7 @@ func loadPreparationCommitReplay(
 	err := tx.QueryRow(ctx, `
 		SELECT generation.id::text, generation.unit_generation_no,
 		       generation.localization_id::text, generation.unit_configuration_hash,
-		       generation.unit_configuration_snapshot, unit.revision
+		       generation.unit_configuration_snapshot, generation.script_unit_revision
 		FROM commerce_script_unit_generations generation
 		JOIN commerce_script_units unit
 		  ON unit.id = generation.script_unit_id
@@ -912,16 +913,17 @@ func insertAndActivatePreparedUnitGeneration(
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO commerce_script_unit_generations(
 			id, organization_id, project_id, product_id, script_unit_id,
-			project_production_generation_id, unit_generation_no, status,
+			script_unit_revision, project_production_generation_id,
+			unit_generation_no, status,
 			commerce_workflow_binding_id, commerce_workflow_binding_revision,
 			product_version_id, source_script_version_id, localization_id,
 			reference_pack_id, unit_configuration_snapshot, unit_configuration_hash,
 			source_unit_generation_id, created_by
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'preparing', $8, $9,
-		        $10, $11, $12, $13, $14, $15, NULLIF($16, '')::uuid, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'preparing', $9, $10,
+		        $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18)
 	`, generationID, state.Unit.OrganizationID, state.Unit.ProjectID, state.Unit.ProductID,
-		state.Unit.ID, state.Production.Generation.ID, generationNo,
+		state.Unit.ID, state.Unit.Revision+1, state.Production.Generation.ID, generationNo,
 		state.Production.CommerceBinding.ID, state.Production.CommerceBinding.Revision,
 		state.ProductVersion.ID, state.SourceVersion.ID, localizationID,
 		state.ReferencePack.ID, raw, configurationHash,
@@ -1637,7 +1639,7 @@ func (r *CommerceGenerationRuntime) lockGenerationState(
 	if err != nil {
 		return commerceGenerationFrozenState{}, err
 	}
-	if unit.Revision != identity.ScriptUnitRevision || unit.Status == "archived" ||
+	if unit.Status == "archived" ||
 		unit.ActiveUnitGenerationID == nil || *unit.ActiveUnitGenerationID != identity.UnitGenerationID ||
 		unit.CurrentSourceVersionID == nil || *unit.CurrentSourceVersionID != generation.SourceScriptVersionID ||
 		unit.CurrentLocalizationID == nil || *unit.CurrentLocalizationID != generation.LocalizationID {
@@ -2166,37 +2168,28 @@ func commerceAllowedVideoDurations(raw json.RawMessage) ([]int, error) {
 	if !ok {
 		return nil, generationMismatch("视频能力快照缺少 videoGenerator", nil)
 	}
-	capabilities, ok := video["capabilities"].([]any)
-	if !ok || len(capabilities) == 0 {
+	videoRaw, err := json.Marshal(video)
+	if err != nil {
+		return nil, generationMismatch("冻结视频能力无法序列化", err)
+	}
+	var snapshot struct {
+		ProviderModelID string                `json:"providerModelId"`
+		Capabilities    []provider.Capability `json:"capabilities"`
+	}
+	if err := json.Unmarshal(videoRaw, &snapshot); err != nil {
+		return nil, generationMismatch("冻结视频能力无法解析", err)
+	}
+	if len(snapshot.Capabilities) == 0 {
 		return nil, generationMismatch("视频能力快照没有冻结可执行能力", nil)
 	}
-	values := map[int]struct{}{}
-	for _, value := range capabilities {
-		capability, _ := value.(map[string]any)
-		schema, _ := capability["providerOptionsSchema"].(map[string]any)
-		extensions, _ := schema["xCapabilities"].(map[string]any)
-		variants, _ := extensions["videoGenerationVariants"].([]any)
-		for _, candidate := range variants {
-			variant, _ := candidate.(map[string]any)
-			duration, _ := variant["duration"].(map[string]any)
-			options, _ := duration["values"].([]any)
-			for _, option := range options {
-				seconds, ok := option.(float64)
-				if ok && seconds > 0 && seconds == float64(int(seconds)) {
-					values[int(seconds)] = struct{}{}
-				}
-			}
-		}
+	values, err := provider.ExecutableWholeSecondVideoDurations(
+		snapshot.Capabilities,
+		provider.Model{ID: snapshot.ProviderModelID},
+	)
+	if err != nil {
+		return nil, generationMismatch("冻结视频能力没有可执行的整数时长集合", err)
 	}
-	if len(values) == 0 {
-		return nil, generationMismatch("冻结视频能力没有可执行的整数时长集合", nil)
-	}
-	result := make([]int, 0, len(values))
-	for value := range values {
-		result = append(result, value)
-	}
-	sort.Ints(result)
-	return result, nil
+	return values, nil
 }
 
 func loadFrozenLocalizationSegments(

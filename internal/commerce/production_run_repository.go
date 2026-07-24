@@ -12,7 +12,7 @@ import (
 const productionRunSelectSQL = `
 	SELECT run.id::text, run.organization_id::text, run.project_id::text,
 	       run.product_id::text, run.script_unit_id::text,
-	       unit.revision, run.script_unit_generation_id::text,
+	       unit_generation.script_unit_revision, run.script_unit_generation_id::text,
 	       unit_generation.unit_generation_no, unit_generation.unit_configuration_hash,
 	       run.project_production_generation_id::text,
 	       project_generation.binding_id::text,
@@ -50,7 +50,8 @@ const productionRunSelectSQL = `
 const productionRunItemSelectSQL = `
 	SELECT item.id::text, item.run_id::text,
 	       item.organization_id::text, item.project_id::text,
-	       run.product_id::text, item.script_unit_id::text, unit.revision,
+	       run.product_id::text, item.script_unit_id::text,
+	       unit_generation.script_unit_revision,
 	       item.script_unit_generation_id::text,
 	       unit_generation.unit_generation_no, unit_generation.unit_configuration_hash,
 	       run.project_production_generation_id::text,
@@ -453,7 +454,8 @@ func (r *Repository) LockProductionRunItem(
 	err := tx.QueryRow(ctx, `
 		SELECT item.id::text, item.run_id::text,
 		       item.organization_id::text, item.project_id::text,
-		       run.product_id::text, item.script_unit_id::text, unit.revision,
+		       run.product_id::text, item.script_unit_id::text,
+		       unit_generation.script_unit_revision,
 		       item.script_unit_generation_id::text,
 		       unit_generation.unit_generation_no, unit_generation.unit_configuration_hash,
 		       run.project_production_generation_id::text,

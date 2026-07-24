@@ -272,7 +272,7 @@ func (r *CommerceGenerationRuntime) BeginCommerceShotImageVersion(
 	if err := r.assertCurrentReferenceImageSnapshotTx(ctx, tx, input.Snapshot); err != nil {
 		return CommerceShotImageVersionState{}, err
 	}
-	if !input.WorkflowInput.Force {
+	if commerceReferenceImageMayReuseGeneratedMedia(input.WorkflowInput) {
 		if current, found, err := loadActiveCommerceShotImageVersionTx(ctx, tx, input.Snapshot.StoryboardShotID, input.PromptPlan.ID); err != nil {
 			return CommerceShotImageVersionState{}, err
 		} else if found && current.Status == "succeeded" {
@@ -297,16 +297,45 @@ func (r *CommerceGenerationRuntime) BeginCommerceShotImageVersion(
 		return CommerceShotImageVersionState{}, err
 	}
 	version := CommerceShotImageVersionState{ID: uuid.NewString(), Status: "running", FidelityStatus: "pending"}
+	if commerceReferenceImageMayReuseGeneratedMedia(input.WorkflowInput) {
+		reusable, found, err := loadReusableCommerceShotImageVersionTx(
+			ctx, tx, input.Snapshot.StoryboardShotID, input.PromptPlan.ID,
+			input.Snapshot.InputHash, input.PromptPlan.ReferenceHash,
+		)
+		if err != nil {
+			return CommerceShotImageVersionState{}, err
+		}
+		if found {
+			version.ArtifactID = reusable.ArtifactID
+			version.MediaFileID = reusable.MediaFileID
+			version.StorageKey = reusable.StorageKey
+			version.ProviderRequestID = reusable.ProviderRequestID
+			version.ProviderCallID = reusable.ProviderCallID
+			version.ProviderModelID = reusable.ProviderModelID
+			version.ReusedFromVersionID = reusable.ID
+		}
+	}
+	versionMetadata := mustJSON(map[string]any{})
+	if version.ReusedFromVersionID != "" {
+		versionMetadata = mustJSON(map[string]any{
+			"reusedGeneratedMedia":     true,
+			"reusedFromImageVersionId": version.ReusedFromVersionID,
+		})
+	}
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO commerce_shot_image_versions(
 			id, organization_id, project_id, storyboard_shot_id,
 			script_unit_id, script_unit_generation_id, image_prompt_plan_id,
 			revision, status, active, input_hash, reference_snapshot_hash,
+			provider_request_id, provider_call_id, provider_model_id,
+			artifact_id, media_file_id, storage_key, fidelity_status, metadata,
 			created_by, started_at
 		)
 		SELECT $1, $2, $3, $4, $5, $6, $7,
 		       COALESCE(max(revision), 0) + 1, 'running', false, $8, $9,
-		       NULLIF($10, '')::uuid, now()
+		       NULLIF($10, '')::uuid, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid,
+		       NULLIF($13, '')::uuid, NULLIF($14, '')::uuid, NULLIF($15, ''),
+		       'pending', $16::jsonb, NULLIF($17, '')::uuid, now()
 		FROM commerce_shot_image_versions
 		WHERE storyboard_shot_id = $4
 		RETURNING revision
@@ -314,6 +343,8 @@ func (r *CommerceGenerationRuntime) BeginCommerceShotImageVersion(
 		input.Snapshot.StoryboardShotID, input.Snapshot.Identity.ScriptUnitID,
 		input.Snapshot.Identity.UnitGenerationID, input.PromptPlan.ID,
 		input.Snapshot.InputHash, input.PromptPlan.ReferenceHash,
+		version.ProviderRequestID, version.ProviderCallID, version.ProviderModelID,
+		version.ArtifactID, version.MediaFileID, version.StorageKey, versionMetadata,
 		input.WorkflowInput.CreatedBy).Scan(&version.Revision); err != nil {
 		return CommerceShotImageVersionState{}, err
 	}
@@ -372,7 +403,9 @@ func (r *CommerceGenerationRuntime) RecordCommerceShotImageGenerated(
 	if err != nil || tag.RowsAffected() != 1 {
 		return CommerceShotImageVersionState{}, commerceReferenceImageWriteConflict(err, "镜头图片版本已不再可写")
 	}
+	input.ImageVersion.ProviderRequestID = input.Gateway.ProviderRequestID
 	input.ImageVersion.ProviderCallID = input.Gateway.ProviderCallID
+	input.ImageVersion.ProviderModelID = input.Gateway.ModelID
 	input.ImageVersion.ArtifactID = input.Gateway.Output.ArtifactID
 	input.ImageVersion.MediaFileID = input.Gateway.Output.MediaFileID
 	input.ImageVersion.StorageKey = input.Gateway.Output.StorageKey
@@ -825,17 +858,20 @@ func loadActiveCommerceImagePromptPlanTx(ctx context.Context, tx pgx.Tx, shotID 
 
 func loadActiveCommerceShotImageVersionTx(ctx context.Context, tx pgx.Tx, shotID, promptPlanID string) (CommerceShotImageVersionState, bool, error) {
 	var item CommerceShotImageVersionState
-	var artifactID, mediaFileID, storageKey, providerCallID sql.NullString
+	var artifactID, mediaFileID, storageKey sql.NullString
+	var providerRequestID, providerCallID, providerModelID sql.NullString
 	err := tx.QueryRow(ctx, `
 		SELECT id::text, revision, status, fidelity_status,
-		       artifact_id::text, media_file_id::text, storage_key, provider_call_id::text
+		       artifact_id::text, media_file_id::text, storage_key,
+		       provider_request_id::text, provider_call_id::text, provider_model_id::text
 		FROM commerce_shot_image_versions
 		WHERE storyboard_shot_id = $1 AND image_prompt_plan_id = $2
 		  AND active AND status = 'succeeded'
 		ORDER BY revision DESC LIMIT 1
 		FOR UPDATE
 	`, shotID, promptPlanID).Scan(&item.ID, &item.Revision, &item.Status,
-		&item.FidelityStatus, &artifactID, &mediaFileID, &storageKey, &providerCallID)
+		&item.FidelityStatus, &artifactID, &mediaFileID, &storageKey,
+		&providerRequestID, &providerCallID, &providerModelID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CommerceShotImageVersionState{}, false, nil
 	}
@@ -845,7 +881,48 @@ func loadActiveCommerceShotImageVersionTx(ctx context.Context, tx pgx.Tx, shotID
 	item.ArtifactID = nullableString(artifactID)
 	item.MediaFileID = nullableString(mediaFileID)
 	item.StorageKey = nullableString(storageKey)
+	item.ProviderRequestID = nullableString(providerRequestID)
 	item.ProviderCallID = nullableString(providerCallID)
+	item.ProviderModelID = nullableString(providerModelID)
+	return item, true, nil
+}
+
+func loadReusableCommerceShotImageVersionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	shotID string,
+	promptPlanID string,
+	inputHash string,
+	referenceHash string,
+) (CommerceShotImageVersionState, bool, error) {
+	var item CommerceShotImageVersionState
+	var providerRequestID, providerCallID, providerModelID sql.NullString
+	err := tx.QueryRow(ctx, `
+		SELECT id::text, revision, status, fidelity_status,
+		       artifact_id::text, media_file_id::text, storage_key,
+		       provider_request_id::text, provider_call_id::text, provider_model_id::text
+		FROM commerce_shot_image_versions
+		WHERE storyboard_shot_id = $1 AND image_prompt_plan_id = $2
+		  AND input_hash = $3 AND reference_snapshot_hash = $4
+		  AND status = 'failed' AND fidelity_status IN ('pending', 'not_reviewed')
+		  AND artifact_id IS NOT NULL AND media_file_id IS NOT NULL
+		  AND storage_key IS NOT NULL AND trim(storage_key) <> ''
+		ORDER BY revision DESC LIMIT 1
+		FOR UPDATE
+	`, shotID, promptPlanID, inputHash, referenceHash).Scan(
+		&item.ID, &item.Revision, &item.Status, &item.FidelityStatus,
+		&item.ArtifactID, &item.MediaFileID, &item.StorageKey,
+		&providerRequestID, &providerCallID, &providerModelID,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CommerceShotImageVersionState{}, false, nil
+	}
+	if err != nil {
+		return CommerceShotImageVersionState{}, false, err
+	}
+	item.ProviderRequestID = nullableString(providerRequestID)
+	item.ProviderCallID = nullableString(providerCallID)
+	item.ProviderModelID = nullableString(providerModelID)
 	return item, true, nil
 }
 

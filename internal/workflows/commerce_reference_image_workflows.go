@@ -42,14 +42,17 @@ type CommerceImagePromptPlanState struct {
 }
 
 type CommerceShotImageVersionState struct {
-	ID             string `json:"id"`
-	Revision       int    `json:"revision"`
-	Status         string `json:"status"`
-	ArtifactID     string `json:"artifactId,omitempty"`
-	MediaFileID    string `json:"mediaFileId,omitempty"`
-	StorageKey     string `json:"storageKey,omitempty"`
-	ProviderCallID string `json:"providerCallId,omitempty"`
-	FidelityStatus string `json:"fidelityStatus"`
+	ID                  string `json:"id"`
+	Revision            int    `json:"revision"`
+	Status              string `json:"status"`
+	ArtifactID          string `json:"artifactId,omitempty"`
+	MediaFileID         string `json:"mediaFileId,omitempty"`
+	StorageKey          string `json:"storageKey,omitempty"`
+	ProviderRequestID   string `json:"providerRequestId,omitempty"`
+	ProviderCallID      string `json:"providerCallId,omitempty"`
+	ProviderModelID     string `json:"providerModelId,omitempty"`
+	FidelityStatus      string `json:"fidelityStatus"`
+	ReusedFromVersionID string `json:"reusedFromVersionId,omitempty"`
 }
 
 type CommerceReferenceImageItemOutput struct {
@@ -334,34 +337,42 @@ func (a CommerceActivities) GenerateCommerceReferenceImageItem(ctx context.Conte
 	if a.Core.gateway == nil || a.Core.db == nil {
 		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, workflowError{Code: provider.CodeProviderGatewayRequired, Message: "Provider Gateway 未配置"})
 	}
+	reusedResponse, reusedGeneratedMedia := commerceGatewayImageResponseFromVersion(version)
 	node, err := StartNodeRun(ctx, a.Core.db, NodeRunInput{
 		OrganizationID: input.Identity.OrganizationID, ProjectID: input.Identity.ProjectID,
 		WorkflowRunID: input.WorkflowRunID, NodeKey: "commerce_reference_image_" + shotID,
 		NodeType: "image.generate", AttemptGeneration: input.AttemptGeneration,
-		Input: mustJSON(map[string]any{"shotId": shotID, "promptPlanId": plan.ID, "promptHash": plan.PromptHash, "references": plan.References}),
+		Input: mustJSON(map[string]any{
+			"shotId": shotID, "promptPlanId": plan.ID, "promptHash": plan.PromptHash,
+			"references": plan.References, "reusedGeneratedMedia": reusedGeneratedMedia,
+			"reusedFromImageVersionId": version.ReusedFromVersionID,
+		}),
 	})
 	if err != nil {
 		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, err)
 	}
-	request := commerceProviderImageRequest(input, snapshot, plan, node)
-	response, err := a.Core.generateProviderImage(ctx, node, request)
-	if err != nil || response.Status != "succeeded" {
-		if err == nil && response.Error != nil {
-			err = &provider.StandardErrorError{Standard: *response.Error}
+	response := reusedResponse
+	if !reusedGeneratedMedia {
+		request := commerceProviderImageRequest(input, snapshot, plan, node)
+		response, err = a.Core.generateProviderImage(ctx, node, request)
+		if err != nil || response.Status != "succeeded" {
+			if err == nil && response.Error != nil {
+				err = &provider.StandardErrorError{Standard: *response.Error}
+			}
+			if err == nil {
+				err = errors.New("图片供应商未返回成功状态")
+			}
+			_ = FailNodeRun(ctx, a.Core.db, node, provider.CodeUpstreamInternalError, err.Error())
+			return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, err)
 		}
-		if err == nil {
-			err = errors.New("图片供应商未返回成功状态")
+		version, err = port.RecordCommerceShotImageGenerated(ctx, RecordCommerceShotImageGeneratedInput{
+			WorkflowInput: input, Attempt: attempt, Snapshot: snapshot,
+			PromptPlan: plan, ImageVersion: version, Gateway: response,
+		})
+		if err != nil {
+			_ = FailNodeRun(ctx, a.Core.db, node, codeActivityFailed, err.Error())
+			return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, err)
 		}
-		_ = FailNodeRun(ctx, a.Core.db, node, provider.CodeUpstreamInternalError, err.Error())
-		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, err)
-	}
-	version, err = port.RecordCommerceShotImageGenerated(ctx, RecordCommerceShotImageGeneratedInput{
-		WorkflowInput: input, Attempt: attempt, Snapshot: snapshot,
-		PromptPlan: plan, ImageVersion: version, Gateway: response,
-	})
-	if err != nil {
-		_ = FailNodeRun(ctx, a.Core.db, node, codeActivityFailed, err.Error())
-		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, err)
 	}
 	fidelityReferences := append(commerceGatewayImageReferences(snapshot.References), provider.GatewayImageReference{
 		Type: "commerce_generated_reference", ArtifactID: response.Output.ArtifactID,
@@ -379,16 +390,18 @@ func (a CommerceActivities) GenerateCommerceReferenceImageItem(ctx context.Conte
 		References: fidelityReferences,
 	})
 	if err != nil {
-		_ = FailNodeRun(ctx, a.Core.db, node, CommerceCodeImageFidelityRejected, err.Error())
-		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, err)
+		reviewErr := commerceImageFidelityReviewFailure(err)
+		_ = FailNodeRun(ctx, a.Core.db, node, CommerceCodeImageFidelityReviewFailed, reviewErr.Error())
+		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, reviewErr)
 	}
 	review, err := ParseCommerceImageFidelityReview(reviewAgent.RawOutput)
 	if err == nil {
 		err = ValidateCommerceImageFidelityReview(review)
 	}
 	if err != nil {
-		_ = FailNodeRun(ctx, a.Core.db, node, CommerceCodeImageFidelityRejected, err.Error())
-		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, err)
+		reviewErr := commerceImageFidelityReviewFailure(err)
+		_ = FailNodeRun(ctx, a.Core.db, node, CommerceCodeImageFidelityReviewFailed, reviewErr.Error())
+		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, reviewErr)
 	}
 	completed, err := port.CompleteCommerceShotImageVersion(ctx, CompleteCommerceShotImageVersionInput{
 		WorkflowInput: input, Attempt: attempt, Snapshot: snapshot, PromptPlan: plan,
@@ -409,6 +422,32 @@ func (a CommerceActivities) GenerateCommerceReferenceImageItem(ctx context.Conte
 		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, err)
 	}
 	return CommerceReferenceImageItemOutput{ShotID: shotID, Status: commerce.ItemSucceeded, ImageVersion: &completed}
+}
+
+func commerceGatewayImageResponseFromVersion(version CommerceShotImageVersionState) (provider.GatewayImageResponse, bool) {
+	if strings.TrimSpace(version.ArtifactID) == "" ||
+		strings.TrimSpace(version.MediaFileID) == "" ||
+		strings.TrimSpace(version.StorageKey) == "" {
+		return provider.GatewayImageResponse{}, false
+	}
+	return provider.GatewayImageResponse{
+		ProviderRequestID: version.ProviderRequestID,
+		ProviderCallID:    version.ProviderCallID,
+		ModelID:           version.ProviderModelID,
+		Status:            "succeeded",
+		Output: provider.GatewayImageOutput{
+			ArtifactID: version.ArtifactID, MediaFileID: version.MediaFileID,
+			StorageKey: version.StorageKey,
+		},
+	}, true
+}
+
+func commerceImageFidelityReviewFailure(cause error) error {
+	return temporal.NewApplicationError(
+		"参考图已生成并入库，但商品保真审核未完成；重试时将复用已生成图片",
+		CommerceCodeImageFidelityReviewFailed,
+		cause,
+	)
 }
 
 func (a CommerceActivities) FinalizeCommerceReferenceImageBatch(ctx context.Context, input CommerceReferenceImageBatchInput, output CommerceReferenceImageBatchOutput) (CommerceReferenceImageBatchOutput, error) {
@@ -544,5 +583,10 @@ func CommerceReferenceImageSubjectHash(input CommerceReferenceImageBatchInput, s
 		"identity": input.Identity, "operation": input.Operation,
 		"storyboardPlanId": input.StoryboardPlanID, "planEditRevision": input.PlanEditRevision,
 		"shotId": shotID, "force": input.Force,
+		"reuseGeneratedMedia": input.ReuseGeneratedMedia,
 	})
+}
+
+func commerceReferenceImageMayReuseGeneratedMedia(input CommerceReferenceImageBatchInput) bool {
+	return !input.Force || input.ReuseGeneratedMedia
 }

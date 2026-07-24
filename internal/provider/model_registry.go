@@ -495,32 +495,3 @@ func modelSupportsTaskType(model Model, taskType string) bool {
 	}
 	return false
 }
-
-func modelSupportsTextImageInput(model Model) bool {
-	if strings.EqualFold(strings.TrimSpace(model.Modality), "multimodal") {
-		return true
-	}
-	for _, capability := range model.Capabilities {
-		if capability.ApprovalStatus != CapabilityApprovalApproved {
-			continue
-		}
-		taskTypes := stringsFromRawJSON(capability.TaskTypes)
-		if !containsNormalizedString(taskTypes, TaskTypeTextGenerate) &&
-			!containsNormalizedString(taskTypes, TaskTypeTextStream) {
-			continue
-		}
-		var schema struct {
-			XCapabilities struct {
-				SupportsMultimodalInput bool `json:"supportsMultimodalInput"`
-			} `json:"xCapabilities"`
-		}
-		if json.Unmarshal(capability.ProviderOptionsSchema, &schema) == nil &&
-			schema.XCapabilities.SupportsMultimodalInput {
-			return true
-		}
-		if containsNormalizedString(stringsFromJSONField(capability.InputLimits, "inputTypes"), "image") {
-			return true
-		}
-	}
-	return false
-}

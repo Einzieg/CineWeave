@@ -252,18 +252,20 @@ func (r *Repository) InsertPreparingProjectRebuildUnit(
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO commerce_script_unit_generations(
 			id, organization_id, project_id, product_id, script_unit_id,
-			project_production_generation_id, unit_generation_no, status,
+			script_unit_revision, project_production_generation_id,
+			unit_generation_no, status,
 			commerce_workflow_binding_id, commerce_workflow_binding_revision,
 			product_version_id, source_script_version_id, localization_id,
 			reference_pack_id, unit_configuration_snapshot, unit_configuration_hash,
 			source_unit_generation_id, created_by
 		)
 		VALUES (
-			$1, $2, $3, $4, $5, $6, $7, 'preparing', $8, $9,
-			$10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid
+			$1, $2, $3, $4, $5, $6, $7, $8, 'preparing', $9, $10,
+			$11, $12, $13, $14, $15, $16, $17, NULLIF($18, '')::uuid
 		)
 	`, unit.TargetUnitGenerationID, unit.OrganizationID, unit.ProjectID, unit.ProductID,
-		unit.ScriptUnitID, target.ProjectGenerationID, unit.TargetUnitGenerationNo,
+		unit.ScriptUnitID, unit.ScriptUnitRevision+1, target.ProjectGenerationID,
+		unit.TargetUnitGenerationNo,
 		target.CommerceBindingID, target.CommerceBindingRevision, unit.ProductVersionID,
 		unit.SourceScriptVersionID, unit.LocalizationID, unit.ReferencePackID,
 		unit.TargetConfiguration, unit.TargetConfigurationHash, unit.SourceUnitGenerationID, createdBy); err != nil {

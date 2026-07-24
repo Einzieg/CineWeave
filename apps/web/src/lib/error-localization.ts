@@ -12,6 +12,8 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
   CONFLICT: "数据状态已发生变化，请刷新后重试",
   CONTINUITY_DEPENDENCY_FAILED: "前序连续镜头生成失败，当前镜头暂时无法继续",
   COMMERCE_BINDING_MISMATCH: "带货工作流配置已变化，请刷新后重试",
+  COMMERCE_IMAGE_FIDELITY_REJECTED: "商品外观保真审核未通过，请调整提示词或参考图后重新生成",
+  COMMERCE_IMAGE_FIDELITY_REVIEW_FAILED: "参考图已生成并入库，但商品保真审核未完成；重试时不会重复生成图片",
   COMMERCE_LANGUAGE_CONFIRMATION_REQUIRED: "需要先确认视频语言",
   COMMERCE_LANGUAGE_REQUIRED: "请选择视频语言或使用自动判断",
   COMMERCE_LANGUAGE_UNSUPPORTED: "当前模板或模型不支持所选视频语言",

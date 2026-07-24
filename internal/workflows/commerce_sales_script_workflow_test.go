@@ -71,6 +71,125 @@ func TestCommerceScriptOrganizationWorkflowStopsAfterThreeInvalidAgentRounds(t *
 	require.Equal(t, CommerceMaxAgentReviewRounds, agentCalls)
 }
 
+func TestCommerceScriptOrganizationWorkflowFillsMissingVisualIntentWithoutRetry(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	input, snapshot, contract, _ := testCommerceSalesScriptWorkflowFixture(t)
+	contract.Segments[0].VisualIntent = ""
+	agentCalls := 0
+	env.RegisterActivityWithOptions(func(context.Context, CommerceSalesScriptContractClaimInput) (CommerceSalesScriptContractClaimResult, error) {
+		return CommerceSalesScriptContractClaimResult{
+			Snapshot: snapshot,
+			State: CommerceSalesScriptContractState{
+				ContractID: "00000000-0000-4000-8000-000000000020", Status: "running", AttemptGeneration: 1,
+				OwnerWorkflowRunID: input.WorkflowRunID, Owner: true, InputHash: snapshot.InputHash,
+			},
+		}, nil
+	}, activity.RegisterOptions{Name: ClaimCommerceSalesScriptContractActivityName})
+	env.RegisterActivityWithOptions(func(context.Context, CommerceAgentCallInput) (CommerceAgentCallOutput, error) {
+		agentCalls++
+		raw, err := json.Marshal(contract)
+		require.NoError(t, err)
+		return CommerceAgentCallOutput{
+			RawOutput: string(raw),
+			Provenance: CommerceAgentProvenance{
+				Role: "script_organizer", Round: 1,
+				NodeRunID:         "00000000-0000-4000-8000-000000000022",
+				ProviderRequestID: "00000000-0000-4000-8000-000000000023",
+				ProviderCallID:    "00000000-0000-4000-8000-000000000024",
+			},
+		}, nil
+	}, activity.RegisterOptions{Name: OrganizeCommerceScriptActivityName})
+	env.RegisterActivityWithOptions(func(_ context.Context, commit CommerceSalesScriptContractCommitInput) (CommerceSalesScriptContractState, error) {
+		require.Equal(t, fallbackCommerceVisualIntent(snapshot), commit.Contract.Segments[0].VisualIntent)
+		hash, err := commerceContractHash(commit.Contract)
+		require.NoError(t, err)
+		return CommerceSalesScriptContractState{
+			ContractID: "00000000-0000-4000-8000-000000000020", Status: "ready",
+			AttemptGeneration: 1, InputHash: snapshot.InputHash, Contract: commit.Contract, ContractHash: hash,
+		}, nil
+	}, activity.RegisterOptions{Name: CommitCommerceSalesScriptContractActivityName})
+
+	env.ExecuteWorkflow(CommerceScriptOrganizationWorkflow, input)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Equal(t, 1, agentCalls)
+	var output CommerceScriptOrganizationOutput
+	require.NoError(t, env.GetWorkflowResult(&output))
+	require.Equal(t, fallbackCommerceVisualIntent(snapshot), output.Contract.Segments[0].VisualIntent)
+}
+
+func TestCommerceSalesScriptValidationFeedbackIdentifiesInvalidField(t *testing.T) {
+	_, snapshot, contract, _ := testCommerceSalesScriptWorkflowFixture(t)
+	contract.Segments[0].SalesBeat = "script"
+
+	err := ValidateCommerceSalesScript(contract, snapshot)
+	issues := commerceValidationFeedback(CommerceCodeStoryboardContractInvalid, "salesScript", err)
+
+	require.Len(t, issues, 1)
+	require.Equal(t, "segments[0].salesBeat", issues[0].Field)
+	require.Equal(t, snapshot.LocalizedSegments[0].SourceSegmentID, issues[0].SourceSegmentID)
+	require.Contains(t, issues[0].Suggestion, "hook")
+}
+
+func TestCommerceStoryboardAgentSnapshotUsesSalesScriptAsSalesBeatAuthority(t *testing.T) {
+	_, snapshot, contract, _ := testCommerceSalesScriptWorkflowFixture(t)
+	snapshot.LocalizedSegments[0].SalesBeat = "script"
+	snapshot.LocalizationContract = json.RawMessage(`{
+		"contractVersion":"commerce-script-localization/v1",
+		"segments":[{"sourceSegmentId":"00000000-0000-4000-8000-00000000000e","salesBeat":"script"}]
+	}`)
+
+	agentSnapshot, err := buildCommerceStoryboardAgentSnapshot(snapshot, contract)
+
+	require.NoError(t, err)
+	require.Equal(t, "salesScript.segments", agentSnapshot.SalesBeatAuthority)
+	require.Equal(t, "hook", agentSnapshot.Segments[0].SalesBeat)
+	serialized, err := json.Marshal(agentSnapshot)
+	require.NoError(t, err)
+	require.NotContains(t, string(serialized), "localizationContract")
+}
+
+func TestCommerceStoryboardSalesBeatValidationAndReviewReconciliation(t *testing.T) {
+	_, snapshot, contract, _ := testCommerceSalesScriptWorkflowFixture(t)
+	plan := CommerceStoryboardPlanContract{
+		ContractVersion:           CommerceStoryboardPlanContractVersion,
+		CommerceScriptUnitID:      snapshot.Identity.ScriptUnitID,
+		ScriptUnitGenerationID:    snapshot.Identity.UnitGenerationID,
+		CommerceWorkflowBindingID: snapshot.Identity.CommerceWorkflowBindingID,
+		ProductVersionID:          snapshot.ProductVersionID,
+		TargetLocale:              snapshot.TargetLocale,
+		TargetDurationSeconds:     snapshot.TargetDurationSeconds,
+		Shots: []CommerceStoryboardShotContract{{
+			CandidateKey: "hook-product-01", ShotOrdinal: 1,
+			SourceSegmentIDs: []string{snapshot.LocalizedSegments[0].SourceSegmentID},
+			DurationSeconds:  snapshot.TargetDurationSeconds, SalesBeat: "hook",
+		}},
+	}
+	require.NoError(t, validateCommerceStoryboardSalesBeats(contract, plan))
+
+	review := reconcileCommerceStoryboardReview(CommerceStoryboardReviewContract{
+		ContractVersion: CommerceStoryboardReviewContractVersion,
+		Decision:        "revise",
+		Issues: []CommerceReviewIssue{{
+			Code: "SALES_BEAT_MISMATCH", CandidateKey: plan.Shots[0].CandidateKey,
+			Field: "salesBeat", Message: "Localization 使用了准备阶段分类",
+			Suggestion: "改为 Localization 的 script",
+		}},
+		CheckedCandidateKeys:    []string{plan.Shots[0].CandidateKey},
+		SegmentCoverageComplete: true,
+		DurationTotalSeconds:    plan.TargetDurationSeconds,
+	}, plan)
+
+	require.Equal(t, "approve", review.Decision)
+	require.Empty(t, review.Issues)
+	require.NoError(t, ValidateCommerceStoryboardReview(review, plan))
+
+	plan.Shots[0].SalesBeat = "script"
+	require.ErrorContains(t, validateCommerceStoryboardSalesBeats(contract, plan), "authoritative sales script")
+}
+
 func TestBindCommerceStoryboardPlanIdentityFillsMissingFrozenFields(t *testing.T) {
 	_, snapshot, _, _ := testCommerceSalesScriptWorkflowFixture(t)
 	plan := CommerceStoryboardPlanContract{

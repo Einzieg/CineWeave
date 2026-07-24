@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
-  "headVersion": 58,
-  "migrationCount": 58,
-  "bundleSha256": "247c8c6ef71eec69d30febc0637eb916d0e992cf00a04e5af940e81437fb2a69",
+  "headVersion": 59,
+  "migrationCount": 59,
+  "bundleSha256": "1f73181fedf8b984e325c9002edc51f9172d63c34555c23fa561762f3d8521aa",
   "migrations": [
     {
       "version": 1,
@@ -293,6 +293,11 @@
       "version": 58,
       "name": "000058_commerce_timeline_identity_repair.sql",
       "sha256": "5577d7306bcf70c6bf840c4c10fe601eeac8b528a076a153ab0865120a75fdbe"
+    },
+    {
+      "version": 59,
+      "name": "000059_commerce_unit_generation_revision.sql",
+      "sha256": "389c112c92044660e6502abb77f90f2674b30db031c5e29c85cc914afa5ab915"
     }
   ]
 }

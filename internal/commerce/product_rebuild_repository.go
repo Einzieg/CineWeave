@@ -194,16 +194,18 @@ func (r *Repository) InsertProductRebuildTargetGeneration(
 	err = tx.QueryRow(ctx, `
 		INSERT INTO commerce_script_unit_generations(
 			organization_id, project_id, product_id, script_unit_id,
-			project_production_generation_id, unit_generation_no, status,
+			script_unit_revision, project_production_generation_id,
+			unit_generation_no, status,
 			commerce_workflow_binding_id, commerce_workflow_binding_revision,
 			product_version_id, source_script_version_id, localization_id,
 			reference_pack_id, unit_configuration_snapshot, unit_configuration_hash,
 			source_unit_generation_id, created_by
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, 'preparing', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'preparing', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		RETURNING id::text
 	`, production.OrganizationID, production.ProjectID, product.ID, seed.ScriptUnitID,
-		production.Generation.ID, seed.SourceGenerationNo+1, production.CommerceBinding.ID,
+		seed.ScriptUnitRevision+1, production.Generation.ID, seed.SourceGenerationNo+1,
+		production.CommerceBinding.ID,
 		production.CommerceBinding.Revision, targetProductVersionID, seed.SourceScriptVersionID,
 		seed.LocalizationID, targetPackID, raw, hash, seed.SourceGenerationID, createdBy).Scan(&id)
 	return id, err

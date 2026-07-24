@@ -31,16 +31,18 @@ type commerceReferenceImageBatchRequest struct {
 	ShotIDs                  []string `json:"shotIds"`
 	Force                    bool     `json:"force"`
 	Concurrency              int      `json:"concurrency"`
+	ReuseGeneratedMedia      bool     `json:"-"`
 }
 
 type commerceReferenceImageRunSnapshot struct {
-	Operation    string   `json:"operation"`
-	PlanID       string   `json:"planId"`
-	PlanRevision int64    `json:"planRevision"`
-	ShotIDs      []string `json:"shotIds"`
-	Force        bool     `json:"force"`
-	Concurrency  int      `json:"concurrency"`
-	RetryOfRunID string   `json:"retryOfRunId,omitempty"`
+	Operation           string   `json:"operation"`
+	PlanID              string   `json:"planId"`
+	PlanRevision        int64    `json:"planRevision"`
+	ShotIDs             []string `json:"shotIds"`
+	Force               bool     `json:"force"`
+	Concurrency         int      `json:"concurrency"`
+	ReuseGeneratedMedia bool     `json:"reuseGeneratedMedia,omitempty"`
+	RetryOfRunID        string   `json:"retryOfRunId,omitempty"`
 }
 
 type commerceVideoBatchRequest struct {
@@ -407,7 +409,8 @@ func (s *Server) createCommerceReferenceImageRunTx(
 		Identity: identity, Operation: req.Operation, ShotIDs: shotIDs,
 		StoryboardPlanID: req.PlanID, PlanEditRevision: int(req.ExpectedPlanRevision),
 		Force: req.Force, Concurrency: req.Concurrency,
-		CreatedBy: createdBy, AttemptGeneration: 1,
+		ReuseGeneratedMedia: req.ReuseGeneratedMedia,
+		CreatedBy:           createdBy, AttemptGeneration: 1,
 	}
 	subjects := make([]commercepkg.ProductionSubject, 0, len(shotIDs))
 	for _, shotID := range shotIDs {
@@ -422,7 +425,8 @@ func (s *Server) createCommerceReferenceImageRunTx(
 	}
 	inputSnapshot := mustRawJSON(commerceReferenceImageRunSnapshot{
 		Operation: req.Operation, PlanID: req.PlanID, PlanRevision: req.ExpectedPlanRevision,
-		ShotIDs: shotIDs, Force: req.Force, Concurrency: req.Concurrency, RetryOfRunID: retryOfRunID,
+		ShotIDs: shotIDs, Force: req.Force, Concurrency: req.Concurrency,
+		ReuseGeneratedMedia: req.ReuseGeneratedMedia, RetryOfRunID: retryOfRunID,
 	})
 	run, created, err := s.commerceCatalog.CreateProductionRun(ctx, tx, commercepkg.CreateProductionRunParams{
 		Identity: identity, RunType: commercepkg.RunTypeReferenceImages,
@@ -573,6 +577,7 @@ func (s *Server) retryFailedCommerceProductionRun(w http.ResponseWriter, r *http
 			ExpectedPlanRevision:     snapshot.PlanRevision,
 			ExpectedUnitGenerationID: original.Run.Identity.UnitGenerationID,
 			ShotIDs:                  shotIDs, Force: true, Concurrency: resolvedConcurrency,
+			ReuseGeneratedMedia: true,
 		}
 		if referenceReq.Concurrency == 0 {
 			referenceReq.Concurrency = snapshot.Concurrency

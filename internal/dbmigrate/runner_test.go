@@ -22,7 +22,7 @@ func TestLatestMigrationIsEmbedded(t *testing.T) {
 		t.Fatalf("loadMigrationFiles() error = %v", err)
 	}
 	latest := migrations[len(migrations)-1]
-	if latest.Version != 58 || latest.Name != "000058_commerce_timeline_identity_repair.sql" {
+	if latest.Version != 59 || latest.Name != "000059_commerce_unit_generation_revision.sql" {
 		t.Fatalf("latest embedded migration = %d %s", latest.Version, latest.Name)
 	}
 }

@@ -41,6 +41,7 @@ const (
 	CommerceCodeStoryboardReplanRequired     = "COMMERCE_STORYBOARD_REPLAN_REQUIRED"
 	CommerceCodeImagePromptContractInvalid   = "COMMERCE_IMAGE_PROMPT_CONTRACT_INVALID"
 	CommerceCodeImageFidelityRejected        = "COMMERCE_IMAGE_FIDELITY_REJECTED"
+	CommerceCodeImageFidelityReviewFailed    = "COMMERCE_IMAGE_FIDELITY_REVIEW_FAILED"
 	CommerceCodeVideoPromptContractInvalid   = "COMMERCE_VIDEO_PROMPT_CONTRACT_INVALID"
 	CommerceCodeVideoPromptReviewExhausted   = "COMMERCE_VIDEO_PROMPT_REVIEW_EXHAUSTED"
 	CommerceCodeVideoReferenceRequired       = "COMMERCE_VIDEO_REFERENCE_REQUIRED"
@@ -76,6 +77,27 @@ type CommerceReviewIssue struct {
 	CandidateKey    string `json:"candidateKey,omitempty"`
 	Message         string `json:"message"`
 	Suggestion      string `json:"suggestion"`
+}
+
+type commerceContractValidationIssue struct {
+	field           string
+	sourceSegmentID string
+	message         string
+	suggestion      string
+}
+
+func (e *commerceContractValidationIssue) Error() string {
+	return e.message
+}
+
+func (e *commerceContractValidationIssue) reviewIssue(code string) CommerceReviewIssue {
+	return CommerceReviewIssue{
+		Code:            code,
+		Field:           e.field,
+		SourceSegmentID: e.sourceSegmentID,
+		Message:         e.message,
+		Suggestion:      e.suggestion,
+	}
 }
 
 type CommerceLanguageIssue struct {
@@ -484,6 +506,43 @@ type CommerceStoryboardPlanningSnapshot struct {
 	Bindings              CommerceStoryboardAgentBindings    `json:"bindings"`
 }
 
+type commerceStoryboardAgentSegment struct {
+	LocalizationSegmentID   string   `json:"localizationSegmentId"`
+	SourceSegmentID         string   `json:"sourceSegmentId"`
+	Ordinal                 int      `json:"ordinal"`
+	SalesBeat               string   `json:"salesBeat"`
+	LocalizedText           string   `json:"localizedText"`
+	VoiceoverText           string   `json:"voiceoverText"`
+	OnscreenText            string   `json:"onscreenText"`
+	VisualIntent            string   `json:"visualIntent"`
+	ProductClaims           []string `json:"productClaims"`
+	RequiredProductFeatures []string `json:"requiredProductFeatures"`
+	SoundEffects            []string `json:"soundEffects"`
+	MusicCue                string   `json:"musicCue"`
+	Required                bool     `json:"required"`
+}
+
+type commerceStoryboardAgentSnapshot struct {
+	Identity              commerce.UnitGenerationIdentity    `json:"identity"`
+	InputHash             string                             `json:"inputHash"`
+	ProductVersionID      string                             `json:"productVersionId"`
+	SourceScriptVersionID string                             `json:"sourceScriptVersionId"`
+	LocalizationID        string                             `json:"localizationId"`
+	ReferencePackID       string                             `json:"referencePackId"`
+	TargetLocale          string                             `json:"targetLocale"`
+	TargetDurationSeconds int                                `json:"targetDurationSeconds"`
+	AspectRatio           string                             `json:"aspectRatio"`
+	TimelineTimebase      int64                              `json:"timelineTimebase"`
+	FPSNumerator          int                                `json:"fpsNumerator"`
+	FPSDenominator        int                                `json:"fpsDenominator"`
+	TimingPolicyVersion   string                             `json:"timingPolicyVersion"`
+	AllowedShotDurations  []int                              `json:"allowedShotDurations"`
+	SalesBeatAuthority    string                             `json:"salesBeatAuthority"`
+	Segments              []commerceStoryboardAgentSegment   `json:"segments"`
+	ProductReferences     []CommerceProductReferenceSnapshot `json:"productReferences"`
+	ProductFacts          json.RawMessage                    `json:"productFacts"`
+}
+
 type CommerceTimingAnalysis struct {
 	Locale                    string  `json:"locale"`
 	PolicyVersion             string  `json:"policyVersion"`
@@ -759,14 +818,105 @@ func ValidateCommerceSalesScript(item CommerceSalesScriptContract, snapshot Comm
 		if segment.VoiceoverText != localized.VoiceoverText || segment.OnscreenText != localized.OnscreenText {
 			return fmt.Errorf("sales script segment %d changed approved voiceover or onscreen text", index+1)
 		}
-		if !validSalesBeat(segment.SalesBeat) || strings.TrimSpace(segment.VisualIntent) == "" {
-			return fmt.Errorf("sales script segment %d has an invalid sales contract", index+1)
+		if !validSalesBeat(segment.SalesBeat) {
+			return &commerceContractValidationIssue{
+				field:           fmt.Sprintf("segments[%d].salesBeat", index),
+				sourceSegmentID: localized.SourceSegmentID,
+				message:         fmt.Sprintf("销售脚本第 %d 段的 salesBeat %q 无效", index+1, segment.SalesBeat),
+				suggestion:      "salesBeat 必须使用 hook、pain_point、feature、demonstration、proof 或 cta",
+			}
+		}
+		if strings.TrimSpace(segment.VisualIntent) == "" {
+			return &commerceContractValidationIssue{
+				field:           fmt.Sprintf("segments[%d].visualIntent", index),
+				sourceSegmentID: localized.SourceSegmentID,
+				message:         fmt.Sprintf("销售脚本第 %d 段缺少 visualIntent", index+1),
+				suggestion:      "填写非空且不引入新商品属性或卖点的画面意图",
+			}
 		}
 		if audioCueLeaksIntoVoiceover(segment.VoiceoverText, segment.SoundEffects, segment.MusicCue) {
-			return fmt.Errorf("sales script segment %d mixes audio cues into voiceover", index+1)
+			return &commerceContractValidationIssue{
+				field:           fmt.Sprintf("segments[%d].voiceoverText", index),
+				sourceSegmentID: localized.SourceSegmentID,
+				message:         fmt.Sprintf("销售脚本第 %d 段将音效或音乐混入旁白", index+1),
+				suggestion:      "保持已审核旁白逐字不变，并把音效和音乐分别放入 soundEffects 与 musicCue",
+			}
 		}
 	}
 	return nil
+}
+
+func normalizeCommerceSalesScript(
+	item CommerceSalesScriptContract,
+	snapshot CommerceStoryboardPlanningSnapshot,
+) CommerceSalesScriptContract {
+	for index := range item.Segments {
+		if strings.TrimSpace(item.Segments[index].VisualIntent) != "" {
+			continue
+		}
+		item.Segments[index].VisualIntent = fallbackCommerceVisualIntent(snapshot)
+	}
+	return item
+}
+
+func fallbackCommerceVisualIntent(snapshot CommerceStoryboardPlanningSnapshot) string {
+	if len(snapshot.ProductReferences) > 0 {
+		return "使用冻结的主商品参考图清晰展示商品主体，并以本段内容为节奏依据推进画面；保持可见外观、包装、颜色、形状和标识一致，不添加未提供的属性、卖点或屏幕文字"
+	}
+	return "清晰展示冻结商品信息中可确认的商品主体，并以本段内容为节奏依据推进画面；不添加未提供的外观、属性、卖点或屏幕文字"
+}
+
+func buildCommerceStoryboardAgentSnapshot(
+	snapshot CommerceStoryboardPlanningSnapshot,
+	salesScript CommerceSalesScriptContract,
+) (commerceStoryboardAgentSnapshot, error) {
+	if err := ValidateCommerceSalesScript(salesScript, snapshot); err != nil {
+		return commerceStoryboardAgentSnapshot{}, err
+	}
+	salesBySource := make(map[string]CommerceSalesScriptSegmentContract, len(salesScript.Segments))
+	for _, segment := range salesScript.Segments {
+		salesBySource[segment.SourceSegmentID] = segment
+	}
+	segments := make([]commerceStoryboardAgentSegment, 0, len(snapshot.LocalizedSegments))
+	for _, localized := range snapshot.LocalizedSegments {
+		sales, ok := salesBySource[localized.SourceSegmentID]
+		if !ok {
+			return commerceStoryboardAgentSnapshot{}, fmt.Errorf(
+				"sales script is missing source segment %s", localized.SourceSegmentID,
+			)
+		}
+		segments = append(segments, commerceStoryboardAgentSegment{
+			LocalizationSegmentID: localized.ID,
+			SourceSegmentID:       localized.SourceSegmentID,
+			Ordinal:               localized.Ordinal,
+			SalesBeat:             sales.SalesBeat,
+			LocalizedText:         localized.LocalizedText,
+			VoiceoverText:         localized.VoiceoverText,
+			OnscreenText:          localized.OnscreenText,
+			VisualIntent:          sales.VisualIntent,
+			ProductClaims:         append([]string(nil), localized.ProductClaims...),
+			RequiredProductFeatures: append(
+				[]string(nil), localized.RequiredProductFeatures...,
+			),
+			SoundEffects: append([]string(nil), sales.SoundEffects...),
+			MusicCue:     sales.MusicCue,
+			Required:     localized.Required,
+		})
+	}
+	return commerceStoryboardAgentSnapshot{
+		Identity: snapshot.Identity, InputHash: snapshot.InputHash,
+		ProductVersionID: snapshot.ProductVersionID, SourceScriptVersionID: snapshot.SourceScriptVersionID,
+		LocalizationID: snapshot.LocalizationID, ReferencePackID: snapshot.ReferencePackID,
+		TargetLocale: snapshot.TargetLocale, TargetDurationSeconds: snapshot.TargetDurationSeconds,
+		AspectRatio: snapshot.AspectRatio, TimelineTimebase: snapshot.TimelineTimebase,
+		FPSNumerator: snapshot.FPSNumerator, FPSDenominator: snapshot.FPSDenominator,
+		TimingPolicyVersion:  snapshot.TimingPolicyVersion,
+		AllowedShotDurations: append([]int(nil), snapshot.AllowedShotDurations...),
+		SalesBeatAuthority:   "salesScript.segments",
+		Segments:             segments,
+		ProductReferences:    append([]CommerceProductReferenceSnapshot(nil), snapshot.ProductReferences...),
+		ProductFacts:         append(json.RawMessage(nil), snapshot.ProductFacts...),
+	}, nil
 }
 
 func ParseCommerceStoryboardPlan(raw string) (CommerceStoryboardPlanContract, error) {
@@ -839,6 +989,70 @@ func ValidateCommerceStoryboardReview(item CommerceStoryboardReviewContract, pla
 		return errors.New("approved storyboard review does not confirm coverage and duration")
 	}
 	return nil
+}
+
+func validateCommerceStoryboardSalesBeats(
+	salesScript CommerceSalesScriptContract,
+	plan CommerceStoryboardPlanContract,
+) error {
+	salesBySource := make(map[string]string, len(salesScript.Segments))
+	for _, segment := range salesScript.Segments {
+		salesBySource[segment.SourceSegmentID] = segment.SalesBeat
+	}
+	for _, shot := range plan.Shots {
+		var expected string
+		for _, sourceSegmentID := range shot.SourceSegmentIDs {
+			salesBeat, ok := salesBySource[sourceSegmentID]
+			if !ok {
+				return fmt.Errorf("shot %s references source segment %s outside the sales script", shot.CandidateKey, sourceSegmentID)
+			}
+			if expected == "" {
+				expected = salesBeat
+				continue
+			}
+			if salesBeat != expected {
+				return fmt.Errorf(
+					"shot %s spans multiple sales beats; split it so each shot has one authoritative salesBeat",
+					shot.CandidateKey,
+				)
+			}
+		}
+		if shot.SalesBeat != expected {
+			return fmt.Errorf(
+				"shot %s salesBeat %q does not match the authoritative sales script value %q",
+				shot.CandidateKey, shot.SalesBeat, expected,
+			)
+		}
+	}
+	return nil
+}
+
+func reconcileCommerceStoryboardReview(
+	review CommerceStoryboardReviewContract,
+	plan CommerceStoryboardPlanContract,
+) CommerceStoryboardReviewContract {
+	if review.Decision == "approve" {
+		return review
+	}
+	remaining := make([]CommerceReviewIssue, 0, len(review.Issues))
+	for _, issue := range review.Issues {
+		if strings.EqualFold(strings.TrimSpace(issue.Code), "SALES_BEAT_MISMATCH") {
+			continue
+		}
+		remaining = append(remaining, issue)
+	}
+	review.Issues = remaining
+	if len(remaining) != 0 {
+		return review
+	}
+	review.Decision = "approve"
+	review.CheckedCandidateKeys = make([]string, 0, len(plan.Shots))
+	for _, shot := range plan.Shots {
+		review.CheckedCandidateKeys = append(review.CheckedCandidateKeys, shot.CandidateKey)
+	}
+	review.SegmentCoverageComplete = true
+	review.DurationTotalSeconds = plan.TargetDurationSeconds
+	return review
 }
 
 func ParseCommerceImagePromptPlan(raw string) (CommerceImagePromptPlanContract, error) {

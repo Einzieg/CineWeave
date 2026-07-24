@@ -153,31 +153,6 @@ func TestNormalizeCapabilityInputAddsTextRuntimeCapabilities(t *testing.T) {
 	}
 }
 
-func TestModelSupportsTextImageInputUsesApprovedStructuredCapability(t *testing.T) {
-	model := Model{
-		Modality: "text",
-		Capabilities: []Capability{{
-			TaskTypes:             json.RawMessage(`["text.generate","text.stream"]`),
-			InputLimits:           json.RawMessage(`{"inputTypes":["text"]}`),
-			ProviderOptionsSchema: json.RawMessage(`{"xCapabilities":{"supportsMultimodalInput":true}}`),
-			ApprovalStatus:        CapabilityApprovalApproved,
-		}},
-	}
-	if !modelSupportsTextImageInput(model) {
-		t.Fatal("approved supportsMultimodalInput capability was ignored")
-	}
-
-	model.Capabilities[0].ApprovalStatus = CapabilityApprovalInferred
-	if modelSupportsTextImageInput(model) {
-		t.Fatal("unapproved inferred multimodal capability was accepted")
-	}
-
-	model.Modality = "multimodal"
-	if !modelSupportsTextImageInput(model) {
-		t.Fatal("legacy multimodal modality was rejected")
-	}
-}
-
 func TestNormalizeCapabilityInputAddsImageAndVideoLimits(t *testing.T) {
 	imageCapability, err := normalizeCapabilityInput(CapabilityInput{
 		TaskTypes:    json.RawMessage(`["image.generate"]`),

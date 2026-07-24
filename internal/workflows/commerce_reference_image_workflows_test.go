@@ -163,6 +163,49 @@ func TestCommerceProviderImageRequestMatchesGatewayHTTPContract(t *testing.T) {
 	require.Equal(t, "generated-artifact", response.Output.ArtifactID)
 }
 
+func TestCommerceReferenceImageReviewRetryReusesGeneratedMedia(t *testing.T) {
+	version := CommerceShotImageVersionState{
+		ID: "image-version-retry", ArtifactID: "artifact-1", MediaFileID: "media-1",
+		StorageKey: "commerce/generated.png", ProviderRequestID: "request-1",
+		ProviderCallID: "call-1", ProviderModelID: "model-1",
+	}
+	response, reusable := commerceGatewayImageResponseFromVersion(version)
+	require.True(t, reusable)
+	require.Equal(t, "succeeded", response.Status)
+	require.Equal(t, version.ProviderRequestID, response.ProviderRequestID)
+	require.Equal(t, version.ProviderCallID, response.ProviderCallID)
+	require.Equal(t, version.ProviderModelID, response.ModelID)
+	require.Equal(t, version.ArtifactID, response.Output.ArtifactID)
+	require.Equal(t, version.MediaFileID, response.Output.MediaFileID)
+	require.Equal(t, version.StorageKey, response.Output.StorageKey)
+
+	_, reusable = commerceGatewayImageResponseFromVersion(CommerceShotImageVersionState{ArtifactID: "artifact-only"})
+	require.False(t, reusable)
+
+	reviewErr := commerceImageFidelityReviewFailure(errors.New("review provider unavailable"))
+	code, message := workflowErrorFields(reviewErr, codeActivityFailed)
+	require.Equal(t, CommerceCodeImageFidelityReviewFailed, code)
+	require.Contains(t, message, "重试时将复用")
+	require.True(t, commerceReferenceImageErrorRetryable(reviewErr))
+}
+
+func TestCommerceReferenceImageMediaReusePolicy(t *testing.T) {
+	require.True(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{}))
+	require.False(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{Force: true}))
+	require.True(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{
+		Force: true, ReuseGeneratedMedia: true,
+	}))
+
+	base := testCommerceReferenceImageBatchInput(1, []string{"shot-reuse-hash"})
+	base.Force = true
+	forcedHash, err := CommerceReferenceImageSubjectHash(base, "shot-reuse-hash")
+	require.NoError(t, err)
+	base.ReuseGeneratedMedia = true
+	retryHash, err := CommerceReferenceImageSubjectHash(base, "shot-reuse-hash")
+	require.NoError(t, err)
+	require.NotEqual(t, forcedHash, retryHash)
+}
+
 func testCommerceReferenceImageBatchInput(concurrency int, shots []string) CommerceReferenceImageBatchInput {
 	return CommerceReferenceImageBatchInput{
 		Identity: testCommerceReferenceImageIdentity(), WorkflowRunID: "00000000-0000-4000-8000-00000000000d",

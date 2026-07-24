@@ -48,6 +48,8 @@ func TestGatewayTextRuntimeIntegration(t *testing.T) {
 
 	gatewayService := NewService(pool, vault)
 	gatewayService.EnableGatewayRuntime()
+	objectStorage := newMemoryObjectStorage()
+	gatewayService.SetStorage(objectStorage)
 	gatewayToken := "integration-service-token"
 	gateway := httptest.NewServer(testProviderGatewayHTTP(t, gatewayService, gatewayToken))
 	defer gateway.Close()
@@ -78,6 +80,26 @@ func TestGatewayTextRuntimeIntegration(t *testing.T) {
 	assertProviderCallPersisted(t, ctx, pool, streamResult.ProviderCallID, "text.stream", modelID)
 	assertCostRecordPersisted(t, ctx, pool, streamResult.ProviderCallID)
 	assertSnapshotsDoNotLeakAPIKey(t, ctx, pool, streamResult.ProviderCallID, streamResult.TestRunID)
+
+	referenceKey := "integration/text-reference.png"
+	if _, err := objectStorage.PutBytes(ctx, referenceKey, testPNGBytes(t), "image/png"); err != nil {
+		t.Fatalf("store text reference: %v", err)
+	}
+	multimodalResult, err := gatewayService.GenerateText(ctx, GatewayTextRequest{
+		OrganizationID:  orgID,
+		ProviderModelID: modelID,
+		IdempotencyKey:  "text-reference-capability-advisory",
+		Input:           json.RawMessage(`{"prompt":"review this image"}`),
+		References: []GatewayImageReference{{
+			Type: "generated_reference", StorageKey: referenceKey,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("text request with advisory image capability: %v", err)
+	}
+	if multimodalResult.Status != "succeeded" {
+		t.Fatalf("multimodal status = %q, want succeeded", multimodalResult.Status)
+	}
 }
 
 func openAICompatibleMock(t *testing.T) http.Handler {

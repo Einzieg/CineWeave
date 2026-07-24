@@ -75,8 +75,7 @@ func (s *CatalogService) LockActiveStoryboardGeneration(
 	}
 	generation, err := s.repository.LockUnitGenerationContext(ctx, tx, production, UnitGenerationIdentity{
 		ExecutionIdentity: production.ExecutionIdentity(), ProductID: unit.ProductID,
-		ScriptUnitID: unit.ID, ScriptUnitRevision: unit.Revision,
-		UnitGenerationID: *unit.ActiveUnitGenerationID,
+		ScriptUnitID: unit.ID, UnitGenerationID: *unit.ActiveUnitGenerationID,
 	})
 	if err != nil {
 		return UnitGenerationIdentity{}, err

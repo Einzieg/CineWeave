@@ -164,6 +164,7 @@ func organizeCommerceScriptInWorkflow(
 		calls = append(calls, call.Provenance)
 		contract, err := ParseCommerceSalesScript(call.RawOutput)
 		if err == nil {
+			contract = normalizeCommerceSalesScript(contract, snapshot)
 			err = ValidateCommerceSalesScript(contract, snapshot)
 		}
 		if err == nil {

@@ -91,6 +91,31 @@ type VideoDurationCapability struct {
 	StepSeconds float64   `json:"stepSeconds,omitempty"`
 }
 
+type flatVideoCapabilityContract struct {
+	Durations                     []float64 `json:"durations"`
+	MinDurationSeconds            float64   `json:"minDurationSeconds"`
+	MaxDurationSeconds            float64   `json:"maxDurationSeconds"`
+	DurationStepSeconds           float64   `json:"durationStepSeconds"`
+	Resolutions                   []string  `json:"resolutions"`
+	SupportedResolutions          []string  `json:"supportedResolutions"`
+	AspectRatios                  []string  `json:"aspectRatios"`
+	SupportedAspectRatios         []string  `json:"supportedAspectRatios"`
+	ReferenceTypes                []string  `json:"referenceTypes"`
+	RequestModes                  []string  `json:"requestModes"`
+	SupportedPromptLanguages      []string  `json:"supportedPromptLanguages"`
+	SupportedNativeAudioLanguages []string  `json:"supportedNativeAudioLanguages"`
+	GenerateAudio                 *bool     `json:"generateAudio"`
+	SupportsNativeAudio           *bool     `json:"supportsNativeAudio"`
+	SupportsDialogue              *bool     `json:"supportsDialogue"`
+	SupportsVoiceover             *bool     `json:"supportsVoiceover"`
+	SupportsAmbientSound          *bool     `json:"supportsAmbientSound"`
+	SupportsMusic                 *bool     `json:"supportsMusic"`
+	SupportsLipSync               *bool     `json:"supportsLipSync"`
+	SupportsFirstFrame            bool      `json:"supportsFirstFrame"`
+	SupportsLastFrame             bool      `json:"supportsLastFrame"`
+	SupportsVideoReference        bool      `json:"supportsVideoReference"`
+}
+
 type VideoFrameRateCapability struct {
 	Mode   string    `json:"mode"`
 	Values []float64 `json:"values,omitempty"`
@@ -275,7 +300,7 @@ type videoVariantMatchRequest struct {
 
 func videoGenerationVariants(capabilities []Capability, model Model) ([]VideoGenerationVariant, error) {
 	variants := make([]VideoGenerationVariant, 0)
-	for _, capability := range capabilities {
+	for capabilityIndex, capability := range capabilities {
 		var schema map[string]any
 		if len(capability.ProviderOptionsSchema) == 0 || string(capability.ProviderOptionsSchema) == "null" {
 			continue
@@ -297,7 +322,15 @@ func videoGenerationVariants(capabilities []Capability, model Model) ([]VideoGen
 				return nil, fmt.Errorf("%w: videoGenerationVariants is invalid", ErrValidation)
 			}
 			variants = append(variants, parsed...)
+			if len(parsed) > 0 {
+				continue
+			}
 		}
+		normalized, err := videoGenerationVariantsFromFlatCapability(capability, model, xCapabilities, capabilityIndex)
+		if err != nil {
+			return nil, err
+		}
+		variants = append(variants, normalized...)
 	}
 	seen := map[string]bool{}
 	for index := range variants {
@@ -318,6 +351,212 @@ func videoGenerationVariants(capabilities []Capability, model Model) ([]VideoGen
 		}
 	}
 	return variants, nil
+}
+
+type normalizedVideoVariantMode struct {
+	key           string
+	taskType      string
+	referenceMode string
+	inputContract string
+}
+
+func videoGenerationVariantsFromFlatCapability(
+	capability Capability,
+	model Model,
+	xCapabilities map[string]any,
+	capabilityIndex int,
+) ([]VideoGenerationVariant, error) {
+	raw, err := json.Marshal(xCapabilities)
+	if err != nil {
+		return nil, err
+	}
+	var flat flatVideoCapabilityContract
+	if err := json.Unmarshal(raw, &flat); err != nil {
+		return nil, fmt.Errorf("%w: flat video capabilities are invalid", ErrValidation)
+	}
+	duration, ok := flatVideoDuration(flat)
+	if !ok {
+		return nil, nil
+	}
+
+	taskTypes := normalizeVideoStringSlice(stringsFromRawJSON(capability.TaskTypes))
+	referenceTypes := normalizeVideoStringSlice(flat.ReferenceTypes)
+	supportsFirstFrame := flat.SupportsFirstFrame ||
+		containsNormalizedString(referenceTypes, "first_frame")
+	supportsLastFrame := flat.SupportsLastFrame ||
+		containsNormalizedString(referenceTypes, "last_frame")
+	supportsVideoReference := flat.SupportsVideoReference ||
+		containsNormalizedString(referenceTypes, "video") ||
+		containsNormalizedString(referenceTypes, "video_reference")
+
+	modes := make([]normalizedVideoVariantMode, 0, 4)
+	if containsNormalizedString(taskTypes, "video.text_to_video") {
+		modes = append(modes, normalizedVideoVariantMode{
+			key: "text", taskType: "video.text_to_video",
+			inputContract: VideoInputContractTextOnly,
+		})
+	}
+	if containsNormalizedString(taskTypes, "video.image_to_video") || supportsFirstFrame || supportsLastFrame {
+		if supportsFirstFrame {
+			modes = append(modes, normalizedVideoVariantMode{
+				key: "first-frame", taskType: "video.image_to_video",
+				referenceMode: "first_frame", inputContract: VideoInputContractFirstFrame,
+			})
+		}
+		if supportsFirstFrame && supportsLastFrame {
+			modes = append(modes, normalizedVideoVariantMode{
+				key: "first-last-frames", taskType: "video.image_to_video",
+				referenceMode: "first_last_frames", inputContract: VideoInputContractFirstLastFrames,
+			})
+		}
+		if !supportsFirstFrame && containsNormalizedString(referenceTypes, "image") {
+			modes = append(modes, normalizedVideoVariantMode{
+				key: "references", taskType: "video.image_to_video",
+				referenceMode: "semantic_references", inputContract: VideoInputContractSemanticReferences,
+			})
+		}
+	}
+	if supportsVideoReference {
+		modes = append(modes, normalizedVideoVariantMode{
+			key: "video-reference", taskType: "video.reference_to_video",
+			referenceMode: "video_reference", inputContract: VideoInputContractVideoReference,
+		})
+	}
+	if len(modes) == 0 {
+		return nil, nil
+	}
+
+	nativeAudioSupport := VideoSupportUnknown
+	if flat.GenerateAudio != nil {
+		if *flat.GenerateAudio {
+			nativeAudioSupport = VideoSupportTrue
+		} else {
+			nativeAudioSupport = VideoSupportFalse
+		}
+	} else if flat.SupportsNativeAudio != nil {
+		if *flat.SupportsNativeAudio {
+			nativeAudioSupport = VideoSupportTrue
+		} else {
+			nativeAudioSupport = VideoSupportFalse
+		}
+	}
+	resolutions := uniqueStrings(append(append(
+		[]string(nil),
+		flat.Resolutions...,
+	), flat.SupportedResolutions...))
+	if len(resolutions) == 0 {
+		resolutions = uniqueStrings(stringsFromRawJSON(capability.QualityTiers))
+	}
+	aspectRatios := uniqueStrings(append(append(
+		[]string(nil),
+		flat.AspectRatios...,
+	), flat.SupportedAspectRatios...))
+	identity := capability.ID + "\x00" + string(raw)
+	sum := sha256.Sum256([]byte(identity))
+	keySuffix := hex.EncodeToString(sum[:])[:10]
+
+	result := make([]VideoGenerationVariant, 0, len(modes))
+	for _, mode := range modes {
+		referenceModes := []string{}
+		if mode.referenceMode != "" {
+			referenceModes = []string{mode.referenceMode}
+		}
+		result = append(result, VideoGenerationVariant{
+			VariantKey:  fmt.Sprintf("normalized-%s-%d-%s", mode.key, capabilityIndex+1, keySuffix),
+			ModelFamily: inferVideoModelFamily(model.ModelKey),
+			When: VideoGenerationVariantWhen{
+				TaskTypes:      []string{mode.taskType},
+				ReferenceModes: referenceModes,
+			},
+			Duration:     duration,
+			Resolutions:  resolutions,
+			AspectRatios: aspectRatios,
+			FrameRate:    VideoFrameRateCapability{Mode: "unknown"},
+			SupportedPromptLanguages: uniqueStrings(append(
+				append([]string(nil), flat.SupportedPromptLanguages...),
+				capability.SupportedPromptLanguages...,
+			)),
+			NativeAudio: VideoNativeAudioCapability{
+				Support:              nativeAudioSupport,
+				SupportsDialogue:     flat.SupportsDialogue,
+				SupportsVoiceover:    flat.SupportsVoiceover,
+				SupportsAmbientSound: flat.SupportsAmbientSound,
+				SupportsMusic:        flat.SupportsMusic,
+				SupportsLipSync:      flat.SupportsLipSync,
+				SupportedDialogueLanguages: uniqueStrings(append(
+					append([]string(nil), flat.SupportedNativeAudioLanguages...),
+					capability.SupportedNativeAudioLanguages...,
+				)),
+			},
+			Continuation: VideoContinuationCapability{
+				SupportsFirstFrame:     mode.inputContract == VideoInputContractFirstFrame || mode.inputContract == VideoInputContractFirstLastFrames,
+				SupportsLastFrame:      mode.inputContract == VideoInputContractFirstLastFrames,
+				SupportsVideoReference: mode.inputContract == VideoInputContractVideoReference,
+			},
+			InputContract: VideoInputContract{
+				ContractKey: mode.inputContract,
+			},
+			RequestModes:       normalizeVideoStringSlice(flat.RequestModes),
+			Source:             firstNonEmpty(strings.TrimSpace(capability.Source), "normalized"),
+			VerificationStatus: normalizeVideoCapabilityVerification("", capability.Source),
+		})
+	}
+	return result, nil
+}
+
+func flatVideoDuration(flat flatVideoCapabilityContract) (VideoDurationCapability, bool) {
+	values := normalizedPositiveDurations(flat.Durations)
+	if len(values) > 0 {
+		mode := VideoDurationDiscrete
+		if len(values) == 1 {
+			mode = VideoDurationFixed
+		}
+		return VideoDurationCapability{Mode: mode, Values: values}, true
+	}
+	if flat.MinDurationSeconds > 0 && flat.MaxDurationSeconds >= flat.MinDurationSeconds {
+		return VideoDurationCapability{
+			Mode:        VideoDurationContinuousRange,
+			MinSeconds:  flat.MinDurationSeconds,
+			MaxSeconds:  flat.MaxDurationSeconds,
+			StepSeconds: flat.DurationStepSeconds,
+		}, true
+	}
+	return VideoDurationCapability{}, false
+}
+
+// ExecutableWholeSecondVideoDurations returns the integer-second request values
+// supported by the same normalized variants used by video planning.
+func ExecutableWholeSecondVideoDurations(capabilities []Capability, model Model) ([]int, error) {
+	variants, err := videoGenerationVariants(capabilities, model)
+	if err != nil {
+		return nil, err
+	}
+	values := make(map[int]struct{})
+	for _, variant := range variants {
+		if variant.Duration.Mode == VideoDurationSource {
+			continue
+		}
+		options, _, err := videoRequestDurationOptions(variant.Duration)
+		if err != nil {
+			return nil, err
+		}
+		for _, option := range options {
+			rounded := math.Round(option)
+			if option <= 0 || math.Abs(option-rounded) > 1e-9 {
+				continue
+			}
+			values[int(rounded)] = struct{}{}
+		}
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("%w: video capabilities have no executable whole-second duration", ErrValidation)
+	}
+	result := make([]int, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Ints(result)
+	return result, nil
 }
 
 func normalizeVideoInputContract(variant *VideoGenerationVariant) error {

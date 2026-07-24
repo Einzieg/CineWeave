@@ -1,11 +1,21 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCommerceReferenceImageBatchRequestKeepsMediaReuseInternal(t *testing.T) {
+	req := commerceReferenceImageBatchRequest{
+		Operation: "generate_images", ReuseGeneratedMedia: true,
+	}
+	raw, err := json.Marshal(req)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "reuseGeneratedMedia")
+}
 
 func TestNormalizeCommerceReferenceImageBatchRequest(t *testing.T) {
 	req := commerceReferenceImageBatchRequest{

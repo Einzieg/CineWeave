@@ -30,6 +30,49 @@ test("带货项目表单隐藏叙事配置并保留产品与脚本入口", async
   await expect(page.getByText("生成方式", { exact: true })).toHaveCount(0);
 });
 
+test("带货创建配置 403 显示真实权限错误且不误报模板", async ({ page }) => {
+  await installScenarioApiRoute(page, (_request, url) => {
+    if (url.pathname === `/api/workspaces/${workspaceId}/commerce/project-options`) {
+      return {
+        status: 403,
+        error: { code: "ACCESS_DENIED", message: "access denied", retryable: false },
+      };
+    }
+    return undefined;
+  });
+  await page.goto("/projects/new");
+  await page.getByRole("button", { name: /带货视频/ }).click();
+
+  await expect(page.getByText("没有执行此操作的权限", { exact: true })).toBeVisible();
+  await expect(page.getByText("带货视频工作流模板尚未发布。", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "创建并准备分镜方案" })).toBeDisabled();
+});
+
+test("只读成员看不到新建入口且不能直接打开新建页", async ({ page }) => {
+  let projectOptionsRequests = 0;
+  await installScenarioApiRoute(page, (_request, url) => {
+    if (url.pathname === "/api/auth/me") {
+      return {
+        data: {
+          ...(mockApiData(url.pathname, url.searchParams) as Record<string, unknown>),
+          permissions: ["organization.read", "workspace.read", "project.read"],
+        },
+      };
+    }
+    if (url.pathname === `/api/workspaces/${workspaceId}/commerce/project-options`) {
+      projectOptionsRequests += 1;
+    }
+    return undefined;
+  });
+
+  await page.goto("/projects");
+  await expect(page.getByRole("link", { name: "新建项目" })).toHaveCount(0);
+  await page.goto("/projects/new");
+  await expect(page.getByText("当前账号没有创建项目的权限，请联系组织管理员授权。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建项目" })).toHaveCount(0);
+  expect(projectOptionsRequests).toBe(0);
+});
+
 test("Commerce 工作台只显示专用导航且成片链接不落入叙事页", async ({ page }) => {
   await page.goto(`/projects/${projectId}/commerce/materials`);
 
@@ -221,7 +264,11 @@ async function mockApiRoute(route: Route) {
   });
 }
 
-type ScenarioResponse = { data: unknown; status?: number };
+type ScenarioResponse = {
+  data?: unknown;
+  error?: { code: string; message: string; retryable?: boolean };
+  status?: number;
+};
 type ScenarioResolver = (request: Request, url: URL) => ScenarioResponse | undefined | Promise<ScenarioResponse | undefined>;
 
 async function installScenarioApiRoute(page: Page, resolve: ScenarioResolver) {
@@ -235,7 +282,17 @@ async function installScenarioApiRoute(page: Page, resolve: ScenarioResolver) {
       return;
     }
     const scenario = await resolve(request, url);
-    const data = scenario?.data ?? mockApiData(url.pathname, url.searchParams);
+    if (scenario?.error) {
+      await route.fulfill({
+        status: scenario.status ?? 500,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({ error: scenario.error }),
+      });
+      return;
+    }
+    const data = scenario && Object.hasOwn(scenario, "data")
+      ? scenario.data
+      : mockApiData(url.pathname, url.searchParams);
     await route.fulfill({
       status: scenario?.status ?? 200,
       contentType: "application/json; charset=utf-8",

@@ -38,8 +38,7 @@ func (s *CatalogService) PlanScriptUnitRebuild(
 	}
 	generation, err := s.repository.LockUnitGenerationContext(ctx, tx, production, UnitGenerationIdentity{
 		ExecutionIdentity: production.ExecutionIdentity(), ProductID: unit.ProductID,
-		ScriptUnitID: unit.ID, ScriptUnitRevision: unit.Revision,
-		UnitGenerationID: *unit.ActiveUnitGenerationID,
+		ScriptUnitID: unit.ID, UnitGenerationID: *unit.ActiveUnitGenerationID,
 	})
 	if err != nil {
 		return ScriptUnitRebuildImpact{}, err
@@ -192,8 +191,7 @@ func (s *CatalogService) scriptUnitRebuildPreparationIdentity(
 	}
 	generation, err := s.repository.LockUnitGenerationContext(ctx, tx, production, UnitGenerationIdentity{
 		ExecutionIdentity: production.ExecutionIdentity(), ProductID: unit.ProductID,
-		ScriptUnitID: unit.ID, ScriptUnitRevision: unit.Revision,
-		UnitGenerationID:      rebuild.SourceUnitGenerationID,
+		ScriptUnitID: unit.ID, UnitGenerationID: rebuild.SourceUnitGenerationID,
 		UnitConfigurationHash: rebuild.SourceUnitConfigurationHash,
 	})
 	if err != nil {

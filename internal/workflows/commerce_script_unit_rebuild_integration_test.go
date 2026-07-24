@@ -355,13 +355,14 @@ func seedCommerceScriptUnitRebuildAtomicFixture(
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO commerce_script_unit_generations(
 			organization_id, project_id, product_id, script_unit_id,
-			project_production_generation_id, unit_generation_no, status,
+			script_unit_revision, project_production_generation_id,
+			unit_generation_no, status,
 			commerce_workflow_binding_id, commerce_workflow_binding_revision,
 			product_version_id, source_script_version_id, localization_id,
 			reference_pack_id, unit_configuration_snapshot, unit_configuration_hash,
 			created_by, activated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, 1, 'active', $6, $7, $8, $9, $10, $11,
+		VALUES ($1, $2, $3, $4, 1, $5, 1, 'active', $6, $7, $8, $9, $10, $11,
 		        '{}', $12, $13, now())
 		RETURNING id::text
 	`, organizationID, draft.ProjectID, productID, scriptUnitID,
@@ -373,13 +374,14 @@ func seedCommerceScriptUnitRebuildAtomicFixture(
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO commerce_script_unit_generations(
 			organization_id, project_id, product_id, script_unit_id,
-			project_production_generation_id, unit_generation_no, status,
+			script_unit_revision, project_production_generation_id,
+			unit_generation_no, status,
 			commerce_workflow_binding_id, commerce_workflow_binding_revision,
 			product_version_id, source_script_version_id, localization_id,
 			reference_pack_id, unit_configuration_snapshot, unit_configuration_hash,
 			source_unit_generation_id, created_by
 		)
-		VALUES ($1, $2, $3, $4, $5, 2, 'preparing', $6, $7, $8, $9, $10, $11,
+		VALUES ($1, $2, $3, $4, 2, $5, 2, 'preparing', $6, $7, $8, $9, $10, $11,
 		        '{}', $12, $13, $14)
 		RETURNING id::text
 	`, organizationID, draft.ProjectID, productID, scriptUnitID,

@@ -457,11 +457,8 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 	upstreamInput := req.Input
 	requestSnapshot := gatewayTextRequestSnapshot(req.Input, req.References)
 	if len(req.References) > 0 {
-		if !modelSupportsTextImageInput(selection.Model) {
-			return GatewayTextResponse{}, GatewayAttempt{}, &StandardErrorError{Standard: StandardError{
-				Code: CodeModelCapabilityUnavailable, Message: "selected text model does not support image input", Retryable: false,
-			}}
-		}
+		// Capability records are advisory here because OpenAI-compatible gateways
+		// often expose multimodal models without complete capability metadata.
 		materials, materializeErr := s.materializeOpenAICompatibleImageReferences(ctx, selection.Account, req.References, timeout)
 		if materializeErr != nil {
 			return GatewayTextResponse{}, GatewayAttempt{}, materializeErr
