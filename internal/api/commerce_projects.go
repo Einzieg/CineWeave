@@ -11,6 +11,8 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/provider"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -18,6 +20,46 @@ const (
 	commerceProjectCreateScope = "commerce_project_create"
 	commerceSetupLifetime      = 30 * 24 * time.Hour
 )
+
+func (s *Server) attachCommerceSetupContext(ctx context.Context, db videoProductionQueryer, item *Project) error {
+	if !item.ProjectKind.IsCommerce() {
+		return nil
+	}
+	var setupSessionID, setupState, workflowTemplateVersionID, setupConfigurationHash string
+	err := db.QueryRow(ctx, `
+		SELECT session.id::text,
+		       session.state,
+		       session.workflow_template_version_id::text,
+		       template.content_hash
+		FROM commerce_setup_sessions session
+		JOIN commerce_workflow_template_versions template
+		  ON template.id = session.workflow_template_version_id
+		WHERE session.organization_id = $1
+		  AND session.project_id = $2
+		ORDER BY session.created_at DESC, session.id DESC
+		LIMIT 1
+	`, item.OrganizationID, item.ID).Scan(
+		&setupSessionID,
+		&setupState,
+		&workflowTemplateVersionID,
+		&setupConfigurationHash,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		item.SetupSessionID = nil
+		item.SetupState = nil
+		item.WorkflowTemplateVersionID = nil
+		item.SetupConfigurationHash = nil
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	item.SetupSessionID = &setupSessionID
+	item.SetupState = &setupState
+	item.WorkflowTemplateVersionID = &workflowTemplateVersionID
+	item.SetupConfigurationHash = &setupConfigurationHash
+	return nil
+}
 
 type createProjectRequest struct {
 	WorkspaceID                   string          `json:"workspaceId"`
@@ -85,8 +127,8 @@ func (s *Server) createCommerceProjectDraft(
 	if req.DefaultTargetDurationSeconds != nil {
 		duration = *req.DefaultTargetDurationSeconds
 	}
-	if duration != 15 && duration != 30 && duration != 60 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "默认目标时长只支持 15、30 或 60 秒", nil, false)
+	if duration <= 0 {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "默认目标时长必须为正整数秒", nil, false)
 		return
 	}
 	languageMode := normalizedProjectString(req.DefaultLanguageMode, "auto")
@@ -121,8 +163,12 @@ func (s *Server) createCommerceProjectDraft(
 		httpx.WriteError(w, r, http.StatusConflict, "COMMERCE_WORKFLOW_TEMPLATE_UNAVAILABLE", "当前没有可用的带货视频工作流模板", nil, false)
 		return
 	}
-	if err := projectOptions.ValidateDraftSelection(duration, options.VideoRatio, options.ImageQuality, languageMode, targetLanguage); err != nil {
-		s.writeError(w, r, err)
+	videoRequirement, found := commerceVideoModelRequirement(projectOptions)
+	if !found {
+		httpx.WriteError(
+			w, r, http.StatusConflict, "COMMERCE_MODEL_CAPABILITY_UNAVAILABLE",
+			"请先配置可用的视频业务模型", nil, false,
+		)
 		return
 	}
 	options.Settings, err = mergeCommerceScriptUnitDefaults(options.Settings, commercepkg.ScriptUnitDefaults{
@@ -171,6 +217,25 @@ func (s *Server) createCommerceProjectDraft(
 		httpx.WriteJSON(w, r, status, replay, map[string]any{"idempotentReplay": true})
 		return
 	}
+	if s.providers == nil {
+		httpx.WriteError(
+			w, r, http.StatusConflict, "COMMERCE_MODEL_CAPABILITY_UNAVAILABLE",
+			"请先配置可用的视频业务模型", nil, false,
+		)
+		return
+	}
+	routingSnapshot, capabilitySnapshot, err := s.providers.BuildCommerceDirectVideoSnapshots(
+		r.Context(), organizationID, videoRequirement.ProfileKey,
+		videoRequirement.TaskType, videoRequirement.Modality,
+	)
+	if err != nil {
+		httpx.WriteError(
+			w, r, http.StatusConflict, "COMMERCE_MODEL_CAPABILITY_UNAVAILABLE",
+			"当前视频业务模型没有可执行的整数时长与分辨率",
+			map[string]any{"providerCode": provider.CodeUnsupportedCapability}, false,
+		)
+		return
+	}
 
 	created, err := s.commerce.CreateDraftProject(r.Context(), tx, commercepkg.DraftProjectParams{
 		OrganizationID:      organizationID,
@@ -203,6 +268,47 @@ func (s *Server) createCommerceProjectDraft(
 		return
 	}
 
+	productionConfiguration, err := videoproduction.LoadProductionConfiguration(r.Context(), tx, created.ProjectID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	configurationSnapshot, err := json.Marshal(map[string]any{
+		"contractVersion":           "commerce-direct-project/v1",
+		"workflowTemplateVersionId": created.WorkflowTemplateVersionID,
+		"productionConfiguration":   productionConfiguration,
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	bindings, err := s.commerce.PrepareInitialBindings(r.Context(), tx, commercepkg.InitialBindingParams{
+		OrganizationID:          organizationID,
+		ProjectID:               created.ProjectID,
+		WorkflowTemplateVersion: created.WorkflowTemplateVersionID,
+		CreatedBy:               principal.UserID,
+		CompatibilityPolicy:     videoproduction.CompatibilityStrict,
+		VideoOverrides:          json.RawMessage(`{}`),
+		ProductionConfiguration: productionConfiguration,
+		ConfigurationSnapshot:   configurationSnapshot,
+		ModelRoutingSnapshot:    routingSnapshot,
+		CapabilitySnapshot:      capabilitySnapshot,
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := s.commerce.ActivateInitialBindings(r.Context(), tx, created.ProjectID, bindings); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := s.commerce.CompleteDirectProjectSetup(
+		r.Context(), tx, created.SetupSessionID, created.ProjectID, bindings,
+	); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
 	item, err := scanProject(tx.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1`), created.ProjectID))
 	if err != nil {
 		s.writeError(w, r, err)
@@ -210,7 +316,8 @@ func (s *Server) createCommerceProjectDraft(
 	}
 
 	item.SetupSessionID = &created.SetupSessionID
-	item.SetupState = &created.SetupState
+	directSetupState := "completed"
+	item.SetupState = &directSetupState
 	item.WorkflowTemplateVersionID = &created.WorkflowTemplateVersionID
 	item.SetupConfigurationHash = &created.SetupConfigurationHash
 	if err := completeIdempotencyTxWithStatus(r.Context(), tx, claim.state, http.StatusCreated, item); err != nil {
@@ -222,6 +329,15 @@ func (s *Server) createCommerceProjectDraft(
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+}
+
+func commerceVideoModelRequirement(options commercepkg.ProjectOptions) (commercepkg.ProjectModelRequirement, bool) {
+	for _, requirement := range options.ModelRequirements {
+		if requirement.Role == "videoGenerator" {
+			return requirement, true
+		}
+	}
+	return commercepkg.ProjectModelRequirement{}, false
 }
 
 func invalidCommerceProjectHiddenFields(req createProjectRequest) bool {

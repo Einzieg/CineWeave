@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -43,8 +44,10 @@ type ProjectVideoProductionDrainOutput struct {
 }
 
 type SwitchProjectVideoProductionGenerationOutput struct {
-	Binding    videoproduction.Binding    `json:"binding"`
-	Generation videoproduction.Generation `json:"generation"`
+	Binding                 videoproduction.Binding    `json:"binding"`
+	Generation              videoproduction.Generation `json:"generation"`
+	CommerceRebuildComplete bool                       `json:"commerceRebuildComplete,omitempty"`
+	SwitchedUnitCount       int                        `json:"switchedUnitCount,omitempty"`
 }
 
 type RebuildEpisodeWorkItem struct {
@@ -114,6 +117,14 @@ func ProjectVideoProductionRebuildWorkflow(ctx workflow.Context, input ProjectVi
 		var switched SwitchProjectVideoProductionGenerationOutput
 		if err := workflow.ExecuteActivity(activityCtx, "SwitchProjectVideoProductionGeneration", input).Get(activityCtx, &switched); err != nil {
 			return output, err
+		}
+		if switched.CommerceRebuildComplete {
+			return ProjectVideoProductionRebuildOutput{
+				RebuildID:      input.RebuildID,
+				Status:         "succeeded",
+				EpisodeCount:   switched.SwitchedUnitCount,
+				SucceededItems: switched.SwitchedUnitCount,
+			}, nil
 		}
 	}
 	var items []RebuildEpisodeWorkItem
@@ -336,14 +347,16 @@ func (a Activities) SwitchProjectVideoProductionGeneration(ctx context.Context, 
 		return SwitchProjectVideoProductionGenerationOutput{}, err
 	}
 	defer tx.Rollback(ctx)
-	var targetProfileID string
+	var targetProfileID, projectKind string
 	var sourceGenerationID, sourceBindingID string
+	var sourceCommerceBindingID sql.NullString
 	var targetConfigurationJSON json.RawMessage
 	var targetConfigurationHash string
 	if err := tx.QueryRow(ctx, `
 		SELECT rebuild.target_profile_version_id::text, rebuild.source_generation_id::text,
 		       rebuild.source_binding_id::text, rebuild.target_configuration,
-		       rebuild.target_configuration_hash
+		       rebuild.target_configuration_hash, project.project_kind,
+		       rebuild.source_commerce_workflow_binding_id::text
 		FROM project_video_production_rebuilds rebuild
 		JOIN projects project ON project.id = rebuild.project_id
 		WHERE rebuild.id = $1 AND rebuild.project_id = $2 AND rebuild.status = 'running'
@@ -353,7 +366,8 @@ func (a Activities) SwitchProjectVideoProductionGeneration(ctx context.Context, 
 		FOR UPDATE OF rebuild, project
 	`, input.RebuildID, input.ProjectID, input.WorkflowRunID).Scan(
 		&targetProfileID, &sourceGenerationID, &sourceBindingID,
-		&targetConfigurationJSON, &targetConfigurationHash,
+		&targetConfigurationJSON, &targetConfigurationHash, &projectKind,
+		&sourceCommerceBindingID,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SwitchProjectVideoProductionGenerationOutput{}, ErrWorkflowWriteFenced
@@ -382,6 +396,30 @@ func (a Activities) SwitchProjectVideoProductionGeneration(ctx context.Context, 
 	}
 	if source.Generation.ID != sourceGenerationID || source.Binding.ID != sourceBindingID {
 		return SwitchProjectVideoProductionGenerationOutput{}, videoproduction.NewError(videoproduction.CodeGenerationMismatch, "重建来源视频生产代已变化", false)
+	}
+	if projectKind == string(commerce.ProjectKindCommerceVideo) {
+		if !sourceCommerceBindingID.Valid {
+			return SwitchProjectVideoProductionGenerationOutput{}, commerce.Error{
+				Code:    commerce.CodeBindingMismatch,
+				Message: "带货视频换代缺少来源工作流绑定",
+			}
+		}
+		output, err := a.switchCommerceProjectVideoProductionGeneration(
+			ctx,
+			tx,
+			input,
+			targetConfiguration,
+			targetProfileID,
+			source,
+			sourceCommerceBindingID.String,
+		)
+		if err != nil {
+			return SwitchProjectVideoProductionGenerationOutput{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return SwitchProjectVideoProductionGenerationOutput{}, err
+		}
+		return output, nil
 	}
 	var targetKey string
 	var targetVersion int
@@ -477,6 +515,347 @@ func (a Activities) SwitchProjectVideoProductionGeneration(ctx context.Context, 
 		return SwitchProjectVideoProductionGenerationOutput{}, err
 	}
 	return SwitchProjectVideoProductionGenerationOutput{Binding: binding, Generation: generation}, nil
+}
+
+func (a Activities) switchCommerceProjectVideoProductionGeneration(
+	ctx context.Context,
+	tx pgx.Tx,
+	input ProjectVideoProductionRebuildInput,
+	targetConfiguration videoproduction.ProductionConfigurationSnapshot,
+	targetProfileID string,
+	source videoproduction.Context,
+	sourceCommerceBindingID string,
+) (SwitchProjectVideoProductionGenerationOutput, error) {
+	repository := commerce.NewRepository()
+	template, err := resolveCommerceRebuildTemplate(
+		ctx,
+		tx,
+		input.OrganizationID,
+		input.ProjectID,
+		sourceCommerceBindingID,
+		targetProfileID,
+	)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	promptBindings, modelContracts, err := commerceSetupTemplateContracts(template)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	setupSnapshot := commerceSetupSnapshot{
+		Session: commerce.SetupSession{
+			OrganizationID: input.OrganizationID,
+			ProjectID:      input.ProjectID,
+		},
+		Template: template,
+		Prompts:  promptBindings,
+		Models:   modelContracts,
+	}
+	setupRuntime := NewCommerceSetupRuntime(a.db, a.gateway)
+	routing, capabilities, _, err := setupRuntime.resolveSetupRouting(
+		ctx,
+		setupSnapshot,
+		targetConfiguration,
+		"",
+		"",
+	)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	configurationSnapshot, err := setupCommerceConfigurationSnapshot(setupSnapshot, targetConfiguration)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	routingSnapshot, err := json.Marshal(routing)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	capabilitySnapshot, err := json.Marshal(capabilities)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	service := commerce.NewService(repository)
+	prepared, err := service.PrepareProjectRebuild(
+		ctx,
+		tx,
+		input.OrganizationID,
+		input.ProjectID,
+		input.RebuildID,
+		commerce.InitialBindingParams{
+			WorkflowTemplateVersion: template.ID,
+			CreatedBy:               input.RequestedBy,
+			CompatibilityPolicy:     videoproduction.CompatibilityStrict,
+			VideoOverrides:          json.RawMessage(`{}`),
+			ProductionConfiguration: targetConfiguration,
+			ConfigurationSnapshot:   configurationSnapshot,
+			ModelRoutingSnapshot:    routingSnapshot,
+			CapabilitySnapshot:      capabilitySnapshot,
+		},
+	)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	if prepared.Target.VideoProfileVersionID != targetProfileID {
+		return SwitchProjectVideoProductionGenerationOutput{}, commerce.Error{
+			Code:    commerce.CodeBindingMismatch,
+			Message: "带货视频业务模板与目标视频生产方案不一致",
+		}
+	}
+	activated, err := service.ActivatePreparedProjectRebuild(
+		ctx,
+		tx,
+		input.OrganizationID,
+		input.ProjectID,
+		input.RebuildID,
+	)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	active, err := videoproduction.LoadActiveContext(ctx, tx, input.ProjectID)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	if active.Generation.ID != activated.ProjectGeneration.ID ||
+		active.Binding.ID != activated.VideoBinding.ID ||
+		active.Binding.Revision != activated.VideoBinding.Revision {
+		return SwitchProjectVideoProductionGenerationOutput{}, commerce.Error{
+			Code:    commerce.CodeBindingMismatch,
+			Message: "带货视频换代激活结果与项目活动生产代不一致",
+		}
+	}
+	command, err := tx.Exec(ctx, `
+		UPDATE workflow_runs
+		SET production_generation_id = $2,
+		    video_production_binding_id = $3,
+		    video_production_binding_revision = $4,
+		    revision = revision + 1,
+		    updated_at = now()
+		WHERE id = $1 AND project_id = $5
+		  AND production_generation_id = $6
+		  AND video_production_binding_id = $7
+	`, input.WorkflowRunID, active.Generation.ID, active.Binding.ID, active.Binding.Revision,
+		input.ProjectID, source.Generation.ID, source.Binding.ID)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return SwitchProjectVideoProductionGenerationOutput{}, videoproduction.NewError(
+			videoproduction.CodeGenerationMismatch,
+			"带货视频换代 Workflow 的生产代切换失败",
+			false,
+		)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflow_start_outbox
+		SET production_generation_id = $2, updated_at = now()
+		WHERE workflow_run_id = $1 AND production_generation_id = $3
+	`, input.WorkflowRunID, active.Generation.ID, source.Generation.ID); err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	workflowOutput := ProjectVideoProductionRebuildOutput{
+		RebuildID:      input.RebuildID,
+		Status:         "succeeded",
+		EpisodeCount:   activated.SwitchedUnitCount,
+		SucceededItems: activated.SwitchedUnitCount,
+	}
+	command, err = tx.Exec(ctx, `
+		UPDATE project_video_production_rebuild_attempts
+		SET status = 'succeeded', completed_at = now(),
+		    failure_code = NULL, failure_message = NULL
+		WHERE rebuild_id = $1 AND workflow_run_id = $2 AND status = 'running'
+	`, input.RebuildID, input.WorkflowRunID)
+	if err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return SwitchProjectVideoProductionGenerationOutput{}, ErrWorkflowWriteFenced
+	}
+	if _, transitioned, err := transitionWorkflowRunTx(
+		ctx,
+		tx,
+		input.WorkflowRunID,
+		"succeeded",
+		"",
+		"",
+		mustJSON(workflowOutput),
+	); err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	} else if !transitioned {
+		return SwitchProjectVideoProductionGenerationOutput{}, ErrWorkflowWriteFenced
+	}
+	for _, event := range []struct {
+		name          string
+		aggregateType string
+		aggregateID   string
+		bindingID     string
+		revision      int64
+		generationID  string
+	}{
+		{name: "video.production.binding.superseded", aggregateType: "video_production_binding", aggregateID: source.Binding.ID, bindingID: source.Binding.ID, revision: source.Binding.Revision, generationID: source.Generation.ID},
+		{name: "video.production.generation.superseded", aggregateType: "production_generation", aggregateID: source.Generation.ID, bindingID: source.Binding.ID, revision: source.Binding.Revision, generationID: source.Generation.ID},
+		{name: "video.production.binding.created", aggregateType: "video_production_binding", aggregateID: active.Binding.ID, bindingID: active.Binding.ID, revision: active.Binding.Revision, generationID: active.Generation.ID},
+		{name: "video.production.generation.activated", aggregateType: "production_generation", aggregateID: active.Generation.ID, bindingID: active.Binding.ID, revision: active.Binding.Revision, generationID: active.Generation.ID},
+	} {
+		if err := insertEvent(
+			ctx,
+			tx,
+			input.OrganizationID,
+			input.ProjectID,
+			event.name,
+			event.aggregateType,
+			event.aggregateID,
+			mustJSON(videoProductionLifecyclePayload(input, event.bindingID, event.revision, event.generationID, map[string]any{
+				"sourceGenerationId": source.Generation.ID,
+				"targetGenerationId": active.Generation.ID,
+			})),
+		); err != nil {
+			return SwitchProjectVideoProductionGenerationOutput{}, err
+		}
+	}
+	if err := insertEvent(
+		ctx,
+		tx,
+		input.OrganizationID,
+		input.ProjectID,
+		"commerce.workflow_binding.created",
+		"commerce_workflow_binding",
+		activated.CommerceBinding.ID,
+		mustJSON(map[string]any{
+			"projectProductionGenerationId":   activated.ProjectGeneration.ID,
+			"videoProductionBindingId":        activated.VideoBinding.ID,
+			"videoProductionBindingRevision":  activated.VideoBinding.Revision,
+			"commerceWorkflowBindingId":       activated.CommerceBinding.ID,
+			"commerceWorkflowBindingRevision": activated.CommerceBinding.Revision,
+		}),
+	); err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	if err := insertEvent(
+		ctx,
+		tx,
+		input.OrganizationID,
+		input.ProjectID,
+		"commerce.project_generation.activated",
+		"production_generation",
+		activated.ProjectGeneration.ID,
+		mustJSON(map[string]any{
+			"projectProductionGenerationId":   activated.ProjectGeneration.ID,
+			"projectProductionGenerationNo":   activated.ProjectGeneration.GenerationNo,
+			"videoProductionBindingId":        activated.VideoBinding.ID,
+			"videoProductionBindingRevision":  activated.VideoBinding.Revision,
+			"commerceWorkflowBindingId":       activated.CommerceBinding.ID,
+			"commerceWorkflowBindingRevision": activated.CommerceBinding.Revision,
+		}),
+	); err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	if err := insertEvent(
+		ctx,
+		tx,
+		input.OrganizationID,
+		input.ProjectID,
+		"video.production.rebuild.completed",
+		"video_production_rebuild",
+		input.RebuildID,
+		mustJSON(videoProductionLifecyclePayload(
+			input,
+			active.Binding.ID,
+			active.Binding.Revision,
+			active.Generation.ID,
+			map[string]any{
+				"status":         "succeeded",
+				"episodeCount":   activated.SwitchedUnitCount,
+				"succeededItems": activated.SwitchedUnitCount,
+				"failedItems":    0,
+			},
+		)),
+	); err != nil {
+		return SwitchProjectVideoProductionGenerationOutput{}, err
+	}
+	return SwitchProjectVideoProductionGenerationOutput{
+		Binding:                 active.Binding,
+		Generation:              active.Generation,
+		CommerceRebuildComplete: true,
+		SwitchedUnitCount:       activated.SwitchedUnitCount,
+	}, nil
+}
+
+func resolveCommerceRebuildTemplate(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID string,
+	projectID string,
+	sourceCommerceBindingID string,
+	targetProfileVersionID string,
+) (commerce.WorkflowTemplateVersion, error) {
+	rows, err := tx.Query(ctx, `
+		WITH source_template AS (
+			SELECT version.id, template.template_key
+			FROM project_commerce_workflow_bindings binding
+			JOIN commerce_workflow_template_versions version
+			  ON version.id = binding.template_version_id
+			JOIN commerce_workflow_templates template
+			  ON template.id = version.template_id
+			WHERE binding.id = $1
+			  AND binding.project_id = $2
+			  AND binding.organization_id = $3
+		)
+		SELECT version.id::text, template.id::text, template.template_key, version.version,
+		       version.content_hash, version.configuration_snapshot, version.prompt_bindings,
+		       version.agent_model_contracts, version.language_contract,
+		       version.image_capability_contract, version.video_capability_contract,
+		       profile.profile_key, profile_version.version
+		FROM source_template source
+		JOIN commerce_workflow_templates template
+		  ON template.template_key = source.template_key
+		JOIN commerce_workflow_template_versions version
+		  ON version.template_id = template.id
+		JOIN video_production_profile_versions profile_version
+		  ON profile_version.id = version.video_production_profile_version_id
+		JOIN video_production_profiles profile
+		  ON profile.id = profile_version.profile_id
+		WHERE template.status = 'active'
+		  AND version.status IN ('published', 'retired')
+		  AND profile_version.id = $4
+		  AND profile_version.lifecycle_state = 'published'
+		  AND profile_version.implementation_state = 'available'
+		  AND (template.organization_id IS NULL OR template.organization_id = $3)
+		ORDER BY CASE WHEN version.id = source.id THEN 0 ELSE 1 END,
+		         version.version DESC
+		FOR SHARE OF version, template, profile_version, profile
+	`, sourceCommerceBindingID, projectID, organizationID, targetProfileVersionID)
+	if err != nil {
+		return commerce.WorkflowTemplateVersion{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var candidate commerce.WorkflowTemplateVersion
+		if err := rows.Scan(
+			&candidate.ID,
+			&candidate.TemplateID,
+			&candidate.TemplateKey,
+			&candidate.Version,
+			&candidate.ContentHash,
+			&candidate.ConfigurationSnapshot,
+			&candidate.PromptBindings,
+			&candidate.AgentModelContracts,
+			&candidate.LanguageContract,
+			&candidate.ImageCapabilityContract,
+			&candidate.VideoCapabilityContract,
+			&candidate.VideoProfileKey,
+			&candidate.VideoProfileVersion,
+		); err != nil {
+			return commerce.WorkflowTemplateVersion{}, err
+		}
+		return candidate, nil
+	}
+	if err := rows.Err(); err != nil {
+		return commerce.WorkflowTemplateVersion{}, err
+	}
+	return commerce.WorkflowTemplateVersion{}, commerce.Error{
+		Code:    commerce.CodeProjectRebuildBlocked,
+		Message: "目标视频生产方案当前不可用",
+	}
 }
 
 func (a Activities) ListProjectVideoProductionRebuildItems(ctx context.Context, input ProjectVideoProductionRebuildInput) ([]RebuildEpisodeWorkItem, error) {
@@ -727,7 +1106,7 @@ func (a Activities) FailProjectVideoProductionRebuildItem(ctx context.Context, i
 	command, err := tx.Exec(ctx, `
 		UPDATE project_video_production_rebuild_items
 		SET status = 'failed', completed_at = now(), failure_code = $3, failure_message = $4,
-		    checkpoint = checkpoint || jsonb_build_object('failedAt', now(), 'failureCode', $3)
+		    checkpoint = checkpoint || jsonb_build_object('failedAt', now(), 'failureCode', $3::text)
 		WHERE id = $1 AND workflow_run_id = $2 AND status = 'running'
 	`, item.ItemID, item.WorkflowRunID, code, message)
 	if err != nil {
@@ -924,9 +1303,9 @@ func (a Activities) FinalizeProjectVideoProductionRebuild(ctx context.Context, i
 	}
 	command, err = tx.Exec(ctx, `
 		UPDATE projects
-		SET video_production_locked = $2,
+		SET video_production_locked = $2::boolean,
 		    video_production_state = $3,
-		    active_video_production_rebuild_id = CASE WHEN $2 THEN $4::uuid ELSE NULL END,
+		    active_video_production_rebuild_id = CASE WHEN $2::boolean THEN $4::uuid ELSE NULL END,
 		    updated_at = now()
 		WHERE id = $1
 		  AND active_video_production_generation_id = $5
@@ -1027,7 +1406,7 @@ func (a Activities) FailProjectVideoProductionRebuild(ctx context.Context, input
 	rows, err := tx.Query(ctx, `
 		UPDATE project_video_production_rebuild_items
 		SET status = 'failed', completed_at = now(), failure_code = $2, failure_message = $3,
-		    checkpoint = checkpoint || jsonb_build_object('failedAt', now(), 'failureCode', $2)
+		    checkpoint = checkpoint || jsonb_build_object('failedAt', now(), 'failureCode', $2::text)
 		WHERE rebuild_id = $1 AND status IN ('pending', 'running')
 		RETURNING workflow_run_id::text
 	`, input.RebuildID, code, message)
@@ -1084,9 +1463,9 @@ func (a Activities) FailProjectVideoProductionRebuild(ctx context.Context, input
 	}
 	command, err = tx.Exec(ctx, `
 		UPDATE projects
-		SET video_production_locked = $2,
+		SET video_production_locked = $2::boolean,
 		    video_production_state = $3,
-		    active_video_production_rebuild_id = CASE WHEN $2 THEN $4::uuid ELSE NULL END,
+		    active_video_production_rebuild_id = CASE WHEN $2::boolean THEN $4::uuid ELSE NULL END,
 		    updated_at = now()
 		WHERE id = $1
 		  AND active_video_production_generation_id = $5

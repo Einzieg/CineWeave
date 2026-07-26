@@ -36,6 +36,7 @@ type matchedVideoPlanCandidate struct {
 	Variant                   VideoGenerationVariant
 	ContinuationInputContract *VideoInputContract
 	CapabilityAttestationID   string
+	RecoverySourcePlanID      string
 	SnapshotHash              string
 	SelectionScore            int
 	NativeAudioStatus         string
@@ -73,6 +74,11 @@ func (s *Service) PlanVideo(ctx context.Context, req GatewayVideoPlanRequest) (G
 	}
 	if req.StoryboardPlanID == "" {
 		req.StoryboardPlanID = shotState.StoryboardPlanID
+	}
+	if recovered, found, err := s.tryPlanGatewayVideoMediaRecovery(ctx, req, shotState); err != nil {
+		return GatewayVideoPlanResponse{}, err
+	} else if found {
+		return recovered, nil
 	}
 	candidates, err := s.resolveVideoPlanCandidates(ctx, req)
 	if err != nil {
@@ -454,6 +460,16 @@ func (s *Service) persistVideoRenderPlan(ctx context.Context, req GatewayVideoPl
 			return GatewayVideoPlanResponse{}, err
 		}
 	}
+	planMetadata := map[string]any{
+		"hasDialogue": req.HasDialogue, "dialogueLanguage": req.DialogueLanguage,
+		"promptLanguage": req.PromptLanguage, "previousExecutionPlanId": req.PreviousExecutionPlanID,
+		"excludedProviderModelIds": req.ExcludeProviderModelIDs, "inputContractVersion": contract.InputContractVersion,
+		"compatibilityPolicy": contract.CompatibilityPolicy, "videoPromptHash": contract.VideoPromptHash,
+	}
+	if selected.RecoverySourcePlanID != "" {
+		planMetadata["mediaRecoverySourceExecutionPlanId"] = selected.RecoverySourcePlanID
+		planMetadata["executionMode"] = "media_recovery"
+	}
 	var planID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO video_render_plans(
@@ -556,12 +572,7 @@ func (s *Service) persistVideoRenderPlan(ctx context.Context, req GatewayVideoPl
 		"verbatim_voiceover_hash":            cleanVideoContractHash(contract.VerbatimVoiceoverHash),
 		"timing_policy_version":              contract.TimingPolicyVersion,
 		"language_capability_snapshot_hash":  cleanVideoContractHash(contract.LanguageCapabilitySnapshotHash),
-		"expires_at":                         expiresAt, "metadata": mustJSON(map[string]any{
-			"hasDialogue": req.HasDialogue, "dialogueLanguage": req.DialogueLanguage,
-			"promptLanguage": req.PromptLanguage, "previousExecutionPlanId": req.PreviousExecutionPlanID,
-			"excludedProviderModelIds": req.ExcludeProviderModelIDs, "inputContractVersion": contract.InputContractVersion,
-			"compatibilityPolicy": contract.CompatibilityPolicy, "videoPromptHash": contract.VideoPromptHash,
-		}),
+		"expires_at":                         expiresAt, "metadata": mustJSON(planMetadata),
 	}).Scan(&planID); err != nil {
 		return GatewayVideoPlanResponse{}, err
 	}
@@ -635,6 +646,17 @@ func (s *Service) persistVideoRenderPlan(ctx context.Context, req GatewayVideoPl
 		"operationItemAttempt":   req.OperationItemAttempt,
 	})); err != nil {
 		return GatewayVideoPlanResponse{}, err
+	}
+	if selected.RecoverySourcePlanID != "" {
+		if err := events.AppendTx(ctx, tx, req.OrganizationID, req.ProjectID, "storyboard.shot.render_plan.execution_cloned", "storyboard_shot", req.StoryboardShotID, mustJSON(map[string]any{
+			"shotId":                req.StoryboardShotID,
+			"executionPlanId":       planID,
+			"sourceExecutionPlanId": selected.RecoverySourcePlanID,
+			"workflowRunId":         req.WorkflowRunID,
+			"reason":                "provider_media_recovery",
+		})); err != nil {
+			return GatewayVideoPlanResponse{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return GatewayVideoPlanResponse{}, err

@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -282,13 +283,14 @@ func (a CommerceActivities) GenerateCommerceImagePromptItem(ctx context.Context,
 		AttemptGeneration: input.AttemptGeneration, Phase: CommercePhaseImagePrompt,
 		SubjectKey: shotID, Round: 1, Binding: snapshot.Bindings.ImagePromptAgent,
 		InputLanguage: snapshot.TargetLocale, OutputLanguage: snapshot.TargetLocale,
-		Context: mustJSON(map[string]any{"snapshot": snapshot}),
+		Context: commerceImagePromptAgentContext(snapshot),
 	})
 	if err != nil {
 		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, "", err)
 	}
 	contract, err := ParseCommerceImagePromptPlan(agent.RawOutput)
 	if err == nil {
+		contract = BindCommerceImagePromptPlanIdentity(contract, snapshot)
 		err = ValidateCommerceImagePromptPlan(contract, snapshot)
 	}
 	if err != nil {
@@ -306,6 +308,20 @@ func (a CommerceActivities) GenerateCommerceImagePromptItem(ctx context.Context,
 		return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, "", err)
 	}
 	return CommerceReferenceImageItemOutput{ShotID: shotID, Status: commerce.ItemSucceeded, PromptPlan: &plan}
+}
+
+func commerceImagePromptAgentContext(snapshot CommerceReferenceImageShotSnapshot) json.RawMessage {
+	return mustJSON(map[string]any{
+		"snapshot":       snapshot,
+		"reviewerIssues": snapshot.PreviousFidelityIssues,
+		"renderPolicy": map[string]any{
+			"imageCount": 1, "frameMoment": "start_state_only",
+			"forbidTemporalSequence": true, "forbidStoryboardPanels": true,
+			"forbidSplitScreen": true, "forbidCollage": true,
+			"instructions": "Describe and render only one still image at the first visible moment. " +
+				"Do not include later actions, multiple time points, transitions, or sequential verbs in visualPrompt.",
+		},
+	})
 }
 
 func (a CommerceActivities) GenerateCommerceReferenceImageItem(ctx context.Context, input CommerceReferenceImageBatchInput, shotID string) CommerceReferenceImageItemOutput {
@@ -374,19 +390,13 @@ func (a CommerceActivities) GenerateCommerceReferenceImageItem(ctx context.Conte
 			return a.failCommerceReferenceImageItem(ctx, input, attempt, shotID, version.ID, err)
 		}
 	}
-	fidelityReferences := append(commerceGatewayImageReferences(snapshot.References), provider.GatewayImageReference{
-		Type: "commerce_generated_reference", ArtifactID: response.Output.ArtifactID,
-		StorageKey: response.Output.StorageKey, Metadata: mustJSON(map[string]any{"referenceKey": "generated:" + version.ID}),
-	})
+	fidelityReferences := commerceImageFidelityReviewReferences(snapshot.References, response.Output, version.ID)
 	reviewAgent, err := a.runCommerceTextAgent(ctx, CommerceAgentCallInput{
 		GenerationIdentity: &input.Identity, WorkflowRunID: input.WorkflowRunID,
 		AttemptGeneration: input.AttemptGeneration, Phase: CommercePhaseImageFidelity,
 		SubjectKey: shotID, Round: 1, Binding: snapshot.Bindings.ImageFidelityReviewer,
 		InputLanguage: snapshot.TargetLocale, OutputLanguage: snapshot.TargetLocale,
-		Context: mustJSON(map[string]any{
-			"snapshot": snapshot, "imagePromptPlan": plan,
-			"generatedImage": map[string]any{"artifactId": response.Output.ArtifactID, "mediaFileId": response.Output.MediaFileID, "storageKey": response.Output.StorageKey},
-		}),
+		Context:    commerceImageFidelityAgentContext(snapshot, plan, response.Output, version.ID),
 		References: fidelityReferences,
 	})
 	if err != nil {
@@ -396,6 +406,10 @@ func (a CommerceActivities) GenerateCommerceReferenceImageItem(ctx context.Conte
 	}
 	review, err := ParseCommerceImageFidelityReview(reviewAgent.RawOutput)
 	if err == nil {
+		err = ValidateCommerceImageFidelityReview(review)
+	}
+	if err == nil {
+		review = ReconcileCommerceImageFidelityReview(review)
 		err = ValidateCommerceImageFidelityReview(review)
 	}
 	if err != nil {
@@ -547,6 +561,65 @@ func commerceGatewayImageReferences(items []CommerceReferenceImageReference) []p
 	return references
 }
 
+func commerceImageFidelityReviewReferences(
+	items []CommerceReferenceImageReference,
+	generated provider.GatewayImageOutput,
+	imageVersionID string,
+) []provider.GatewayImageReference {
+	references := make([]provider.GatewayImageReference, 0, len(items)+1)
+	for index, item := range items {
+		references = append(references, provider.GatewayImageReference{
+			Type: "commerce_product_reference", ArtifactID: item.ArtifactID,
+			StorageKey: item.StorageKey,
+			Metadata: mustJSON(map[string]any{
+				"referenceKey":       "commerce-product:" + item.ReferenceID,
+				"productReferenceId": item.ReferenceID, "packItemId": item.PackItemID,
+				"role": item.Role, "contentHash": item.ContentHash,
+				"attachmentIndex": index + 1, "reviewRole": "product_reference",
+			}),
+		})
+	}
+	references = append(references, provider.GatewayImageReference{
+		Type: "commerce_generated_reference", ArtifactID: generated.ArtifactID,
+		StorageKey: generated.StorageKey,
+		Metadata: mustJSON(map[string]any{
+			"referenceKey":    "generated:" + imageVersionID,
+			"attachmentIndex": len(items) + 1, "reviewRole": "generated_candidate",
+		}),
+	})
+	return references
+}
+
+func commerceImageFidelityAgentContext(
+	snapshot CommerceReferenceImageShotSnapshot,
+	plan CommerceImagePromptPlanState,
+	generated provider.GatewayImageOutput,
+	imageVersionID string,
+) json.RawMessage {
+	return mustJSON(map[string]any{
+		"snapshot": snapshot, "imagePromptPlan": plan,
+		"generatedImage": map[string]any{
+			"artifactId": generated.ArtifactID, "mediaFileId": generated.MediaFileID,
+			"storageKey": generated.StorageKey, "imageVersionId": imageVersionID,
+			"attachmentIndex": len(snapshot.References) + 1,
+		},
+		"attachmentGuide": map[string]any{
+			"productReferenceAttachmentIndexes": integerRange(1, len(snapshot.References)),
+			"generatedCandidateAttachmentIndex": len(snapshot.References) + 1,
+			"instructions": "Only the generated candidate attachment is the image under review. " +
+				"Product reference attachments are comparison inputs and must never be treated as panels, split screens, or parts of the generated candidate.",
+		},
+	})
+}
+
+func integerRange(start, count int) []int {
+	values := make([]int, 0, count)
+	for value := start; value < start+count; value++ {
+		values = append(values, value)
+	}
+	return values
+}
+
 func commerceProviderImageRequest(
 	input CommerceReferenceImageBatchInput,
 	snapshot CommerceReferenceImageShotSnapshot,
@@ -583,10 +656,18 @@ func CommerceReferenceImageSubjectHash(input CommerceReferenceImageBatchInput, s
 		"identity": input.Identity, "operation": input.Operation,
 		"storyboardPlanId": input.StoryboardPlanID, "planEditRevision": input.PlanEditRevision,
 		"shotId": shotID, "force": input.Force,
-		"reuseGeneratedMedia": input.ReuseGeneratedMedia,
+		"reuseGeneratedMedia": commerceReferenceImageMayReuseGeneratedMedia(input, shotID),
 	})
 }
 
-func commerceReferenceImageMayReuseGeneratedMedia(input CommerceReferenceImageBatchInput) bool {
-	return !input.Force || input.ReuseGeneratedMedia
+func commerceReferenceImageMayReuseGeneratedMedia(input CommerceReferenceImageBatchInput, shotID string) bool {
+	if !input.Force || input.ReuseGeneratedMedia {
+		return true
+	}
+	for _, reusableShotID := range input.ReuseGeneratedMediaShotIDs {
+		if reusableShotID == shotID {
+			return true
+		}
+	}
+	return false
 }

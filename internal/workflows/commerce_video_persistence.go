@@ -504,11 +504,23 @@ func (r *CommerceGenerationRuntime) LoadCommerceVideoExecutionShot(
 	var planEditRevision int
 	err = tx.QueryRow(ctx, `
 		SELECT shot.id::text, shot.shot_index, shot.shot_no,
-		       plan.aspect_ratio, prompt.audio_strategy, prompt.audio_requirement,
+		       plan.aspect_ratio,
+		       COALESCE(plan.video_execution_envelope->>'targetResolution', ''),
+		       COALESCE(contract.recommended_request_duration_seconds::float8, 0),
+		       plan.video_execution_envelope_hash,
+		       COALESCE(contract.eligible_route_set_hash, ''),
+		       prompt.audio_strategy, prompt.audio_requirement,
 		       plan.edit_revision
 		FROM commerce_storyboard_plans plan
 		JOIN storyboard_shots shot
 		  ON shot.commerce_storyboard_plan_id = plan.id AND shot.deleted_at IS NULL
+		JOIN commerce_shot_contracts contract
+		  ON contract.storyboard_shot_id = shot.id
+		 AND contract.commerce_storyboard_plan_id = plan.id
+		 AND contract.script_unit_id = plan.script_unit_id
+		 AND contract.script_unit_generation_id = plan.script_unit_generation_id
+		 AND contract.organization_id = plan.organization_id
+		 AND contract.project_id = plan.project_id
 		JOIN video_prompt_plans prompt
 		  ON prompt.storyboard_shot_id = shot.id
 		 AND prompt.production_generation_id = plan.project_production_generation_id
@@ -537,7 +549,8 @@ func (r *CommerceGenerationRuntime) LoadCommerceVideoExecutionShot(
 	`, input.Identity.OrganizationID, input.Identity.ProjectID, input.Identity.ScriptUnitID,
 		input.Identity.UnitGenerationID, input.StoryboardPlanID, shotID).Scan(
 		&shot.ShotID, &shot.ShotIndex, &shot.ShotNo, &shot.AspectRatio,
-		&shot.AudioStrategy, &shot.AudioRequirement, &planEditRevision,
+		&shot.Resolution, &shot.RequestedDurationSeconds, &shot.VideoExecutionEnvelopeHash,
+		&shot.EligibleRouteSetHash, &shot.AudioStrategy, &shot.AudioRequirement, &planEditRevision,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CommerceVideoExecutionShot{}, commerce.Error{
@@ -552,9 +565,14 @@ func (r *CommerceGenerationRuntime) LoadCommerceVideoExecutionShot(
 	if planEditRevision != input.PlanEditRevision {
 		return CommerceVideoExecutionShot{}, generationMismatch("分镜已修改，请重新生成视频提示词", nil)
 	}
-	shot.Resolution = strings.TrimSpace(input.Resolution)
-	if shot.Resolution == "" {
-		shot.Resolution = "1080p"
+	shot.Resolution = strings.ToLower(strings.TrimSpace(shot.Resolution))
+	if shot.Resolution == "" || shot.RequestedDurationSeconds <= 0 ||
+		strings.TrimSpace(shot.VideoExecutionEnvelopeHash) == "" ||
+		strings.TrimSpace(shot.EligibleRouteSetHash) == "" {
+		return CommerceVideoExecutionShot{}, commerce.Error{
+			Code:    CommerceCodeVideoPromptContractInvalid,
+			Message: "镜头缺少冻结的视频时长或分辨率执行契约，请重新生成分镜方案",
+		}
 	}
 	return shot, nil
 }

@@ -18,7 +18,7 @@ import { ErrorPanel } from "@/components/shared/error-panel";
 import { orgScopedKey, useApiQuery, useApiMutation, useInvalidateKeys } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { StudioApiError, studioApi } from "@/lib/api-client";
-import { useStudioSession } from "@/lib/session";
+import { sessionHasPermission, useStudioSession } from "@/lib/session";
 import {
   applyProjectBasicSaveFailure,
   applyProjectBasicSaveSuccess,
@@ -46,6 +46,7 @@ import {
 } from "@/features/projects/manual-style-selector";
 import { VideoProductionRebuildDialog } from "@/features/project-settings/video-production-rebuild-dialog";
 import { CommerceProjectSettingsPage } from "@/features/project-settings/commerce-settings-page";
+import { ProjectDeletionDialog } from "@/features/projects/project-deletion-dialog";
 
 const defaultArtStyle = "写实电影感";
 
@@ -135,8 +136,10 @@ function NarrativeProjectSettingsPage({ projectId }: { projectId: string }) {
   const [error, setError] = useState("");
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
   const [rebuildDialogOpen, setRebuildDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraft>(emptyVoiceDraft);
   const invalidateKeys = useInvalidateKeys();
+  const canDeleteProject = sessionHasPermission(session, "project.delete");
 
   const effectiveBasicFormState = useMemo(
     () => project ? synchronizeProjectBasicSnapshot(basicFormState, basicSnapshotFromProject(project)) : null,
@@ -587,6 +590,29 @@ function NarrativeProjectSettingsPage({ projectId }: { projectId: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {canDeleteProject ? (
+        <Surface>
+          <div className="flex flex-wrap items-center justify-between gap-4 p-5">
+            <div>
+              <p className="font-semibold text-destructive">删除项目</p>
+              <p className="mt-1 text-sm text-muted-foreground">永久删除项目及其原文、剧本、资产、分镜、媒体文件和成片。</p>
+            </div>
+            <Button type="button" variant="destructive" onClick={() => setDeleteDialogOpen(true)}>
+              <Trash2 className="size-4" />
+              删除项目
+            </Button>
+          </div>
+        </Surface>
+      ) : null}
+
+      {project ? (
+        <ProjectDeletionDialog
+          project={project}
+          open={deleteDialogOpen}
+          onOpenChange={setDeleteDialogOpen}
+        />
+      ) : null}
     </div>
   );
 }

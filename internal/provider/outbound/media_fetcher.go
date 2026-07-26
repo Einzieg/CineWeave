@@ -48,6 +48,7 @@ type Dialer interface {
 type NetworkPolicy struct {
 	AllowedPrivateHosts []string
 	AllowedPrivateCIDRs []netip.Prefix
+	TrustedPrivateHosts []string
 }
 
 type RequestPolicy = NetworkPolicy
@@ -60,6 +61,8 @@ type FetchOptions struct {
 	UpstreamMIMEType      string
 	AllowedMIMEPrefixes   []string
 	Policy                NetworkPolicy
+	RequestHeaders        http.Header
+	AuthenticatedOrigin   string
 }
 
 type Result struct {
@@ -150,6 +153,10 @@ func (f *MediaFetcher) FetchToTempFile(ctx context.Context, rawURL string, optio
 		policy:                options.Policy,
 		responseHeaderTimeout: options.ResponseHeaderTimeout,
 	}
+	authenticatedOrigin, err := normalizedOrigin(options.AuthenticatedOrigin)
+	if err != nil {
+		return Result{}, err
+	}
 	client := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -160,6 +167,9 @@ func (f *MediaFetcher) FetchToTempFile(ctx context.Context, rawURL string, optio
 			if len(via) > 0 && strings.EqualFold(via[len(via)-1].URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
 				return fmt.Errorf("provider media redirect cannot downgrade HTTPS to HTTP")
 			}
+			if authenticatedOrigin != "" && requestOrigin(req.URL) != authenticatedOrigin {
+				return fmt.Errorf("provider media authenticated request cannot redirect to another origin")
+			}
 			return nil
 		},
 	}
@@ -167,6 +177,18 @@ func (f *MediaFetcher) FetchToTempFile(ctx context.Context, rawURL string, optio
 	req, err := http.NewRequestWithContext(requestContext, http.MethodGet, strings.TrimSpace(rawURL), nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidURL, err)
+	}
+	if authenticatedOrigin != "" {
+		if requestOrigin(req.URL) != authenticatedOrigin {
+			return Result{}, fmt.Errorf("%w: authenticated media URL does not match its trusted origin", ErrInvalidURL)
+		}
+		options.Policy.TrustedPrivateHosts = append(options.Policy.TrustedPrivateHosts, req.URL.Hostname())
+		transport.policy = options.Policy
+	}
+	for name, values := range options.RequestHeaders {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -450,6 +472,11 @@ func validateAddress(host string, address netip.Addr, policy NetworkPolicy) erro
 	if address.IsGlobalUnicast() && !isDeniedSpecialAddress(address) {
 		return nil
 	}
+	for _, trustedHost := range policy.TrustedPrivateHosts {
+		if sameHost(host, trustedHost) {
+			return nil
+		}
+	}
 	if privateAddressAllowed(host, address, policy) {
 		return nil
 	}
@@ -485,6 +512,31 @@ func privateAddressAllowed(host string, address netip.Addr, policy NetworkPolicy
 
 func sameHost(left, right string) bool {
 	return strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(left), "."), strings.TrimSuffix(strings.TrimSpace(right), "."))
+}
+
+func normalizedOrigin(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("%w: authenticated media origin is invalid", ErrInvalidURL)
+	}
+	if _, err := validateURL(parsed); err != nil {
+		return "", err
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", fmt.Errorf("%w: authenticated media origin must not include a path, query, or fragment", ErrInvalidURL)
+	}
+	return requestOrigin(parsed), nil
+}
+
+func requestOrigin(value *url.URL) string {
+	if value == nil {
+		return ""
+	}
+	return strings.ToLower(value.Scheme) + "://" + strings.ToLower(value.Host)
 }
 
 func selectMIMEType(responseValue, upstreamValue string, finalURL *url.URL, prefix []byte) string {

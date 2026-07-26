@@ -3,6 +3,7 @@ package workflows
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -13,25 +14,26 @@ import (
 )
 
 type ShotRenderExecutionInput struct {
-	OrganizationID   string
-	ProjectID        string
-	WorkflowRunID    string
-	OperationID      string
-	OperationItemID  string
-	OperationAttempt int
-	CreatedBy        string
-	ShotID           string
-	ShotIndex        int
-	ShotNo           int
-	WorkflowPrompt   string
-	FailureScope     string
-	AspectRatio      string
-	Resolution       string
-	AudioStrategy    string
-	AudioRequirement string
-	Force            bool
-	MaxPolls         int
-	PollInterval     time.Duration
+	OrganizationID            string
+	ProjectID                 string
+	WorkflowRunID             string
+	OperationID               string
+	OperationItemID           string
+	OperationAttempt          int
+	CreatedBy                 string
+	ShotID                    string
+	ShotIndex                 int
+	ShotNo                    int
+	WorkflowPrompt            string
+	FailureScope              string
+	AspectRatio               string
+	Resolution                string
+	ExpectedRequestedDuration float64
+	AudioStrategy             string
+	AudioRequirement          string
+	Force                     bool
+	MaxPolls                  int
+	PollInterval              time.Duration
 }
 
 type ShotRenderExecutionResult struct {
@@ -86,6 +88,9 @@ func executePreparedShotRenderPlan(ctx, createCtx workflow.Context, input ShotRe
 	}
 	if len(prepared.Segments) == 0 {
 		return ShotRenderExecutionResult{}, temporal.NewApplicationError("视频执行计划没有已审核片段提示词，请重新生成视频提示词", provider.CodeRenderPlanReplanRequired)
+	}
+	if err := validateExpectedShotRenderDuration(input.ExpectedRequestedDuration, prepared.Segments); err != nil {
+		return ShotRenderExecutionResult{}, err
 	}
 	result.Plan = prepared.Plan
 	var current CreateShotVideoTaskOutput
@@ -287,6 +292,20 @@ func executePreparedShotRenderPlan(ctx, createCtx workflow.Context, input ShotRe
 	}
 	result.Output = composed
 	return result, nil
+}
+
+func validateExpectedShotRenderDuration(expected float64, segments []PreparedShotVideoSegment) error {
+	if expected <= 0 {
+		return nil
+	}
+	if len(segments) != 1 || math.Abs(segments[0].RequestedDurationSeconds-expected) > 0.001 {
+		return temporal.NewNonRetryableApplicationError(
+			"视频执行计划与分镜冻结的模型请求时长不一致，请重新生成分镜方案",
+			provider.CodeRenderPlanReplanRequired,
+			nil,
+		)
+	}
+	return nil
 }
 
 func waitForVideoSegmentRetry(ctx workflow.Context, code string, retryGeneration int) error {

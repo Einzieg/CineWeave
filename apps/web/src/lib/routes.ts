@@ -35,11 +35,8 @@ export const narrativeProjectNavItems = [
 ] as const;
 
 export const commerceProjectNavItems = [
-  { label: "项目概览", segment: "", icon: FolderKanban },
-  { label: "商品与脚本", segment: "commerce/materials", icon: ShoppingBag },
-  { label: "分镜方案", segment: "commerce/storyboard", icon: Clapperboard },
-  { label: "视频制作", segment: "commerce/video", icon: PlaySquare },
-  { label: "成片", segment: "commerce/final", icon: Film },
+  { label: "商品配置", segment: "commerce/materials", icon: ShoppingBag },
+  { label: "视频生成", segment: "commerce/video", icon: PlaySquare },
   { label: "项目设置", segment: "settings", icon: Settings2 },
 ] as const;
 
@@ -68,9 +65,6 @@ export function isProjectNavActive(currentSegment: string, itemSegment: ProjectS
   }
   if (currentSegment === "timeline" || currentSegment === "export") {
     return itemSegment === "final";
-  }
-  if (currentSegment === "commerce/final") {
-    return itemSegment === "commerce/final";
   }
   return false;
 }
@@ -129,6 +123,8 @@ export function workflowLabel(value: string) {
       return "项目导出";
     case "commerce_project_setup":
       return "初始化带货项目";
+    case "commerce_direct_video":
+      return "生成带货视频";
     case "commerce_script_unit_preparation":
       return "准备广告脚本";
     case "commerce_script_organization":

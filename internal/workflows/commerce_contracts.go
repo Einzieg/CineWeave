@@ -30,6 +30,8 @@ const (
 	CommerceImageFidelityReviewContractVersion = "commerce-image-fidelity-review/v1"
 	CommerceVideoPromptPlanContractVersion     = "commerce-video-prompt-plan/v1"
 	CommerceVideoPromptReviewContractVersion   = "commerce-video-prompt-review/v1"
+	CommerceDurationExecutionPolicy            = "editorial_target_with_gateway_provider_adaptation"
+	CommerceVoiceoverTimingPolicy              = "advisory_only_user_selected_target_authoritative"
 
 	CommerceCodeWorkflowInputInvalid         = "COMMERCE_WORKFLOW_INPUT_INVALID"
 	CommerceCodeActivityPortUnavailable      = "COMMERCE_ACTIVITY_PORT_UNAVAILABLE"
@@ -46,7 +48,6 @@ const (
 	CommerceCodeVideoPromptReviewExhausted   = "COMMERCE_VIDEO_PROMPT_REVIEW_EXHAUSTED"
 	CommerceCodeVideoReferenceRequired       = "COMMERCE_VIDEO_REFERENCE_REQUIRED"
 	CommerceCodeProductReferencePackStale    = "PRODUCT_REFERENCE_PACK_STALE"
-	CommerceCodeScriptDurationExceeded       = "COMMERCE_SCRIPT_DURATION_EXCEEDED"
 	CommerceCodeGenerationMismatch           = "COMMERCE_SCRIPT_UNIT_GENERATION_MISMATCH"
 	CommerceCodeLanguageConfirmationRequired = "COMMERCE_LANGUAGE_CONFIRMATION_REQUIRED"
 )
@@ -54,19 +55,28 @@ const (
 var (
 	commerceLocalePattern       = regexp.MustCompile(`^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$`)
 	commerceSpeechMarkerPattern = regexp.MustCompile(
-		`(?i)(?:旁白|配音|口播|解说|主播|voiceover|vo)\s*[:：]\s*`,
+		`(?i)(?:旁白|配音|口播|解说|主播|voiceover|vo)(?:\s*[\(（][^)\r\n）]+[)）])?\s*[:：]\s*`,
 	)
 	commerceOnscreenMarkerPattern = regexp.MustCompile(
-		`(?i)(?:字幕|屏幕文字|画面文字|onscreen(?:\s+text)?)\s*[:：]\s*`,
+		`(?i)(?:字幕|屏幕文字|画面文字|onscreen(?:\s+text)?)(?:\s*[\(（][^)\r\n）]+[)）])?\s*[:：]\s*`,
 	)
 	commerceNonSpeechChannelPattern = regexp.MustCompile(
-		`(?i)(?:音效|音乐|bgm|sfx|字幕|屏幕文字|画面文字|画面|镜头)\s*[:：]\s*`,
+		`(?i)(?:音效|音乐|bgm|sfx|audio|字幕|屏幕文字|画面文字|画面|镜头)\s*[:：]\s*`,
 	)
 	commerceAnyChannelPattern = regexp.MustCompile(
-		`(?i)(?:旁白|配音|口播|解说|主播|voiceover|vo|音效|音乐|bgm|sfx|字幕|屏幕文字|画面文字|画面|镜头)\s*[:：]\s*`,
+		`(?i)(?:旁白|配音|口播|解说|主播|voiceover|vo)(?:\s*[\(（][^)\r\n）]+[)）])?\s*[:：]\s*|(?:音效|音乐|bgm|sfx|audio|字幕|屏幕文字|画面文字|画面|镜头)\s*[:：]\s*`,
 	)
 	commerceVisualOnlyPrefixPattern = regexp.MustCompile(
-		`(?i)^(?:镜头(?:[一二三四五六七八九十百零\d]+)?|画面|场景|动作|音效|音乐|字幕|屏幕文字|画面文字|sfx|bgm)\s*[:：]`,
+		`(?i)^(?:镜头(?:[一二三四五六七八九十百零\d]+)?|画面|场景|动作|音效|音乐|字幕|屏幕文字|画面文字|sfx|bgm|setting|camera|audio|talent|scene|visual\s+style)\s*[:：]`,
+	)
+	commerceStandaloneSpeechHeaderPattern = regexp.MustCompile(
+		`(?i)^\s*(?:旁白|配音|口播|解说|主播|voiceover|vo)(?:\s*[\(（][^)\r\n）]+[)）])?\s*[:：]\s*$`,
+	)
+	commerceStandaloneOnscreenHeaderPattern = regexp.MustCompile(
+		`(?i)^\s*(?:字幕|屏幕文字|画面文字|onscreen(?:\s+text)?)(?:\s*[\(（][^)\r\n）]+[)）])?\s*[:：]\s*$`,
+	)
+	commerceProductionSectionHeaderPattern = regexp.MustCompile(
+		`(?i)^\s*(?:(?:setting|camera|audio|talent|visual\s+style|product(?:\s+details?)?|important(?:\s+[\pL\d_-]+){0,8}\s+details?|sound(?:\s+effects?)?|music|bgm|sfx)|(?:scene|shot)\s*\d+(?:\s*[\(（][^)\r\n）]+[)）])?|(?:场景|镜头)\s*[一二三四五六七八九十百零\d]*)\s*[:：]?\s*$`,
 	)
 )
 
@@ -314,6 +324,7 @@ type CommerceReferenceImageShotSnapshot struct {
 	MinimumReferences      int                                 `json:"minimumReferences"`
 	MaximumReferences      int                                 `json:"maximumReferences"`
 	References             []CommerceReferenceImageReference   `json:"references"`
+	PreviousFidelityIssues []CommerceReviewIssue               `json:"previousFidelityIssues,omitempty"`
 	Bindings               CommerceReferenceImageAgentBindings `json:"bindings"`
 	ImageModel             CommerceMediaModelBinding           `json:"imageModel"`
 }
@@ -348,8 +359,10 @@ type CommerceImageFidelityReviewContract struct {
 	ContractVersion         string                      `json:"contractVersion"`
 	Decision                string                      `json:"decision"`
 	Issues                  []CommerceReviewIssue       `json:"issues"`
+	AdvisoryIssues          []CommerceReviewIssue       `json:"advisoryIssues,omitempty"`
 	Checks                  CommerceImageFidelityChecks `json:"checks"`
 	RegenerationRecommended bool                        `json:"regenerationRecommended"`
+	Resolution              string                      `json:"resolution,omitempty"`
 }
 
 type CommerceVideoFirstFrameReference struct {
@@ -386,6 +399,7 @@ type CommerceVideoPromptShotSnapshot struct {
 	InstructionLanguage            string                             `json:"instructionLanguage"`
 	DurationSeconds                int                                `json:"durationSeconds"`
 	DurationTicks                  int64                              `json:"durationTicks"`
+	DurationExecutionPolicy        string                             `json:"durationExecutionPolicy"`
 	TimelineTimebase               int64                              `json:"timelineTimebase"`
 	FPSNumerator                   int                                `json:"fpsNumerator"`
 	FPSDenominator                 int                                `json:"fpsDenominator"`
@@ -448,7 +462,9 @@ type CommerceVideoPromptReviewContract struct {
 	ContractVersion string                          `json:"contractVersion"`
 	Decision        string                          `json:"decision"`
 	Issues          []CommerceReviewIssue           `json:"issues"`
+	AdvisoryIssues  []CommerceReviewIssue           `json:"advisoryIssues,omitempty"`
 	Checks          CommerceVideoPromptReviewChecks `json:"checks"`
+	Resolution      string                          `json:"resolution,omitempty"`
 }
 
 type CommerceTimingPolicy struct {
@@ -459,6 +475,16 @@ type CommerceTimingPolicy struct {
 	SentencePauseSeconds  float64 `json:"sentencePauseSeconds"`
 	SegmentGapSeconds     float64 `json:"segmentGapSeconds"`
 	AllowedOverrunSeconds float64 `json:"allowedOverrunSeconds"`
+}
+
+func commerceAdvisoryTimingPolicy(locale string) CommerceTimingPolicy {
+	policy := commerce.AdvisoryLocalizationTimingPolicy(locale)
+	return CommerceTimingPolicy{
+		Version: policy.Version, Unit: policy.Unit,
+		NormalUnitsPerSecond: policy.NormalUnitsPerSecond,
+		CommaPauseSeconds:    policy.CommaPauseSeconds, SentencePauseSeconds: policy.SentencePauseSeconds,
+		SegmentGapSeconds: policy.SegmentGapSeconds, AllowedOverrunSeconds: policy.AllowedOverrunSeconds,
+	}
 }
 
 type CommerceScriptUnitPreparationSnapshot struct {
@@ -474,6 +500,7 @@ type CommerceScriptUnitPreparationSnapshot struct {
 	SourceLanguageHint          string                                 `json:"sourceLanguageHint,omitempty"`
 	AllowedLocales              []string                               `json:"allowedLocales"`
 	LanguageConfidenceThreshold float64                                `json:"languageConfidenceThreshold"`
+	LanguageConfirmationMode    string                                 `json:"languageConfirmationMode"`
 	TargetDurationSeconds       int                                    `json:"targetDurationSeconds"`
 	TargetPlatform              string                                 `json:"targetPlatform"`
 	SourceSegments              []CommerceSourceSegmentSnapshot        `json:"sourceSegments"`
@@ -483,27 +510,32 @@ type CommerceScriptUnitPreparationSnapshot struct {
 }
 
 type CommerceStoryboardPlanningSnapshot struct {
-	Identity              commerce.UnitGenerationIdentity    `json:"identity"`
-	InputHash             string                             `json:"inputHash"`
-	ProductVersionID      string                             `json:"productVersionId"`
-	SourceScriptVersionID string                             `json:"sourceScriptVersionId"`
-	LocalizationID        string                             `json:"localizationId"`
-	ReferencePackID       string                             `json:"referencePackId"`
-	TargetLocale          string                             `json:"targetLocale"`
-	TargetDurationSeconds int                                `json:"targetDurationSeconds"`
-	AspectRatio           string                             `json:"aspectRatio"`
-	TimelineTimebase      int64                              `json:"timelineTimebase"`
-	FPSNumerator          int                                `json:"fpsNumerator"`
-	FPSDenominator        int                                `json:"fpsDenominator"`
-	TimingPolicyVersion   string                             `json:"timingPolicyVersion"`
-	LocalizedContentHash  string                             `json:"localizedContentHash"`
-	LocalizedContractHash string                             `json:"localizedContractHash"`
-	AllowedShotDurations  []int                              `json:"allowedShotDurations"`
-	LocalizedSegments     []CommerceLocalizedSegmentSnapshot `json:"localizedSegments"`
-	ProductReferences     []CommerceProductReferenceSnapshot `json:"productReferences"`
-	ProductFacts          json.RawMessage                    `json:"productFacts"`
-	LocalizationContract  json.RawMessage                    `json:"localizationContract"`
-	Bindings              CommerceStoryboardAgentBindings    `json:"bindings"`
+	Identity                   commerce.UnitGenerationIdentity    `json:"identity"`
+	InputHash                  string                             `json:"inputHash"`
+	ProductVersionID           string                             `json:"productVersionId"`
+	SourceScriptVersionID      string                             `json:"sourceScriptVersionId"`
+	LocalizationID             string                             `json:"localizationId"`
+	ReferencePackID            string                             `json:"referencePackId"`
+	TargetLocale               string                             `json:"targetLocale"`
+	TargetDurationSeconds      int                                `json:"targetDurationSeconds"`
+	AspectRatio                string                             `json:"aspectRatio"`
+	TimelineTimebase           int64                              `json:"timelineTimebase"`
+	FPSNumerator               int                                `json:"fpsNumerator"`
+	FPSDenominator             int                                `json:"fpsDenominator"`
+	TimingPolicyVersion        string                             `json:"timingPolicyVersion"`
+	LocalizedContentHash       string                             `json:"localizedContentHash"`
+	LocalizedContractHash      string                             `json:"localizedContractHash"`
+	AllowedShotDurations       []int                              `json:"allowedShotDurations"`
+	StoryboardStrategy         commerce.StoryboardStrategy        `json:"storyboardStrategy"`
+	SegmentationPolicyVersion  string                             `json:"segmentationPolicyVersion"`
+	VideoExecutionEnvelope     commerce.VideoExecutionEnvelope    `json:"videoExecutionEnvelope"`
+	VideoExecutionEnvelopeHash string                             `json:"videoExecutionEnvelopeHash"`
+	TimingPolicy               CommerceTimingPolicy               `json:"timingPolicy"`
+	LocalizedSegments          []CommerceLocalizedSegmentSnapshot `json:"localizedSegments"`
+	ProductReferences          []CommerceProductReferenceSnapshot `json:"productReferences"`
+	ProductFacts               json.RawMessage                    `json:"productFacts"`
+	LocalizationContract       json.RawMessage                    `json:"localizationContract"`
+	Bindings                   CommerceStoryboardAgentBindings    `json:"bindings"`
 }
 
 type commerceStoryboardAgentSegment struct {
@@ -523,24 +555,32 @@ type commerceStoryboardAgentSegment struct {
 }
 
 type commerceStoryboardAgentSnapshot struct {
-	Identity              commerce.UnitGenerationIdentity    `json:"identity"`
-	InputHash             string                             `json:"inputHash"`
-	ProductVersionID      string                             `json:"productVersionId"`
-	SourceScriptVersionID string                             `json:"sourceScriptVersionId"`
-	LocalizationID        string                             `json:"localizationId"`
-	ReferencePackID       string                             `json:"referencePackId"`
-	TargetLocale          string                             `json:"targetLocale"`
-	TargetDurationSeconds int                                `json:"targetDurationSeconds"`
-	AspectRatio           string                             `json:"aspectRatio"`
-	TimelineTimebase      int64                              `json:"timelineTimebase"`
-	FPSNumerator          int                                `json:"fpsNumerator"`
-	FPSDenominator        int                                `json:"fpsDenominator"`
-	TimingPolicyVersion   string                             `json:"timingPolicyVersion"`
-	AllowedShotDurations  []int                              `json:"allowedShotDurations"`
-	SalesBeatAuthority    string                             `json:"salesBeatAuthority"`
-	Segments              []commerceStoryboardAgentSegment   `json:"segments"`
-	ProductReferences     []CommerceProductReferenceSnapshot `json:"productReferences"`
-	ProductFacts          json.RawMessage                    `json:"productFacts"`
+	Identity                           commerce.UnitGenerationIdentity    `json:"identity"`
+	InputHash                          string                             `json:"inputHash"`
+	ProductVersionID                   string                             `json:"productVersionId"`
+	SourceScriptVersionID              string                             `json:"sourceScriptVersionId"`
+	LocalizationID                     string                             `json:"localizationId"`
+	ReferencePackID                    string                             `json:"referencePackId"`
+	TargetLocale                       string                             `json:"targetLocale"`
+	TargetDurationSeconds              int                                `json:"targetDurationSeconds"`
+	AspectRatio                        string                             `json:"aspectRatio"`
+	TimelineTimebase                   int64                              `json:"timelineTimebase"`
+	FPSNumerator                       int                                `json:"fpsNumerator"`
+	FPSDenominator                     int                                `json:"fpsDenominator"`
+	TimingPolicyVersion                string                             `json:"timingPolicyVersion"`
+	ProviderRequestDurationSuggestions []int                              `json:"providerRequestDurationSuggestions"`
+	DurationPolicy                     string                             `json:"durationPolicy"`
+	VoiceoverTimingPolicy              string                             `json:"voiceoverTimingPolicy"`
+	SalesBeatAuthority                 string                             `json:"salesBeatAuthority"`
+	Segments                           []commerceStoryboardAgentSegment   `json:"segments"`
+	ProductReferences                  []CommerceProductReferenceSnapshot `json:"productReferences"`
+	ProductFacts                       json.RawMessage                    `json:"productFacts"`
+}
+
+type commerceStoryboardSourceAliases struct {
+	aliasToActual map[string]string
+	actualIDs     map[string]struct{}
+	actualToAlias map[string]string
 }
 
 type CommerceTimingAnalysis struct {
@@ -630,16 +670,6 @@ func ValidateCommerceLanguageResolution(item CommerceLanguageResolutionContract,
 	if item.LanguageComposition != "single" && item.LanguageComposition != "mixed" && item.LanguageComposition != "undetermined" {
 		return errors.New("languageComposition is invalid")
 	}
-	allowed, err := canonicalLocaleSet(snapshot.AllowedLocales)
-	if err != nil {
-		return err
-	}
-	if _, ok := allowed[item.SourceLanguage]; !ok {
-		return fmt.Errorf("sourceLanguage %s is not allowed by the frozen template", item.SourceLanguage)
-	}
-	if _, ok := allowed[item.TargetLanguage]; !ok {
-		return fmt.Errorf("targetLanguage %s is not allowed by the frozen template", item.TargetLanguage)
-	}
 	switch snapshot.LanguageMode {
 	case "explicit":
 		expected, err := canonicalCommerceLocale(snapshot.ExplicitTargetLanguage)
@@ -649,16 +679,22 @@ func ValidateCommerceLanguageResolution(item CommerceLanguageResolutionContract,
 		if item.TargetLanguage != expected {
 			return fmt.Errorf("explicit targetLanguage changed from %s to %s", expected, item.TargetLanguage)
 		}
+		if item.NeedsUserConfirmation {
+			return errors.New("explicit target language must not require user confirmation")
+		}
 	case "auto":
-		needsConfirmation := item.Confidence < snapshot.LanguageConfidenceThreshold || item.LanguageComposition != "single"
-		if needsConfirmation && !item.NeedsUserConfirmation {
-			return errors.New("low-confidence or mixed language output must require user confirmation")
+		if item.NeedsUserConfirmation {
+			return errors.New("automatic language resolution must not require user confirmation")
 		}
 	default:
 		return errors.New("languageMode must be explicit or auto")
 	}
 	return validateLanguageIssues(item.Issues)
 }
+
+const (
+	CommerceLanguageConfirmationDisabled = "disabled"
+)
 
 func ParseCommerceLocalization(raw string) (CommerceLocalizationContract, error) {
 	item, err := decodeCommerceContract[CommerceLocalizationContract](raw)
@@ -677,13 +713,13 @@ func ParseCommerceLocalization(raw string) (CommerceLocalizationContract, error)
 }
 
 func BuildCommerceIdentityLocalization(snapshot CommerceScriptUnitPreparationSnapshot, resolution CommerceLanguageResolutionContract) CommerceLocalizationContract {
+	channels := splitCommerceIdentityChannelsForSegments(snapshot.SourceSegments)
 	segments := make([]CommerceLocalizationSegmentContract, 0, len(snapshot.SourceSegments))
-	for _, source := range snapshot.SourceSegments {
-		voiceover, onscreen := splitCommerceIdentityChannels(source.SourceText)
+	for index, source := range snapshot.SourceSegments {
 		segments = append(segments, CommerceLocalizationSegmentContract{
 			Ordinal: source.Ordinal, SourceSegmentID: source.ID, SalesBeat: source.Kind,
 			SourceText: source.SourceText, LocalizedText: source.SourceText,
-			VoiceoverText: voiceover, OnscreenText: onscreen,
+			VoiceoverText: channels[index].VoiceoverText, OnscreenText: channels[index].OnscreenText,
 			ProductClaims: []string{}, RequiredProductFeatures: []string{},
 		})
 	}
@@ -704,6 +740,7 @@ func ValidateCommerceLocalization(item CommerceLocalizationContract, snapshot Co
 	if len(item.Segments) != len(snapshot.SourceSegments) {
 		return fmt.Errorf("localization segment count %d does not match source count %d", len(item.Segments), len(snapshot.SourceSegments))
 	}
+	identityChannels := splitCommerceIdentityChannelsForSegments(snapshot.SourceSegments)
 	for index, source := range snapshot.SourceSegments {
 		segment := item.Segments[index]
 		if segment.Ordinal != source.Ordinal || segment.SourceSegmentID != source.ID {
@@ -716,10 +753,9 @@ func ValidateCommerceLocalization(item CommerceLocalizationContract, snapshot Co
 			return fmt.Errorf("localization segment %d localizedText is empty", index+1)
 		}
 		if item.SourceLanguage == item.TargetLanguage {
-			expectedVoiceover, expectedOnscreen := splitCommerceIdentityChannels(source.SourceText)
 			if segment.LocalizedText != source.SourceText ||
-				segment.VoiceoverText != expectedVoiceover ||
-				segment.OnscreenText != expectedOnscreen {
+				segment.VoiceoverText != identityChannels[index].VoiceoverText ||
+				segment.OnscreenText != identityChannels[index].OnscreenText {
 				return fmt.Errorf("identity localization segment %d changed deterministic content channels", index+1)
 			}
 		}
@@ -730,15 +766,94 @@ func ValidateCommerceLocalization(item CommerceLocalizationContract, snapshot Co
 	return nil
 }
 
+type commerceIdentityChannels struct {
+	VoiceoverText string
+	OnscreenText  string
+}
+
+func splitCommerceIdentityChannelsForSegments(segments []CommerceSourceSegmentSnapshot) []commerceIdentityChannels {
+	channels := make([]commerceIdentityChannels, len(segments))
+	sectioned := false
+	for _, segment := range segments {
+		if isCommerceStandaloneChannelHeader(segment.SourceText) ||
+			commerceProductionSectionHeaderPattern.MatchString(strings.TrimSpace(segment.SourceText)) {
+			sectioned = true
+			break
+		}
+	}
+	if !sectioned {
+		for index, segment := range segments {
+			channels[index].VoiceoverText, channels[index].OnscreenText = splitCommerceIdentityChannels(segment.SourceText)
+		}
+		return channels
+	}
+
+	activeChannel := ""
+	for index, segment := range segments {
+		source := strings.TrimSpace(segment.SourceText)
+		if source == "" {
+			continue
+		}
+		switch {
+		case commerceStandaloneSpeechHeaderPattern.MatchString(source):
+			activeChannel = "voiceover"
+			continue
+		case commerceStandaloneOnscreenHeaderPattern.MatchString(source):
+			activeChannel = "onscreen"
+			continue
+		case commerceProductionSectionHeaderPattern.MatchString(source):
+			activeChannel = ""
+			continue
+		}
+
+		voiceover := extractCommerceLabeledChannel(source, commerceSpeechMarkerPattern, commerceNonSpeechChannelPattern)
+		onscreen := extractCommerceLabeledChannel(source, commerceOnscreenMarkerPattern, commerceAnyChannelPattern)
+		if commerceSpeechMarkerPattern.FindStringIndex(source) != nil {
+			activeChannel = "voiceover"
+		}
+		if commerceOnscreenMarkerPattern.FindStringIndex(source) != nil {
+			activeChannel = "onscreen"
+		}
+		if commerceNonSpeechChannelPattern.FindStringIndex(source) != nil &&
+			commerceSpeechMarkerPattern.FindStringIndex(source) == nil &&
+			commerceOnscreenMarkerPattern.FindStringIndex(source) == nil {
+			activeChannel = ""
+		}
+		if voiceover != "" || onscreen != "" {
+			channels[index] = commerceIdentityChannels{
+				VoiceoverText: trimCommerceQuotedChannel(voiceover),
+				OnscreenText:  trimCommerceQuotedChannel(onscreen),
+			}
+			continue
+		}
+		switch activeChannel {
+		case "voiceover":
+			channels[index].VoiceoverText = trimCommerceQuotedChannel(source)
+		case "onscreen":
+			channels[index].OnscreenText = trimCommerceQuotedChannel(source)
+		}
+	}
+	return channels
+}
+
+func isCommerceStandaloneChannelHeader(value string) bool {
+	value = strings.TrimSpace(value)
+	return commerceStandaloneSpeechHeaderPattern.MatchString(value) ||
+		commerceStandaloneOnscreenHeaderPattern.MatchString(value) ||
+		commerceNonSpeechChannelPattern.MatchString(value) &&
+			commerceNonSpeechChannelPattern.FindString(value) == value
+}
+
 func splitCommerceIdentityChannels(source string) (string, string) {
 	source = strings.TrimSpace(source)
 	voiceover := extractCommerceLabeledChannel(source, commerceSpeechMarkerPattern, commerceNonSpeechChannelPattern)
 	onscreen := extractCommerceLabeledChannel(source, commerceOnscreenMarkerPattern, commerceAnyChannelPattern)
 	if voiceover == "" && commerceSpeechMarkerPattern.FindStringIndex(source) == nil &&
-		!commerceVisualOnlyPrefixPattern.MatchString(source) {
+		!commerceVisualOnlyPrefixPattern.MatchString(source) &&
+		!commerceProductionSectionHeaderPattern.MatchString(source) {
 		voiceover = source
 	}
-	return voiceover, onscreen
+	return trimCommerceQuotedChannel(voiceover), trimCommerceQuotedChannel(onscreen)
 }
 
 func extractCommerceLabeledChannel(source string, marker, boundary *regexp.Regexp) string {
@@ -751,6 +866,89 @@ func extractCommerceLabeledChannel(source string, marker, boundary *regexp.Regex
 		value = value[:next[0]]
 	}
 	return strings.TrimSpace(value)
+}
+
+func trimCommerceQuotedChannel(value string) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) < 2 {
+		return value
+	}
+	switch {
+	case runes[0] == '"' && runes[len(runes)-1] == '"',
+		runes[0] == '\'' && runes[len(runes)-1] == '\'',
+		runes[0] == '“' && runes[len(runes)-1] == '”',
+		runes[0] == '‘' && runes[len(runes)-1] == '’':
+		return strings.TrimSpace(string(runes[1 : len(runes)-1]))
+	default:
+		return value
+	}
+}
+
+func BuildCommerceIdentityLocalizationReview(candidate CommerceLocalizationContract) CommerceLocalizationReviewContract {
+	checked := make([]string, 0, len(candidate.Segments))
+	for _, segment := range candidate.Segments {
+		checked = append(checked, segment.SourceSegmentID)
+	}
+	return CommerceLocalizationReviewContract{
+		ContractVersion:   CommerceReviewDecisionContractVersion,
+		Decision:          "approve",
+		Issues:            []CommerceReviewIssue{},
+		CheckedSegmentIDs: checked,
+	}
+}
+
+func CanonicalizeApprovedCommerceLocalizationReview(
+	item CommerceLocalizationReviewContract,
+	candidate CommerceLocalizationContract,
+) CommerceLocalizationReviewContract {
+	if item.Decision != "approve" || len(item.Issues) != 0 {
+		return item
+	}
+	checked := make([]string, 0, len(candidate.Segments))
+	for _, segment := range candidate.Segments {
+		checked = append(checked, segment.SourceSegmentID)
+	}
+	item.CheckedSegmentIDs = checked
+	return item
+}
+
+func CanonicalizeCommerceLocalizationReviewCoverage(
+	item CommerceLocalizationReviewContract,
+	candidate CommerceLocalizationContract,
+) CommerceLocalizationReviewContract {
+	checked := make([]string, 0, len(candidate.Segments))
+	for _, segment := range candidate.Segments {
+		checked = append(checked, segment.SourceSegmentID)
+	}
+	item.CheckedSegmentIDs = checked
+	return item
+}
+
+func ApplyCommerceLocalizationReviewPolicy(
+	candidate CommerceLocalizationContract,
+	item CommerceLocalizationReviewContract,
+) (CommerceLocalizationContract, CommerceLocalizationReviewContract, bool) {
+	item = CanonicalizeCommerceLocalizationReviewCoverage(item, candidate)
+	if item.Decision == "approve" {
+		return candidate, item, true
+	}
+
+	for _, issue := range item.Issues {
+		warning, err := json.Marshal(map[string]any{
+			"source":          "localization_reviewer",
+			"severity":        "advisory",
+			"code":            issue.Code,
+			"field":           issue.Field,
+			"sourceSegmentId": issue.SourceSegmentID,
+			"message":         issue.Message,
+			"suggestion":      issue.Suggestion,
+		})
+		if err == nil {
+			candidate.Warnings = append(candidate.Warnings, warning)
+		}
+	}
+	return candidate, BuildCommerceIdentityLocalizationReview(candidate), true
 }
 
 func ParseCommerceLocalizationReview(raw string) (CommerceLocalizationReviewContract, error) {
@@ -850,7 +1048,16 @@ func normalizeCommerceSalesScript(
 	item CommerceSalesScriptContract,
 	snapshot CommerceStoryboardPlanningSnapshot,
 ) CommerceSalesScriptContract {
+	localizedBySourceID := make(map[string]CommerceLocalizedSegmentSnapshot, len(snapshot.LocalizedSegments))
+	for _, localized := range snapshot.LocalizedSegments {
+		localizedBySourceID[localized.SourceSegmentID] = localized
+	}
 	for index := range item.Segments {
+		localized, found := localizedBySourceID[item.Segments[index].SourceSegmentID]
+		if found && item.Segments[index].Ordinal == localized.Ordinal {
+			item.Segments[index].VoiceoverText = localized.VoiceoverText
+			item.Segments[index].OnscreenText = localized.OnscreenText
+		}
 		if strings.TrimSpace(item.Segments[index].VisualIntent) != "" {
 			continue
 		}
@@ -910,23 +1117,169 @@ func buildCommerceStoryboardAgentSnapshot(
 		TargetLocale: snapshot.TargetLocale, TargetDurationSeconds: snapshot.TargetDurationSeconds,
 		AspectRatio: snapshot.AspectRatio, TimelineTimebase: snapshot.TimelineTimebase,
 		FPSNumerator: snapshot.FPSNumerator, FPSDenominator: snapshot.FPSDenominator,
-		TimingPolicyVersion:  snapshot.TimingPolicyVersion,
-		AllowedShotDurations: append([]int(nil), snapshot.AllowedShotDurations...),
-		SalesBeatAuthority:   "salesScript.segments",
-		Segments:             segments,
-		ProductReferences:    append([]CommerceProductReferenceSnapshot(nil), snapshot.ProductReferences...),
-		ProductFacts:         append(json.RawMessage(nil), snapshot.ProductFacts...),
+		TimingPolicyVersion:                snapshot.TimingPolicyVersion,
+		ProviderRequestDurationSuggestions: append([]int(nil), snapshot.AllowedShotDurations...),
+		DurationPolicy:                     CommerceDurationExecutionPolicy,
+		VoiceoverTimingPolicy:              CommerceVoiceoverTimingPolicy,
+		SalesBeatAuthority:                 "salesScript.segments",
+		Segments:                           segments,
+		ProductReferences:                  append([]CommerceProductReferenceSnapshot(nil), snapshot.ProductReferences...),
+		ProductFacts:                       append(json.RawMessage(nil), snapshot.ProductFacts...),
 	}, nil
+}
+
+func aliasCommerceStoryboardPlannerInput(
+	snapshot commerceStoryboardAgentSnapshot,
+	salesScript CommerceSalesScriptContract,
+) (commerceStoryboardAgentSnapshot, CommerceSalesScriptContract, commerceStoryboardSourceAliases, error) {
+	aliasedSnapshot := snapshot
+	aliasedSnapshot.Segments = append([]commerceStoryboardAgentSegment(nil), snapshot.Segments...)
+	aliasedSalesScript := salesScript
+	aliasedSalesScript.Segments = append([]CommerceSalesScriptSegmentContract(nil), salesScript.Segments...)
+
+	aliases := commerceStoryboardSourceAliases{
+		aliasToActual: make(map[string]string, len(snapshot.Segments)),
+		actualIDs:     make(map[string]struct{}, len(snapshot.Segments)),
+		actualToAlias: make(map[string]string, len(snapshot.Segments)),
+	}
+	for index := range aliasedSnapshot.Segments {
+		actualID := strings.TrimSpace(aliasedSnapshot.Segments[index].SourceSegmentID)
+		if err := validateCommerceUUID(actualID); err != nil {
+			return commerceStoryboardAgentSnapshot{}, CommerceSalesScriptContract{}, commerceStoryboardSourceAliases{},
+				fmt.Errorf("storyboard snapshot sourceSegmentId: %w", err)
+		}
+		alias, ok := aliases.actualToAlias[actualID]
+		if !ok {
+			alias = fmt.Sprintf("00000000-0000-4000-8000-%012x", len(aliases.actualToAlias)+1)
+			aliases.actualToAlias[actualID] = alias
+			aliases.aliasToActual[alias] = actualID
+			aliases.actualIDs[actualID] = struct{}{}
+		}
+		aliasedSnapshot.Segments[index].SourceSegmentID = alias
+	}
+	for index := range aliasedSalesScript.Segments {
+		actualID := strings.TrimSpace(aliasedSalesScript.Segments[index].SourceSegmentID)
+		alias, ok := aliases.actualToAlias[actualID]
+		if !ok {
+			return commerceStoryboardAgentSnapshot{}, CommerceSalesScriptContract{}, commerceStoryboardSourceAliases{},
+				fmt.Errorf("sales script source segment %s is missing from the storyboard snapshot", actualID)
+		}
+		aliasedSalesScript.Segments[index].SourceSegmentID = alias
+	}
+	return aliasedSnapshot, aliasedSalesScript, aliases, nil
+}
+
+func resolveCommerceStoryboardSourceSegmentAliases(
+	plan CommerceStoryboardPlanContract,
+	aliases commerceStoryboardSourceAliases,
+) (CommerceStoryboardPlanContract, error) {
+	for shotIndex := range plan.Shots {
+		for segmentIndex, sourceSegmentID := range plan.Shots[shotIndex].SourceSegmentIDs {
+			sourceSegmentID = strings.TrimSpace(sourceSegmentID)
+			if actualID, ok := aliases.aliasToActual[sourceSegmentID]; ok {
+				plan.Shots[shotIndex].SourceSegmentIDs[segmentIndex] = actualID
+				continue
+			}
+			if _, ok := aliases.actualIDs[sourceSegmentID]; ok {
+				plan.Shots[shotIndex].SourceSegmentIDs[segmentIndex] = sourceSegmentID
+				continue
+			}
+			return CommerceStoryboardPlanContract{}, fmt.Errorf(
+				"shot %s references unknown source segment alias %s",
+				plan.Shots[shotIndex].CandidateKey,
+				sourceSegmentID,
+			)
+		}
+	}
+	return plan, nil
+}
+
+func reconcileCommerceStoryboardRequiredContextCoverage(
+	snapshot CommerceStoryboardPlanningSnapshot,
+	plan CommerceStoryboardPlanContract,
+) (CommerceStoryboardPlanContract, error) {
+	if len(plan.Shots) == 0 {
+		return plan, nil
+	}
+	segments := make(map[string]CommerceLocalizedSegmentSnapshot, len(snapshot.LocalizedSegments))
+	for _, segment := range snapshot.LocalizedSegments {
+		segments[segment.SourceSegmentID] = segment
+	}
+	covered := make(map[string]struct{}, len(snapshot.LocalizedSegments))
+	for _, shot := range plan.Shots {
+		for _, sourceSegmentID := range shot.SourceSegmentIDs {
+			if _, ok := segments[sourceSegmentID]; !ok {
+				return CommerceStoryboardPlanContract{}, fmt.Errorf(
+					"shot %s references source segment %s outside the localization",
+					shot.CandidateKey,
+					sourceSegmentID,
+				)
+			}
+			covered[sourceSegmentID] = struct{}{}
+		}
+	}
+
+	for _, segment := range snapshot.LocalizedSegments {
+		if !segment.Required || strings.TrimSpace(segment.VoiceoverText) != "" {
+			continue
+		}
+		if _, ok := covered[segment.SourceSegmentID]; ok {
+			continue
+		}
+		targetShot := nearestCommerceStoryboardShotForSegment(plan, segments, segment.Ordinal)
+		plan.Shots[targetShot].SourceSegmentIDs = append(
+			plan.Shots[targetShot].SourceSegmentIDs,
+			segment.SourceSegmentID,
+		)
+		covered[segment.SourceSegmentID] = struct{}{}
+	}
+	for shotIndex := range plan.Shots {
+		sort.SliceStable(plan.Shots[shotIndex].SourceSegmentIDs, func(left, right int) bool {
+			return segments[plan.Shots[shotIndex].SourceSegmentIDs[left]].Ordinal <
+				segments[plan.Shots[shotIndex].SourceSegmentIDs[right]].Ordinal
+		})
+	}
+	return plan, nil
+}
+
+func nearestCommerceStoryboardShotForSegment(
+	plan CommerceStoryboardPlanContract,
+	segments map[string]CommerceLocalizedSegmentSnapshot,
+	ordinal int,
+) int {
+	targetShot := -1
+	bestPrecedingOrdinal := -1
+	for shotIndex, shot := range plan.Shots {
+		for _, sourceSegmentID := range shot.SourceSegmentIDs {
+			anchorOrdinal := segments[sourceSegmentID].Ordinal
+			if anchorOrdinal <= ordinal && anchorOrdinal > bestPrecedingOrdinal {
+				bestPrecedingOrdinal = anchorOrdinal
+				targetShot = shotIndex
+			}
+		}
+	}
+	if targetShot >= 0 {
+		return targetShot
+	}
+
+	targetShot = 0
+	nearestFutureOrdinal := int(^uint(0) >> 1)
+	for shotIndex, shot := range plan.Shots {
+		for _, sourceSegmentID := range shot.SourceSegmentIDs {
+			anchorOrdinal := segments[sourceSegmentID].Ordinal
+			if anchorOrdinal < nearestFutureOrdinal {
+				nearestFutureOrdinal = anchorOrdinal
+				targetShot = shotIndex
+			}
+		}
+	}
+	return targetShot
 }
 
 func ParseCommerceStoryboardPlan(raw string) (CommerceStoryboardPlanContract, error) {
 	item, err := decodeCommerceContract[CommerceStoryboardPlanContract](raw)
 	if err != nil {
 		return item, fmt.Errorf("storyboard plan JSON: %w", err)
-	}
-	item.TargetLocale, err = canonicalCommerceLocale(item.TargetLocale)
-	if err != nil {
-		return item, fmt.Errorf("targetLocale: %w", err)
 	}
 	return item, nil
 }
@@ -935,24 +1288,12 @@ func bindCommerceStoryboardPlanIdentity(
 	snapshot CommerceStoryboardPlanningSnapshot,
 	item CommerceStoryboardPlanContract,
 ) (CommerceStoryboardPlanContract, error) {
-	fields := []struct {
-		name     string
-		actual   *string
-		expected string
-	}{
-		{name: "commerceScriptUnitId", actual: &item.CommerceScriptUnitID, expected: snapshot.Identity.ScriptUnitID},
-		{name: "scriptUnitGenerationId", actual: &item.ScriptUnitGenerationID, expected: snapshot.Identity.UnitGenerationID},
-		{name: "commerceWorkflowBindingId", actual: &item.CommerceWorkflowBindingID, expected: snapshot.Identity.CommerceWorkflowBindingID},
-		{name: "productVersionId", actual: &item.ProductVersionID, expected: snapshot.ProductVersionID},
-	}
-	for _, field := range fields {
-		switch {
-		case strings.TrimSpace(*field.actual) == "":
-			*field.actual = field.expected
-		case *field.actual != field.expected:
-			return CommerceStoryboardPlanContract{}, fmt.Errorf("%s conflicts with the frozen unit generation", field.name)
-		}
-	}
+	item.CommerceScriptUnitID = snapshot.Identity.ScriptUnitID
+	item.ScriptUnitGenerationID = snapshot.Identity.UnitGenerationID
+	item.CommerceWorkflowBindingID = snapshot.Identity.CommerceWorkflowBindingID
+	item.ProductVersionID = snapshot.ProductVersionID
+	item.TargetLocale = snapshot.TargetLocale
+	item.TargetDurationSeconds = snapshot.TargetDurationSeconds
 	return item, nil
 }
 
@@ -991,40 +1332,86 @@ func ValidateCommerceStoryboardReview(item CommerceStoryboardReviewContract, pla
 	return nil
 }
 
-func validateCommerceStoryboardSalesBeats(
+func reconcileCommerceStoryboardSalesBeats(
 	salesScript CommerceSalesScriptContract,
 	plan CommerceStoryboardPlanContract,
-) error {
-	salesBySource := make(map[string]string, len(salesScript.Segments))
+) (CommerceStoryboardPlanContract, error) {
+	salesBySource := make(map[string]CommerceSalesScriptSegmentContract, len(salesScript.Segments))
 	for _, segment := range salesScript.Segments {
-		salesBySource[segment.SourceSegmentID] = segment.SalesBeat
+		salesBySource[segment.SourceSegmentID] = segment
 	}
-	for _, shot := range plan.Shots {
-		var expected string
+	for index := range plan.Shots {
+		shot := &plan.Shots[index]
+		var expected, fallback string
 		for _, sourceSegmentID := range shot.SourceSegmentIDs {
-			salesBeat, ok := salesBySource[sourceSegmentID]
+			segment, ok := salesBySource[sourceSegmentID]
 			if !ok {
-				return fmt.Errorf("shot %s references source segment %s outside the sales script", shot.CandidateKey, sourceSegmentID)
-			}
-			if expected == "" {
-				expected = salesBeat
-				continue
-			}
-			if salesBeat != expected {
-				return fmt.Errorf(
-					"shot %s spans multiple sales beats; split it so each shot has one authoritative salesBeat",
-					shot.CandidateKey,
+				return CommerceStoryboardPlanContract{}, fmt.Errorf(
+					"shot %s references source segment %s outside the sales script",
+					shot.CandidateKey, sourceSegmentID,
 				)
 			}
+			if fallback == "" {
+				fallback = segment.SalesBeat
+			}
+			if expected == "" && strings.TrimSpace(segment.VoiceoverText) != "" {
+				expected = segment.SalesBeat
+			}
 		}
-		if shot.SalesBeat != expected {
-			return fmt.Errorf(
-				"shot %s salesBeat %q does not match the authoritative sales script value %q",
-				shot.CandidateKey, shot.SalesBeat, expected,
+		if expected == "" {
+			expected = fallback
+		}
+		if strings.TrimSpace(expected) == "" {
+			return CommerceStoryboardPlanContract{}, fmt.Errorf(
+				"shot %s has no authoritative sales beat in the linked sales script",
+				shot.CandidateKey,
 			)
 		}
+		shot.SalesBeat = expected
 	}
-	return nil
+	return plan, nil
+}
+
+func reconcileCommerceStoryboardVoiceover(
+	snapshot CommerceStoryboardPlanningSnapshot,
+	plan CommerceStoryboardPlanContract,
+) (CommerceStoryboardPlanContract, error) {
+	segments := make(map[string]CommerceLocalizedSegmentSnapshot, len(snapshot.LocalizedSegments))
+	for _, segment := range snapshot.LocalizedSegments {
+		segments[segment.SourceSegmentID] = segment
+	}
+	usageCount := make(map[string]int, len(snapshot.LocalizedSegments))
+	for _, shot := range plan.Shots {
+		for _, sourceSegmentID := range shot.SourceSegmentIDs {
+			usageCount[sourceSegmentID]++
+		}
+	}
+	for index := range plan.Shots {
+		parts := make([]string, 0, len(plan.Shots[index].SourceSegmentIDs))
+		canReconstruct := true
+		for _, sourceSegmentID := range plan.Shots[index].SourceSegmentIDs {
+			segment, ok := segments[sourceSegmentID]
+			if !ok {
+				return CommerceStoryboardPlanContract{}, fmt.Errorf(
+					"shot %s references source segment %s outside the localization",
+					plan.Shots[index].CandidateKey, sourceSegmentID,
+				)
+			}
+			voiceover := strings.TrimSpace(segment.VoiceoverText)
+			if voiceover == "" {
+				continue
+			}
+			if usageCount[sourceSegmentID] != 1 {
+				canReconstruct = false
+				break
+			}
+			parts = append(parts, voiceover)
+		}
+		if canReconstruct {
+			plan.Shots[index].VoiceoverText = strings.Join(parts, " ")
+		}
+	}
+	return plan, nil
 }
 
 func reconcileCommerceStoryboardReview(
@@ -1034,24 +1421,23 @@ func reconcileCommerceStoryboardReview(
 	if review.Decision == "approve" {
 		return review
 	}
-	remaining := make([]CommerceReviewIssue, 0, len(review.Issues))
-	for _, issue := range review.Issues {
-		if strings.EqualFold(strings.TrimSpace(issue.Code), "SALES_BEAT_MISMATCH") {
-			continue
-		}
-		remaining = append(remaining, issue)
+	return BuildCommerceAdvisoryStoryboardReview(plan)
+}
+
+func BuildCommerceAdvisoryStoryboardReview(
+	plan CommerceStoryboardPlanContract,
+) CommerceStoryboardReviewContract {
+	review := CommerceStoryboardReviewContract{
+		ContractVersion:         CommerceStoryboardReviewContractVersion,
+		Decision:                "approve",
+		Issues:                  []CommerceReviewIssue{},
+		CheckedCandidateKeys:    make([]string, 0, len(plan.Shots)),
+		SegmentCoverageComplete: true,
+		DurationTotalSeconds:    plan.TargetDurationSeconds,
 	}
-	review.Issues = remaining
-	if len(remaining) != 0 {
-		return review
-	}
-	review.Decision = "approve"
-	review.CheckedCandidateKeys = make([]string, 0, len(plan.Shots))
 	for _, shot := range plan.Shots {
 		review.CheckedCandidateKeys = append(review.CheckedCandidateKeys, shot.CandidateKey)
 	}
-	review.SegmentCoverageComplete = true
-	review.DurationTotalSeconds = plan.TargetDurationSeconds
 	return review
 }
 
@@ -1061,6 +1447,17 @@ func ParseCommerceImagePromptPlan(raw string) (CommerceImagePromptPlanContract, 
 		return item, fmt.Errorf("image prompt plan JSON: %w", err)
 	}
 	return item, nil
+}
+
+func BindCommerceImagePromptPlanIdentity(
+	item CommerceImagePromptPlanContract,
+	snapshot CommerceReferenceImageShotSnapshot,
+) CommerceImagePromptPlanContract {
+	item.CommerceScriptUnitID = snapshot.Identity.ScriptUnitID
+	item.ScriptUnitGenerationID = snapshot.Identity.UnitGenerationID
+	item.CommerceWorkflowBindingID = snapshot.Identity.CommerceWorkflowBindingID
+	item.ProductVersionID = snapshot.ProductVersionID
+	return item
 }
 
 func ValidateCommerceImagePromptPlan(item CommerceImagePromptPlanContract, snapshot CommerceReferenceImageShotSnapshot) error {
@@ -1137,14 +1534,36 @@ func ValidateCommerceImageFidelityReview(item CommerceImageFidelityReviewContrac
 	if err := validateReviewDecision(item.Decision, item.Issues); err != nil {
 		return err
 	}
-	if item.Decision == "approve" {
-		checks := item.Checks
-		if !checks.ProductIdentity || !checks.Packaging || !checks.Color || !checks.Shape ||
-			!checks.ReferenceOwnership || !checks.NoForbiddenText || !checks.ShotAlignment {
-			return errors.New("approved image fidelity review contains a failed check")
-		}
+	if item.Decision == "approve" && !commerceImageFidelityBlockingChecksPass(item.Checks) {
+		return errors.New("approved image fidelity review contains a failed blocking check")
 	}
 	return nil
+}
+
+func commerceImageFidelityBlockingChecksPass(checks CommerceImageFidelityChecks) bool {
+	return checks.ProductIdentity &&
+		checks.Packaging &&
+		checks.Color &&
+		checks.Shape &&
+		checks.ReferenceOwnership &&
+		checks.NoForbiddenText
+}
+
+func ReconcileCommerceImageFidelityReview(
+	item CommerceImageFidelityReviewContract,
+) CommerceImageFidelityReviewContract {
+	if item.Decision == "approve" {
+		return item
+	}
+	if !commerceImageFidelityBlockingChecksPass(item.Checks) {
+		return item
+	}
+	item.AdvisoryIssues = append([]CommerceReviewIssue(nil), item.Issues...)
+	item.Issues = []CommerceReviewIssue{}
+	item.Decision = "approve"
+	item.RegenerationRecommended = false
+	item.Resolution = "approved_with_advisory_issues"
+	return item
 }
 
 func ParseCommerceVideoPromptPlan(raw string) (CommerceVideoPromptPlanContract, error) {
@@ -1153,6 +1572,29 @@ func ParseCommerceVideoPromptPlan(raw string) (CommerceVideoPromptPlanContract, 
 		return item, fmt.Errorf("video prompt plan JSON: %w", err)
 	}
 	return item, nil
+}
+
+func BindCommerceVideoPromptPlanExecutionContract(
+	item CommerceVideoPromptPlanContract,
+	snapshot CommerceVideoPromptShotSnapshot,
+) CommerceVideoPromptPlanContract {
+	item.ContractVersion = CommerceVideoPromptPlanContractVersion
+	item.CommerceScriptUnitID = snapshot.Identity.ScriptUnitID
+	item.ScriptUnitGenerationID = snapshot.Identity.UnitGenerationID
+	item.CommerceWorkflowBindingID = snapshot.Identity.CommerceWorkflowBindingID
+	item.ProductVersionID = snapshot.ProductVersionID
+	item.SourceSegmentIDs = append([]string{}, snapshot.SourceSegmentIDs...)
+	item.InstructionLanguage = snapshot.InstructionLanguage
+	item.SpokenLanguage = snapshot.TargetLocale
+	item.VoiceoverText = snapshot.VoiceoverText
+	item.OnscreenText = snapshot.OnscreenText
+	item.SoundEffects = append([]string{}, snapshot.SoundEffects...)
+	item.MusicCue = snapshot.MusicCue
+	item.NativeAudioRequested = snapshot.NativeAudioRequested
+	item.ReferencePackID = snapshot.ReferencePackID
+	item.ReferenceIDs = []string{snapshot.FirstFrame.ImageVersionID}
+	item.DurationSeconds = snapshot.DurationSeconds
+	return item
 }
 
 func ValidateCommerceVideoPromptPlan(item CommerceVideoPromptPlanContract, snapshot CommerceVideoPromptShotSnapshot) error {
@@ -1171,9 +1613,6 @@ func ValidateCommerceVideoPromptPlan(item CommerceVideoPromptPlanContract, snaps
 	if item.SpokenLanguage != snapshot.TargetLocale {
 		return errors.New("spokenLanguage does not match the frozen localization")
 	}
-	if !containsFold(snapshot.SupportedPromptLanguages, item.InstructionLanguage) {
-		return errors.New("instructionLanguage is not supported by the frozen video capability")
-	}
 	if item.VoiceoverText != snapshot.VoiceoverText {
 		return errors.New("voiceoverText must exactly match the linked localization segments")
 	}
@@ -1186,17 +1625,14 @@ func ValidateCommerceVideoPromptPlan(item CommerceVideoPromptPlanContract, snaps
 	if item.ReferencePackID != snapshot.ReferencePackID || len(item.ReferenceIDs) != 1 || item.ReferenceIDs[0] != snapshot.FirstFrame.ImageVersionID {
 		return errors.New("video prompt must use the approved commerce shot image as its only first frame")
 	}
-	if item.DurationSeconds != snapshot.DurationSeconds || !containsInt(snapshot.AllowedDurations, item.DurationSeconds) {
-		return errors.New("durationSeconds does not match the frozen shot or approved model capability")
+	if item.DurationSeconds != snapshot.DurationSeconds {
+		return errors.New("durationSeconds does not match the frozen editorial shot duration")
 	}
 	if !sameStrings(item.SourceSegmentIDs, snapshot.SourceSegmentIDs) {
 		return errors.New("sourceSegmentIds do not match the frozen shot segment links")
 	}
 	if item.NativeAudioRequested != snapshot.NativeAudioRequested {
 		return errors.New("nativeAudioRequested does not match the frozen audio strategy")
-	}
-	if item.NativeAudioRequested && !containsFold(snapshot.NativeAudioLanguages, snapshot.TargetLocale) {
-		return errors.New("the frozen video capability does not approve native audio for the target locale")
 	}
 	visual := strings.TrimSpace(item.VisualPrompt)
 	if overlay := strings.TrimSpace(item.OnscreenText); overlay != "" && strings.Contains(visual, overlay) {
@@ -1223,6 +1659,46 @@ func ParseCommerceVideoPromptReview(raw string) (CommerceVideoPromptReviewContra
 		return item, fmt.Errorf("video prompt review JSON: %w", err)
 	}
 	return item, nil
+}
+
+func ReconcileCommerceVideoPromptReview(
+	item CommerceVideoPromptReviewContract,
+) CommerceVideoPromptReviewContract {
+	if item.ContractVersion != CommerceVideoPromptReviewContractVersion ||
+		(item.Decision != "approve" && item.Decision != "revise" && item.Decision != "reject") {
+		return item
+	}
+
+	// Identity, localization, audio, references, and editorial duration are
+	// bound and validated server-side before review. The multimodal reviewer
+	// owns only the semantic reachability of the motion from the approved frame.
+	item.Checks.Identity = true
+	item.Checks.VerbatimVoiceover = true
+	item.Checks.AudioSeparation = true
+	item.Checks.OverlaySeparation = true
+	item.Checks.ReferenceContract = true
+	item.Checks.DurationCapability = true
+	item.Checks.NativeAudioLanguage = true
+
+	if item.Checks.SingleFrameReachability {
+		item.AdvisoryIssues = append([]CommerceReviewIssue{}, item.Issues...)
+		item.Issues = []CommerceReviewIssue{}
+		item.Decision = "approve"
+		item.Resolution = "approved_by_frozen_execution_contract"
+		return item
+	}
+
+	if len(item.Issues) == 0 {
+		item.Issues = []CommerceReviewIssue{{
+			Code:       "FIRST_FRAME_REACHABILITY_UNRESOLVED",
+			Field:      "visualPrompt",
+			Message:    "视频动作无法确认可从已审核首帧连续执行",
+			Suggestion: "只保留从已审核首帧可直接到达的动作、运镜和商品展示",
+		}}
+	}
+	item.Decision = "revise"
+	item.Resolution = "revision_requested_for_first_frame_reachability"
+	return item
 }
 
 func ValidateCommerceVideoPromptReview(item CommerceVideoPromptReviewContract) error {
@@ -1291,27 +1767,29 @@ func AnalyzeCommerceTiming(localization CommerceLocalizationContract, policy Com
 	}
 	units := 0
 	pause := 0.0
-	for index, segment := range localization.Segments {
-		voiceover := segment.VoiceoverText
+	spokenSegments := 0
+	for _, segment := range localization.Segments {
+		voiceover := strings.TrimSpace(segment.VoiceoverText)
+		if voiceover == "" {
+			continue
+		}
+		if spokenSegments > 0 {
+			pause += policy.SegmentGapSeconds
+		}
+		spokenSegments++
 		switch policy.Unit {
 		case "han_character", "character", "mora", "syllable":
 			for _, current := range voiceover {
 				if unicode.IsLetter(current) || unicode.IsDigit(current) || unicode.Is(unicode.Han, current) || unicode.In(current, unicode.Hiragana, unicode.Katakana, unicode.Hangul) {
 					units++
 				}
-				pause += commercePunctuationPause(current, policy)
 			}
 		case "word":
 			units += len(strings.Fields(voiceover))
-			for _, current := range voiceover {
-				pause += commercePunctuationPause(current, policy)
-			}
 		default:
 			return CommerceTimingAnalysis{}, fmt.Errorf("unsupported timing unit %q", policy.Unit)
 		}
-		if index > 0 {
-			pause += policy.SegmentGapSeconds
-		}
+		pause += commercePunctuationPauseSeconds(voiceover, policy)
 	}
 	speech := float64(units) / policy.NormalUnitsPerSecond
 	total := speech + pause
@@ -1319,7 +1797,7 @@ func AnalyzeCommerceTiming(localization CommerceLocalizationContract, policy Com
 		Locale: localization.TargetLanguage, PolicyVersion: policy.Version, Unit: policy.Unit,
 		Units: units, SpeechSeconds: speech, PauseSeconds: pause, EstimatedVoiceoverSeconds: total,
 		TargetDurationSeconds: targetDurationSeconds, AllowedOverrunSeconds: policy.AllowedOverrunSeconds,
-		Exceeded: total > float64(targetDurationSeconds)+policy.AllowedOverrunSeconds,
+		Exceeded: total > float64(targetDurationSeconds),
 	}, nil
 }
 
@@ -1427,10 +1905,6 @@ func validateCommerceStoryboardPlanShape(snapshot CommerceStoryboardPlanningSnap
 	for _, reference := range snapshot.ProductReferences {
 		references[reference.ReferenceID] = struct{}{}
 	}
-	allowedDurations := make(map[int]struct{}, len(snapshot.AllowedShotDurations))
-	for _, duration := range snapshot.AllowedShotDurations {
-		allowedDurations[duration] = struct{}{}
-	}
 	seenCandidates := make(map[string]struct{}, len(plan.Shots))
 	total := 0
 	for index, shot := range plan.Shots {
@@ -1446,11 +1920,6 @@ func validateCommerceStoryboardPlanShape(snapshot CommerceStoryboardPlanningSnap
 		}
 		if shot.DurationSeconds <= 0 {
 			return fmt.Errorf("shot %s duration must be a positive integer", shot.CandidateKey)
-		}
-		if len(allowedDurations) > 0 {
-			if _, ok := allowedDurations[shot.DurationSeconds]; !ok {
-				return fmt.Errorf("shot %s duration %d is not allowed by the frozen video capability", shot.CandidateKey, shot.DurationSeconds)
-			}
 		}
 		if strings.TrimSpace(shot.SalesBeat) == "" || strings.TrimSpace(shot.ShotPurpose) == "" || strings.TrimSpace(shot.VisualAction) == "" || strings.TrimSpace(shot.Composition) == "" {
 			return fmt.Errorf("shot %s visual contract is incomplete", shot.CandidateKey)
@@ -1588,11 +2057,8 @@ func ValidateCommercePreparationSnapshot(inputIdentity commerce.ScriptUnitPrepar
 	if snapshot.TargetDurationSeconds <= 0 || len(snapshot.SourceSegments) == 0 {
 		return errors.New("preparation snapshot has no script or target duration")
 	}
-	if _, err := canonicalLocaleSet(snapshot.AllowedLocales); err != nil {
+	if err := validateCommercePreparationLanguageConfiguration(snapshot); err != nil {
 		return err
-	}
-	if snapshot.LanguageConfidenceThreshold <= 0 || snapshot.LanguageConfidenceThreshold > 1 {
-		return errors.New("language confidence threshold is invalid")
 	}
 	if err := validateCommerceSourceSegments(snapshot.SourceSegments); err != nil {
 		return err
@@ -1604,6 +2070,32 @@ func ValidateCommercePreparationSnapshot(inputIdentity commerce.ScriptUnitPrepar
 		if err := ValidateCommerceAgentBinding(binding); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateCommercePreparationLanguageConfiguration(snapshot CommerceScriptUnitPreparationSnapshot) error {
+	if snapshot.LanguageMode != "auto" && snapshot.LanguageMode != "explicit" {
+		return errors.New("preparation snapshot language mode is invalid")
+	}
+	if snapshot.LanguageMode == "explicit" {
+		if _, err := canonicalCommerceLocale(snapshot.ExplicitTargetLanguage); err != nil {
+			return errors.New("preparation snapshot explicit target language is invalid")
+		}
+	}
+	if snapshot.SourceLanguageHint != "" {
+		if _, err := canonicalCommerceLocale(snapshot.SourceLanguageHint); err != nil {
+			return errors.New("preparation snapshot source language hint is invalid")
+		}
+	}
+	if _, err := canonicalLocaleSet(snapshot.AllowedLocales); err != nil {
+		return fmt.Errorf("preparation snapshot locale suggestions are invalid: %w", err)
+	}
+	if snapshot.LanguageConfidenceThreshold <= 0 || snapshot.LanguageConfidenceThreshold > 1 {
+		return errors.New("preparation snapshot language confidence threshold is invalid")
+	}
+	if snapshot.LanguageConfirmationMode != CommerceLanguageConfirmationDisabled {
+		return errors.New("preparation snapshot language confirmation mode is invalid")
 	}
 	return nil
 }
@@ -1714,6 +2206,25 @@ func ValidateCommerceStoryboardSnapshot(inputIdentity commerce.UnitGenerationIde
 	}
 	if snapshot.TargetDurationSeconds <= 0 || strings.TrimSpace(snapshot.AspectRatio) == "" || snapshot.TimelineTimebase <= 0 || snapshot.FPSNumerator <= 0 || snapshot.FPSDenominator <= 0 {
 		return errors.New("storyboard timing or aspect configuration is invalid")
+	}
+	strategy, err := commerce.ParseStoryboardStrategy(string(snapshot.StoryboardStrategy))
+	if err != nil || strategy == commerce.StoryboardStrategyManual ||
+		snapshot.SegmentationPolicyVersion != commerce.CommerceSegmentationPolicyV2 {
+		return errors.New("storyboard segmentation strategy or policy is invalid")
+	}
+	if !validCommerceHash(snapshot.VideoExecutionEnvelopeHash) {
+		return errors.New("storyboard video execution envelope hash is invalid")
+	}
+	if err := snapshot.VideoExecutionEnvelope.Validate(); err != nil {
+		return fmt.Errorf("storyboard video execution envelope: %w", err)
+	}
+	_, envelopeHash, err := commerce.CanonicalizeVideoExecutionEnvelope(snapshot.VideoExecutionEnvelope)
+	if err != nil || envelopeHash != snapshot.VideoExecutionEnvelopeHash {
+		return errors.New("storyboard video execution envelope hash does not match the frozen envelope")
+	}
+	if strings.TrimSpace(snapshot.TimingPolicy.Unit) == "" ||
+		snapshot.TimingPolicy.NormalUnitsPerSecond <= 0 {
+		return errors.New("storyboard voiceover timing estimate is invalid")
 	}
 	if (snapshot.TimelineTimebase*int64(snapshot.FPSDenominator))%int64(snapshot.FPSNumerator) != 0 {
 		return errors.New("storyboard timebase is not frame aligned")
@@ -2040,6 +2551,21 @@ func commercePunctuationPause(current rune, policy CommerceTimingPolicy) float64
 	}
 }
 
+func commercePunctuationPauseSeconds(content string, policy CommerceTimingPolicy) float64 {
+	pauseSeconds := 0.0
+	clusterPauseSeconds := 0.0
+	for _, current := range content {
+		currentPauseSeconds := commercePunctuationPause(current, policy)
+		if currentPauseSeconds > 0 {
+			clusterPauseSeconds = max(clusterPauseSeconds, currentPauseSeconds)
+			continue
+		}
+		pauseSeconds += clusterPauseSeconds
+		clusterPauseSeconds = 0
+	}
+	return pauseSeconds + clusterPauseSeconds
+}
+
 func containsExplicitAudioCue(value string) bool {
 	normalized := strings.ToLower(value)
 	for _, marker := range []string{"[音效", "【音效", "（音效", "(音效", "sfx:", "sfx：", "bgm:", "bgm："} {
@@ -2094,13 +2620,3 @@ func trimLeadingCommerceSpaces(value []rune) []rune {
 }
 
 func commerceIntPointer(value int) *int { return &value }
-
-func sortedCommerceIssueCopy(issues []CommerceReviewIssue) []CommerceReviewIssue {
-	result := append([]CommerceReviewIssue(nil), issues...)
-	sort.SliceStable(result, func(i, j int) bool {
-		left := result[i].Code + "\x00" + result[i].Field + "\x00" + result[i].SourceSegmentID + "\x00" + result[i].CandidateKey
-		right := result[j].Code + "\x00" + result[j].Field + "\x00" + result[j].SourceSegmentID + "\x00" + result[j].CandidateKey
-		return left < right
-	})
-	return result
-}

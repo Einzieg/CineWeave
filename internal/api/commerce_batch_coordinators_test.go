@@ -47,7 +47,7 @@ func TestNormalizeCommerceScriptUnitBatchAdvanceRequestFreezesSelection(t *testi
 	if !slices.Equal(req.Items[0].ShotIDs, wantShotIDs) {
 		t.Fatalf("normalized first selection = %+v", req.Items[0].ShotIDs)
 	}
-	if req.Items[0].AttemptGeneration != 1 || req.Items[0].Resolution != "1080p" || req.Items[1].Resolution != "720p" {
+	if req.Items[0].AttemptGeneration != 1 || req.Items[0].Resolution != "" || req.Items[1].Resolution != "720p" {
 		t.Fatalf("normalized item defaults = %+v", req.Items)
 	}
 }

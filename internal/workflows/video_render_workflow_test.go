@@ -37,6 +37,27 @@ func TestTerminalVideoSegmentFailureDoesNotRetryDeterministicErrors(t *testing.T
 	}
 }
 
+func TestValidateExpectedShotRenderDurationUsesFrozenProviderRequestTier(t *testing.T) {
+	segments := []PreparedShotVideoSegment{{
+		GatewayVideoPlanSegment: provider.GatewayVideoPlanSegment{
+			PlannedDurationSeconds:   15,
+			RequestedDurationSeconds: 16,
+		},
+	}}
+
+	if err := validateExpectedShotRenderDuration(16, segments); err != nil {
+		t.Fatalf("expected frozen 16 second provider tier to pass: %v", err)
+	}
+	err := validateExpectedShotRenderDuration(15, segments)
+	if err == nil {
+		t.Fatal("expected mismatched frozen provider tier to fail")
+	}
+	var applicationErr *temporal.ApplicationError
+	if !errors.As(err, &applicationErr) || applicationErr.Type() != provider.CodeRenderPlanReplanRequired || !applicationErr.NonRetryable() {
+		t.Fatalf("error = %v, want non-retryable %s", err, provider.CodeRenderPlanReplanRequired)
+	}
+}
+
 func TestShotRenderExecutionTailFrameContractsExtractFreshTailForNextSegment(t *testing.T) {
 	for _, contractKey := range []string{
 		provider.VideoInputContractFirstFrame,

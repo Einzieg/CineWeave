@@ -221,11 +221,6 @@ func (s *CatalogService) CreateScriptVersion(ctx context.Context, tx pgx.Tx, org
 	if !activate {
 		return ScriptVersionMutation{ScriptUnit: unit, Version: version}, nil
 	}
-	if unit.ActiveUnitGenerationID != nil {
-		return ScriptVersionMutation{
-			ScriptUnit: unit, Version: version, RequiresRebuild: true,
-		}, nil
-	}
 	unit, err = s.repository.ActivateScriptVersion(ctx, tx, unit, version)
 	if err != nil {
 		return ScriptVersionMutation{}, err
@@ -248,9 +243,6 @@ func (s *CatalogService) ActivateScriptVersion(ctx context.Context, tx pgx.Tx, o
 	}
 	if unit.Revision != expectedRevision {
 		return ScriptUnit{}, Error{Code: CodeScriptUnitRevision, Message: "脚本已变化，请刷新后重试"}
-	}
-	if unit.ActiveUnitGenerationID != nil {
-		return ScriptUnit{}, Error{Code: CodeScriptVersionStale, Message: "当前脚本已有生产结果，请先确认单元重建影响"}
 	}
 	version, err := s.repository.LoadScriptVersion(ctx, tx, organizationID, projectID, unitID, versionID)
 	if err != nil {
@@ -332,17 +324,10 @@ func (s *CatalogService) ResolveLanguage(ctx context.Context, tx pgx.Tx, organiz
 		return s.repository.InsertLanguageResolution(ctx, tx, unit, version.ID, &source, unit.ExplicitTargetLanguage,
 			&confidence, "用户明确指定目标语言", false, "confirmed", &actorID, inputHash)
 	}
-	needsConfirmation := confidence < 0.82 || mixed
-	status := "confirmed"
-	var confirmedBy *string
-	if needsConfirmation {
-		status = "needs_confirmation"
-	} else {
-		confirmedBy = &actorID
-	}
+	_ = mixed
 	reasoning := "根据脚本文字分布生成语言候选"
 	return s.repository.InsertLanguageResolution(ctx, tx, unit, version.ID, &source, &source,
-		&confidence, reasoning, needsConfirmation, status, confirmedBy, inputHash)
+		&confidence, reasoning, false, "confirmed", &actorID, inputHash)
 }
 
 // RecordLanguageResolution persists a validated resolver result against the
@@ -360,6 +345,7 @@ func (s *CatalogService) RecordLanguageResolution(
 	confidence float64,
 	reasoning string,
 	needsConfirmation bool,
+	inputHash string,
 ) (LanguageResolution, error) {
 	sourceLanguage, err := normalizeLocale(sourceLanguage)
 	if err != nil {
@@ -395,24 +381,20 @@ func (s *CatalogService) RecordLanguageResolution(
 		if normalizeErr != nil || expected != targetLanguage {
 			return LanguageResolution{}, Error{Code: CodeLanguageConfirmation, Message: "语言解析结果不能覆盖用户指定的目标语言", Cause: normalizeErr}
 		}
-		needsConfirmation = false
 	}
-	inputHash := hashText(strings.Join([]string{version.ID, version.ContentHash, unit.LanguageMode, optionalString(unit.ExplicitTargetLanguage)}, ":"))
+	needsConfirmation = false
+	inputHash = strings.TrimSpace(inputHash)
+	if len(inputHash) != 64 {
+		return LanguageResolution{}, Error{Code: CodeLanguageUnsupported, Message: "语言解析输入快照无效"}
+	}
 	if existing, existingErr := s.repository.LoadLatestLanguageResolution(ctx, tx, organizationID, projectID, unitID); existingErr == nil && existing.InputHash == inputHash {
 		return existing, nil
 	} else if existingErr != nil && !errors.Is(existingErr, pgx.ErrNoRows) {
 		return LanguageResolution{}, existingErr
 	}
-	status := "confirmed"
-	var confirmedBy *string
-	if needsConfirmation {
-		status = "needs_confirmation"
-	} else {
-		confirmedBy = &actorID
-	}
 	return s.repository.InsertLanguageResolution(
 		ctx, tx, unit, version.ID, &sourceLanguage, &targetLanguage, &confidence,
-		reasoning, needsConfirmation, status, confirmedBy, inputHash,
+		reasoning, false, "confirmed", &actorID, inputHash,
 	)
 }
 
@@ -488,8 +470,9 @@ func (s *CatalogService) CreateLocalization(ctx context.Context, tx pgx.Tx, orga
 		return ScriptLocalization{}, TimingEstimate{}, err
 	}
 	if resolution.ID != input.LanguageResolutionID || resolution.Status != "confirmed" || resolution.TargetLanguage == nil || *resolution.TargetLanguage != targetLocale {
-		return ScriptLocalization{}, TimingEstimate{}, Error{Code: CodeLanguageConfirmation, Message: "请先确认当前脚本的目标语言"}
+		return ScriptLocalization{}, TimingEstimate{}, Error{Code: CodeLanguageConfirmation, Message: "当前脚本的语言识别尚未完成"}
 	}
+	timingPolicy := AdvisoryLocalizationTimingPolicy(targetLocale)
 	sourceSegments, err := s.repository.ListScriptSegments(ctx, tx, organizationID, projectID, unitID, input.SourceScriptVersionID)
 	if err != nil {
 		return ScriptLocalization{}, TimingEstimate{}, err
@@ -512,19 +495,12 @@ func (s *CatalogService) CreateLocalization(ctx context.Context, tx pgx.Tx, orga
 	}
 	var timing TimingEstimate
 	if structured {
-		timing, err = estimateStructuredScriptTiming(timingSegments, targetLocale, unit.TargetDurationSeconds)
+		timing, err = estimateStructuredScriptTiming(timingSegments, targetLocale, unit.TargetDurationSeconds, timingPolicy)
 	} else {
-		timing, err = estimateScriptTiming(input.LocalizedContent, targetLocale, unit.TargetDurationSeconds)
+		timing, err = estimateScriptTiming(input.LocalizedContent, targetLocale, unit.TargetDurationSeconds, timingPolicy)
 	}
 	if err != nil {
 		return ScriptLocalization{}, TimingEstimate{}, err
-	}
-	if timing.Exceeded {
-		return ScriptLocalization{}, timing, Error{
-			Code:    CodeDurationExceeded,
-			Message: fmt.Sprintf("预计旁白 %.1f 秒，超过目标 %d 秒", timing.EstimatedVoiceoverSeconds, timing.TargetDurationSeconds),
-			Details: map[string]any{"timing": timing},
-		}
 	}
 	localization, err := s.repository.InsertLocalization(ctx, tx, unit, resolution, input, timing, createdBy)
 	if err != nil {
@@ -620,8 +596,8 @@ func normalizeScriptUnitInput(input *CreateScriptUnitInput) error {
 	if input.TargetPlatform == "" {
 		input.TargetPlatform = "generic"
 	}
-	if input.TargetDurationSeconds != 15 && input.TargetDurationSeconds != 30 && input.TargetDurationSeconds != 60 {
-		return Error{Code: CodeDurationExceeded, Message: "目标时长只支持 15、30 或 60 秒"}
+	if input.TargetDurationSeconds <= 0 {
+		return Error{Code: CodeDurationExceeded, Message: "目标时长必须为正整数秒"}
 	}
 	if input.LanguageMode != "auto" && input.LanguageMode != "explicit" {
 		return Error{Code: CodeLanguageRequired, Message: "语言模式必须为自动判断或明确指定"}
@@ -684,8 +660,8 @@ func validateScriptUnitUpdate(current ScriptUnit, input *UpdateScriptUnitInput) 
 	} else if input.LanguageMode != nil {
 		input.ExplicitTargetLanguage = nil
 	}
-	if input.TargetDurationSeconds != nil && *input.TargetDurationSeconds != 15 && *input.TargetDurationSeconds != 30 && *input.TargetDurationSeconds != 60 {
-		return Error{Code: CodeDurationExceeded, Message: "目标时长只支持 15、30 或 60 秒"}
+	if input.TargetDurationSeconds != nil && *input.TargetDurationSeconds <= 0 {
+		return Error{Code: CodeDurationExceeded, Message: "目标时长必须为正整数秒"}
 	}
 	if input.TargetPlatform != nil {
 		value := strings.TrimSpace(*input.TargetPlatform)
@@ -771,56 +747,40 @@ func decodeScriptUnitCursor(cursor string) (int64, string, error) {
 	return sortOrder, parts[1], nil
 }
 
-func estimateScriptTiming(content, locale string, targetDuration int) (TimingEstimate, error) {
-	locale, err := normalizeLocale(locale)
-	if err != nil {
-		return TimingEstimate{}, err
+func estimateScriptTiming(
+	content string,
+	locale string,
+	targetDuration int,
+	policy LocalizationTimingPolicy,
+) (TimingEstimate, error) {
+	return estimateLocalizationTiming([]string{content}, locale, targetDuration, policy)
+}
+
+const CommerceAdvisoryTimingVersion = "commerce-advisory-timing/v1"
+
+// AdvisoryLocalizationTimingPolicy estimates pacing for UI guidance and
+// storyboard allocation. It is deliberately derived from the resolved locale
+// at runtime: templates do not publish, freeze, approve, or restrict it.
+func AdvisoryLocalizationTimingPolicy(locale string) LocalizationTimingPolicy {
+	language := strings.ToLower(strings.Split(strings.TrimSpace(locale), "-")[0])
+	policy := LocalizationTimingPolicy{
+		Version: CommerceAdvisoryTimingVersion,
+		Unit:    "word", NormalUnitsPerSecond: 2.5,
+		CommaPauseSeconds: 0.12, SentencePauseSeconds: 0.22,
+		SegmentGapSeconds: 0.08, AllowedOverrunSeconds: 0,
 	}
-	base := strings.ToLower(strings.Split(locale, "-")[0])
-	units := 0
-	rate := 0.0
-	policy := ""
-	switch base {
+	switch language {
 	case "zh":
-		for _, current := range content {
-			if unicode.Is(unicode.Han, current) || unicode.IsLetter(current) || unicode.IsDigit(current) {
-				units++
-			}
-		}
-		rate = 3.5
-		policy = "zh-hanzi-v1"
+		policy.Unit = "han_character"
+		policy.NormalUnitsPerSecond = 3.5
 	case "ja":
-		for _, current := range content {
-			if !unicode.IsSpace(current) && !unicode.IsPunct(current) {
-				units++
-			}
-		}
-		rate = 4.0
-		policy = "ja-mora-approx-v1"
+		policy.Unit = "mora"
+		policy.NormalUnitsPerSecond = 5
 	case "ko":
-		for _, current := range content {
-			if unicode.IsLetter(current) || unicode.IsDigit(current) {
-				units++
-			}
-		}
-		rate = 3.5
-		policy = "ko-syllable-v1"
-	case "en", "de", "fr", "es", "pt", "it", "id", "vi", "th":
-		units = len(strings.Fields(content))
-		rate = 2.5
-		policy = base + "-word-v1"
-	default:
-		return TimingEstimate{}, Error{Code: CodeLanguageUnsupported, Message: "当前语言没有已发布的时长策略"}
+		policy.Unit = "syllable"
+		policy.NormalUnitsPerSecond = 4
 	}
-	seconds := 0.0
-	if rate > 0 {
-		seconds = float64(units) / rate
-	}
-	return TimingEstimate{
-		Locale: locale, PolicyVersion: policy, Units: units, UnitsPerSecond: rate,
-		EstimatedVoiceoverSeconds: seconds, TargetDurationSeconds: targetDuration,
-		Exceeded: seconds > float64(targetDuration),
-	}, nil
+	return policy
 }
 
 const commerceScriptLocalizationContractVersion = "commerce-script-localization/v1"
@@ -944,73 +904,118 @@ func parseStructuredLocalizationSegments(
 	return contract.Segments, true, nil
 }
 
-func estimateStructuredScriptTiming(segments []string, locale string, targetDuration int) (TimingEstimate, error) {
+func estimateStructuredScriptTiming(
+	segments []string,
+	locale string,
+	targetDuration int,
+	policy LocalizationTimingPolicy,
+) (TimingEstimate, error) {
+	return estimateLocalizationTiming(segments, locale, targetDuration, policy)
+}
+
+func estimateLocalizationTiming(
+	segments []string,
+	locale string,
+	targetDuration int,
+	policy LocalizationTimingPolicy,
+) (TimingEstimate, error) {
 	locale, err := normalizeLocale(locale)
 	if err != nil {
 		return TimingEstimate{}, err
 	}
-	base := strings.ToLower(strings.Split(locale, "-")[0])
-	rate := 0.0
-	policy := ""
-	switch base {
-	case "zh":
-		rate = 3.5
-		policy = "zh-cn-voiceover/v1"
-	case "ja":
-		rate = 4.0
-		policy = "ja-mora-approx-v1"
-	case "ko":
-		rate = 3.5
-		policy = "ko-syllable-v1"
-	case "en", "de", "fr", "es", "pt", "it", "id", "vi", "th":
-		rate = 2.5
-		policy = base + "-word-v1"
-	default:
-		return TimingEstimate{}, Error{Code: CodeLanguageUnsupported, Message: "当前语言没有已发布的时长策略"}
+	if err := validateLocalizationTimingPolicy(policy); err != nil {
+		return TimingEstimate{}, err
 	}
-
 	units := 0
 	pauseSeconds := 0.0
-	for index, content := range segments {
-		switch base {
-		case "zh", "ko":
-			for _, current := range content {
-				if unicode.Is(unicode.Han, current) || unicode.IsLetter(current) || unicode.IsDigit(current) {
-					units++
-				}
-				pauseSeconds += structuredScriptPunctuationPause(current)
-			}
-		case "ja":
-			for _, current := range content {
-				if !unicode.IsSpace(current) && !unicode.IsPunct(current) {
-					units++
-				}
-				pauseSeconds += structuredScriptPunctuationPause(current)
-			}
-		default:
-			units += len(strings.Fields(content))
-			for _, current := range content {
-				pauseSeconds += structuredScriptPunctuationPause(current)
-			}
+	spokenSegments := 0
+	for _, content := range segments {
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
 		}
-		if index > 0 {
-			pauseSeconds += 0.1
+		if spokenSegments > 0 {
+			pauseSeconds += policy.SegmentGapSeconds
 		}
+		spokenSegments++
+		currentUnits, countErr := localizationTimingUnits(content, policy.Unit)
+		if countErr != nil {
+			return TimingEstimate{}, countErr
+		}
+		units += currentUnits
+		pauseSeconds += localizationPunctuationPauseSeconds(content, policy)
 	}
-	seconds := float64(units)/rate + pauseSeconds
+	seconds := float64(units)/policy.NormalUnitsPerSecond + pauseSeconds
 	return TimingEstimate{
-		Locale: locale, PolicyVersion: policy, Units: units, UnitsPerSecond: rate,
+		Locale: locale, PolicyVersion: policy.Version, Units: units, UnitsPerSecond: policy.NormalUnitsPerSecond,
 		EstimatedVoiceoverSeconds: seconds, TargetDurationSeconds: targetDuration,
 		Exceeded: seconds > float64(targetDuration),
 	}, nil
 }
 
-func structuredScriptPunctuationPause(current rune) float64 {
+func validateLocalizationTimingPolicy(policy LocalizationTimingPolicy) error {
+	if strings.TrimSpace(policy.Version) == "" ||
+		strings.TrimSpace(policy.Unit) == "" ||
+		policy.NormalUnitsPerSecond <= 0 ||
+		policy.CommaPauseSeconds < 0 ||
+		policy.SentencePauseSeconds < 0 ||
+		policy.SegmentGapSeconds < 0 ||
+		policy.AllowedOverrunSeconds < 0 {
+		return errors.New("localization timing policy is invalid")
+	}
+	switch policy.Unit {
+	case "han_character", "character", "mora", "syllable", "word":
+		return nil
+	default:
+		return fmt.Errorf("unsupported timing unit %q", policy.Unit)
+	}
+}
+
+func localizationTimingUnits(content, unit string) (int, error) {
+	units := 0
+	switch unit {
+	case "han_character", "character", "syllable":
+		for _, current := range content {
+			if unicode.IsLetter(current) || unicode.IsDigit(current) || unicode.Is(unicode.Han, current) ||
+				unicode.In(current, unicode.Hiragana, unicode.Katakana, unicode.Hangul) {
+				units++
+			}
+		}
+	case "mora":
+		for _, current := range content {
+			if !unicode.IsSpace(current) && !unicode.IsPunct(current) {
+				units++
+			}
+		}
+	case "word":
+		units = len(strings.Fields(content))
+	default:
+		return 0, fmt.Errorf("unsupported timing unit %q", unit)
+	}
+	return units, nil
+}
+
+func localizationPunctuationPauseSeconds(content string, policy LocalizationTimingPolicy) float64 {
+	pauseSeconds := 0.0
+	clusterPauseSeconds := 0.0
+	for _, current := range content {
+		currentPauseSeconds := localizationPunctuationPause(current, policy)
+		if currentPauseSeconds > 0 {
+			clusterPauseSeconds = max(clusterPauseSeconds, currentPauseSeconds)
+			continue
+		}
+		pauseSeconds += clusterPauseSeconds
+		clusterPauseSeconds = 0
+	}
+	return pauseSeconds + clusterPauseSeconds
+}
+
+func localizationPunctuationPause(current rune, policy LocalizationTimingPolicy) float64 {
 	switch current {
 	case ',', '，', '、', ';', '；', ':', '：':
-		return 0.15
+		return policy.CommaPauseSeconds
 	case '.', '。', '!', '！', '?', '？':
-		return 0.35
+		return policy.SentencePauseSeconds
 	default:
 		return 0
 	}

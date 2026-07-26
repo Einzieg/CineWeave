@@ -14,41 +14,46 @@ var (
 )
 
 const (
-	CodeProjectKindMismatch    = "PROJECT_KIND_MISMATCH"
-	CodeBindingMismatch        = "COMMERCE_BINDING_MISMATCH"
-	CodeGenerationMismatch     = "COMMERCE_SCRIPT_UNIT_GENERATION_MISMATCH"
-	CodeRevisionConflict       = "COMMERCE_REVISION_CONFLICT"
-	CodeProjectNotConfigured   = "COMMERCE_PROJECT_NOT_CONFIGURED"
-	CodeProjectLocked          = "COMMERCE_PROJECT_LOCKED"
-	CodeProjectRebuildBlocked  = "COMMERCE_PROJECT_REBUILD_BLOCKED"
-	CodeSetupIncomplete        = "COMMERCE_SETUP_INCOMPLETE"
-	CodeSetupRevisionConflict  = "COMMERCE_SETUP_REVISION_CONFLICT"
-	CodeSetupAbandoned         = "COMMERCE_SETUP_ALREADY_ABANDONED"
-	CodeProductRequired        = "COMMERCE_PRODUCT_REQUIRED"
-	CodeProductVersionStale    = "COMMERCE_PRODUCT_VERSION_STALE"
-	CodeProductReconfigure     = "COMMERCE_PRODUCT_RECONFIGURATION_REQUIRED"
-	CodeProductPrimaryImage    = "COMMERCE_PRODUCT_PRIMARY_IMAGE_REQUIRED"
-	CodeScriptUnitRequired     = "COMMERCE_SCRIPT_UNIT_REQUIRED"
-	CodeScriptUnitArchived     = "COMMERCE_SCRIPT_UNIT_ARCHIVED"
-	CodeScriptUnitRevision     = "COMMERCE_SCRIPT_UNIT_REVISION_CONFLICT"
-	CodeScriptRequired         = "COMMERCE_SCRIPT_REQUIRED"
-	CodeLanguageRequired       = "COMMERCE_LANGUAGE_REQUIRED"
-	CodeLanguageUnsupported    = "COMMERCE_LANGUAGE_UNSUPPORTED"
-	CodeLanguageConfirmation   = "COMMERCE_LANGUAGE_CONFIRMATION_REQUIRED"
-	CodeDurationExceeded       = "COMMERCE_SCRIPT_DURATION_EXCEEDED"
-	CodeScriptVersionStale     = "COMMERCE_SCRIPT_VERSION_STALE"
-	CodeScriptRebuildRequired  = "COMMERCE_SCRIPT_UNIT_REBUILD_REQUIRED"
-	CodeScriptRebuildStale     = "COMMERCE_SCRIPT_UNIT_REBUILD_STALE"
-	CodeScriptRebuildBlocked   = "COMMERCE_SCRIPT_UNIT_REBUILD_BLOCKED"
-	CodeScriptOrganization     = "COMMERCE_SCRIPT_ORGANIZATION_INVALID"
-	CodeScriptOrganizationBusy = "COMMERCE_SCRIPT_ORGANIZATION_IN_PROGRESS"
-	CodeScriptOrganizationNeed = "COMMERCE_SCRIPT_ORGANIZATION_REQUIRED"
-	CodeStoryboardPlanRequired = "COMMERCE_STORYBOARD_PLAN_REQUIRED"
-	CodeStoryboardPlanStale    = "COMMERCE_STORYBOARD_PLAN_STALE"
-	CodeStoryboardShotRequired = "COMMERCE_STORYBOARD_SHOT_REQUIRED"
-	CodeStoryboardRevision     = "COMMERCE_STORYBOARD_REVISION_CONFLICT"
-	CodeStoryboardInvalid      = "COMMERCE_STORYBOARD_INVALID"
-	CodeImagePromptRequired    = "COMMERCE_IMAGE_PROMPT_REQUIRED"
+	CodeProjectKindMismatch       = "PROJECT_KIND_MISMATCH"
+	CodeBindingMismatch           = "COMMERCE_BINDING_MISMATCH"
+	CodeGenerationMismatch        = "COMMERCE_SCRIPT_UNIT_GENERATION_MISMATCH"
+	CodeRevisionConflict          = "COMMERCE_REVISION_CONFLICT"
+	CodeProjectNotConfigured      = "COMMERCE_PROJECT_NOT_CONFIGURED"
+	CodeProjectLocked             = "COMMERCE_PROJECT_LOCKED"
+	CodeProjectDeletionInProgress = "PROJECT_DELETION_IN_PROGRESS"
+	CodeProjectRebuildBlocked     = "COMMERCE_PROJECT_REBUILD_BLOCKED"
+	CodeSetupIncomplete           = "COMMERCE_SETUP_INCOMPLETE"
+	CodeSetupRevisionConflict     = "COMMERCE_SETUP_REVISION_CONFLICT"
+	CodeSetupAbandoned            = "COMMERCE_SETUP_ALREADY_ABANDONED"
+	CodeProductRequired           = "COMMERCE_PRODUCT_REQUIRED"
+	CodeProductVersionStale       = "COMMERCE_PRODUCT_VERSION_STALE"
+	CodeProductReconfigure        = "COMMERCE_PRODUCT_RECONFIGURATION_REQUIRED"
+	CodeProductPrimaryImage       = "COMMERCE_PRODUCT_PRIMARY_IMAGE_REQUIRED"
+	CodeScriptUnitRequired        = "COMMERCE_SCRIPT_UNIT_REQUIRED"
+	CodeScriptUnitArchived        = "COMMERCE_SCRIPT_UNIT_ARCHIVED"
+	CodeScriptUnitRevision        = "COMMERCE_SCRIPT_UNIT_REVISION_CONFLICT"
+	CodeScriptRequired            = "COMMERCE_SCRIPT_REQUIRED"
+	CodeLanguageRequired          = "COMMERCE_LANGUAGE_REQUIRED"
+	CodeLanguageUnsupported       = "COMMERCE_LANGUAGE_UNSUPPORTED"
+	CodeLanguageConfirmation      = "COMMERCE_LANGUAGE_CONFIRMATION_REQUIRED"
+	CodeDurationExceeded          = "COMMERCE_SCRIPT_DURATION_EXCEEDED"
+	CodeScriptVersionStale        = "COMMERCE_SCRIPT_VERSION_STALE"
+	CodeScriptRebuildRequired     = "COMMERCE_SCRIPT_UNIT_REBUILD_REQUIRED"
+	CodeScriptRebuildStale        = "COMMERCE_SCRIPT_UNIT_REBUILD_STALE"
+	CodeScriptRebuildBlocked      = "COMMERCE_SCRIPT_UNIT_REBUILD_BLOCKED"
+	CodeScriptOrganization        = "COMMERCE_SCRIPT_ORGANIZATION_INVALID"
+	CodeScriptOrganizationBusy    = "COMMERCE_SCRIPT_ORGANIZATION_IN_PROGRESS"
+	CodeScriptOrganizationNeed    = "COMMERCE_SCRIPT_ORGANIZATION_REQUIRED"
+	CodeStoryboardPlanRequired    = "COMMERCE_STORYBOARD_PLAN_REQUIRED"
+	CodeStoryboardPlanStale       = "COMMERCE_STORYBOARD_PLAN_STALE"
+	CodeStoryboardShotRequired    = "COMMERCE_STORYBOARD_SHOT_REQUIRED"
+	CodeStoryboardRevision        = "COMMERCE_STORYBOARD_REVISION_CONFLICT"
+	CodeStoryboardInvalid         = "COMMERCE_STORYBOARD_INVALID"
+	CodeStoryboardStrategy        = "COMMERCE_STORYBOARD_STRATEGY_INVALID"
+	CodeStoryboardPreviewStale    = "COMMERCE_STORYBOARD_PREVIEW_STALE"
+	CodeVideoEnvelopeMissing      = "VIDEO_EXECUTION_ENVELOPE_UNAVAILABLE"
+	CodeVideoDurationMissing      = "VIDEO_DURATION_PLAN_UNAVAILABLE"
+	CodeImagePromptRequired       = "COMMERCE_IMAGE_PROMPT_REQUIRED"
 )
 
 type Error struct {
@@ -189,14 +194,16 @@ type ProjectGenerationIdentity struct {
 }
 
 type ProductionContext struct {
-	OrganizationID  string                    `json:"organizationId"`
-	ProjectID       string                    `json:"projectId"`
-	ProjectRevision int64                     `json:"projectRevision"`
-	ProjectState    string                    `json:"projectState"`
-	ProjectLocked   bool                      `json:"projectLocked"`
-	Generation      ProjectGenerationIdentity `json:"generation"`
-	VideoBinding    VideoBindingIdentity      `json:"videoBinding"`
-	CommerceBinding WorkflowBindingIdentity   `json:"commerceBinding"`
+	OrganizationID   string                    `json:"organizationId"`
+	ProjectID        string                    `json:"projectId"`
+	ProjectRevision  int64                     `json:"projectRevision"`
+	ProjectState     string                    `json:"projectState"`
+	ProjectLocked    bool                      `json:"projectLocked"`
+	LifecycleStatus  string                    `json:"lifecycleStatus"`
+	DeletionRevision int64                     `json:"deletionRevision"`
+	Generation       ProjectGenerationIdentity `json:"generation"`
+	VideoBinding     VideoBindingIdentity      `json:"videoBinding"`
+	CommerceBinding  WorkflowBindingIdentity   `json:"commerceBinding"`
 }
 
 type ExecutionIdentity struct {

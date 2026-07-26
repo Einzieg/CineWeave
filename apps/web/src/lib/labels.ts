@@ -676,11 +676,23 @@ export function localeLabel(
     "zh-cn": "简体中文",
     "zh-tw": "繁体中文",
     "en-us": "英语（美国）",
+    "en-gb": "英语（英国）",
+    "ms-my": "马来语",
+    "id-id": "印度尼西亚语",
     "ja-jp": "日语",
     "ko-kr": "韩语",
-    "es-es": "西班牙语",
+    "th-th": "泰语",
+    "vi-vn": "越南语",
+    "es-es": "西班牙语（西班牙）",
+    "es-mx": "西班牙语（墨西哥）",
+    "pt-br": "葡萄牙语（巴西）",
     "fr-fr": "法语",
     "de-de": "德语",
+    "it-it": "意大利语",
+    "ru-ru": "俄语",
+    "ar-sa": "阿拉伯语",
+    "hi-in": "印地语",
+    "tr-tr": "土耳其语",
   };
   return labels[normalized.toLowerCase()] || normalized;
 }
@@ -694,6 +706,27 @@ export function commerceReferenceRoleLabel(value?: string | null) {
     context: "环境参考",
   };
   return labels[value || ""] || value || "商品参考";
+}
+
+export function commerceSegmentUsageLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    visual: "画面依据",
+    voiceover: "旁白依据",
+    onscreen: "屏幕文字",
+    cta: "行动引导",
+    context: "上下文",
+  };
+  return labels[value || ""] || value || "来源片段";
+}
+
+export function commerceTimingAdvisoryLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    none: "时长匹配",
+    info: "时长提示",
+    warning: "旁白偏长",
+    critical: "旁白超出",
+  };
+  return labels[value || ""] || "时长待评估";
 }
 
 export function projectKindLabel(value?: string | null) {
@@ -840,4 +873,18 @@ export function auditResourceTypeLabel(value?: string) {
     role_binding: "角色绑定",
   };
   return labels[value || ""] || "资源";
+}
+
+export function projectDeletionStatusLabel(value?: string) {
+  const labels: Record<string, string> = {
+    requested: "等待启动",
+    cancelling_tasks: "正在取消任务",
+    waiting_for_terminal: "等待任务结束",
+    deleting_storage: "正在删除文件",
+    deleting_business_data: "正在删除项目数据",
+    completed: "删除完成",
+    failed_retryable: "删除失败，可重试",
+    failed_terminal: "删除失败",
+  };
+  return labels[value || ""] || "删除中";
 }

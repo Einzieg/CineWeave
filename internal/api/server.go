@@ -36,6 +36,7 @@ type Server struct {
 	providers                    *provider.Service
 	commerce                     *commercepkg.Service
 	commerceCatalog              *commercepkg.CatalogService
+	commerceDirect               *commercepkg.DirectVideoService
 	storage                      *storage.Client
 	temporal                     temporalClient
 	assetBatchSnapshotLockedHook func()
@@ -78,6 +79,9 @@ type Project struct {
 	AudioRequirement           string                          `json:"audioRequirement"`
 	AudioConfigurationRevision int                             `json:"audioConfigurationRevision"`
 	Revision                   int64                           `json:"revision"`
+	LifecycleStatus            string                          `json:"lifecycleStatus"`
+	DeletionRevision           int64                           `json:"deletionRevision"`
+	DeletionRequestedAt        *time.Time                      `json:"deletionRequestedAt,omitempty"`
 	ImageQuality               string                          `json:"imageQuality"`
 	TimelineTimebase           int64                           `json:"timelineTimebase"`
 	FPSNumerator               int                             `json:"fpsNumerator"`
@@ -108,6 +112,7 @@ func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provide
 		db: pool, auth: authService, authorizer: authorizer, providers: providerService,
 		commerce:        commercepkg.NewService(commercepkg.NewRepository()),
 		commerceCatalog: commercepkg.NewCatalogService(commercepkg.NewRepository()),
+		commerceDirect:  commercepkg.NewDirectVideoService(commercepkg.NewRepository()),
 		storage:         storageClient, temporal: temporalClient,
 	}
 }
@@ -192,9 +197,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{projectId}/video-production/rebuilds/{rebuildId}/items", s.withAuth(s.listProjectVideoProductionRebuildItems))
 	mux.HandleFunc("POST /api/projects/{projectId}/video-production/rebuilds/{rebuildId}/retry-failed", s.withAuth(s.retryFailedProjectVideoProductionRebuildItems))
 	mux.HandleFunc("PATCH /api/projects/{projectId}", s.withAuth(s.updateProject))
-	mux.HandleFunc("DELETE /api/projects/{projectId}", s.withAuth(s.deleteProject))
+	mux.HandleFunc("GET /api/projects/{projectId}/deletion-impact", s.withAuth(s.getProjectDeletionImpact))
+	mux.HandleFunc("POST /api/projects/{projectId}/deletion-requests", s.withAuth(s.createProjectDeletionRequest))
+	mux.HandleFunc("GET /api/projects/{projectId}/deletion-requests/{requestId}", s.withAuth(s.getProjectDeletionRequest))
+	mux.HandleFunc("POST /api/projects/{projectId}/deletion-requests/{requestId}/retry", s.withAuth(s.retryProjectDeletionRequest))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}", s.withAuth(s.getCommerceSetupSession))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/complete", s.withAuth(s.completeCommerceSetupSession))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/restart", s.withAuth(s.restartCommerceSetupSession))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/language-confirmation", s.withAuth(s.confirmCommerceSetupLanguage))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/abandon", s.withAuth(s.abandonCommerceSetupSession))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product", s.withAuth(s.getCommerceProduct))
@@ -227,6 +236,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions/{versionId}", s.withAuth(s.getCommerceScriptVersion))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions", s.withAuth(s.createCommerceScriptVersion))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions/{versionId}/activate", s.withAuth(s.activateCommerceScriptVersion))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/video-options", s.withAuth(s.getCommerceDirectVideoOptions))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/references", s.withAuth(s.listCommerceScriptReferences))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/references/upload-url", s.withAuth(s.createCommerceScriptReferenceUploadURL))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/references/complete", s.withAuth(s.completeCommerceScriptReferenceUpload))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/references/{referenceId}", s.withAuth(s.archiveCommerceScriptReference))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/direct-videos", s.withAuth(s.listCommerceDirectVideos))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/direct-videos", s.withAuth(s.createCommerceDirectVideo))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/direct-videos/{jobId}", s.withAuth(s.getCommerceDirectVideo))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-resolution", s.withAuth(s.resolveCommerceScriptLanguage))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-resolution", s.withAuth(s.getCommerceScriptLanguageResolution))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-confirmation", s.withAuth(s.confirmCommerceScriptLanguage))
@@ -239,7 +256,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/localizations", s.withAuth(s.createCommerceScriptLocalization))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/localizations/{localizationId}/activate", s.withAuth(s.activateCommerceScriptLocalization))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans", s.withAuth(s.listCommerceStoryboardPlans))
-	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans", s.withAuth(s.createCommerceStoryboardPlan))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/generations/{scriptUnitGenerationId}/storyboard-planning-preview", s.withAuth(s.previewCommerceStoryboardPlan))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/generations/{scriptUnitGenerationId}/storyboard-plans", s.withAuth(s.createCommerceStoryboardPlan))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans/{planId}", s.withAuth(s.getCommerceStoryboardPlan))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans/{planId}/activate", s.withAuth(s.activateCommerceStoryboardPlan))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/storyboard-plans/{planId}/shots", s.withAuth(s.listCommerceStoryboardShots))
@@ -822,9 +840,11 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 		       tts_model_profile_key, asr_model_profile_key, audio_strategy, audio_requirement, audio_configuration_revision,
 		       image_quality, timeline_timebase, fps_numerator, fps_denominator,
 		       active_script_id::text, active_final_video_version_id::text, active_audio_mix_version_id::text,
-		       settings, revision, created_at, updated_at
+		       settings, revision, lifecycle_status, deletion_revision, deletion_requested_at,
+		       created_at, updated_at
 		FROM projects
 		WHERE organization_id = $1
+		  AND lifecycle_status = 'active'
 	`
 	args := []any{orgID}
 	if workspaceID != "" {
@@ -844,6 +864,10 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 	for rows.Next() {
 		item, err := scanProject(rows)
 		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if err := s.attachCommerceSetupContext(r.Context(), s.db, &item); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
@@ -1228,23 +1252,6 @@ func projectRevisionConflict(item Project, expectedRevision int64) apiError {
 	return conflict
 }
 
-func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	projectID := r.PathValue("projectId")
-	item, err := s.project(r, projectID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if !s.authorize(w, r, principal, authz.PermissionProjectDelete, authz.Resource{ProjectID: item.ID}) {
-		return
-	}
-	if _, err := s.db.Exec(r.Context(), `DELETE FROM projects WHERE id = $1`, projectID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]bool{"deleted": true}, nil)
-}
-
 func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, auth.Principal)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		principal, err := s.auth.ParseBearer(r.Header.Get("Authorization"))
@@ -1271,11 +1278,31 @@ func (s *Server) organization(r *http.Request, orgID string) (Organization, erro
 }
 
 func (s *Server) project(r *http.Request, projectID string) (Project, error) {
-	item, err := scanProject(s.db.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1`), projectID))
+	item, err := s.projectIncludingDeleting(r.Context(), projectID)
 	if err != nil {
 		return Project{}, err
 	}
-	if err := s.attachVideoProductionContext(r.Context(), s.db, &item); err != nil {
+	if item.LifecycleStatus == "deleting" {
+		conflict := newAPIError(http.StatusConflict, "PROJECT_DELETION_IN_PROGRESS", "项目正在删除，不能继续操作")
+		conflict.Retryable = false
+		conflict.Details = map[string]any{
+			"projectId":        item.ID,
+			"deletionRevision": item.DeletionRevision,
+		}
+		return Project{}, conflict
+	}
+	return item, nil
+}
+
+func (s *Server) projectIncludingDeleting(ctx context.Context, projectID string) (Project, error) {
+	item, err := scanProject(s.db.QueryRow(ctx, projectSelectSQL(`WHERE p.id = $1`), projectID))
+	if err != nil {
+		return Project{}, err
+	}
+	if err := s.attachCommerceSetupContext(ctx, s.db, &item); err != nil {
+		return Project{}, err
+	}
+	if err := s.attachVideoProductionContext(ctx, s.db, &item); err != nil {
 		return Project{}, err
 	}
 	return item, nil
@@ -1311,7 +1338,8 @@ func projectSelectSQL(where string) string {
 		       p.tts_model_profile_key, p.asr_model_profile_key, p.audio_strategy, p.audio_requirement, p.audio_configuration_revision,
 		       p.image_quality, p.timeline_timebase, p.fps_numerator, p.fps_denominator,
 		       p.active_script_id::text, p.active_final_video_version_id::text, p.active_audio_mix_version_id::text,
-		       p.settings, p.revision, p.created_at, p.updated_at
+		       p.settings, p.revision, p.lifecycle_status, p.deletion_revision, p.deletion_requested_at,
+		       p.created_at, p.updated_at
 		FROM projects p
 	` + where
 }
@@ -1387,6 +1415,9 @@ func scanProject(row pgx.Row) (Project, error) {
 		&item.ActiveAudioMixVersionID,
 		&item.Settings,
 		&item.Revision,
+		&item.LifecycleStatus,
+		&item.DeletionRevision,
+		&item.DeletionRequestedAt,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
@@ -1568,7 +1599,7 @@ func commerceErrorStatus(code string) int {
 		commercepkg.CodeScriptOrganization, commercepkg.CodeScriptOrganizationBusy,
 		commercepkg.CodeScriptOrganizationNeed, commercepkg.CodeLanguageConfirmation,
 		commercepkg.CodeStoryboardPlanStale, commercepkg.CodeStoryboardRevision,
-		commercepkg.CodeImagePromptRequired:
+		commercepkg.CodeStoryboardPreviewStale, commercepkg.CodeImagePromptRequired:
 		return http.StatusConflict
 	case commercepkg.CodeStoryboardPlanRequired, commercepkg.CodeStoryboardShotRequired:
 		return http.StatusNotFound

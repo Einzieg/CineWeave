@@ -61,6 +61,93 @@ Services that should normally stay on the Docker network only:
 
 Avoid introducing common development ports such as `3000`, `8080`, `8081`, `8082`, `5432`, `6379`, `7233`, or `9001` as host mappings unless the user approves.
 
+## Production Update, Repair, And Deployment Checklist
+
+Treat a production update as one immutable release unit. Editing source, building an image, replacing one container, applying a migration, or seeing a healthy process is not by itself a completed deployment. The release is complete only when source, image tags, database schema/seed, API contract, Web assets, Temporal Worker routing, and browser behavior have all been verified as the same release.
+
+The current server deployment lives under `/soft/CineWeave`. The public application and storage entry points are `cineweave.einzieg.site` and `cineweave-s3.einzieg.site`; do not modify or take over the main domain. Follow `docs/runtime-foundation-hardening-runbook.md` for the detailed release procedure.
+
+### Release authorization and scope
+
+- [ ] Obtain explicit user authorization before migrating or rebuilding the main production environment. Authorization to call paid provider APIs does not automatically authorize a database migration or Compose rebuild, and vice versa.
+- [ ] Record an immutable release ID before building. Use a full commit SHA or a release identifier tied to exact source and image digests. Never use `latest`, `main`, `local-dev`, or another mutable value in production.
+- [ ] Record the source commit, dirty patch/untracked-file inventory, expected migration head, expected seed versions, affected services, affected Temporal Worker Deployments, and whether a paid smoke test is authorized.
+- [ ] Do not overwrite a dirty production checkout. Assemble a clean release worktree/directory from a known commit plus an explicit patch and explicit untracked files. Keep the previous release directory and images until validation and Worker drainage finish.
+- [ ] Never copy `.env`, secrets, credential exports, provider protection snapshots, database dumps, or login notes into Git or a release archive. Do not print fully resolved Compose configuration when it may contain secrets.
+- [ ] A production-only hotfix must also be applied to the repository source, tested, and tracked for commit/push. Otherwise the next deployment will silently remove it.
+
+### Local release gate
+
+- [ ] Run `git status --short` and review every staged, unstaged, and untracked path. Preserve unrelated changes from other tasks.
+- [ ] Run `git diff --check`.
+- [ ] Run `pnpm run test`; do not deploy while the root test entry, migration/seed validation, OpenAPI route check, Web typecheck/lint, or Compose validation is failing.
+- [ ] Confirm all changed public routes exist in both `packages/openapi/openapi.yaml` and the running API implementation.
+- [ ] Confirm migrations and seeds are embedded in the binaries/images being deployed, and that the expected schema head comes from the same release source.
+- [ ] Build every service affected by a shared contract. If a feature spans Web, API, migration, Provider Gateway, or Worker code, deploying only one of those services is prohibited.
+
+### Production preflight and protection
+
+- [ ] Inspect the currently running image tags/digests, `CINEWEAVE_RELEASE_ID`, database schema version, seed versions, and current/ramping Temporal Build IDs. Any mismatch is version drift and must be resolved before diagnosing product behavior.
+- [ ] Validate the exact production Compose stack, including `compose.yml`, `.compose.server.yml`, and the release image override when present. Use `docker compose ... config --quiet` and `docker compose ... config --images`; avoid dumping secret-bearing resolved configuration.
+- [ ] Drain or safely pause active work before replacing runtime services. The gate includes active `workflow_runs`, `workflow_node_runs`, Commerce setup/production runs, `provider_requests`, `provider_async_tasks`, and video/asset execution checkpoints in queued, running, cancelling, or waiting states.
+- [ ] If active work cannot be drained, keep the compatible old Worker release running and prepare a Temporal versioned rollout. Do not force-recreate a Pinned Worker and abandon workflows assigned to its old Build ID.
+- [ ] Freeze Provider configuration writes and run the current `scripts/provider-data-guard.ps1` DrainCheck/Snapshot flow when the release touches Provider, model, workflow, video, or migration behavior. Store the snapshot outside Git.
+- [ ] Create a non-empty PostgreSQL custom-format backup before applying migrations. Record its absolute server path, size, timestamp, schema version, and release ID.
+- [ ] Build all release images while the old containers are still serving. Do not switch traffic to a partially built release.
+
+### Migration and service rollout
+
+- [ ] Set `CINEWEAVE_ENV=production` and the immutable `CINEWEAVE_RELEASE_ID` for migration, seed, application, and Worker containers.
+- [ ] For a backward-incompatible migration, stop or freeze every writer before migration. Do not allow old API/Worker containers to write against an incompatible new schema.
+- [ ] Run the release-specific `migrate` image, then migration `verify`. Run `seed apply` and `seed verify` when the release changes system templates, prompts, profiles, permissions, or other managed seed data.
+- [ ] Confirm the database reached the exact expected migration head. Never edit the migration ledger or database rows to make a failed release appear successful.
+- [ ] Recreate the complete affected service set as one release. A Web/API/Worker contract change must not leave any of those components on an older image.
+- [ ] Wait for Provider Gateway readiness before starting callers that depend on it. Then verify API, Realtime, Event Publisher, Workers, Web, storage, and supporting services.
+- [ ] Treat successful one-shot exits for `migrate`, `seed`, `temporal-schema`, `temporal-namespace`, and `minio-create-bucket` as expected only after their exit status and logs have been checked.
+
+### Temporal Worker release gate
+
+- [ ] Verify each Worker startup log reports the intended immutable Build ID and expected Worker Deployment name.
+- [ ] Run the repository `temporal-release check/ramp/promote` flow for every changed Worker Deployment. A healthy Worker container does not mean new workflows are routed to it.
+- [ ] Confirm the deployment current Build ID equals the release ID after promotion. For canary rollout, also verify the ramping Build ID and percentage.
+- [ ] Start a zero-cost canary workflow when available and verify its workflow/build assignment. Do not use a real paid provider merely to prove Worker routing unless the current task explicitly authorizes that spend.
+- [ ] Keep the prior Pinned Worker version available until `temporal-release drain` reports it safe to decommission. Never delete Temporal data to clear a release mismatch.
+
+### Post-deployment verification
+
+- [ ] Run `docker compose ... ps`; every long-running required service must be `Up`, and every service with a healthcheck must be `healthy`.
+- [ ] Verify API `/healthz` and `/readyz`, Realtime health, Web HTTP status, MinIO health, and Provider Gateway health/readiness from inside the Docker network.
+- [ ] Verify the schema head, seed hashes, running image tags/digests, container release labels/environment, and Temporal current Build IDs all resolve to the same release.
+- [ ] Smoke each changed API route. An unauthenticated request may return `401` or `403`, but it must not return `404` when the route should exist.
+- [ ] For Web changes, verify the new production asset/chunk is being served, then perform a hard reload or reopen the browser tab and exercise the exact changed control. Static bundle text alone is not sufficient browser acceptance.
+- [ ] Verify changed dialogs, mutations, realtime invalidation, task progress, and terminal states in the browser. Confirm the UI is not an old cached build before reopening a backend investigation.
+- [ ] Inspect recent logs for panic, fatal errors, migration failures, repeated retries, Temporal nondeterminism, provider polling loops, and authorization failures.
+- [ ] Recheck active workflow/provider/task counts after smoke. A task card marked completed must agree with its item/checkpoint/provider terminal states.
+- [ ] If a paid smoke test is authorized, record the exact project, workflow, provider request/call/task IDs, outcome, and spend boundary. Otherwise use preflight-only or local contract tests.
+- [ ] Run Provider protection `Verify` before unfreezing Provider writes. Any unexpected configuration/history difference blocks reopening production traffic.
+
+### Failure and rollback rules
+
+- [ ] If image build, migration, seed, readiness, Worker promotion, or browser acceptance fails, stop the release and preserve logs/state. Do not continue through later checklist items hoping the system will self-correct.
+- [ ] Before any paid task starts, roll back application image tags and Temporal routing to the recorded prior release when runtime verification fails.
+- [ ] Database rollback requires an explicitly reviewed down migration or backup restore plan and user authorization. Never improvise destructive SQL in production.
+- [ ] Do not mark stuck workflow/provider rows successful or delete them manually as a normal repair. Fix reconciliation/finalization, then use an explicitly approved one-off repair only when necessary.
+- [ ] Keep the previous release worktree, image tags/digests, backup, Provider snapshot, and prior Worker Build IDs until the new release has passed smoke and old workflows have drained.
+
+### Required completion report
+
+Every production deployment report must include:
+
+- release ID and source commit/patch identity
+- schema and seed versions before and after
+- backup path and verification
+- services rebuilt and exact image tags/digests
+- Temporal Deployment current/ramping/previous Build IDs
+- tests, readiness checks, API smoke, and browser smoke performed
+- active workflow/provider task counts before and after
+- whether a real paid provider call was made
+- remaining risk and exact rollback target
+
 ## Validation Commands
 
 Use the root test entry when broad validation is appropriate:

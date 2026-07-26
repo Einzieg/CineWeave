@@ -19,6 +19,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
@@ -34,22 +35,23 @@ type workflowStartDefinition struct {
 }
 
 type workflowStartOutboxItem struct {
-	ID                     string
-	WorkflowRunID          *string
-	AgentTaskID            *string
-	CommerceSetupRunID     *string
-	OrganizationID         string
-	ProjectID              string
-	ProductionGenerationID string
-	ProfileVersionID       string
-	WorkflowType           string
-	WorkflowHandler        string
-	TemporalWorkflowID     string
-	TaskQueue              string
-	Input                  json.RawMessage
-	InputHash              string
-	AttemptCount           int
-	MaxAttempts            int
+	ID                       string
+	WorkflowRunID            *string
+	AgentTaskID              *string
+	CommerceSetupRunID       *string
+	ProjectDeletionRequestID *string
+	OrganizationID           string
+	ProjectID                string
+	ProductionGenerationID   string
+	ProfileVersionID         string
+	WorkflowType             string
+	WorkflowHandler          string
+	TemporalWorkflowID       string
+	TaskQueue                string
+	Input                    json.RawMessage
+	InputHash                string
+	AttemptCount             int
+	MaxAttempts              int
 }
 
 type workflowStartFailure struct {
@@ -86,6 +88,7 @@ var workflowStartDefinitions = map[string]workflowStartDefinition{
 	"commerce_reference_image_batch":         {workflows.CommerceReferenceImageBatchWorkflow, decodeWorkflowStartInput[workflows.CommerceReferenceImageBatchInput]},
 	"commerce_video_prompt_batch":            {workflows.CommerceVideoPromptBatchWorkflow, decodeWorkflowStartInput[workflows.CommerceVideoBatchInput]},
 	"commerce_shot_video_batch":              {workflows.CommerceShotVideoBatchWorkflow, decodeWorkflowStartInput[workflows.CommerceVideoBatchInput]},
+	"commerce_direct_video":                  {workflows.CommerceDirectVideoWorkflow, decodeWorkflowStartInput[workflows.CommerceDirectVideoInput]},
 	"commerce_final_compose":                 {workflows.CommerceFinalComposeWorkflow, decodeWorkflowStartInput[workflows.CommerceFinalComposeInput]},
 	"commerce_script_unit_batch_coordinator": {workflows.CommerceScriptUnitBatchCoordinatorWorkflow, decodeWorkflowStartInput[workflows.CommerceScriptUnitBatchCoordinatorInput]},
 	"text_to_storyboard":                     {workflows.TextToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},
@@ -119,6 +122,7 @@ var workflowStartDefinitions = map[string]workflowStartDefinition{
 	"export_project":                         {workflows.ExportProjectWorkflow, decodeWorkflowStartInput[workflows.ExportProjectInput]},
 	"project_agent":                          {workflows.ProjectAgentWorkflow, decodeWorkflowStartInput[workflows.ProjectAgentWorkflowInput]},
 	"project_video_production_rebuild":       {workflows.ProjectVideoProductionRebuildWorkflow, decodeWorkflowStartInput[workflows.ProjectVideoProductionRebuildInput]},
+	"project_deletion":                       {workflows.ProjectDeletionWorkflow, decodeWorkflowStartInput[workflows.ProjectDeletionInput]},
 }
 
 func workflowHandlerForFunction(workflowFunc any) (string, error) {
@@ -190,6 +194,9 @@ func workflowStartVisibility(item workflowStartOutboxItem) (map[string]interface
 	}
 	if item.CommerceSetupRunID != nil && strings.TrimSpace(*item.CommerceSetupRunID) != "" {
 		memo["CommerceSetupRunId"] = strings.TrimSpace(*item.CommerceSetupRunID)
+	}
+	if item.ProjectDeletionRequestID != nil && strings.TrimSpace(*item.ProjectDeletionRequestID) != "" {
+		memo["ProjectDeletionRequestId"] = strings.TrimSpace(*item.ProjectDeletionRequestID)
 	}
 	return searchAttributes, memo
 }
@@ -599,6 +606,7 @@ func (s *Server) claimWorkflowStart(ctx context.Context, workerID string, leaseT
 		WHERE outbox.id = candidate.id
 		RETURNING outbox.id::text, outbox.workflow_run_id::text, outbox.agent_task_id::text,
 		          outbox.commerce_setup_run_id::text,
+		          outbox.project_deletion_request_id::text,
 		          outbox.organization_id::text, outbox.project_id::text,
 		          COALESCE(outbox.production_generation_id::text, ''),
 		          COALESCE((
@@ -615,6 +623,7 @@ func (s *Server) claimWorkflowStart(ctx context.Context, workerID string, leaseT
 		&item.WorkflowRunID,
 		&item.AgentTaskID,
 		&item.CommerceSetupRunID,
+		&item.ProjectDeletionRequestID,
 		&item.OrganizationID,
 		&item.ProjectID,
 		&item.ProductionGenerationID,
@@ -680,7 +689,17 @@ func (s *Server) executeWorkflowStart(ctx context.Context, workerID string, item
 		}
 		return workflowStartResultCancelledFenced, nil
 	}
-	if item.CommerceSetupRunID != nil {
+	if item.ProjectDeletionRequestID != nil {
+		if err := assertProjectDeletionStartWritableTx(ctx, tx, item); err != nil {
+			if err := s.cancelFencedWorkflowStartTx(ctx, tx, workerID, item, "PROJECT_DELETION_STALE", err.Error()); err != nil {
+				return "", err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return "", err
+			}
+			return workflowStartResultCancelledFenced, nil
+		}
+	} else if item.CommerceSetupRunID != nil {
 		if err := assertCommerceSetupStartWritableTx(ctx, tx, item); err != nil {
 			if err := s.cancelFencedWorkflowStartTx(ctx, tx, workerID, item, "COMMERCE_SETUP_STALE", err.Error()); err != nil {
 				return "", err
@@ -714,12 +733,16 @@ func (s *Server) executeWorkflowStart(ctx context.Context, workerID string, item
 
 	alreadyStartedExecution := false
 	searchAttributes, memo := workflowStartVisibility(item)
-	_, err = s.temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+	startOptions := client.StartWorkflowOptions{
 		ID:               item.TemporalWorkflowID,
 		TaskQueue:        item.TaskQueue,
 		SearchAttributes: searchAttributes,
 		Memo:             memo,
-	}, definition.workflow, input)
+	}
+	if item.ProjectDeletionRequestID != nil {
+		startOptions.WorkflowIDReusePolicy = enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY
+	}
+	_, err = s.temporal.ExecuteWorkflow(ctx, startOptions, definition.workflow, input)
 	if err != nil {
 		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
 		if !errors.As(err, &alreadyStarted) {
@@ -778,6 +801,15 @@ func (s *Server) executeWorkflowStart(ctx context.Context, workerID string, item
 			SET state = 'started', step = 'workflow_started', updated_at = now(), revision = revision + 1
 			WHERE setup_workflow_run_id = $1 AND state = 'starting'
 		`, *item.CommerceSetupRunID); err != nil {
+			return "", err
+		}
+	}
+	if item.ProjectDeletionRequestID != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE project_deletion_requests
+			SET updated_at = now()
+			WHERE id = $1 AND status = 'requested'
+		`, *item.ProjectDeletionRequestID); err != nil {
 			return "", err
 		}
 	}
@@ -882,6 +914,19 @@ func (s *Server) cancelFencedWorkflowStartTx(
 			return err
 		}
 	}
+	if item.ProjectDeletionRequestID != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE project_deletion_requests
+			SET status = 'failed_retryable',
+			    error_code = $2,
+			    error_message = $3,
+			    updated_at = now()
+			WHERE id = $1
+			  AND status NOT IN ('completed', 'failed_terminal')
+		`, *item.ProjectDeletionRequestID, code, message); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -950,6 +995,9 @@ func logWorkflowStartAttempt(ctx context.Context, item workflowStartOutboxItem, 
 	}
 	if item.CommerceSetupRunID != nil {
 		args = append(args, "commerceSetupRunId", *item.CommerceSetupRunID)
+	}
+	if item.ProjectDeletionRequestID != nil {
+		args = append(args, "projectDeletionRequestId", *item.ProjectDeletionRequestID)
 	}
 	if runErr != nil {
 		args = append(args, "error", runErr)
@@ -1048,6 +1096,19 @@ func (s *Server) markWorkflowStartFailed(ctx context.Context, workerID string, i
 			return err
 		}
 	}
+	if item.ProjectDeletionRequestID != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE project_deletion_requests
+			SET status = 'failed_retryable',
+			    error_code = $2,
+			    error_message = $3,
+			    updated_at = now()
+			WHERE id = $1
+			  AND status NOT IN ('completed', 'failed_terminal')
+		`, *item.ProjectDeletionRequestID, failure.code, failure.err.Error()); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 
@@ -1076,6 +1137,32 @@ func assertCommerceSetupStartWritableTx(ctx context.Context, tx pgx.Tx, item wor
 	}
 	if count != 1 {
 		return errors.New("commerce setup run is no longer writable")
+	}
+	return nil
+}
+
+func assertProjectDeletionStartWritableTx(ctx context.Context, tx pgx.Tx, item workflowStartOutboxItem) error {
+	if item.ProjectDeletionRequestID == nil || strings.TrimSpace(*item.ProjectDeletionRequestID) == "" {
+		return errors.New("project deletion request identity is missing")
+	}
+	var count int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*)
+		FROM project_deletion_requests request
+		JOIN projects project
+		  ON project.id = request.project_id
+		 AND project.organization_id = request.organization_id
+		WHERE request.id = $1
+		  AND request.organization_id = $2
+		  AND request.project_id = $3
+		  AND request.status = 'requested'
+		  AND project.lifecycle_status = 'deleting'
+		  AND project.deletion_revision = request.deletion_revision
+	`, *item.ProjectDeletionRequestID, item.OrganizationID, item.ProjectID).Scan(&count); err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("project deletion request is no longer writable")
 	}
 	return nil
 }

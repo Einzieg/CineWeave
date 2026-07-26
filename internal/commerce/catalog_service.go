@@ -106,6 +106,36 @@ func (s *CatalogService) AbandonSetupSession(
 	return updated, keys, err
 }
 
+func (s *CatalogService) RestartSetupSessionWithTemplate(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID string,
+	projectID string,
+	setupSessionID string,
+	expectedRevision int64,
+	workflowTemplateVersionID string,
+) (SetupSession, error) {
+	item, err := s.repository.LoadSetupSession(ctx, tx, organizationID, projectID, setupSessionID, true)
+	if err != nil {
+		return SetupSession{}, err
+	}
+	if item.Revision != expectedRevision {
+		return SetupSession{}, Error{Code: CodeSetupRevisionConflict, Message: "项目准备状态已变化，请刷新后重试"}
+	}
+	if item.State == "completed" || item.State == "abandoned" {
+		return SetupSession{}, Error{Code: CodeSetupAbandoned, Message: "当前项目准备任务不能重新启动"}
+	}
+	var run *SetupRun
+	if item.SetupWorkflowRunID != nil {
+		current, loadErr := s.repository.LoadSetupRun(ctx, tx, organizationID, projectID, *item.SetupWorkflowRunID)
+		if loadErr != nil {
+			return SetupSession{}, loadErr
+		}
+		run = &current
+	}
+	return s.repository.RestartSetupSessionWithTemplate(ctx, tx, item, run, strings.TrimSpace(workflowTemplateVersionID))
+}
+
 func (s *CatalogService) PrepareSetupCompletion(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -271,7 +301,7 @@ func (s *CatalogService) CommitInitialSetup(
 		return InitialSetupCommitResult{}, err
 	}
 	if localization.Status != "approved" || localization.ReviewStatus != "approved" {
-		return InitialSetupCommitResult{}, Error{Code: CodeLanguageConfirmation, Message: "脚本本地化尚未通过审核"}
+		return InitialSetupCommitResult{}, Error{Code: CodeLanguageConfirmation, Message: "脚本本地化结果尚未通过结构校验"}
 	}
 
 	bindingService := NewService(s.repository)

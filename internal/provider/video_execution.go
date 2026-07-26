@@ -68,6 +68,12 @@ type videoExecutionSegment struct {
 }
 
 func (s *Service) validateVideoExecutionRequest(ctx context.Context, req *GatewayVideoCreateTaskRequest, input gatewayVideoInput) (*videoExecutionSegment, error) {
+	if strings.TrimSpace(req.CommerceDirectVideoJobID) != "" {
+		if err := s.validateCommerceDirectVideoExecutionRequest(ctx, *req, input); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
 	planID := strings.TrimSpace(req.ExecutionPlanID)
 	segmentID := strings.TrimSpace(req.RenderSegmentID)
 	hash := strings.TrimSpace(req.CapabilitySnapshotHash)

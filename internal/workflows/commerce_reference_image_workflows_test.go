@@ -106,6 +106,156 @@ func TestValidateCommerceImagePromptPlanRejectsAudioAndTextLeakage(t *testing.T)
 	}
 }
 
+func TestBindCommerceImagePromptPlanIdentityUsesFrozenSnapshot(t *testing.T) {
+	identity := testCommerceReferenceImageIdentity()
+	snapshot := CommerceReferenceImageShotSnapshot{
+		Identity: identity, ProductVersionID: "product-version", TargetLocale: "zh-CN", AspectRatio: "9:16",
+		MinimumReferences: 1, MaximumReferences: 1,
+		References: []CommerceReferenceImageReference{{ReferenceID: "reference-1"}},
+	}
+	agentOutput := CommerceImagePromptPlanContract{
+		ContractVersion:      CommerceImagePromptPlanContractVersion,
+		CommerceScriptUnitID: "hallucinated-script", ScriptUnitGenerationID: "hallucinated-generation",
+		CommerceWorkflowBindingID: "hallucinated-binding", ProductVersionID: "hallucinated-product-version",
+		VisualPrompt: "商品正面特写，保持包装颜色和形状一致", NegativePrompt: "no text, no watermark",
+		InstructionLanguage: "zh-CN", TargetLanguage: "zh-CN", ReferenceIDs: []string{"reference-1"},
+		AspectRatio: "9:16",
+	}
+
+	bound := BindCommerceImagePromptPlanIdentity(agentOutput, snapshot)
+
+	require.Equal(t, identity.ScriptUnitID, bound.CommerceScriptUnitID)
+	require.Equal(t, identity.UnitGenerationID, bound.ScriptUnitGenerationID)
+	require.Equal(t, identity.CommerceWorkflowBindingID, bound.CommerceWorkflowBindingID)
+	require.Equal(t, snapshot.ProductVersionID, bound.ProductVersionID)
+	require.NoError(t, ValidateCommerceImagePromptPlan(bound, snapshot))
+}
+
+func TestCommerceImagePromptAgentContextCarriesPreviousFidelityIssues(t *testing.T) {
+	snapshot := CommerceReferenceImageShotSnapshot{
+		StoryboardShotID: "shot-4",
+		PreviousFidelityIssues: []CommerceReviewIssue{{
+			Code: "SHOT_COMPOSITION_MISMATCH", Field: "generatedImage",
+			Message: "生成结果是多面板拼贴", Suggestion: "只生成单一连续镜头的起始帧",
+		}},
+	}
+
+	var contextValue struct {
+		Snapshot       CommerceReferenceImageShotSnapshot `json:"snapshot"`
+		ReviewerIssues []CommerceReviewIssue              `json:"reviewerIssues"`
+		RenderPolicy   struct {
+			ImageCount             int    `json:"imageCount"`
+			FrameMoment            string `json:"frameMoment"`
+			ForbidTemporalSequence bool   `json:"forbidTemporalSequence"`
+			ForbidStoryboardPanels bool   `json:"forbidStoryboardPanels"`
+		} `json:"renderPolicy"`
+	}
+	require.NoError(t, json.Unmarshal(commerceImagePromptAgentContext(snapshot), &contextValue))
+	require.Equal(t, snapshot.StoryboardShotID, contextValue.Snapshot.StoryboardShotID)
+	require.Equal(t, snapshot.PreviousFidelityIssues, contextValue.ReviewerIssues)
+	require.Equal(t, 1, contextValue.RenderPolicy.ImageCount)
+	require.Equal(t, "start_state_only", contextValue.RenderPolicy.FrameMoment)
+	require.True(t, contextValue.RenderPolicy.ForbidTemporalSequence)
+	require.True(t, contextValue.RenderPolicy.ForbidStoryboardPanels)
+}
+
+func TestMergeCommerceReviewIssuesKeepsNewestIssuePerCodeAndField(t *testing.T) {
+	newest := []CommerceReviewIssue{
+		{Code: "PRODUCT_MATERIAL_CHANGED", Field: "generatedImage", Message: "new material issue", Suggestion: "new fix"},
+	}
+	older := []CommerceReviewIssue{
+		{Code: "PRODUCT_MATERIAL_CHANGED", Field: "generatedImage", Message: "old material issue", Suggestion: "old fix"},
+		{Code: "SHOT_COMPOSITION_CHANGED", Field: "generatedImage", Message: "panel issue", Suggestion: "single frame"},
+	}
+
+	merged := mergeCommerceReviewIssues(newest, older)
+
+	require.Len(t, merged, 2)
+	require.Equal(t, "new material issue", merged[0].Message)
+	require.Equal(t, "SHOT_COMPOSITION_CHANGED", merged[1].Code)
+}
+
+func TestCommerceImageFidelityContextLabelsGeneratedCandidate(t *testing.T) {
+	snapshot := CommerceReferenceImageShotSnapshot{
+		References: []CommerceReferenceImageReference{
+			{ReferenceID: "reference-1", PackItemID: "pack-1", ArtifactID: "artifact-1", StorageKey: "reference-1.png"},
+			{ReferenceID: "reference-2", PackItemID: "pack-2", ArtifactID: "artifact-2", StorageKey: "reference-2.png"},
+		},
+	}
+	generated := provider.GatewayImageOutput{
+		ArtifactID: "generated-artifact", MediaFileID: "generated-media", StorageKey: "generated.png",
+	}
+
+	references := commerceImageFidelityReviewReferences(snapshot.References, generated, "image-version")
+	require.Len(t, references, 3)
+	for index, reference := range references {
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(reference.Metadata, &metadata))
+		require.Equal(t, float64(index+1), metadata["attachmentIndex"])
+		if index < 2 {
+			require.Equal(t, "product_reference", metadata["reviewRole"])
+		} else {
+			require.Equal(t, "generated_candidate", metadata["reviewRole"])
+		}
+	}
+
+	var contextValue struct {
+		GeneratedImage struct {
+			AttachmentIndex int `json:"attachmentIndex"`
+		} `json:"generatedImage"`
+		AttachmentGuide struct {
+			ProductReferenceAttachmentIndexes []int  `json:"productReferenceAttachmentIndexes"`
+			GeneratedCandidateAttachmentIndex int    `json:"generatedCandidateAttachmentIndex"`
+			Instructions                      string `json:"instructions"`
+		} `json:"attachmentGuide"`
+	}
+	require.NoError(t, json.Unmarshal(
+		commerceImageFidelityAgentContext(snapshot, CommerceImagePromptPlanState{}, generated, "image-version"),
+		&contextValue,
+	))
+	require.Equal(t, 3, contextValue.GeneratedImage.AttachmentIndex)
+	require.Equal(t, []int{1, 2}, contextValue.AttachmentGuide.ProductReferenceAttachmentIndexes)
+	require.Equal(t, 3, contextValue.AttachmentGuide.GeneratedCandidateAttachmentIndex)
+	require.Contains(t, contextValue.AttachmentGuide.Instructions, "must never be treated as panels")
+}
+
+func TestReconcileCommerceImageFidelityReviewTreatsCreativeAlignmentAsAdvisory(t *testing.T) {
+	issue := CommerceReviewIssue{
+		Code: "PRODUCT_MATERIAL_CHANGED", Field: "generatedImage",
+		Message: "自然光产生了轻微高光", Suggestion: "可降低高光后重试",
+	}
+	review := CommerceImageFidelityReviewContract{
+		ContractVersion: CommerceImageFidelityReviewContractVersion,
+		Decision:        "reject", Issues: []CommerceReviewIssue{issue}, RegenerationRecommended: true,
+		Checks: CommerceImageFidelityChecks{
+			ProductIdentity: true, Packaging: true, Color: true, Shape: true,
+			ReferenceOwnership: true, NoForbiddenText: true, ShotAlignment: true,
+		},
+	}
+	require.NoError(t, ValidateCommerceImageFidelityReview(review))
+
+	reconciled := ReconcileCommerceImageFidelityReview(review)
+
+	require.Equal(t, "approve", reconciled.Decision)
+	require.Empty(t, reconciled.Issues)
+	require.Equal(t, []CommerceReviewIssue{issue}, reconciled.AdvisoryIssues)
+	require.Equal(t, "approved_with_advisory_issues", reconciled.Resolution)
+	require.False(t, reconciled.RegenerationRecommended)
+	require.NoError(t, ValidateCommerceImageFidelityReview(reconciled))
+
+	review.Checks.ShotAlignment = false
+	approvedWithAlignmentWarning := ReconcileCommerceImageFidelityReview(review)
+	require.Equal(t, "approve", approvedWithAlignmentWarning.Decision)
+	require.Equal(t, []CommerceReviewIssue{issue}, approvedWithAlignmentWarning.AdvisoryIssues)
+	require.NoError(t, ValidateCommerceImageFidelityReview(approvedWithAlignmentWarning))
+
+	review.Checks.NoForbiddenText = false
+	rejected := ReconcileCommerceImageFidelityReview(review)
+	require.Equal(t, "reject", rejected.Decision)
+	require.Equal(t, []CommerceReviewIssue{issue}, rejected.Issues)
+	require.Empty(t, rejected.AdvisoryIssues)
+}
+
 func TestCommerceProviderImageRequestMatchesGatewayHTTPContract(t *testing.T) {
 	input := testCommerceReferenceImageBatchInput(5, []string{"shot-contract"})
 	snapshot := CommerceReferenceImageShotSnapshot{
@@ -190,11 +340,17 @@ func TestCommerceReferenceImageReviewRetryReusesGeneratedMedia(t *testing.T) {
 }
 
 func TestCommerceReferenceImageMediaReusePolicy(t *testing.T) {
-	require.True(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{}))
-	require.False(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{Force: true}))
+	require.True(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{}, "shot-1"))
+	require.False(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{Force: true}, "shot-1"))
 	require.True(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{
 		Force: true, ReuseGeneratedMedia: true,
-	}))
+	}, "shot-1"))
+	require.True(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{
+		Force: true, ReuseGeneratedMediaShotIDs: []string{"shot-1"},
+	}, "shot-1"))
+	require.False(t, commerceReferenceImageMayReuseGeneratedMedia(CommerceReferenceImageBatchInput{
+		Force: true, ReuseGeneratedMediaShotIDs: []string{"shot-2"},
+	}, "shot-1"))
 
 	base := testCommerceReferenceImageBatchInput(1, []string{"shot-reuse-hash"})
 	base.Force = true
@@ -204,6 +360,33 @@ func TestCommerceReferenceImageMediaReusePolicy(t *testing.T) {
 	retryHash, err := CommerceReferenceImageSubjectHash(base, "shot-reuse-hash")
 	require.NoError(t, err)
 	require.NotEqual(t, forcedHash, retryHash)
+}
+
+func TestCommerceReferenceImageSnapshotHashIgnoresReviewFeedback(t *testing.T) {
+	snapshot := CommerceReferenceImageShotSnapshot{
+		StoryboardShotID: "shot-review-hash",
+		References:       []CommerceReferenceImageReference{{ReferenceID: "reference-1"}},
+	}
+	before, err := commerceReferenceImageSnapshotInputHash(snapshot)
+	require.NoError(t, err)
+
+	snapshot.PreviousFidelityIssues = []CommerceReviewIssue{{
+		Code: "SHOT_COMPOSITION_MISMATCH", Field: "generatedImage",
+		Message: "构图偏离", Suggestion: "保持开场构图",
+	}}
+	after, err := commerceReferenceImageSnapshotInputHash(snapshot)
+	require.NoError(t, err)
+
+	require.Equal(t, before, after)
+}
+
+func TestWorkflowErrorFieldsPreservesCommerceErrorCode(t *testing.T) {
+	code, message := workflowErrorFields(commerce.Error{
+		Code: CommerceCodeImagePromptContractInvalid, Message: "缺少已审核图片提示词",
+	}, codeActivityFailed)
+
+	require.Equal(t, CommerceCodeImagePromptContractInvalid, code)
+	require.Equal(t, "缺少已审核图片提示词", message)
 }
 
 func testCommerceReferenceImageBatchInput(concurrency int, shots []string) CommerceReferenceImageBatchInput {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -45,6 +46,7 @@ func (r *Repository) loadActiveProductionContext(
 ) (ProductionContext, error) {
 	projectQuery := `
 		SELECT project_kind, revision, video_production_state, video_production_locked,
+		       lifecycle_status, deletion_revision,
 		       active_video_production_generation_id::text
 		FROM projects
 		WHERE id = $1 AND organization_id = $2`
@@ -59,6 +61,8 @@ func (r *Repository) loadActiveProductionContext(
 		&item.ProjectRevision,
 		&item.ProjectState,
 		&item.ProjectLocked,
+		&item.LifecycleStatus,
+		&item.DeletionRevision,
 		&activeGenerationID,
 	)
 	if err != nil {
@@ -72,7 +76,7 @@ func (r *Repository) loadActiveProductionContext(
 		}
 	}
 	if !activeGenerationID.Valid {
-		return ProductionContext{}, Error{Code: CodeProjectNotConfigured, Message: "带货视频项目尚未完成生产配置", Cause: ErrProjectNotConfigured}
+		return ProductionContext{}, r.loadIncompleteSetupError(ctx, db, organizationID, projectID)
 	}
 
 	item.OrganizationID = organizationID
@@ -134,6 +138,68 @@ func (r *Repository) loadActiveProductionContext(
 		return ProductionContext{}, err
 	}
 	return item, nil
+}
+
+func (r *Repository) loadIncompleteSetupError(
+	ctx context.Context,
+	db rowQuerier,
+	organizationID string,
+	projectID string,
+) error {
+	var state string
+	var lastErrorCode, lastErrorMessage pgtype.Text
+	err := db.QueryRow(ctx, `
+		SELECT state, last_error_code, last_error_message
+		FROM commerce_setup_sessions
+		WHERE organization_id = $1 AND project_id = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, organizationID, projectID).Scan(&state, &lastErrorCode, &lastErrorMessage)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Error{Code: CodeProjectNotConfigured, Message: "带货视频项目尚未完成生产配置", Cause: ErrProjectNotConfigured}
+	}
+	if err != nil {
+		return err
+	}
+	return incompleteSetupStateError(state, lastErrorCode.String, lastErrorMessage.String)
+}
+
+func incompleteSetupStateError(state, lastErrorCode, lastErrorMessage string) Error {
+	details := map[string]any{"setupState": state}
+	if code := strings.TrimSpace(lastErrorCode); code != "" {
+		details["lastErrorCode"] = code
+	}
+	switch state {
+	case "waiting_user_confirmation":
+		return Error{
+			Code:    CodeSetupIncomplete,
+			Message: "项目准备正在完成语言识别，请稍候或重试项目准备",
+			Details: details,
+		}
+	case "failed":
+		message := "项目准备流程执行失败，请先在商品与脚本页面重试"
+		if reason := strings.TrimSpace(lastErrorMessage); reason != "" {
+			message = "项目准备失败：" + reason
+		}
+		return Error{Code: CodeSetupIncomplete, Message: message, Details: details}
+	case "abandoned":
+		return Error{Code: CodeSetupAbandoned, Message: "项目创建流程已放弃，不能继续生产", Details: details}
+	case "needs_user_review":
+		return Error{Code: CodeSetupIncomplete, Message: "项目准备流程需要人工处理，请先在商品与脚本页面完成", Details: details}
+	case "completed":
+		return Error{
+			Code:    CodeProjectNotConfigured,
+			Message: "项目准备已完成但生产配置缺失，请重试项目准备或联系管理员",
+			Details: details,
+			Cause:   ErrProjectNotConfigured,
+		}
+	default:
+		return Error{
+			Code:    CodeSetupIncomplete,
+			Message: "项目准备流程尚未完成，请先在商品与脚本页面等待或完成当前步骤",
+			Details: details,
+		}
+	}
 }
 
 func validateProductionContext(item ProductionContext) error {

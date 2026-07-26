@@ -83,6 +83,7 @@ func TestEmptyDatabaseUpDownUpProducesStableSchema(t *testing.T) {
 	applySeed(t, ctx, testURL)
 	assertProviderModelHardDeleteRollbackPreflight(t, ctx, runner, testConfig)
 	assertVersion36NullRenderPlanRollbackPreflight(t, ctx, runner, testConfig)
+	assertProjectDeletionHardDeletePath(t, ctx, testConfig)
 	first := normalizedSchemaSnapshot(t, ctx, testConfig)
 
 	if err := runner.Run(ctx, "reset", 0); err != nil {

@@ -15,7 +15,9 @@ import (
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/db"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/videoproduction"
+	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -100,7 +102,9 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 	pool, err := db.Open(ctx, databaseURL)
 	require.NoError(t, err)
 	authService := auth.NewService(pool, "commerce-project-test-secret", time.Hour, 24*time.Hour)
-	handler := New(pool, authService, nil, nil, nil).Handler()
+	vault, err := provider.NewVault("")
+	require.NoError(t, err)
+	handler := New(pool, authService, provider.NewService(pool, vault), nil, nil).Handler()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
 	registration, err := authService.Setup(ctx, auth.RegisterRequest{
 		Email:            "commerce-project-" + suffix + "@example.test",
@@ -118,6 +122,7 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 	})
 
 	seedCommerceWorkflowTemplate(t, ctx, pool, registration.OrganizationID, registration.User.ID)
+	seedCommerceDirectVideoModel(t, ctx, pool, registration.OrganizationID, registration.User.ID)
 	optionsRequest := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+registration.WorkspaceID+"/commerce/project-options", nil)
 	optionsRequest.Header.Set("Authorization", "Bearer "+registration.AccessToken)
 	optionsRequest.Header.Set("X-Organization-Id", registration.OrganizationID)
@@ -131,8 +136,8 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 	require.Equal(t, []int{15, 30, 60}, optionsEnvelope.Data.Durations)
 	require.Len(t, optionsEnvelope.Data.Languages, 2)
 	require.Len(t, optionsEnvelope.Data.ModelRequirements, 4)
-	require.False(t, optionsEnvelope.Data.Available, "provider readiness must be applied without an upstream call")
-	require.Contains(t, optionsEnvelope.Data.Blockers, "供应商运行时尚未配置")
+	require.True(t, optionsEnvelope.Data.Available, "configured video model should make direct project creation available")
+	require.Empty(t, optionsEnvelope.Data.Blockers)
 
 	key := "commerce-create-" + suffix
 	body := map[string]any{
@@ -140,7 +145,7 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 		"name":                         "多语言商品视频 " + suffix,
 		"projectKind":                  "commerce_video",
 		"videoRatio":                   "9:16",
-		"defaultTargetDurationSeconds": 30,
+		"defaultTargetDurationSeconds": 20,
 		"defaultTargetPlatform":        "douyin",
 		"defaultLanguageMode":          "explicit",
 		"defaultTargetLanguage":        "zh-CN",
@@ -154,7 +159,7 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 	require.NotNil(t, firstEnvelope.Data.WorkflowTemplateVersionID)
 	require.Len(t, dereferenceString(firstEnvelope.Data.SetupConfigurationHash), 64)
 	require.Equal(t, &commercepkg.ScriptUnitDefaults{
-		TargetDurationSeconds: 30,
+		TargetDurationSeconds: 20,
 		TargetPlatform:        "douyin",
 		LanguageMode:          "explicit",
 		TargetLanguage:        stringPointer("zh-CN"),
@@ -167,6 +172,18 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 	require.Equal(t, firstEnvelope.Data.ID, replayEnvelope.Data.ID)
 	require.Equal(t, firstEnvelope.Data.SetupSessionID, replayEnvelope.Data.SetupSessionID)
 	require.Equal(t, true, replayEnvelope.Meta["idempotentReplay"])
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/projects/"+firstEnvelope.Data.ID, nil)
+	getRequest.Header.Set("Authorization", "Bearer "+registration.AccessToken)
+	getRequest.Header.Set("X-Organization-Id", registration.OrganizationID)
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, getRequest)
+	require.Equal(t, http.StatusOK, getResponse.Code, getResponse.Body.String())
+	getEnvelope := decodeCommerceProjectEnvelope(t, getResponse)
+	require.Equal(t, firstEnvelope.Data.SetupSessionID, getEnvelope.Data.SetupSessionID)
+	require.Equal(t, firstEnvelope.Data.SetupState, getEnvelope.Data.SetupState)
+	require.Equal(t, firstEnvelope.Data.WorkflowTemplateVersionID, getEnvelope.Data.WorkflowTemplateVersionID)
+	require.Equal(t, firstEnvelope.Data.SetupConfigurationHash, getEnvelope.Data.SetupConfigurationHash)
 
 	conflictingBody := cloneCommerceCreateBody(body)
 	conflictingBody["name"] = "冲突商品视频 " + suffix
@@ -186,11 +203,61 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 	require.Equal(t, 1, projectCount)
 	require.Equal(t, 1, setupCount)
 	require.Equal(t, 1, idempotencyCount)
+	var productID string
 	require.NoError(t, pool.QueryRow(ctx, `
 		INSERT INTO commerce_products(organization_id, project_id, status, created_by)
 		VALUES ($1, $2, 'draft', $3)
 		RETURNING id::text
-	`, registration.OrganizationID, firstEnvelope.Data.ID, registration.User.ID).Scan(new(string)))
+	`, registration.OrganizationID, firstEnvelope.Data.ID, registration.User.ID).Scan(&productID))
+	var productVersionID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO commerce_product_versions(
+			organization_id, project_id, product_id, version, name,
+			selling_points, immutable_features, prohibited_claims,
+			facts_snapshot, facts_hash, created_by
+		)
+		VALUES ($1, $2, $3, 1, '直出测试商品', '[]', '{}', '[]',
+		        '{"name":"直出测试商品"}', $4, $5)
+		RETURNING id::text
+	`, registration.OrganizationID, firstEnvelope.Data.ID, productID,
+		strings.Repeat("d", 64), registration.User.ID).Scan(&productVersionID))
+	_, err = pool.Exec(ctx, `
+		UPDATE commerce_products
+		SET current_version_id = $2, status = 'ready'
+		WHERE id = $1
+	`, productID, productVersionID)
+	require.NoError(t, err)
+	var productArtifactID, productMediaFileID, productReferenceID string
+	productStorageKey := "commerce/direct-video-" + suffix + ".png"
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO artifacts(
+			organization_id, project_id, type, storage_key, mime_type, metadata, created_by
+		)
+		VALUES ($1, $2, 'commerce_product_reference', $3, 'image/png', '{}', $4)
+		RETURNING id::text
+	`, registration.OrganizationID, firstEnvelope.Data.ID, productStorageKey,
+		registration.User.ID).Scan(&productArtifactID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO media_files(
+			organization_id, project_id, artifact_id, storage_key, mime_type,
+			byte_size, width, height, checksum, metadata, created_by
+		)
+		VALUES ($1, $2, $3, $4, 'image/png', 128, 720, 1280, $5, '{}', $6)
+		RETURNING id::text
+	`, registration.OrganizationID, firstEnvelope.Data.ID, productArtifactID,
+		productStorageKey, strings.Repeat("e", 64), registration.User.ID).Scan(&productMediaFileID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO commerce_product_references(
+			organization_id, project_id, product_id, artifact_id, media_file_id,
+			reference_role, ordinal, is_primary, width, height, mime_type,
+			content_hash, quality_review, created_by
+		)
+		VALUES ($1, $2, $3, $4, $5, 'primary', 0, true, 720, 1280,
+		        'image/png', $6, '{}', $7)
+		RETURNING id::text
+	`, registration.OrganizationID, firstEnvelope.Data.ID, productID,
+		productArtifactID, productMediaFileID, strings.Repeat("e", 64),
+		registration.User.ID).Scan(&productReferenceID))
 
 	projectStatusRequest := httptest.NewRequest(http.MethodGet, "/api/projects/"+firstEnvelope.Data.ID+"/commerce/production-status", nil)
 	projectStatusRequest.Header.Set("Authorization", "Bearer "+registration.AccessToken)
@@ -211,7 +278,7 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 		"content":                     "展示产品卖点并引导下单。",
 		"languageMode":                "explicit",
 		"explicitTargetLanguage":      "zh-CN",
-		"targetDurationSeconds":       30,
+		"targetDurationSeconds":       6,
 		"targetPlatform":              "douyin",
 	})
 	require.NoError(t, err)
@@ -227,6 +294,108 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(unitResponse.Body.Bytes(), &unitEnvelope))
 	require.NotEmpty(t, unitEnvelope.Data.ScriptUnit.ID)
+	require.Equal(t, "draft", unitEnvelope.Data.ScriptUnit.Status)
+
+	directOptionsRequest := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+firstEnvelope.Data.ID+"/commerce/video-options",
+		nil,
+	)
+	directOptionsRequest.Header.Set("Authorization", "Bearer "+registration.AccessToken)
+	directOptionsRequest.Header.Set("X-Organization-Id", registration.OrganizationID)
+	directOptionsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(directOptionsResponse, directOptionsRequest)
+	require.Equal(t, http.StatusOK, directOptionsResponse.Code, directOptionsResponse.Body.String())
+	var directOptionsEnvelope struct {
+		Data commercepkg.DirectVideoOptions `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(directOptionsResponse.Body.Bytes(), &directOptionsEnvelope))
+	require.Equal(t, []int{6, 10, 12, 16}, directOptionsEnvelope.Data.ExecutableDurationSeconds)
+	require.Equal(t, "720p", directOptionsEnvelope.Data.DefaultResolution)
+
+	directVideoBody, err := json.Marshal(map[string]any{
+		"durationSeconds": 6,
+		"resolution":      "720p",
+		"aspectRatio":     "9:16",
+		"generateAudio":   true,
+		"references": []map[string]any{{
+			"sourceType": "product",
+			"sourceId":   productReferenceID,
+		}},
+	})
+	require.NoError(t, err)
+	directVideoRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+firstEnvelope.Data.ID+"/commerce/script-units/"+
+			unitEnvelope.Data.ScriptUnit.ID+"/direct-videos",
+		bytes.NewReader(directVideoBody),
+	)
+	directVideoRequest.Header.Set("Content-Type", "application/json")
+	directVideoRequest.Header.Set("Authorization", "Bearer "+registration.AccessToken)
+	directVideoRequest.Header.Set("X-Organization-Id", registration.OrganizationID)
+	directVideoRequest.Header.Set("Idempotency-Key", "commerce-direct-video-"+suffix)
+	directVideoResponse := httptest.NewRecorder()
+	handler.ServeHTTP(directVideoResponse, directVideoRequest)
+	require.Equal(t, http.StatusAccepted, directVideoResponse.Code, directVideoResponse.Body.String())
+	var directVideoEnvelope struct {
+		Data commercepkg.DirectVideoJob `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(directVideoResponse.Body.Bytes(), &directVideoEnvelope))
+	require.Equal(t, "queued", directVideoEnvelope.Data.Status)
+	require.Equal(t, 6, directVideoEnvelope.Data.RequestedDurationSeconds)
+	require.Equal(t, "展示产品卖点并引导下单。", directVideoEnvelope.Data.ScriptSnapshot)
+	require.Len(t, directVideoEnvelope.Data.References, 1)
+	require.Equal(t, "first_frame", directVideoEnvelope.Data.References[0].ReferenceRole)
+	require.Equal(t, productReferenceID, directVideoEnvelope.Data.References[0].SourceID)
+	var directWorkflowCount, directOutboxCount int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM workflow_runs
+			 WHERE id = $1 AND workflow_type = 'commerce_direct_video' AND status = 'queued'),
+			(SELECT count(*) FROM workflow_start_outbox
+			 WHERE workflow_run_id = $1 AND workflow_type = 'commerce_direct_video')
+	`, *directVideoEnvelope.Data.WorkflowRunID).Scan(&directWorkflowCount, &directOutboxCount))
+	require.Equal(t, 1, directWorkflowCount)
+	require.Equal(t, 1, directOutboxCount)
+	_, err = pool.Exec(ctx, `
+		UPDATE workflow_runs
+		SET status = 'running', started_at = now(), revision = revision + 1
+		WHERE id = $1 AND status = 'queued';
+		UPDATE workflow_start_outbox
+		SET status = 'started', started_at = now(), completed_at = now()
+		WHERE workflow_run_id = $1 AND status = 'pending'
+	`, *directVideoEnvelope.Data.WorkflowRunID)
+	require.NoError(t, err)
+	directWorkflowInput := workflows.CommerceDirectVideoInput{
+		OrganizationID: registration.OrganizationID,
+		ProjectID:      firstEnvelope.Data.ID,
+		ScriptUnitID:   unitEnvelope.Data.ScriptUnit.ID,
+		JobID:          directVideoEnvelope.Data.ID,
+		WorkflowRunID:  *directVideoEnvelope.Data.WorkflowRunID,
+		CreatedBy:      registration.User.ID,
+
+		AttemptGeneration: 1,
+	}
+	directActivities := workflows.NewActivities(pool, nil, nil)
+	require.NoError(t, directActivities.CancelCommerceDirectVideo(ctx, directWorkflowInput))
+	require.NoError(t, directActivities.CancelCommerceDirectVideo(ctx, directWorkflowInput))
+	var cancelledJobStatus, cancelledWorkflowStatus string
+	var cancelledEventCount int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT
+			(SELECT status FROM commerce_direct_video_jobs WHERE id = $1),
+			(SELECT status FROM workflow_runs WHERE id = $2),
+			(SELECT count(*) FROM project_event_log
+			 WHERE project_id = $3
+			   AND aggregate_type = 'commerce_direct_video_job'
+			   AND aggregate_id = $1
+			   AND event_type = 'commerce.direct_video.cancelled')
+	`, directVideoEnvelope.Data.ID, *directVideoEnvelope.Data.WorkflowRunID, firstEnvelope.Data.ID).Scan(
+		&cancelledJobStatus, &cancelledWorkflowStatus, &cancelledEventCount,
+	))
+	require.Equal(t, "cancelled", cancelledJobStatus)
+	require.Equal(t, "cancelled", cancelledWorkflowStatus)
+	require.Equal(t, 1, cancelledEventCount)
 
 	defaultsBody, err := json.Marshal(map[string]any{
 		"expectedRevision":      firstEnvelope.Data.Revision,
@@ -269,7 +438,7 @@ func TestCreateCommerceProjectIsDurablyIdempotent(t *testing.T) {
 		Data commercepkg.ScriptUnit `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(unitDetailResponse.Body.Bytes(), &unitDetailEnvelope))
-	require.Equal(t, 30, unitDetailEnvelope.Data.TargetDurationSeconds)
+	require.Equal(t, 6, unitDetailEnvelope.Data.TargetDurationSeconds)
 	require.Equal(t, "douyin", unitDetailEnvelope.Data.TargetPlatform)
 	var defaultsEventCount int
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -345,6 +514,75 @@ func seedCommerceWorkflowTemplate(t *testing.T, ctx context.Context, pool *pgxpo
 		)
 		RETURNING id::text
 	`, templateID, profileVersionID, strings.Repeat("c", 64), userID).Scan(new(string)))
+}
+
+func seedCommerceDirectVideoModel(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	organizationID string,
+	userID string,
+) {
+	t.Helper()
+	var connectorID, accountID, modelID, profileID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT id::text
+		FROM provider_connectors
+		ORDER BY is_official DESC, created_at, id
+		LIMIT 1
+	`).Scan(&connectorID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO provider_accounts(
+			organization_id, connector_id, name, base_url, auth_type, status, created_by
+		)
+		VALUES ($1, $2, 'Commerce Direct Video', 'https://example.invalid/v1', 'none', 'active', $3)
+		RETURNING id::text
+	`, organizationID, connectorID, userID).Scan(&accountID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO provider_models(provider_account_id, model_key, display_name, modality, status)
+		VALUES ($1, 'commerce-direct-video', 'Commerce Direct Video', 'video', 'active')
+		RETURNING id::text
+	`, accountID).Scan(&modelID))
+	_, err := pool.Exec(ctx, `
+		INSERT INTO provider_model_capabilities(
+			provider_model_id, task_types, provider_options_schema
+		)
+		VALUES (
+			$1,
+			'["video.generate","video.create_task","video.poll_task","video.cancel_task"]',
+			'{"xCapabilities":{"videoGenerationVariants":[{
+				"variantKey":"commerce-direct-i2v",
+				"when":{"taskTypes":["video.generate"],"referenceModes":["first_frame"],"nativeAudioRequested":true},
+				"duration":{"mode":"fixed","values":[6,10,12,16]},
+				"resolutions":["720p"],
+				"aspectRatios":["9:16","16:9","1:1"],
+				"frameRate":{"mode":"unknown"},
+				"nativeAudio":{"support":"true","supportsDialogue":true,"supportsVoiceover":true},
+				"continuation":{"supportsFirstFrame":true},
+				"requestModes":["async_create"],
+				"source":"official",
+				"verificationStatus":"official"
+			}]}}'
+		)
+	`, modelID)
+	require.NoError(t, err)
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO model_profiles(
+			organization_id, profile_key, name, purpose, routing_strategy
+		)
+		VALUES (
+			$1, 'video_generation_default', 'Commerce Video', 'commerce direct video',
+			'priority_with_fallback'
+		)
+		RETURNING id::text
+	`, organizationID).Scan(&profileID))
+	_, err = pool.Exec(ctx, `
+		INSERT INTO model_profile_bindings(
+			model_profile_id, provider_model_id, priority, weight, enabled
+		)
+		VALUES ($1, $2, 100, 100, true)
+	`, profileID, modelID)
+	require.NoError(t, err)
 }
 
 func doCommerceProjectCreateRequest(

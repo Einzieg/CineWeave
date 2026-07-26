@@ -78,6 +78,66 @@ func (r *Repository) CountActiveUnitGenerations(ctx context.Context, db rowQueri
 	return count, err
 }
 
+func (r *Repository) RetireLegacyUnitGenerationsForProductUpdate(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID string,
+	projectID string,
+	productID string,
+) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE commerce_storyboard_plans plan
+		SET status = 'stale',
+		    active = false,
+		    stale_state = 'upstream_changed',
+		    stale_at = COALESCE(stale_at, now())
+		WHERE plan.organization_id = $1
+		  AND plan.project_id = $2
+		  AND plan.script_unit_generation_id IN (
+		      SELECT unit.active_unit_generation_id
+		      FROM commerce_script_units unit
+		      WHERE unit.organization_id = $1
+		        AND unit.project_id = $2
+		        AND unit.product_id = $3
+		        AND unit.status <> 'archived'
+		        AND unit.active_unit_generation_id IS NOT NULL
+		  )
+		  AND plan.status <> 'archived'
+	`, organizationID, projectID, productID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE commerce_script_unit_generations generation
+		SET status = 'archived', archived_at = COALESCE(archived_at, now())
+		WHERE generation.id IN (
+		      SELECT unit.active_unit_generation_id
+		      FROM commerce_script_units unit
+		      WHERE unit.organization_id = $1
+		        AND unit.project_id = $2
+		        AND unit.product_id = $3
+		        AND unit.status <> 'archived'
+		        AND unit.active_unit_generation_id IS NOT NULL
+		  )
+		  AND generation.status = 'active'
+	`, organizationID, projectID, productID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE commerce_script_units
+		SET active_unit_generation_id = NULL,
+		    current_localization_id = NULL,
+		    status = 'draft',
+		    revision = revision + 1,
+		    updated_at = now()
+		WHERE organization_id = $1
+		  AND project_id = $2
+		  AND product_id = $3
+		  AND status <> 'archived'
+		  AND active_unit_generation_id IS NOT NULL
+	`, organizationID, projectID, productID)
+	return err
+}
+
 func (r *Repository) ListProductVersions(ctx context.Context, db rowsQuerier, organizationID, projectID string) ([]ProductVersion, error) {
 	rows, err := db.Query(ctx, productVersionSelectSQL+`
 		WHERE organization_id = $1 AND project_id = $2

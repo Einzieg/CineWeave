@@ -32,12 +32,12 @@ Phase A-E 已完成实现并通过自动化、主环境部署、真实供应商�
 | B2 可恢复 Setup 与 abandon | 已完成 | `commerce_setup_runs`、retry attempts、Setup API/Workflow | `commerce_setup_runs_integration_test.go`、`commerce_setup_workflow_test.go` |
 | B3 ProductVersion、Product Rebuild 与安全图片 | 已完成 | `product_service.go`、`product_upload_repository.go`、`product_rebuild.go`、Commerce catalog API | product/service、API 与 migration 集成测试 |
 | B4 多 ScriptUnit 管理 | 已完成 | `script_service.go`、`commerce_scripts.go`、`commerce-materials-page.tsx` | repository/service/API tests；分页列表使用 cursor 与浏览器原生虚拟化 |
-| B5 语言解析与 Localization | 已完成 | `commerce_generation_runtime.go`、语言确认 Signal、Localization API/UI | Setup/Workflow tests 和语言能力 contract tests |
-| B6 时长与付费前模型能力预检 | 已完成 | `project_options.go`、`preparation.go`；视频时长/分辨率 fail closed，语言、参考模式、画幅和原生音频作为路由与结果提示信号 | `project_options_test.go`、Provider/Workflow contract tests |
+| B5 语言解析与 Localization | 已完成 | `commerce_generation_runtime.go`、自动语言免确认策略、Localization API/UI | Setup/Workflow tests 和语言能力 contract tests |
+| B6 时长建议与付费前模型能力预检 | 已完成 | `project_options.go`、`preparation.go`；用户选择的目标时长为生产权威值，旁白估算仅持久化节奏建议且不阻断；分镜编辑时长精确组成用户目标，Provider Gateway 再映射到可覆盖的供应商请求档位并按 Render Plan 裁入时间线；视频模型时长/分辨率仍 fail closed，语言、参考模式、画幅和原生音频作为路由与结果提示信号 | `service_test.go`、`commerce_setup_workflow_test.go`、`commerce_sales_script_workflow_test.go`、`commerce_video_workflows_test.go`、Provider/Workflow contract tests |
 | B7 ProjectKind 导航分流 | 已完成 | 项目 layout、`routes.ts`、Commerce 专用页面 | Playwright Commerce-only navigation |
 | B8 Sales Script Organizer 持久合约 | 已完成 | `000057`、`commerce_sales_script_runtime.go`、`commerce_sales_script_workflow.go` | Organizer replay/claim/reviewer tests |
 | B9 ScriptUnit 候选版本与原子换代 | 已完成 | `script_unit_rebuild.go`、repository、Preparation Workflow | 真实 PostgreSQL 回滚/提交测试、Fence 测试 |
-| B10 revision/hash 语言确认 Signal | 已完成 | Setup/Generation runtime 的确认握手与重放保护 | `commerce_setup_workflow_test.go` |
+| B10 revision/hash 语言结果保护 | 已完成 | Setup/Generation runtime 的输入 hash、自动解析结果校验与重放保护 | `commerce_setup_workflow_test.go` |
 
 ## 4. Phase C：分镜规划与参考图
 

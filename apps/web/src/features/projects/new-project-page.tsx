@@ -1,9 +1,8 @@
 "use client";
 
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Check,
@@ -19,8 +18,6 @@ import {
   Smartphone,
   Sparkles,
   Square,
-  Trash2,
-  Upload,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
@@ -36,8 +33,6 @@ import { useApiQuery } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { cn } from "@/lib/utils";
 import type {
-  CommerceLanguageMode,
-  CommerceProjectLanguageOption,
   NarrativeContentType,
   NarrativeProjectType,
   ProjectKind,
@@ -122,40 +117,16 @@ type NewNarrativeProjectForm = {
 type CommerceProjectForm = {
   name: string;
   description: string;
-  productName: string;
-  brand: string;
-  sellingPoints: string;
-  scriptTitle: string;
-  script: string;
-  targetDurationSeconds: number;
-  languageMode: CommerceLanguageMode;
-  targetLanguage: string;
   videoRatio: string;
-  imageQuality: string;
-  audioStrategy: "native_av" | "external_audio";
-  audioRequirement: "preferred" | "required" | "disabled";
-  targetPlatform: string;
-};
-
-type ProductImageDraft = {
-  id: string;
-  file: File;
-  previewUrl: string;
-  role: string;
-  primary: boolean;
 };
 
 type PersistedCommerceDraft = {
   clientRequestId: string;
   form: CommerceProjectForm;
-  projectId?: string;
-  setupSessionId?: string;
 };
 
 function NewProjectContent() {
   const router = useRouter();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const productImagesRef = useRef<ProductImageDraft[]>([]);
   const { session, ready } = useStudioSession();
   const workspaceId = session.workspaceId?.trim() ?? "";
   const canCreateProject = sessionHasPermission(session, "project.write");
@@ -165,9 +136,6 @@ function NewProjectContent() {
   const [stage, setStage] = useState("");
   const [error, setError] = useState("");
   const [clientRequestId, setClientRequestId] = useState("");
-  const [draftProjectId, setDraftProjectId] = useState("");
-  const [draftSetupSessionId, setDraftSetupSessionId] = useState("");
-  const [productImages, setProductImages] = useState<ProductImageDraft[]>([]);
   const [narrativeForm, setNarrativeForm] = useState<NewNarrativeProjectForm>({
     name: "",
     description: "",
@@ -187,19 +155,7 @@ function NewProjectContent() {
   const [commerceForm, setCommerceForm] = useState<CommerceProjectForm>({
     name: "",
     description: "",
-    productName: "",
-    brand: "",
-    sellingPoints: "",
-    scriptTitle: "脚本 1",
-    script: "",
-    targetDurationSeconds: 30,
-    languageMode: "auto",
-    targetLanguage: "",
     videoRatio: "9:16",
-    imageQuality: "standard",
-    audioStrategy: "native_av",
-    audioRequirement: "preferred",
-    targetPlatform: "通用短视频平台",
   });
 
   const { data: manualTemplates = [], isLoading: manualTemplatesLoading } = useApiQuery({
@@ -212,16 +168,6 @@ function NewProjectContent() {
     queryFn: (activeSession) => studioApi.listVideoProductionProfiles(activeSession).then((response) => response.items),
     enabled: canCreateProject && projectKind === "narrative",
   });
-  const commerceOptionsQuery = useApiQuery({
-    key: qk.commerceProjectOptions(workspaceId),
-    queryFn: (activeSession) => studioApi.getCommerceProjectOptions(activeSession, workspaceId),
-    enabled: canCreateProject && projectKind === "commerce_video" && Boolean(workspaceId),
-    staleTime: 30_000,
-  });
-  const commerceOptions = commerceOptionsQuery.data;
-  const commerceOptionsLoading = commerceOptionsQuery.isLoading || commerceOptionsQuery.isFetching;
-  const commerceOptionsError = commerceOptionsQuery.error?.message ?? "";
-
   const directorManualOptions = useMemo(() => buildManualStyleOptions(manualTemplates, "director"), [manualTemplates]);
   const visualManualOptions = useMemo(() => buildManualStyleOptions(manualTemplates, "visual"), [manualTemplates]);
   const videoProductionProfileCards = useMemo(() => videoProductionProfileOptions.map((option) => {
@@ -230,11 +176,6 @@ function NewProjectContent() {
       .sort((left, right) => right.version - left.version)[0];
     return { ...option, available: profile?.available === true, description: profile?.description || option.description, version: profile?.version };
   }), [videoProductionProfileVersions]);
-  const commerceLanguages = useMemo(
-    () => (commerceOptions?.languages ?? []).filter((language) => commerceLanguageExecutable(language, commerceForm.audioStrategy)),
-    [commerceForm.audioStrategy, commerceOptions?.languages],
-  );
-
   useEffect(() => {
     if (!workspaceId) return;
     const key = commerceDraftStorageKey(workspaceId);
@@ -246,8 +187,6 @@ function NewProjectContent() {
           if (saved.clientRequestId && saved.form) {
             setClientRequestId(saved.clientRequestId);
             setCommerceForm(saved.form);
-            setDraftProjectId(saved.projectId ?? "");
-            setDraftSetupSessionId(saved.setupSessionId ?? "");
             return;
           }
         } catch {
@@ -264,19 +203,9 @@ function NewProjectContent() {
     const saved: PersistedCommerceDraft = {
       clientRequestId,
       form: commerceForm,
-      projectId: draftProjectId || undefined,
-      setupSessionId: draftSetupSessionId || undefined,
     };
     window.localStorage.setItem(commerceDraftStorageKey(workspaceId), JSON.stringify(saved));
-  }, [clientRequestId, commerceForm, draftProjectId, draftSetupSessionId, workspaceId]);
-
-  useEffect(() => {
-    productImagesRef.current = productImages;
-  }, [productImages]);
-
-  useEffect(() => () => {
-    for (const image of productImagesRef.current) URL.revokeObjectURL(image.previewUrl);
-  }, []);
+  }, [clientRequestId, commerceForm, workspaceId]);
 
   async function submit() {
     setError("");
@@ -331,136 +260,34 @@ function NewProjectContent() {
   }
 
   async function submitCommerceProject(activeWorkspaceId: string) {
-    if (!commerceForm.name.trim() || !commerceForm.productName.trim()) {
-      setError("请填写项目名称和产品名称。");
-      return;
-    }
-    if (!commerceForm.script.trim()) {
-      setError("请填写第一个广告脚本。");
-      return;
-    }
-    if (productImages.length === 0 && !draftProjectId) {
-      setError("请至少上传一张产品图片。");
+    if (!commerceForm.name.trim()) {
+      setError("请填写项目名称。");
       return;
     }
     if (!clientRequestId) {
       setError("创建请求标识尚未准备完成，请稍后重试。");
       return;
     }
-    if (commerceOptionsQuery.error) {
-      setError(commerceOptionsQuery.error.message);
-      return;
-    }
-    if (!commerceOptions) {
-      setError("带货视频创建配置尚未加载完成，请稍后重试。");
-      return;
-    }
-    if (!commerceOptions?.workflowTemplateVersionId) {
-      setError(commerceOptions.blockers[0] || "带货视频工作流模板尚未发布。");
-      return;
-    }
-    if (commerceForm.languageMode === "explicit" && !commerceForm.targetLanguage) {
-      setError("请选择目标语言。");
-      return;
-    }
-    if (commerceForm.languageMode === "explicit" && !commerceLanguages.some((item) => item.locale === commerceForm.targetLanguage)) {
-      setError("当前模型链路无法执行所选语言。");
-      return;
-    }
-
     setBusy(true);
     try {
-      setStage("创建项目草稿");
-      let projectId = draftProjectId;
-      let setupSessionId = draftSetupSessionId;
-      if (!projectId) {
-        const project = await studioApi.createProject(session, {
-          workspaceId: activeWorkspaceId,
-          name: commerceForm.name.trim(),
-          description: commerceForm.description.trim() || undefined,
-          projectKind: "commerce_video",
-          videoRatio: commerceForm.videoRatio,
-          imageQuality: commerceForm.imageQuality,
-          audioStrategy: commerceForm.audioStrategy,
-          audioRequirement: commerceForm.audioRequirement,
-          defaultTargetDurationSeconds: commerceForm.targetDurationSeconds as 15 | 30 | 60,
-          defaultTargetPlatform: commerceForm.targetPlatform,
-          defaultLanguageMode: commerceForm.languageMode,
-          defaultTargetLanguage: commerceForm.languageMode === "explicit" ? commerceForm.targetLanguage : undefined,
-        }, clientRequestId);
-        projectId = project.id;
-        setupSessionId = project.setupSessionId ?? "";
-        setDraftProjectId(projectId);
-        setDraftSetupSessionId(setupSessionId);
-        persistCommerceDraft(activeWorkspaceId, { clientRequestId, form: commerceForm, projectId, setupSessionId });
-      }
-
-      setStage("保存商品资料");
-      let product;
-      try {
-        product = await studioApi.getCommerceProduct(session, projectId);
-      } catch (cause) {
-        if (!(cause instanceof StudioApiError) || cause.code !== "COMMERCE_PRODUCT_REQUIRED") throw cause;
-      }
-      const productMutation = await studioApi.createCommerceProductVersion(session, projectId, {
-        expectedRevision: product?.revision ?? 0,
-        name: commerceForm.productName.trim(),
-        brand: commerceForm.brand.trim(),
-        sellingPoints: splitLines(commerceForm.sellingPoints),
-        immutableFeatures: {},
-        prohibitedClaims: [],
-        metadata: {},
-      });
-      product = productMutation.product;
-
-      if (productImages.length > 0) {
-        setStage(`上传产品图片 0/${productImages.length}`);
-        for (const [index, image] of productImages.entries()) {
-          const upload = await studioApi.createCommerceProductReferenceUpload(session, projectId, {
-            setupSessionId: setupSessionId || undefined,
-            fileName: image.file.name,
-            mimeType: image.file.type,
-          }, `${clientRequestId}:product-image:${image.file.name}:${image.file.size}:${image.file.lastModified}`);
-          await studioApi.uploadCommerceProductReferenceFile(upload, image.file);
-          await studioApi.completeCommerceProductReferenceUpload(session, projectId, {
-            uploadId: upload.uploadId,
-            referenceRole: image.role,
-            setPrimary: image.primary,
-          });
-          setStage(`上传产品图片 ${index + 1}/${productImages.length}`);
-        }
-      }
-
-      setStage("保存首个广告脚本");
-      const units = await studioApi.listCommerceScriptUnits(session, projectId, { limit: 1 });
-      if (units.items.length === 0) {
-        await studioApi.createCommerceScriptUnit(session, projectId, {
-          expectedScriptUnitsRevision: product.scriptUnitsRevision,
-          title: commerceForm.scriptTitle.trim() || "脚本 1",
-          content: commerceForm.script.trim(),
-          languageMode: commerceForm.languageMode,
-          explicitTargetLanguage: commerceForm.languageMode === "explicit" ? commerceForm.targetLanguage : undefined,
-          targetDurationSeconds: commerceForm.targetDurationSeconds,
-          targetPlatform: commerceForm.targetPlatform,
-        });
-      }
-
-	  if (!setupSessionId) {
-		throw new Error("项目创建会话缺失，请重新创建带货视频项目。");
-	  }
-	  setStage("启动项目准备流程");
-	  const setupSession = await studioApi.getCommerceSetupSession(session, projectId, setupSessionId);
-	  await studioApi.completeCommerceSetupSession(
-		session,
-		projectId,
-		setupSessionId,
-		{ expectedRevision: setupSession.revision },
-		`${clientRequestId}:setup-complete`,
-	  );
+      setStage("创建并配置项目");
+      const project = await studioApi.createProject(session, {
+        workspaceId: activeWorkspaceId,
+        name: commerceForm.name.trim(),
+        description: commerceForm.description.trim() || undefined,
+        projectKind: "commerce_video",
+        videoRatio: commerceForm.videoRatio,
+        imageQuality: "standard",
+        audioStrategy: "native_av",
+        audioRequirement: "preferred",
+        defaultTargetDurationSeconds: 6,
+        defaultTargetPlatform: "other",
+        defaultLanguageMode: "auto",
+      }, clientRequestId);
 
       window.localStorage.removeItem(commerceDraftStorageKey(activeWorkspaceId));
       setStage("");
-      router.push(projectHref(projectId, "commerce/materials") as Route);
+      router.push(projectHref(project.id, "commerce/materials") as Route);
     } catch (cause) {
       setError(cause instanceof StudioApiError ? cause.message : "创建失败，请稍后重试。");
     } finally {
@@ -496,32 +323,6 @@ function NewProjectContent() {
     }));
   }
 
-  function addProductImages(files: FileList | null) {
-    if (!files) return;
-    const accepted = Array.from(files).filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type));
-    setProductImages((current) => [
-      ...current,
-      ...accepted.map((file, offset) => ({
-        id: crypto.randomUUID(),
-        file,
-        previewUrl: URL.createObjectURL(file),
-        role: "other",
-        primary: current.length === 0 && offset === 0,
-      })),
-    ]);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }
-
-  function removeProductImage(id: string) {
-    setProductImages((current) => {
-      const removed = current.find((item) => item.id === id);
-      if (removed) URL.revokeObjectURL(removed.previewUrl);
-      const next = current.filter((item) => item.id !== id);
-      if (removed?.primary && next.length > 0) next[0] = { ...next[0], primary: true };
-      return next;
-    });
-  }
-
   if (!canCreateProject) {
     return (
       <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm md:p-6">
@@ -552,16 +353,6 @@ function NewProjectContent() {
         <CommerceProjectFormView
           form={commerceForm}
           setForm={setCommerceForm}
-          images={productImages}
-          languages={commerceLanguages}
-          optionsLoading={commerceOptionsLoading}
-          optionsError={commerceOptionsError}
-          blockers={commerceOptions?.blockers ?? []}
-          fileInputRef={fileInputRef}
-          onRetryOptions={() => { void commerceOptionsQuery.refetch(); }}
-          onFiles={addProductImages}
-          onRemoveImage={removeProductImage}
-          onSetPrimary={(id) => setProductImages((current) => current.map((item) => ({ ...item, primary: item.id === id })))}
         />
       ) : (
         <NarrativeProjectFormView
@@ -585,14 +376,10 @@ function NewProjectContent() {
           <Button variant="outline" onClick={() => router.back()} disabled={busy}>取消</Button>
           <Button
             onClick={submit}
-            disabled={busy || (projectKind === "commerce_video" && (
-              commerceOptionsLoading
-              || Boolean(commerceOptionsError)
-              || !commerceOptions?.workflowTemplateVersionId
-            ))}
+            disabled={busy}
           >
             {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
-            {projectKind === "commerce_video" ? "创建并准备分镜方案" : "创建项目"}
+            创建项目
           </Button>
         </div>
       </div>
@@ -672,157 +459,47 @@ function NarrativeProjectFormView({
 function CommerceProjectFormView({
   form,
   setForm,
-  images,
-  languages,
-  optionsLoading,
-  optionsError,
-  blockers,
-  fileInputRef,
-  onRetryOptions,
-  onFiles,
-  onRemoveImage,
-  onSetPrimary,
 }: {
   form: CommerceProjectForm;
   setForm: React.Dispatch<React.SetStateAction<CommerceProjectForm>>;
-  images: ProductImageDraft[];
-  languages: CommerceProjectLanguageOption[];
-  optionsLoading: boolean;
-  optionsError: string;
-  blockers: string[];
-  fileInputRef: React.RefObject<HTMLInputElement | null>;
-  onRetryOptions: () => void;
-  onFiles: (files: FileList | null) => void;
-  onRemoveImage: (id: string) => void;
-  onSetPrimary: (id: string) => void;
 }) {
   return (
     <>
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="commerce-name">项目名称 *</Label>
-          <Input id="commerce-name" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="product-name">产品名称 *</Label>
-          <Input id="product-name" value={form.productName} onChange={(event) => setForm((current) => ({
-            ...current,
-            productName: event.target.value,
-            name: current.name || `${event.target.value}带货视频`,
-          }))} />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="brand">品牌</Label>
-          <Input id="brand" value={form.brand} onChange={(event) => setForm((current) => ({ ...current, brand: event.target.value }))} />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="selling-points">核心卖点</Label>
-          <Input id="selling-points" value={form.sellingPoints} onChange={(event) => setForm((current) => ({ ...current, sellingPoints: event.target.value }))} placeholder="多个卖点用换行分隔" />
-        </div>
+      <div className="space-y-2">
+        <Label htmlFor="commerce-name">项目名称 *</Label>
+        <Input
+          id="commerce-name"
+          value={form.name}
+          onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="commerce-description">项目简介</Label>
+        <Textarea
+          id="commerce-description"
+          rows={4}
+          value={form.description}
+          onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+        />
       </div>
 
-      <ConfigSection title="产品图片">
-        <input ref={fileInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => onFiles(event.target.files)} />
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-          {images.map((image) => (
-            <div key={image.id} className={cn("group relative aspect-square overflow-hidden rounded-md border bg-muted", image.primary && "border-primary ring-1 ring-primary")}>
-              <Image src={image.previewUrl} alt={image.file.name} fill unoptimized className="object-cover" />
-              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-black/65 p-1.5 text-white">
-                <button type="button" className="truncate px-1 text-xs" onClick={() => onSetPrimary(image.id)}>{image.primary ? "主图" : "设为主图"}</button>
-                <button type="button" aria-label="移除图片" className="rounded p-1 hover:bg-white/20" onClick={() => onRemoveImage(image.id)}><Trash2 className="size-3.5" /></button>
-              </div>
-            </div>
-          ))}
-          <button type="button" className="flex aspect-square flex-col items-center justify-center gap-2 rounded-md border border-dashed text-sm text-muted-foreground transition hover:border-primary hover:text-primary" onClick={() => fileInputRef.current?.click()}>
-            <Upload className="size-5" />
-            添加图片
-          </button>
+      <ConfigSection title="画面比例">
+        <div className="flex flex-wrap gap-3">
+          {ratioOptions
+            .filter((option) => ["9:16", "16:9", "1:1"].includes(option.value))
+            .map((option) => (
+              <SegmentButton
+                key={option.value}
+                selected={form.videoRatio === option.value}
+                icon={option.icon}
+                label={option.label}
+                hint={option.hint}
+                onClick={() => setForm((current) => ({ ...current, videoRatio: option.value }))}
+              />
+            ))}
         </div>
       </ConfigSection>
 
-      <ConfigSection title="广告脚本">
-        <div className="grid gap-3 md:grid-cols-[240px_1fr]">
-          <div className="space-y-2">
-            <Label htmlFor="script-title">脚本标题</Label>
-            <Input id="script-title" value={form.scriptTitle} onChange={(event) => setForm((current) => ({ ...current, scriptTitle: event.target.value }))} />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="target-platform">目标平台</Label>
-            <Input id="target-platform" value={form.targetPlatform} onChange={(event) => setForm((current) => ({ ...current, targetPlatform: event.target.value }))} />
-          </div>
-        </div>
-        <Textarea id="commerce-script" rows={10} value={form.script} onChange={(event) => setForm((current) => ({ ...current, script: event.target.value }))} placeholder="输入完整广告脚本，产品事实、旁白、屏幕文字和行动引导将分别结构化处理" />
-        <div className="text-xs text-muted-foreground">{countSpeechUnits(form.script, form.targetLanguage)} 个计时单位，预计旁白 {estimateSpeechSeconds(form.script, form.targetLanguage)} 秒</div>
-      </ConfigSection>
-
-      <ConfigSection title="快速设置">
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="space-y-2">
-            <Label>目标时长</Label>
-            <div className="flex gap-2">
-              {[15, 30, 60].map((duration) => (
-                <button key={duration} type="button" className={cn("h-10 flex-1 rounded-md border text-sm font-medium", form.targetDurationSeconds === duration ? "border-primary bg-primary/10 text-primary" : "bg-muted/30")} onClick={() => setForm((current) => ({ ...current, targetDurationSeconds: duration }))}>{duration} 秒</button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="commerce-language-mode">视频语言</Label>
-            <Select value={form.languageMode === "auto" ? "auto" : form.targetLanguage} onValueChange={(value) => setForm((current) => value === "auto" ? { ...current, languageMode: "auto", targetLanguage: "" } : { ...current, languageMode: "explicit", targetLanguage: value })}>
-              <SelectTrigger id="commerce-language-mode"><SelectValue placeholder={optionsLoading ? "正在读取语言" : "选择语言"} /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">自动判断</SelectItem>
-                {languages.map((language) => <SelectItem key={language.locale} value={language.locale}>{language.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>画面比例</Label>
-            <div className="flex gap-2">
-              {["9:16", "16:9", "1:1"].map((ratio) => (
-                <button key={ratio} type="button" className={cn("h-10 flex-1 rounded-md border text-sm font-medium", form.videoRatio === ratio ? "border-primary bg-primary/10 text-primary" : "bg-muted/30")} onClick={() => setForm((current) => ({ ...current, videoRatio: ratio }))}>{ratio}</button>
-              ))}
-            </div>
-          </div>
-        </div>
-        <details className="rounded-md border bg-muted/20 p-3">
-          <summary className="cursor-pointer text-sm font-medium">高级设置</summary>
-          <div className="mt-4 grid gap-4 md:grid-cols-3">
-            <div className="space-y-2">
-              <Label htmlFor="commerce-quality">图片质量</Label>
-              <Select value={form.imageQuality} onValueChange={(value) => setForm((current) => ({ ...current, imageQuality: value }))}>
-                <SelectTrigger id="commerce-quality"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="standard">标准</SelectItem><SelectItem value="hd">高清</SelectItem></SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="commerce-audio">音频方式</Label>
-              <Select value={form.audioStrategy} onValueChange={(value: "native_av" | "external_audio") => setForm((current) => ({ ...current, audioStrategy: value }))}>
-                <SelectTrigger id="commerce-audio"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="native_av">视频模型原生音频</SelectItem><SelectItem value="external_audio">独立音轨</SelectItem></SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="commerce-audio-requirement">原生音频要求</Label>
-              <Select value={form.audioRequirement} onValueChange={(value: "preferred" | "required" | "disabled") => setForm((current) => ({ ...current, audioRequirement: value }))}>
-                <SelectTrigger id="commerce-audio-requirement"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="preferred">优先使用</SelectItem><SelectItem value="required">必须支持</SelectItem><SelectItem value="disabled">不使用</SelectItem></SelectContent>
-              </Select>
-            </div>
-          </div>
-        </details>
-        {optionsError ? (
-          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            <span>{optionsError}</span>
-            <Button type="button" size="sm" variant="outline" disabled={optionsLoading} onClick={onRetryOptions}>
-              {optionsLoading ? "正在重试" : "重试"}
-            </Button>
-          </div>
-        ) : blockers.length > 0 ? (
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-            {blockers.join("；")}
-          </div>
-        ) : null}
-      </ConfigSection>
     </>
   );
 }
@@ -873,29 +550,6 @@ function projectSettingsFromForm(form: Pick<NewNarrativeProjectForm, "toonflowVi
   return settings;
 }
 
-function commerceLanguageExecutable(language: CommerceProjectLanguageOption, audioStrategy: CommerceProjectForm["audioStrategy"]) {
-  return language.textAvailable && language.imagePromptAvailable && language.videoPromptAvailable && (audioStrategy !== "native_av" || language.nativeAudioAvailable);
-}
-
 function commerceDraftStorageKey(workspaceId: string) {
   return `cineweave:commerce-project-draft:${workspaceId}`;
-}
-
-function persistCommerceDraft(workspaceId: string, draft: PersistedCommerceDraft) {
-  window.localStorage.setItem(commerceDraftStorageKey(workspaceId), JSON.stringify(draft));
-}
-
-function splitLines(value: string) {
-  return value.split(/[\n；;]+/).map((item) => item.trim()).filter(Boolean);
-}
-
-function countSpeechUnits(value: string, locale: string) {
-  if (!value.trim()) return 0;
-  if (!locale || locale.startsWith("zh")) return Array.from(value.replace(/\s|[\p{P}\p{S}]/gu, "")).length;
-  return value.trim().split(/\s+/).filter(Boolean).length;
-}
-
-function estimateSpeechSeconds(value: string, locale: string) {
-  const units = countSpeechUnits(value, locale);
-  return Math.ceil(units / ((!locale || locale.startsWith("zh")) ? 3.5 : 2.5));
 }

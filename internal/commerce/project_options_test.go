@@ -66,8 +66,8 @@ func TestProjectOptionsValidateDraftSelection(t *testing.T) {
 		t.Fatalf("valid selection rejected: %v", err)
 	}
 	unsupported := "fr-FR"
-	if err := options.ValidateDraftSelection(30, "9:16", "standard", "explicit", &unsupported); errorCode(err) != CodeLanguageUnsupported {
-		t.Fatalf("unsupported locale error = %v", err)
+	if err := options.ValidateDraftSelection(30, "9:16", "standard", "explicit", &unsupported); err != nil {
+		t.Fatalf("valid BCP 47 locale rejected: %v", err)
 	}
 	if err := options.ValidateDraftSelection(60, "9:16", "standard", "auto", nil); errorCode(err) != CodeSetupIncomplete {
 		t.Fatalf("unsupported duration error = %v", err)

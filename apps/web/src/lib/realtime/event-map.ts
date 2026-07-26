@@ -16,11 +16,13 @@ type InvalidationHandler =
   | "content"
   | "commerceProduct"
   | "commerceProject"
+  | "commerceDirect"
   | "commerceScript"
   | "commerceStoryboard"
   | "export"
   | "final"
   | "project"
+  | "projectDeletion"
   | "progress"
   | "provider"
   | "review"
@@ -66,6 +68,11 @@ export const projectEventInvalidation = {
   "commerce.final_video.completed": "final",
   "commerce.language.confirmation_required": "commerceScript",
   "commerce.language.resolved": "commerceScript",
+  "commerce.direct_video.cancelled": "commerceDirect",
+  "commerce.direct_video.failed": "commerceDirect",
+  "commerce.direct_video.progressed": "commerceDirect",
+  "commerce.direct_video.started": "commerceDirect",
+  "commerce.direct_video.succeeded": "commerceDirect",
   "commerce.product.reference.added": "commerceProduct",
   "commerce.product.reference.archived": "commerceProduct",
   "commerce.product.reference.updated": "commerceProduct",
@@ -87,6 +94,8 @@ export const projectEventInvalidation = {
   "commerce.script.localization.created": "commerceScript",
   "commerce.script.version.activated": "commerceScript",
   "commerce.script.version.created": "commerceScript",
+  "commerce.script_reference.added": "commerceDirect",
+  "commerce.script_reference.archived": "commerceDirect",
   "commerce.script_unit.archived": "commerceScript",
   "commerce.script_unit.created": "commerceScript",
   "commerce.script_unit.generation.archived": "commerceScript",
@@ -106,6 +115,11 @@ export const projectEventInvalidation = {
   "commerce.shot.video_prompt.failed": "storyboard",
   "commerce.storyboard.plan.activated": "commerceStoryboard",
   "commerce.storyboard.plan.cancelled": "commerceStoryboard",
+  "commerce.storyboard.creative.generated": "commerceStoryboard",
+  "commerce.storyboard.segmentation.previewed": "commerceStoryboard",
+  "commerce.storyboard.segmentation.completed": "commerceStoryboard",
+  "commerce.storyboard.strategy.selected": "commerceStoryboard",
+  "commerce.storyboard.plan.committed": "commerceStoryboard",
   "commerce.storyboard.plan.completed": "commerceStoryboard",
   "commerce.storyboard.plan.failed": "commerceStoryboard",
   "commerce.storyboard.plan.started": "commerceStoryboard",
@@ -125,6 +139,14 @@ export const projectEventInvalidation = {
   "novel.events.extracted": "content",
   "project.audio_configuration.invalidated": "project",
   "project.audio_settings.changed": "project",
+  "project.deletion.business_data_started": "projectDeletion",
+  "project.deletion.completed": "projectDeletion",
+  "project.deletion.drain_timeout": "projectDeletion",
+  "project.deletion.failed": "projectDeletion",
+  "project.deletion.requested": "projectDeletion",
+  "project.deletion.storage_progress": "projectDeletion",
+  "project.deletion.storage_started": "projectDeletion",
+  "project.deletion.tasks_cancelling": "projectDeletion",
   "project.export.completed": "export",
   "project.export.failed": "export",
   "project.frame_rate.changed": "project",
@@ -302,6 +324,7 @@ export function keysForProjectEvent(
   const commerceReferencePackId = stringPayload(payload, "referencePackId");
   const commerceSetupSessionId = stringPayload(payload, "setupSessionId");
   const commerceSetupRunId = stringPayload(payload, "setupRunId");
+  const projectDeletionRequestId = stringPayload(payload, "projectDeletionRequestId");
   const keys: QueryKey[] = [];
 
   if (eventType.startsWith("commerce.shot.") || eventType.startsWith("commerce.production.")) {
@@ -390,6 +413,20 @@ export function keysForProjectEvent(
         || eventType === "commerce.reference_pack.created"
         || (eventType === "commerce.product.updated" && payload.activated === true)) {
         keys.push(qk.commerceScriptUnitsRoot(projectId), qk.commerceProjectProductionStatus(projectId));
+      }
+      break;
+    case "commerceDirect":
+      keys.push(
+        qk.commerceScriptUnitsRoot(projectId),
+        qk.commerceDirectVideosRoot(projectId),
+        qk.workflowRuns(projectId),
+      );
+      if (commerceScriptUnitId) {
+        keys.push(
+          qk.commerceScriptUnit(projectId, commerceScriptUnitId),
+          qk.commerceScriptReferencesRoot(projectId, commerceScriptUnitId),
+          qk.commerceDirectVideos(projectId, commerceScriptUnitId),
+        );
       }
       break;
     case "commerceProject":
@@ -560,6 +597,14 @@ export function keysForProjectEvent(
           qk.projectVideoProductionRebuildItems(projectId, rebuildId),
         );
       }
+      break;
+    case "projectDeletion":
+      keys.push(
+        qk.projects(),
+        ...(projectDeletionRequestId
+          ? [qk.projectDeletionRequest(projectId, projectDeletionRequestId)]
+          : []),
+      );
       break;
   }
   return uniqueQueryKeys(keys);

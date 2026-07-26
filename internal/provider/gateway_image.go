@@ -76,6 +76,9 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	if strings.TrimSpace(req.OrganizationID) == "" {
 		return GatewayImageResponse{}, fmt.Errorf("%w: organizationId is required", ErrValidation)
 	}
+	if err := s.assertProviderProjectWritable(ctx, req.OrganizationID, req.ProjectID); err != nil {
+		return GatewayImageResponse{}, err
+	}
 	input, err := normalizeJSON(req.Input, "{}")
 	if err != nil {
 		return GatewayImageResponse{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
@@ -631,6 +634,9 @@ func (s *Service) storeGatewayImageMedia(ctx context.Context, callID string, req
 			return nil, err
 		}
 		layout.Validated = true
+	}
+	if err := s.assertProviderProjectWritable(ctx, req.OrganizationID, req.ProjectID); err != nil {
+		return nil, err
 	}
 	storageKey := gatewayImageStorageKey(req.OrganizationID, req.ProjectID, media.MimeType, result.ImageURL)
 	var put storage.PutResult

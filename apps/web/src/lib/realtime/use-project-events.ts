@@ -11,7 +11,7 @@ import { orgScopedKey } from "@/lib/query/use-api";
 import { useStudioSession } from "@/lib/session";
 import { useActivityStore } from "@/lib/stores/activity-store";
 
-const realtimeBase = process.env.NEXT_PUBLIC_REALTIME_URL ?? "http://localhost:19281/api/realtime/events";
+const configuredRealtimeBase = process.env.NEXT_PUBLIC_REALTIME_URL?.trim() ?? "";
 const knownProjectEvents = new Set<string>(projectEventNames);
 
 type RealtimeErrorBody = {
@@ -83,7 +83,7 @@ export function useProjectEvents(projectId: string) {
           headers.set("Last-Event-ID", cursor);
         }
         try {
-          const response = await fetch(`${realtimeBase}?projectId=${encodeURIComponent(projectId)}`, {
+          const response = await fetch(`${resolveRealtimeBase()}?projectId=${encodeURIComponent(projectId)}`, {
             method: "GET",
             headers,
             cache: "no-store",
@@ -194,6 +194,23 @@ export function useProjectEvents(projectId: string) {
       }
     };
   }, [accessToken, organizationId, projectId, queryClient, ready, recordActivityEvent, setConnectionStatus]);
+}
+
+function resolveRealtimeBase() {
+  const sameOriginBase = new URL("/api/realtime/events", window.location.origin);
+  if (!configuredRealtimeBase) {
+    return sameOriginBase.toString();
+  }
+  const configuredUrl = new URL(configuredRealtimeBase, window.location.origin);
+  if (!isLoopbackHost(window.location.hostname) && isLoopbackHost(configuredUrl.hostname)) {
+    return sameOriginBase.toString();
+  }
+  return configuredUrl.toString();
+}
+
+function isLoopbackHost(hostname: string) {
+  const normalized = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 
 function parseStreamPosition(value: string | null | undefined): number {

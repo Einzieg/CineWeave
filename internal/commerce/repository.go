@@ -3,6 +3,7 @@ package commerce
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -111,6 +112,52 @@ func (r *Repository) ResolvePublishedWorkflowTemplateVersion(
 	return item, err
 }
 
+func (r *Repository) ResolveWorkflowTemplateVersionForRebuild(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID string,
+	versionID string,
+) (WorkflowTemplateVersion, error) {
+	var item WorkflowTemplateVersion
+	err := tx.QueryRow(ctx, `
+		SELECT version.id::text, template.id::text, template.template_key, version.version,
+		       version.content_hash, version.configuration_snapshot, version.prompt_bindings,
+		       version.agent_model_contracts, version.language_contract,
+		       version.image_capability_contract, version.video_capability_contract,
+		       profile.profile_key, profile_version.version
+		FROM commerce_workflow_template_versions version
+		JOIN commerce_workflow_templates template ON template.id = version.template_id
+		JOIN video_production_profile_versions profile_version
+		  ON profile_version.id = version.video_production_profile_version_id
+		JOIN video_production_profiles profile ON profile.id = profile_version.profile_id
+		WHERE version.id = $2
+		  AND template.status = 'active'
+		  AND version.status IN ('published', 'retired')
+		  AND profile_version.lifecycle_state = 'published'
+		  AND profile_version.implementation_state = 'available'
+		  AND (template.organization_id IS NULL OR template.organization_id = $1)
+		FOR SHARE OF version, template, profile_version, profile
+	`, organizationID, versionID).Scan(
+		&item.ID,
+		&item.TemplateID,
+		&item.TemplateKey,
+		&item.Version,
+		&item.ContentHash,
+		&item.ConfigurationSnapshot,
+		&item.PromptBindings,
+		&item.AgentModelContracts,
+		&item.LanguageContract,
+		&item.ImageCapabilityContract,
+		&item.VideoCapabilityContract,
+		&item.VideoProfileKey,
+		&item.VideoProfileVersion,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkflowTemplateVersion{}, ErrWorkflowTemplateUnavailable
+	}
+	return item, err
+}
+
 func (r *Repository) InsertDraftProject(ctx context.Context, tx pgx.Tx, id string, params DraftProjectParams) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO projects(
@@ -181,6 +228,44 @@ func (r *Repository) InsertSetupSession(
 		params.IdempotencyScope, params.ClientRequestID, params.RequestHash,
 		params.InputSnapshot, params.CreatedBy, params.SetupExpiresAt)
 	return err
+}
+
+func (r *Repository) CompleteDirectProjectSetup(
+	ctx context.Context,
+	tx pgx.Tx,
+	setupSessionID string,
+	projectID string,
+	result InitialBindingResult,
+) error {
+	output, err := json.Marshal(map[string]any{
+		"mode":                            "direct_video",
+		"projectGenerationId":             result.ProjectGenerationID,
+		"videoProductionBindingId":        result.VideoBindingID,
+		"videoProductionBindingRevision":  result.VideoBindingRevision,
+		"commerceWorkflowBindingId":       result.CommerceBindingID,
+		"commerceWorkflowBindingRevision": result.CommerceBindingRevision,
+	})
+	if err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE commerce_setup_sessions
+		SET state = 'completed',
+		    step = 'direct_video_ready',
+		    input_snapshot = input_snapshot || jsonb_build_object('directVideoSetup', $3::jsonb),
+		    completed_at = now(),
+		    updated_at = now(),
+		    revision = revision + 1
+		WHERE id = $1 AND project_id = $2
+		  AND state IN ('draft', 'uploading', 'failed', 'ready')
+	`, setupSessionID, projectID, output)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return Error{Code: CodeSetupRevisionConflict, Message: "带货视频项目初始化状态已变化"}
+	}
+	return nil
 }
 
 func (r *Repository) InsertPreparingVideoBinding(

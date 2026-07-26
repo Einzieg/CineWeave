@@ -30,6 +30,10 @@ func (store *recordingStore) ResolvePublishedWorkflowTemplateVersion(context.Con
 	return WorkflowTemplateVersion{}, errors.New("unexpected call")
 }
 
+func (store *recordingStore) ResolveWorkflowTemplateVersionForRebuild(context.Context, pgx.Tx, string, string) (WorkflowTemplateVersion, error) {
+	return WorkflowTemplateVersion{}, errors.New("unexpected call")
+}
+
 func (store *recordingStore) InsertDraftProject(_ context.Context, _ pgx.Tx, id string, params DraftProjectParams) error {
 	store.calls = append(store.calls, "insert-project")
 	store.projectID = id
@@ -52,6 +56,16 @@ func (store *recordingStore) InsertSetupSession(_ context.Context, _ pgx.Tx, id,
 		return errors.New("setup identity changed")
 	}
 	return store.err
+}
+
+func (store *recordingStore) CompleteDirectProjectSetup(
+	context.Context,
+	pgx.Tx,
+	string,
+	string,
+	InitialBindingResult,
+) error {
+	return errors.New("unexpected call")
 }
 
 func (store *recordingStore) InsertPreparingVideoBinding(context.Context, pgx.Tx, string, InitialBindingParams, string, []byte, string, int64) error {
@@ -217,12 +231,37 @@ func TestLocalizationTimingUsesStructuredVoiceoverChannels(t *testing.T) {
 	if !structured {
 		t.Fatal("localizationTimingSegments() structured = false, want true")
 	}
-	timing, err := estimateStructuredScriptTiming(segments, "zh-CN", 15)
+	timing, err := estimateStructuredScriptTiming(segments, "zh-CN", 15, LocalizationTimingPolicy{
+		Version: "zh-cn-voiceover/v2", Unit: "han_character", NormalUnitsPerSecond: 3.5,
+		CommaPauseSeconds: 0.15, SentencePauseSeconds: 0.35, SegmentGapSeconds: 0.10,
+	})
 	if err != nil {
 		t.Fatalf("estimateStructuredScriptTiming() error = %v", err)
 	}
 	if timing.Units != 31 || timing.Exceeded || timing.EstimatedVoiceoverSeconds < 10.55 || timing.EstimatedVoiceoverSeconds > 10.57 {
 		t.Fatalf("timing = %+v", timing)
+	}
+}
+
+func TestStructuredLocalizationTimingIgnoresSilentSegmentsAndCoalescesPunctuation(t *testing.T) {
+	timing, err := estimateStructuredScriptTiming([]string{
+		"",
+		"Helmet ini selesa...",
+		"   ",
+		"Memang berbaloi?!",
+	}, "ms-MY", 2, LocalizationTimingPolicy{
+		Version: "ms-my-voiceover/v1", Unit: "word", NormalUnitsPerSecond: 2.5,
+		CommaPauseSeconds: 0.15, SentencePauseSeconds: 0.35, SegmentGapSeconds: 0.10,
+	})
+	if err != nil {
+		t.Fatalf("estimateStructuredScriptTiming() error = %v", err)
+	}
+	// Five words at 2.5 words/second, two sentence pauses, and one spoken-segment gap.
+	if timing.Units != 5 || timing.EstimatedVoiceoverSeconds < 2.79 || timing.EstimatedVoiceoverSeconds > 2.81 {
+		t.Fatalf("timing = %+v", timing)
+	}
+	if !timing.Exceeded {
+		t.Fatalf("timing.Exceeded = false, want advisory overrun")
 	}
 }
 
@@ -290,5 +329,24 @@ func TestLocalizationPersistenceNormalizesMissingStructuredArrays(t *testing.T) 
 	}
 	if len(segments) != 1 || segments[0].ProductClaims == nil || segments[0].RequiredProductFeatures == nil {
 		t.Fatalf("optional arrays must be persisted as JSON arrays: %+v", segments)
+	}
+}
+
+func TestScriptUnitDurationAcceptsAnyPositiveWholeSecond(t *testing.T) {
+	input := CreateScriptUnitInput{
+		Title:                 "20 秒广告",
+		LanguageMode:          "auto",
+		TargetDurationSeconds: 20,
+		TargetPlatform:        "tiktok",
+	}
+	if err := normalizeScriptUnitInput(&input); err != nil {
+		t.Fatalf("normalizeScriptUnitInput() error = %v", err)
+	}
+
+	invalid := -1
+	if err := validateScriptUnitUpdate(ScriptUnit{LanguageMode: "auto"}, &UpdateScriptUnitInput{
+		TargetDurationSeconds: &invalid,
+	}); err == nil {
+		t.Fatal("validateScriptUnitUpdate() error = nil, want non-positive duration rejection")
 	}
 }

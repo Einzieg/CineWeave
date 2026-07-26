@@ -71,17 +71,18 @@ type commerceGenerationFrozenState struct {
 }
 
 type commercePreparationFrozenState struct {
-	Production     commerce.ProductionContext
-	Product        commerce.Product
-	ProductVersion commerce.ProductVersion
-	Unit           commerce.ScriptUnit
-	SourceVersion  commerce.ScriptVersion
-	SourceSegments []commerce.ScriptSegment
-	ReferencePack  commerce.ProductReferencePack
-	Template       commerce.WorkflowTemplateVersion
-	BindingConfig  commerceGenerationBindingConfiguration
-	AgentBindings  map[string]CommerceAgentBinding
-	Snapshot       CommerceScriptUnitPreparationSnapshot
+	Production         commerce.ProductionContext
+	Product            commerce.Product
+	ProductVersion     commerce.ProductVersion
+	Unit               commerce.ScriptUnit
+	SourceVersion      commerce.ScriptVersion
+	SourceSegments     []commerce.ScriptSegment
+	ReferencePack      commerce.ProductReferencePack
+	Template           commerce.WorkflowTemplateVersion
+	BindingConfig      commerceGenerationBindingConfiguration
+	AgentBindings      map[string]CommerceAgentBinding
+	Snapshot           CommerceScriptUnitPreparationSnapshot
+	StoryboardStrategy commerce.StoryboardStrategy
 }
 
 type commerceGenerationBindingConfiguration struct {
@@ -94,6 +95,7 @@ type commerceGenerationBindingConfiguration struct {
 }
 
 type commerceUnitConfigurationSnapshot struct {
+	SchemaVersion                   int    `json:"schemaVersion"`
 	ProjectGenerationID             string `json:"projectGenerationId"`
 	CommerceWorkflowBindingID       string `json:"commerceWorkflowBindingId"`
 	CommerceWorkflowBindingRevision int64  `json:"commerceWorkflowBindingRevision"`
@@ -106,14 +108,21 @@ type commerceUnitConfigurationSnapshot struct {
 	ReferencePackID                 string `json:"referencePackId"`
 	TargetDurationSeconds           int    `json:"targetDurationSeconds"`
 	TargetPlatform                  string `json:"targetPlatform"`
+	StoryboardStrategy              string `json:"storyboardStrategy"`
+	SegmentationPolicyVersion       string `json:"segmentationPolicyVersion"`
 }
 
 type commerceStoryboardFrozenConfiguration struct {
-	AspectRatio      string
-	TimelineTimebase int64
-	FPSNumerator     int
-	FPSDenominator   int
-	AllowedDurations []int
+	AspectRatio                string
+	TimelineTimebase           int64
+	FPSNumerator               int
+	FPSDenominator             int
+	Strategy                   commerce.StoryboardStrategy
+	SegmentationPolicyVersion  string
+	VideoExecutionEnvelope     commerce.VideoExecutionEnvelope
+	VideoExecutionEnvelopeHash string
+	AllowedDurations           []int
+	TimingPolicy               CommerceTimingPolicy
 }
 
 type commerceWorkflowRunRecord struct {
@@ -161,8 +170,10 @@ func (r *CommerceGenerationRuntime) AssertCommerceWorkflowIdentity(
 		if input.PreparationIdentity == nil || input.GenerationIdentity != nil {
 			return commerce.Error{Code: CommerceCodeWorkflowInputInvalid, Message: "脚本准备 Agent 身份无效"}
 		}
-		_, err = r.lockPreparationState(ctx, tx, *input.PreparationIdentity)
-		return err
+		if _, err = r.lockPreparationState(ctx, tx, *input.PreparationIdentity); err != nil {
+			return err
+		}
+		return r.lockCommercePreparationAgentWorkflow(ctx, tx, input)
 	case CommercePhaseScriptOrganization, CommercePhaseStoryboard:
 		if input.GenerationIdentity == nil || input.PreparationIdentity != nil {
 			return commerce.Error{Code: CommerceCodeWorkflowInputInvalid, Message: "销售脚本或分镜 Agent 身份无效"}
@@ -236,6 +247,38 @@ func (r *CommerceGenerationRuntime) lockCommerceMediaAgentWorkflow(
 	return nil
 }
 
+func (r *CommerceGenerationRuntime) lockCommercePreparationAgentWorkflow(
+	ctx context.Context,
+	tx pgx.Tx,
+	input CommerceAgentCallInput,
+) error {
+	if input.PreparationIdentity == nil {
+		return commerce.Error{Code: CommerceCodeWorkflowInputInvalid, Message: "脚本准备 Agent 缺少生产身份"}
+	}
+	record, err := loadCommerceWorkflowRunRecord(ctx, tx, input.WorkflowRunID)
+	if err != nil {
+		return err
+	}
+	var workflowInput CommerceScriptUnitPreparationInput
+	if err := json.Unmarshal(record.Input, &workflowInput); err != nil {
+		return generationMismatch("脚本准备 Workflow 输入无法解析", err)
+	}
+	if _, err := r.lockWorkflowRun(ctx, tx, input.WorkflowRunID, CommercePhasePreparation, workflowInput); err != nil {
+		return err
+	}
+	if err := assertCommerceSnapshotEqual(
+		workflowInput.Identity,
+		*input.PreparationIdentity,
+		"脚本准备 Agent 生产身份",
+	); err != nil {
+		return err
+	}
+	if workflowInput.AttemptGeneration != input.AttemptGeneration {
+		return generationMismatch("脚本准备 Agent attempt 与 Workflow 不一致", nil)
+	}
+	return nil
+}
+
 func (r *CommerceGenerationRuntime) LoadScriptUnitPreparation(
 	ctx context.Context,
 	input CommerceScriptUnitPreparationInput,
@@ -266,6 +309,7 @@ func (r *CommerceGenerationRuntime) PersistLanguageResolution(
 	ctx context.Context,
 	input PersistCommerceLanguageResolutionInput,
 ) (CommerceLanguageResolutionState, error) {
+	input.Contract.NeedsUserConfirmation = false
 	if err := ValidateCommercePreparationSnapshot(input.WorkflowInput.Identity, input.Snapshot); err != nil {
 		return CommerceLanguageResolutionState{}, generationMismatch("语言解析使用了无效快照", err)
 	}
@@ -379,6 +423,13 @@ func (r *CommerceGenerationRuntime) persistFrozenLanguageResolution(
 	)
 	if err == nil && existing.InputHash == state.Snapshot.InputHash &&
 		existing.SourceScriptVersionID == state.SourceVersion.ID {
+		if existing.Status != "confirmed" && existing.TargetLanguage != nil {
+			confirmed, confirmErr := r.repository.ConfirmLanguageResolution(
+				ctx, tx, state.Unit.OrganizationID, state.Unit.ProjectID, state.Unit.ID,
+				existing.ID, *existing.TargetLanguage, input.WorkflowInput.CreatedBy,
+			)
+			return confirmed, false, confirmErr
+		}
 		return existing, false, nil
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -387,17 +438,11 @@ func (r *CommerceGenerationRuntime) persistFrozenLanguageResolution(
 	sourceLanguage := input.Contract.SourceLanguage
 	targetLanguage := input.Contract.TargetLanguage
 	confidence := input.Contract.Confidence
-	status := "confirmed"
-	var confirmedBy *string
-	if input.Contract.NeedsUserConfirmation {
-		status = "needs_confirmation"
-	} else {
-		confirmedBy = &input.WorkflowInput.CreatedBy
-	}
+	confirmedBy := &input.WorkflowInput.CreatedBy
 	item, err := r.repository.InsertLanguageResolution(
 		ctx, tx, state.Unit, state.SourceVersion.ID, &sourceLanguage, &targetLanguage,
 		&confidence, strings.TrimSpace(input.Contract.Reasoning),
-		input.Contract.NeedsUserConfirmation, status, confirmedBy, state.Snapshot.InputHash,
+		false, "confirmed", confirmedBy, state.Snapshot.InputHash,
 	)
 	return item, err == nil, err
 }
@@ -629,6 +674,14 @@ func (r *CommerceGenerationRuntime) CommitScriptUnitPreparation(
 		return CommerceScriptUnitPreparationCommitResult{}, err
 	}
 	if err := appendCommerceWorkflowEvent(ctx, tx, identity.OrganizationID, identity.ProjectID,
+		"commerce.storyboard.strategy.selected", "commerce_script_unit_generation", identity.UnitGenerationID, map[string]any{
+			"commerceScriptUnitId":   identity.ScriptUnitID,
+			"scriptUnitGenerationId": identity.UnitGenerationID,
+			"strategy":               state.StoryboardStrategy,
+		}); err != nil {
+		return CommerceScriptUnitPreparationCommitResult{}, err
+	}
+	if err := appendCommerceWorkflowEvent(ctx, tx, identity.OrganizationID, identity.ProjectID,
 		"commerce.script_unit.updated", "commerce_script_unit", identity.ScriptUnitID, map[string]any{
 			"workflowRunId":          input.WorkflowInput.WorkflowRunID,
 			"commerceScriptUnitId":   identity.ScriptUnitID,
@@ -746,8 +799,7 @@ func (r *CommerceGenerationRuntime) assertPreparationAgentProvenance(
 		input.Snapshot.Bindings.LocalizationReviewer.Role: input.Snapshot.Bindings.LocalizationReviewer,
 	}
 	required := map[string]bool{
-		input.Snapshot.Bindings.LanguageResolver.Role:     true,
-		input.Snapshot.Bindings.LocalizationReviewer.Role: true,
+		input.Snapshot.Bindings.LanguageResolver.Role: true,
 	}
 	if input.Localization.SourceLanguage != input.Localization.TargetLanguage {
 		required[input.Snapshot.Bindings.ScriptLocalizer.Role] = true
@@ -803,10 +855,10 @@ func insertPreparedCommerceLocalization(
 	}
 	var promptVersionID, providerCallID string
 	for _, call := range input.AgentCalls {
-		if call.Role == input.Snapshot.Bindings.ScriptLocalizer.Role ||
-			(promptVersionID == "" && call.Role == input.Snapshot.Bindings.LanguageResolver.Role) {
+		if call.Role == input.Snapshot.Bindings.ScriptLocalizer.Role {
 			promptVersionID = call.PromptVersionID
 			providerCallID = call.ProviderCallID
+			break
 		}
 	}
 	var nextVersion int
@@ -880,7 +932,7 @@ func insertAndActivatePreparedUnitGeneration(
 	generationID := uuid.NewString()
 	generationNo := state.Unit.UnitGenerationNo + 1
 	configuration := map[string]any{
-		"schemaVersion":                   2,
+		"schemaVersion":                   3,
 		"projectGenerationId":             state.Production.Generation.ID,
 		"commerceWorkflowBindingId":       state.Production.CommerceBinding.ID,
 		"commerceWorkflowBindingRevision": state.Production.CommerceBinding.Revision,
@@ -893,6 +945,8 @@ func insertAndActivatePreparedUnitGeneration(
 		"referencePackId":                 state.ReferencePack.ID,
 		"targetDurationSeconds":           state.Unit.TargetDurationSeconds,
 		"targetPlatform":                  state.Unit.TargetPlatform,
+		"storyboardStrategy":              state.StoryboardStrategy,
+		"segmentationPolicyVersion":       commerce.CommerceSegmentationPolicyV2,
 		"preparationWorkflowRunId":        input.WorkflowInput.WorkflowRunID,
 		"preparationInputHash":            input.Snapshot.InputHash,
 		"preparationAgentCalls":           input.AgentCalls,
@@ -1148,6 +1202,40 @@ func (r *CommerceGenerationRuntime) LoadStoryboardPlanning(
 	return snapshot, nil
 }
 
+// BuildStoryboardPlanningPreviewTx builds the exact deterministic plan that the
+// Storyboard Workflow will commit. The caller owns the transaction so identity
+// checks, preview generation, and workflow enqueueing can share one lock.
+func (r *CommerceGenerationRuntime) BuildStoryboardPlanningPreviewTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	identity commerce.UnitGenerationIdentity,
+) (CommerceStoryboardPlanningSnapshot, CommerceSalesScriptContractState, CommerceStoryboardDeterministicPlan, error) {
+	state, err := r.lockGenerationState(ctx, tx, identity)
+	if err != nil {
+		return CommerceStoryboardPlanningSnapshot{}, CommerceSalesScriptContractState{}, CommerceStoryboardDeterministicPlan{}, err
+	}
+	snapshot, err := r.buildStoryboardSnapshot(ctx, tx, state)
+	if err != nil {
+		return CommerceStoryboardPlanningSnapshot{}, CommerceSalesScriptContractState{}, CommerceStoryboardDeterministicPlan{}, err
+	}
+	contractState, found, err := loadCommerceSalesScriptContractState(ctx, tx, identity.UnitGenerationID)
+	if err != nil {
+		return CommerceStoryboardPlanningSnapshot{}, CommerceSalesScriptContractState{}, CommerceStoryboardDeterministicPlan{}, err
+	}
+	if !found || contractState.InputHash != snapshot.InputHash {
+		return CommerceStoryboardPlanningSnapshot{}, CommerceSalesScriptContractState{}, CommerceStoryboardDeterministicPlan{},
+			commerce.Error{Code: commerce.CodeScriptOrganizationNeed, Message: "已冻结销售脚本契约不存在或已失效"}
+	}
+	if err := validatePersistedCommerceSalesScript(contractState, snapshot); err != nil {
+		return CommerceStoryboardPlanningSnapshot{}, CommerceSalesScriptContractState{}, CommerceStoryboardDeterministicPlan{}, err
+	}
+	plan, err := BuildCommerceStoryboardDeterministicPlan(snapshot, contractState.Contract)
+	if err != nil {
+		return CommerceStoryboardPlanningSnapshot{}, CommerceSalesScriptContractState{}, CommerceStoryboardDeterministicPlan{}, err
+	}
+	return snapshot, contractState, plan, nil
+}
+
 func (r *CommerceGenerationRuntime) CommitStoryboardPlan(
 	ctx context.Context,
 	input CommerceStoryboardPlanCommit,
@@ -1202,6 +1290,32 @@ func (r *CommerceGenerationRuntime) CommitStoryboardPlan(
 	if err != nil {
 		return CommerceStoryboardPlanCommitResult{}, err
 	}
+	baseEventPayload := map[string]any{
+		"workflowRunId":            input.WorkflowInput.WorkflowRunID,
+		"commerceScriptUnitId":     result.Identity.ScriptUnitID,
+		"scriptUnitGenerationId":   result.Identity.UnitGenerationID,
+		"commerceStoryboardPlanId": result.StoryboardPlanID,
+		"status":                   result.Status,
+	}
+	segmentationPayload := cloneCommerceEventPayload(baseEventPayload)
+	segmentationPayload["segmentationPlanHash"] = input.DeterministicPlan.SegmentationPlanHash
+	if err := appendCommerceWorkflowEvent(ctx, tx,
+		input.WorkflowInput.Identity.OrganizationID, input.WorkflowInput.Identity.ProjectID,
+		"commerce.storyboard.segmentation.completed", "commerce_storyboard_plan", result.StoryboardPlanID, segmentationPayload); err != nil {
+		return CommerceStoryboardPlanCommitResult{}, err
+	}
+	if err := appendCommerceWorkflowEvent(ctx, tx,
+		input.WorkflowInput.Identity.OrganizationID, input.WorkflowInput.Identity.ProjectID,
+		"commerce.storyboard.creative.generated", "commerce_storyboard_plan", result.StoryboardPlanID, baseEventPayload); err != nil {
+		return CommerceStoryboardPlanCommitResult{}, err
+	}
+	committedPayload := cloneCommerceEventPayload(baseEventPayload)
+	committedPayload["previewHash"] = input.DeterministicPlan.PreviewHash
+	if err := appendCommerceWorkflowEvent(ctx, tx,
+		input.WorkflowInput.Identity.OrganizationID, input.WorkflowInput.Identity.ProjectID,
+		"commerce.storyboard.plan.committed", "commerce_storyboard_plan", result.StoryboardPlanID, committedPayload); err != nil {
+		return CommerceStoryboardPlanCommitResult{}, err
+	}
 	if err := appendCommerceWorkflowEvent(ctx, tx,
 		input.WorkflowInput.Identity.OrganizationID, input.WorkflowInput.Identity.ProjectID,
 		"commerce.storyboard.plan.completed", "commerce_storyboard_plan", result.StoryboardPlanID, map[string]any{
@@ -1222,6 +1336,14 @@ func (r *CommerceGenerationRuntime) CommitStoryboardPlan(
 		return CommerceStoryboardPlanCommitResult{}, err
 	}
 	return result, nil
+}
+
+func cloneCommerceEventPayload(source map[string]any) map[string]any {
+	cloned := make(map[string]any, len(source)+1)
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (r *CommerceGenerationRuntime) FailCommerceGenerationWorkflow(
@@ -1396,10 +1518,7 @@ func (r *CommerceGenerationRuntime) FindCommerceAgentReplay(
 		if _, err := r.lockPreparationState(ctx, tx, *input.PreparationIdentity); err != nil {
 			return CommerceAgentCallOutput{}, false, err
 		}
-		if _, err := r.lockWorkflowRun(ctx, tx, input.WorkflowRunID, input.Phase, CommerceScriptUnitPreparationInput{
-			Identity: *input.PreparationIdentity, WorkflowRunID: input.WorkflowRunID,
-			AttemptGeneration: input.AttemptGeneration,
-		}); err != nil {
+		if err := r.lockCommercePreparationAgentWorkflow(ctx, tx, input); err != nil {
 			return CommerceAgentCallOutput{}, false, err
 		}
 	} else {
@@ -1482,6 +1601,7 @@ func (r *CommerceGenerationRuntime) lockPreparationState(
 	if unit.ProductID != identity.ProductID || unit.Status == "archived" || unit.Revision != identity.ScriptUnitRevision {
 		return commercePreparationFrozenState{}, generationMismatch("广告脚本已变化", nil)
 	}
+	stateStoryboardStrategy := commerce.StoryboardStrategySmart
 	if identity.RebuildID == "" {
 		if unit.ActiveUnitGenerationID != nil || unit.CurrentSourceVersionID == nil || *unit.CurrentSourceVersionID != identity.SourceScriptVersionID {
 			return commercePreparationFrozenState{}, generationMismatch("广告脚本已变化或已有活动生产代", nil)
@@ -1516,6 +1636,21 @@ func (r *CommerceGenerationRuntime) lockPreparationState(
 		if sourceStatus != "active" || sourceConfigurationHash != rebuild.SourceUnitConfigurationHash {
 			return commercePreparationFrozenState{}, generationMismatch("脚本换代来源生产代已变化", nil)
 		}
+		var targetConfiguration struct {
+			SchemaVersion            int                         `json:"schemaVersion"`
+			TargetStoryboardStrategy commerce.StoryboardStrategy `json:"targetStoryboardStrategy"`
+		}
+		if err := json.Unmarshal(rebuild.TargetConfiguration, &targetConfiguration); err != nil {
+			return commercePreparationFrozenState{}, generationMismatch("脚本换代目标配置无法解析", err)
+		}
+		if targetConfiguration.SchemaVersion != 2 {
+			return commercePreparationFrozenState{}, generationMismatch("脚本换代目标配置版本无效", nil)
+		}
+		strategy, strategyErr := commerce.ParseStoryboardStrategy(string(targetConfiguration.TargetStoryboardStrategy))
+		if strategyErr != nil || strategy == commerce.StoryboardStrategyManual {
+			return commercePreparationFrozenState{}, commerce.Error{Code: commerce.CodeStoryboardStrategy, Message: "脚本换代切分策略无效", Cause: strategyErr}
+		}
+		stateStoryboardStrategy = strategy
 		unit.LanguageMode = rebuild.TargetLanguageMode
 		unit.ExplicitTargetLanguage = rebuild.TargetLanguage
 		unit.TargetDurationSeconds = rebuild.TargetDurationSeconds
@@ -1592,6 +1727,7 @@ func (r *CommerceGenerationRuntime) lockPreparationState(
 		Unit: unit, SourceVersion: source, SourceSegments: segments,
 		ReferencePack: pack, Template: template, BindingConfig: bindingConfig,
 		AgentBindings: agentBindings, Snapshot: preparation,
+		StoryboardStrategy: stateStoryboardStrategy,
 	}, nil
 }
 
@@ -1696,21 +1832,35 @@ func (r *CommerceGenerationRuntime) lockGenerationState(
 	if err != nil {
 		return commerceGenerationFrozenState{}, err
 	}
-	allowedDurations, err := commerceAllowedVideoDurations(production.CommerceBinding.CapabilitySnapshot)
+	videoEnvelope, videoEnvelopeHash, err := buildCommerceVideoExecutionEnvelope(
+		production,
+		bindingConfig.ProductionConfiguration,
+		production.CommerceBinding.CapabilitySnapshot,
+	)
 	if err != nil {
 		return commerceGenerationFrozenState{}, err
 	}
+	strategy, err := commerce.ParseStoryboardStrategy(unitConfig.StoryboardStrategy)
+	if err != nil {
+		return commerceGenerationFrozenState{}, generationMismatch("脚本单元切分策略无效", err)
+	}
+	timingPolicy := commerceAdvisoryTimingPolicy(localization.TargetLanguage)
 	return commerceGenerationFrozenState{
 		Production: production, Generation: generation, Product: product, ProductVersion: productVersion,
 		Unit: unit, SourceVersion: source, SourceSegments: segments, Localization: localization,
 		ReferencePack: pack, Template: template, BindingConfig: bindingConfig,
 		PromptBindings: promptBindings, ModelContracts: modelContracts, AgentBindings: agentBindings,
 		StoryboardConfig: commerceStoryboardFrozenConfiguration{
-			AspectRatio:      bindingConfig.ProductionConfiguration.AspectRatio,
-			TimelineTimebase: bindingConfig.ProductionConfiguration.TimelineTimebase,
-			FPSNumerator:     bindingConfig.ProductionConfiguration.FPSNumerator,
-			FPSDenominator:   bindingConfig.ProductionConfiguration.FPSDenominator,
-			AllowedDurations: allowedDurations,
+			AspectRatio:                bindingConfig.ProductionConfiguration.AspectRatio,
+			TimelineTimebase:           bindingConfig.ProductionConfiguration.TimelineTimebase,
+			FPSNumerator:               bindingConfig.ProductionConfiguration.FPSNumerator,
+			FPSDenominator:             bindingConfig.ProductionConfiguration.FPSDenominator,
+			Strategy:                   strategy,
+			SegmentationPolicyVersion:  unitConfig.SegmentationPolicyVersion,
+			VideoExecutionEnvelope:     videoEnvelope,
+			VideoExecutionEnvelopeHash: videoEnvelopeHash,
+			AllowedDurations:           append([]int(nil), videoEnvelope.ExecutableDurationSeconds...),
+			TimingPolicy:               timingPolicy,
 		},
 	}, nil
 }
@@ -1744,11 +1894,15 @@ func (r *CommerceGenerationRuntime) buildStoryboardSnapshot(
 		"localizationId": state.Localization.ID, "localizedContentHash": state.Localization.LocalizedContentHash,
 		"localizedContractHash": localizedContractHash,
 		"referencePackId":       state.ReferencePack.ID, "referencePackHash": state.ReferencePack.PackHash,
-		"aspectRatio":      state.StoryboardConfig.AspectRatio,
-		"timelineTimebase": state.StoryboardConfig.TimelineTimebase,
-		"fpsNumerator":     state.StoryboardConfig.FPSNumerator,
-		"fpsDenominator":   state.StoryboardConfig.FPSDenominator,
-		"allowedDurations": state.StoryboardConfig.AllowedDurations,
+		"aspectRatio":                state.StoryboardConfig.AspectRatio,
+		"timelineTimebase":           state.StoryboardConfig.TimelineTimebase,
+		"fpsNumerator":               state.StoryboardConfig.FPSNumerator,
+		"fpsDenominator":             state.StoryboardConfig.FPSDenominator,
+		"allowedDurations":           state.StoryboardConfig.AllowedDurations,
+		"storyboardStrategy":         state.StoryboardConfig.Strategy,
+		"segmentationPolicyVersion":  state.StoryboardConfig.SegmentationPolicyVersion,
+		"videoExecutionEnvelopeHash": state.StoryboardConfig.VideoExecutionEnvelopeHash,
+		"timingPolicy":               state.StoryboardConfig.TimingPolicy,
 	})
 	if err != nil {
 		return CommerceStoryboardPlanningSnapshot{}, err
@@ -1762,8 +1916,13 @@ func (r *CommerceGenerationRuntime) buildStoryboardSnapshot(
 		FPSNumerator: state.StoryboardConfig.FPSNumerator, FPSDenominator: state.StoryboardConfig.FPSDenominator,
 		TimingPolicyVersion:  state.Localization.TimingPolicyVersion,
 		LocalizedContentHash: state.Localization.LocalizedContentHash, LocalizedContractHash: localizedContractHash,
-		AllowedShotDurations: append([]int(nil), state.StoryboardConfig.AllowedDurations...),
-		LocalizedSegments:    localizedSegments, ProductReferences: references,
+		AllowedShotDurations:       append([]int(nil), state.StoryboardConfig.AllowedDurations...),
+		StoryboardStrategy:         state.StoryboardConfig.Strategy,
+		SegmentationPolicyVersion:  state.StoryboardConfig.SegmentationPolicyVersion,
+		VideoExecutionEnvelope:     state.StoryboardConfig.VideoExecutionEnvelope,
+		VideoExecutionEnvelopeHash: state.StoryboardConfig.VideoExecutionEnvelopeHash,
+		TimingPolicy:               state.StoryboardConfig.TimingPolicy,
+		LocalizedSegments:          localizedSegments, ProductReferences: references,
 		ProductFacts:         append(json.RawMessage(nil), state.ProductVersion.FactsSnapshot...),
 		LocalizationContract: append(json.RawMessage(nil), state.Localization.StructuredContract...),
 		Bindings: CommerceStoryboardAgentBindings{
@@ -2088,6 +2247,11 @@ func validateFrozenUnitConfiguration(
 	unit commerce.ScriptUnit,
 	config commerceUnitConfigurationSnapshot,
 ) error {
+	strategy, strategyErr := commerce.ParseStoryboardStrategy(config.StoryboardStrategy)
+	if config.SchemaVersion != 3 || strategyErr != nil || strategy == commerce.StoryboardStrategyManual ||
+		config.SegmentationPolicyVersion != commerce.CommerceSegmentationPolicyV2 {
+		return generationMismatch("脚本单元配置版本过旧或切分策略无效，请重建脚本单元生产代", strategyErr)
+	}
 	if config.ProjectGenerationID != production.Generation.ID ||
 		config.CommerceWorkflowBindingID != production.CommerceBinding.ID ||
 		config.CommerceWorkflowBindingRevision != production.CommerceBinding.Revision ||
@@ -2187,9 +2351,181 @@ func commerceAllowedVideoDurations(raw json.RawMessage) ([]int, error) {
 		provider.Model{ID: snapshot.ProviderModelID},
 	)
 	if err != nil {
-		return nil, generationMismatch("冻结视频能力没有可执行的整数时长集合", err)
+		return nil, generationMismatch("当前视频模型没有可执行的整数时长集合", err)
 	}
 	return values, nil
+}
+
+type commerceFrozenVideoCapabilityCandidate struct {
+	ModelProfileID          string `json:"modelProfileId"`
+	ModelProfileKey         string `json:"modelProfileKey"`
+	ModelProfileBindingID   string `json:"modelProfileBindingId"`
+	ProviderModelID         string `json:"providerModelId"`
+	ProviderAccountID       string `json:"providerAccountId"`
+	ModelKey                string `json:"modelKey"`
+	Priority                int    `json:"priority"`
+	Weight                  int    `json:"weight"`
+	VideoGenerationVariants []struct {
+		VariantKey                  string   `json:"variantKey"`
+		CapabilitySnapshotHash      string   `json:"capabilitySnapshotHash"`
+		ExecutableDurationSeconds   []int    `json:"executableDurationSeconds"`
+		Resolutions                 []string `json:"resolutions"`
+		AspectRatios                []string `json:"aspectRatios"`
+		SupportsContinuousExtension bool     `json:"supportsContinuousExtension"`
+	} `json:"videoGenerationVariants"`
+}
+
+func buildCommerceVideoExecutionEnvelope(
+	production commerce.ProductionContext,
+	configuration videoproduction.ProductionConfigurationSnapshot,
+	raw json.RawMessage,
+) (commerce.VideoExecutionEnvelope, string, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return commerce.VideoExecutionEnvelope{}, "", generationMismatch("视频能力快照无法解析", err)
+	}
+	videoRaw, ok := root["videoGenerator"]
+	if !ok {
+		return commerce.VideoExecutionEnvelope{}, "", generationMismatch("视频能力快照缺少 videoGenerator", nil)
+	}
+	var video struct {
+		Candidates []commerceFrozenVideoCapabilityCandidate `json:"candidates"`
+	}
+	if err := json.Unmarshal(videoRaw, &video); err != nil {
+		return commerce.VideoExecutionEnvelope{}, "", generationMismatch("视频候选路由无法解析", err)
+	}
+	if len(video.Candidates) == 0 {
+		return commerce.VideoExecutionEnvelope{}, "", generationMismatch("当前视频模型没有可执行路由，请检查业务模型配置", nil)
+	}
+	var profile struct {
+		ProfileKey string `json:"profileKey"`
+	}
+	if err := json.Unmarshal(production.VideoBinding.ProfileSnapshot, &profile); err != nil {
+		return commerce.VideoExecutionEnvelope{}, "", generationMismatch("视频 Profile 快照无法解析", err)
+	}
+	targetResolution := configuredCommerceVideoResolution(configuration)
+	if targetResolution == "" {
+		targetResolution = selectCommerceVideoResolution(video.Candidates, configuration.AspectRatio, configuration.ImageQuality)
+	}
+	if targetResolution == "" {
+		return commerce.VideoExecutionEnvelope{}, "", generationMismatch("当前视频模型没有可执行的分辨率", nil)
+	}
+	envelope := commerce.VideoExecutionEnvelope{
+		ContractVersion:                    commerce.CommerceVideoEnvelopeV1,
+		ProjectProductionGenerationID:      production.Generation.ID,
+		VideoProductionBindingID:           production.VideoBinding.ID,
+		VideoProductionBindingRevision:     production.VideoBinding.Revision,
+		VideoProductionProfileVersionID:    production.VideoBinding.ProfileVersionID,
+		VideoProductionProfileSnapshotHash: production.VideoBinding.ProfileSnapshotHash,
+		ModelProfileKey:                    video.Candidates[0].ModelProfileKey,
+		TargetResolution:                   targetResolution,
+		AspectRatio:                        configuration.AspectRatio,
+	}
+	durationSet := map[int]struct{}{}
+	for _, candidate := range video.Candidates {
+		for _, variant := range candidate.VideoGenerationVariants {
+			if !containsCommerceNormalizedString(variant.Resolutions, targetResolution) {
+				continue
+			}
+			route := commerce.VideoExecutionRoute{
+				RouteKey:       candidate.ModelProfileBindingID + ":" + candidate.ProviderModelID + ":" + variant.VariantKey,
+				ModelProfileID: candidate.ModelProfileID, ModelProfileKey: candidate.ModelProfileKey,
+				ModelProfileBindingID: candidate.ModelProfileBindingID,
+				ProviderModelID:       candidate.ProviderModelID, ProviderAccountID: candidate.ProviderAccountID,
+				ModelKey: candidate.ModelKey, Priority: candidate.Priority, Weight: candidate.Weight,
+				VariantKey: variant.VariantKey, CapabilitySnapshotHash: variant.CapabilitySnapshotHash,
+				ExecutableDurationSeconds:   append([]int(nil), variant.ExecutableDurationSeconds...),
+				Resolutions:                 append([]string(nil), variant.Resolutions...),
+				AspectRatios:                append([]string(nil), variant.AspectRatios...),
+				SupportsContinuousExtension: variant.SupportsContinuousExtension,
+			}
+			envelope.Routes = append(envelope.Routes, route)
+			for _, duration := range variant.ExecutableDurationSeconds {
+				if duration > 0 {
+					durationSet[duration] = struct{}{}
+				}
+			}
+		}
+	}
+	envelope.ExecutableDurationSeconds = make([]int, 0, len(durationSet))
+	for duration := range durationSet {
+		envelope.ExecutableDurationSeconds = append(envelope.ExecutableDurationSeconds, duration)
+	}
+	canonicalEnvelope, hash, err := commerce.CanonicalizeVideoExecutionEnvelope(envelope)
+	if err != nil {
+		return commerce.VideoExecutionEnvelope{}, "", generationMismatch("当前视频模型没有同时满足时长和分辨率的候选路由", err)
+	}
+	return canonicalEnvelope, hash, nil
+}
+
+func configuredCommerceVideoResolution(configuration videoproduction.ProductionConfigurationSnapshot) string {
+	if len(configuration.Settings) == 0 || string(configuration.Settings) == "null" {
+		return ""
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(configuration.Settings, &settings); err != nil {
+		return ""
+	}
+	for _, key := range []string{"videoResolution", "resolution"} {
+		if value, ok := settings[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.ToLower(strings.TrimSpace(value))
+		}
+	}
+	return ""
+}
+
+func selectCommerceVideoResolution(
+	candidates []commerceFrozenVideoCapabilityCandidate,
+	aspectRatio string,
+	imageQuality string,
+) string {
+	values := map[string]struct{}{}
+	for _, candidate := range candidates {
+		for _, variant := range candidate.VideoGenerationVariants {
+			for _, value := range variant.Resolutions {
+				value = strings.ToLower(strings.TrimSpace(value))
+				if value != "" {
+					values[value] = struct{}{}
+				}
+			}
+		}
+	}
+	if len(values) == 0 {
+		return ""
+	}
+	portrait := strings.TrimSpace(aspectRatio) == "9:16"
+	preferred := []string{"720p", "1280x720", "720x1280", "1080p", "1920x1080", "1080x1920"}
+	if strings.EqualFold(strings.TrimSpace(imageQuality), "high") {
+		preferred = []string{"1080p", "1920x1080", "1080x1920", "720p", "1280x720", "720x1280"}
+	}
+	if portrait {
+		if strings.EqualFold(strings.TrimSpace(imageQuality), "high") {
+			preferred = []string{"1080x1920", "1080p", "720x1280", "720p", "1920x1080", "1280x720"}
+		} else {
+			preferred = []string{"720x1280", "720p", "1080x1920", "1080p", "1280x720", "1920x1080"}
+		}
+	}
+	for _, value := range preferred {
+		if _, ok := values[value]; ok {
+			return value
+		}
+	}
+	sorted := make([]string, 0, len(values))
+	for value := range values {
+		sorted = append(sorted, value)
+	}
+	sort.Strings(sorted)
+	return sorted[0]
+}
+
+func containsCommerceNormalizedString(values []string, expected string) bool {
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	for _, value := range values {
+		if strings.ToLower(strings.TrimSpace(value)) == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func loadFrozenLocalizationSegments(
@@ -2322,6 +2658,7 @@ func (r *CommerceGenerationRuntime) assertStoryboardAgentProvenance(
 		input.Snapshot.Bindings.StoryboardPlanner.Role:  input.Snapshot.Bindings.StoryboardPlanner,
 		input.Snapshot.Bindings.StoryboardReviewer.Role: input.Snapshot.Bindings.StoryboardReviewer,
 	}
+	requiredRole := input.Snapshot.Bindings.StoryboardPlanner.Role
 	seen := make(map[string]bool, len(bindings))
 	for _, call := range input.AgentCalls {
 		binding, ok := bindings[call.Role]
@@ -2340,10 +2677,8 @@ func (r *CommerceGenerationRuntime) assertStoryboardAgentProvenance(
 		}
 		seen[call.Role] = true
 	}
-	for role := range bindings {
-		if !seen[role] {
-			return generationMismatch("分镜提交缺少必需的 Agent provenance："+role, nil)
-		}
+	if !seen[requiredRole] {
+		return generationMismatch("分镜提交缺少必需的 Agent provenance："+requiredRole, nil)
 	}
 	return nil
 }
@@ -2365,16 +2700,13 @@ func validateCommercePreparationCommit(input CommerceScriptUnitPreparationCommit
 	if err := ValidateCommerceLocalizationReview(input.LocalizationReview, input.Localization); err != nil || input.LocalizationReview.Decision != "approve" {
 		return commerce.Error{Code: CommerceCodeLocalizationReviewExhausted, Message: "本地化尚未通过审核", Cause: err}
 	}
-	policy, ok := input.Snapshot.TimingPolicies[input.Localization.TargetLanguage]
-	if !ok {
-		return commerce.Error{Code: commerce.CodeLanguageUnsupported, Message: "冻结模板没有目标语言时长策略"}
-	}
+	policy := commerceAdvisoryTimingPolicy(input.Localization.TargetLanguage)
 	expectedTiming, err := AnalyzeCommerceTiming(input.Localization, policy, input.Snapshot.TargetDurationSeconds)
 	if err != nil {
 		return err
 	}
-	if expectedTiming != input.Timing || input.Timing.Exceeded {
-		return commerce.Error{Code: CommerceCodeScriptDurationExceeded, Message: "脚本时长分析与冻结输入不一致"}
+	if expectedTiming != input.Timing {
+		return generationMismatch("脚本时长分析与冻结输入不一致", nil)
 	}
 	return nil
 }
@@ -2422,6 +2754,20 @@ func validateCommerceStoryboardCommit(input CommerceStoryboardPlanCommit) error 
 	}
 	if err := ValidateCommerceSalesScript(input.SalesScript, input.Snapshot); err != nil {
 		return commerce.Error{Code: CommerceCodeStoryboardContractInvalid, Message: "销售脚本契约无效", Cause: err}
+	}
+	deterministicPlan, err := BuildCommerceStoryboardDeterministicPlan(input.Snapshot, input.SalesScript)
+	if err != nil {
+		return commerce.Error{Code: CommerceCodeStoryboardContractInvalid, Message: "确定性分镜切分无效", Cause: err}
+	}
+	if err := assertCommerceSnapshotEqual(input.DeterministicPlan, deterministicPlan, "确定性分镜切分"); err != nil {
+		return err
+	}
+	mergedPlan, err := applyCommerceStoryboardCreativeDirection(deterministicPlan.Skeleton, input.Plan)
+	if err != nil {
+		return commerce.Error{Code: CommerceCodeStoryboardContractInvalid, Message: "分镜创意修改了冻结切分结果", Cause: err}
+	}
+	if err := assertCommerceSnapshotEqual(input.Plan, mergedPlan, "分镜创意契约"); err != nil {
+		return err
 	}
 	projection, err := BuildCommerceStoryboardProjection(input.Snapshot, input.Plan)
 	if err != nil {
@@ -2499,6 +2845,18 @@ func (r *CommerceGenerationRuntime) persistCommerceStoryboardPlan(
 	if err != nil {
 		return CommerceStoryboardPlanCommitResult{}, err
 	}
+	segmentationPlan, err := json.Marshal(input.DeterministicPlan.Segmentation)
+	if err != nil {
+		return CommerceStoryboardPlanCommitResult{}, err
+	}
+	videoExecutionEnvelope, err := json.Marshal(input.Snapshot.VideoExecutionEnvelope)
+	if err != nil {
+		return CommerceStoryboardPlanCommitResult{}, err
+	}
+	timingAdvisory, err := json.Marshal(input.DeterministicPlan.TimingAdvisory)
+	if err != nil {
+		return CommerceStoryboardPlanCommitResult{}, err
+	}
 	planner := findCommerceAgentCall(input.AgentCalls, input.Snapshot.Bindings.StoryboardPlanner.Role)
 	reviewer := findCommerceAgentCall(input.AgentCalls, input.Snapshot.Bindings.StoryboardReviewer.Role)
 	planID := uuid.NewString()
@@ -2517,7 +2875,11 @@ func (r *CommerceGenerationRuntime) persistCommerceStoryboardPlan(
 			planner_provider_call_id, reviewer_provider_call_id,
 			planner_output, reviewer_output, review_status, plan_hash, projection_hash,
 			allowed_shot_durations, sales_script_contract_id,
-			sales_script_contract_hash, created_by, activated_at
+			sales_script_contract_hash,
+			segmentation_policy_version, segmentation_plan, segmentation_plan_hash,
+			video_execution_envelope, video_execution_envelope_hash,
+			timing_advisory, preview_hash,
+			created_by, activated_at
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
@@ -2526,7 +2888,9 @@ func (r *CommerceGenerationRuntime) persistCommerceStoryboardPlan(
 			$25, $25, NULLIF($26, '')::uuid, NULLIF($27, '')::uuid,
 			NULLIF($28, '')::uuid, NULLIF($29, '')::uuid,
 			$30, $31, 'approved', $32, $32, $34,
-			NULLIF($35, '')::uuid, $36, NULLIF($33, '')::uuid, now()
+			NULLIF($35, '')::uuid, $36,
+			$37, $38, $39, $40, $41, $42, $43,
+			NULLIF($33, '')::uuid, now()
 		)
 	`, planID, state.Generation.Identity.OrganizationID, state.Generation.Identity.ProjectID,
 		state.Generation.Identity.ProductID, state.Generation.ProductVersionID,
@@ -2543,11 +2907,19 @@ func (r *CommerceGenerationRuntime) persistCommerceStoryboardPlan(
 		planner.ProviderCallID, reviewer.ProviderCallID, plannerOutput, reviewerOutput,
 		projection.PlanHash, input.WorkflowInput.CreatedBy, input.Snapshot.AllowedShotDurations,
 		input.SalesScriptContractID, input.SalesScriptContractHash,
+		input.Snapshot.SegmentationPolicyVersion, segmentationPlan,
+		input.DeterministicPlan.SegmentationPlanHash, videoExecutionEnvelope,
+		input.Snapshot.VideoExecutionEnvelopeHash, timingAdvisory,
+		input.DeterministicPlan.PreviewHash,
 	)
 	if err != nil {
 		return CommerceStoryboardPlanCommitResult{}, err
 	}
 	for _, shot := range projection.Shots {
+		segmentedShot, ok := commerceSegmentationShotByOrdinal(input.DeterministicPlan.Segmentation, shot.ShotOrdinal)
+		if !ok {
+			return CommerceStoryboardPlanCommitResult{}, generationMismatch("确定性切分缺少镜头规划摘要", nil)
+		}
 		shotID := uuid.NewString()
 		startTick := int64(shot.StartSeconds) * input.Snapshot.TimelineTimebase
 		durationTicks := int64(shot.DurationSeconds) * input.Snapshot.TimelineTimebase
@@ -2557,9 +2929,12 @@ func (r *CommerceGenerationRuntime) persistCommerceStoryboardPlan(
 			cameraText = "{}"
 		}
 		metadata, err := json.Marshal(map[string]any{
-			"commerceCandidateKey": shot.CandidateKey,
-			"shotPurpose":          shot.Contract.ShotPurpose,
-			"composition":          shot.Contract.Composition,
+			"commerceCandidateKey":     shot.CandidateKey,
+			"shotPurpose":              shot.Contract.ShotPurpose,
+			"composition":              shot.Contract.Composition,
+			"requestedDurationSeconds": segmentedShot.RequestedDurationSeconds,
+			"trimDurationSeconds":      segmentedShot.TrimDurationSeconds,
+			"eligibleRouteSetHash":     segmentedShot.EligibleRouteSetHash,
 		})
 		if err != nil {
 			return CommerceStoryboardPlanCommitResult{}, err
@@ -2599,6 +2974,16 @@ func (r *CommerceGenerationRuntime) persistCommerceStoryboardPlan(
 		if err != nil {
 			return CommerceStoryboardPlanCommitResult{}, err
 		}
+		creativeDirection, err := json.Marshal(map[string]any{
+			"shotPurpose":         shot.Contract.ShotPurpose,
+			"visualAction":        shot.Contract.VisualAction,
+			"camera":              shot.Contract.Camera,
+			"composition":         shot.Contract.Composition,
+			"productReferenceIds": shot.Contract.ProductReferenceIDs,
+		})
+		if err != nil {
+			return CommerceStoryboardPlanCommitResult{}, err
+		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO commerce_shot_contracts(
 				storyboard_shot_id, organization_id, project_id,
@@ -2606,17 +2991,24 @@ func (r *CommerceGenerationRuntime) persistCommerceStoryboardPlan(
 				sales_beat, visual_action, product_presentation,
 				voiceover_text, onscreen_text, target_language,
 				sound_effects, music_cue, compliance_flags, contract_hash,
-				review_status, reviewer_output
+				review_status, reviewer_output, creative_direction,
+				estimated_voiceover_ticks, voiceover_overflow_ticks,
+				timing_advisory_level, recommended_request_duration_seconds,
+				eligible_route_set_hash
 			)
 			VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8, $9,
-				$10, $11, $12, $13, $14, '[]', $15, 'approved', $16
+				$10, $11, $12, $13, $14, '[]', $15, 'approved', $16,
+				$17, $18, $19, $20, $21, $22
 			)
 		`, shotID, state.Generation.Identity.OrganizationID, state.Generation.Identity.ProjectID,
 			planID, state.Generation.Identity.ScriptUnitID, state.Generation.Identity.UnitGenerationID,
 			shot.Contract.SalesBeat, shot.Contract.VisualAction, productPresentation,
 			shot.Contract.VoiceoverText, shot.Contract.OnscreenText, input.Snapshot.TargetLocale,
-			soundEffects, shot.Contract.MusicCue, shot.ContractHash, reviewerOutput)
+			soundEffects, shot.Contract.MusicCue, shot.ContractHash, reviewerOutput,
+			creativeDirection, segmentedShot.EstimatedVoiceoverTicks,
+			segmentedShot.VoiceoverOverflowTicks, segmentedShot.TimingAdvisoryLevel,
+			segmentedShot.RequestedDurationSeconds, segmentedShot.EligibleRouteSetHash)
 		if err != nil {
 			return CommerceStoryboardPlanCommitResult{}, err
 		}

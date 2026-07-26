@@ -252,7 +252,7 @@ func attemptedProviderModels(raw []byte) map[string]bool {
 
 func videoSegmentFailureRetryable(code string) bool {
 	switch strings.ToUpper(strings.TrimSpace(code)) {
-	case "", CodeProviderRateLimited, CodeProviderConcurrencyLimited, CodeUpstreamTimeout, CodeUpstreamInternalError, CodeUpstreamStreamTruncated, CodeUpstreamOutputMismatch, CodePollingTimeout, "PROVIDER_VIDEO_POLLING_TIMEOUT", CodeMediaDownloadFailed, CodeProviderCircuitOpen:
+	case "", CodeProviderRateLimited, CodeProviderConcurrencyLimited, CodeUpstreamTimeout, CodeUpstreamInternalError, CodeUpstreamStreamTruncated, CodeUpstreamOutputMismatch, CodePollingTimeout, "PROVIDER_VIDEO_POLLING_TIMEOUT", CodeProviderCircuitOpen:
 		return true
 	default:
 		return false

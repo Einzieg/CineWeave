@@ -119,7 +119,8 @@ func TestValidateCommerceVideoPromptPlanSeparatesVisualOverlayAndAudio(t *testin
 		VoiceoverText: "现在下单立即享受优惠", OnscreenText: "限时优惠",
 		SoundEffects: []string{"包装开启声"}, MusicCue: "轻快器乐",
 		FirstFrame:      CommerceVideoFirstFrameReference{ImageVersionID: "image-version"},
-		DurationSeconds: 5, AllowedDurations: []int{5, 10}, NativeAudioRequested: true,
+		DurationSeconds: 3, DurationExecutionPolicy: CommerceDurationExecutionPolicy,
+		AllowedDurations: []int{6, 10}, NativeAudioRequested: true,
 	}
 	base := CommerceVideoPromptPlanContract{
 		ContractVersion:      CommerceVideoPromptPlanContractVersion,
@@ -134,11 +135,21 @@ func TestValidateCommerceVideoPromptPlanSeparatesVisualOverlayAndAudio(t *testin
 	}
 	require.NoError(t, ValidateCommerceVideoPromptPlan(base, snapshot))
 
+	advisoryCapabilities := base
+	advisoryCapabilities.InstructionLanguage = "ms-MY"
+	advisorySnapshot := snapshot
+	advisorySnapshot.SupportedPromptLanguages = []string{"en-US"}
+	advisorySnapshot.NativeAudioLanguages = []string{"en-US"}
+	require.NoError(t, ValidateCommerceVideoPromptPlan(advisoryCapabilities, advisorySnapshot))
+
 	for name, mutate := range map[string]func(*CommerceVideoPromptPlanContract){
 		"overlay in visual prompt":   func(item *CommerceVideoPromptPlanContract) { item.VisualPrompt += " " + snapshot.OnscreenText },
 		"voiceover in visual prompt": func(item *CommerceVideoPromptPlanContract) { item.VisualPrompt += " " + snapshot.VoiceoverText },
 		"sound effect in voiceover":  func(item *CommerceVideoPromptPlanContract) { item.VoiceoverText += snapshot.SoundEffects[0] },
 		"music in voiceover":         func(item *CommerceVideoPromptPlanContract) { item.VoiceoverText += snapshot.MusicCue },
+		"provider duration substituted": func(item *CommerceVideoPromptPlanContract) {
+			item.DurationSeconds = snapshot.AllowedDurations[0]
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := base
@@ -155,6 +166,101 @@ func TestValidateCommerceVideoPromptPlanSeparatesVisualOverlayAndAudio(t *testin
 	require.Contains(t, rendered, "Never vocalize")
 }
 
+func TestBindCommerceVideoPromptPlanExecutionContractUsesFrozenSnapshot(t *testing.T) {
+	identity := testCommerceReferenceImageIdentity()
+	snapshot := CommerceVideoPromptShotSnapshot{
+		Identity: identity, ProductVersionID: "product-version", ReferencePackID: "reference-pack",
+		SourceSegmentIDs:    []string{"segment-1", "segment-2"},
+		InstructionLanguage: "en-US", TargetLocale: "ms-MY",
+		VoiceoverText: "Topi keledar ini sangat selesa.", OnscreenText: "PROMOSI",
+		SoundEffects: []string{"helmet click"}, MusicCue: "light electronic music",
+		FirstFrame:      CommerceVideoFirstFrameReference{ImageVersionID: "approved-image-version"},
+		DurationSeconds: 6, NativeAudioRequested: true,
+	}
+	agentOutput := CommerceVideoPromptPlanContract{
+		ContractVersion:      "hallucinated-version",
+		CommerceScriptUnitID: "hallucinated-script", ScriptUnitGenerationID: "hallucinated-generation",
+		CommerceWorkflowBindingID: "hallucinated-binding", ProductVersionID: "hallucinated-product",
+		SourceSegmentIDs: []string{"hallucinated-segment"}, InstructionLanguage: "zh-CN",
+		SpokenLanguage: "en-US", VisualPrompt: "A single continuous product demonstration.",
+		VoiceoverText: "rewritten voiceover", OnscreenText: "rewritten overlay",
+		SoundEffects: []string{"rewritten effect"}, MusicCue: "rewritten music",
+		NativeAudioRequested: false, ReferencePackID: "hallucinated-reference-pack",
+		ReferenceIDs: []string{"hallucinated-image"}, DurationSeconds: 12,
+	}
+
+	bound := BindCommerceVideoPromptPlanExecutionContract(agentOutput, snapshot)
+
+	require.Equal(t, CommerceVideoPromptPlanContractVersion, bound.ContractVersion)
+	require.Equal(t, identity.ScriptUnitID, bound.CommerceScriptUnitID)
+	require.Equal(t, identity.UnitGenerationID, bound.ScriptUnitGenerationID)
+	require.Equal(t, identity.CommerceWorkflowBindingID, bound.CommerceWorkflowBindingID)
+	require.Equal(t, snapshot.ProductVersionID, bound.ProductVersionID)
+	require.Equal(t, snapshot.SourceSegmentIDs, bound.SourceSegmentIDs)
+	require.Equal(t, snapshot.InstructionLanguage, bound.InstructionLanguage)
+	require.Equal(t, snapshot.TargetLocale, bound.SpokenLanguage)
+	require.Equal(t, snapshot.VoiceoverText, bound.VoiceoverText)
+	require.Equal(t, snapshot.OnscreenText, bound.OnscreenText)
+	require.Equal(t, snapshot.SoundEffects, bound.SoundEffects)
+	require.Equal(t, snapshot.MusicCue, bound.MusicCue)
+	require.Equal(t, snapshot.NativeAudioRequested, bound.NativeAudioRequested)
+	require.Equal(t, snapshot.ReferencePackID, bound.ReferencePackID)
+	require.Equal(t, []string{snapshot.FirstFrame.ImageVersionID}, bound.ReferenceIDs)
+	require.Equal(t, snapshot.DurationSeconds, bound.DurationSeconds)
+	require.Equal(t, agentOutput.VisualPrompt, bound.VisualPrompt)
+	require.NoError(t, ValidateCommerceVideoPromptPlan(bound, snapshot))
+}
+
+func TestReconcileCommerceVideoPromptReviewOnlyBlocksFirstFrameReachability(t *testing.T) {
+	review := CommerceVideoPromptReviewContract{
+		ContractVersion: CommerceVideoPromptReviewContractVersion,
+		Decision:        "reject",
+		Issues: []CommerceReviewIssue{{
+			Code: "UNSUPPORTED_DURATION", Field: "durationSeconds",
+			Message: "编辑时长不在供应商时长集合中", Suggestion: "改为供应商时长",
+		}},
+		Checks: CommerceVideoPromptReviewChecks{
+			SingleFrameReachability: true,
+		},
+	}
+
+	reconciled := ReconcileCommerceVideoPromptReview(review)
+
+	require.Equal(t, "approve", reconciled.Decision)
+	require.Empty(t, reconciled.Issues)
+	require.Equal(t, review.Issues, reconciled.AdvisoryIssues)
+	require.Equal(t, "approved_by_frozen_execution_contract", reconciled.Resolution)
+	require.True(t, reconciled.Checks.Identity)
+	require.True(t, reconciled.Checks.VerbatimVoiceover)
+	require.True(t, reconciled.Checks.AudioSeparation)
+	require.True(t, reconciled.Checks.OverlaySeparation)
+	require.True(t, reconciled.Checks.ReferenceContract)
+	require.True(t, reconciled.Checks.DurationCapability)
+	require.True(t, reconciled.Checks.NativeAudioLanguage)
+	require.NoError(t, ValidateCommerceVideoPromptReview(reconciled))
+}
+
+func TestReconcileCommerceVideoPromptReviewTurnsRejectIntoRevisionForUnreachableMotion(t *testing.T) {
+	review := CommerceVideoPromptReviewContract{
+		ContractVersion: CommerceVideoPromptReviewContractVersion,
+		Decision:        "reject",
+		Issues: []CommerceReviewIssue{{
+			Code: "UNREACHABLE_ACTION", Field: "visualPrompt",
+			Message: "动作无法从首帧连续到达", Suggestion: "改为首帧可达动作",
+		}},
+		Checks: CommerceVideoPromptReviewChecks{
+			SingleFrameReachability: false,
+		},
+	}
+
+	reconciled := ReconcileCommerceVideoPromptReview(review)
+
+	require.Equal(t, "revise", reconciled.Decision)
+	require.Equal(t, review.Issues, reconciled.Issues)
+	require.Equal(t, "revision_requested_for_first_frame_reachability", reconciled.Resolution)
+	require.NoError(t, ValidateCommerceVideoPromptReview(reconciled))
+}
+
 func TestCommerceVideoDialogueCuesUseOnlyExactVoiceover(t *testing.T) {
 	snapshot := CommerceVideoPromptShotSnapshot{
 		StoryboardShotID: "shot-1", VoiceoverText: "逐字旁白",
@@ -166,6 +272,62 @@ func TestCommerceVideoDialogueCuesUseOnlyExactVoiceover(t *testing.T) {
 	require.Equal(t, "voiceover", cues[0].Kind)
 	require.NotContains(t, cues[0].Text, "雷声")
 	require.NotContains(t, cues[0].Text, "紧张配乐")
+}
+
+func TestReconstructCommerceVideoVoiceoverPreservesFrozenSegmentBoundaries(t *testing.T) {
+	firstStart, firstEnd := 0, 5
+	secondStart, secondEnd := 0, 5
+	reconstructed, err := reconstructCommerceVideoVoiceover([]commerceVideoSegmentLink{
+		{
+			SourceSegmentID: "segment-1", Usage: "voiceover", Ordinal: 0,
+			VoiceoverText: "first", VerbatimStart: &firstStart, VerbatimEnd: &firstEnd,
+		},
+		{
+			SourceSegmentID: "segment-2", Usage: "voiceover", Ordinal: 1,
+			VoiceoverText: "words", VerbatimStart: &secondStart, VerbatimEnd: &secondEnd,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "first words", reconstructed)
+}
+
+func TestReconstructCommerceVideoVoiceoverDoesNotInventWhitespaceInsideOneSegment(t *testing.T) {
+	firstStart, firstEnd := 0, 5
+	secondStart, secondEnd := 5, 11
+	reconstructed, err := reconstructCommerceVideoVoiceover([]commerceVideoSegmentLink{
+		{
+			SourceSegmentID: "segment-1", Usage: "voiceover", Ordinal: 0,
+			VoiceoverText: "hello world", VerbatimStart: &firstStart, VerbatimEnd: &firstEnd,
+		},
+		{
+			SourceSegmentID: "segment-1", Usage: "voiceover", Ordinal: 1,
+			VoiceoverText: "hello world", VerbatimStart: &secondStart, VerbatimEnd: &secondEnd,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "hello world", reconstructed)
+}
+
+func TestApplyFrozenCommerceVideoVoiceoverReplacesStoryboardCopy(t *testing.T) {
+	firstStart, firstEnd := 0, 5
+	secondStart, secondEnd := 0, 5
+	snapshot := CommerceVideoPromptShotSnapshot{VoiceoverText: "stale storyboard copy"}
+
+	err := applyFrozenCommerceVideoVoiceover(&snapshot, []commerceVideoSegmentLink{
+		{
+			SourceSegmentID: "segment-1", Usage: "voiceover", Ordinal: 0,
+			VoiceoverText: "first", VerbatimStart: &firstStart, VerbatimEnd: &firstEnd,
+		},
+		{
+			SourceSegmentID: "segment-2", Usage: "voiceover", Ordinal: 1,
+			VoiceoverText: "words", VerbatimStart: &secondStart, VerbatimEnd: &secondEnd,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "first words", snapshot.VoiceoverText)
 }
 
 func TestCommerceVideoReviewRoundLimitNeverExceedsThree(t *testing.T) {

@@ -152,15 +152,19 @@ func (s *CatalogService) CreateProductVersion(
 	if err != nil {
 		return ProductMutationResult{}, err
 	}
-	activate := product.CurrentVersionID == nil || activeUnits == 0
-	if activate {
-		product, err = s.repository.ActivateProductVersion(ctx, tx, product, version, input.Metadata)
-		if err != nil {
+	if activeUnits > 0 {
+		if err := s.repository.RetireLegacyUnitGenerationsForProductUpdate(
+			ctx, tx, organizationID, projectID, product.ID,
+		); err != nil {
 			return ProductMutationResult{}, err
 		}
 	}
+	product, err = s.repository.ActivateProductVersion(ctx, tx, product, version, input.Metadata)
+	if err != nil {
+		return ProductMutationResult{}, err
+	}
 	return ProductMutationResult{
-		Product: product, Version: version, Activated: activate, RequiresRebuild: !activate,
+		Product: product, Version: version, Activated: true, RequiresRebuild: false,
 	}, nil
 }
 

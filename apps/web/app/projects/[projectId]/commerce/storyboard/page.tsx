@@ -1,6 +1,6 @@
-import { CommerceStoryboardPage } from "@/features/commerce/commerce-storyboard-page";
+import { redirect } from "next/navigation";
 
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  return <CommerceStoryboardPage projectId={projectId} />;
+  redirect(`/projects/${projectId}/commerce/video`);
 }

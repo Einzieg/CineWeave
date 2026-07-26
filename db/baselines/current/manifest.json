@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
-  "headVersion": 59,
-  "migrationCount": 59,
-  "bundleSha256": "1f73181fedf8b984e325c9002edc51f9172d63c34555c23fa561762f3d8521aa",
+  "headVersion": 66,
+  "migrationCount": 66,
+  "bundleSha256": "6beb40a57f4c3a5c72c2082099ad363eb46b37dd8cd60dcad4b354b0c1da3f67",
   "migrations": [
     {
       "version": 1,
@@ -298,6 +298,41 @@
       "version": 59,
       "name": "000059_commerce_unit_generation_revision.sql",
       "sha256": "389c112c92044660e6502abb77f90f2674b30db031c5e29c85cc914afa5ab915"
+    },
+    {
+      "version": 60,
+      "name": "000060_commerce_multilingual_workflow_v2.sql",
+      "sha256": "bbca5a502b65f677cfbd6c05a65fe77443cb6d1fb5a746a1d84c845ecabbe4aa"
+    },
+    {
+      "version": 61,
+      "name": "000061_commerce_storyboard_segmentation_contracts.sql",
+      "sha256": "ac7a81909d25caccf52eb74479f5b094b03944f0137a544bb6b0dc1e602e5206"
+    },
+    {
+      "version": 62,
+      "name": "000062_project_deletion_runtime.sql",
+      "sha256": "72323168be960632eab012ad7540324738845b87e295617670e28053deedb8d1"
+    },
+    {
+      "version": 63,
+      "name": "000063_commerce_storyboard_creative_prompt_v2.sql",
+      "sha256": "40f2bec41997f193b17594e3a59a8b7df510c2f32e357dfcefcc7e3fd385fba0"
+    },
+    {
+      "version": 64,
+      "name": "000064_commerce_localization_review_policy_v2.sql",
+      "sha256": "f12a06a47d7e13c490bdd840d8548954f1f55bdb75f757804e5c53a810f64213"
+    },
+    {
+      "version": 65,
+      "name": "000065_project_deletion_deferred_constraints.sql",
+      "sha256": "7439d9835d93bc010965d6a87a04dd9532d994568d525062d354a39a0fd548d0"
+    },
+    {
+      "version": 66,
+      "name": "000066_commerce_direct_video_runtime.sql",
+      "sha256": "86913f9545d98edb7a9a99e4e5b0c9691a7488d44e27e7cb84e84e6cd6f04771"
     }
   ]
 }

@@ -70,6 +70,50 @@ func TestProjectVideoProductionRebuildWorkflowSwitchesGenerationOnInitialRun(t *
 	require.True(t, switchCalled)
 }
 
+func TestProjectVideoProductionRebuildWorkflowStopsAfterCommerceGenerationSwitch(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	input := projectVideoProductionRebuildTestInput()
+	listCalled := false
+	finalizeCalled := false
+
+	env.RegisterActivityWithOptions(func(context.Context, ProjectVideoProductionRebuildInput) (PrepareProjectVideoProductionRebuildOutput, error) {
+		return PrepareProjectVideoProductionRebuildOutput{}, nil
+	}, activity.RegisterOptions{Name: "PrepareProjectVideoProductionRebuild"})
+	env.RegisterActivityWithOptions(func(context.Context, ProjectVideoProductionRebuildInput) (ProjectVideoProductionDrainOutput, error) {
+		return ProjectVideoProductionDrainOutput{Drained: true}, nil
+	}, activity.RegisterOptions{Name: "CheckProjectVideoProductionDrain"})
+	env.RegisterActivityWithOptions(func(context.Context, ProjectVideoProductionRebuildInput) (SwitchProjectVideoProductionGenerationOutput, error) {
+		return SwitchProjectVideoProductionGenerationOutput{
+			CommerceRebuildComplete: true,
+			SwitchedUnitCount:       3,
+		}, nil
+	}, activity.RegisterOptions{Name: "SwitchProjectVideoProductionGeneration"})
+	env.RegisterActivityWithOptions(func(context.Context, ProjectVideoProductionRebuildInput) ([]RebuildEpisodeWorkItem, error) {
+		listCalled = true
+		return nil, nil
+	}, activity.RegisterOptions{Name: "ListProjectVideoProductionRebuildItems"})
+	env.RegisterActivityWithOptions(func(context.Context, ProjectVideoProductionRebuildInput) (ProjectVideoProductionRebuildOutput, error) {
+		finalizeCalled = true
+		return ProjectVideoProductionRebuildOutput{}, nil
+	}, activity.RegisterOptions{Name: "FinalizeProjectVideoProductionRebuild"})
+	env.RegisterActivityWithOptions(func(context.Context, ProjectVideoProductionRebuildInput, string, string) error {
+		return nil
+	}, activity.RegisterOptions{Name: "FailProjectVideoProductionRebuild"})
+
+	env.ExecuteWorkflow(ProjectVideoProductionRebuildWorkflow, input)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.False(t, listCalled)
+	require.False(t, finalizeCalled)
+	var output ProjectVideoProductionRebuildOutput
+	require.NoError(t, env.GetWorkflowResult(&output))
+	require.Equal(t, "succeeded", output.Status)
+	require.Equal(t, 3, output.EpisodeCount)
+	require.Equal(t, 3, output.SucceededItems)
+}
+
 func TestProjectVideoProductionRebuildWorkflowFailsWhenAllEpisodesFail(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()

@@ -43,6 +43,15 @@ func (s *CatalogService) PlanScriptUnitRebuild(
 	if err != nil {
 		return ScriptUnitRebuildImpact{}, err
 	}
+	if target.TargetStoryboardStrategy == "" {
+		var sourceConfig struct {
+			StoryboardStrategy StoryboardStrategy `json:"storyboardStrategy"`
+		}
+		if err := json.Unmarshal(generation.ConfigurationSnapshot, &sourceConfig); err != nil {
+			return ScriptUnitRebuildImpact{}, Error{Code: CodeGenerationMismatch, Message: "脚本单元生产配置无法解析", Cause: err}
+		}
+		target.TargetStoryboardStrategy = sourceConfig.StoryboardStrategy
+	}
 	target, err = normalizeScriptUnitRebuildTarget(target, unit)
 	if err != nil {
 		return ScriptUnitRebuildImpact{}, err
@@ -52,7 +61,7 @@ func (s *CatalogService) PlanScriptUnitRebuild(
 		return ScriptUnitRebuildImpact{}, Error{Code: CodeScriptVersionStale, Message: "目标脚本版本不存在", Cause: err}
 	}
 	targetConfiguration := map[string]any{
-		"schemaVersion":                 1,
+		"schemaVersion":                 2,
 		"projectGenerationId":           production.Generation.ID,
 		"sourceUnitGenerationId":        generation.Identity.UnitGenerationID,
 		"sourceUnitConfigurationHash":   generation.Identity.UnitConfigurationHash,
@@ -62,6 +71,7 @@ func (s *CatalogService) PlanScriptUnitRebuild(
 		"targetLanguage":                target.TargetLanguage,
 		"targetDurationSeconds":         target.TargetDurationSeconds,
 		"targetPlatform":                target.TargetPlatform,
+		"targetStoryboardStrategy":      target.TargetStoryboardStrategy,
 	}
 	targetRaw, err := json.Marshal(targetConfiguration)
 	if err != nil {
@@ -88,7 +98,8 @@ func (s *CatalogService) PlanScriptUnitRebuild(
 		TargetSourceScriptVersionID: version.ID, ExpectedRevision: unit.Revision,
 		TargetLanguageMode: target.TargetLanguageMode, TargetLanguage: target.TargetLanguage,
 		TargetDurationSeconds: target.TargetDurationSeconds, TargetPlatform: target.TargetPlatform,
-		TargetConfigurationHash: targetHash, ImpactToken: token, ExpiresAt: expiresAt,
+		TargetStoryboardStrategy: target.TargetStoryboardStrategy,
+		TargetConfigurationHash:  targetHash, ImpactToken: token, ExpiresAt: expiresAt,
 		Affected: counts, EstimatedAgentCalls: 3, Blockers: blockers,
 	}
 	impactRaw, err := json.Marshal(impact)
@@ -245,9 +256,14 @@ func normalizeScriptUnitRebuildTarget(target ScriptUnitRebuildTarget, current Sc
 		}
 		target.TargetLanguage = &locale
 	}
-	if target.TargetDurationSeconds != 15 && target.TargetDurationSeconds != 30 && target.TargetDurationSeconds != 60 {
-		return ScriptUnitRebuildTarget{}, Error{Code: CodeDurationExceeded, Message: "目标时长仅支持 15、30 或 60 秒"}
+	if target.TargetDurationSeconds <= 0 {
+		return ScriptUnitRebuildTarget{}, Error{Code: CodeDurationExceeded, Message: "目标时长必须为正整数秒"}
 	}
+	strategy, err := ParseStoryboardStrategy(string(target.TargetStoryboardStrategy))
+	if err != nil || strategy == StoryboardStrategyManual {
+		return ScriptUnitRebuildTarget{}, Error{Code: CodeStoryboardStrategy, Message: "请选择智能切分或单段生成"}
+	}
+	target.TargetStoryboardStrategy = strategy
 	if current.Status == "archived" {
 		return ScriptUnitRebuildTarget{}, Error{Code: CodeScriptUnitArchived, Message: "已归档脚本不能换代"}
 	}

@@ -42,7 +42,7 @@ func (s *CatalogService) ResolveProjectOptions(ctx context.Context, tx pgx.Tx, o
 	if err != nil {
 		if errors.Is(err, ErrWorkflowTemplateUnavailable) {
 			return ProjectOptions{
-				Available: false, Blockers: []string{"当前没有已发布的带货视频工作流模板"},
+				Available: false, Blockers: []string{"带货视频系统流程尚未初始化"},
 				Durations: []int{15, 30, 60}, AspectRatios: []string{"9:16", "16:9", "1:1"},
 				ImageQualities: []string{"standard", "hd"}, LanguageModes: []string{"auto", "explicit"},
 				AudioStrategies: []string{"native_av", "external_audio"}, AudioRequirements: []string{"preferred", "required", "disabled"},
@@ -134,9 +134,6 @@ func projectOptionsFromTemplate(template WorkflowTemplateVersion) (ProjectOption
 	if len(requirements) == 0 {
 		blockers = append(blockers, "工作流模板没有声明业务模型契约")
 	}
-	if len(languages) == 0 {
-		blockers = append(blockers, "工作流模板没有声明可用语言")
-	}
 	return ProjectOptions{
 		WorkflowTemplateVersionID: template.ID, WorkflowTemplateVersion: template.Version,
 		TemplateContentHash: template.ContentHash, VideoProductionProfileKey: template.VideoProfileKey,
@@ -204,12 +201,7 @@ func (options ProjectOptions) ValidateDraftSelection(duration int, aspectRatio, 
 		if err != nil {
 			return Error{Code: CodeLanguageUnsupported, Message: "目标语言标签无效", Cause: err}
 		}
-		for _, language := range options.Languages {
-			if language.Locale == target {
-				return nil
-			}
-		}
-		return Error{Code: CodeLanguageUnsupported, Message: "目标语言不在当前带货视频模板支持范围内"}
+		_ = target
 	}
 	return nil
 }

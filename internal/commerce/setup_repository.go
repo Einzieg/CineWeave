@@ -119,6 +119,55 @@ func (r *Repository) AbandonSetupSession(ctx context.Context, tx pgx.Tx, item Se
 	return r.LoadSetupSession(ctx, tx, item.OrganizationID, item.ProjectID, item.ID, false)
 }
 
+func (r *Repository) RestartSetupSessionWithTemplate(
+	ctx context.Context,
+	tx pgx.Tx,
+	item SetupSession,
+	run *SetupRun,
+	workflowTemplateVersionID string,
+) (SetupSession, error) {
+	if run != nil {
+		if item.SetupWorkflowRunID == nil || *item.SetupWorkflowRunID != run.ID || run.SetupSessionID != item.ID {
+			return SetupSession{}, Error{Code: CodeSetupRevisionConflict, Message: "项目准备任务身份已变化，请刷新后重试"}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE commerce_setup_runs
+			SET status = 'cancelled',
+			    error_code = 'COMMERCE_SETUP_SUPERSEDED',
+			    error_message = '项目准备任务已切换到最新多语言工作流模板',
+			    completed_at = now(), updated_at = now(), revision = revision + 1
+			WHERE id = $1
+			  AND status IN ('queued', 'running', 'waiting_user_confirmation', 'needs_user_review')
+		`, run.ID); err != nil {
+			return SetupSession{}, err
+		}
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE commerce_setup_sessions
+		SET workflow_template_version_id = $3,
+		    setup_workflow_run_id = NULL,
+		    state = 'failed',
+		    step = 'template_upgraded',
+		    last_error_code = NULL,
+		    last_error_message = NULL,
+		    localization_id = NULL,
+		    input_snapshot = input_snapshot - 'languageResolutionId',
+		    input_hash = encode(digest((input_snapshot - 'languageResolutionId')::text, 'sha256'), 'hex'),
+		    revision = revision + 1,
+		    updated_at = now()
+		WHERE id = $1
+		  AND revision = $2
+		  AND state IN ('waiting_user_confirmation', 'failed', 'needs_user_review')
+	`, item.ID, item.Revision, workflowTemplateVersionID)
+	if err != nil {
+		return SetupSession{}, err
+	}
+	if tag.RowsAffected() != 1 {
+		return SetupSession{}, Error{Code: CodeSetupRevisionConflict, Message: "项目准备状态已变化，请刷新后重试"}
+	}
+	return r.LoadSetupSession(ctx, tx, item.OrganizationID, item.ProjectID, item.ID, false)
+}
+
 func (r *Repository) AttachSetupRun(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -191,7 +240,7 @@ func (r *Repository) InsertInitialUnitGeneration(
 ) (string, int64, string, error) {
 	unitGenerationNo := unit.UnitGenerationNo + 1
 	snapshot := map[string]any{
-		"schemaVersion":                   2,
+		"schemaVersion":                   3,
 		"projectGenerationId":             bindings.ProjectGenerationID,
 		"commerceWorkflowBindingId":       bindings.CommerceBindingID,
 		"commerceWorkflowBindingRevision": bindings.CommerceBindingRevision,
@@ -204,6 +253,8 @@ func (r *Repository) InsertInitialUnitGeneration(
 		"referencePackId":                 referencePackID,
 		"targetDurationSeconds":           unit.TargetDurationSeconds,
 		"targetPlatform":                  unit.TargetPlatform,
+		"storyboardStrategy":              StoryboardStrategySmart,
+		"segmentationPolicyVersion":       CommerceSegmentationPolicyV2,
 		"preparationWorkflowRunId":        params.SetupRunID,
 		"preparationInputHash":            params.PreparationInputHash,
 		"preparationAgentCalls":           json.RawMessage(params.PreparationAgentCalls),

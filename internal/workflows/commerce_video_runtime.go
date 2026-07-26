@@ -123,15 +123,8 @@ func (r *CommerceGenerationRuntime) LoadCommerceVideoPromptShot(
 	}
 	snapshot.LocalizedSegments = localized
 	snapshot.SourceSegmentIDs = uniqueCommerceVideoSourceSegments(links)
-	verbatim, err := reconstructCommerceVideoVoiceover(links)
-	if err != nil {
+	if err := applyFrozenCommerceVideoVoiceover(&snapshot, links); err != nil {
 		return CommerceVideoPromptShotSnapshot{}, err
-	}
-	if verbatim != snapshot.VoiceoverText {
-		return CommerceVideoPromptShotSnapshot{}, commerce.Error{
-			Code:    CommerceCodeStoryboardReplanRequired,
-			Message: "镜头旁白与冻结脚本段落不一致，请重新生成分镜",
-		}
 	}
 	if len(snapshot.SourceSegmentIDs) == 0 {
 		return CommerceVideoPromptShotSnapshot{}, commerce.Error{
@@ -144,28 +137,16 @@ func (r *CommerceGenerationRuntime) LoadCommerceVideoPromptShot(
 	if err := json.Unmarshal(state.Template.VideoCapabilityContract, &capability); err != nil {
 		return CommerceVideoPromptShotSnapshot{}, generationMismatch("冻结视频能力契约无法解析", err)
 	}
-	if capability.VideoProductionProfile.ProfileKey != "single_frame_i2v" ||
-		!capability.Request.AsyncTaskRequired || !capability.Request.PollingRequired ||
-		!capability.Request.FirstFrameRequired || capability.Request.MinimumReferences != 1 ||
-		capability.Request.MaximumReferences != 1 || capability.Request.LastFrameAllowed ||
-		capability.Request.VideoReferenceAllowed {
-		return CommerceVideoPromptShotSnapshot{}, generationMismatch("冻结视频能力契约不是可执行的单首帧图生视频契约", nil)
-	}
 	allowedDurations := state.StoryboardConfig.AllowedDurations
 	if len(allowedDurations) == 0 {
-		return CommerceVideoPromptShotSnapshot{}, generationMismatch("冻结视频模型没有可执行的整数时长集合", nil)
+		return CommerceVideoPromptShotSnapshot{}, generationMismatch("当前视频模型没有可执行的整数时长集合", nil)
 	}
 	if state.BindingConfig.ProductionConfiguration.TimelineTimebase <= 0 || snapshot.DurationTicks <= 0 ||
 		snapshot.DurationTicks%state.BindingConfig.ProductionConfiguration.TimelineTimebase != 0 {
 		return CommerceVideoPromptShotSnapshot{}, generationMismatch("镜头时长不是模型可执行的整数秒", nil)
 	}
 	snapshot.DurationSeconds = int(snapshot.DurationTicks / state.BindingConfig.ProductionConfiguration.TimelineTimebase)
-	if !containsInt(allowedDurations, snapshot.DurationSeconds) {
-		return CommerceVideoPromptShotSnapshot{}, generationMismatch("镜头时长不属于冻结视频模型支持集合", nil)
-	}
-	if !containsFold(capability.AspectRatios, state.BindingConfig.ProductionConfiguration.AspectRatio) {
-		return CommerceVideoPromptShotSnapshot{}, generationMismatch("项目画幅不在冻结视频模型能力集合中", nil)
-	}
+	snapshot.DurationExecutionPolicy = CommerceDurationExecutionPolicy
 	videoModel, err := resolveFrozenCommerceMediaModelBinding(
 		"videoGenerator", state.ModelContracts, state.Production.CommerceBinding.ModelRoutingSnapshot,
 	)
@@ -241,6 +222,7 @@ func (r *CommerceGenerationRuntime) LoadCommerceVideoPromptShot(
 		"sourceSegmentIds": snapshot.SourceSegmentIDs, "voiceoverText": snapshot.VoiceoverText,
 		"onscreenText": snapshot.OnscreenText, "soundEffects": snapshot.SoundEffects, "musicCue": snapshot.MusicCue,
 		"firstFrame": snapshot.FirstFrame, "durationSeconds": snapshot.DurationSeconds,
+		"durationExecutionPolicy": snapshot.DurationExecutionPolicy, "allowedDurations": snapshot.AllowedDurations,
 		"productVersionId": snapshot.ProductVersionID, "referencePackId": snapshot.ReferencePackID,
 		"languageCapabilitySnapshotHash": snapshot.LanguageCapabilitySnapshotHash,
 		"videoProfileSnapshotHash":       snapshot.VideoProfileSnapshotHash,
@@ -367,7 +349,8 @@ func uniqueCommerceVideoSourceSegments(links []commerceVideoSegmentLink) []strin
 }
 
 func reconstructCommerceVideoVoiceover(links []commerceVideoSegmentLink) (string, error) {
-	parts := make([]string, 0)
+	var reconstructed strings.Builder
+	previousSourceSegmentID := ""
 	for _, link := range links {
 		if link.Usage != "voiceover" {
 			continue
@@ -379,9 +362,25 @@ func reconstructCommerceVideoVoiceover(links []commerceVideoSegmentLink) (string
 		if *link.VerbatimStart < 0 || *link.VerbatimEnd <= *link.VerbatimStart || *link.VerbatimEnd > len(runes) {
 			return "", commerce.Error{Code: CommerceCodeStoryboardReplanRequired, Message: "旁白逐字范围已失效，请重新生成分镜"}
 		}
-		parts = append(parts, string(runes[*link.VerbatimStart:*link.VerbatimEnd]))
+		if reconstructed.Len() > 0 && link.SourceSegmentID != previousSourceSegmentID {
+			reconstructed.WriteByte(' ')
+		}
+		reconstructed.WriteString(string(runes[*link.VerbatimStart:*link.VerbatimEnd]))
+		previousSourceSegmentID = link.SourceSegmentID
 	}
-	return strings.TrimSpace(strings.Join(parts, "")), nil
+	return strings.TrimSpace(reconstructed.String()), nil
+}
+
+func applyFrozenCommerceVideoVoiceover(
+	snapshot *CommerceVideoPromptShotSnapshot,
+	links []commerceVideoSegmentLink,
+) error {
+	voiceover, err := reconstructCommerceVideoVoiceover(links)
+	if err != nil {
+		return err
+	}
+	snapshot.VoiceoverText = voiceover
+	return nil
 }
 
 func preferredCommerceInstructionLanguage(target string, supported []string) string {
@@ -423,6 +422,9 @@ func validateCommerceVideoSnapshot(snapshot CommerceVideoPromptShotSnapshot) err
 	}
 	if snapshot.DurationSeconds < 1 || snapshot.DurationTicks != int64(snapshot.DurationSeconds)*snapshot.TimelineTimebase {
 		return fmt.Errorf("commerce shot duration is invalid")
+	}
+	if snapshot.DurationExecutionPolicy != CommerceDurationExecutionPolicy || len(snapshot.AllowedDurations) == 0 {
+		return fmt.Errorf("commerce shot duration execution policy is invalid")
 	}
 	return nil
 }

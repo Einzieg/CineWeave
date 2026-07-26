@@ -60,8 +60,20 @@ function ProjectShellContent({ projectId, children }: { projectId: string; child
 
   useEffect(() => {
     if (project?.projectKind !== "commerce_video") return;
-    if (["content", "sources", "scripts", "assets", "storyboard", "video"].includes(currentSegment)) {
-      router.replace(projectHref(projectId) as Route);
+    if (
+      currentSegment === ""
+      || currentSegment === "commerce/storyboard"
+      || currentSegment === "commerce/final"
+      || ["content", "sources", "scripts", "assets", "storyboard", "video", "final"].includes(currentSegment)
+    ) {
+      router.replace(
+        projectHref(
+          projectId,
+          currentSegment === "commerce/storyboard" || currentSegment === "commerce/final"
+            ? "commerce/video"
+            : "commerce/materials",
+        ) as Route,
+      );
     }
   }, [currentSegment, project?.projectKind, projectId, router]);
 

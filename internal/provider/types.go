@@ -894,6 +894,7 @@ type GatewayVideoCreateTaskRequest struct {
 	OperationID                    string                              `json:"operationId,omitempty"`
 	OperationItemID                string                              `json:"operationItemId,omitempty"`
 	OperationItemAttempt           int                                 `json:"operationItemAttempt,omitempty"`
+	CommerceDirectVideoJobID       string                              `json:"commerceDirectVideoJobId,omitempty"`
 	StoryboardShotID               string                              `json:"storyboardShotId,omitempty"`
 	ProductionGenerationID         string                              `json:"productionGenerationId,omitempty"`
 	VideoProductionBindingID       string                              `json:"videoProductionBindingId,omitempty"`

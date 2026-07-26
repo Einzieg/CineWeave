@@ -3,7 +3,8 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { useState } from "react";
-import { ArrowRight, Filter, Plus, Search } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ArrowRight, Filter, MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
 import { AppShell, Surface } from "@/components/layout/app-shell";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -12,6 +13,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useApiQuery } from "@/lib/query/use-api";
 import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
@@ -19,18 +26,25 @@ import { contentTypeLabel, projectTypeLabel } from "@/lib/labels";
 import { projectHref } from "@/lib/routes";
 import { sessionHasPermission, useStudioSession } from "@/lib/session";
 import type { Project } from "@/lib/types";
+import {
+  ProjectDeletionDialog,
+  ProjectDeletionStatusDialog,
+} from "@/features/projects/project-deletion-dialog";
 
 export function ProjectsPage() {
   return (
-    <AppShell active="projects" title="项目" description="只展示项目卡片；工作流、镜头和媒体资产保留在项目内部。">
+    <AppShell active="projects" title="项目">
       <ProjectsContent />
     </AppShell>
   );
 }
 
 function ProjectsContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { session } = useStudioSession();
   const canCreateProject = sessionHasPermission(session, "project.write");
+  const canDeleteProject = sessionHasPermission(session, "project.delete");
   const { data: projects = [], isLoading } = useApiQuery({
     key: qk.projects(),
     queryFn: (session) => studioApi.listProjects(session).then((r) => r.items),
@@ -38,6 +52,9 @@ function ProjectsContent() {
 
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const deletionProjectId = searchParams.get("deletionProjectId") ?? "";
+  const deletionRequestId = searchParams.get("deletionRequestId") ?? "";
 
   const filtered = projects.filter((project) => {
     const text = `${project.name} ${project.description ?? ""} ${project.projectType ?? ""} ${project.contentType ?? ""}`.toLowerCase();
@@ -91,47 +108,101 @@ function ProjectsContent() {
       ) : filtered.length ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((project) => (
-            <ProjectCard key={project.id} project={project} />
+            <ProjectCard
+              key={project.id}
+              project={project}
+              canDelete={canDeleteProject}
+              onDelete={() => setDeleteTarget(project)}
+            />
           ))}
         </div>
       ) : (
         <EmptyState title="没有匹配项目" description="调整搜索条件，或新建一个脚本驱动项目。" />
       )}
+
+      {deleteTarget ? (
+        <ProjectDeletionDialog
+          project={deleteTarget}
+          open
+          onOpenChange={(open) => {
+            if (!open) setDeleteTarget(null);
+          }}
+        />
+      ) : null}
+
+      {deletionProjectId && deletionRequestId ? (
+        <ProjectDeletionStatusDialog
+          projectId={deletionProjectId}
+          requestId={deletionRequestId}
+          open
+          onOpenChange={(open) => {
+            if (!open) router.replace("/projects");
+          }}
+        />
+      ) : null}
     </>
   );
 }
 
-function ProjectCard({ project }: { project: Project }) {
+function ProjectCard({
+  project,
+  canDelete,
+  onDelete,
+}: {
+  project: Project;
+  canDelete: boolean;
+  onDelete: () => void;
+}) {
   return (
-    <Link
-      href={projectHref(project.id) as Route}
-      className="group rounded-lg border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-accent"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <h3 className="text-base font-semibold">{project.name}</h3>
-          <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
-            {project.description || "暂无简介"}
-          </p>
+    <article className="group relative rounded-lg border bg-card transition-colors hover:border-primary/40 hover:bg-accent">
+      <Link
+        href={projectHref(project.id, project.projectKind === "commerce_video" ? "commerce/materials" : "") as Route}
+        className="block p-4"
+      >
+        <div className="flex items-start justify-between gap-3 pr-9">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-semibold">{project.name}</h3>
+            <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+              {project.description || "暂无简介"}
+            </p>
+          </div>
+          <StatusBadge status={project.status ?? "active"} />
         </div>
-        <StatusBadge status={project.status ?? "active"} />
-      </div>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Badge variant="outline">{projectTypeLabel(project.projectType)}</Badge>
-        {project.contentType ? <Badge variant="outline">{contentTypeLabel(project.contentType)}</Badge> : null}
-        <Badge variant="outline">{project.videoRatio || project.aspectRatio || "16:9"}</Badge>
-        <Badge variant="outline">{project.artStyle || "未设置画风"}</Badge>
-      </div>
-      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-muted">
-        <div className="h-full w-2/5 rounded-full bg-primary transition-all group-hover:w-3/5" />
-      </div>
-      <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
-        <span>最近更新：{project.updatedAt ? formatTime(project.updatedAt) : "未知"}</span>
-        <span className="inline-flex items-center gap-1 text-primary">
-          打开项目 <ArrowRight className="h-3 w-3" />
-        </span>
-      </div>
-    </Link>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Badge variant="outline">{projectTypeLabel(project.projectType)}</Badge>
+          {project.contentType ? <Badge variant="outline">{contentTypeLabel(project.contentType)}</Badge> : null}
+          <Badge variant="outline">{project.videoRatio || project.aspectRatio || "16:9"}</Badge>
+          <Badge variant="outline">{project.artStyle || "未设置画风"}</Badge>
+        </div>
+        <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
+          <span>最近更新：{project.updatedAt ? formatTime(project.updatedAt) : "未知"}</span>
+          <span className="inline-flex items-center gap-1 text-primary">
+            打开项目 <ArrowRight className="h-3 w-3" />
+          </span>
+        </div>
+      </Link>
+      {canDelete ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="absolute right-2 top-2 size-8"
+              title="项目操作"
+            >
+              <MoreHorizontal className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+              <Trash2 className="size-4" />
+              删除项目
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+    </article>
   );
 }
 

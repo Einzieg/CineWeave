@@ -124,6 +124,37 @@ func (r *CommerceGenerationRuntime) LoadCommerceReferenceImageShot(
 	if err := rows.Err(); err != nil {
 		return CommerceReferenceImageShotSnapshot{}, err
 	}
+	rows.Close()
+
+	reviewRows, err := tx.Query(ctx, `
+		SELECT review.issues
+		FROM commerce_product_fidelity_reviews review
+		WHERE review.organization_id = $1
+		  AND review.project_id = $2
+		  AND review.storyboard_shot_id = $3
+		  AND review.script_unit_generation_id = $4
+		  AND review.status = 'rejected'
+		ORDER BY review.created_at DESC, review.id DESC
+		LIMIT 3
+	`, input.Identity.OrganizationID, input.Identity.ProjectID, shotID, input.Identity.UnitGenerationID)
+	if err != nil {
+		return CommerceReferenceImageShotSnapshot{}, err
+	}
+	defer reviewRows.Close()
+	for reviewRows.Next() {
+		var raw json.RawMessage
+		if err := reviewRows.Scan(&raw); err != nil {
+			return CommerceReferenceImageShotSnapshot{}, err
+		}
+		var issues []CommerceReviewIssue
+		if err := json.Unmarshal(raw, &issues); err != nil {
+			return CommerceReferenceImageShotSnapshot{}, generationMismatch("历史商品保真审核问题无法解析", err)
+		}
+		snapshot.PreviousFidelityIssues = mergeCommerceReviewIssues(snapshot.PreviousFidelityIssues, issues)
+	}
+	if err := reviewRows.Err(); err != nil {
+		return CommerceReferenceImageShotSnapshot{}, err
+	}
 
 	var capability commerceImageCapabilityContract
 	if err := json.Unmarshal(state.Template.ImageCapabilityContract, &capability); err != nil {
@@ -160,7 +191,15 @@ func (r *CommerceGenerationRuntime) LoadCommerceReferenceImageShot(
 		ImageFidelityReviewer: state.AgentBindings["imageFidelityReviewer"],
 	}
 	snapshot.ImageModel = imageModel
-	snapshot.InputHash, err = commerceContractHash(map[string]any{
+	snapshot.InputHash, err = commerceReferenceImageSnapshotInputHash(snapshot)
+	if err != nil {
+		return CommerceReferenceImageShotSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func commerceReferenceImageSnapshotInputHash(snapshot CommerceReferenceImageShotSnapshot) (string, error) {
+	return commerceContractHash(map[string]any{
 		"identity": snapshot.Identity, "storyboardPlanId": snapshot.StoryboardPlanID,
 		"storyboardPlanRevision": snapshot.StoryboardPlanRevision,
 		"storyboardEditRevision": snapshot.StoryboardEditRevision,
@@ -168,13 +207,30 @@ func (r *CommerceGenerationRuntime) LoadCommerceReferenceImageShot(
 		"productVersionId": snapshot.ProductVersionID, "productFacts": snapshot.ProductFacts,
 		"localizationId": snapshot.LocalizationID, "referencePackId": snapshot.ReferencePackID,
 		"referencePackHash": snapshot.ReferencePackHash, "references": snapshot.References,
-		"aspectRatio": snapshot.AspectRatio, "imageQuality": snapshot.ImageQuality,
+		// Review feedback is mutable attempt history. Keep the legacy null field
+		// in the hash so plans created before the first review remain reusable.
+		"previousFidelityIssues": []CommerceReviewIssue(nil),
+		"aspectRatio":            snapshot.AspectRatio, "imageQuality": snapshot.ImageQuality,
 		"bindings": snapshot.Bindings, "imageModel": snapshot.ImageModel,
 	})
-	if err != nil {
-		return CommerceReferenceImageShotSnapshot{}, err
+}
+
+func mergeCommerceReviewIssues(current, incoming []CommerceReviewIssue) []CommerceReviewIssue {
+	merged := append([]CommerceReviewIssue(nil), current...)
+	seen := make(map[string]struct{}, len(current)+len(incoming))
+	for _, issue := range current {
+		key := strings.ToLower(strings.TrimSpace(issue.Code)) + "\x00" + strings.ToLower(strings.TrimSpace(issue.Field))
+		seen[key] = struct{}{}
 	}
-	return snapshot, nil
+	for _, issue := range incoming {
+		key := strings.ToLower(strings.TrimSpace(issue.Code)) + "\x00" + strings.ToLower(strings.TrimSpace(issue.Field))
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, issue)
+	}
+	return merged
 }
 
 func commerceReferenceImagePhase(operation string) (CommerceWorkflowPhase, error) {

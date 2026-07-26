@@ -1525,19 +1525,102 @@ paths:
                 $ref: "#/components/schemas/ProjectEnvelope"
         "409":
           $ref: "#/components/responses/Error"
-    delete:
-      operationId: deleteProject
+  /api/projects/{projectId}/deletion-impact:
+    get:
+      operationId: getProjectDeletionImpact
+      description: Returns the current irreversible-deletion impact and a hash that must be confirmed when creating the asynchronous deletion request.
       security:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
       responses:
         "200":
-          description: Deleted project
+          description: Current project deletion impact
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Envelope"
+                $ref: "#/components/schemas/ProjectDeletionImpactEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/deletion-requests:
+    post:
+      operationId: createProjectDeletionRequest
+      description: Fences the project immediately and starts an asynchronous workflow that cancels tasks, drains runtime state, deletes owned storage objects, and hard-deletes project business data.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectDeletionRequest"
+      responses:
+        "202":
+          description: Project deletion request accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDeletionRequestEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/deletion-requests/{requestId}:
+    get:
+      operationId: getProjectDeletionRequest
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Project deletion request status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDeletionRequestEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/deletion-requests/{requestId}/retry:
+    post:
+      operationId: retryProjectDeletionRequest
+      description: Restarts the same failed-retryable deletion request and resumes its persisted storage manifest.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: Project deletion retry accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDeletionRequestEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}:
     get:
       operationId: getCommerceSetupSession
@@ -1583,6 +1666,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CommerceSetupCompletionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/restart:
+    post:
+      operationId: restartCommerceSetupSession
+      description: Cancels an unfinished setup run, upgrades the session to the latest published workflow template, and makes it ready for a new setup attempt.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceSetupSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestartCommerceSetupSessionRequest"
+      responses:
+        "200":
+          description: Restartable setup session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceSetupSessionEnvelope"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -2562,7 +2675,7 @@ paths:
   /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/versions/{versionId}/activate:
     post:
       operationId: activateCommerceScriptVersion
-      description: Activates an immutable source-script version when no production generation requires a rebuild.
+      description: Activates an immutable source-script version, retires any legacy storyboard generation, and leaves historical direct-video job snapshots unchanged.
       security:
         - bearerAuth: []
       parameters:
@@ -2589,6 +2702,240 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
         "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/video-options:
+    get:
+      operationId: getCommerceDirectVideoOptions
+      description: Returns the executable duration and resolution combinations frozen into the active project production configuration.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Direct video generation options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceDirectVideoOptionsEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/references:
+    get:
+      operationId: listCommerceScriptReferences
+      description: Lists script-specific custom reference images. Product references remain the default when no explicit selection is sent.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
+      responses:
+        "200":
+          description: Script-specific reference images with signed preview URLs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptReferenceListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/references/upload-url:
+    post:
+      operationId: createCommerceScriptReferenceUploadUrl
+      description: Creates an idempotent signed PUT URL for a script-specific JPEG, PNG, or WebP reference image.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceScriptReferenceUploadRequest"
+      responses:
+        "201":
+          description: Signed custom-reference upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceProductReferenceUploadEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/references/complete:
+    post:
+      operationId: completeCommerceScriptReferenceUpload
+      description: Validates an uploaded image, deduplicates it within the script, and creates a script-specific reference.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteCommerceScriptReferenceUploadRequest"
+      responses:
+        "200":
+          description: Existing reference returned for an idempotent completion replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptReferenceEnvelope"
+        "201":
+          description: Script-specific reference created or deduplicated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptReferenceEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/references/{referenceId}:
+    delete:
+      operationId: archiveCommerceScriptReference
+      description: Archives a script-specific reference without changing immutable historical direct-video jobs.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - name: referenceId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommerceExpectedRevisionRequest"
+      responses:
+        "200":
+          description: Archived script-specific reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptReferenceEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/direct-videos:
+    get:
+      operationId: listCommerceDirectVideos
+      description: Lists immutable direct-video jobs for the project or one script unit.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: filter[scriptUnitId]
+          in: query
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Direct-video jobs with signed output and reference previews
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceDirectVideoJobListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/direct-videos:
+    post:
+      operationId: createCommerceDirectVideo
+      description: Queues direct provider video generation from the active script version and selected references without storyboard or prompt-agent stages.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceDirectVideoRequest"
+      responses:
+        "202":
+          description: Existing idempotent result or newly queued direct-video job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceDirectVideoJobEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/direct-videos/{jobId}:
+    get:
+      operationId: getCommerceDirectVideo
+      description: Returns one direct-video job with immutable input snapshots and signed previews.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: jobId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Direct-video job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceDirectVideoJobEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-resolution:
     get:
@@ -2798,14 +3145,47 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/generations/{scriptUnitGenerationId}/storyboard-planning-preview:
     post:
-      operationId: createCommerceStoryboardPlan
-      description: Starts a new immutable storyboard planning workflow for the active script-unit generation.
+      operationId: previewCommerceStoryboardPlan
+      description: Builds a deterministic, zero-provider-cost storyboard segmentation preview for the exact active unit generation.
       security:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceScriptUnitGenerationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewCommerceStoryboardPlanRequest"
+      responses:
+        "200":
+          description: Current deterministic segmentation preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceStoryboardPlanningPreviewEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/generations/{scriptUnitGenerationId}/storyboard-plans:
+    post:
+      operationId: createCommerceStoryboardPlan
+      description: Starts storyboard planning only when the submitted deterministic preview still matches the active unit generation and capability snapshot.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/CommerceScriptUnitGenerationId"
         - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
@@ -9277,6 +9657,13 @@ components:
       schema:
         type: string
         format: uuid
+    CommerceScriptUnitGenerationId:
+      name: scriptUnitGenerationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     CommerceScriptVersionId:
       name: versionId
       in: path
@@ -10327,7 +10714,7 @@ components:
           format: date-time
     Project:
       type: object
-      required: [id, organizationId, workspaceId, name, projectKind, audioConfigurationRevision, revision, timelineTimebase, fpsNumerator, fpsDenominator, settings, createdAt, updatedAt]
+      required: [id, organizationId, workspaceId, name, projectKind, audioConfigurationRevision, revision, lifecycleStatus, deletionRevision, timelineTimebase, fpsNumerator, fpsDenominator, settings, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -10401,6 +10788,20 @@ components:
           format: int64
           minimum: 1
           readOnly: true
+        lifecycleStatus:
+          type: string
+          enum: [active, deleting]
+          readOnly: true
+        deletionRevision:
+          type: integer
+          format: int64
+          minimum: 0
+          readOnly: true
+        deletionRequestedAt:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
         activeScriptId:
           type: string
           format: uuid
@@ -10467,6 +10868,76 @@ components:
         updatedAt:
           type: string
           format: date-time
+    ProjectDeletionImpact:
+      type: object
+      required: [projectId, projectName, projectRevision, currentDeletionRevision, productCount, scriptUnitCount, storyboardShotCount, artifactCount, mediaFileCount, finalVideoCount, activeWorkflowCount, activeAgentTaskCount, activeProviderTaskCount, storageObjectCount, storageByteSize, generatedAt, impactHash]
+      properties:
+        projectId: {type: string, format: uuid}
+        projectName: {type: string}
+        projectRevision: {type: integer, format: int64, minimum: 1}
+        currentDeletionRevision: {type: integer, format: int64, minimum: 0}
+        productCount: {type: integer, minimum: 0}
+        scriptUnitCount: {type: integer, minimum: 0}
+        storyboardShotCount: {type: integer, minimum: 0}
+        artifactCount: {type: integer, minimum: 0}
+        mediaFileCount: {type: integer, minimum: 0}
+        finalVideoCount: {type: integer, minimum: 0}
+        activeWorkflowCount: {type: integer, minimum: 0}
+        activeAgentTaskCount: {type: integer, minimum: 0}
+        activeProviderTaskCount: {type: integer, minimum: 0}
+        storageObjectCount: {type: integer, minimum: 0}
+        storageByteSize: {type: integer, format: int64, minimum: 0}
+        generatedAt: {type: string, format: date-time}
+        impactHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    CreateProjectDeletionRequest:
+      type: object
+      required: [projectName, expectedProjectRevision, impactHash]
+      additionalProperties: false
+      properties:
+        projectName: {type: string, minLength: 1}
+        expectedProjectRevision: {type: integer, format: int64, minimum: 1}
+        impactHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    ProjectDeletionRequest:
+      type: object
+      required: [id, organizationId, workspaceId, projectId, projectName, projectRevision, deletionRevision, status, impactSnapshot, impactHash, manifestCursor, storageObjectCount, storageDeletedCount, storageFailedCount, storageSkippedSharedCount, temporalWorkflowId, idempotencyKey, requestedAt, drainDeadlineAt, updatedAt, retryCount]
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        workspaceId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        projectName: {type: string}
+        projectRevision: {type: integer, format: int64, minimum: 1}
+        deletionRevision: {type: integer, format: int64, minimum: 1}
+        status:
+          type: string
+          enum: [requested, cancelling_tasks, waiting_for_terminal, deleting_storage, deleting_business_data, completed, failed_retryable, failed_terminal]
+        impactSnapshot:
+          type: object
+          additionalProperties: true
+        impactHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        manifestCursor: {type: integer, format: int64, minimum: 0}
+        storageObjectCount: {type: integer, minimum: 0}
+        storageDeletedCount: {type: integer, minimum: 0}
+        storageFailedCount: {type: integer, minimum: 0}
+        storageSkippedSharedCount: {type: integer, minimum: 0}
+        temporalWorkflowId: {type: string}
+        idempotencyKey: {type: string}
+        requestedBy: {type: string, format: uuid, nullable: true}
+        requestedAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time, nullable: true}
+        drainDeadlineAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time, nullable: true}
+        expiresAt: {type: string, format: date-time, nullable: true}
+        errorCode: {type: string, nullable: true}
+        errorMessage: {type: string, nullable: true}
+        retryCount: {type: integer, minimum: 0}
     VideoProductionProfileKey:
       type: string
       enum: [single_frame_i2v, first_last_frame, multimodal_reference, storyboard_sheet]
@@ -17170,6 +17641,20 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/Project"
+    ProjectDeletionImpactEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectDeletionImpact"
+    ProjectDeletionRequestEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectDeletionRequest"
     VideoProductionProfileListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -22362,7 +22847,7 @@ components:
               enum: [commerce_video]
             defaultTargetDurationSeconds:
               type: integer
-              enum: [15, 30, 60]
+              minimum: 1
               default: 30
             defaultTargetPlatform:
               type: string
@@ -22386,7 +22871,7 @@ components:
       properties:
         targetDurationSeconds:
           type: integer
-          enum: [15, 30, 60]
+          minimum: 1
         targetPlatform:
           type: string
           minLength: 1
@@ -22606,6 +23091,14 @@ components:
         completedAt: {type: string, format: date-time, nullable: true}
         revision: {type: integer, format: int64, minimum: 1}
     CompleteCommerceSetupSessionRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    RestartCommerceSetupSessionRequest:
       type: object
       required: [expectedRevision]
       properties:
@@ -23148,7 +23641,7 @@ components:
           nullable: true
         targetDurationSeconds:
           type: integer
-          enum: [15, 30, 60]
+          minimum: 1
         targetPlatform:
           type: string
           minLength: 1
@@ -23163,6 +23656,8 @@ components:
           type: integer
           format: int64
           minimum: 0
+        storyboardStrategy:
+          $ref: "#/components/schemas/CommerceStoryboardStrategy"
         derivedFromScriptUnitId: {type: string, format: uuid, nullable: true}
         derivationKind:
           type: string
@@ -23206,7 +23701,7 @@ components:
           $ref: "#/components/schemas/CommerceLocale"
         targetDurationSeconds:
           type: integer
-          enum: [15, 30, 60]
+          minimum: 1
           default: 30
         targetPlatform:
           type: string
@@ -23233,7 +23728,7 @@ components:
           $ref: "#/components/schemas/CommerceLocale"
         targetDurationSeconds:
           type: integer
-          enum: [15, 30, 60]
+          minimum: 1
         targetPlatform:
           type: string
           minLength: 1
@@ -23328,6 +23823,370 @@ components:
             - $ref: "#/components/schemas/CommerceEmptyScriptVersion"
         activated: {type: boolean}
         requiresRebuild: {type: boolean}
+    CommerceDirectVideoInputSlot:
+      type: object
+      required: [role, mediaType, semantics, min, max, ordered]
+      properties:
+        role: {type: string}
+        mediaType: {type: string}
+        semantics: {type: string}
+        min: {type: integer, minimum: 0}
+        max: {type: integer, minimum: 0}
+        ordered: {type: boolean}
+    CommerceDirectVideoInputContract:
+      type: object
+      required: [contractKey, requestMode, slots]
+      properties:
+        contractKey: {type: string, minLength: 1}
+        requestMode: {type: string}
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceDirectVideoInputSlot"
+        mutuallyExclusiveRoles:
+          type: array
+          items:
+            type: array
+            items: {type: string}
+    CommerceDirectVideoRoute:
+      type: object
+      required:
+        - routeKey
+        - modelProfileId
+        - modelProfileKey
+        - modelProfileBindingId
+        - providerModelId
+        - providerAccountId
+        - providerModelKey
+        - priority
+        - weight
+        - variantKey
+        - capabilitySnapshotHash
+        - executableDurationSeconds
+        - resolutions
+        - aspectRatios
+        - inputContract
+        - nativeAudio
+      properties:
+        routeKey: {type: string}
+        modelProfileId: {type: string, format: uuid}
+        modelProfileKey: {type: string}
+        modelProfileBindingId: {type: string, format: uuid}
+        providerModelId: {type: string, format: uuid}
+        providerAccountId: {type: string, format: uuid}
+        providerModelKey: {type: string}
+        priority: {type: integer}
+        weight: {type: integer}
+        variantKey: {type: string}
+        capabilitySnapshotHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        executableDurationSeconds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: integer, minimum: 1}
+        resolutions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string}
+        aspectRatios:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+        inputContract:
+          $ref: "#/components/schemas/CommerceDirectVideoInputContract"
+        nativeAudio:
+          type: object
+          required: [support]
+          properties:
+            support: {type: string}
+            supportsDialogue: {type: boolean}
+            supportsVoiceover: {type: boolean}
+    CommerceDirectVideoOptions:
+      type: object
+      required:
+        - contractVersion
+        - projectProductionGenerationId
+        - videoProductionBindingId
+        - videoProductionBindingRevision
+        - videoProductionProfileVersionId
+        - videoProductionProfileSnapshotHash
+        - defaultAspectRatio
+        - defaultResolution
+        - executableDurationSeconds
+        - resolutions
+        - aspectRatios
+        - routes
+      properties:
+        contractVersion:
+          type: string
+          const: commerce-direct-video/v1
+        projectProductionGenerationId: {type: string, format: uuid}
+        videoProductionBindingId: {type: string, format: uuid}
+        videoProductionBindingRevision: {type: integer, format: int64, minimum: 1}
+        videoProductionProfileVersionId: {type: string, format: uuid}
+        videoProductionProfileSnapshotHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        defaultAspectRatio: {type: string}
+        defaultResolution: {type: string}
+        executableDurationSeconds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: integer, minimum: 1}
+        resolutions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string}
+        aspectRatios:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+        routes:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CommerceDirectVideoRoute"
+    CommerceScriptReferenceImage:
+      type: object
+      required:
+        - id
+        - organizationId
+        - projectId
+        - productId
+        - scriptUnitId
+        - artifactId
+        - mediaFileId
+        - fileName
+        - mimeType
+        - width
+        - height
+        - byteSize
+        - contentHash
+        - status
+        - revision
+        - createdAt
+        - updatedAt
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        artifactId: {type: string, format: uuid}
+        mediaFileId: {type: string, format: uuid}
+        fileName: {type: string}
+        mimeType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        width: {type: integer, minimum: 1}
+        height: {type: integer, minimum: 1}
+        byteSize: {type: integer, format: int64, minimum: 1}
+        contentHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        status:
+          type: string
+          enum: [active, archived]
+        revision: {type: integer, format: int64, minimum: 1}
+        previewUrl: {type: string, format: uri}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        archivedAt: {type: string, format: date-time, nullable: true}
+    CreateCommerceScriptReferenceUploadRequest:
+      type: object
+      required: [fileName, mimeType]
+      properties:
+        fileName: {type: string, minLength: 1}
+        mimeType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        expiresSeconds:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          default: 900
+    CompleteCommerceScriptReferenceUploadRequest:
+      type: object
+      required: [uploadId]
+      properties:
+        uploadId: {type: string, format: uuid}
+    CommerceDirectVideoReferenceSelection:
+      type: object
+      required: [sourceType, sourceId]
+      properties:
+        sourceType:
+          type: string
+          enum: [product, custom]
+        sourceId: {type: string, format: uuid}
+    CommerceDirectVideoReference:
+      allOf:
+        - $ref: "#/components/schemas/CommerceDirectVideoReferenceSelection"
+        - type: object
+          required:
+            - id
+            - artifactId
+            - mediaFileId
+            - mimeType
+            - referenceRole
+            - ordinal
+            - contentHash
+            - sourceRevision
+            - snapshot
+          properties:
+            id: {type: string, format: uuid}
+            productReferenceId: {type: string, format: uuid, nullable: true}
+            scriptReferenceImageId: {type: string, format: uuid, nullable: true}
+            artifactId: {type: string, format: uuid}
+            mediaFileId: {type: string, format: uuid}
+            mimeType: {type: string}
+            referenceRole:
+              type: string
+              enum: [first_frame, semantic_reference]
+            ordinal: {type: integer, minimum: 0}
+            contentHash:
+              type: string
+              pattern: "^[0-9a-f]{64}$"
+            sourceRevision: {type: integer, format: int64, minimum: 1}
+            snapshot:
+              type: object
+              additionalProperties: true
+            previewUrl: {type: string, format: uri}
+    CreateCommerceDirectVideoRequest:
+      type: object
+      required: [durationSeconds, resolution]
+      properties:
+        durationSeconds: {type: integer, minimum: 1}
+        resolution: {type: string, minLength: 1}
+        aspectRatio: {type: string}
+        generateAudio:
+          type: boolean
+          default: true
+        references:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/CommerceDirectVideoReferenceSelection"
+    CommerceDirectVideoJob:
+      type: object
+      required:
+        - id
+        - organizationId
+        - projectId
+        - productId
+        - productVersionId
+        - scriptUnitId
+        - scriptUnitRevision
+        - projectProductionGenerationId
+        - videoProductionBindingId
+        - videoProductionBindingRevision
+        - videoProfileVersionId
+        - videoProfileSnapshotHash
+        - modelProfileKey
+        - providerModelKey
+        - routeKey
+        - variantKey
+        - capabilitySnapshotHash
+        - requestedDurationSeconds
+        - aspectRatio
+        - resolution
+        - generateAudio
+        - scriptSnapshot
+        - scriptHash
+        - productSnapshot
+        - productSnapshotHash
+        - executionContract
+        - executionContractHash
+        - referenceSetHash
+        - promptHash
+        - status
+        - attemptGeneration
+        - createdAt
+        - updatedAt
+        - references
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        productVersionId: {type: string, format: uuid}
+        scriptUnitId: {type: string, format: uuid}
+        scriptUnitRevision: {type: integer, format: int64, minimum: 1}
+        projectProductionGenerationId: {type: string, format: uuid}
+        videoProductionBindingId: {type: string, format: uuid}
+        videoProductionBindingRevision: {type: integer, format: int64, minimum: 1}
+        videoProfileVersionId: {type: string, format: uuid}
+        videoProfileSnapshotHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        modelProfileKey: {type: string}
+        modelProfileId: {type: string, format: uuid, nullable: true}
+        modelProfileBindingId: {type: string, format: uuid, nullable: true}
+        providerModelId: {type: string, format: uuid, nullable: true}
+        providerAccountId: {type: string, format: uuid, nullable: true}
+        providerModelKey: {type: string}
+        routeKey: {type: string}
+        variantKey: {type: string}
+        capabilitySnapshotHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        requestedDurationSeconds: {type: integer, minimum: 1}
+        aspectRatio: {type: string}
+        resolution: {type: string}
+        generateAudio: {type: boolean}
+        scriptSnapshot: {type: string, minLength: 1}
+        scriptHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        productSnapshot:
+          type: object
+          additionalProperties: true
+        productSnapshotHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        executionContract:
+          type: object
+          additionalProperties: true
+        executionContractHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        referenceSetHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        promptHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelling, cancelled]
+        attemptGeneration: {type: integer, minimum: 1}
+        workflowRunId: {type: string, format: uuid, nullable: true}
+        nodeRunId: {type: string, format: uuid, nullable: true}
+        providerRequestId: {type: string, format: uuid, nullable: true}
+        providerCallId: {type: string, format: uuid, nullable: true}
+        providerAsyncTaskId: {type: string, format: uuid, nullable: true}
+        externalTaskId: {type: string, nullable: true}
+        outputArtifactId: {type: string, format: uuid, nullable: true}
+        outputMediaFileId: {type: string, format: uuid, nullable: true}
+        outputMimeType: {type: string, nullable: true}
+        outputPreviewUrl: {type: string, format: uri}
+        errorCode: {type: string, nullable: true}
+        errorMessage: {type: string, nullable: true}
+        createdBy: {type: string, format: uuid, nullable: true}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time, nullable: true}
+        completedAt: {type: string, format: date-time, nullable: true}
+        cancelledAt: {type: string, format: date-time, nullable: true}
+        updatedAt: {type: string, format: date-time}
+        references:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CommerceDirectVideoReference"
     OrganizeCommerceScriptUnitRequest:
       type: object
       required: [expectedUnitGenerationId]
@@ -23337,7 +24196,7 @@ components:
           format: uuid
     CommerceScriptUnitRebuildImpactRequest:
       type: object
-      required: [expectedRevision, targetSourceScriptVersionId, targetLanguageMode, targetDurationSeconds, targetPlatform]
+      required: [expectedRevision, targetSourceScriptVersionId, targetLanguageMode, targetDurationSeconds, targetPlatform, targetStoryboardStrategy]
       properties:
         expectedRevision:
           type: integer
@@ -23355,10 +24214,13 @@ components:
           nullable: true
         targetDurationSeconds:
           type: integer
-          enum: [15, 30, 60]
+          minimum: 1
         targetPlatform:
           type: string
           minLength: 1
+        targetStoryboardStrategy:
+          type: string
+          enum: [smart, single_take]
     CommerceScriptUnitRebuildAffectedCounts:
       type: object
       required: [storyboardPlans, storyboardShots, referenceImages, videoPrompts, shotVideos, timelines, finalVideos]
@@ -23383,6 +24245,7 @@ components:
         - targetLanguageMode
         - targetDurationSeconds
         - targetPlatform
+        - targetStoryboardStrategy
         - targetConfigurationHash
         - impactToken
         - expiresAt
@@ -23406,8 +24269,11 @@ components:
           nullable: true
         targetDurationSeconds:
           type: integer
-          enum: [15, 30, 60]
+          minimum: 1
         targetPlatform: {type: string, minLength: 1}
+        targetStoryboardStrategy:
+          type: string
+          enum: [smart, single_take]
         targetConfigurationHash:
           type: string
           pattern: "^[0-9a-f]{64}$"
@@ -23580,10 +24446,14 @@ components:
         estimatedVoiceoverSeconds:
           type: number
           minimum: 0
+          description: Estimated spoken duration used for pacing advice only. It never overrides or blocks the selected target duration.
         targetDurationSeconds:
           type: integer
           minimum: 1
-        exceeded: {type: boolean}
+          description: User-selected authoritative output duration.
+        exceeded:
+          type: boolean
+          description: True when the estimate exceeds the selected target. This is advisory and must not block setup or production.
     CommerceScriptUnitEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -23650,6 +24520,62 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/CommerceScriptVersionMutation"
+    CommerceDirectVideoOptionsEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceDirectVideoOptions"
+    CommerceScriptReferenceEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptReferenceImage"
+            meta:
+              type: object
+              properties:
+                duplicate: {type: boolean}
+                idempotentReplay: {type: boolean}
+    CommerceScriptReferenceListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceScriptReferenceImage"
+    CommerceDirectVideoJobEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceDirectVideoJob"
+            meta:
+              type: object
+              properties:
+                idempotentReplay: {type: boolean}
+    CommerceDirectVideoJobListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CommerceDirectVideoJob"
     CommerceLanguageResolutionEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -23713,6 +24639,130 @@ components:
     CommerceStoryboardPlanStatus:
       type: string
       enum: [planning, reviewing, ready, failed, stale, archived]
+    CommerceStoryboardStrategy:
+      type: string
+      enum: [smart, single_take, manual]
+    CommerceVideoExecutionRoute:
+      type: object
+      required: [routeKey, modelProfileId, modelProfileKey, modelProfileBindingId, providerModelId, providerAccountId, modelKey, priority, weight, variantKey, capabilitySnapshotHash, executableDurationSeconds, resolutions, aspectRatios, supportsContinuousExtension]
+      properties:
+        routeKey: {type: string, minLength: 1}
+        modelProfileId: {type: string, format: uuid}
+        modelProfileKey: {type: string, minLength: 1}
+        modelProfileBindingId: {type: string, format: uuid}
+        providerModelId: {type: string, format: uuid}
+        providerAccountId: {type: string, format: uuid}
+        modelKey: {type: string, minLength: 1}
+        priority: {type: integer}
+        weight: {type: integer, minimum: 0}
+        variantKey: {type: string, minLength: 1}
+        capabilitySnapshotHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        executableDurationSeconds:
+          type: array
+          minItems: 1
+          items: {type: integer, minimum: 1}
+        resolutions:
+          type: array
+          minItems: 1
+          items: {type: string, minLength: 1}
+        aspectRatios:
+          type: array
+          items: {type: string, minLength: 1}
+        supportsContinuousExtension: {type: boolean}
+    CommerceVideoExecutionEnvelope:
+      type: object
+      required: [contractVersion, projectProductionGenerationId, videoProductionBindingId, videoProductionBindingRevision, videoProductionProfileVersionId, videoProductionProfileSnapshotHash, modelProfileKey, targetResolution, aspectRatio, routes, executableDurationSeconds]
+      properties:
+        contractVersion:
+          type: string
+          enum: [commerce-video-execution-envelope/v1]
+        projectProductionGenerationId: {type: string, format: uuid}
+        videoProductionBindingId: {type: string, format: uuid}
+        videoProductionBindingRevision: {type: integer, format: int64, minimum: 1}
+        videoProductionProfileVersionId: {type: string, format: uuid}
+        videoProductionProfileSnapshotHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        modelProfileKey: {type: string, minLength: 1}
+        targetResolution: {type: string, minLength: 1}
+        aspectRatio: {type: string, minLength: 1}
+        routes:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CommerceVideoExecutionRoute"
+        executableDurationSeconds:
+          type: array
+          minItems: 1
+          items: {type: integer, minimum: 1}
+    CommerceSegmentationShot:
+      type: object
+      required: [shotOrdinal, beatOrdinals, localizationSegmentIds, sourceSegmentIds, editDurationSeconds, requestedDurationSeconds, trimDurationSeconds, estimatedVoiceoverTicks, voiceoverOverflowTicks, timingAdvisoryLevel, eligibleRouteKeys, eligibleRouteSetHash, semanticBoundaryPenalty, continuityPenalty, complexityPenalty]
+      properties:
+        shotOrdinal: {type: integer, minimum: 1}
+        beatOrdinals:
+          type: array
+          minItems: 1
+          items: {type: integer, minimum: 1}
+        localizationSegmentIds:
+          type: array
+          minItems: 1
+          items: {type: string, format: uuid}
+        sourceSegmentIds:
+          type: array
+          minItems: 1
+          items: {type: string, format: uuid}
+        editDurationSeconds: {type: integer, minimum: 1}
+        requestedDurationSeconds: {type: integer, minimum: 1}
+        trimDurationSeconds: {type: integer, minimum: 0}
+        estimatedVoiceoverTicks: {type: integer, format: int64, minimum: 0}
+        voiceoverOverflowTicks: {type: integer, format: int64, minimum: 0}
+        timingAdvisoryLevel:
+          type: string
+          enum: [none, info, warning, critical]
+        eligibleRouteKeys:
+          type: array
+          minItems: 1
+          items: {type: string, minLength: 1}
+        eligibleRouteSetHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        semanticBoundaryPenalty: {type: integer, minimum: 0}
+        continuityPenalty: {type: integer, minimum: 0}
+        complexityPenalty: {type: integer, minimum: 0}
+    CommerceSegmentationPlan:
+      type: object
+      required: [contractVersion, strategy, segmentationPolicyVersion, targetDurationSeconds, timelineTimebase, videoExecutionEnvelopeHash, shots, totalRequestedSeconds, totalTrimSeconds, estimatedVoiceoverTicks, voiceoverOverflowTicks, timingAdvisoryLevel]
+      properties:
+        contractVersion:
+          type: string
+          enum: [commerce-storyboard-segmentation/v1]
+        strategy:
+          $ref: "#/components/schemas/CommerceStoryboardStrategy"
+        segmentationPolicyVersion: {type: string, minLength: 1}
+        targetDurationSeconds: {type: integer, minimum: 1}
+        timelineTimebase: {type: integer, format: int64, minimum: 1}
+        videoExecutionEnvelopeHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        shots:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CommerceSegmentationShot"
+        totalRequestedSeconds: {type: integer, minimum: 1}
+        totalTrimSeconds: {type: integer, minimum: 0}
+        estimatedVoiceoverTicks: {type: integer, format: int64, minimum: 0}
+        voiceoverOverflowTicks: {type: integer, format: int64, minimum: 0}
+        timingAdvisoryLevel:
+          type: string
+          enum: [none, info, warning, critical]
+    CommerceStoryboardTimingAdvisory:
+      type: object
+      required: [targetDurationSeconds, estimatedVoiceoverSeconds, voiceoverOverflowSeconds, exceeded, level, message]
+      properties:
+        targetDurationSeconds: {type: integer, minimum: 1}
+        estimatedVoiceoverSeconds: {type: number, minimum: 0}
+        voiceoverOverflowSeconds: {type: number, minimum: 0}
+        exceeded: {type: boolean}
+        level:
+          type: string
+          enum: [none, info, warning, critical]
+        message: {type: string}
     CommerceStoryboardPlan:
       type: object
       required: [id, organizationId, projectId, productId, productVersionId, scriptUnitId, sourceScriptVersionId, localizationId, referencePackId, projectProductionGenerationId, scriptUnitGenerationId, commerceWorkflowBindingId, commerceWorkflowBindingRevision, salesScriptContractId, salesScriptContractHash, planRevision, revision, status, active, staleState, targetLanguage, targetDurationSeconds, aspectRatio, timelineTimebase, fpsNumerator, fpsDenominator, allowedShotDurations, shotCount, reviewStatus, planHash, projectionHash, createdAt]
@@ -23742,7 +24792,7 @@ components:
           type: string
           enum: [fresh, upstream_changed, needs_regeneration]
         targetLanguage: {$ref: "#/components/schemas/CommerceLocale"}
-        targetDurationSeconds: {type: integer, enum: [15, 30, 60]}
+        targetDurationSeconds: {type: integer, minimum: 1}
         aspectRatio: {type: string, minLength: 1}
         timelineTimebase: {type: integer, format: int64, minimum: 1}
         fpsNumerator: {type: integer, minimum: 1}
@@ -23751,6 +24801,19 @@ components:
           type: array
           minItems: 1
           items: {type: integer, minimum: 1}
+          description: 供应商可请求的视频时长档位，仅作为执行建议；分镜使用正整数编辑时长精确组成用户选择的成片目标，Provider Gateway 在执行时映射到支持档位并裁入镜头时间线。
+        storyboardStrategy:
+          $ref: "#/components/schemas/CommerceStoryboardStrategy"
+        segmentationPolicyVersion: {type: string}
+        segmentationPlan:
+          $ref: "#/components/schemas/CommerceSegmentationPlan"
+        segmentationPlanHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        videoExecutionEnvelope:
+          $ref: "#/components/schemas/CommerceVideoExecutionEnvelope"
+        videoExecutionEnvelopeHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        timingAdvisory:
+          $ref: "#/components/schemas/CommerceStoryboardTimingAdvisory"
+        previewHash: {type: string, pattern: "^[0-9a-f]{64}$"}
         shotCount: {type: integer, minimum: 0}
         reviewStatus:
           type: string
@@ -23791,7 +24854,7 @@ components:
         previewUrl: {type: string, format: uri}
     CommerceStoryboardShot:
       type: object
-      required: [id, storyboardPlanId, scriptUnitId, scriptUnitGenerationId, revision, shotOrdinal, title, durationSeconds, startTick, endTick, salesBeat, visualAction, shotPurpose, composition, camera, voiceoverText, onscreenText, targetLanguage, soundEffects, musicCue, requiredProductFeatures, reviewStatus, manualOverride, staleState, imagePromptStatus, imageStatus, videoPromptStatus, videoStatus, segmentLinks, productReferences]
+      required: [id, storyboardPlanId, scriptUnitId, scriptUnitGenerationId, revision, shotOrdinal, title, durationSeconds, startTick, endTick, salesBeat, visualAction, shotPurpose, composition, camera, voiceoverText, onscreenText, targetLanguage, soundEffects, musicCue, creativeDirection, estimatedVoiceoverTicks, voiceoverOverflowTicks, timingAdvisoryLevel, recommendedRequestDurationSeconds, eligibleRouteSetHash, requiredProductFeatures, reviewStatus, manualOverride, staleState, imagePromptStatus, imageStatus, videoPromptStatus, videoStatus, segmentLinks, productReferences]
       properties:
         id: {type: string, format: uuid}
         storyboardPlanId: {type: string, format: uuid}
@@ -23815,6 +24878,14 @@ components:
           type: array
           items: {}
         musicCue: {type: string}
+        creativeDirection: {type: object, additionalProperties: true}
+        estimatedVoiceoverTicks: {type: integer, format: int64, minimum: 0}
+        voiceoverOverflowTicks: {type: integer, format: int64, minimum: 0}
+        timingAdvisoryLevel:
+          type: string
+          enum: ["", none, info, warning, critical]
+        recommendedRequestDurationSeconds: {type: integer, minimum: 0}
+        eligibleRouteSetHash: {type: string}
         requiredProductFeatures:
           type: array
           items: {type: string}
@@ -23880,12 +24951,91 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/CommerceStoryboardPlan"
-    CreateCommerceStoryboardPlanRequest:
+    PreviewCommerceStoryboardPlanRequest:
       type: object
+      required: [expectedScriptUnitRevision, expectedProjectProductionGenerationId, clientRequestId]
       properties:
-        expectedUnitGenerationId:
+        expectedScriptUnitRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        expectedProjectProductionGenerationId:
           type: string
           format: uuid
+        clientRequestId:
+          type: string
+          minLength: 1
+          maxLength: 200
+    CreateCommerceStoryboardPlanRequest:
+      allOf:
+        - $ref: "#/components/schemas/PreviewCommerceStoryboardPlanRequest"
+        - type: object
+          required: [previewHash, videoExecutionEnvelopeHash]
+          properties:
+            previewHash:
+              type: string
+              pattern: "^[0-9a-f]{64}$"
+            videoExecutionEnvelopeHash:
+              type: string
+              pattern: "^[0-9a-f]{64}$"
+    CommerceStoryboardPlanningPreview:
+      type: object
+      required:
+        - identity
+        - inputHash
+        - storyboardStrategy
+        - segmentationPolicyVersion
+        - targetDurationSeconds
+        - estimatedVoiceoverSeconds
+        - voiceoverOverflowSeconds
+        - voiceoverExceeded
+        - providerDurationOptions
+        - recommendedShotCount
+        - plannedEditDurations
+        - recommendedRequestDurations
+        - estimatedTrimSeconds
+        - videoExecutionEnvelopeHash
+        - segmentationPlanHash
+        - previewHash
+        - timingAdvisory
+        - segmentation
+      properties:
+        identity:
+          type: object
+          additionalProperties: true
+        inputHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        storyboardStrategy:
+          $ref: "#/components/schemas/CommerceStoryboardStrategy"
+        segmentationPolicyVersion: {type: string}
+        targetDurationSeconds: {type: integer, minimum: 1}
+        estimatedVoiceoverSeconds: {type: number, minimum: 0}
+        voiceoverOverflowSeconds: {type: number, minimum: 0}
+        voiceoverExceeded: {type: boolean}
+        providerDurationOptions:
+          type: array
+          items: {type: integer, minimum: 1}
+        recommendedShotCount: {type: integer, minimum: 1}
+        plannedEditDurations:
+          type: array
+          items: {type: integer, minimum: 1}
+        recommendedRequestDurations:
+          type: array
+          items: {type: integer, minimum: 1}
+        estimatedTrimSeconds: {type: integer, minimum: 0}
+        videoExecutionEnvelopeHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        segmentationPlanHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        previewHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        timingAdvisory:
+          $ref: "#/components/schemas/CommerceStoryboardTimingAdvisory"
+        segmentation:
+          $ref: "#/components/schemas/CommerceSegmentationPlan"
+    CommerceStoryboardPlanningPreviewEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceStoryboardPlanningPreview"
     UpdateCommerceStoryboardShotRequest:
       type: object
       required: [expectedPlanRevision, expectedShotRevision]
@@ -23952,7 +25102,9 @@ components:
           items: {type: string, format: uuid}
         force: {type: boolean, default: false}
         concurrency: {type: integer, minimum: 1, maximum: 16, default: 5}
-        resolution: {type: string, default: 1080p}
+        resolution:
+          type: string
+          description: 可选请求提示；实际执行使用分镜方案冻结的视频分辨率
     CommerceRetryProductionRunRequest:
       type: object
       properties:
@@ -24279,7 +25431,7 @@ components:
         unitGenerationId: {type: string, format: uuid}
         unitGenerationNo: {type: integer, format: int64, minimum: 0}
         targetLanguage: {type: string}
-        targetDurationSeconds: {type: integer, enum: [15, 30, 60]}
+        targetDurationSeconds: {type: integer, minimum: 1}
         status: {type: string, enum: [pending, running, needs_review, failed, completed]}
         progress: {type: integer, minimum: 0, maximum: 100}
         nextAction: {type: string}

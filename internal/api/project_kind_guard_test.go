@@ -16,6 +16,8 @@ func TestProjectRouteExpectedKind(t *testing.T) {
 		{path: "/api/projects/project-1/commerce", kind: commercepkg.ProjectKindCommerceVideo, ok: true},
 		{path: "/api/projects/project-1/scripts/script-1", kind: commercepkg.ProjectKindNarrative, ok: true},
 		{path: "/api/projects/project-1/storyboard-shots", kind: commercepkg.ProjectKindNarrative, ok: true},
+		{path: "/api/projects/project-1/storyboard-shots/shot-1/render-plan", ok: false},
+		{path: "/api/projects/project-1/storyboard-shots/shot-1/render-plan/audio-verification", ok: false},
 		{path: "/api/projects/project-1", ok: false},
 		{path: "/api/projects/project-1/agent/tasks", ok: false},
 		{path: "/api/projects/project-1/video-production-profile", ok: false},

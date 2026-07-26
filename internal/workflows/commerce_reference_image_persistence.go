@@ -272,7 +272,7 @@ func (r *CommerceGenerationRuntime) BeginCommerceShotImageVersion(
 	if err := r.assertCurrentReferenceImageSnapshotTx(ctx, tx, input.Snapshot); err != nil {
 		return CommerceShotImageVersionState{}, err
 	}
-	if commerceReferenceImageMayReuseGeneratedMedia(input.WorkflowInput) {
+	if commerceReferenceImageMayReuseGeneratedMedia(input.WorkflowInput, input.Snapshot.StoryboardShotID) {
 		if current, found, err := loadActiveCommerceShotImageVersionTx(ctx, tx, input.Snapshot.StoryboardShotID, input.PromptPlan.ID); err != nil {
 			return CommerceShotImageVersionState{}, err
 		} else if found && current.Status == "succeeded" {
@@ -297,7 +297,7 @@ func (r *CommerceGenerationRuntime) BeginCommerceShotImageVersion(
 		return CommerceShotImageVersionState{}, err
 	}
 	version := CommerceShotImageVersionState{ID: uuid.NewString(), Status: "running", FidelityStatus: "pending"}
-	if commerceReferenceImageMayReuseGeneratedMedia(input.WorkflowInput) {
+	if commerceReferenceImageMayReuseGeneratedMedia(input.WorkflowInput, input.Snapshot.StoryboardShotID) {
 		reusable, found, err := loadReusableCommerceShotImageVersionTx(
 			ctx, tx, input.Snapshot.StoryboardShotID, input.PromptPlan.ID,
 			input.Snapshot.InputHash, input.PromptPlan.ReferenceHash,

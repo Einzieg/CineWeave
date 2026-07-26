@@ -950,6 +950,9 @@ func LoadWritableContextTx(ctx context.Context, tx pgx.Tx, projectID string, all
 	if err != nil {
 		return Context{}, err
 	}
+	if item.LifecycleStatus == "deleting" {
+		return Context{}, Error{Code: CodeProjectDeletionInProgress, Message: "项目正在删除，不能继续写入生产数据"}
+	}
 	if item.Locked && !allowLocked {
 		return Context{}, Error{Code: CodeProjectLocked, Message: "项目视频生产配置正在重建，请稍后重试", Retryable: true}
 	}
@@ -992,7 +995,8 @@ const activeContextSQL = `
 	       generation.binding_id::text, generation.generation_no, generation.status,
 	       generation.source_generation_id::text, generation.rebuild_id::text,
 	       generation.created_at, generation.activated_at, generation.superseded_at,
-	       project.video_production_locked, project.video_production_state
+	       project.video_production_locked, project.video_production_state,
+	       project.lifecycle_status, project.deletion_revision
 	FROM projects project
 	JOIN project_video_production_generations generation
 	  ON generation.id = project.active_video_production_generation_id
@@ -1041,6 +1045,8 @@ func scanContext(row pgx.Row) (Context, error) {
 		&generationSupersededAt,
 		&item.Locked,
 		&item.State,
+		&item.LifecycleStatus,
+		&item.DeletionRevision,
 	)
 	if err != nil {
 		return Context{}, err

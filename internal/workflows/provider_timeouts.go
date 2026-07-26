@@ -73,6 +73,16 @@ func commerceVideoPromptItemActivityOptions() workflow.ActivityOptions {
 	return options
 }
 
+func commerceProjectSetupActivityOptions() workflow.ActivityOptions {
+	options := defaultActivityOptions()
+	// Project setup can run language resolution plus bounded localization and
+	// review rounds. Each provider call has its own ten-minute budget, so the
+	// enclosing durable activity must cover the whole supervised sequence.
+	options.StartToCloseTimeout = 2 * time.Hour
+	options.HeartbeatTimeout = providerTextHeartbeatTimeout
+	return options
+}
+
 func providerImageActivityOptions() workflow.ActivityOptions {
 	options := defaultActivityOptions()
 	// The Gateway owns a bounded twenty-minute request budget across all image

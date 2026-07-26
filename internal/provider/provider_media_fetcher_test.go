@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Einzieg/cineweave/internal/provider/outbound"
 )
@@ -73,5 +76,57 @@ func TestNormalizedGatewayMediaFailureDoesNotRetryBlockedURL(t *testing.T) {
 	}
 	if message != "provider returned a blocked image URL" {
 		t.Fatalf("message = %q", message)
+	}
+}
+
+func TestDownloadGatewayVideoURLUsesAuthenticatedNewAPIContentProxy(t *testing.T) {
+	videoBody := []byte("\x00\x00\x00\x18ftypmp42")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/videos/task_123/content" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer channel-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(videoBody)
+	}))
+	defer server.Close()
+
+	service := &Service{}
+	service.SetMediaFetcher(outbound.NewMediaFetcher(outbound.Config{}))
+	baseURL := server.URL
+	media, err := service.downloadGatewayVideoURL(context.Background(), gatewayModelSelection{
+		Account: Account{
+			BaseURL:  &baseURL,
+			AuthType: "api_key",
+			Config:   json.RawMessage(`{"runtime":"openai_compatible","videoProtocol":"new_api"}`),
+		},
+		APIKey: "channel-token",
+	}, "task_123", "https://api.example/v1/videos/task_123/content", "video/mp4", time.Second)
+	if err != nil {
+		t.Fatalf("downloadGatewayVideoURL() error = %v", err)
+	}
+	defer media.close()
+	if media.ByteSize != int64(len(videoBody)) || media.MimeType != "video/mp4" {
+		t.Fatalf("media = %+v", media)
+	}
+}
+
+func TestGatewayVideoMediaRequestDoesNotSendCredentialsToUnrelatedURL(t *testing.T) {
+	baseURL := "http://new-api:3000"
+	fetchURL, headers, authenticatedOrigin, err := gatewayVideoMediaRequest(gatewayModelSelection{
+		Account: Account{
+			BaseURL:  &baseURL,
+			AuthType: "api_key",
+			Config:   json.RawMessage(`{"runtime":"openai_compatible","videoProtocol":"new_api"}`),
+		},
+		APIKey: "channel-token",
+	}, "task_123", "https://cdn.example/video.mp4")
+	if err != nil {
+		t.Fatalf("gatewayVideoMediaRequest() error = %v", err)
+	}
+	if fetchURL != "https://cdn.example/video.mp4" || len(headers) != 0 || authenticatedOrigin != "" {
+		t.Fatalf("request = %q %#v %q", fetchURL, headers, authenticatedOrigin)
 	}
 }

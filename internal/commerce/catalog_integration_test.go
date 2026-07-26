@@ -141,12 +141,80 @@ func TestCommerceCatalogLifecycle(t *testing.T) {
 	localization, timing, err := catalog.CreateLocalization(ctx, tx, organizationID, projectID, updated.ID, userID, LocalizationInput{
 		SourceScriptVersionID: versionMutation.Version.ID, LanguageResolutionID: resolution.ID,
 		SourceLanguage: "zh-CN", TargetLanguage: "zh-CN", LocalizedContent: updated.DraftContent,
-		StructuredContract: json.RawMessage(`{}`), ReviewerOutput: json.RawMessage(`{"manual":true}`), Approve: true,
+		StructuredContract: json.RawMessage(`{}`), ReviewerOutput: json.RawMessage(`{"manual":true}`),
+		Approve: true,
 	})
 	if err != nil {
 		t.Fatalf("create localization: %v", err)
 	}
 	if localization.Status != "approved" || timing.Exceeded {
 		t.Fatalf("localization=%s timing=%+v", localization.Status, timing)
+	}
+
+	product, err = catalog.GetProduct(ctx, tx, organizationID, projectID)
+	if err != nil {
+		t.Fatalf("reload product for overrun advisory: %v", err)
+	}
+	longContent := strings.Repeat("真实商品口播内容", 10)
+	overrunUnit, err := catalog.CreateScriptUnit(ctx, tx, organizationID, projectID, userID, product.ScriptUnitsRevision, CreateScriptUnitInput{
+		Title: "长口播版", Content: longContent, LanguageMode: "explicit",
+		ExplicitTargetLanguage: stringPointer("zh-CN"), TargetDurationSeconds: 15, TargetPlatform: "douyin",
+	})
+	if err != nil {
+		t.Fatalf("create overrun unit: %v", err)
+	}
+	overrunResolution, err := catalog.ResolveLanguage(ctx, tx, organizationID, projectID, overrunUnit.ScriptUnit.ID, userID)
+	if err != nil {
+		t.Fatalf("resolve overrun unit language: %v", err)
+	}
+	overrunLocalization, overrunTiming, err := catalog.CreateLocalization(ctx, tx, organizationID, projectID, overrunUnit.ScriptUnit.ID, userID, LocalizationInput{
+		SourceScriptVersionID: overrunUnit.Version.ID, LanguageResolutionID: overrunResolution.ID,
+		SourceLanguage: "zh-CN", TargetLanguage: "zh-CN", LocalizedContent: longContent,
+		StructuredContract: json.RawMessage(`{}`), ReviewerOutput: json.RawMessage(`{"manual":true}`),
+		Approve: true,
+	})
+	if err != nil {
+		t.Fatalf("overrun localization must remain non-blocking: %v", err)
+	}
+	if overrunLocalization.Status != "approved" || !overrunTiming.Exceeded {
+		t.Fatalf("overrun localization=%s timing=%+v", overrunLocalization.Status, overrunTiming)
+	}
+	var persistedTiming TimingEstimate
+	if err := json.Unmarshal(overrunLocalization.TimingAnalysis, &persistedTiming); err != nil {
+		t.Fatalf("decode persisted overrun timing: %v", err)
+	}
+	if persistedTiming != overrunTiming {
+		t.Fatalf("persisted timing=%+v want %+v", persistedTiming, overrunTiming)
+	}
+
+	product, err = catalog.GetProduct(ctx, tx, organizationID, projectID)
+	if err != nil {
+		t.Fatalf("reload product for malay timing policy: %v", err)
+	}
+	malayContent := "Helmet ini sangat ringan.\nHarganya memang berbaloi."
+	malayUnit, err := catalog.CreateScriptUnit(ctx, tx, organizationID, projectID, userID, product.ScriptUnitsRevision, CreateScriptUnitInput{
+		Title: "马来语版", Content: malayContent, LanguageMode: "explicit",
+		ExplicitTargetLanguage: stringPointer("ms-MY"), TargetDurationSeconds: 15, TargetPlatform: "tiktok",
+	})
+	if err != nil {
+		t.Fatalf("create malay unit: %v", err)
+	}
+	malayResolution, err := catalog.ResolveLanguage(ctx, tx, organizationID, projectID, malayUnit.ScriptUnit.ID, userID)
+	if err != nil {
+		t.Fatalf("resolve malay language: %v", err)
+	}
+	malayLocalization, malayTiming, err := catalog.CreateLocalization(ctx, tx, organizationID, projectID, malayUnit.ScriptUnit.ID, userID, LocalizationInput{
+		SourceScriptVersionID: malayUnit.Version.ID, LanguageResolutionID: malayResolution.ID,
+		SourceLanguage: "ms-MY", TargetLanguage: "ms-MY", LocalizedContent: malayContent,
+		StructuredContract: json.RawMessage(`{}`), ReviewerOutput: json.RawMessage(`{"manual":true}`),
+		Approve: true,
+	})
+	if err != nil {
+		t.Fatalf("create malay localization: %v", err)
+	}
+	if malayLocalization.TimingPolicyVersion != CommerceAdvisoryTimingVersion ||
+		malayTiming.PolicyVersion != CommerceAdvisoryTimingVersion {
+		t.Fatalf("malay timing policy localization=%s estimate=%s want=%s",
+			malayLocalization.TimingPolicyVersion, malayTiming.PolicyVersion, CommerceAdvisoryTimingVersion)
 	}
 }

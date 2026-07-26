@@ -25,12 +25,12 @@ func TestSameVideoCapabilityFamilyRequiresFamilyVariantAndHash(t *testing.T) {
 }
 
 func TestVideoSegmentFailureRetryability(t *testing.T) {
-	for _, code := range []string{CodeUpstreamTimeout, CodeUpstreamInternalError, CodeUpstreamStreamTruncated, CodeUpstreamOutputMismatch, CodeProviderRateLimited, CodeMediaDownloadFailed, "PROVIDER_VIDEO_POLLING_TIMEOUT"} {
+	for _, code := range []string{CodeUpstreamTimeout, CodeUpstreamInternalError, CodeUpstreamStreamTruncated, CodeUpstreamOutputMismatch, CodeProviderRateLimited, "PROVIDER_VIDEO_POLLING_TIMEOUT"} {
 		if !VideoSegmentFailureRetryable(code) {
 			t.Fatalf("%s should be retryable", code)
 		}
 	}
-	for _, code := range []string{CodeInvalidRequest, CodeAuthFailed, CodeContentRejected} {
+	for _, code := range []string{CodeInvalidRequest, CodeAuthFailed, CodeContentRejected, CodeMediaDownloadFailed} {
 		if VideoSegmentFailureRetryable(code) {
 			t.Fatalf("%s should not be retried automatically", code)
 		}

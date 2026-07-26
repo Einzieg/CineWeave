@@ -79,7 +79,12 @@ func (s *Service) PrepareProjectRebuild(
 		return PreparedProjectRebuild{}, err
 	}
 	for _, seed := range seeds {
-		prepared, err := prepareProjectRebuildUnit(seed, target)
+		prepared, err := prepareProjectRebuildUnit(
+			seed,
+			target,
+			params.WorkflowTemplateVersion,
+			rebuild.ID,
+		)
 		if err != nil {
 			return PreparedProjectRebuild{}, fmt.Errorf("prepare script unit %s: %w", seed.ScriptUnitID, err)
 		}
@@ -139,7 +144,12 @@ func (s *Service) ActivatePreparedProjectRebuild(
 	)
 }
 
-func prepareProjectRebuildUnit(seed ProjectRebuildUnitSeed, target InitialBindingResult) (ProjectRebuildUnitTarget, error) {
+func prepareProjectRebuildUnit(
+	seed ProjectRebuildUnitSeed,
+	target InitialBindingResult,
+	workflowTemplateVersionID string,
+	rebuildID string,
+) (ProjectRebuildUnitTarget, error) {
 	var snapshot map[string]any
 	if err := json.Unmarshal(seed.ConfigurationSnapshot, &snapshot); err != nil {
 		return ProjectRebuildUnitTarget{}, err
@@ -156,7 +166,15 @@ func prepareProjectRebuildUnit(seed ProjectRebuildUnitSeed, target InitialBindin
 		"commerceWorkflowBindingRevision": target.CommerceBindingRevision,
 		"commerceConfigurationHash":       target.CommerceConfigurationHash,
 	}
+	snapshot["projectGenerationId"] = target.ProjectGenerationID
+	snapshot["videoProductionBindingId"] = target.VideoBindingID
+	snapshot["videoProductionBindingRevision"] = target.VideoBindingRevision
+	snapshot["commerceWorkflowBindingId"] = target.CommerceBindingID
+	snapshot["commerceWorkflowBindingRevision"] = target.CommerceBindingRevision
+	snapshot["workflowTemplateVersionId"] = workflowTemplateVersionID
+	snapshot["rebuildId"] = rebuildID
 	snapshot["sourceUnitGenerationId"] = seed.SourceUnitGenerationID
+	snapshot["targetConfigurationHash"] = target.CommerceConfigurationHash
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return ProjectRebuildUnitTarget{}, err

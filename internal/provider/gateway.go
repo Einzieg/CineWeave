@@ -126,6 +126,9 @@ func (s *Service) executeProviderTextRequest(ctx context.Context, req GatewayTex
 	if strings.TrimSpace(req.OrganizationID) == "" {
 		return GatewayTextResponse{}, fmt.Errorf("%w: organizationId is required", ErrValidation)
 	}
+	if err := s.assertProviderProjectWritable(ctx, req.OrganizationID, req.ProjectID); err != nil {
+		return GatewayTextResponse{}, err
+	}
 	input, err := normalizeJSON(req.Input, "{}")
 	if err != nil {
 		return GatewayTextResponse{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)

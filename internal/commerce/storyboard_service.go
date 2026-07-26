@@ -32,8 +32,18 @@ const storyboardPlanSelectSQL = `
 	       plan.timeline_timebase, plan.fps_numerator, plan.fps_denominator,
 	       plan.allowed_shot_durations, plan.actual_shot_count,
 	       plan.review_status, plan.plan_hash, plan.projection_hash,
+	       COALESCE(generation.storyboard_strategy, ''),
+	       COALESCE(plan.segmentation_policy_version, ''),
+	       plan.segmentation_plan,
+	       COALESCE(plan.segmentation_plan_hash, ''),
+	       plan.video_execution_envelope,
+	       COALESCE(plan.video_execution_envelope_hash, ''),
+	       plan.timing_advisory,
+	       COALESCE(plan.preview_hash, ''),
 	       plan.created_at, plan.activated_at
-	FROM commerce_storyboard_plans plan`
+	FROM commerce_storyboard_plans plan
+	JOIN commerce_script_unit_generations generation
+	  ON generation.id = plan.script_unit_generation_id`
 
 func (s *CatalogService) ListStoryboardPlans(
 	ctx context.Context,
@@ -277,9 +287,6 @@ func (s *CatalogService) ReorderStoryboardShots(
 		}
 		seen[item.ShotID] = struct{}{}
 		if item.DurationSeconds > 0 && item.DurationSeconds != shot.DurationSeconds {
-			if !storyboardDurationAllowed(plan.AllowedShotDurations, item.DurationSeconds) {
-				return StoryboardPlanDetail{}, Error{Code: CodeStoryboardInvalid, Message: fmt.Sprintf("镜头 %d 秒不受当前视频模型支持", item.DurationSeconds)}
-			}
 			shot.DurationSeconds = item.DurationSeconds
 			durationChanged = true
 			durationChangedShotIDs[shot.ID] = struct{}{}
@@ -617,6 +624,12 @@ const storyboardShotSelectSQL = `
 	       COALESCE(contract.product_presentation->'camera', '{}'::jsonb),
 	       contract.voiceover_text, contract.onscreen_text, contract.target_language,
 	       contract.sound_effects, contract.music_cue,
+	       contract.creative_direction,
+	       COALESCE(contract.estimated_voiceover_ticks, 0),
+	       COALESCE(contract.voiceover_overflow_ticks, 0),
+	       COALESCE(contract.timing_advisory_level, ''),
+	       COALESCE(contract.recommended_request_duration_seconds, 0),
+	       COALESCE(contract.eligible_route_set_hash, ''),
 	       COALESCE(contract.product_presentation->'requiredProductFeatures', '[]'::jsonb),
 	       contract.review_status, contract.manual_override, shot.stale_state,
 	       COALESCE(shot.image_prompt, ''), shot.image_prompt_status, shot.image_status,
@@ -1036,7 +1049,7 @@ func (r *Repository) ValidateStoryboardPlanForActivation(
 	for index, shot := range shots {
 		if shot.ShotOrdinal != index+1 || strings.TrimSpace(shot.VisualAction) == "" ||
 			strings.TrimSpace(shot.ShotPurpose) == "" || strings.TrimSpace(shot.Composition) == "" ||
-			len(shot.ProductReferences) == 0 || !storyboardDurationAllowed(plan.AllowedShotDurations, shot.DurationSeconds) {
+			len(shot.ProductReferences) == 0 || shot.DurationSeconds <= 0 {
 			return Error{Code: CodeStoryboardInvalid, Message: fmt.Sprintf("镜头 %02d 的分镜契约不完整", index+1)}
 		}
 	}
@@ -1225,7 +1238,11 @@ func scanStoryboardPlan(row scanRow) (StoryboardPlan, error) {
 		&item.TargetLanguage, &item.TargetDurationSeconds, &item.AspectRatio,
 		&item.TimelineTimebase, &item.FPSNumerator, &item.FPSDenominator,
 		&durations, &item.ShotCount, &item.ReviewStatus, &item.PlanHash,
-		&item.ProjectionHash, &item.CreatedAt, &activatedAt,
+		&item.ProjectionHash, &item.StoryboardStrategy,
+		&item.SegmentationPolicyVersion, &item.SegmentationPlan,
+		&item.SegmentationPlanHash, &item.VideoExecutionEnvelope,
+		&item.VideoExecutionEnvelopeHash, &item.TimingAdvisory,
+		&item.PreviewHash, &item.CreatedAt, &activatedAt,
 	)
 	item.WorkflowRunID = textPointer(workflowRunID)
 	item.ActivatedAt = timestampPointer(activatedAt)
@@ -1249,6 +1266,9 @@ func scanStoryboardShot(row scanRow) (StoryboardShot, error) {
 		&item.StartTick, &item.EndTick, &item.SalesBeat, &item.VisualAction,
 		&item.ShotPurpose, &item.Composition, &item.Camera, &item.VoiceoverText,
 		&item.OnscreenText, &item.TargetLanguage, &item.SoundEffects, &item.MusicCue,
+		&item.CreativeDirection, &item.EstimatedVoiceoverTicks,
+		&item.VoiceoverOverflowTicks, &item.TimingAdvisoryLevel,
+		&item.RecommendedRequestDurationSeconds, &item.EligibleRouteSetHash,
 		&requiredFeatures, &item.ReviewStatus, &item.ManualOverride, &item.StaleState,
 		&item.ImagePrompt, &item.ImagePromptStatus, &item.ImageStatus,
 		&imageArtifactID, &item.ImageStorageKey, &item.ImageMimeType,
@@ -1402,15 +1422,6 @@ func storyboardTotalDuration(shots []StoryboardShot) int {
 		total += shot.DurationSeconds
 	}
 	return total
-}
-
-func storyboardDurationAllowed(allowed []int, duration int) bool {
-	for _, value := range allowed {
-		if value == duration {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeStoryboardReferenceRole(value string) string {

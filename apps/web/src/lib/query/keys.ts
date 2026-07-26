@@ -59,6 +59,9 @@ export const qk = {
 
   // 项目域
   project: (projectId: string) => ["project", projectId] as const,
+  projectDeletionImpact: (projectId: string) => ["project", projectId, "deletion-impact"] as const,
+  projectDeletionRequest: (projectId: string, requestId: string) =>
+    ["project-deletion-request", projectId, requestId] as const,
   commerceSetupSession: (projectId: string, setupSessionId: string) => ["project", projectId, "commerce-setup", setupSessionId] as const,
   commerceSetupRun: (projectId: string, setupRunId: string) => ["project", projectId, "commerce-setup-run", setupRunId] as const,
   commerceProduct: (projectId: string) => ["project", projectId, "commerce-product"] as const,
@@ -72,6 +75,16 @@ export const qk = {
   commerceScriptUnitsRoot: (projectId: string) => ["project", projectId, "commerce-script-units"] as const,
   commerceScriptUnit: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-script-unit", scriptUnitId] as const,
   commerceScriptVersions: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-script-versions", scriptUnitId] as const,
+  commerceDirectVideoOptions: (projectId: string) => ["project", projectId, "commerce-direct-video-options"] as const,
+  commerceScriptReferences: (projectId: string, scriptUnitId: string, status = "active") =>
+    ["project", projectId, "commerce-script-references", scriptUnitId, status] as const,
+  commerceScriptReferencesRoot: (projectId: string, scriptUnitId = "all") =>
+    ["project", projectId, "commerce-script-references", scriptUnitId] as const,
+  commerceDirectVideos: (projectId: string, scriptUnitId = "all") =>
+    ["project", projectId, "commerce-direct-videos", scriptUnitId] as const,
+  commerceDirectVideosRoot: (projectId: string) => ["project", projectId, "commerce-direct-videos"] as const,
+  commerceDirectVideo: (projectId: string, jobId: string) =>
+    ["project", projectId, "commerce-direct-video", jobId] as const,
   commerceScriptUnitRebuild: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-script-unit-rebuild", scriptUnitId] as const,
   commerceLanguageResolution: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-language-resolution", scriptUnitId] as const,
   commerceLocalizations: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-localizations", scriptUnitId] as const,
@@ -79,6 +92,8 @@ export const qk = {
     ["project", projectId, "commerce-storyboard-plans", scriptUnitId, status] as const,
   commerceStoryboardPlansRoot: (projectId: string, scriptUnitId: string) =>
     ["project", projectId, "commerce-storyboard-plans", scriptUnitId] as const,
+  commerceStoryboardPlanningPreview: (projectId: string, scriptUnitId: string, unitGenerationId: string) =>
+    ["project", projectId, "commerce-storyboard-planning-preview", scriptUnitId, unitGenerationId] as const,
   commerceStoryboardPlan: (projectId: string, scriptUnitId: string, planId: string) =>
     ["project", projectId, "commerce-storyboard-plan", scriptUnitId, planId] as const,
   commerceProductionRuns: (projectId: string, scriptUnitId = "all", runType = "all") =>

@@ -24,25 +24,27 @@ const (
 )
 
 type commerceReferenceImageBatchRequest struct {
-	Operation                string   `json:"operation"`
-	PlanID                   string   `json:"planId"`
-	ExpectedPlanRevision     int64    `json:"expectedPlanRevision"`
-	ExpectedUnitGenerationID string   `json:"expectedUnitGenerationId"`
-	ShotIDs                  []string `json:"shotIds"`
-	Force                    bool     `json:"force"`
-	Concurrency              int      `json:"concurrency"`
-	ReuseGeneratedMedia      bool     `json:"-"`
+	Operation                  string   `json:"operation"`
+	PlanID                     string   `json:"planId"`
+	ExpectedPlanRevision       int64    `json:"expectedPlanRevision"`
+	ExpectedUnitGenerationID   string   `json:"expectedUnitGenerationId"`
+	ShotIDs                    []string `json:"shotIds"`
+	Force                      bool     `json:"force"`
+	Concurrency                int      `json:"concurrency"`
+	ReuseGeneratedMedia        bool     `json:"-"`
+	ReuseGeneratedMediaShotIDs []string `json:"-"`
 }
 
 type commerceReferenceImageRunSnapshot struct {
-	Operation           string   `json:"operation"`
-	PlanID              string   `json:"planId"`
-	PlanRevision        int64    `json:"planRevision"`
-	ShotIDs             []string `json:"shotIds"`
-	Force               bool     `json:"force"`
-	Concurrency         int      `json:"concurrency"`
-	ReuseGeneratedMedia bool     `json:"reuseGeneratedMedia,omitempty"`
-	RetryOfRunID        string   `json:"retryOfRunId,omitempty"`
+	Operation                  string   `json:"operation"`
+	PlanID                     string   `json:"planId"`
+	PlanRevision               int64    `json:"planRevision"`
+	ShotIDs                    []string `json:"shotIds"`
+	Force                      bool     `json:"force"`
+	Concurrency                int      `json:"concurrency"`
+	ReuseGeneratedMedia        bool     `json:"reuseGeneratedMedia,omitempty"`
+	ReuseGeneratedMediaShotIDs []string `json:"reuseGeneratedMediaShotIds,omitempty"`
+	RetryOfRunID               string   `json:"retryOfRunId,omitempty"`
 }
 
 type commerceVideoBatchRequest struct {
@@ -409,8 +411,9 @@ func (s *Server) createCommerceReferenceImageRunTx(
 		Identity: identity, Operation: req.Operation, ShotIDs: shotIDs,
 		StoryboardPlanID: req.PlanID, PlanEditRevision: int(req.ExpectedPlanRevision),
 		Force: req.Force, Concurrency: req.Concurrency,
-		ReuseGeneratedMedia: req.ReuseGeneratedMedia,
-		CreatedBy:           createdBy, AttemptGeneration: 1,
+		ReuseGeneratedMedia:        req.ReuseGeneratedMedia,
+		ReuseGeneratedMediaShotIDs: append([]string(nil), req.ReuseGeneratedMediaShotIDs...),
+		CreatedBy:                  createdBy, AttemptGeneration: 1,
 	}
 	subjects := make([]commercepkg.ProductionSubject, 0, len(shotIDs))
 	for _, shotID := range shotIDs {
@@ -426,7 +429,9 @@ func (s *Server) createCommerceReferenceImageRunTx(
 	inputSnapshot := mustRawJSON(commerceReferenceImageRunSnapshot{
 		Operation: req.Operation, PlanID: req.PlanID, PlanRevision: req.ExpectedPlanRevision,
 		ShotIDs: shotIDs, Force: req.Force, Concurrency: req.Concurrency,
-		ReuseGeneratedMedia: req.ReuseGeneratedMedia, RetryOfRunID: retryOfRunID,
+		ReuseGeneratedMedia:        req.ReuseGeneratedMedia,
+		ReuseGeneratedMediaShotIDs: append([]string(nil), req.ReuseGeneratedMediaShotIDs...),
+		RetryOfRunID:               retryOfRunID,
 	})
 	run, created, err := s.commerceCatalog.CreateProductionRun(ctx, tx, commercepkg.CreateProductionRunParams{
 		Identity: identity, RunType: commercepkg.RunTypeReferenceImages,
@@ -577,7 +582,7 @@ func (s *Server) retryFailedCommerceProductionRun(w http.ResponseWriter, r *http
 			ExpectedPlanRevision:     snapshot.PlanRevision,
 			ExpectedUnitGenerationID: original.Run.Identity.UnitGenerationID,
 			ShotIDs:                  shotIDs, Force: true, Concurrency: resolvedConcurrency,
-			ReuseGeneratedMedia: true,
+			ReuseGeneratedMediaShotIDs: commerceReferenceImageRetryMediaShotIDs(selectedItems),
 		}
 		if referenceReq.Concurrency == 0 {
 			referenceReq.Concurrency = snapshot.Concurrency
@@ -781,6 +786,21 @@ func selectRetryableCommerceRunItems(items []commercepkg.ProductionRunItem, requ
 	return selected, nil
 }
 
+func commerceReferenceImageRetryMediaShotIDs(items []commercepkg.ProductionRunItem) []string {
+	reusable := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.ErrorCode != workflows.CommerceCodeImageFidelityReviewFailed {
+			continue
+		}
+		shotID := strings.TrimSpace(item.Subject.StoryboardShotID)
+		if shotID != "" {
+			reusable = append(reusable, shotID)
+		}
+	}
+	sort.Strings(reusable)
+	return reusable
+}
+
 func normalizeCommerceReferenceImageBatchRequest(req *commerceReferenceImageBatchRequest) error {
 	req.Operation = strings.TrimSpace(req.Operation)
 	req.PlanID = strings.TrimSpace(req.PlanID)
@@ -854,9 +874,6 @@ func normalizeCommerceVideoBatchRequest(req *commerceVideoBatchRequest) error {
 	}
 	if req.Concurrency < 1 || req.Concurrency > 16 {
 		return commercepkg.Error{Code: commercepkg.CodeStoryboardInvalid, Message: "并发数必须在 1 到 16 之间"}
-	}
-	if req.Resolution == "" {
-		req.Resolution = "1080p"
 	}
 	return nil
 }

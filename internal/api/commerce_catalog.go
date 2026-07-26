@@ -37,6 +37,79 @@ func (s *Server) getCommerceSetupSession(w http.ResponseWriter, r *http.Request,
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
+func (s *Server) restartCommerceSetupSession(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
+	if !ok {
+		return
+	}
+	if s.temporal == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEMPORAL_UNAVAILABLE", "工作流服务暂不可用", nil, true)
+		return
+	}
+	var req struct {
+		ExpectedRevision int64 `json:"expectedRevision"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.ExpectedRevision <= 0 {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedRevision 必须大于 0", nil, false)
+		return
+	}
+	options, err := s.loadCommerceProjectOptions(r.Context(), project.OrganizationID, true)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if !options.Available || strings.TrimSpace(options.WorkflowTemplateVersionID) == "" {
+		httpx.WriteError(w, r, http.StatusConflict, "COMMERCE_WORKFLOW_TEMPLATE_UNAVAILABLE", "当前没有可执行的带货视频工作流模板", map[string]any{"blockers": options.Blockers}, false)
+		return
+	}
+	setupSessionID := strings.TrimSpace(r.PathValue("setupSessionId"))
+	current, err := s.commerceCatalog.GetSetupSession(r.Context(), s.db, project.OrganizationID, project.ID, setupSessionID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if current.Revision != req.ExpectedRevision {
+		s.writeError(w, r, commercepkg.Error{Code: commercepkg.CodeSetupRevisionConflict, Message: "项目准备状态已变化，请刷新后重试"})
+		return
+	}
+	if current.SetupWorkflowRunID != nil {
+		run, runErr := s.commerceCatalog.GetSetupRun(r.Context(), s.db, project.OrganizationID, project.ID, *current.SetupWorkflowRunID)
+		if runErr != nil {
+			s.writeError(w, r, runErr)
+			return
+		}
+		switch run.Status {
+		case "queued", "running", "waiting_user_confirmation", "needs_user_review":
+			if err := s.temporal.CancelWorkflow(r.Context(), run.TemporalWorkflowID, ""); err != nil {
+				s.writeError(w, r, err)
+				return
+			}
+		}
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	updated, err := s.commerceCatalog.RestartSetupSessionWithTemplate(
+		r.Context(), tx, project.OrganizationID, project.ID, setupSessionID,
+		req.ExpectedRevision, options.WorkflowTemplateVersionID,
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, updated, nil)
+}
+
 func (s *Server) abandonCommerceSetupSession(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
 	if !ok {

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,8 +13,11 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
+	"github.com/Einzieg/cineweave/internal/events"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/workflows"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Server) listCommerceStoryboardPlans(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -31,6 +36,169 @@ func (s *Server) listCommerceStoryboardPlans(w http.ResponseWriter, r *http.Requ
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
 }
 
+type commerceStoryboardPlanningRequest struct {
+	ExpectedScriptUnitRevision            int64  `json:"expectedScriptUnitRevision"`
+	ExpectedProjectProductionGenerationID string `json:"expectedProjectProductionGenerationId"`
+	PreviewHash                           string `json:"previewHash,omitempty"`
+	VideoExecutionEnvelopeHash            string `json:"videoExecutionEnvelopeHash,omitempty"`
+	ClientRequestID                       string `json:"clientRequestId"`
+}
+
+func (s *Server) previewCommerceStoryboardPlan(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionStoryboardGenerate)
+	if !ok {
+		return
+	}
+	var req commerceStoryboardPlanningRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.ClientRequestID) == "" {
+		s.writeError(w, r, commercepkg.Error{Code: commercepkg.CodeStoryboardInvalid, Message: "规划预览缺少请求标识"})
+		return
+	}
+	if _, err := uuid.Parse(strings.TrimSpace(req.ClientRequestID)); err != nil {
+		s.writeError(w, r, commercepkg.Error{Code: commercepkg.CodeStoryboardInvalid, Message: "规划预览请求标识无效"})
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	identity, err := s.commerceCatalog.LockActiveStoryboardGeneration(
+		r.Context(), tx, project.OrganizationID, project.ID, r.PathValue("scriptUnitId"),
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := validateCommerceStoryboardPlanningIdentity(r, req, identity); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	runtime := workflows.NewCommerceGenerationRuntime(s.db)
+	snapshot, _, plan, err := runtime.BuildStoryboardPlanningPreviewTx(r.Context(), tx, identity)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	preview := workflows.NewCommerceStoryboardPlanningPreview(snapshot, plan)
+	if err := persistCommerceStoryboardPlanningPreviewTx(
+		r.Context(),
+		tx,
+		project,
+		principal.UserID,
+		strings.TrimSpace(req.ClientRequestID),
+		preview,
+	); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, preview, nil)
+}
+
+func persistCommerceStoryboardPlanningPreviewTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	project Project,
+	createdBy string,
+	clientRequestID string,
+	preview workflows.CommerceStoryboardPlanningPreview,
+) error {
+	raw, err := json.Marshal(preview)
+	if err != nil {
+		return err
+	}
+	var attemptID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO commerce_storyboard_preview_attempts(
+			organization_id,
+			project_id,
+			commerce_script_unit_id,
+			script_unit_generation_id,
+			project_production_generation_id,
+			script_unit_revision,
+			client_request_id,
+			input_hash,
+			preview_hash,
+			video_execution_envelope_hash,
+			segmentation_plan_hash,
+			preview_snapshot,
+			created_by
+		)
+		VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10,
+			$11, $12, $13
+		)
+		ON CONFLICT (script_unit_generation_id, client_request_id) DO NOTHING
+		RETURNING id::text
+	`, project.OrganizationID, project.ID, preview.Identity.ScriptUnitID,
+		preview.Identity.UnitGenerationID, preview.Identity.ProjectGenerationID,
+		preview.Identity.ScriptUnitRevision, clientRequestID, preview.InputHash,
+		preview.PreviewHash, preview.VideoExecutionEnvelopeHash,
+		preview.SegmentationPlanHash, raw, createdBy,
+	).Scan(&attemptID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var existing struct {
+			InputHash                  string
+			PreviewHash                string
+			VideoExecutionEnvelopeHash string
+			SegmentationPlanHash       string
+		}
+		if err := tx.QueryRow(ctx, `
+			SELECT input_hash, preview_hash, video_execution_envelope_hash, segmentation_plan_hash
+			FROM commerce_storyboard_preview_attempts
+			WHERE script_unit_generation_id = $1
+			  AND client_request_id = $2
+		`, preview.Identity.UnitGenerationID, clientRequestID).Scan(
+			&existing.InputHash,
+			&existing.PreviewHash,
+			&existing.VideoExecutionEnvelopeHash,
+			&existing.SegmentationPlanHash,
+		); err != nil {
+			return err
+		}
+		if existing.InputHash != preview.InputHash ||
+			existing.PreviewHash != preview.PreviewHash ||
+			existing.VideoExecutionEnvelopeHash != preview.VideoExecutionEnvelopeHash ||
+			existing.SegmentationPlanHash != preview.SegmentationPlanHash {
+			return commercepkg.Error{
+				Code:    commercepkg.CodeStoryboardPreviewStale,
+				Message: "分镜规划预览已变化，请重新打开生成窗口",
+			}
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return events.AppendTx(
+		ctx,
+		tx,
+		project.OrganizationID,
+		project.ID,
+		"commerce.storyboard.segmentation.previewed",
+		"commerce_storyboard_preview_attempt",
+		attemptID,
+		mustMarshal(map[string]any{
+			"commerceScriptUnitId":          preview.Identity.ScriptUnitID,
+			"scriptUnitGenerationId":        preview.Identity.UnitGenerationID,
+			"projectProductionGenerationId": preview.Identity.ProjectGenerationID,
+			"clientRequestId":               clientRequestID,
+			"previewHash":                   preview.PreviewHash,
+			"videoExecutionEnvelopeHash":    preview.VideoExecutionEnvelopeHash,
+			"segmentationPlanHash":          preview.SegmentationPlanHash,
+		}),
+	)
+}
+
 func (s *Server) createCommerceStoryboardPlan(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionStoryboardGenerate)
 	if !ok {
@@ -40,10 +208,14 @@ func (s *Server) createCommerceStoryboardPlan(w http.ResponseWriter, r *http.Req
 		s.writeError(w, r, apiError{Status: http.StatusServiceUnavailable, Code: "TEMPORAL_UNAVAILABLE", Message: "工作流服务暂不可用", Retryable: true})
 		return
 	}
-	var req struct {
-		ExpectedUnitGenerationID string `json:"expectedUnitGenerationId"`
-	}
+	var req commerceStoryboardPlanningRequest
 	if !decode(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.ClientRequestID) == "" ||
+		strings.TrimSpace(req.PreviewHash) == "" ||
+		strings.TrimSpace(req.VideoExecutionEnvelopeHash) == "" {
+		s.writeError(w, r, commercepkg.Error{Code: commercepkg.CodeStoryboardInvalid, Message: "创建分镜缺少规划预览身份"})
 		return
 	}
 	idempotency := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
@@ -53,7 +225,12 @@ func (s *Server) createCommerceStoryboardPlan(w http.ResponseWriter, r *http.Req
 	}
 	requestHash := idempotencyRequestHash(map[string]any{
 		"projectId": project.ID, "scriptUnitId": r.PathValue("scriptUnitId"),
-		"expectedUnitGenerationId": strings.TrimSpace(req.ExpectedUnitGenerationID),
+		"scriptUnitGenerationId":                strings.TrimSpace(r.PathValue("scriptUnitGenerationId")),
+		"expectedScriptUnitRevision":            req.ExpectedScriptUnitRevision,
+		"expectedProjectProductionGenerationId": strings.TrimSpace(req.ExpectedProjectProductionGenerationID),
+		"previewHash":                           strings.TrimSpace(req.PreviewHash),
+		"videoExecutionEnvelopeHash":            strings.TrimSpace(req.VideoExecutionEnvelopeHash),
+		"clientRequestId":                       strings.TrimSpace(req.ClientRequestID),
 	})
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
@@ -87,8 +264,26 @@ func (s *Server) createCommerceStoryboardPlan(w http.ResponseWriter, r *http.Req
 		s.writeError(w, r, err)
 		return
 	}
-	if expected := strings.TrimSpace(req.ExpectedUnitGenerationID); expected != "" && expected != identity.UnitGenerationID {
-		s.writeError(w, r, commercepkg.Error{Code: commercepkg.CodeGenerationMismatch, Message: "脚本单元生产代已变化，请刷新后重试"})
+	if err := validateCommerceStoryboardPlanningIdentity(r, req, identity); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	runtime := workflows.NewCommerceGenerationRuntime(s.db)
+	snapshot, _, plan, err := runtime.BuildStoryboardPlanningPreviewTx(r.Context(), tx, identity)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if strings.TrimSpace(req.PreviewHash) != plan.PreviewHash ||
+		strings.TrimSpace(req.VideoExecutionEnvelopeHash) != snapshot.VideoExecutionEnvelopeHash {
+		s.writeError(w, r, commercepkg.Error{
+			Code:    commercepkg.CodeStoryboardPreviewStale,
+			Message: "分镜规划预览已过期，请重新预览后再生成",
+			Details: map[string]any{
+				"currentPreviewHash":                plan.PreviewHash,
+				"currentVideoExecutionEnvelopeHash": snapshot.VideoExecutionEnvelopeHash,
+			},
+		})
 		return
 	}
 	runID, err := workflows.EnqueueCommerceStoryboardPlanningTx(r.Context(), tx, identity, principal.UserID, "")
@@ -125,6 +320,24 @@ func (s *Server) createCommerceStoryboardPlan(w http.ResponseWriter, r *http.Req
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusAccepted, run, nil)
+}
+
+func validateCommerceStoryboardPlanningIdentity(
+	r *http.Request,
+	req commerceStoryboardPlanningRequest,
+	identity commercepkg.UnitGenerationIdentity,
+) error {
+	if strings.TrimSpace(r.PathValue("scriptUnitGenerationId")) != identity.UnitGenerationID {
+		return commercepkg.Error{Code: commercepkg.CodeGenerationMismatch, Message: "脚本单元生产代已变化，请刷新后重试"}
+	}
+	if req.ExpectedScriptUnitRevision <= 0 || req.ExpectedScriptUnitRevision != identity.ScriptUnitRevision {
+		return commercepkg.Error{Code: commercepkg.CodeGenerationMismatch, Message: "广告脚本已变化，请刷新后重试"}
+	}
+	if strings.TrimSpace(req.ExpectedProjectProductionGenerationID) == "" ||
+		strings.TrimSpace(req.ExpectedProjectProductionGenerationID) != identity.ProjectGenerationID {
+		return commercepkg.Error{Code: commercepkg.CodeGenerationMismatch, Message: "项目生产配置已变化，请刷新后重试"}
+	}
+	return nil
 }
 
 func (s *Server) getCommerceStoryboardPlan(w http.ResponseWriter, r *http.Request, principal auth.Principal) {

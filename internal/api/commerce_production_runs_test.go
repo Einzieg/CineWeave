@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
+	"github.com/Einzieg/cineweave/internal/provider"
+	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,6 +79,18 @@ func TestNormalizeCommerceVideoBatchRequest(t *testing.T) {
 	}, req.ShotIDs)
 }
 
+func TestNormalizeCommerceVideoBatchRequestLeavesResolutionForFrozenStoryboardContract(t *testing.T) {
+	req := commerceVideoBatchRequest{
+		PlanID:                   "00000000-0000-4000-8000-000000000001",
+		ExpectedPlanRevision:     2,
+		ExpectedUnitGenerationID: "00000000-0000-4000-8000-000000000002",
+		ShotIDs:                  []string{"00000000-0000-4000-8000-000000000003"},
+	}
+
+	require.NoError(t, normalizeCommerceVideoBatchRequest(&req))
+	require.Empty(t, req.Resolution)
+}
+
 func TestNormalizeCommerceVideoBatchRequestRejectsEmptySelection(t *testing.T) {
 	req := commerceVideoBatchRequest{
 		PlanID:                   "00000000-0000-4000-8000-000000000001",
@@ -113,4 +127,24 @@ func TestSelectRetryableCommerceRunItemsRejectsSucceededSelection(t *testing.T) 
 	typed, ok := commercepkg.AsError(err)
 	require.True(t, ok)
 	require.Equal(t, commercepkg.CodeRunStateConflict, typed.Code)
+}
+
+func TestCommerceReferenceImageRetryReusesOnlyUnreviewedMedia(t *testing.T) {
+	reviewFailedShotID := "00000000-0000-4000-8000-000000000010"
+	items := []commercepkg.ProductionRunItem{
+		{
+			ErrorCode: workflows.CommerceCodeImageFidelityReviewFailed,
+			Subject:   commercepkg.ProductionSubject{StoryboardShotID: reviewFailedShotID},
+		},
+		{
+			ErrorCode: workflows.CommerceCodeImageFidelityRejected,
+			Subject:   commercepkg.ProductionSubject{StoryboardShotID: "00000000-0000-4000-8000-000000000011"},
+		},
+		{
+			ErrorCode: provider.CodeUpstreamTimeout,
+			Subject:   commercepkg.ProductionSubject{StoryboardShotID: "00000000-0000-4000-8000-000000000012"},
+		},
+	}
+
+	require.Equal(t, []string{reviewFailedShotID}, commerceReferenceImageRetryMediaShotIDs(items))
 }

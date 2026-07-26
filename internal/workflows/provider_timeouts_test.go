@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/provider"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/temporal"
 )
 
 func TestProviderTextGatewayOptionsRetryOnlyAfterFirstActivityAttempt(t *testing.T) {
@@ -45,6 +47,30 @@ func TestCommerceVideoPromptItemActivityOptionsCoverSupervisedRounds(t *testing.
 	}
 	if options.RetryPolicy == nil || options.RetryPolicy.MaximumAttempts != 1 {
 		t.Fatalf("commerce video prompt retry policy = %#v, want one explicit attempt", options.RetryPolicy)
+	}
+}
+
+func TestCommerceProjectSetupActivityOptionsCoverSupervisedSetup(t *testing.T) {
+	options := commerceProjectSetupActivityOptions()
+	if options.StartToCloseTimeout != 2*time.Hour {
+		t.Fatalf("commerce project setup timeout = %s, want 2h", options.StartToCloseTimeout)
+	}
+	if options.HeartbeatTimeout != providerTextHeartbeatTimeout {
+		t.Fatalf("commerce project setup heartbeat = %s, want %s", options.HeartbeatTimeout, providerTextHeartbeatTimeout)
+	}
+	if options.RetryPolicy == nil || options.RetryPolicy.MaximumAttempts != 3 {
+		t.Fatalf("commerce project setup retry policy = %#v, want three idempotent attempts", options.RetryPolicy)
+	}
+}
+
+func TestCommerceProjectSetupTimeoutIsNormalized(t *testing.T) {
+	cause := temporal.NewTimeoutError(enumspb.TIMEOUT_TYPE_START_TO_CLOSE, nil)
+	code, message := commerceProjectSetupErrorFields(cause)
+	if code != provider.CodeUpstreamTimeout {
+		t.Fatalf("code = %q, want %q", code, provider.CodeUpstreamTimeout)
+	}
+	if message != "项目准备等待模型响应超时，请重试；已完成的供应商请求会自动复用" {
+		t.Fatalf("message = %q", message)
 	}
 }
 

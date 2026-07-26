@@ -280,6 +280,7 @@ type ScriptUnit struct {
 	DraftUpdatedAt          *time.Time                   `json:"draftUpdatedAt,omitempty"`
 	ActiveUnitGenerationID  *string                      `json:"activeUnitGenerationId,omitempty"`
 	UnitGenerationNo        int64                        `json:"unitGenerationNo"`
+	StoryboardStrategy      StoryboardStrategy           `json:"storyboardStrategy,omitempty"`
 	DerivedFromScriptUnitID *string                      `json:"derivedFromScriptUnitId,omitempty"`
 	DerivationKind          *string                      `json:"derivationKind,omitempty"`
 	Revision                int64                        `json:"revision"`
@@ -344,12 +345,13 @@ type ScriptVersionMutation struct {
 }
 
 type ScriptUnitRebuildTarget struct {
-	ExpectedRevision            int64   `json:"expectedRevision"`
-	TargetSourceScriptVersionID string  `json:"targetSourceScriptVersionId"`
-	TargetLanguageMode          string  `json:"targetLanguageMode"`
-	TargetLanguage              *string `json:"targetLanguage,omitempty"`
-	TargetDurationSeconds       int     `json:"targetDurationSeconds"`
-	TargetPlatform              string  `json:"targetPlatform"`
+	ExpectedRevision            int64              `json:"expectedRevision"`
+	TargetSourceScriptVersionID string             `json:"targetSourceScriptVersionId"`
+	TargetLanguageMode          string             `json:"targetLanguageMode"`
+	TargetLanguage              *string            `json:"targetLanguage,omitempty"`
+	TargetDurationSeconds       int                `json:"targetDurationSeconds"`
+	TargetPlatform              string             `json:"targetPlatform"`
+	TargetStoryboardStrategy    StoryboardStrategy `json:"targetStoryboardStrategy"`
 }
 
 type ScriptUnitRebuildAffectedCounts struct {
@@ -374,6 +376,7 @@ type ScriptUnitRebuildImpact struct {
 	TargetLanguage              *string                         `json:"targetLanguage,omitempty"`
 	TargetDurationSeconds       int                             `json:"targetDurationSeconds"`
 	TargetPlatform              string                          `json:"targetPlatform"`
+	TargetStoryboardStrategy    StoryboardStrategy              `json:"targetStoryboardStrategy"`
 	TargetConfigurationHash     string                          `json:"targetConfigurationHash"`
 	ImpactToken                 string                          `json:"impactToken"`
 	ExpiresAt                   time.Time                       `json:"expiresAt"`
@@ -510,6 +513,16 @@ type TimingEstimate struct {
 	EstimatedVoiceoverSeconds float64 `json:"estimatedVoiceoverSeconds"`
 	TargetDurationSeconds     int     `json:"targetDurationSeconds"`
 	Exceeded                  bool    `json:"exceeded"`
+}
+
+type LocalizationTimingPolicy struct {
+	Version               string  `json:"version"`
+	Unit                  string  `json:"unit"`
+	NormalUnitsPerSecond  float64 `json:"normalUnitsPerSecond"`
+	CommaPauseSeconds     float64 `json:"commaPauseSeconds"`
+	SentencePauseSeconds  float64 `json:"sentencePauseSeconds"`
+	SegmentGapSeconds     float64 `json:"segmentGapSeconds"`
+	AllowedOverrunSeconds float64 `json:"allowedOverrunSeconds"`
 }
 
 type ProjectLanguageOption struct {

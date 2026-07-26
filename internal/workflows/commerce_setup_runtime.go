@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -36,11 +37,19 @@ type commerceSetupModelContract struct {
 type commerceSetupLanguageContract struct {
 	Resolver struct {
 		AutoConfidenceThreshold float64 `json:"autoConfidenceThreshold"`
+		ConfirmationMode        string  `json:"confirmationMode"`
 	} `json:"resolver"`
 	Locales []struct {
 		Locale       string               `json:"locale"`
 		TimingPolicy CommerceTimingPolicy `json:"timingPolicy"`
 	} `json:"locales"`
+}
+
+type commerceSetupLanguageConfiguration struct {
+	LocaleSuggestions   []string
+	ConfidenceThreshold float64
+	ConfirmationMode    string
+	TimingPolicies      map[string]CommerceTimingPolicy
 }
 
 type commerceSetupSnapshot struct {
@@ -147,7 +156,8 @@ func (r *CommerceSetupRuntime) ExecuteCommerceProjectSetup(ctx context.Context, 
 	for _, candidate := range existingLocalizations {
 		if candidate.SourceScriptVersionID == input.SourceScriptVersionID && candidate.LanguageResolutionID == resolution.ID &&
 			candidate.SourceLanguage == *resolution.SourceLanguage && candidate.TargetLanguage == *resolution.TargetLanguage &&
-			candidate.LocalizedContent == localizedText && candidate.Status == "approved" && candidate.ReviewStatus == "approved" {
+			candidate.LocalizedContent == localizedText &&
+			candidate.Status == "approved" && candidate.ReviewStatus == "approved" {
 			persisted = candidate
 			break
 		}
@@ -487,35 +497,15 @@ func buildCommerceSetupPreparation(
 	source commerce.ScriptVersion,
 	segments []commerce.ScriptSegment,
 ) (CommerceScriptUnitPreparationSnapshot, map[string]commerceSetupPromptBinding, map[string]commerceSetupModelContract, error) {
-	promptBindings := map[string]commerceSetupPromptBinding{}
-	if err := json.Unmarshal(template.PromptBindings, &promptBindings); err != nil {
-		return CommerceScriptUnitPreparationSnapshot{}, nil, nil, commerce.Error{Code: commerce.CodeSetupIncomplete, Message: "带货视频 Prompt 绑定无效", Cause: err}
-	}
-	modelContracts := map[string]commerceSetupModelContract{}
-	if err := json.Unmarshal(template.AgentModelContracts, &modelContracts); err != nil {
-		return CommerceScriptUnitPreparationSnapshot{}, nil, nil, commerce.Error{Code: commerce.CodeSetupIncomplete, Message: "带货视频模型契约无效", Cause: err}
-	}
-	var imageContract, videoContract commerceSetupModelContract
-	if err := json.Unmarshal(template.ImageCapabilityContract, &imageContract); err != nil {
+	promptBindings, modelContracts, err := commerceSetupTemplateContracts(template)
+	if err != nil {
 		return CommerceScriptUnitPreparationSnapshot{}, nil, nil, err
 	}
-	if err := json.Unmarshal(template.VideoCapabilityContract, &videoContract); err != nil {
-		return CommerceScriptUnitPreparationSnapshot{}, nil, nil, err
-	}
-	modelContracts["imageGenerator"] = imageContract
-	modelContracts["videoGenerator"] = videoContract
-	var languageContract commerceSetupLanguageContract
-	if err := json.Unmarshal(template.LanguageContract, &languageContract); err != nil {
-		return CommerceScriptUnitPreparationSnapshot{}, nil, nil, err
-	}
-	if languageContract.Resolver.AutoConfidenceThreshold <= 0 || languageContract.Resolver.AutoConfidenceThreshold > 1 {
-		return CommerceScriptUnitPreparationSnapshot{}, nil, nil, commerce.Error{Code: commerce.CodeSetupIncomplete, Message: "带货视频语言置信度阈值无效"}
-	}
-	allowedLocales := make([]string, 0, len(languageContract.Locales))
-	timingPolicies := make(map[string]CommerceTimingPolicy, len(languageContract.Locales))
-	for _, locale := range languageContract.Locales {
-		allowedLocales = append(allowedLocales, locale.Locale)
-		timingPolicies[locale.Locale] = locale.TimingPolicy
+	languageConfiguration, err := parseCommerceSetupLanguageConfiguration(template.LanguageContract)
+	if err != nil {
+		return CommerceScriptUnitPreparationSnapshot{}, nil, nil, commerce.Error{
+			Code: commerce.CodeSetupIncomplete, Message: "带货视频语言契约无效", Cause: err,
+		}
 	}
 	sourceSegments := make([]CommerceSourceSegmentSnapshot, 0, len(segments))
 	for _, segment := range segments {
@@ -537,27 +527,128 @@ func buildCommerceSetupPreparation(
 		InputHash: inputHash, WorkflowTemplateVersionID: template.ID,
 		WorkflowTemplateContentHash: template.ContentHash, ProductVersionID: product.ID,
 		SourceScriptVersionID: source.ID, LanguageMode: unit.LanguageMode,
-		ExplicitTargetLanguage: optionalCommerceString(unit.ExplicitTargetLanguage),
-		SourceLanguageHint:     optionalCommerceString(source.SourceLanguageHint),
-		AllowedLocales:         allowedLocales, LanguageConfidenceThreshold: languageContract.Resolver.AutoConfidenceThreshold,
-		TargetDurationSeconds: unit.TargetDurationSeconds, TargetPlatform: unit.TargetPlatform,
-		SourceSegments: sourceSegments, ProductFacts: product.FactsSnapshot, TimingPolicies: timingPolicies,
+		ExplicitTargetLanguage:      optionalCommerceString(unit.ExplicitTargetLanguage),
+		SourceLanguageHint:          optionalCommerceString(source.SourceLanguageHint),
+		AllowedLocales:              languageConfiguration.LocaleSuggestions,
+		LanguageConfidenceThreshold: languageConfiguration.ConfidenceThreshold,
+		LanguageConfirmationMode:    languageConfiguration.ConfirmationMode,
+		TargetDurationSeconds:       unit.TargetDurationSeconds, TargetPlatform: unit.TargetPlatform,
+		SourceSegments: sourceSegments, ProductFacts: product.FactsSnapshot,
+		TimingPolicies: languageConfiguration.TimingPolicies,
 	}, promptBindings, modelContracts, nil
 }
 
+func parseCommerceSetupLanguageConfiguration(raw json.RawMessage) (commerceSetupLanguageConfiguration, error) {
+	configuration := commerceSetupLanguageConfiguration{
+		ConfirmationMode: CommerceLanguageConfirmationDisabled,
+		TimingPolicies:   map[string]CommerceTimingPolicy{},
+	}
+	var contract commerceSetupLanguageContract
+	if err := json.Unmarshal(raw, &contract); err != nil {
+		return commerceSetupLanguageConfiguration{}, err
+	}
+	configuration.ConfidenceThreshold = contract.Resolver.AutoConfidenceThreshold
+	if mode := strings.TrimSpace(contract.Resolver.ConfirmationMode); mode != "" {
+		configuration.ConfirmationMode = mode
+	}
+	seen := make(map[string]struct{}, len(contract.Locales))
+	for _, configured := range contract.Locales {
+		locale, err := canonicalCommerceLocale(configured.Locale)
+		if err != nil {
+			return commerceSetupLanguageConfiguration{}, err
+		}
+		if _, exists := seen[locale]; exists {
+			return commerceSetupLanguageConfiguration{}, fmt.Errorf("locale %s is duplicated", locale)
+		}
+		seen[locale] = struct{}{}
+		configuration.LocaleSuggestions = append(configuration.LocaleSuggestions, locale)
+		policy := configured.TimingPolicy
+		if strings.TrimSpace(policy.Version) == "" || strings.TrimSpace(policy.Unit) == "" || policy.NormalUnitsPerSecond <= 0 {
+			policy = commerceAdvisoryTimingPolicy(locale)
+		}
+		configuration.TimingPolicies[locale] = policy
+	}
+	if len(configuration.LocaleSuggestions) == 0 {
+		return commerceSetupLanguageConfiguration{}, errors.New("language contract has no locale suggestions")
+	}
+	if configuration.ConfidenceThreshold <= 0 || configuration.ConfidenceThreshold > 1 {
+		return commerceSetupLanguageConfiguration{}, errors.New("language confidence threshold must be greater than 0 and no greater than 1")
+	}
+	if configuration.ConfirmationMode != CommerceLanguageConfirmationDisabled {
+		return commerceSetupLanguageConfiguration{}, fmt.Errorf(
+			"language confirmation mode must be %s",
+			CommerceLanguageConfirmationDisabled,
+		)
+	}
+	return configuration, nil
+}
+
+func commerceSetupTemplateContracts(
+	template commerce.WorkflowTemplateVersion,
+) (map[string]commerceSetupPromptBinding, map[string]commerceSetupModelContract, error) {
+	promptBindings := map[string]commerceSetupPromptBinding{}
+	if err := json.Unmarshal(template.PromptBindings, &promptBindings); err != nil {
+		return nil, nil, commerce.Error{Code: commerce.CodeSetupIncomplete, Message: "带货视频 Prompt 绑定无效", Cause: err}
+	}
+	modelContracts := map[string]commerceSetupModelContract{}
+	if err := json.Unmarshal(template.AgentModelContracts, &modelContracts); err != nil {
+		return nil, nil, commerce.Error{Code: commerce.CodeSetupIncomplete, Message: "带货视频模型契约无效", Cause: err}
+	}
+	var imageContract, videoContract commerceSetupModelContract
+	if err := json.Unmarshal(template.ImageCapabilityContract, &imageContract); err != nil {
+		return nil, nil, err
+	}
+	if err := json.Unmarshal(template.VideoCapabilityContract, &videoContract); err != nil {
+		return nil, nil, err
+	}
+	modelContracts["imageGenerator"] = imageContract
+	modelContracts["videoGenerator"] = videoContract
+	return promptBindings, modelContracts, nil
+}
+
 func (r *CommerceSetupRuntime) resolveSetupLanguage(ctx context.Context, input CommerceProjectSetupInput, snapshot commerceSetupSnapshot) (commerce.LanguageResolution, bool, error) {
+	confirmExisting := func(existing commerce.LanguageResolution) (commerce.LanguageResolution, error) {
+		if existing.Status == "confirmed" {
+			return existing, nil
+		}
+		if existing.TargetLanguage == nil {
+			return commerce.LanguageResolution{}, commerce.Error{Code: commerce.CodeLanguageRequired, Message: "语言解析没有给出目标语言"}
+		}
+		tx, err := r.db.Begin(ctx)
+		if err != nil {
+			return commerce.LanguageResolution{}, err
+		}
+		defer tx.Rollback(ctx)
+		confirmed, err := r.catalog.ConfirmLanguage(
+			ctx, tx, input.OrganizationID, input.ProjectID, input.ScriptUnitID,
+			existing.ID, *existing.TargetLanguage, input.RequestedBy,
+		)
+		if err != nil {
+			return commerce.LanguageResolution{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return commerce.LanguageResolution{}, err
+		}
+		return confirmed, nil
+	}
 	if input.LanguageResolutionID != "" {
 		existing, err := r.catalog.GetLanguageResolution(ctx, r.db, input.OrganizationID, input.ProjectID, input.ScriptUnitID)
 		if err != nil {
 			return commerce.LanguageResolution{}, false, err
 		}
-		if existing.ID != input.LanguageResolutionID || existing.Status != "confirmed" || existing.TargetLanguage == nil || *existing.TargetLanguage != input.ConfirmedTargetLanguage {
+		if existing.ID != input.LanguageResolutionID || existing.TargetLanguage == nil || *existing.TargetLanguage != input.ConfirmedTargetLanguage {
 			return commerce.LanguageResolution{}, false, commerce.Error{Code: commerce.CodeLanguageConfirmation, Message: "语言确认与创建任务不一致"}
+		}
+		existing, err = confirmExisting(existing)
+		if err != nil {
+			return commerce.LanguageResolution{}, false, err
 		}
 		return existing, false, nil
 	}
-	if existing, err := r.catalog.GetLanguageResolution(ctx, r.db, input.OrganizationID, input.ProjectID, input.ScriptUnitID); err == nil && existing.SourceScriptVersionID == input.SourceScriptVersionID {
-		return existing, existing.Status != "confirmed", nil
+	if existing, err := r.catalog.GetLanguageResolution(ctx, r.db, input.OrganizationID, input.ProjectID, input.ScriptUnitID); err == nil &&
+		existing.SourceScriptVersionID == input.SourceScriptVersionID && existing.InputHash == snapshot.Preparation.InputHash {
+		existing, err = confirmExisting(existing)
+		return existing, false, err
 	}
 	if err := r.updateSetupProgress(ctx, snapshot.Run.ID, snapshot.Session.ID, "resolving_language", "language_resolution"); err != nil {
 		return commerce.LanguageResolution{}, false, err
@@ -579,6 +670,7 @@ func (r *CommerceSetupRuntime) resolveSetupLanguage(ctx context.Context, input C
 		}
 		contract, lastErr = ParseCommerceLanguageResolution(output)
 		if lastErr == nil {
+			contract.NeedsUserConfirmation = false
 			lastErr = ValidateCommerceLanguageResolution(contract, snapshot.Preparation)
 		}
 		if lastErr == nil {
@@ -596,20 +688,12 @@ func (r *CommerceSetupRuntime) resolveSetupLanguage(ctx context.Context, input C
 	resolution, err := r.catalog.RecordLanguageResolution(
 		ctx, tx, input.OrganizationID, input.ProjectID, input.ScriptUnitID, input.RequestedBy,
 		contract.SourceLanguage, contract.TargetLanguage, contract.Confidence, contract.Reasoning,
-		contract.NeedsUserConfirmation,
+		false, snapshot.Preparation.InputHash,
 	)
 	if err != nil {
 		return commerce.LanguageResolution{}, false, err
 	}
-	if resolution.Status != "confirmed" {
-		if err := r.catalog.MarkSetupWaitingForLanguage(ctx, tx, input.OrganizationID, input.ProjectID, input.SetupSessionID, snapshot.Run.ID, resolution.ID); err != nil {
-			return commerce.LanguageResolution{}, false, err
-		}
-	}
 	eventName := "commerce.language.resolved"
-	if resolution.Status != "confirmed" {
-		eventName = "commerce.language.confirmation_required"
-	}
 	if err := appendCommerceWorkflowEvent(ctx, tx, input.OrganizationID, input.ProjectID,
 		eventName, "commerce_language_resolution", resolution.ID, map[string]any{
 			"workflowRunId":         snapshot.Run.ID,
@@ -626,7 +710,7 @@ func (r *CommerceSetupRuntime) resolveSetupLanguage(ctx context.Context, input C
 	if err := tx.Commit(ctx); err != nil {
 		return commerce.LanguageResolution{}, false, err
 	}
-	return resolution, resolution.Status != "confirmed", nil
+	return resolution, false, nil
 }
 
 func (r *CommerceSetupRuntime) resolveSetupRouting(
@@ -655,7 +739,54 @@ func (r *CommerceSetupRuntime) resolveSetupRouting(
 			return nil, nil, nil, commerce.Error{Code: provider.CodeUnsupportedCapability, Message: fmt.Sprintf("业务模型 %s 当前不可用", role), Cause: err}
 		}
 		serialized := make([]map[string]any, 0, len(candidates))
+		capabilityCandidates := make([]map[string]any, 0, len(candidates))
+		primaryProviderModelID := ""
+		primaryCapabilities := []provider.Capability{}
 		for _, candidate := range candidates {
+			capabilityCandidate := map[string]any{
+				"modelProfileId": candidate.ModelProfileID, "modelProfileKey": candidate.ModelProfileKey,
+				"modelProfileBindingId": candidate.ModelProfileBindingID,
+				"providerModelId":       candidate.ProviderModelID, "providerAccountId": candidate.ProviderAccountID,
+				"modelKey": candidate.ModelKey, "modality": candidate.Modality,
+				"priority": candidate.Priority, "weight": candidate.Weight,
+				"capabilities": candidate.Capabilities,
+			}
+			if role == "videoGenerator" {
+				variants, err := provider.ExecutableVideoGenerationVariants(
+					candidate.Capabilities,
+					provider.Model{
+						ID: candidate.ProviderModelID, ProviderAccountID: candidate.ProviderAccountID,
+						ModelKey: candidate.ModelKey, Modality: candidate.Modality,
+						Capabilities: candidate.Capabilities,
+					},
+				)
+				if err != nil {
+					continue
+				}
+				variantSnapshots := make([]map[string]any, 0, len(variants))
+				for _, variant := range variants {
+					durations, durationErr := provider.ExecutableWholeSecondDurationsForVideoVariant(variant)
+					if durationErr != nil || len(variant.Resolutions) == 0 {
+						continue
+					}
+					hash, hashErr := provider.VideoGenerationVariantSnapshotHash(variant)
+					if hashErr != nil {
+						return nil, nil, nil, hashErr
+					}
+					variantSnapshots = append(variantSnapshots, map[string]any{
+						"variantKey": variant.VariantKey, "capabilitySnapshotHash": hash,
+						"executableDurationSeconds":   durations,
+						"resolutions":                 variant.Resolutions,
+						"aspectRatios":                variant.AspectRatios,
+						"supportsContinuousExtension": variant.Continuation.SupportsExtension,
+						"capability":                  variant,
+					})
+				}
+				if len(variantSnapshots) == 0 {
+					continue
+				}
+				capabilityCandidate["videoGenerationVariants"] = variantSnapshots
+			}
 			serialized = append(serialized, map[string]any{
 				"modelProfileId": candidate.ModelProfileID, "modelProfileKey": candidate.ModelProfileKey,
 				"modelProfileBindingId": candidate.ModelProfileBindingID,
@@ -663,16 +794,33 @@ func (r *CommerceSetupRuntime) resolveSetupRouting(
 				"modelKey": candidate.ModelKey, "modality": candidate.Modality,
 				"priority": candidate.Priority, "weight": candidate.Weight,
 			})
+			capabilityCandidates = append(capabilityCandidates, capabilityCandidate)
+			if primaryProviderModelID == "" {
+				primaryProviderModelID = candidate.ProviderModelID
+				primaryCapabilities = candidate.Capabilities
+			}
+		}
+		if len(serialized) == 0 {
+			if role == "videoGenerator" {
+				return nil, nil, nil, commerce.Error{
+					Code:    provider.CodeUnsupportedCapability,
+					Message: "当前视频业务模型均缺少可执行的整数时长或分辨率能力",
+				}
+			}
+			return nil, nil, nil, commerce.Error{
+				Code: provider.CodeUnsupportedCapability, Message: fmt.Sprintf("业务模型 %s 当前没有可执行路由", role),
+			}
 		}
 		routingSnapshot[role] = map[string]any{"request": request, "candidates": serialized}
 		capabilitySnapshot[role] = map[string]any{
-			"providerModelId": candidates[0].ProviderModelID, "capabilities": candidates[0].Capabilities,
+			"providerModelId": primaryProviderModelID, "capabilities": primaryCapabilities,
+			"candidates": capabilityCandidates,
 		}
 		if promptBinding, ok := snapshot.Prompts[role]; ok {
 			binding := CommerceAgentBinding{
 				Role: role, TemplateKey: promptBinding.TemplateKey, PromptVersionID: promptBinding.PromptVersionID,
 				PromptContentHash: promptBinding.ContentHash, ModelProfileKey: contract.ProfileKey,
-				ProviderModelID: candidates[0].ProviderModelID, MaxReviewRounds: promptBinding.MaxReviewRounds,
+				ProviderModelID: primaryProviderModelID, MaxReviewRounds: promptBinding.MaxReviewRounds,
 			}
 			if err := ValidateCommerceAgentBinding(binding); err != nil {
 				return nil, nil, nil, commerce.Error{Code: commerce.CodeSetupIncomplete, Message: "带货视频 Agent 绑定无效", Cause: err}
@@ -725,65 +873,78 @@ func (r *CommerceSetupRuntime) prepareSetupLocalization(
 		Confidence: optionalCommerceFloat(resolution.Confidence), LanguageComposition: "single",
 		NeedsUserConfirmation: false, Reasoning: resolution.Reasoning, Issues: []CommerceLanguageIssue{},
 	}
-	localizer, localizerOK := bindings["scriptLocalizer"]
-	reviewer, reviewerOK := bindings["localizationReviewer"]
-	if !localizerOK || !reviewerOK {
-		return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil, commerce.Error{Code: commerce.CodeSetupIncomplete, Message: "本地化 Agent 绑定不完整"}
-	}
 	if err := r.updateSetupProgress(ctx, snapshot.Run.ID, snapshot.Session.ID, "localizing", "script_localization"); err != nil {
 		return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil, err
 	}
-	limit := commerceReviewRounds(localizer, reviewer)
 	if contract.SourceLanguage == contract.TargetLanguage {
-		limit = 1
+		candidate := BuildCommerceIdentityLocalization(snapshot.Preparation, contract)
+		if err := ValidateCommerceLocalization(candidate, snapshot.Preparation, contract); err != nil {
+			return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil,
+				commerce.Error{Code: CommerceCodeLocalizationContractInvalid, Message: "同语种脚本通道解析失败", Cause: err}
+		}
+		review := BuildCommerceIdentityLocalizationReview(candidate)
+		if err := ValidateCommerceLocalizationReview(review, candidate); err != nil {
+			return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil,
+				commerce.Error{Code: CommerceCodeLocalizationContractInvalid, Message: "同语种脚本本地审核失败", Cause: err}
+		}
+		return candidate, review, []CommerceAgentProvenance{}, nil
 	}
+
+	localizer, localizerOK := bindings["scriptLocalizer"]
+	if !localizerOK {
+		return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil, commerce.Error{Code: commerce.CodeSetupIncomplete, Message: "脚本本地化 Agent 绑定不完整"}
+	}
+	reviewer, reviewerOK := bindings["localizationReviewer"]
+	limit := commerceReviewRounds(localizer)
 	feedback := []CommerceReviewIssue{}
 	calls := make([]CommerceAgentProvenance, 0, limit*2)
 	var lastErr error
 	for round := 1; round <= limit; round++ {
-		var candidate CommerceLocalizationContract
-		if contract.SourceLanguage == contract.TargetLanguage {
-			candidate = BuildCommerceIdentityLocalization(snapshot.Preparation, contract)
-		} else {
-			output, call, err := r.runSetupAgent(ctx, snapshot, localizer, round, contract.SourceLanguage, contract.TargetLanguage, map[string]any{
-				"snapshot": snapshot.Preparation, "languageResolution": contract, "reviewerIssues": feedback,
-			})
-			if err != nil {
-				return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, calls, err
-			}
-			calls = append(calls, call)
-			candidate, lastErr = ParseCommerceLocalization(output)
-			if lastErr == nil {
-				lastErr = ValidateCommerceLocalization(candidate, snapshot.Preparation, contract)
-			}
-			if lastErr != nil {
-				feedback = commerceValidationFeedback(CommerceCodeLocalizationContractInvalid, "localization", lastErr)
-				continue
-			}
+		output, call, err := r.runSetupAgent(ctx, snapshot, localizer, round, contract.SourceLanguage, contract.TargetLanguage, map[string]any{
+			"snapshot": snapshot.Preparation, "languageResolution": contract, "reviewerIssues": feedback,
+		})
+		if err != nil {
+			return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, calls, err
+		}
+		calls = append(calls, call)
+		candidate, parseErr := ParseCommerceLocalization(output)
+		lastErr = parseErr
+		if lastErr == nil {
+			lastErr = ValidateCommerceLocalization(candidate, snapshot.Preparation, contract)
+		}
+		if lastErr != nil {
+			feedback = commerceValidationFeedback(CommerceCodeLocalizationContractInvalid, "localization", lastErr)
+			continue
+		}
+		if !reviewerOK {
+			return candidate, BuildCommerceIdentityLocalizationReview(candidate), calls, nil
 		}
 		reviewOutput, reviewCall, err := r.runSetupAgent(ctx, snapshot, reviewer, round, contract.SourceLanguage, contract.TargetLanguage, map[string]any{
 			"snapshot": snapshot.Preparation, "candidate": candidate,
 		})
 		if err != nil {
-			return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, calls, err
+			return candidate, BuildCommerceIdentityLocalizationReview(candidate), calls, nil
 		}
 		calls = append(calls, reviewCall)
 		review, reviewErr := ParseCommerceLocalizationReview(reviewOutput)
 		if reviewErr == nil {
+			review = CanonicalizeCommerceLocalizationReviewCoverage(review, candidate)
 			reviewErr = ValidateCommerceLocalizationReview(review, candidate)
 		}
-		if reviewErr == nil && review.Decision == "approve" {
-			return candidate, review, calls, nil
+		if reviewErr == nil {
+			var approved bool
+			candidate, review, approved = ApplyCommerceLocalizationReviewPolicy(candidate, review)
+			if approved {
+				return candidate, review, calls, nil
+			}
 		}
 		if reviewErr != nil {
-			lastErr = reviewErr
-			feedback = commerceValidationFeedback(CommerceCodeAgentOutputInvalid, "localizationReview", reviewErr)
-		} else {
-			lastErr = fmt.Errorf("localization reviewer returned %s", review.Decision)
-			feedback = sortedCommerceIssueCopy(review.Issues)
+			return candidate, BuildCommerceIdentityLocalizationReview(candidate), calls, nil
 		}
 	}
-	return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, calls, commerce.Error{Code: CommerceCodeLocalizationReviewExhausted, Message: "本地化审核三轮后仍未通过", Cause: lastErr}
+	return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, calls, commerce.Error{
+		Code: CommerceCodeLocalizationContractInvalid, Message: fmt.Sprintf("脚本本地化结果在 %d 次尝试后仍不符合结构要求", limit), Cause: lastErr,
+	}
 }
 
 func (r *CommerceSetupRuntime) runSetupAgent(

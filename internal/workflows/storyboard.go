@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Einzieg/cineweave/internal/commerce"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/storage"
@@ -845,6 +846,17 @@ func workflowErrorFields(err error, fallbackCode string) (string, string) {
 	var workflowErr workflowError
 	if errors.As(err, &workflowErr) {
 		return workflowErr.Code, workflowErr.Message
+	}
+	if commerceErr, ok := commerce.AsError(err); ok {
+		code := strings.TrimSpace(commerceErr.Code)
+		if code == "" {
+			code = fallbackCode
+		}
+		message := strings.TrimSpace(commerceErr.Message)
+		if message == "" {
+			message = strings.TrimSpace(commerceErr.Error())
+		}
+		return code, message
 	}
 	var applicationErr *temporal.ApplicationError
 	if errors.As(err, &applicationErr) {

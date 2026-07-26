@@ -60,6 +60,7 @@ func (s *Server) attachCommerceProviderReadiness(ctx context.Context, organizati
 		options.Blockers = appendUniqueCommerceMessages(options.Blockers, "供应商运行时尚未配置")
 		return options
 	}
+	videoReady := false
 	for index := range options.ModelRequirements {
 		requirement := &options.ModelRequirements[index]
 		candidates, err := s.providers.ResolveRoutingCandidates(ctx, provider.RoutingRequest{
@@ -69,14 +70,18 @@ func (s *Server) attachCommerceProviderReadiness(ctx context.Context, organizati
 		if err != nil {
 			requirement.Ready = false
 			requirement.Blocker = commerceProviderBlocker(requirement.Label, err)
-			options.Blockers = appendUniqueCommerceMessages(options.Blockers, requirement.Blocker)
+			if requirement.Role == "videoGenerator" {
+				options.Blockers = appendUniqueCommerceMessages(options.Blockers, requirement.Blocker)
+			}
 			continue
 		}
 		requirement.Ready = true
 		requirement.CandidateCount = len(candidates)
+		if requirement.Role == "videoGenerator" {
+			videoReady = len(candidates) > 0
+		}
 	}
 
-	usableLanguage := false
 	for languageIndex := range options.Languages {
 		language := &options.Languages[languageIndex]
 		textRequirements := 0
@@ -112,14 +117,10 @@ func (s *Server) attachCommerceProviderReadiness(ctx context.Context, organizati
 			if requirement.UsesNativeAudio {
 				nativeAudioRequirements++
 				if requirement.Ready {
-					request := provider.RoutingRequest{
-						OrganizationID: organizationID, ModelProfileKey: requirement.ProfileKey,
-						TaskType: requirement.TaskType, Modality: requirement.Modality,
-						NativeAudioLanguage: language.Locale,
-					}
-					if _, err := s.providers.ResolveRoutingCandidates(ctx, request); err == nil {
-						readyNativeAudioRequirements++
-					}
+					// Language support is an execution-time prompt concern, not a
+					// project-creation gate. Only duration and resolution are hard
+					// video capability requirements.
+					readyNativeAudioRequirements++
 				}
 			}
 		}
@@ -127,14 +128,11 @@ func (s *Server) attachCommerceProviderReadiness(ctx context.Context, organizati
 		language.ImagePromptAvailable = imageRequirements > 0 && readyImageRequirements == imageRequirements
 		language.VideoPromptAvailable = videoRequirements > 0 && readyVideoRequirements == videoRequirements
 		language.NativeAudioAvailable = nativeAudioRequirements > 0 && readyNativeAudioRequirements == nativeAudioRequirements
-		if language.TextAvailable && language.ImagePromptAvailable && language.VideoPromptAvailable {
-			usableLanguage = true
-		}
 	}
-	if !usableLanguage {
-		options.Blockers = appendUniqueCommerceMessages(options.Blockers, "当前没有可执行的带货视频语言与模型组合")
+	if !videoReady {
+		options.Blockers = appendUniqueCommerceMessages(options.Blockers, "请先配置可用的视频业务模型")
 	}
-	options.Available = len(options.Blockers) == 0 && usableLanguage
+	options.Available = len(options.Blockers) == 0 && videoReady
 	return options
 }
 

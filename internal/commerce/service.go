@@ -21,9 +21,11 @@ type Service struct {
 type Store interface {
 	ResolvePublishedWorkflowTemplate(context.Context, pgx.Tx, string, string) (WorkflowTemplateVersion, error)
 	ResolvePublishedWorkflowTemplateVersion(context.Context, pgx.Tx, string, string) (WorkflowTemplateVersion, error)
+	ResolveWorkflowTemplateVersionForRebuild(context.Context, pgx.Tx, string, string) (WorkflowTemplateVersion, error)
 	InsertDraftProject(context.Context, pgx.Tx, string, DraftProjectParams) error
 	InsertProjectOwner(context.Context, pgx.Tx, string, string, string) error
 	InsertSetupSession(context.Context, pgx.Tx, string, string, WorkflowTemplateVersion, DraftProjectParams) error
+	CompleteDirectProjectSetup(context.Context, pgx.Tx, string, string, InitialBindingResult) error
 	InsertPreparingVideoBinding(context.Context, pgx.Tx, string, InitialBindingParams, string, []byte, string, int64) error
 	InsertPreparingCommerceBinding(context.Context, pgx.Tx, string, string, WorkflowTemplateVersion, InitialBindingParams, string, string, int64) error
 	InsertPreparingProjectGeneration(context.Context, pgx.Tx, string, string, string, InitialBindingParams, int64) error
@@ -144,12 +146,22 @@ func (s *Service) PrepareInitialBindings(ctx context.Context, tx pgx.Tx, params 
 			return InitialBindingResult{}, err
 		}
 	}
-	template, err := s.repository.ResolvePublishedWorkflowTemplateVersion(
-		ctx,
-		tx,
-		params.OrganizationID,
-		params.WorkflowTemplateVersion,
-	)
+	var template WorkflowTemplateVersion
+	if params.RebuildID == "" {
+		template, err = s.repository.ResolvePublishedWorkflowTemplateVersion(
+			ctx,
+			tx,
+			params.OrganizationID,
+			params.WorkflowTemplateVersion,
+		)
+	} else {
+		template, err = s.repository.ResolveWorkflowTemplateVersionForRebuild(
+			ctx,
+			tx,
+			params.OrganizationID,
+			params.WorkflowTemplateVersion,
+		)
+	}
 	if err != nil {
 		return InitialBindingResult{}, err
 	}
@@ -211,6 +223,16 @@ func (s *Service) ActivateInitialBindings(ctx context.Context, tx pgx.Tx, projec
 	return s.repository.ActivateInitialBindings(ctx, tx, projectID, result)
 }
 
+func (s *Service) CompleteDirectProjectSetup(
+	ctx context.Context,
+	tx pgx.Tx,
+	setupSessionID string,
+	projectID string,
+	result InitialBindingResult,
+) error {
+	return s.repository.CompleteDirectProjectSetup(ctx, tx, setupSessionID, projectID, result)
+}
+
 func (s *Service) AssertWritableExecution(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -219,6 +241,9 @@ func (s *Service) AssertWritableExecution(
 	item, err := s.repository.LockActiveProductionContext(ctx, tx, identity.OrganizationID, identity.ProjectID)
 	if err != nil {
 		return ProductionContext{}, err
+	}
+	if item.LifecycleStatus == "deleting" {
+		return ProductionContext{}, Error{Code: CodeProjectDeletionInProgress, Message: "项目正在删除，不能继续写入生产数据"}
 	}
 	if item.ProjectLocked {
 		return ProductionContext{}, Error{Code: CodeProjectLocked, Message: "带货视频项目生产配置正在切换", Retryable: true}

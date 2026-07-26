@@ -70,13 +70,16 @@ type CommitCommerceVideoPromptPlanInput struct {
 }
 
 type CommerceVideoExecutionShot struct {
-	ShotID           string `json:"shotId"`
-	ShotIndex        int    `json:"shotIndex"`
-	ShotNo           int    `json:"shotNo"`
-	AspectRatio      string `json:"aspectRatio"`
-	Resolution       string `json:"resolution"`
-	AudioStrategy    string `json:"audioStrategy"`
-	AudioRequirement string `json:"audioRequirement"`
+	ShotID                     string  `json:"shotId"`
+	ShotIndex                  int     `json:"shotIndex"`
+	ShotNo                     int     `json:"shotNo"`
+	AspectRatio                string  `json:"aspectRatio"`
+	Resolution                 string  `json:"resolution"`
+	RequestedDurationSeconds   float64 `json:"requestedDurationSeconds"`
+	VideoExecutionEnvelopeHash string  `json:"videoExecutionEnvelopeHash"`
+	EligibleRouteSetHash       string  `json:"eligibleRouteSetHash"`
+	AudioStrategy              string  `json:"audioStrategy"`
+	AudioRequirement           string  `json:"audioRequirement"`
 }
 
 type CompleteCommerceShotVideoItemInput struct {
@@ -256,7 +259,8 @@ func CommerceShotVideoWorkflow(ctx workflow.Context, input CommerceVideoBatchInp
 		ShotID: shot.ShotID, ShotIndex: shot.ShotIndex, ShotNo: shot.ShotNo,
 		WorkflowPrompt: "commerce_approved_video_prompt", FailureScope: workflowFailureScopeBatchItem,
 		AspectRatio: shot.AspectRatio, Resolution: shot.Resolution,
-		AudioStrategy: shot.AudioStrategy, AudioRequirement: shot.AudioRequirement,
+		ExpectedRequestedDuration: shot.RequestedDurationSeconds,
+		AudioStrategy:             shot.AudioStrategy, AudioRequirement: shot.AudioRequirement,
 		Force: input.Force, MaxPolls: 240, PollInterval: 5 * time.Second,
 	})
 	if err != nil {
@@ -289,6 +293,7 @@ func (a CommerceActivities) GenerateCommerceVideoPromptItem(ctx context.Context,
 	references := []provider.GatewayImageReference{{
 		Type: "image", ArtifactID: snapshot.FirstFrame.ArtifactID, StorageKey: snapshot.FirstFrame.StorageKey,
 	}}
+	executionPolicy := commerceVideoPromptExecutionPolicy(snapshot)
 	maxRounds := commerceVideoReviewRoundLimit(snapshot.Bindings)
 	issues := []CommerceReviewIssue(nil)
 	for round := 1; round <= maxRounds; round++ {
@@ -297,7 +302,9 @@ func (a CommerceActivities) GenerateCommerceVideoPromptItem(ctx context.Context,
 			AttemptGeneration: input.AttemptGeneration, Phase: CommercePhaseVideoPrompt,
 			SubjectKey: shotID, Round: round, Binding: snapshot.Bindings.VideoPromptAgent,
 			InputLanguage: snapshot.TargetLocale, OutputLanguage: snapshot.InstructionLanguage,
-			Context:        mustJSON(map[string]any{"snapshot": snapshot, "reviewerIssues": issues}),
+			Context: mustJSON(map[string]any{
+				"snapshot": snapshot, "reviewerIssues": issues, "executionPolicy": executionPolicy,
+			}),
 			ReviewerIssues: issues, References: references,
 		})
 		if err != nil {
@@ -305,6 +312,7 @@ func (a CommerceActivities) GenerateCommerceVideoPromptItem(ctx context.Context,
 		}
 		contract, parseErr := ParseCommerceVideoPromptPlan(generated.RawOutput)
 		if parseErr == nil {
+			contract = BindCommerceVideoPromptPlanExecutionContract(contract, snapshot)
 			parseErr = ValidateCommerceVideoPromptPlan(contract, snapshot)
 		}
 		if parseErr != nil {
@@ -322,7 +330,9 @@ func (a CommerceActivities) GenerateCommerceVideoPromptItem(ctx context.Context,
 			AttemptGeneration: input.AttemptGeneration, Phase: CommercePhaseVideoPrompt,
 			SubjectKey: shotID, Round: round, Binding: snapshot.Bindings.VideoPromptReviewer,
 			InputLanguage: snapshot.TargetLocale, OutputLanguage: snapshot.InstructionLanguage,
-			Context:    mustJSON(map[string]any{"snapshot": snapshot, "draft": contract}),
+			Context: mustJSON(map[string]any{
+				"snapshot": snapshot, "draft": contract, "executionPolicy": executionPolicy,
+			}),
 			References: references,
 		})
 		if err != nil {
@@ -330,6 +340,7 @@ func (a CommerceActivities) GenerateCommerceVideoPromptItem(ctx context.Context,
 		}
 		review, err := ParseCommerceVideoPromptReview(reviewed.RawOutput)
 		if err == nil {
+			review = ReconcileCommerceVideoPromptReview(review)
 			err = ValidateCommerceVideoPromptReview(review)
 		}
 		if err != nil {
@@ -345,9 +356,7 @@ func (a CommerceActivities) GenerateCommerceVideoPromptItem(ctx context.Context,
 				return a.failCommerceVideoItem(ctx, input, attempt, shotID, err)
 			}
 			return CommerceVideoItemOutput{ShotID: shotID, Status: commerce.ItemSucceeded, PromptPlan: &plan}
-		case "reject":
-			return a.failCommerceVideoItem(ctx, input, attempt, shotID, temporal.NewNonRetryableApplicationError("视频提示词审核拒绝", CommerceCodeVideoPromptContractInvalid, nil))
-		case "revise":
+		case "revise", "reject":
 			issues = append([]CommerceReviewIssue(nil), review.Issues...)
 			if round == maxRounds {
 				return a.failCommerceVideoItem(ctx, input, attempt, shotID, temporal.NewNonRetryableApplicationError("视频提示词审核在 3 轮内未通过", CommerceCodeVideoPromptReviewExhausted, nil))
@@ -355,6 +364,25 @@ func (a CommerceActivities) GenerateCommerceVideoPromptItem(ctx context.Context,
 		}
 	}
 	return a.failCommerceVideoItem(ctx, input, attempt, shotID, temporal.NewNonRetryableApplicationError("视频提示词审核未产生终态", CommerceCodeVideoPromptReviewExhausted, nil))
+}
+
+func commerceVideoPromptExecutionPolicy(snapshot CommerceVideoPromptShotSnapshot) map[string]any {
+	return map[string]any{
+		"authoritativeFirstFrame": true,
+		"appearancePrecedence":    "approved_first_frame_over_storyboard_or_localization_appearance",
+		"motionRule":              "continue only from the visible first-frame state; do not restage an earlier action",
+		"identityRule":            "preserve the visible person, product, clothing, pose, and scene without replacing or redescribing them",
+		"durationPolicy":          snapshot.DurationExecutionPolicy,
+		"durationReview":          "editorial duration is authoritative and provider duration adaptation is handled after review; never reject or revise for allowedDurations mismatch",
+		"reviewBlockingScope":     []string{"singleFrameReachability"},
+		"serverBoundFields": []string{
+			"contractVersion", "commerceScriptUnitId", "scriptUnitGenerationId",
+			"commerceWorkflowBindingId", "productVersionId", "sourceSegmentIds",
+			"instructionLanguage", "spokenLanguage", "voiceoverText", "onscreenText",
+			"soundEffects", "musicCue", "nativeAudioRequested", "referencePackId",
+			"referenceIds", "durationSeconds",
+		},
+	}
 }
 
 func commerceVideoReviewRoundLimit(bindings CommerceVideoPromptAgentBindings) int {

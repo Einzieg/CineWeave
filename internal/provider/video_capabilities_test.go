@@ -111,6 +111,32 @@ func TestPlanVideoSegmentsMovesBoundaryToPreserveDialogueTurn(t *testing.T) {
 	}
 }
 
+func TestPlanVideoSegmentsUsesNextDiscreteTierForSingleTakeDialogue(t *testing.T) {
+	variant := VideoGenerationVariant{
+		VariantKey: "single-take",
+		Duration: VideoDurationCapability{
+			Mode:   VideoDurationDiscrete,
+			Values: []float64{6, 10, 12, 16},
+		},
+	}
+	segments, err := planVideoSegmentsWithDialogue(15*90000, 90000, 3750, variant, "first_frame", []GatewayVideoDialogueSpan{{
+		TimingUnitID: "voiceover-1",
+		Speaker:      "旁白",
+		Text:         "冻结脚本旁白",
+		StartTick:    0,
+		EndTick:      15 * 90000,
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 1 ||
+		segments[0].PlannedDurationTicks != 15*90000 ||
+		segments[0].RequestedDurationSeconds != 16 ||
+		segments[0].TrimEndTick != 15*90000 {
+		t.Fatalf("single-take segment = %+v", segments)
+	}
+}
+
 func TestPlanVideoSegmentsRejectsDialogueLongerThanProviderCapacity(t *testing.T) {
 	variant := VideoGenerationVariant{
 		VariantKey: "discrete", Duration: VideoDurationCapability{Mode: VideoDurationDiscrete, Values: []float64{4, 8}},

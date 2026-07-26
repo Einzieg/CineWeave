@@ -272,9 +272,37 @@ func (r *Repository) InsertScriptVersion(ctx context.Context, tx pgx.Tx, unit Sc
 }
 
 func (r *Repository) ActivateScriptVersion(ctx context.Context, tx pgx.Tx, unit ScriptUnit, version ScriptVersion) (ScriptUnit, error) {
+	if unit.ActiveUnitGenerationID != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE commerce_storyboard_plans
+			SET status = 'stale', active = false, stale_state = 'upstream_changed',
+			    stale_at = COALESCE(stale_at, now())
+			WHERE organization_id = $1 AND project_id = $2
+			  AND script_unit_id = $3 AND script_unit_generation_id = $4
+			  AND status <> 'archived'
+		`, unit.OrganizationID, unit.ProjectID, unit.ID, *unit.ActiveUnitGenerationID); err != nil {
+			return ScriptUnit{}, err
+		}
+		tag, err := tx.Exec(ctx, `
+			UPDATE commerce_script_unit_generations
+			SET status = 'archived', archived_at = now()
+			WHERE id = $1 AND script_unit_id = $2 AND status = 'active'
+		`, *unit.ActiveUnitGenerationID, unit.ID)
+		if err != nil {
+			return ScriptUnit{}, err
+		}
+		if tag.RowsAffected() != 1 {
+			return ScriptUnit{}, Error{
+				Code: CodeGenerationMismatch, Message: "脚本旧生产代已变化，请刷新后重试",
+			}
+		}
+	}
 	return scanScriptUnit(tx.QueryRow(ctx, `
 		UPDATE commerce_script_units unit
-		SET current_source_version_id = $4, draft_content = $5, draft_content_hash = $6,
+		SET current_source_version_id = $4, current_localization_id = NULL,
+		    active_unit_generation_id = NULL,
+		    status = 'draft',
+		    draft_content = $5, draft_content_hash = $6,
 		    draft_updated_at = now(), revision = revision + 1, updated_at = now()
 		WHERE unit.id = $1 AND unit.organization_id = $2 AND unit.project_id = $3 AND unit.revision = $7
 		RETURNING `+scriptUnitReturningColumns+`
@@ -507,6 +535,11 @@ const scriptUnitReturningColumns = `
 	unit.language_mode, unit.explicit_target_language, unit.target_duration_seconds,
 	unit.target_platform, unit.draft_content, unit.draft_content_hash, unit.draft_updated_at,
 	unit.active_unit_generation_id::text, unit.unit_generation_no,
+	COALESCE((
+		SELECT generation.storyboard_strategy
+		FROM commerce_script_unit_generations generation
+		WHERE generation.id = unit.active_unit_generation_id
+	), ''),
 	unit.derived_from_script_unit_id::text, unit.derivation_kind,
 	unit.revision, unit.metadata, unit.created_at, unit.updated_at, unit.archived_at`
 
@@ -536,6 +569,7 @@ func scanScriptUnit(row scanRow) (ScriptUnit, error) {
 		&currentSource, &currentLocalization, &item.LanguageMode, &targetLanguage,
 		&item.TargetDurationSeconds, &item.TargetPlatform, &item.DraftContent,
 		&draftHash, &draftUpdatedAt, &activeGeneration, &item.UnitGenerationNo,
+		&item.StoryboardStrategy,
 		&derivedFrom, &derivationKind, &item.Revision, &item.Metadata,
 		&item.CreatedAt, &item.UpdatedAt, &archivedAt,
 	)

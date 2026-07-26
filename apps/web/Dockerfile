@@ -3,12 +3,13 @@ WORKDIR /app
 RUN npm install --global pnpm@10.32.1
 COPY package.json pnpm-workspace.yaml ./
 COPY pnpm-lock.yaml ./
+COPY patches/minimatch@3.1.5.patch patches/minimatch@3.1.5.patch
 COPY apps/web/package.json apps/web/package.json
 RUN pnpm install --filter @cineweave/web --frozen-lockfile
 
 FROM deps AS build
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:19288
-ARG NEXT_PUBLIC_REALTIME_URL=http://localhost:19281/api/realtime/events
+ARG NEXT_PUBLIC_API_BASE_URL=
+ARG NEXT_PUBLIC_REALTIME_URL=
 ARG S3_PUBLIC_ENDPOINT=http://localhost:19290
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
@@ -20,8 +21,8 @@ RUN pnpm --filter @cineweave/web build
 
 FROM node:24-alpine AS runtime
 WORKDIR /app
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:19288
-ARG NEXT_PUBLIC_REALTIME_URL=http://localhost:19281/api/realtime/events
+ARG NEXT_PUBLIC_API_BASE_URL=
+ARG NEXT_PUBLIC_REALTIME_URL=
 ARG S3_PUBLIC_ENDPOINT=http://localhost:19290
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0

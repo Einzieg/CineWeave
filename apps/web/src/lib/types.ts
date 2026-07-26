@@ -220,6 +220,9 @@ export type Project = {
   activeFinalVideoVersionId?: string | null;
   activeAudioMixVersionId?: string | null;
   status?: string;
+  lifecycleStatus: "active" | "deleting";
+  deletionRevision: number;
+  deletionRequestedAt?: string | null;
   settings?: JsonRecord;
   revision: number;
   setupSessionId?: string;
@@ -229,6 +232,72 @@ export type Project = {
   scriptUnitDefaults?: CommerceScriptUnitDefaults;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type ProjectDeletionImpact = {
+  projectId: string;
+  projectName: string;
+  projectRevision: number;
+  currentDeletionRevision: number;
+  productCount: number;
+  scriptUnitCount: number;
+  storyboardShotCount: number;
+  artifactCount: number;
+  mediaFileCount: number;
+  finalVideoCount: number;
+  activeWorkflowCount: number;
+  activeAgentTaskCount: number;
+  activeProviderTaskCount: number;
+  storageObjectCount: number;
+  storageByteSize: number;
+  generatedAt: string;
+  impactHash: string;
+};
+
+export type ProjectDeletionRequestStatus =
+  | "requested"
+  | "cancelling_tasks"
+  | "waiting_for_terminal"
+  | "deleting_storage"
+  | "deleting_business_data"
+  | "completed"
+  | "failed_retryable"
+  | "failed_terminal";
+
+export type ProjectDeletionRequest = {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  projectId: string;
+  projectName: string;
+  projectRevision: number;
+  deletionRevision: number;
+  status: ProjectDeletionRequestStatus;
+  impactSnapshot: JsonRecord;
+  impactHash: string;
+  manifestCursor: number;
+  storageObjectCount: number;
+  storageDeletedCount: number;
+  storageFailedCount: number;
+  storageSkippedSharedCount: number;
+  temporalWorkflowId: string;
+  idempotencyKey: string;
+  requestedBy?: string | null;
+  requestedAt: string;
+  startedAt?: string | null;
+  drainDeadlineAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  expiresAt?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  retryCount: number;
+};
+
+export type CreateProjectDeletionRequest = {
+  projectName: string;
+  expectedProjectRevision: number;
+  impactHash: string;
 };
 
 export type VideoProductionProfileKey =
@@ -478,7 +547,7 @@ export type CreateNarrativeProjectRequest = CreateProjectBaseRequest & {
 
 export type CreateCommerceVideoProjectRequest = CreateProjectBaseRequest & {
   projectKind: "commerce_video";
-  defaultTargetDurationSeconds?: 15 | 30 | 60;
+  defaultTargetDurationSeconds?: number;
   defaultTargetPlatform?: string;
   defaultLanguageMode?: "auto" | "explicit";
   defaultTargetLanguage?: string;
@@ -839,6 +908,7 @@ export type CommerceScriptUnit = {
   draftUpdatedAt?: string;
   activeUnitGenerationId?: string;
   unitGenerationNo: number;
+  storyboardStrategy?: CommerceStoryboardStrategy;
   derivedFromScriptUnitId?: string;
   derivationKind?: "copy" | "language_variant" | "agent_idea" | string;
   revision: number;
@@ -874,6 +944,175 @@ export type CommerceScriptVersionMutation = {
   requiresRebuild: boolean;
 };
 
+export type CommerceDirectVideoInputSlot = {
+  role: string;
+  mediaType: string;
+  semantics: string;
+  min: number;
+  max: number;
+  ordered: boolean;
+};
+
+export type CommerceDirectVideoInputContract = {
+  contractKey: string;
+  requestMode: string;
+  slots: CommerceDirectVideoInputSlot[];
+  mutuallyExclusiveRoles?: string[][];
+};
+
+export type CommerceDirectVideoRoute = {
+  routeKey: string;
+  modelProfileId: string;
+  modelProfileKey: string;
+  modelProfileBindingId: string;
+  providerModelId: string;
+  providerAccountId: string;
+  providerModelKey: string;
+  priority: number;
+  weight: number;
+  variantKey: string;
+  capabilitySnapshotHash: string;
+  executableDurationSeconds: number[];
+  resolutions: string[];
+  aspectRatios: string[];
+  inputContract: CommerceDirectVideoInputContract;
+  nativeAudio: {
+    support: string;
+    supportsDialogue?: boolean;
+    supportsVoiceover?: boolean;
+  };
+};
+
+export type CommerceDirectVideoOptions = {
+  contractVersion: string;
+  projectProductionGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  videoProductionProfileVersionId: string;
+  videoProductionProfileSnapshotHash: string;
+  defaultAspectRatio: string;
+  defaultResolution: string;
+  executableDurationSeconds: number[];
+  resolutions: string[];
+  aspectRatios: string[];
+  routes: CommerceDirectVideoRoute[];
+};
+
+export type CommerceScriptReferenceImage = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  scriptUnitId: string;
+  artifactId: string;
+  mediaFileId: string;
+  fileName: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  byteSize: number;
+  contentHash: string;
+  status: "active" | "archived";
+  revision: number;
+  previewUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+};
+
+export type CommerceDirectVideoReferenceSelection = {
+  sourceType: "product" | "custom";
+  sourceId: string;
+};
+
+export type CommerceDirectVideoReference = CommerceDirectVideoReferenceSelection & {
+  id: string;
+  productReferenceId?: string;
+  scriptReferenceImageId?: string;
+  artifactId: string;
+  mediaFileId: string;
+  mimeType: string;
+  referenceRole: "first_frame" | "semantic_reference";
+  ordinal: number;
+  contentHash: string;
+  sourceRevision: number;
+  snapshot: JsonValue;
+  previewUrl?: string;
+};
+
+export type CommerceDirectVideoJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelling"
+  | "cancelled";
+
+export type CommerceDirectVideoJob = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  productVersionId: string;
+  scriptUnitId: string;
+  scriptUnitRevision: number;
+  projectProductionGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  videoProfileVersionId: string;
+  videoProfileSnapshotHash: string;
+  modelProfileKey: string;
+  modelProfileId?: string;
+  modelProfileBindingId?: string;
+  providerModelId?: string;
+  providerAccountId?: string;
+  providerModelKey: string;
+  routeKey: string;
+  variantKey: string;
+  capabilitySnapshotHash: string;
+  requestedDurationSeconds: number;
+  aspectRatio: string;
+  resolution: string;
+  generateAudio: boolean;
+  scriptSnapshot: string;
+  scriptHash: string;
+  productSnapshot: JsonValue;
+  productSnapshotHash: string;
+  executionContract: JsonValue;
+  executionContractHash: string;
+  referenceSetHash: string;
+  promptHash: string;
+  status: CommerceDirectVideoJobStatus;
+  attemptGeneration: number;
+  workflowRunId?: string;
+  nodeRunId?: string;
+  providerRequestId?: string;
+  providerCallId?: string;
+  providerAsyncTaskId?: string;
+  externalTaskId?: string;
+  outputArtifactId?: string;
+  outputMediaFileId?: string;
+  outputMimeType?: string;
+  outputPreviewUrl?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  createdBy?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  cancelledAt?: string;
+  updatedAt: string;
+  references: CommerceDirectVideoReference[];
+};
+
+export type CreateCommerceDirectVideoRequest = {
+  durationSeconds: number;
+  resolution: string;
+  aspectRatio?: string;
+  generateAudio?: boolean;
+  references?: CommerceDirectVideoReferenceSelection[];
+};
+
 export type CommerceScriptUnitRebuildAffectedCounts = {
   storyboardPlans: number;
   storyboardShots: number;
@@ -896,6 +1135,7 @@ export type CommerceScriptUnitRebuildImpact = {
   targetLanguage?: string;
   targetDurationSeconds: number;
   targetPlatform: string;
+  targetStoryboardStrategy: CommerceStoryboardStrategy;
   targetConfigurationHash: string;
   impactToken: string;
   expiresAt: string;
@@ -920,6 +1160,103 @@ export type CommerceTimingEstimate = {
 };
 
 export type CommerceStoryboardPlanStatus = "planning" | "reviewing" | "ready" | "failed" | "stale" | "archived";
+
+export type CommerceStoryboardStrategy = "smart" | "single_take" | "manual";
+
+export type CommerceVideoExecutionRoute = {
+  routeKey: string;
+  modelProfileId: string;
+  modelProfileKey: string;
+  modelProfileBindingId: string;
+  providerModelId: string;
+  providerAccountId: string;
+  modelKey: string;
+  priority: number;
+  weight: number;
+  variantKey: string;
+  capabilitySnapshotHash: string;
+  executableDurationSeconds: number[];
+  resolutions: string[];
+  aspectRatios: string[];
+  supportsContinuousExtension: boolean;
+};
+
+export type CommerceVideoExecutionEnvelope = {
+  contractVersion: "commerce-video-execution-envelope/v1";
+  projectProductionGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  videoProductionProfileVersionId: string;
+  videoProductionProfileSnapshotHash: string;
+  modelProfileKey: string;
+  targetResolution: string;
+  aspectRatio: string;
+  routes: CommerceVideoExecutionRoute[];
+  executableDurationSeconds: number[];
+};
+
+export type CommerceSegmentationShot = {
+  shotOrdinal: number;
+  beatOrdinals: number[];
+  localizationSegmentIds: string[];
+  sourceSegmentIds: string[];
+  editDurationSeconds: number;
+  requestedDurationSeconds: number;
+  trimDurationSeconds: number;
+  estimatedVoiceoverTicks: number;
+  voiceoverOverflowTicks: number;
+  timingAdvisoryLevel: "none" | "info" | "warning" | "critical";
+  eligibleRouteKeys: string[];
+  eligibleRouteSetHash: string;
+  semanticBoundaryPenalty: number;
+  continuityPenalty: number;
+  complexityPenalty: number;
+};
+
+export type CommerceSegmentationPlan = {
+  contractVersion: "commerce-storyboard-segmentation/v1";
+  strategy: CommerceStoryboardStrategy;
+  segmentationPolicyVersion: string;
+  targetDurationSeconds: number;
+  timelineTimebase: number;
+  videoExecutionEnvelopeHash: string;
+  shots: CommerceSegmentationShot[];
+  totalRequestedSeconds: number;
+  totalTrimSeconds: number;
+  estimatedVoiceoverTicks: number;
+  voiceoverOverflowTicks: number;
+  timingAdvisoryLevel: "none" | "info" | "warning" | "critical";
+};
+
+export type CommerceStoryboardTimingAdvisory = {
+  targetDurationSeconds: number;
+  estimatedVoiceoverSeconds: number;
+  voiceoverOverflowSeconds: number;
+  exceeded: boolean;
+  level: "none" | "info" | "warning" | "critical";
+  message: string;
+};
+
+export type CommerceStoryboardPlanningPreview = {
+  identity: JsonRecord;
+  inputHash: string;
+  storyboardStrategy: CommerceStoryboardStrategy;
+  segmentationPolicyVersion: string;
+  targetDurationSeconds: number;
+  estimatedVoiceoverSeconds: number;
+  voiceoverOverflowSeconds: number;
+  voiceoverExceeded: boolean;
+  providerDurationOptions: number[];
+  recommendedShotCount: number;
+  plannedEditDurations: number[];
+  recommendedRequestDurations: number[];
+  estimatedTrimSeconds: number;
+  videoExecutionEnvelopeHash: string;
+  segmentationPlanHash: string;
+  previewHash: string;
+  timingAdvisory: CommerceStoryboardTimingAdvisory;
+  segmentation: CommerceSegmentationPlan;
+};
 
 export type CommerceStoryboardPlan = {
   id: string;
@@ -950,6 +1287,14 @@ export type CommerceStoryboardPlan = {
   fpsNumerator: number;
   fpsDenominator: number;
   allowedShotDurations: number[];
+  storyboardStrategy?: CommerceStoryboardStrategy;
+  segmentationPolicyVersion?: string;
+  segmentationPlan?: CommerceSegmentationPlan;
+  segmentationPlanHash?: string;
+  videoExecutionEnvelope?: CommerceVideoExecutionEnvelope;
+  videoExecutionEnvelopeHash?: string;
+  timingAdvisory?: CommerceStoryboardTimingAdvisory;
+  previewHash?: string;
   shotCount: number;
   reviewStatus: string;
   planHash: string;
@@ -1003,6 +1348,12 @@ export type CommerceStoryboardShot = {
   targetLanguage: string;
   soundEffects: JsonValue;
   musicCue: string;
+  creativeDirection: JsonRecord;
+  estimatedVoiceoverTicks: number;
+  voiceoverOverflowTicks: number;
+  timingAdvisoryLevel: "" | "none" | "info" | "warning" | "critical";
+  recommendedRequestDurationSeconds: number;
+  eligibleRouteSetHash: string;
   requiredProductFeatures: string[];
   reviewStatus: string;
   manualOverride: boolean;

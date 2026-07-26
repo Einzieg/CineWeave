@@ -122,6 +122,63 @@ func TestMediaFetcherAllowsExplicitHostAndCIDRPair(t *testing.T) {
 	defer result.Close()
 }
 
+func TestMediaFetcherAllowsAuthenticatedTrustedOriginAndSendsHeaders(t *testing.T) {
+	videoBody := []byte("\x00\x00\x00\x18ftypmp42")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer channel-token" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(videoBody)
+	}))
+	defer server.Close()
+
+	fetcher := NewMediaFetcher(Config{})
+	result, err := fetcher.FetchToTempFile(context.Background(), server.URL+"/v1/videos/task-1/content", FetchOptions{
+		Kind:                "video",
+		MaxBytes:            1024,
+		Timeout:             time.Second,
+		AllowedMIMEPrefixes: []string{"video/"},
+		RequestHeaders:      http.Header{"Authorization": []string{"Bearer channel-token"}},
+		AuthenticatedOrigin: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("FetchToTempFile() error = %v", err)
+	}
+	defer result.Close()
+	if result.ByteSize != int64(len(videoBody)) {
+		t.Fatalf("ByteSize = %d, want %d", result.ByteSize, len(videoBody))
+	}
+}
+
+func TestMediaFetcherRejectsAuthenticatedCrossOriginRedirect(t *testing.T) {
+	targetCalled := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/video.mp4", http.StatusFound)
+	}))
+	defer source.Close()
+
+	fetcher := NewMediaFetcher(Config{})
+	_, err := fetcher.FetchToTempFile(context.Background(), source.URL+"/start", FetchOptions{
+		Kind:                "video",
+		MaxBytes:            1024,
+		Timeout:             time.Second,
+		RequestHeaders:      http.Header{"Authorization": []string{"Bearer channel-token"}},
+		AuthenticatedOrigin: source.URL,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot redirect to another origin") {
+		t.Fatalf("FetchToTempFile() error = %v", err)
+	}
+	if targetCalled {
+		t.Fatal("authenticated redirect target was requested")
+	}
+}
+
 func TestMediaFetcherRejectsOversizedResponseAndRemovesTempFile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "video/mp4")

@@ -559,6 +559,58 @@ func ExecutableWholeSecondVideoDurations(capabilities []Capability, model Model)
 	return result, nil
 }
 
+// ExecutableVideoGenerationVariants exposes the same normalized capability
+// variants used by video planning so callers can freeze an executable routing
+// envelope without reimplementing provider capability parsing.
+func ExecutableVideoGenerationVariants(capabilities []Capability, model Model) ([]VideoGenerationVariant, error) {
+	variants, err := videoGenerationVariants(capabilities, model)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]VideoGenerationVariant, len(variants))
+	copy(result, variants)
+	return result, nil
+}
+
+// ExecutableWholeSecondDurationsForVideoVariant returns the legal integer
+// request durations for one normalized variant.
+func ExecutableWholeSecondDurationsForVideoVariant(variant VideoGenerationVariant) ([]int, error) {
+	if variant.Duration.Mode == VideoDurationSource {
+		return nil, fmt.Errorf("%w: source-duration variants have no frozen integer duration set", ErrValidation)
+	}
+	options, _, err := videoRequestDurationOptions(variant.Duration)
+	if err != nil {
+		return nil, err
+	}
+	values := make(map[int]struct{}, len(options))
+	for _, option := range options {
+		rounded := math.Round(option)
+		if option <= 0 || math.Abs(option-rounded) > 1e-9 {
+			continue
+		}
+		values[int(rounded)] = struct{}{}
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("%w: video variant has no executable whole-second duration", ErrValidation)
+	}
+	result := make([]int, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Ints(result)
+	return result, nil
+}
+
+// VideoGenerationVariantSnapshotHash returns the canonical 64-character hash
+// used by persisted Commerce contracts.
+func VideoGenerationVariantSnapshotHash(variant VideoGenerationVariant) (string, error) {
+	hash, err := capabilitySnapshotHash(variant)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(hash, "sha256:"), nil
+}
+
 func normalizeVideoInputContract(variant *VideoGenerationVariant) error {
 	if variant == nil {
 		return fmt.Errorf("%w: video generation variant is required", ErrValidation)

@@ -46,12 +46,20 @@ func projectRouteExpectedKind(path string) (commercepkg.ProjectKind, bool) {
 	if remainder == "/commerce" || strings.HasPrefix(remainder, "/commerce/") {
 		return commercepkg.ProjectKindCommerceVideo, true
 	}
+	if isSharedStoryboardRenderPlanRoute(remainder) {
+		return "", false
+	}
 	for _, prefix := range narrativeProjectRoutePrefixes {
 		if remainder == prefix || strings.HasPrefix(remainder, prefix+"/") {
 			return commercepkg.ProjectKindNarrative, true
 		}
 	}
 	return "", false
+}
+
+func isSharedStoryboardRenderPlanRoute(remainder string) bool {
+	parts := strings.Split(strings.Trim(remainder, "/"), "/")
+	return len(parts) >= 3 && parts[0] == "storyboard-shots" && parts[1] != "" && parts[2] == "render-plan"
 }
 
 func projectRouteRemainder(path string) (string, bool) {

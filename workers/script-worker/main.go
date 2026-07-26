@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 func main() {
@@ -96,6 +97,10 @@ func main() {
 	temporalWorker.RegisterWorkflow(workflows.GenerateAssetCardItemWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.GenerateCanonicalAssetImageItemWorkflow)
 	temporalWorker.RegisterWorkflow(workflows.ProjectVideoProductionRebuildWorkflow)
+	temporalWorker.RegisterWorkflowWithOptions(
+		workflows.ProjectDeletionWorkflow,
+		workflow.RegisterOptions{Name: workflows.ProjectDeletionWorkflowName},
+	)
 	temporalWorker.RegisterActivityWithOptions(activities.GenerateStoryboardText, workflowActivityOptions("GenerateStoryboardText"))
 	temporalWorker.RegisterActivityWithOptions(activities.GenerateStoryboardImage, workflowActivityOptions("GenerateStoryboardImage"))
 	temporalWorker.RegisterActivityWithOptions(activities.ExtractNovelEvents, workflowActivityOptions("ExtractNovelEvents"))
@@ -159,6 +164,13 @@ func main() {
 	temporalWorker.RegisterActivityWithOptions(activities.FailProjectVideoProductionRebuildItem, workflowActivityOptions("FailProjectVideoProductionRebuildItem"))
 	temporalWorker.RegisterActivityWithOptions(activities.FinalizeProjectVideoProductionRebuild, workflowActivityOptions("FinalizeProjectVideoProductionRebuild"))
 	temporalWorker.RegisterActivityWithOptions(activities.FailProjectVideoProductionRebuild, workflowActivityOptions("FailProjectVideoProductionRebuild"))
+	temporalWorker.RegisterActivityWithOptions(activities.PrepareProjectDeletion, workflowActivityOptions(workflows.PrepareProjectDeletionActivityName))
+	temporalWorker.RegisterActivityWithOptions(activities.CancelProjectProviderTasks, workflowActivityOptions(workflows.CancelProjectProviderTasksActivityName))
+	temporalWorker.RegisterActivityWithOptions(activities.CheckProjectDeletionDrain, workflowActivityOptions(workflows.CheckProjectDeletionDrainActivityName))
+	temporalWorker.RegisterActivityWithOptions(activities.BuildProjectDeletionManifest, workflowActivityOptions(workflows.BuildProjectDeletionManifestActivityName))
+	temporalWorker.RegisterActivityWithOptions(activities.DeleteProjectStorageBatch, workflowActivityOptions(workflows.DeleteProjectStorageBatchActivityName))
+	temporalWorker.RegisterActivityWithOptions(activities.CommitProjectDeletion, workflowActivityOptions(workflows.CommitProjectDeletionActivityName))
+	temporalWorker.RegisterActivityWithOptions(activities.FailProjectDeletion, workflowActivityOptions(workflows.FailProjectDeletionActivityName))
 	temporalWorker.RegisterActivityWithOptions(activities.CompleteComposeTimelineWorkflow, workflowActivityOptions("CompleteComposeTimelineWorkflow"))
 	temporalWorker.RegisterActivityWithOptions(activities.ListStoryboardShots, workflowActivityOptions("ListStoryboardShots"))
 	temporalWorker.RegisterActivityWithOptions(activities.ListRunningShotVideoTasks, workflowActivityOptions("ListRunningShotVideoTasks"))
@@ -196,8 +208,40 @@ func main() {
 	go runEpisodeVideoCheckpointReconciler(reconcilerCtx, pool)
 	go runSourceToScriptPayloadCleanup(reconcilerCtx, pool)
 	go runDerivedAssetExecutionReconciler(reconcilerCtx, activities)
+	go runProjectDeletionRequestCleanup(reconcilerCtx, pool)
 	if err := workerkit.RunTemporalWorker(temporalWorker, worker.InterruptCh()); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func runProjectDeletionRequestCleanup(ctx context.Context, pool *pgxpool.Pool) {
+	interval := config.Duration("CINEWEAVE_PROJECT_DELETION_CLEANUP_INTERVAL", 6*time.Hour)
+	batchSize := config.Int("CINEWEAVE_PROJECT_DELETION_CLEANUP_BATCH_SIZE", 100)
+	if interval <= 0 {
+		interval = 6 * time.Hour
+	}
+	cleanup := func() {
+		count, err := workflows.PurgeExpiredProjectDeletionRequests(ctx, pool, batchSize)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("purge expired project deletion requests: %v", err)
+			}
+			return
+		}
+		if count > 0 {
+			log.Printf("purged %d expired project deletion requests", count)
+		}
+	}
+	cleanup()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanup()
+		}
 	}
 }
 

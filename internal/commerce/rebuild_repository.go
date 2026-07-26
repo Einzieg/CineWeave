@@ -309,7 +309,7 @@ func (r *Repository) AttachPreparedProjectRebuild(
 		WHERE id = $1
 		  AND project_id = $7
 		  AND organization_id = $8
-		  AND status = 'approved'
+		  AND status IN ('approved', 'running')
 		  AND target_binding_id IS NULL
 		  AND target_generation_id IS NULL
 	`, rebuild.ID, target.VideoBindingID, target.ProjectGenerationID,

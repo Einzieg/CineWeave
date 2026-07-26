@@ -25,6 +25,10 @@ import type {
   ComposeTimelineResponse,
   CommerceLanguageResolution,
   CommerceLanguageConfirmationAccepted,
+  CommerceDirectVideoJob,
+  CommerceDirectVideoOptions,
+  CommerceScriptReferenceImage,
+  CreateCommerceDirectVideoRequest,
   CommerceProduct,
   CommerceProductMutationResult,
   CommerceProductRebuildImpact,
@@ -44,6 +48,7 @@ import type {
   CommerceScriptLocalization,
   CommerceStoryboardPlan,
   CommerceStoryboardPlanDetail,
+  CommerceStoryboardPlanningPreview,
   CommerceVideoBatchRequest,
   CommerceScriptUnit,
   CommerceScriptUnitList,
@@ -84,6 +89,9 @@ import type {
   ParseScriptScenesResponse,
   Permission,
   Project,
+  ProjectDeletionImpact,
+  ProjectDeletionRequest,
+  CreateProjectDeletionRequest,
   ProjectManualBinding,
   ProjectSource,
   ProductionActionResponse,
@@ -172,9 +180,10 @@ import type {
   Workspace,
 } from "./types";
 import { localizePlatformError } from "./error-localization";
+import { normalizeIdempotencyKey } from "./idempotency-key";
 import { wrapBrowserCachedMediaUrls } from "./media-cache";
 
-const apiBase = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:19288");
+const configuredApiBase = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE_URL ?? "");
 
 type ApiRequestOptions = {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -212,7 +221,7 @@ export class StudioApiError extends Error {
 }
 
 export async function apiRequest<TData>(path: string, options: ApiRequestOptions = {}): Promise<TData> {
-  const url = new URL(`${apiBase}${path}`);
+  const url = resolveApiUrl(path);
   for (const [key, value] of Object.entries(options.query ?? {})) {
     if (value !== undefined && value !== null && String(value).trim() !== "") {
       url.searchParams.set(key, String(value));
@@ -232,17 +241,36 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
     headers.set("X-Organization-Id", organizationId);
   }
   if (options.idempotencyKey?.trim()) {
-    headers.set("Idempotency-Key", options.idempotencyKey.trim());
+    try {
+      headers.set("Idempotency-Key", await normalizeIdempotencyKey(options.idempotencyKey));
+    } catch {
+      throw new StudioApiError(
+        "浏览器无法生成请求标识，请刷新页面后重试",
+        "IDEMPOTENCY_KEY_INVALID",
+        0,
+        false,
+      );
+    }
   }
   for (const [name, value] of Object.entries(options.headers ?? {})) {
     if (value.trim()) headers.set(name, value.trim());
   }
   const requestBody = options.body === undefined ? undefined : isFormData ? (options.body as BodyInit) : JSON.stringify(options.body);
-  const response = await fetch(url, {
-    method: options.method ?? (options.body === undefined ? "GET" : "POST"),
-    headers,
-    body: requestBody,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: options.method ?? (options.body === undefined ? "GET" : "POST"),
+      headers,
+      body: requestBody,
+    });
+  } catch {
+    throw new StudioApiError(
+      "无法连接 CineWeave 服务，请检查网络后重试",
+      "NETWORK_ERROR",
+      0,
+      true,
+    );
+  }
   const envelope = (await response.json().catch(() => ({}))) as ApiEnvelope<TData>;
   if (!response.ok || envelope.error || envelope.data === undefined) {
     const errorCode = envelope.error?.code ?? "HTTP_ERROR";
@@ -423,6 +451,26 @@ export const studioApi = {
   getProject: (session: StudioSession, projectId: string) => apiRequest<Project>(`/api/projects/${projectId}`, { session }),
   createProject: (session: StudioSession, body: CreateProjectRequest, idempotencyKey?: string) =>
     apiRequest<Project>("/api/projects", { method: "POST", session, body, idempotencyKey }),
+  getProjectDeletionImpact: (session: StudioSession, projectId: string) =>
+    apiRequest<ProjectDeletionImpact>(`/api/projects/${projectId}/deletion-impact`, { session }),
+  createProjectDeletionRequest: (
+    session: StudioSession,
+    projectId: string,
+    body: CreateProjectDeletionRequest,
+    idempotencyKey: string,
+  ) => apiRequest<ProjectDeletionRequest>(`/api/projects/${projectId}/deletion-requests`, {
+    method: "POST",
+    session,
+    body,
+    idempotencyKey,
+  }),
+  getProjectDeletionRequest: (session: StudioSession, projectId: string, requestId: string) =>
+    apiRequest<ProjectDeletionRequest>(`/api/projects/${projectId}/deletion-requests/${requestId}`, { session }),
+  retryProjectDeletionRequest: (session: StudioSession, projectId: string, requestId: string) =>
+    apiRequest<ProjectDeletionRequest>(`/api/projects/${projectId}/deletion-requests/${requestId}/retry`, {
+      method: "POST",
+      session,
+    }),
   getCommerceProjectOptions: (session: StudioSession, workspaceId: string) =>
     apiRequest<CommerceProjectOptions>(`/api/workspaces/${workspaceId}/commerce/project-options`, { session }),
   getCommerceSetupSession: (session: StudioSession, projectId: string, setupSessionId: string) =>
@@ -435,6 +483,14 @@ export const studioApi = {
     idempotencyKey: string,
   ) => apiRequest<CommerceSetupCompletionResult>(`/api/projects/${projectId}/commerce/setup-sessions/${setupSessionId}/complete`, {
     method: "POST", session, body, idempotencyKey,
+  }),
+  restartCommerceSetupSession: (
+    session: StudioSession,
+    projectId: string,
+    setupSessionId: string,
+    expectedRevision: number,
+  ) => apiRequest<CommerceSetupSession>(`/api/projects/${projectId}/commerce/setup-sessions/${setupSessionId}/restart`, {
+    method: "POST", session, body: { expectedRevision },
   }),
   confirmCommerceSetupLanguage: (
     session: StudioSession,
@@ -486,7 +542,17 @@ export const studioApi = {
     method: "POST", session, body, idempotencyKey,
   }),
   uploadCommerceProductReferenceFile: async (upload: CommerceProductReferenceUpload, file: File) => {
-    const response = await fetch(upload.uploadUrl, { method: upload.method || "PUT", headers: upload.headers, body: file });
+    let response: Response;
+    try {
+      response = await fetch(upload.uploadUrl, { method: upload.method || "PUT", headers: upload.headers, body: file });
+    } catch {
+      throw new StudioApiError(
+        "无法连接对象存储，请检查网络或存储域名配置后重试",
+        "UPLOAD_NETWORK_ERROR",
+        0,
+        true,
+      );
+    }
     if (!response.ok) throw new StudioApiError(`商品图片上传失败：HTTP ${response.status}`, "UPLOAD_FAILED", response.status, true);
   },
   completeCommerceProductReferenceUpload: (
@@ -558,7 +624,7 @@ export const studioApi = {
       targetPlatform?: string;
       sourceLanguageHint?: string;
     },
-  ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units`, { method: "POST", session, body }),
+  ) => apiRequest<CommerceScriptVersionMutation>(`/api/projects/${projectId}/commerce/script-units`, { method: "POST", session, body }),
   updateCommerceScriptUnit: (
     session: StudioSession,
     projectId: string,
@@ -626,6 +692,7 @@ export const studioApi = {
       targetLanguage?: string;
       targetDurationSeconds: number;
       targetPlatform: string;
+      targetStoryboardStrategy: "smart" | "single_take";
     },
   ) => apiRequest<CommerceScriptUnitRebuildImpact>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/rebuild-impact`, {
     method: "POST", session, body,
@@ -651,6 +718,86 @@ export const studioApi = {
   ) => apiRequest<CommerceScriptVersionMutation>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/versions`, {
     method: "POST", session, body,
   }),
+  getCommerceDirectVideoOptions: (session: StudioSession, projectId: string) =>
+    apiRequest<CommerceDirectVideoOptions>(`/api/projects/${projectId}/commerce/video-options`, { session }),
+  listCommerceScriptReferences: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    status: ArchiveListStatus = "active",
+  ) => apiRequest<ListEnvelope<CommerceScriptReferenceImage>>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/references`,
+    { session, query: { "filter[status]": status } },
+  ),
+  createCommerceScriptReferenceUpload: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: { fileName: string; mimeType: string; expiresSeconds?: number },
+    idempotencyKey: string,
+  ) => apiRequest<CommerceProductReferenceUpload>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/references/upload-url`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  uploadCommerceScriptReferenceFile: async (upload: CommerceProductReferenceUpload, file: File) => {
+    let response: Response;
+    try {
+      response = await fetch(upload.uploadUrl, {
+        method: upload.method || "PUT",
+        headers: upload.headers,
+        body: file,
+      });
+    } catch {
+      throw new StudioApiError(
+        "无法连接对象存储，请检查网络或存储域名配置后重试",
+        "UPLOAD_NETWORK_ERROR",
+        0,
+        true,
+      );
+    }
+    if (!response.ok) {
+      throw new StudioApiError(`自定义参考图上传失败：HTTP ${response.status}`, "UPLOAD_FAILED", response.status, true);
+    }
+  },
+  completeCommerceScriptReferenceUpload: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    uploadId: string,
+  ) => apiRequest<CommerceScriptReferenceImage>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/references/complete`,
+    { method: "POST", session, body: { uploadId } },
+  ),
+  archiveCommerceScriptReference: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    referenceId: string,
+    expectedRevision: number,
+  ) => apiRequest<CommerceScriptReferenceImage>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/references/${referenceId}`,
+    { method: "DELETE", session, body: { expectedRevision } },
+  ),
+  listCommerceDirectVideos: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId?: string,
+  ) => apiRequest<ListEnvelope<CommerceDirectVideoJob>>(
+    `/api/projects/${projectId}/commerce/direct-videos`,
+    { session, query: scriptUnitId ? { "filter[scriptUnitId]": scriptUnitId } : undefined },
+  ),
+  getCommerceDirectVideo: (session: StudioSession, projectId: string, jobId: string) =>
+    apiRequest<CommerceDirectVideoJob>(`/api/projects/${projectId}/commerce/direct-videos/${jobId}`, { session }),
+  createCommerceDirectVideo: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: CreateCommerceDirectVideoRequest,
+    idempotencyKey: string,
+  ) => apiRequest<CommerceDirectVideoJob>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/direct-videos`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
   activateCommerceScriptVersion: (
     session: StudioSession,
     projectId: string,
@@ -717,11 +864,33 @@ export const studioApi = {
     session: StudioSession,
     projectId: string,
     scriptUnitId: string,
-    expectedUnitGenerationId: string,
+    scriptUnitGenerationId: string,
+    body: {
+      expectedScriptUnitRevision: number;
+      expectedProjectProductionGenerationId: string;
+      previewHash: string;
+      videoExecutionEnvelopeHash: string;
+      clientRequestId: string;
+    },
     idempotencyKey: string,
-  ) => apiRequest<WorkflowRun>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/storyboard-plans`, {
-    method: "POST", session, body: { expectedUnitGenerationId }, idempotencyKey,
-  }),
+  ) => apiRequest<WorkflowRun>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/generations/${scriptUnitGenerationId}/storyboard-plans`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  previewCommerceStoryboardPlan: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    scriptUnitGenerationId: string,
+    body: {
+      expectedScriptUnitRevision: number;
+      expectedProjectProductionGenerationId: string;
+      clientRequestId: string;
+    },
+  ) => apiRequest<CommerceStoryboardPlanningPreview>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/generations/${scriptUnitGenerationId}/storyboard-planning-preview`,
+    { method: "POST", session, body },
+  ),
   getCommerceStoryboardPlan: (session: StudioSession, projectId: string, scriptUnitId: string, planId: string) =>
     apiRequest<CommerceStoryboardPlanDetail>(
       `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/storyboard-plans/${planId}`,
@@ -1547,4 +1716,32 @@ export const studioApi = {
 
 function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
+}
+
+function resolveApiUrl(path: string) {
+  if (typeof window !== "undefined") {
+    const sameOriginUrl = new URL(path, window.location.origin);
+    if (!configuredApiBase) {
+      return sameOriginUrl;
+    }
+    const configuredUrl = new URL(`${configuredApiBase}${path}`);
+    if (!isLoopbackHost(window.location.hostname) && isLoopbackHost(configuredUrl.hostname)) {
+      return sameOriginUrl;
+    }
+    return configuredUrl;
+  }
+  if (!configuredApiBase) {
+    throw new StudioApiError(
+      "服务端 API 地址未配置",
+      "API_BASE_URL_NOT_CONFIGURED",
+      0,
+      false,
+    );
+  }
+  return new URL(`${configuredApiBase}${path}`);
+}
+
+function isLoopbackHost(hostname: string) {
+  const normalized = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }

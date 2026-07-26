@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -76,14 +79,20 @@ func (s *Service) downloadGatewayImageURL(ctx context.Context, account Account, 
 	}, nil
 }
 
-func (s *Service) downloadGatewayVideoURL(ctx context.Context, account Account, rawURL, upstreamMIMEType string, timeout time.Duration) (gatewayVideoMedia, error) {
-	result, err := s.fetchProviderMedia(ctx, account, rawURL, outbound.FetchOptions{
+func (s *Service) downloadGatewayVideoURL(ctx context.Context, selection gatewayModelSelection, externalTaskID, rawURL, upstreamMIMEType string, timeout time.Duration) (gatewayVideoMedia, error) {
+	fetchURL, requestHeaders, authenticatedOrigin, err := gatewayVideoMediaRequest(selection, externalTaskID, rawURL)
+	if err != nil {
+		return gatewayVideoMedia{}, err
+	}
+	result, err := s.fetchProviderMedia(ctx, selection.Account, fetchURL, outbound.FetchOptions{
 		Kind:                  "video",
 		MaxBytes:              gatewayVideoMaxBytes(),
 		Timeout:               timeout,
 		ResponseHeaderTimeout: firstByteTimeout(timeout),
 		UpstreamMIMEType:      upstreamMIMEType,
 		AllowedMIMEPrefixes:   []string{"video/"},
+		RequestHeaders:        requestHeaders,
+		AuthenticatedOrigin:   authenticatedOrigin,
 	})
 	if err != nil {
 		return gatewayVideoMedia{}, err
@@ -94,6 +103,41 @@ func (s *Service) downloadGatewayVideoURL(ctx context.Context, account Account, 
 		ByteSize:    result.ByteSize,
 		ContentHash: result.ContentHash,
 	}, nil
+}
+
+func gatewayVideoMediaRequest(selection gatewayModelSelection, externalTaskID, rawURL string) (string, http.Header, string, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", nil, "", fmt.Errorf("%w: provider video URL is required", ErrValidation)
+	}
+	config := parseOpenAICompatibleConfig(selection.Account.Config)
+	if !usesNativeOpenAICompatibleRuntime(selection.Account) || !strings.EqualFold(strings.TrimSpace(config.VideoProtocol), "new_api") {
+		return rawURL, nil, "", nil
+	}
+	resultURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "", nil, "", fmt.Errorf("%w: provider video URL is invalid", ErrValidation)
+	}
+	expectedPath := "/v1/videos/" + strings.TrimSpace(externalTaskID) + "/content"
+	if strings.TrimSpace(externalTaskID) == "" || path.Clean(resultURL.Path) != expectedPath {
+		return rawURL, nil, "", nil
+	}
+	proxyURL, err := buildProviderURL(selection.Account.BaseURL, expectedPath, false)
+	if err != nil {
+		return "", nil, "", err
+	}
+	proxyTarget, err := url.Parse(proxyURL)
+	if err != nil || proxyTarget.Scheme == "" || proxyTarget.Host == "" {
+		return "", nil, "", fmt.Errorf("%w: provider video proxy URL is invalid", ErrValidation)
+	}
+	request, err := http.NewRequest(http.MethodGet, proxyURL, nil)
+	if err != nil {
+		return "", nil, "", fmt.Errorf("%w: provider video proxy request is invalid", ErrValidation)
+	}
+	request.Header.Set("Accept", "video/*")
+	applyAuth(request, selection.Account.AuthType, selection.APIKey)
+	authenticatedOrigin := strings.ToLower(proxyTarget.Scheme) + "://" + strings.ToLower(proxyTarget.Host)
+	return proxyURL, request.Header.Clone(), authenticatedOrigin, nil
 }
 
 func (s *Service) fetchProviderMedia(ctx context.Context, account Account, rawURL string, options outbound.FetchOptions) (outbound.Result, error) {

@@ -303,13 +303,13 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 	}
 	targetScript, err := catalog.CreateScriptVersion(
 		ctx, tx, organizationID, draft.ProjectID, currentScriptUnit.ID, userID,
-		currentScriptUnit.Revision, "更新后的真实商品脚本", stringPointer("zh-CN"), true,
+		currentScriptUnit.Revision, "更新后的真实商品脚本", stringPointer("zh-CN"), false,
 	)
 	if err != nil {
 		t.Fatalf("create target script version for rebuild: %v", err)
 	}
-	if targetScript.Activated || !targetScript.RequiresRebuild {
-		t.Fatalf("target script mutation = %+v, want rebuild without activation", targetScript)
+	if targetScript.Activated || targetScript.RequiresRebuild {
+		t.Fatalf("target script mutation = %+v, want an inactive version for the legacy rebuild fixture", targetScript)
 	}
 	updatedTitle := currentScriptUnit.Title + "（标题已编辑）"
 	currentScriptUnit, err = catalog.UpdateScriptUnit(
@@ -348,6 +348,7 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 			TargetLanguageMode:          "auto",
 			TargetDurationSeconds:       30,
 			TargetPlatform:              "douyin",
+			TargetStoryboardStrategy:    StoryboardStrategySmart,
 		}, userID)
 	if err != nil {
 		t.Fatalf("plan script unit rebuild: %v", err)
@@ -460,19 +461,33 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload commerce product after reference upload: %v", err)
 	}
-	targetProduct, err := catalog.CreateProductVersion(ctx, tx, organizationID, draft.ProjectID, userID, &product.Revision, ProductVersionInput{
+	targetProductInput := ProductVersionInput{
 		Name: "Integration Product v2", Brand: "CineWeave",
 		SellingPoints: json.RawMessage(`["new selling point"]`), ImmutableFeatures: json.RawMessage(`{"package":"white"}`),
 		ProhibitedClaims: json.RawMessage(`[]`),
+	}
+	targetProductFacts, err := json.Marshal(map[string]any{
+		"name":              targetProductInput.Name,
+		"brand":             targetProductInput.Brand,
+		"sellingPoints":     targetProductInput.SellingPoints,
+		"immutableFeatures": targetProductInput.ImmutableFeatures,
+		"prohibitedClaims":  targetProductInput.ProhibitedClaims,
 	})
 	if err != nil {
-		t.Fatalf("create target product version: %v", err)
+		t.Fatalf("marshal target product facts: %v", err)
 	}
-	if targetProduct.Activated || !targetProduct.RequiresRebuild {
-		t.Fatalf("target product version mutation = %+v", targetProduct)
+	targetProductFactsHash, err := hashJSON(targetProductFacts)
+	if err != nil {
+		t.Fatalf("hash target product facts: %v", err)
+	}
+	targetProduct, err := repository.InsertProductVersion(
+		ctx, tx, product, targetProductInput, targetProductFacts, targetProductFactsHash, userID,
+	)
+	if err != nil {
+		t.Fatalf("insert inactive target product version for legacy rebuild fixture: %v", err)
 	}
 	impact, err := catalog.PlanProductRebuild(ctx, tx, organizationID, draft.ProjectID,
-		targetProduct.Version.ID, []string{primaryReference.ID}, product.Revision, userID)
+		targetProduct.ID, []string{primaryReference.ID}, product.Revision, userID)
 	if err != nil {
 		t.Fatalf("plan product rebuild: %v", err)
 	}
@@ -515,7 +530,7 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 	}
 	if rebuiltGenerationID == unitIdentity.UnitGenerationID || rebuiltGenerationNo != 2 || stableUnitNo != 1 ||
 		rebuiltGenerationStatus != "active" || sourceProductGenerationStatus != "archived" ||
-		activeProductVersionID != targetProduct.Version.ID {
+		activeProductVersionID != targetProduct.ID {
 		t.Fatalf("product rebuild state target=%s no=%d unitNo=%d targetStatus=%s sourceStatus=%s productVersion=%s",
 			rebuiltGenerationID, rebuiltGenerationNo, stableUnitNo, rebuiltGenerationStatus,
 			sourceProductGenerationStatus, activeProductVersionID)
@@ -604,7 +619,7 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
-			'approved', 'configuration_change', $10, $11, '{}', $12, $13, $14, $15, now()
+			'running', 'configuration_change', $10, $11, '{}', $12, $13, $14, $15, now()
 		)
 	`, rebuildID, production.OrganizationID, production.ProjectID,
 		production.VideoBinding.ID, production.Generation.ID, production.ProjectState,
@@ -715,12 +730,42 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 
 	var currentUnitGenerationNo int64
 	var currentUnitConfigurationHash string
+	var currentUnitConfiguration json.RawMessage
 	if err := tx.QueryRow(ctx, `
-		SELECT unit_generation_no, unit_configuration_hash
+		SELECT unit_generation_no, unit_configuration_hash, unit_configuration_snapshot
 		FROM commerce_script_unit_generations
 		WHERE id = $1
-	`, currentUnitGenerationID).Scan(&currentUnitGenerationNo, &currentUnitConfigurationHash); err != nil {
+	`, currentUnitGenerationID).Scan(
+		&currentUnitGenerationNo,
+		&currentUnitConfigurationHash,
+		&currentUnitConfiguration,
+	); err != nil {
 		t.Fatalf("load current unit generation identity: %v", err)
+	}
+	var rebuiltUnitSnapshot struct {
+		ProjectGenerationID             string `json:"projectGenerationId"`
+		VideoProductionBindingID        string `json:"videoProductionBindingId"`
+		VideoProductionBindingRevision  int64  `json:"videoProductionBindingRevision"`
+		CommerceWorkflowBindingID       string `json:"commerceWorkflowBindingId"`
+		CommerceWorkflowBindingRevision int64  `json:"commerceWorkflowBindingRevision"`
+		WorkflowTemplateVersionID       string `json:"workflowTemplateVersionId"`
+		RebuildID                       string `json:"rebuildId"`
+		SourceUnitGenerationID          string `json:"sourceUnitGenerationId"`
+		TargetConfigurationHash         string `json:"targetConfigurationHash"`
+	}
+	if err := json.Unmarshal(currentUnitConfiguration, &rebuiltUnitSnapshot); err != nil {
+		t.Fatalf("decode rebuilt unit snapshot: %v", err)
+	}
+	if rebuiltUnitSnapshot.ProjectGenerationID != activated.ProjectGeneration.ID ||
+		rebuiltUnitSnapshot.VideoProductionBindingID != activated.VideoBinding.ID ||
+		rebuiltUnitSnapshot.VideoProductionBindingRevision != activated.VideoBinding.Revision ||
+		rebuiltUnitSnapshot.CommerceWorkflowBindingID != activated.CommerceBinding.ID ||
+		rebuiltUnitSnapshot.CommerceWorkflowBindingRevision != activated.CommerceBinding.Revision ||
+		rebuiltUnitSnapshot.WorkflowTemplateVersionID != templateVersionID ||
+		rebuiltUnitSnapshot.RebuildID != rebuildID ||
+		rebuiltUnitSnapshot.SourceUnitGenerationID != unit.Identity.UnitGenerationID ||
+		rebuiltUnitSnapshot.TargetConfigurationHash != activated.CommerceBinding.ConfigurationHash {
+		t.Fatalf("rebuilt unit snapshot = %+v, activated = %+v", rebuiltUnitSnapshot, activated)
 	}
 	runIdentity := UnitGenerationIdentity{
 		ExecutionIdentity: ExecutionIdentity{

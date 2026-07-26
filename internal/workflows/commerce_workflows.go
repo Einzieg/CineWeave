@@ -127,18 +127,19 @@ type CommerceStoryboardPlanningInput struct {
 }
 
 type CommerceReferenceImageBatchInput struct {
-	Identity            commerce.UnitGenerationIdentity `json:"identity"`
-	WorkflowRunID       string                          `json:"workflowRunId"`
-	ProductionRunID     string                          `json:"productionRunId"`
-	StoryboardPlanID    string                          `json:"storyboardPlanId"`
-	PlanEditRevision    int                             `json:"planEditRevision"`
-	Operation           string                          `json:"operation"`
-	ShotIDs             []string                        `json:"shotIds"`
-	Force               bool                            `json:"force"`
-	ReuseGeneratedMedia bool                            `json:"reuseGeneratedMedia,omitempty"`
-	Concurrency         int                             `json:"concurrency"`
-	CreatedBy           string                          `json:"createdBy"`
-	AttemptGeneration   int                             `json:"attemptGeneration"`
+	Identity                   commerce.UnitGenerationIdentity `json:"identity"`
+	WorkflowRunID              string                          `json:"workflowRunId"`
+	ProductionRunID            string                          `json:"productionRunId"`
+	StoryboardPlanID           string                          `json:"storyboardPlanId"`
+	PlanEditRevision           int                             `json:"planEditRevision"`
+	Operation                  string                          `json:"operation"`
+	ShotIDs                    []string                        `json:"shotIds"`
+	Force                      bool                            `json:"force"`
+	ReuseGeneratedMedia        bool                            `json:"reuseGeneratedMedia,omitempty"`
+	ReuseGeneratedMediaShotIDs []string                        `json:"reuseGeneratedMediaShotIds,omitempty"`
+	Concurrency                int                             `json:"concurrency"`
+	CreatedBy                  string                          `json:"createdBy"`
+	AttemptGeneration          int                             `json:"attemptGeneration"`
 }
 
 type CommerceVideoBatchInput struct {
@@ -258,15 +259,16 @@ type CommerceGenerationWorkflowFailureInput struct {
 }
 
 type CommerceStoryboardPlanCommit struct {
-	WorkflowInput           CommerceStoryboardPlanningInput    `json:"workflowInput"`
-	Snapshot                CommerceStoryboardPlanningSnapshot `json:"snapshot"`
-	SalesScriptContractID   string                             `json:"salesScriptContractId"`
-	SalesScriptContractHash string                             `json:"salesScriptContractHash"`
-	SalesScript             CommerceSalesScriptContract        `json:"salesScript"`
-	Plan                    CommerceStoryboardPlanContract     `json:"plan"`
-	Review                  CommerceStoryboardReviewContract   `json:"review"`
-	Projection              CommerceStoryboardProjection       `json:"projection"`
-	AgentCalls              []CommerceAgentProvenance          `json:"agentCalls"`
+	WorkflowInput           CommerceStoryboardPlanningInput     `json:"workflowInput"`
+	Snapshot                CommerceStoryboardPlanningSnapshot  `json:"snapshot"`
+	SalesScriptContractID   string                              `json:"salesScriptContractId"`
+	SalesScriptContractHash string                              `json:"salesScriptContractHash"`
+	SalesScript             CommerceSalesScriptContract         `json:"salesScript"`
+	DeterministicPlan       CommerceStoryboardDeterministicPlan `json:"deterministicPlan"`
+	Plan                    CommerceStoryboardPlanContract      `json:"plan"`
+	Review                  CommerceStoryboardReviewContract    `json:"review"`
+	Projection              CommerceStoryboardProjection        `json:"projection"`
+	AgentCalls              []CommerceAgentProvenance           `json:"agentCalls"`
 }
 
 type CommerceStoryboardPlanCommitResult struct {
@@ -279,15 +281,16 @@ type CommerceStoryboardPlanCommitResult struct {
 }
 
 type CommerceStoryboardPlanningOutput struct {
-	Identity                commerce.UnitGenerationIdentity    `json:"identity"`
-	SalesScriptContractID   string                             `json:"salesScriptContractId"`
-	SalesScriptContractHash string                             `json:"salesScriptContractHash"`
-	SalesScript             CommerceSalesScriptContract        `json:"salesScript"`
-	Plan                    CommerceStoryboardPlanContract     `json:"plan"`
-	Review                  CommerceStoryboardReviewContract   `json:"review"`
-	Projection              CommerceStoryboardProjection       `json:"projection"`
-	Commit                  CommerceStoryboardPlanCommitResult `json:"commit"`
-	AgentCalls              []CommerceAgentProvenance          `json:"agentCalls"`
+	Identity                commerce.UnitGenerationIdentity     `json:"identity"`
+	SalesScriptContractID   string                              `json:"salesScriptContractId"`
+	SalesScriptContractHash string                              `json:"salesScriptContractHash"`
+	SalesScript             CommerceSalesScriptContract         `json:"salesScript"`
+	DeterministicPlan       CommerceStoryboardDeterministicPlan `json:"deterministicPlan"`
+	Plan                    CommerceStoryboardPlanContract      `json:"plan"`
+	Review                  CommerceStoryboardReviewContract    `json:"review"`
+	Projection              CommerceStoryboardProjection        `json:"projection"`
+	Commit                  CommerceStoryboardPlanCommitResult  `json:"commit"`
+	AgentCalls              []CommerceAgentProvenance           `json:"agentCalls"`
 }
 
 // CommerceWorkflowActivityPorts is the persistence boundary required by the
@@ -354,6 +357,7 @@ func RegisterCommerceGenerationWorkflows(registrar CommerceWorkflowRegistrar) {
 	registrar.RegisterWorkflowWithOptions(CommerceStoryboardPlanningWorkflow, workflow.RegisterOptions{Name: CommerceStoryboardPlanningWorkflowName})
 	RegisterCommerceReferenceImageWorkflow(registrar)
 	RegisterCommerceVideoWorkflows(registrar)
+	registrar.RegisterWorkflowWithOptions(CommerceDirectVideoWorkflow, workflow.RegisterOptions{Name: CommerceDirectVideoWorkflowName})
 	RegisterCommerceFinalWorkflow(registrar)
 	RegisterCommerceScriptUnitBatchCoordinatorWorkflow(registrar)
 }
@@ -381,6 +385,11 @@ func RegisterCommerceGenerationActivities(registrar CommerceActivityRegistrar, a
 	registrar.RegisterActivityWithOptions(activities.CommitCommerceStoryboardPlan, activity.RegisterOptions{Name: CommitCommerceStoryboardPlanActivityName})
 	RegisterCommerceReferenceImageActivities(registrar, activities)
 	RegisterCommerceVideoActivities(registrar, activities)
+	registrar.RegisterActivityWithOptions(activities.Core.CreateCommerceDirectVideoTask, activity.RegisterOptions{Name: CreateCommerceDirectVideoActivity})
+	registrar.RegisterActivityWithOptions(activities.Core.PollCommerceDirectVideoTask, activity.RegisterOptions{Name: PollCommerceDirectVideoActivity})
+	registrar.RegisterActivityWithOptions(activities.Core.CompleteCommerceDirectVideo, activity.RegisterOptions{Name: CompleteCommerceDirectVideoActivity})
+	registrar.RegisterActivityWithOptions(activities.Core.FailCommerceDirectVideo, activity.RegisterOptions{Name: FailCommerceDirectVideoActivity})
+	registrar.RegisterActivityWithOptions(activities.Core.CancelCommerceDirectVideo, activity.RegisterOptions{Name: CancelCommerceDirectVideoActivity})
 	RegisterCommerceFinalActivities(registrar, activities)
 	RegisterCommerceScriptUnitBatchCoordinatorActivities(registrar, activities)
 }
@@ -393,38 +402,28 @@ func CommerceProjectSetupWorkflow(ctx workflow.Context, input CommerceProjectSet
 		strings.TrimSpace(input.SourceScriptVersionID) == "" || strings.TrimSpace(input.RequestedBy) == "" {
 		return CommerceProjectSetupOutput{}, commerceWorkflowError(CommerceCodeWorkflowInputInvalid, errors.New("commerce project setup identity is incomplete"))
 	}
-	activityCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	activityCtx := workflow.WithActivityOptions(ctx, commerceProjectSetupActivityOptions())
 	var output CommerceProjectSetupOutput
-	for {
-		if err := workflow.ExecuteActivity(activityCtx, ExecuteCommerceProjectSetupActivityName, input).Get(activityCtx, &output); err != nil {
-			code, message := workflowErrorFields(err, codeActivityFailed)
-			_ = workflow.ExecuteActivity(activityCtx, FailCommerceProjectSetupActivityName, CommerceProjectSetupFailureInput{
-				WorkflowInput: input, ErrorCode: code, ErrorMessage: message,
-			}).Get(activityCtx, nil)
-			return CommerceProjectSetupOutput{}, err
-		}
-		if output.Status != "waiting_user_confirmation" {
-			break
-		}
-		if !output.NeedsUserConfirmation || output.LanguageResolutionID == "" {
-			return CommerceProjectSetupOutput{}, commerceWorkflowError(CommerceCodeLanguageContractInvalid, errors.New("setup language confirmation state is incomplete"))
-		}
-		signalChannel := workflow.GetSignalChannel(ctx, CommerceSetupLanguageConfirmationSignalName)
-		for {
-			var signal CommerceSetupLanguageConfirmationSignal
-			signalChannel.Receive(ctx, &signal)
-			if signal.SetupSessionID != input.SetupSessionID || signal.LanguageResolutionID != output.LanguageResolutionID || strings.TrimSpace(signal.TargetLanguage) == "" {
-				continue
-			}
-			input.LanguageResolutionID = signal.LanguageResolutionID
-			input.ConfirmedTargetLanguage = signal.TargetLanguage
-			break
-		}
+	if err := workflow.ExecuteActivity(activityCtx, ExecuteCommerceProjectSetupActivityName, input).Get(activityCtx, &output); err != nil {
+		code, message := commerceProjectSetupErrorFields(err)
+		failureCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions())
+		_ = workflow.ExecuteActivity(failureCtx, FailCommerceProjectSetupActivityName, CommerceProjectSetupFailureInput{
+			WorkflowInput: input, ErrorCode: code, ErrorMessage: message,
+		}).Get(failureCtx, nil)
+		return CommerceProjectSetupOutput{}, temporal.NewNonRetryableApplicationError(message, code, err)
 	}
 	if err := validateCommerceProjectSetupOutput(input, output); err != nil {
 		return CommerceProjectSetupOutput{}, commerceWorkflowError(CommerceCodeGenerationMismatch, errors.New("commerce project setup commit returned an incomplete identity"))
 	}
 	return output, nil
+}
+
+func commerceProjectSetupErrorFields(err error) (string, string) {
+	var timeoutErr *temporal.TimeoutError
+	if errors.As(err, &timeoutErr) {
+		return provider.CodeUpstreamTimeout, "项目准备等待模型响应超时，请重试；已完成的供应商请求会自动复用"
+	}
+	return workflowErrorFields(err, codeActivityFailed)
 }
 
 func validateCommerceProjectSetupOutput(input CommerceProjectSetupInput, output CommerceProjectSetupOutput) error {
@@ -478,31 +477,16 @@ func CommerceScriptUnitPreparationWorkflow(ctx workflow.Context, input CommerceS
 	if err := validateCommerceLanguageResolutionState(snapshot, resolutionState); err != nil {
 		return CommerceScriptUnitPreparationOutput{}, commerceWorkflowError(CommerceCodeLanguageContractInvalid, err)
 	}
-	if resolutionState.Contract.NeedsUserConfirmation || resolutionState.Status == "needs_confirmation" {
-		resolutionState, err = waitForCommerceLanguageConfirmation(ctx, defaultCtx, input, snapshot, resolutionState)
-		if err != nil {
-			return CommerceScriptUnitPreparationOutput{}, err
-		}
-	}
 
 	localization, review, localizationCalls, err := prepareCommerceLocalizationInWorkflow(agentCtx, input, snapshot, resolutionState.Contract)
 	if err != nil {
 		return CommerceScriptUnitPreparationOutput{}, err
 	}
 	agentCalls = append(agentCalls, localizationCalls...)
-	policy, ok := snapshot.TimingPolicies[resolutionState.Contract.TargetLanguage]
-	if !ok {
-		return CommerceScriptUnitPreparationOutput{}, commerceWorkflowError(commerce.CodeLanguageUnsupported, fmt.Errorf("target locale %s has no frozen timing policy", resolutionState.Contract.TargetLanguage))
-	}
+	policy := commerceAdvisoryTimingPolicy(resolutionState.Contract.TargetLanguage)
 	timing, err := AnalyzeCommerceTiming(localization, policy, snapshot.TargetDurationSeconds)
 	if err != nil {
 		return CommerceScriptUnitPreparationOutput{}, commerceWorkflowError(CommerceCodeLocalizationContractInvalid, err)
-	}
-	if timing.Exceeded {
-		return CommerceScriptUnitPreparationOutput{}, temporal.NewNonRetryableApplicationError(
-			fmt.Sprintf("预计旁白 %.2f 秒，超过目标 %d 秒", timing.EstimatedVoiceoverSeconds, timing.TargetDurationSeconds),
-			CommerceCodeScriptDurationExceeded, nil, timing,
-		)
 	}
 	commitInput := CommerceScriptUnitPreparationCommit{
 		WorkflowInput: input, Snapshot: snapshot, LanguageResolution: resolutionState,
@@ -538,7 +522,7 @@ func CommerceStoryboardPlanningWorkflow(ctx workflow.Context, input CommerceStor
 		return CommerceStoryboardPlanningOutput{}, err
 	}
 	salesScript := salesScriptState.Contract
-	plan, review, projection, planningCalls, err := planCommerceStoryboardInWorkflow(agentCtx, input, snapshot, salesScript)
+	deterministicPlan, plan, review, projection, planningCalls, err := planCommerceStoryboardInWorkflow(agentCtx, input, snapshot, salesScript)
 	if err != nil {
 		return CommerceStoryboardPlanningOutput{}, err
 	}
@@ -546,8 +530,9 @@ func CommerceStoryboardPlanningWorkflow(ctx workflow.Context, input CommerceStor
 	commitInput := CommerceStoryboardPlanCommit{
 		WorkflowInput: input, Snapshot: snapshot,
 		SalesScriptContractID: salesScriptState.ContractID, SalesScriptContractHash: salesScriptState.ContractHash,
-		SalesScript: salesScript,
-		Plan:        plan, Review: review, Projection: projection, AgentCalls: planningCalls,
+		SalesScript:       salesScript,
+		DeterministicPlan: deterministicPlan,
+		Plan:              plan, Review: review, Projection: projection, AgentCalls: planningCalls,
 	}
 	var committed CommerceStoryboardPlanCommitResult
 	if err := workflow.ExecuteActivity(defaultCtx, CommitCommerceStoryboardPlanActivityName, commitInput).Get(defaultCtx, &committed); err != nil {
@@ -559,7 +544,8 @@ func CommerceStoryboardPlanningWorkflow(ctx workflow.Context, input CommerceStor
 	return CommerceStoryboardPlanningOutput{
 		Identity: input.Identity, SalesScriptContractID: salesScriptState.ContractID,
 		SalesScriptContractHash: salesScriptState.ContractHash,
-		SalesScript:             salesScript, Plan: plan, Review: review,
+		SalesScript:             salesScript, DeterministicPlan: deterministicPlan,
+		Plan: plan, Review: review,
 		Projection: projection, Commit: committed, AgentCalls: outputAgentCalls,
 	}, nil
 }
@@ -598,6 +584,7 @@ func resolveCommerceLanguageInWorkflow(ctx workflow.Context, input CommerceScrip
 		}
 		contract, err := ParseCommerceLanguageResolution(call.RawOutput)
 		if err == nil {
+			contract.NeedsUserConfirmation = false
 			err = ValidateCommerceLanguageResolution(contract, snapshot)
 		}
 		if err == nil {
@@ -609,72 +596,44 @@ func resolveCommerceLanguageInWorkflow(ctx workflow.Context, input CommerceScrip
 	return CommerceLanguageResolutionContract{}, CommerceAgentProvenance{}, commerceWorkflowError(CommerceCodeLanguageContractInvalid, lastErr)
 }
 
-func waitForCommerceLanguageConfirmation(ctx, activityCtx workflow.Context, input CommerceScriptUnitPreparationInput, snapshot CommerceScriptUnitPreparationSnapshot, current CommerceLanguageResolutionState) (CommerceLanguageResolutionState, error) {
-	channel := workflow.GetSignalChannel(ctx, CommerceLanguageConfirmationSignalName)
-	for {
-		var signal CommerceLanguageConfirmationSignal
-		channel.Receive(ctx, &signal)
-		if signal.Identity != input.Identity || signal.ResolutionID != current.ResolutionID || signal.ExpectedRevision != current.Revision || signal.InputHash != snapshot.InputHash {
-			continue
-		}
-		locale, err := canonicalCommerceLocale(signal.TargetLanguage)
-		if err != nil {
-			continue
-		}
-		allowed, _ := canonicalLocaleSet(snapshot.AllowedLocales)
-		if _, ok := allowed[locale]; !ok {
-			continue
-		}
-		signal.TargetLanguage = locale
-		var confirmed CommerceLanguageResolutionState
-		if err := workflow.ExecuteActivity(activityCtx, ConfirmCommerceLanguageActivityName, ConfirmCommerceLanguageInput{
-			WorkflowInput: input, Snapshot: snapshot, Current: current, Signal: signal,
-		}).Get(activityCtx, &confirmed); err != nil {
-			return CommerceLanguageResolutionState{}, err
-		}
-		if err := validateCommerceLanguageResolutionState(snapshot, confirmed); err != nil {
-			return CommerceLanguageResolutionState{}, commerceWorkflowError(CommerceCodeLanguageContractInvalid, err)
-		}
-		if confirmed.Status != "confirmed" || confirmed.Contract.NeedsUserConfirmation {
-			return CommerceLanguageResolutionState{}, commerceWorkflowError(CommerceCodeLanguageConfirmationRequired, errors.New("language confirmation did not reach a confirmed state"))
-		}
-		return confirmed, nil
-	}
-}
-
 func prepareCommerceLocalizationInWorkflow(ctx workflow.Context, input CommerceScriptUnitPreparationInput, snapshot CommerceScriptUnitPreparationSnapshot, resolution CommerceLanguageResolutionContract) (CommerceLocalizationContract, CommerceLocalizationReviewContract, []CommerceAgentProvenance, error) {
-	limit := commerceReviewRounds(snapshot.Bindings.ScriptLocalizer, snapshot.Bindings.LocalizationReviewer)
 	if resolution.SourceLanguage == resolution.TargetLanguage {
-		limit = 1
+		candidate := BuildCommerceIdentityLocalization(snapshot, resolution)
+		if err := ValidateCommerceLocalization(candidate, snapshot, resolution); err != nil {
+			return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil,
+				commerceWorkflowError(CommerceCodeLocalizationContractInvalid, err)
+		}
+		review := BuildCommerceIdentityLocalizationReview(candidate)
+		if err := ValidateCommerceLocalizationReview(review, candidate); err != nil {
+			return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil,
+				commerceWorkflowError(CommerceCodeLocalizationContractInvalid, err)
+		}
+		return candidate, review, []CommerceAgentProvenance{}, nil
 	}
+
+	limit := commerceReviewRounds(snapshot.Bindings.ScriptLocalizer)
 	feedback := []CommerceReviewIssue{}
 	calls := make([]CommerceAgentProvenance, 0, limit*2)
 	var lastErr error
 	for round := 1; round <= limit; round++ {
-		var candidate CommerceLocalizationContract
-		if resolution.SourceLanguage == resolution.TargetLanguage {
-			candidate = BuildCommerceIdentityLocalization(snapshot, resolution)
-		} else {
-			var call CommerceAgentCallOutput
-			if err := workflow.ExecuteActivity(ctx, LocalizeCommerceScriptActivityName, CommerceAgentCallInput{
-				PreparationIdentity: &input.Identity, WorkflowRunID: input.WorkflowRunID, AttemptGeneration: input.AttemptGeneration,
-				Phase: CommercePhasePreparation, Round: round, Binding: snapshot.Bindings.ScriptLocalizer,
-				InputLanguage: resolution.SourceLanguage, OutputLanguage: resolution.TargetLanguage,
-				Context: mustJSON(map[string]any{"snapshot": snapshot, "languageResolution": resolution, "reviewerIssues": feedback}), ReviewerIssues: feedback,
-			}).Get(ctx, &call); err != nil {
-				return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil, err
-			}
-			calls = append(calls, call.Provenance)
-			parsed, err := ParseCommerceLocalization(call.RawOutput)
-			if err == nil {
-				err = ValidateCommerceLocalization(parsed, snapshot, resolution)
-			}
-			if err != nil {
-				lastErr = err
-				feedback = commerceValidationFeedback(CommerceCodeLocalizationContractInvalid, "localization", err)
-				continue
-			}
-			candidate = parsed
+		var call CommerceAgentCallOutput
+		if err := workflow.ExecuteActivity(ctx, LocalizeCommerceScriptActivityName, CommerceAgentCallInput{
+			PreparationIdentity: &input.Identity, WorkflowRunID: input.WorkflowRunID, AttemptGeneration: input.AttemptGeneration,
+			Phase: CommercePhasePreparation, Round: round, Binding: snapshot.Bindings.ScriptLocalizer,
+			InputLanguage: resolution.SourceLanguage, OutputLanguage: resolution.TargetLanguage,
+			Context: mustJSON(map[string]any{"snapshot": snapshot, "languageResolution": resolution, "reviewerIssues": feedback}), ReviewerIssues: feedback,
+		}).Get(ctx, &call); err != nil {
+			return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil, err
+		}
+		calls = append(calls, call.Provenance)
+		candidate, err := ParseCommerceLocalization(call.RawOutput)
+		if err == nil {
+			err = ValidateCommerceLocalization(candidate, snapshot, resolution)
+		}
+		if err != nil {
+			lastErr = err
+			feedback = commerceValidationFeedback(CommerceCodeLocalizationContractInvalid, "localization", err)
+			continue
 		}
 		if err := ValidateCommerceLocalization(candidate, snapshot, resolution); err != nil {
 			lastErr = err
@@ -688,34 +647,47 @@ func prepareCommerceLocalizationInWorkflow(ctx workflow.Context, input CommerceS
 			InputLanguage: resolution.SourceLanguage, OutputLanguage: resolution.TargetLanguage,
 			Context: mustJSON(map[string]any{"snapshot": snapshot, "candidate": candidate}),
 		}).Get(ctx, &reviewCall); err != nil {
-			return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, nil, err
+			return candidate, BuildCommerceIdentityLocalizationReview(candidate), calls, nil
 		}
 		calls = append(calls, reviewCall.Provenance)
 		review, err := ParseCommerceLocalizationReview(reviewCall.RawOutput)
 		if err == nil {
+			review = CanonicalizeCommerceLocalizationReviewCoverage(review, candidate)
 			err = ValidateCommerceLocalizationReview(review, candidate)
 		}
 		if err != nil {
-			lastErr = err
-			feedback = commerceValidationFeedback(CommerceCodeAgentOutputInvalid, "localizationReview", err)
-			continue
+			return candidate, BuildCommerceIdentityLocalizationReview(candidate), calls, nil
 		}
-		if review.Decision == "approve" {
+		candidate, review, approved := ApplyCommerceLocalizationReviewPolicy(candidate, review)
+		if approved {
 			return candidate, review, calls, nil
 		}
-		lastErr = fmt.Errorf("localization reviewer returned %s", review.Decision)
-		feedback = sortedCommerceIssueCopy(review.Issues)
 	}
-	return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, calls, commerceWorkflowError(CommerceCodeLocalizationReviewExhausted, lastErr)
+	return CommerceLocalizationContract{}, CommerceLocalizationReviewContract{}, calls, commerceWorkflowError(CommerceCodeLocalizationContractInvalid, lastErr)
 }
 
-func planCommerceStoryboardInWorkflow(ctx workflow.Context, input CommerceStoryboardPlanningInput, snapshot CommerceStoryboardPlanningSnapshot, salesScript CommerceSalesScriptContract) (CommerceStoryboardPlanContract, CommerceStoryboardReviewContract, CommerceStoryboardProjection, []CommerceAgentProvenance, error) {
-	agentSnapshot, err := buildCommerceStoryboardAgentSnapshot(snapshot, salesScript)
+func planCommerceStoryboardInWorkflow(ctx workflow.Context, input CommerceStoryboardPlanningInput, snapshot CommerceStoryboardPlanningSnapshot, salesScript CommerceSalesScriptContract) (CommerceStoryboardDeterministicPlan, CommerceStoryboardPlanContract, CommerceStoryboardReviewContract, CommerceStoryboardProjection, []CommerceAgentProvenance, error) {
+	deterministicPlan, err := BuildCommerceStoryboardDeterministicPlan(snapshot, salesScript)
 	if err != nil {
-		return CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, nil,
+		return CommerceStoryboardDeterministicPlan{}, CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, nil,
 			commerceWorkflowError(CommerceCodeStoryboardContractInvalid, err)
 	}
-	limit := commerceReviewRounds(snapshot.Bindings.StoryboardPlanner, snapshot.Bindings.StoryboardReviewer)
+	agentSnapshot, err := buildCommerceStoryboardAgentSnapshot(snapshot, salesScript)
+	if err != nil {
+		return CommerceStoryboardDeterministicPlan{}, CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, nil,
+			commerceWorkflowError(CommerceCodeStoryboardContractInvalid, err)
+	}
+	plannerSnapshot, plannerSalesScript, sourceAliases, err := aliasCommerceStoryboardPlannerInput(agentSnapshot, salesScript)
+	if err != nil {
+		return CommerceStoryboardDeterministicPlan{}, CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, nil,
+			commerceWorkflowError(CommerceCodeStoryboardContractInvalid, err)
+	}
+	plannerSkeleton, err := aliasCommerceStoryboardCreativeSkeleton(deterministicPlan.Skeleton, sourceAliases)
+	if err != nil {
+		return CommerceStoryboardDeterministicPlan{}, CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, nil,
+			commerceWorkflowError(CommerceCodeStoryboardContractInvalid, err)
+	}
+	limit := commerceReviewRounds(snapshot.Bindings.StoryboardPlanner)
 	feedback := []CommerceReviewIssue{}
 	calls := make([]CommerceAgentProvenance, 0, limit*2)
 	var lastErr error
@@ -726,23 +698,35 @@ func planCommerceStoryboardInWorkflow(ctx workflow.Context, input CommerceStoryb
 			Phase: CommercePhaseStoryboard, Round: round, Binding: snapshot.Bindings.StoryboardPlanner,
 			InputLanguage: snapshot.TargetLocale, OutputLanguage: snapshot.TargetLocale,
 			Context: mustJSON(map[string]any{
-				"snapshot": agentSnapshot, "salesScript": salesScript,
-				"salesBeatAuthority": agentSnapshot.SalesBeatAuthority, "reviewerIssues": feedback,
+				"snapshot": plannerSnapshot, "salesScript": plannerSalesScript,
+				"salesBeatAuthority": agentSnapshot.SalesBeatAuthority,
+				"segmentationPlan":   deterministicPlan.Segmentation,
+				"frozenShotPlan":     plannerSkeleton,
+				"reviewerIssues":     feedback,
 			}), ReviewerIssues: feedback,
 		}).Get(ctx, &planCall); err != nil {
-			return CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, nil, err
+			return CommerceStoryboardDeterministicPlan{}, CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, nil, err
 		}
 		calls = append(calls, planCall.Provenance)
 		plan, err := ParseCommerceStoryboardPlan(planCall.RawOutput)
 		var projection CommerceStoryboardProjection
 		if err == nil {
+			plan, err = resolveCommerceStoryboardSourceSegmentAliases(plan, sourceAliases)
+		}
+		if err == nil {
+			plan, err = applyCommerceStoryboardCreativeDirection(deterministicPlan.Skeleton, plan)
+		}
+		if err == nil {
 			plan, err = bindCommerceStoryboardPlanIdentity(snapshot, plan)
 		}
 		if err == nil {
-			projection, err = BuildCommerceStoryboardProjection(snapshot, plan)
+			plan, err = reconcileCommerceStoryboardVoiceover(snapshot, plan)
 		}
 		if err == nil {
-			err = validateCommerceStoryboardSalesBeats(salesScript, plan)
+			plan, err = reconcileCommerceStoryboardSalesBeats(salesScript, plan)
+		}
+		if err == nil {
+			projection, err = BuildCommerceStoryboardProjection(snapshot, plan)
 		}
 		if err != nil {
 			lastErr = err
@@ -757,10 +741,11 @@ func planCommerceStoryboardInWorkflow(ctx workflow.Context, input CommerceStoryb
 			Context: mustJSON(map[string]any{
 				"snapshot": agentSnapshot, "salesScript": salesScript,
 				"salesBeatAuthority": agentSnapshot.SalesBeatAuthority,
+				"segmentationPlan":   deterministicPlan.Segmentation,
 				"candidate":          plan, "projection": projection,
 			}),
 		}).Get(ctx, &reviewCall); err != nil {
-			return CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, nil, err
+			return deterministicPlan, plan, BuildCommerceAdvisoryStoryboardReview(plan), projection, calls, nil
 		}
 		calls = append(calls, reviewCall.Provenance)
 		review, err := ParseCommerceStoryboardReview(reviewCall.RawOutput)
@@ -769,17 +754,11 @@ func planCommerceStoryboardInWorkflow(ctx workflow.Context, input CommerceStoryb
 			err = ValidateCommerceStoryboardReview(review, plan)
 		}
 		if err != nil {
-			lastErr = err
-			feedback = commerceValidationFeedback(CommerceCodeAgentOutputInvalid, "storyboardReview", err)
-			continue
+			return deterministicPlan, plan, BuildCommerceAdvisoryStoryboardReview(plan), projection, calls, nil
 		}
-		if review.Decision == "approve" {
-			return plan, review, projection, calls, nil
-		}
-		lastErr = fmt.Errorf("storyboard reviewer returned %s", review.Decision)
-		feedback = sortedCommerceIssueCopy(review.Issues)
+		return deterministicPlan, plan, review, projection, calls, nil
 	}
-	return CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, calls, commerceWorkflowError(CommerceCodeStoryboardReplanRequired, lastErr)
+	return CommerceStoryboardDeterministicPlan{}, CommerceStoryboardPlanContract{}, CommerceStoryboardReviewContract{}, CommerceStoryboardProjection{}, calls, commerceWorkflowError(CommerceCodeStoryboardContractInvalid, lastErr)
 }
 
 func commerceAgentActivityOptions() workflow.ActivityOptions {
@@ -860,6 +839,13 @@ func (a CommerceActivities) LoadCommerceScriptUnitPreparation(ctx context.Contex
 }
 
 func (a CommerceActivities) ExecuteCommerceProjectSetup(ctx context.Context, input CommerceProjectSetupInput) (CommerceProjectSetupOutput, error) {
+	stopHeartbeat := startWorkflowActivityHeartbeat(ctx, map[string]any{
+		"phase":          "commerce_project_setup",
+		"projectId":      input.ProjectID,
+		"setupSessionId": input.SetupSessionID,
+	})
+	defer stopHeartbeat()
+
 	port := a.SetupPort
 	if port == nil {
 		if fallback, ok := a.Ports.(CommerceProjectSetupPort); ok {

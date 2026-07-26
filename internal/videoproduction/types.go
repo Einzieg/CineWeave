@@ -28,6 +28,7 @@ const (
 	CodeRebuildImpactStale           = "PRODUCTION_PROFILE_REBUILD_IMPACT_STALE"
 	CodeConfigurationRebuildRequired = "VIDEO_PRODUCTION_RECONFIGURATION_REQUIRED"
 	CodeProjectLocked                = "PROJECT_VIDEO_PRODUCTION_LOCKED"
+	CodeProjectDeletionInProgress    = "PROJECT_DELETION_IN_PROGRESS"
 	CodePromptContractIncomplete     = "VIDEO_PRODUCTION_PROMPT_CONTRACT_INCOMPLETE"
 	CodeProfileIncompatible          = "PRODUCTION_PROFILE_INCOMPATIBLE"
 )
@@ -136,10 +137,12 @@ type Generation struct {
 }
 
 type Context struct {
-	Binding    Binding    `json:"binding"`
-	Generation Generation `json:"generation"`
-	Locked     bool       `json:"locked"`
-	State      string     `json:"state"`
+	Binding          Binding    `json:"binding"`
+	Generation       Generation `json:"generation"`
+	Locked           bool       `json:"locked"`
+	State            string     `json:"state"`
+	LifecycleStatus  string     `json:"lifecycleStatus"`
+	DeletionRevision int64      `json:"deletionRevision"`
 }
 
 type ModelCapability struct {

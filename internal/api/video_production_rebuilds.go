@@ -224,18 +224,48 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 		s.writeError(w, r, err)
 		return
 	}
+	var sourceCommerceBindingID *string
+	var sourceCommerceConfigurationHash *string
+	if project.ProjectKind.IsCommerce() {
+		var bindingID string
+		var configurationHash string
+		if err := tx.QueryRow(r.Context(), `
+			SELECT generation.commerce_workflow_binding_id::text, binding.configuration_hash
+			FROM project_video_production_generations generation
+			JOIN project_commerce_workflow_bindings binding
+			  ON binding.id = generation.commerce_workflow_binding_id
+			 AND binding.project_id = generation.project_id
+			 AND binding.organization_id = generation.organization_id
+			WHERE generation.id = $1
+			  AND generation.project_id = $2
+			  AND generation.organization_id = $3
+		`, impact.SourceGenerationID, project.ID, project.OrganizationID).Scan(
+			&bindingID,
+			&configurationHash,
+		); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		sourceCommerceBindingID = &bindingID
+		sourceCommerceConfigurationHash = &configurationHash
+	}
 	if _, err := tx.Exec(r.Context(), `
 		INSERT INTO project_video_production_rebuilds(
 			id, organization_id, project_id, source_binding_id, source_generation_id,
 			source_video_production_state,
+			source_commerce_workflow_binding_id, source_commerce_configuration_hash,
 			target_profile_version_id, status, reason, target_configuration, target_configuration_hash,
 			impact_snapshot, impact_token,
 			expected_project_revision, episode_count, retained_asset_count,
 			idempotency_key, requested_by, approved_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, now())
+		VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9,
+			'approved', $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now()
+		)
 	`, rebuildID, project.OrganizationID, project.ID, impact.SourceBindingID, impact.SourceGenerationID,
-		sourceVideoProductionState, target.ID, impact.Reason, targetConfigurationJSON, impact.TargetConfigurationHash,
+		sourceVideoProductionState, sourceCommerceBindingID, sourceCommerceConfigurationHash,
+		target.ID, impact.Reason, targetConfigurationJSON, impact.TargetConfigurationHash,
 		impactSnapshot, impact.ImpactToken, impact.ExpectedProjectRevision,
 		len(impact.Episodes), impact.Counts.RetainedAssets, idempotencyKey, principal.UserID); err != nil {
 		s.writeVideoProductionRebuildDatabaseError(w, r, err)

@@ -25,6 +25,24 @@ func TestNormalizeGatewayVideoStatus(t *testing.T) {
 	}
 }
 
+func TestGatewayVideoMediaPendingOutputPreservesUpstreamResult(t *testing.T) {
+	output := gatewayVideoMediaPendingOutput(
+		json.RawMessage(`{"status":"succeeded","videoUrl":"https://provider.example/v1/videos/task_1/content","externalTaskId":"task_1"}`),
+		CodeMediaDownloadFailed,
+		"provider video download failed",
+	)
+	var decoded map[string]any
+	if err := json.Unmarshal(output, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["status"] != "running" || decoded["mediaTransferStatus"] != "pending" ||
+		decoded["mediaTransferErrorCode"] != CodeMediaDownloadFailed ||
+		decoded["videoUrl"] != "https://provider.example/v1/videos/task_1/content" ||
+		decoded["externalTaskId"] != "task_1" {
+		t.Fatalf("pending output = %#v", decoded)
+	}
+}
+
 func TestValidateGatewayVideoCreateTaskIdentityRejectsCrossExecutionReuse(t *testing.T) {
 	task := gatewayVideoTask{
 		NodeRunID: "node-old", NodeExecutionToken: "token-old", NodeAttemptGeneration: 1,
