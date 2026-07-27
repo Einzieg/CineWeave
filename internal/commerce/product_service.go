@@ -245,13 +245,6 @@ func (s *CatalogService) ArchiveProductReference(
 	referenceID string,
 	expectedRevision int64,
 ) (ProductReference, error) {
-	used, err := s.repository.ProductReferenceUsedByActiveGeneration(ctx, tx, organizationID, projectID, referenceID)
-	if err != nil {
-		return ProductReference{}, err
-	}
-	if used {
-		return ProductReference{}, Error{Code: CodeProductReconfigure, Message: "当前商品图片已被生产使用，请先确认商品换版影响"}
-	}
 	return s.repository.ArchiveProductReference(ctx, tx, organizationID, projectID, referenceID, expectedRevision)
 }
 

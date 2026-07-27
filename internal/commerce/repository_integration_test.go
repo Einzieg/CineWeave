@@ -545,6 +545,26 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assert rebuilt unit generation: %v", err)
 	}
+	archivedReference, err := catalog.ArchiveProductReference(
+		ctx, tx, organizationID, draft.ProjectID, primaryReference.ID, primaryReference.Revision,
+	)
+	if err != nil {
+		t.Fatalf("archive reference used by active generation: %v", err)
+	}
+	if archivedReference.Status != "archived" || archivedReference.ArchivedAt == nil {
+		t.Fatalf("archived product reference = %+v", archivedReference)
+	}
+	var frozenReferenceCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*)
+		FROM commerce_product_reference_pack_items
+		WHERE reference_pack_id = $1 AND product_reference_id = $2
+	`, unit.ReferencePackID, primaryReference.ID).Scan(&frozenReferenceCount); err != nil {
+		t.Fatalf("count frozen product reference: %v", err)
+	}
+	if frozenReferenceCount != 1 {
+		t.Fatalf("frozen product reference count = %d, want 1", frozenReferenceCount)
+	}
 
 	hashValue := func(value byte) string { return strings.Repeat(string(value), 64) }
 	salesScriptContractID, salesScriptContractHash := insertCommerceSalesScriptContractFixture(

@@ -16,6 +16,16 @@ import {
 import { toast } from "sonner";
 
 import { SectionTitle, Surface } from "@/components/layout/app-shell";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -80,6 +90,7 @@ export function CommerceMaterialsPage({ projectId }: { projectId: string }) {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [draftOverride, setDraftOverride] = useState<ProductDraft | null>(null);
   const [preview, setPreview] = useState<CommerceProductReference | null>(null);
+  const [referenceToDelete, setReferenceToDelete] = useState<CommerceProductReference | null>(null);
 
   const productQuery = useApiQuery({
     key: qk.commerceProduct(projectId),
@@ -183,10 +194,14 @@ export function CommerceMaterialsPage({ projectId }: { projectId: string }) {
     mutationFn: (session, item: CommerceProductReference) =>
       studioApi.archiveCommerceProductReference(session, projectId, item.id, item.revision),
     onSuccess: () => {
-      invalidate([qk.commerceProductReferencesRoot(projectId)]);
-      toast.success("商品图片已移除");
+      setReferenceToDelete(null);
+      invalidate([
+        qk.commerceProduct(projectId),
+        qk.commerceProductReferencesRoot(projectId),
+      ]);
+      toast.success("商品图片已删除");
     },
-    onError: (error) => toast.error(userFacingErrorMessage(error, "商品图片移除失败")),
+    onError: (error) => toast.error(userFacingErrorMessage(error, "商品图片删除失败")),
   });
 
   const isInitialLoading = productQuery.isLoading && !product;
@@ -327,7 +342,7 @@ export function CommerceMaterialsPage({ projectId }: { projectId: string }) {
                   onPreview={() => setPreview(item)}
                   onRoleChange={(referenceRole) => updateReference.mutate({ item, referenceRole })}
                   onSetPrimary={() => updateReference.mutate({ item, setPrimary: true })}
-                  onRemove={() => archiveReference.mutate(item)}
+                  onRemove={() => setReferenceToDelete(item)}
                 />
               ))}
             </div>
@@ -360,6 +375,36 @@ export function CommerceMaterialsPage({ projectId }: { projectId: string }) {
           ) : null}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={Boolean(referenceToDelete)}
+        onOpenChange={(open) => {
+          if (!open && !archiveReference.isPending) setReferenceToDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除商品参考图</AlertDialogTitle>
+            <AlertDialogDescription>
+              删除后，此图片不会再用于新的视频任务。已创建的任务和历史视频仍会保留原有引用。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={archiveReference.isPending}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={archiveReference.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                if (referenceToDelete) archiveReference.mutate(referenceToDelete);
+              }}
+            >
+              {archiveReference.isPending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

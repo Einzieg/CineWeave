@@ -349,22 +349,6 @@ func (r *Repository) UpdateProductReference(ctx context.Context, tx pgx.Tx, orga
 	return item, nil
 }
 
-func (r *Repository) ProductReferenceUsedByActiveGeneration(ctx context.Context, db rowQuerier, organizationID, projectID, referenceID string) (bool, error) {
-	var used bool
-	err := db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM commerce_product_reference_pack_items item
-			JOIN commerce_product_reference_packs pack ON pack.id = item.reference_pack_id
-			JOIN commerce_script_unit_generations generation ON generation.reference_pack_id = pack.id
-			WHERE item.product_reference_id = $1
-			  AND item.organization_id = $2 AND item.project_id = $3
-			  AND generation.status = 'active'
-		)
-	`, referenceID, organizationID, projectID).Scan(&used)
-	return used, err
-}
-
 func (r *Repository) ArchiveProductReference(ctx context.Context, tx pgx.Tx, organizationID, projectID, referenceID string, expectedRevision int64) (ProductReference, error) {
 	current, err := scanProductReference(tx.QueryRow(ctx, productReferenceSelectSQL+`
 		WHERE id = $1 AND organization_id = $2 AND project_id = $3 FOR UPDATE

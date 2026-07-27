@@ -2084,7 +2084,7 @@ paths:
           $ref: "#/components/responses/Error"
     delete:
       operationId: archiveCommerceProductReference
-      description: Archives an unused product reference without deleting its artifact or media file.
+      description: Archives a product reference without deleting its artifact, media file, or immutable references held by existing production snapshots.
       security:
         - bearerAuth: []
       parameters:
