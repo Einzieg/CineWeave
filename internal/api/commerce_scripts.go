@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -73,6 +74,10 @@ func (s *Server) createCommerceScriptUnit(w http.ResponseWriter, r *http.Request
 	if !decode(w, r, &req) {
 		return
 	}
+	if err := s.validateCommerceScriptContentForCurrentVideoModel(r.Context(), project, req.Content); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
@@ -118,6 +123,12 @@ func (s *Server) updateCommerceScriptUnit(w http.ResponseWriter, r *http.Request
 	}
 	if !decode(w, r, &req) {
 		return
+	}
+	if req.DraftContent != nil {
+		if err := s.validateCommerceScriptContentForCurrentVideoModel(r.Context(), project, *req.DraftContent); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
 	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
@@ -280,6 +291,23 @@ func (s *Server) createCommerceScriptUnitDerivationDecoded(w http.ResponseWriter
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
 }
 
+func (s *Server) validateCommerceScriptContentForCurrentVideoModel(
+	ctx context.Context,
+	project Project,
+	content string,
+) error {
+	options, err := s.commerceDirect.Options(ctx, s.db, project.OrganizationID, project.ID)
+	if err != nil {
+		// Script editing remains available while a project is still being
+		// configured or its video route is temporarily unavailable.
+		if _, ok := commercepkg.AsError(err); ok {
+			return nil
+		}
+		return err
+	}
+	return commercepkg.ValidateDirectVideoScript(content, options.ScriptPromptConstraint)
+}
+
 func (s *Server) listCommerceScriptVersions(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionScriptRead)
 	if !ok {
@@ -318,6 +346,10 @@ func (s *Server) createCommerceScriptVersion(w http.ResponseWriter, r *http.Requ
 		Activate           bool    `json:"activate"`
 	}
 	if !decode(w, r, &req) {
+		return
+	}
+	if err := s.validateCommerceScriptContentForCurrentVideoModel(r.Context(), project, req.Content); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	tx, err := s.db.Begin(r.Context())

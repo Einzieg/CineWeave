@@ -77,6 +77,7 @@ func (s *Service) BuildCommerceDirectVideoSnapshots(
 			"priority":              candidate.Priority,
 			"weight":                candidate.Weight,
 		}
+		promptConstraint := ModelPromptLengthConstraint(candidate.Capabilities)
 		routes = append(routes, route)
 		capabilityCandidates = append(capabilityCandidates, map[string]any{
 			"modelProfileId":          candidate.ModelProfileID,
@@ -88,6 +89,7 @@ func (s *Service) BuildCommerceDirectVideoSnapshots(
 			"modality":                candidate.Modality,
 			"priority":                candidate.Priority,
 			"weight":                  candidate.Weight,
+			"promptConstraint":        promptConstraint,
 			"capabilities":            candidate.Capabilities,
 			"videoGenerationVariants": variantSnapshots,
 		})

@@ -960,6 +960,11 @@ export type CommerceDirectVideoInputContract = {
   mutuallyExclusiveRoles?: string[][];
 };
 
+export type CommercePromptLengthConstraint = {
+  maxLength: number;
+  unit: "characters" | "utf8_bytes";
+};
+
 export type CommerceDirectVideoRoute = {
   routeKey: string;
   modelProfileId: string;
@@ -975,6 +980,7 @@ export type CommerceDirectVideoRoute = {
   executableDurationSeconds: number[];
   resolutions: string[];
   aspectRatios: string[];
+  promptConstraint: CommercePromptLengthConstraint;
   inputContract: CommerceDirectVideoInputContract;
   nativeAudio: {
     support: string;
@@ -992,6 +998,8 @@ export type CommerceDirectVideoOptions = {
   videoProductionProfileSnapshotHash: string;
   defaultAspectRatio: string;
   defaultResolution: string;
+  defaultDurationSeconds: number;
+  scriptPromptConstraint: CommercePromptLengthConstraint;
   executableDurationSeconds: number[];
   resolutions: string[];
   aspectRatios: string[];

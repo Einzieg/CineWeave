@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { commerceScriptDraftMetrics } from "./commerce-script-metrics.ts";
+import {
+  commerceScriptExceedsPromptLimit,
+  maximumExecutableDuration,
+  measureCommerceScriptLength,
+} from "./commerce-direct-video.ts";
 import { commerceSetupPreparationGate } from "./commerce-setup-gate.ts";
 import { commerceStoryboardStrategyAction } from "./commerce-storyboard-strategy.ts";
 import { commerceTimingAdvisory } from "./commerce-timing-advisory.ts";
@@ -52,6 +57,24 @@ test("Chinese script metrics count Han characters", () => {
   assert.equal(metrics.unitLabel, "字");
   assert.equal(metrics.detectedLanguageLabel, "中文");
   assert.ok(metrics.units > 10);
+});
+
+test("Commerce direct video defaults to the maximum executable duration", () => {
+  assert.equal(maximumExecutableDuration([6, 16, 10, 12]), 16);
+  assert.equal(maximumExecutableDuration([]), 0);
+});
+
+test("Commerce script limits follow the configured model length unit", () => {
+  assert.equal(measureCommerceScriptLength("蛊真人", "characters"), 3);
+  assert.equal(measureCommerceScriptLength("蛊真人", "utf8_bytes"), 9);
+  assert.equal(
+    commerceScriptExceedsPromptLimit("蛊真人", { maxLength: 9, unit: "utf8_bytes" }),
+    false,
+  );
+  assert.equal(
+    commerceScriptExceedsPromptLimit("蛊真人啊", { maxLength: 9, unit: "utf8_bytes" }),
+    true,
+  );
 });
 
 test("commerce timing overrun remains an advisory against the selected target", () => {

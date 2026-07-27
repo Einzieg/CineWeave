@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,38 +44,46 @@ type DirectVideoNativeAudio struct {
 	SupportsVoiceover *bool  `json:"supportsVoiceover,omitempty"`
 }
 
+type DirectVideoPromptConstraint struct {
+	MaxLength int    `json:"maxLength"`
+	Unit      string `json:"unit"`
+}
+
 type DirectVideoRoute struct {
-	RouteKey                  string                   `json:"routeKey"`
-	ModelProfileID            string                   `json:"modelProfileId"`
-	ModelProfileKey           string                   `json:"modelProfileKey"`
-	ModelProfileBindingID     string                   `json:"modelProfileBindingId"`
-	ProviderModelID           string                   `json:"providerModelId"`
-	ProviderAccountID         string                   `json:"providerAccountId"`
-	ProviderModelKey          string                   `json:"providerModelKey"`
-	Priority                  int                      `json:"priority"`
-	Weight                    int                      `json:"weight"`
-	VariantKey                string                   `json:"variantKey"`
-	CapabilitySnapshotHash    string                   `json:"capabilitySnapshotHash"`
-	ExecutableDurationSeconds []int                    `json:"executableDurationSeconds"`
-	Resolutions               []string                 `json:"resolutions"`
-	AspectRatios              []string                 `json:"aspectRatios"`
-	InputContract             DirectVideoInputContract `json:"inputContract"`
-	NativeAudio               DirectVideoNativeAudio   `json:"nativeAudio"`
+	RouteKey                  string                      `json:"routeKey"`
+	ModelProfileID            string                      `json:"modelProfileId"`
+	ModelProfileKey           string                      `json:"modelProfileKey"`
+	ModelProfileBindingID     string                      `json:"modelProfileBindingId"`
+	ProviderModelID           string                      `json:"providerModelId"`
+	ProviderAccountID         string                      `json:"providerAccountId"`
+	ProviderModelKey          string                      `json:"providerModelKey"`
+	Priority                  int                         `json:"priority"`
+	Weight                    int                         `json:"weight"`
+	VariantKey                string                      `json:"variantKey"`
+	CapabilitySnapshotHash    string                      `json:"capabilitySnapshotHash"`
+	ExecutableDurationSeconds []int                       `json:"executableDurationSeconds"`
+	Resolutions               []string                    `json:"resolutions"`
+	AspectRatios              []string                    `json:"aspectRatios"`
+	PromptConstraint          DirectVideoPromptConstraint `json:"promptConstraint"`
+	InputContract             DirectVideoInputContract    `json:"inputContract"`
+	NativeAudio               DirectVideoNativeAudio      `json:"nativeAudio"`
 }
 
 type DirectVideoOptions struct {
-	ContractVersion                    string             `json:"contractVersion"`
-	ProjectProductionGenerationID      string             `json:"projectProductionGenerationId"`
-	VideoProductionBindingID           string             `json:"videoProductionBindingId"`
-	VideoProductionBindingRevision     int64              `json:"videoProductionBindingRevision"`
-	VideoProductionProfileVersionID    string             `json:"videoProductionProfileVersionId"`
-	VideoProductionProfileSnapshotHash string             `json:"videoProductionProfileSnapshotHash"`
-	DefaultAspectRatio                 string             `json:"defaultAspectRatio"`
-	DefaultResolution                  string             `json:"defaultResolution"`
-	ExecutableDurationSeconds          []int              `json:"executableDurationSeconds"`
-	Resolutions                        []string           `json:"resolutions"`
-	AspectRatios                       []string           `json:"aspectRatios"`
-	Routes                             []DirectVideoRoute `json:"routes"`
+	ContractVersion                    string                      `json:"contractVersion"`
+	ProjectProductionGenerationID      string                      `json:"projectProductionGenerationId"`
+	VideoProductionBindingID           string                      `json:"videoProductionBindingId"`
+	VideoProductionBindingRevision     int64                       `json:"videoProductionBindingRevision"`
+	VideoProductionProfileVersionID    string                      `json:"videoProductionProfileVersionId"`
+	VideoProductionProfileSnapshotHash string                      `json:"videoProductionProfileSnapshotHash"`
+	DefaultAspectRatio                 string                      `json:"defaultAspectRatio"`
+	DefaultResolution                  string                      `json:"defaultResolution"`
+	DefaultDurationSeconds             int                         `json:"defaultDurationSeconds"`
+	ScriptPromptConstraint             DirectVideoPromptConstraint `json:"scriptPromptConstraint"`
+	ExecutableDurationSeconds          []int                       `json:"executableDurationSeconds"`
+	Resolutions                        []string                    `json:"resolutions"`
+	AspectRatios                       []string                    `json:"aspectRatios"`
+	Routes                             []DirectVideoRoute          `json:"routes"`
 }
 
 type ScriptReferenceImage struct {
@@ -216,15 +225,20 @@ type PreparedDirectVideoJob struct {
 }
 
 type directVideoCapabilityCandidate struct {
-	ModelProfileID        string `json:"modelProfileId"`
-	ModelProfileKey       string `json:"modelProfileKey"`
-	ModelProfileBindingID string `json:"modelProfileBindingId"`
-	ProviderModelID       string `json:"providerModelId"`
-	ProviderAccountID     string `json:"providerAccountId"`
-	ModelKey              string `json:"modelKey"`
-	Priority              int    `json:"priority"`
-	Weight                int    `json:"weight"`
-	Variants              []struct {
+	ModelProfileID        string                      `json:"modelProfileId"`
+	ModelProfileKey       string                      `json:"modelProfileKey"`
+	ModelProfileBindingID string                      `json:"modelProfileBindingId"`
+	ProviderModelID       string                      `json:"providerModelId"`
+	ProviderAccountID     string                      `json:"providerAccountId"`
+	ModelKey              string                      `json:"modelKey"`
+	Priority              int                         `json:"priority"`
+	Weight                int                         `json:"weight"`
+	PromptConstraint      DirectVideoPromptConstraint `json:"promptConstraint"`
+	Capabilities          []struct {
+		InputLimits           json.RawMessage `json:"inputLimits"`
+		ProviderOptionsSchema json.RawMessage `json:"providerOptionsSchema"`
+	} `json:"capabilities"`
+	Variants []struct {
 		VariantKey                string   `json:"variantKey"`
 		CapabilitySnapshotHash    string   `json:"capabilitySnapshotHash"`
 		ExecutableDurationSeconds []int    `json:"executableDurationSeconds"`
@@ -271,6 +285,10 @@ func BuildDirectVideoOptions(production ProductionContext) (DirectVideoOptions, 
 	aspectSet := map[string]bool{}
 	durationSet := map[int]bool{}
 	for _, candidate := range video.Candidates {
+		promptConstraint := normalizedDirectVideoPromptConstraint(candidate.PromptConstraint)
+		if promptConstraint.MaxLength == 0 {
+			promptConstraint = directVideoPromptConstraintFromCapabilities(candidate.Capabilities)
+		}
 		for _, variant := range candidate.Variants {
 			if strings.TrimSpace(variant.VariantKey) == "" || !validSHA256(variant.CapabilitySnapshotHash) {
 				continue
@@ -285,6 +303,7 @@ func BuildDirectVideoOptions(production ProductionContext) (DirectVideoOptions, 
 				ExecutableDurationSeconds: normalizedDirectVideoInts(variant.ExecutableDurationSeconds),
 				Resolutions:               normalizedDirectVideoStrings(variant.Resolutions),
 				AspectRatios:              normalizedDirectVideoStrings(variant.AspectRatios),
+				PromptConstraint:          promptConstraint,
 				InputContract:             variant.Capability.InputContract, NativeAudio: variant.Capability.NativeAudio,
 			}
 			if len(route.ExecutableDurationSeconds) == 0 || len(route.Resolutions) == 0 {
@@ -318,7 +337,24 @@ func BuildDirectVideoOptions(production ProductionContext) (DirectVideoOptions, 
 	options.ExecutableDurationSeconds = sortedDirectVideoInts(durationSet)
 	options.Resolutions = sortedDirectVideoStrings(resolutionSet)
 	options.AspectRatios = sortedDirectVideoStrings(aspectSet)
-	options.DefaultResolution = configuredDirectVideoResolution(configuration.ProductionConfiguration, options.Resolutions)
+	options.DefaultDurationSeconds = options.ExecutableDurationSeconds[len(options.ExecutableDurationSeconds)-1]
+	defaultResolutionSet := map[string]bool{}
+	for _, route := range options.Routes {
+		if containsDirectVideoInt(route.ExecutableDurationSeconds, options.DefaultDurationSeconds) {
+			for _, resolution := range route.Resolutions {
+				defaultResolutionSet[resolution] = true
+			}
+		}
+	}
+	options.DefaultResolution = configuredDirectVideoResolution(
+		configuration.ProductionConfiguration,
+		sortedDirectVideoStrings(defaultResolutionSet),
+	)
+	defaultRoute, err := SelectDirectVideoRoute(options, options.DefaultDurationSeconds, options.DefaultResolution)
+	if err != nil {
+		return DirectVideoOptions{}, err
+	}
+	options.ScriptPromptConstraint = defaultRoute.PromptConstraint
 	return options, nil
 }
 
@@ -339,6 +375,38 @@ func SelectDirectVideoRoute(options DirectVideoOptions, duration int, resolution
 		Code: CodeDirectVideoInvalid, Message: "当前视频模型不支持所选时长与分辨率组合",
 		Details: map[string]any{"durationSeconds": duration, "resolution": resolution},
 	}
+}
+
+func ValidateDirectVideoScript(content string, constraint DirectVideoPromptConstraint) error {
+	constraint = normalizedDirectVideoPromptConstraint(constraint)
+	length := MeasureDirectVideoPromptLength(content, constraint.Unit)
+	if constraint.MaxLength <= 0 || length <= constraint.MaxLength {
+		return nil
+	}
+	unitLabel := "个 Unicode 字符"
+	if constraint.Unit == "utf8_bytes" {
+		unitLabel = "个 UTF-8 字节"
+	}
+	return Error{
+		Code: CodeScriptPromptTooLong,
+		Message: fmt.Sprintf(
+			"广告脚本长度为 %d%s，超过当前视频模型上限 %d%s",
+			length, unitLabel, constraint.MaxLength, unitLabel,
+		),
+		Details: map[string]any{
+			"actualLength": length,
+			"maxLength":    constraint.MaxLength,
+			"unit":         constraint.Unit,
+		},
+	}
+}
+
+func MeasureDirectVideoPromptLength(content string, unit string) int {
+	content = strings.TrimSpace(content)
+	if normalizeDirectVideoPromptLengthUnit(unit) == "utf8_bytes" {
+		return len([]byte(content))
+	}
+	return len([]rune(content))
 }
 
 func AssignDirectVideoReferenceRoles(contract DirectVideoInputContract, count int) ([]string, error) {
@@ -489,6 +557,98 @@ func normalizedDirectVideoStrings(values []string) []string {
 		}
 	}
 	return sortedDirectVideoStrings(seen)
+}
+
+func normalizedDirectVideoPromptConstraint(constraint DirectVideoPromptConstraint) DirectVideoPromptConstraint {
+	if constraint.MaxLength < 0 {
+		constraint.MaxLength = 0
+	}
+	constraint.Unit = normalizeDirectVideoPromptLengthUnit(constraint.Unit)
+	if constraint.Unit == "" {
+		constraint.Unit = "characters"
+	}
+	return constraint
+}
+
+func directVideoPromptConstraintFromCapabilities(capabilities []struct {
+	InputLimits           json.RawMessage `json:"inputLimits"`
+	ProviderOptionsSchema json.RawMessage `json:"providerOptionsSchema"`
+}) DirectVideoPromptConstraint {
+	constraint := DirectVideoPromptConstraint{Unit: "characters"}
+	for _, capability := range capabilities {
+		for _, raw := range []json.RawMessage{capability.InputLimits, capability.ProviderOptionsSchema} {
+			values := directVideoPromptConstraintValues(raw)
+			candidate := directVideoPositivePromptLimit(values)
+			if candidate <= 0 || (constraint.MaxLength > 0 && candidate >= constraint.MaxLength) {
+				continue
+			}
+			constraint.MaxLength = candidate
+			constraint.Unit = normalizeDirectVideoPromptLengthUnit(
+				directVideoPromptConstraintString(values, "promptLengthUnit", "promptLimitUnit"),
+			)
+			if constraint.Unit == "" {
+				constraint.Unit = "characters"
+			}
+		}
+	}
+	return constraint
+}
+
+func directVideoPromptConstraintValues(raw json.RawMessage) map[string]any {
+	var values map[string]any
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil
+	}
+	if nested, ok := values["xCapabilities"].(map[string]any); ok {
+		return nested
+	}
+	return values
+}
+
+func directVideoPositivePromptLimit(values map[string]any) int {
+	for _, key := range []string{"promptMaxLength", "maxPromptLength", "maxPromptCharacters"} {
+		if value := directVideoPromptConstraintInt(values[key]); value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func directVideoPromptConstraintInt(value any) int {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case int:
+		return typed
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return int(parsed)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(typed))
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func directVideoPromptConstraintString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func normalizeDirectVideoPromptLengthUnit(unit string) string {
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case "byte", "bytes", "utf8_byte", "utf8_bytes", "utf-8-byte", "utf-8-bytes":
+		return "utf8_bytes"
+	case "character", "characters", "char", "chars", "rune", "runes":
+		return "characters"
+	default:
+		return ""
+	}
 }
 
 func sortedDirectVideoStrings(values map[string]bool) []string {

@@ -37,6 +37,7 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
   COMMERCE_SCRIPT_ORGANIZATION_IN_PROGRESS: "销售脚本正在整理，请稍后查看任务进度",
   COMMERCE_SCRIPT_ORGANIZATION_INVALID: "销售脚本整理结果未通过结构校验，请重试",
   COMMERCE_SCRIPT_ORGANIZATION_REQUIRED: "请先完成销售脚本整理",
+  COMMERCE_SCRIPT_PROMPT_TOO_LONG: "广告脚本超过当前视频模型允许的长度，请删减后重试",
   COMMERCE_SCRIPT_REQUIRED: "请先填写广告脚本",
   COMMERCE_SCRIPT_UNIT_REBUILD_BLOCKED: "当前脚本换代存在阻断项，请先处理后重试",
   COMMERCE_SCRIPT_UNIT_REBUILD_REQUIRED: "当前脚本已有生产结果，请确认影响后换代",

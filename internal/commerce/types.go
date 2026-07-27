@@ -33,6 +33,7 @@ const (
 	CodeScriptUnitArchived        = "COMMERCE_SCRIPT_UNIT_ARCHIVED"
 	CodeScriptUnitRevision        = "COMMERCE_SCRIPT_UNIT_REVISION_CONFLICT"
 	CodeScriptRequired            = "COMMERCE_SCRIPT_REQUIRED"
+	CodeScriptPromptTooLong       = "COMMERCE_SCRIPT_PROMPT_TOO_LONG"
 	CodeLanguageRequired          = "COMMERCE_LANGUAGE_REQUIRED"
 	CodeLanguageUnsupported       = "COMMERCE_LANGUAGE_UNSUPPORTED"
 	CodeLanguageConfirmation      = "COMMERCE_LANGUAGE_CONFIRMATION_REQUIRED"

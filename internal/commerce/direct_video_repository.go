@@ -360,6 +360,9 @@ func (s *DirectVideoService) PrepareJob(
 	if err != nil {
 		return PreparedDirectVideoJob{}, err
 	}
+	if err := ValidateDirectVideoScript(unit.CurrentSourceVersion.Content, route.PromptConstraint); err != nil {
+		return PreparedDirectVideoJob{}, err
+	}
 	references, err := s.loadSelectedReferences(ctx, tx, product, unit, params.Input.References)
 	if err != nil {
 		return PreparedDirectVideoJob{}, err

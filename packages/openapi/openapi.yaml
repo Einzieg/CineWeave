@@ -23692,7 +23692,9 @@ components:
         title:
           type: string
           minLength: 1
-        content: {type: string}
+        content:
+          type: string
+          description: Validated against CommerceDirectVideoOptions.scriptPromptConstraint when a video route is configured.
         languageMode:
           type: string
           enum: [auto, explicit]
@@ -23720,7 +23722,9 @@ components:
         title:
           type: string
           minLength: 1
-        draftContent: {type: string}
+        draftContent:
+          type: string
+          description: Validated against CommerceDirectVideoOptions.scriptPromptConstraint when supplied.
         languageMode:
           type: string
           enum: [auto, explicit]
@@ -23865,6 +23869,7 @@ components:
         - executableDurationSeconds
         - resolutions
         - aspectRatios
+        - promptConstraint
         - inputContract
         - nativeAudio
       properties:
@@ -23895,6 +23900,8 @@ components:
           type: array
           uniqueItems: true
           items: {type: string}
+        promptConstraint:
+          $ref: "#/components/schemas/PromptLengthConstraint"
         inputContract:
           $ref: "#/components/schemas/CommerceDirectVideoInputContract"
         nativeAudio:
@@ -23915,6 +23922,8 @@ components:
         - videoProductionProfileSnapshotHash
         - defaultAspectRatio
         - defaultResolution
+        - defaultDurationSeconds
+        - scriptPromptConstraint
         - executableDurationSeconds
         - resolutions
         - aspectRatios
@@ -23932,6 +23941,14 @@ components:
           pattern: "^[0-9a-f]{64}$"
         defaultAspectRatio: {type: string}
         defaultResolution: {type: string}
+        defaultDurationSeconds:
+          type: integer
+          minimum: 1
+          description: Maximum executable whole-second duration for the default generation selection.
+        scriptPromptConstraint:
+          allOf:
+            - $ref: "#/components/schemas/PromptLengthConstraint"
+          description: Prompt length constraint of the model route selected by the default duration and resolution.
         executableDurationSeconds:
           type: array
           minItems: 1
@@ -24309,6 +24326,7 @@ components:
         content:
           type: string
           minLength: 1
+          description: Validated against CommerceDirectVideoOptions.scriptPromptConstraint.
         sourceLanguageHint:
           $ref: "#/components/schemas/CommerceLocale"
         activate:

@@ -57,6 +57,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { studioApi } from "@/lib/api-client";
+import {
+  commercePromptLengthUnitLabel,
+  commerceScriptExceedsPromptLimit,
+  maximumExecutableDuration,
+  measureCommerceScriptLength,
+} from "@/lib/commerce-direct-video";
 import { userFacingErrorMessage } from "@/lib/error-localization";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
@@ -66,6 +72,7 @@ import type {
   CommerceDirectVideoJob,
   CommerceDirectVideoOptions,
   CommerceDirectVideoReferenceSelection,
+  CommercePromptLengthConstraint,
   CommerceProductReference,
   CommerceScriptReferenceImage,
   CommerceScriptUnit,
@@ -167,6 +174,17 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
       const title = input.title.trim();
       const content = input.content.trim();
       if (!title || !content) throw new Error("脚本标题和正文不能为空");
+      const promptConstraint = options?.scriptPromptConstraint;
+      if (promptConstraint && commerceScriptExceedsPromptLimit(content, promptConstraint)) {
+        const length = measureCommerceScriptLength(content, promptConstraint.unit);
+        throw new Error(
+          `广告脚本长度为 ${length} ${commercePromptLengthUnitLabel(promptConstraint.unit)}，`
+          + `超过当前视频模型上限 ${promptConstraint.maxLength}`,
+        );
+      }
+      const maximumDuration =
+        options?.defaultDurationSeconds
+        ?? maximumExecutableDuration(options?.executableDurationSeconds ?? []);
       if (input.mode === "create") {
         return studioApi.createCommerceScriptUnit(session, projectId, {
           expectedScriptUnitsRevision: unitsQuery.data?.scriptUnitsRevision ?? 0,
@@ -174,9 +192,9 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
           content,
           languageMode: "auto",
           targetDurationSeconds:
-            options?.executableDurationSeconds[0]
-            ?? projectQuery.data?.scriptUnitDefaults?.targetDurationSeconds
-            ?? 6,
+            maximumDuration
+            || projectQuery.data?.scriptUnitDefaults?.targetDurationSeconds
+            || 6,
           targetPlatform: projectQuery.data?.scriptUnitDefaults?.targetPlatform ?? "other",
         });
       }
@@ -269,9 +287,8 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
 
   const openGenerate = (unit: CommerceScriptUnit) => {
     const durationSeconds =
-      options?.executableDurationSeconds.includes(unit.targetDurationSeconds)
-        ? unit.targetDurationSeconds
-        : options?.executableDurationSeconds[0] ?? 0;
+      options?.defaultDurationSeconds
+      ?? maximumExecutableDuration(options?.executableDurationSeconds ?? []);
     const compatibleResolutions = options
       ? directVideoResolutionsForDuration(options, durationSeconds)
       : [];
@@ -387,6 +404,7 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
 
       <ScriptEditorDialog
         state={editor}
+        promptConstraint={options?.scriptPromptConstraint}
         saving={saveScript.isPending}
         onChange={setEditor}
         onClose={() => setEditor(null)}
@@ -558,17 +576,24 @@ function ScriptVideoRow({
 
 function ScriptEditorDialog({
   state,
+  promptConstraint,
   saving,
   onChange,
   onClose,
   onSave,
 }: {
   state: ScriptEditorState | null;
+  promptConstraint?: CommercePromptLengthConstraint;
   saving: boolean;
   onChange: (state: ScriptEditorState | null) => void;
   onClose: () => void;
   onSave: () => void;
 }) {
+  const contentLength = state
+    ? measureCommerceScriptLength(state.content, promptConstraint?.unit ?? "characters")
+    : 0;
+  const contentTooLong = commerceScriptExceedsPromptLimit(state?.content ?? "", promptConstraint);
+  const lengthUnitLabel = commercePromptLengthUnitLabel(promptConstraint?.unit ?? "characters");
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-4xl">
@@ -588,14 +613,27 @@ function ScriptEditorDialog({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="commerce-script-content">广告脚本</Label>
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="commerce-script-content">广告脚本</Label>
+                {promptConstraint?.maxLength ? (
+                  <span className={cn("text-xs tabular-nums", contentTooLong ? "text-destructive" : "text-muted-foreground")}>
+                    {contentLength} / {promptConstraint.maxLength} {lengthUnitLabel}
+                  </span>
+                ) : null}
+              </div>
               <Textarea
                 id="commerce-script-content"
                 className="field-sizing-fixed h-[clamp(14rem,50dvh,32rem)] min-h-56 max-h-[50dvh] resize-y overflow-y-auto overscroll-contain font-mono text-sm leading-6"
                 value={state.content}
+                aria-invalid={contentTooLong}
                 onChange={(event) => onChange({ ...state, content: event.target.value })}
                 placeholder="输入完整广告脚本，可使用任意语言。"
               />
+              {contentTooLong ? (
+                <p className="text-xs text-destructive">
+                  已超过当前视频模型允许的脚本长度，请删减后保存。
+                </p>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -603,7 +641,7 @@ function ScriptEditorDialog({
           <Button type="button" variant="outline" onClick={onClose}>取消</Button>
           <Button
             type="button"
-            disabled={saving || !state?.title.trim() || !state?.content.trim()}
+            disabled={saving || contentTooLong || !state?.title.trim() || !state?.content.trim()}
             onClick={onSave}
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}

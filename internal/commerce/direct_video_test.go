@@ -20,11 +20,65 @@ func TestBuildDirectVideoOptionsUsesExecutableVideoRoutes(t *testing.T) {
 	if options.DefaultResolution != "720p" {
 		t.Fatalf("default resolution = %q, want 720p", options.DefaultResolution)
 	}
+	if options.DefaultDurationSeconds != 16 {
+		t.Fatalf("default duration = %d, want 16", options.DefaultDurationSeconds)
+	}
+	if options.ScriptPromptConstraint.MaxLength != 4096 ||
+		options.ScriptPromptConstraint.Unit != "characters" {
+		t.Fatalf("script prompt constraint = %+v", options.ScriptPromptConstraint)
+	}
 	if len(options.Routes) != 2 {
 		t.Fatalf("route count = %d, want 2", len(options.Routes))
 	}
 	if options.Routes[0].ProviderModelKey != "priority-model" {
 		t.Fatalf("first route model = %q, want priority-model", options.Routes[0].ProviderModelKey)
+	}
+}
+
+func TestBuildDirectVideoOptionsDerivesPromptConstraintFromLegacySnapshot(t *testing.T) {
+	production := directVideoTestProductionContext(t)
+	candidate := directVideoTestCandidate("priority-model", 100, 50, []int{6, 16}, "a")
+	delete(candidate, "promptConstraint")
+	candidate["capabilities"] = []map[string]any{{
+		"inputLimits": map[string]any{
+			"promptMaxLength":  120,
+			"promptLengthUnit": "utf8_bytes",
+		},
+	}}
+	raw, err := json.Marshal(map[string]any{
+		"videoGenerator": map[string]any{"candidates": []map[string]any{candidate}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	production.CommerceBinding.CapabilitySnapshot = raw
+
+	options, err := BuildDirectVideoOptions(production)
+	if err != nil {
+		t.Fatalf("BuildDirectVideoOptions() error = %v", err)
+	}
+	if got := options.ScriptPromptConstraint; got.MaxLength != 120 || got.Unit != "utf8_bytes" {
+		t.Fatalf("legacy script prompt constraint = %+v", got)
+	}
+}
+
+func TestValidateDirectVideoScriptUsesConfiguredLengthUnit(t *testing.T) {
+	if err := ValidateDirectVideoScript("蛊真人", DirectVideoPromptConstraint{
+		MaxLength: 9,
+		Unit:      "utf8_bytes",
+	}); err != nil {
+		t.Fatalf("ValidateDirectVideoScript() boundary error = %v", err)
+	}
+	err := ValidateDirectVideoScript("蛊真人啊", DirectVideoPromptConstraint{
+		MaxLength: 9,
+		Unit:      "utf8_bytes",
+	})
+	typed, ok := AsError(err)
+	if !ok || typed.Code != CodeScriptPromptTooLong {
+		t.Fatalf("ValidateDirectVideoScript() error = %v, want %s", err, CodeScriptPromptTooLong)
+	}
+	if typed.Details["actualLength"] != 12 || typed.Details["maxLength"] != 9 {
+		t.Fatalf("length details = %#v", typed.Details)
 	}
 }
 
@@ -200,6 +254,10 @@ func directVideoTestCandidate(modelKey string, priority int, weight int, duratio
 		"modelKey":              modelKey,
 		"priority":              priority,
 		"weight":                weight,
+		"promptConstraint": map[string]any{
+			"maxLength": 4096,
+			"unit":      "characters",
+		},
 		"videoGenerationVariants": []map[string]any{{
 			"variantKey":                "i2v",
 			"capabilitySnapshotHash":    strings.Repeat(hashChar, 64),
