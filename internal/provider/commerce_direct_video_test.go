@@ -57,7 +57,7 @@ func TestDecodeCommerceDirectVideoExecutionContractPreservesCompleteWireHash(t *
 	if err := json.Unmarshal(raw, &narrowed); err != nil {
 		t.Fatal(err)
 	}
-	narrowedHash, err := stableJSONHash(narrowed)
+	narrowedHash, err := commerce.DirectVideoHash(narrowed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,5 +85,12 @@ func TestDecodeCommerceDirectVideoExecutionContractRejectsHashMismatch(t *testin
 		standard.Standard.Code != CodeRenderPlanReplanRequired ||
 		standard.Standard.Message != "带货视频直生成执行契约完整性校验失败" {
 		t.Fatalf("error = %v, want integrity failure", err)
+	}
+}
+
+func TestCommerceDirectVideoTextHashMatchesProducer(t *testing.T) {
+	prompt := "  第一行广告脚本\r\nSecond line.  "
+	if got, want := commerceDirectVideoTextHash(prompt), commerce.DirectVideoTextHash(prompt); got != want {
+		t.Fatalf("gateway hash = %s, producer hash = %s", got, want)
 	}
 }

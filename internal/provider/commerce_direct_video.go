@@ -2,13 +2,12 @@ package provider
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"math"
 	"strconv"
 	"strings"
 
+	"github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -34,23 +33,6 @@ type commerceDirectRoute struct {
 	VariantKey             string             `json:"variantKey"`
 	CapabilitySnapshotHash string             `json:"capabilitySnapshotHash"`
 	InputContract          VideoInputContract `json:"inputContract"`
-}
-
-type commerceDirectReferenceIdentity struct {
-	ID                     string          `json:"id"`
-	SourceType             string          `json:"sourceType"`
-	SourceID               string          `json:"sourceId"`
-	ProductReferenceID     *string         `json:"productReferenceId,omitempty"`
-	ScriptReferenceImageID *string         `json:"scriptReferenceImageId,omitempty"`
-	ArtifactID             string          `json:"artifactId"`
-	MediaFileID            string          `json:"mediaFileId"`
-	StorageKey             string          `json:"storageKey"`
-	MimeType               string          `json:"mimeType"`
-	ReferenceRole          string          `json:"referenceRole"`
-	Ordinal                int             `json:"ordinal"`
-	ContentHash            string          `json:"contentHash"`
-	SourceRevision         int64           `json:"sourceRevision"`
-	Snapshot               json.RawMessage `json:"snapshot"`
 }
 
 func (s *Service) validateCommerceDirectVideoExecutionRequest(
@@ -154,8 +136,8 @@ func (s *Service) validateCommerceDirectVideoExecutionRequest(
 	}
 	if strings.TrimSpace(req.PromptSource) != "user_script" ||
 		strings.TrimSpace(req.PromptHash) != promptHash || promptHash != scriptHash ||
-		videoPromptTextHash(scriptSnapshot) != scriptHash ||
-		input.Prompt != scriptSnapshot || videoPromptTextHash(input.Prompt) != scriptHash {
+		commerceDirectVideoTextHash(scriptSnapshot) != scriptHash ||
+		input.Prompt != scriptSnapshot || commerceDirectVideoTextHash(input.Prompt) != scriptHash {
 		return commerceDirectVideoContractError("实际发送的广告脚本与直生成任务快照不一致")
 	}
 	if math.Abs(input.DurationSeconds-float64(duration)) > 0.001 ||
@@ -190,7 +172,7 @@ func (s *Service) validateCommerceDirectVideoExecutionRequest(
 	if err != nil {
 		return err
 	}
-	currentReferenceSetHash, err := stableJSONHash(references)
+	currentReferenceSetHash, err := commerce.DirectVideoReferenceSetHash(references)
 	if err != nil || currentReferenceSetHash != referenceSetHash {
 		return commerceDirectVideoContractError("带货视频直生成参考图快照完整性校验失败")
 	}
@@ -216,7 +198,7 @@ func decodeCommerceDirectVideoExecutionContract(
 	expectedHash string,
 ) (commerceDirectVideoExecutionContract, string, error) {
 	var contract commerceDirectVideoExecutionContract
-	hash, err := stableJSONHash(json.RawMessage(raw))
+	hash, err := commerce.DirectVideoHash(json.RawMessage(raw))
 	if err != nil {
 		return contract, "", commerceDirectVideoContractError("带货视频直生成执行契约已损坏")
 	}
@@ -235,7 +217,7 @@ func decodeCommerceDirectVideoExecutionContract(
 	if err := json.Unmarshal(envelope.Route, &routeEnvelope); err != nil || len(routeEnvelope.InputContract) == 0 {
 		return contract, "", commerceDirectVideoContractError("带货视频直生成执行契约已损坏")
 	}
-	inputContractHash, err := stableJSONHash(routeEnvelope.InputContract)
+	inputContractHash, err := commerce.DirectVideoHash(routeEnvelope.InputContract)
 	if err != nil {
 		return contract, "", commerceDirectVideoContractError("带货视频直生成执行契约已损坏")
 	}
@@ -245,12 +227,16 @@ func decodeCommerceDirectVideoExecutionContract(
 	return contract, inputContractHash, nil
 }
 
+func commerceDirectVideoTextHash(value string) string {
+	return commerce.DirectVideoTextHash(value)
+}
+
 func (s *Service) loadCommerceDirectVideoReferences(
 	ctx context.Context,
 	organizationID string,
 	projectID string,
 	jobID string,
-) ([]commerceDirectReferenceIdentity, error) {
+) ([]commerce.DirectVideoReferenceSnapshot, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT reference.id::text, reference.source_type, reference.source_id::text,
 		       reference.product_reference_id::text, reference.script_reference_image_id::text,
@@ -266,9 +252,9 @@ func (s *Service) loadCommerceDirectVideoReferences(
 		return nil, err
 	}
 	defer rows.Close()
-	items := make([]commerceDirectReferenceIdentity, 0)
+	items := make([]commerce.DirectVideoReferenceSnapshot, 0)
 	for rows.Next() {
-		var item commerceDirectReferenceIdentity
+		var item commerce.DirectVideoReferenceSnapshot
 		var productReferenceID, scriptReferenceID pgtype.Text
 		if err := rows.Scan(&item.ID, &item.SourceType, &item.SourceID,
 			&productReferenceID, &scriptReferenceID, &item.ArtifactID, &item.MediaFileID,
@@ -294,23 +280,6 @@ func directVideoSourceRevision(value int64) string {
 		return ""
 	}
 	return strconv.FormatInt(value, 10)
-}
-
-func stableJSONHash(value any) (string, error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return "", err
-	}
-	var normalized any
-	if err := json.Unmarshal(raw, &normalized); err != nil {
-		return "", err
-	}
-	raw, err = json.Marshal(normalized)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 func directVideoPGTextPointer(value pgtype.Text) *string {

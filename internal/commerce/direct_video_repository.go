@@ -382,7 +382,7 @@ func (s *DirectVideoService) PrepareJob(
 		references[index].ReferenceRole = roles[index]
 		references[index].Ordinal = index
 	}
-	referenceHash, err := DirectVideoHash(references)
+	referenceHash, err := DirectVideoReferenceSetHash(references)
 	if err != nil {
 		return PreparedDirectVideoJob{}, err
 	}

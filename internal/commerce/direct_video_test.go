@@ -126,6 +126,30 @@ func TestPrioritizeDirectVideoReferencesUsesProductPrimaryAsFirstFrameCandidate(
 	}
 }
 
+func TestDirectVideoReferenceSetHashIgnoresPreviewURLs(t *testing.T) {
+	references := []DirectVideoReferenceSnapshot{{
+		ID: "reference", SourceType: "product", SourceID: "source",
+		ProductReferenceID: directStringPointer("source"),
+		ArtifactID:         "artifact", MediaFileID: "media", StorageKey: "products/reference.png",
+		MimeType: "image/png", ReferenceRole: "first_frame", Ordinal: 0,
+		ContentHash: "content-hash", SourceRevision: 3,
+		Snapshot:   json.RawMessage(`{"sourceType":"product","isPrimary":true}`),
+		PreviewURL: "https://storage.example/first-signature",
+	}}
+	firstHash, err := DirectVideoReferenceSetHash(references)
+	if err != nil {
+		t.Fatal(err)
+	}
+	references[0].PreviewURL = "https://storage.example/refreshed-signature"
+	secondHash, err := DirectVideoReferenceSetHash(references)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstHash != secondHash {
+		t.Fatalf("reference hash changed with preview URL: %s != %s", firstHash, secondHash)
+	}
+}
+
 func directVideoTestProductionContext(t *testing.T) ProductionContext {
 	t.Helper()
 	configuration, err := json.Marshal(map[string]any{

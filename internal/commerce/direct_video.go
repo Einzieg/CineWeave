@@ -418,6 +418,15 @@ func DirectVideoTextHash(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func DirectVideoReferenceSetHash(references []DirectVideoReferenceSnapshot) (string, error) {
+	identities := make([]DirectVideoReferenceSnapshot, len(references))
+	copy(identities, references)
+	for index := range identities {
+		identities[index].PreviewURL = ""
+	}
+	return DirectVideoHash(identities)
+}
+
 func directVideoContractSupportsImages(contract DirectVideoInputContract) bool {
 	for _, slot := range contract.Slots {
 		if strings.EqualFold(strings.TrimSpace(slot.MediaType), "image") &&
