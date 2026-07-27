@@ -21,7 +21,8 @@ func TestOpenAICompatibleVideoCreateAndPoll(t *testing.T) {
 			if body["model"] != "grok-imagine-video-1.5-preview" || body["prompt"] != "slow camera push" || body["image"] != "https://cdn.example/frame.png" {
 				t.Fatalf("create body = %#v", body)
 			}
-			if body["size"] != "1280x720" || body["duration"] != float64(5) || body["n"] != float64(1) {
+			if body["size"] != "1280x720" || body["aspect_ratio"] != "16:9" || body["resolution"] != "720p" ||
+				body["duration"] != float64(5) || body["n"] != float64(1) {
 				t.Fatalf("create layout = %#v", body)
 			}
 			if _, ok := body["width"]; ok {
@@ -389,4 +390,51 @@ func TestNewAPIVideoDimensions(t *testing.T) {
 			t.Fatalf("dimensions(%q, %q) = %dx%d, want %dx%d", test.resolution, test.aspectRatio, width, height, test.width, test.height)
 		}
 	}
+}
+
+func TestOpenAICompatibleNewAPIVideoLayoutMapping(t *testing.T) {
+	tests := []struct {
+		name             string
+		modelKey         string
+		config           openAICompatibleConfig
+		wantNativeLayout bool
+	}{
+		{name: "grok auto", modelKey: "grok-imagine-video-1.5-preview", config: openAICompatibleConfig{VideoProtocol: "new_api"}, wantNativeLayout: true},
+		{name: "xai namespaced auto", modelKey: "x-ai/grok-imagine-video", config: openAICompatibleConfig{VideoProtocol: "new_api"}, wantNativeLayout: true},
+		{name: "generic size only", modelKey: "sora-2", config: openAICompatibleConfig{VideoProtocol: "new_api"}, wantNativeLayout: false},
+		{name: "generic explicit native", modelKey: "custom-video", config: openAICompatibleConfig{VideoProtocol: "new_api", VideoForwardNativeLayout: boolPointer(true)}, wantNativeLayout: true},
+		{name: "grok explicit size only", modelKey: "grok-imagine-video", config: openAICompatibleConfig{VideoProtocol: "new_api", VideoForwardNativeLayout: boolPointer(false)}, wantNativeLayout: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := buildOpenAICompatibleVideoRequest(
+				test.modelKey,
+				json.RawMessage(`{
+					"prompt":"layout contract",
+					"aspectRatio":"9:16",
+					"resolution":"720p",
+					"providerOptions":{"size":"960x960","aspect_ratio":"1:1","resolution":"480p"}
+				}`),
+				nil,
+				test.config,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if body["size"] != "720x1280" {
+				t.Fatalf("size = %#v, body = %#v", body["size"], body)
+			}
+			if test.wantNativeLayout {
+				if body["aspect_ratio"] != "9:16" || body["resolution"] != "720p" {
+					t.Fatalf("native layout = %#v/%#v, body = %#v", body["aspect_ratio"], body["resolution"], body)
+				}
+			} else if body["aspect_ratio"] != "1:1" || body["resolution"] != "480p" {
+				t.Fatalf("explicit provider options must remain available for non-native mapping: %#v", body)
+			}
+		})
+	}
+}
+
+func boolPointer(value bool) *bool {
+	return &value
 }

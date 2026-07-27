@@ -179,6 +179,86 @@ func TestGatewayVideoRuntimeIntegration(t *testing.T) {
 	assertSnapshotsDoNotLeakAPIKey(t, ctx, pool, result.ProviderCallID, result.TestRunID)
 }
 
+func TestGatewayVideoOutputMismatchFinalizesAsyncTask(t *testing.T) {
+	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
+		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run provider gateway video integration tests")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is required for provider gateway video integration tests")
+	}
+	ctx := context.Background()
+	pool, err := db.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	upstream := newVideoRuntimeMock(t)
+	defer upstream.Close()
+	vault, err := NewVault("")
+	if err != nil {
+		t.Fatalf("new vault: %v", err)
+	}
+	orgID, _, projectID, modelID := seedGatewayVideoIntegrationData(t, ctx, pool, vault, upstream.URL)
+	identity := loadGatewayVideoIntegrationIdentity(t, ctx, pool, projectID)
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID) })
+
+	service := NewService(pool, vault)
+	service.EnableGatewayRuntime()
+	service.SetStorage(newMemoryObjectStorage())
+	service.SetVideoMediaProbe(func(context.Context, []byte, string) (GatewayVideoMediaProbe, error) {
+		return GatewayVideoMediaProbe{DurationSeconds: 5, Width: 960, Height: 960}, nil
+	})
+	created, err := service.CreateVideoTask(ctx, GatewayVideoCreateTaskRequest{
+		OrganizationID: orgID, ProjectID: projectID, ProviderModelID: modelID,
+		ProductionGenerationID: identity.GenerationID, VideoProductionBindingID: identity.BindingID,
+		VideoProductionBindingRevision: identity.BindingRevision,
+		Input: mustJSON(map[string]any{
+			"prompt": "Wrong layout terminalization", "duration": 5,
+			"aspectRatio": "16:9", "resolution": "720p",
+		}),
+	})
+	if err != nil || created.ProviderAsyncTaskID == "" {
+		t.Fatalf("create video task: response=%+v err=%v", created, err)
+	}
+	first, err := service.PollVideoTask(ctx, GatewayVideoPollTaskRequest{
+		OrganizationID: orgID, ProjectID: projectID, ProviderAsyncTaskID: created.ProviderAsyncTaskID,
+		ProductionGenerationID: identity.GenerationID, VideoProductionBindingID: identity.BindingID,
+		VideoProductionBindingRevision: identity.BindingRevision,
+		Options:                        GatewayVideoOptions{IdempotencyKey: "layout-mismatch-poll-1"},
+	})
+	if err != nil || first.Status != "running" {
+		t.Fatalf("first poll: response=%+v err=%v", first, err)
+	}
+	second, err := service.PollVideoTask(ctx, GatewayVideoPollTaskRequest{
+		OrganizationID: orgID, ProjectID: projectID, ProviderAsyncTaskID: created.ProviderAsyncTaskID,
+		ProductionGenerationID: identity.GenerationID, VideoProductionBindingID: identity.BindingID,
+		VideoProductionBindingRevision: identity.BindingRevision,
+		Options:                        GatewayVideoOptions{IdempotencyKey: "layout-mismatch-poll-2"},
+	})
+	if err != nil {
+		t.Fatalf("second poll: %v", err)
+	}
+	if second.Status != "failed" || second.Error == nil || second.Error.Code != CodeUpstreamOutputMismatch || second.Error.Retryable {
+		t.Fatalf("second poll = %+v", second)
+	}
+	var status, errorCode string
+	var pollCount int
+	var completed, finalized bool
+	if err := pool.QueryRow(ctx, `
+		SELECT status, error_code, poll_count, completed_at IS NOT NULL, finalized_at IS NOT NULL
+		FROM provider_async_tasks
+		WHERE id = $1
+	`, created.ProviderAsyncTaskID).Scan(&status, &errorCode, &pollCount, &completed, &finalized); err != nil {
+		t.Fatalf("load terminal provider task: %v", err)
+	}
+	if status != "failed" || errorCode != CodeUpstreamOutputMismatch || pollCount != 2 || !completed || !finalized {
+		t.Fatalf("terminal provider task = status:%s code:%s polls:%d completed:%t finalized:%t", status, errorCode, pollCount, completed, finalized)
+	}
+	assertGatewayVideoArtifactCount(t, ctx, pool, created.ProviderAsyncTaskID, 0)
+}
+
 func TestGatewayVideoPollKeepsTaskCredentialAfterRotation(t *testing.T) {
 	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
 		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run provider gateway video integration tests")

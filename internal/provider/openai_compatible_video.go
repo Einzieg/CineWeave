@@ -169,8 +169,6 @@ func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, r
 		if err := appendOpenRouterVideoReferences(body, ordinaryReferences); err != nil {
 			return nil, err
 		}
-		copyVideoRequestOption(body, decoded, "aspectRatio", "aspect_ratio")
-		copyVideoRequestOption(body, decoded, "resolution", "resolution")
 		copyVideoRequestOption(body, decoded, "generateAudio", "generate_audio")
 	} else {
 		inputReferences := make([]map[string]any, 0)
@@ -215,15 +213,7 @@ func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, r
 		}
 	}
 
-	if protocol == "" || protocol == "new_api" || protocol == "newapi" {
-		if width, height := newAPIVideoDimensions(videoStringOption(decoded, "resolution"), videoStringOption(decoded, "aspectRatio")); width > 0 && height > 0 {
-			// New API's /v1/video/generations contract reads size and ignores
-			// width/height, which otherwise falls back to its portrait default.
-			body["size"] = fmt.Sprintf("%dx%d", width, height)
-		}
-	} else if protocol != "openrouter" {
-		copyVideoRequestOption(body, decoded, "aspectRatio", "aspect_ratio")
-		copyVideoRequestOption(body, decoded, "resolution", "resolution")
+	if protocol != "openrouter" && protocol != "" && protocol != "new_api" && protocol != "newapi" {
 		copyVideoRequestOption(body, decoded, "mode", "mode")
 	}
 	if negativePrompt := videoStringOption(decoded, "negativePrompt"); negativePrompt != "" {
@@ -231,7 +221,48 @@ func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, r
 	}
 	mergeVideoRequestOverrides(body, decoded["extraBody"])
 	mergeVideoRequestOverrides(body, decoded["providerOptions"])
+	applyOpenAICompatibleVideoLayout(body, decoded, modelKey, cfg)
 	return body, nil
+}
+
+func applyOpenAICompatibleVideoLayout(body, decoded map[string]any, modelKey string, cfg openAICompatibleConfig) {
+	protocol := strings.ToLower(strings.TrimSpace(cfg.VideoProtocol))
+	aspectRatio := videoStringOption(decoded, "aspectRatio")
+	resolution := videoStringOption(decoded, "resolution")
+	if protocol == "" || protocol == "new_api" || protocol == "newapi" {
+		if width, height := newAPIVideoDimensions(resolution, aspectRatio); width > 0 && height > 0 {
+			// New API uses size for its generic task contract and billing. Some
+			// OpenAI-compatible upstreams, including xAI video, also require
+			// their native aspect_ratio and resolution fields.
+			body["size"] = fmt.Sprintf("%dx%d", width, height)
+		}
+		forwardNative := isXAINativeVideoModel(modelKey)
+		if cfg.VideoForwardNativeLayout != nil {
+			forwardNative = *cfg.VideoForwardNativeLayout
+		}
+		if forwardNative {
+			if aspectRatio != "" {
+				body["aspect_ratio"] = aspectRatio
+			}
+			if resolution != "" {
+				body["resolution"] = resolution
+			}
+		}
+		return
+	}
+	if aspectRatio != "" {
+		body["aspect_ratio"] = aspectRatio
+	}
+	if resolution != "" {
+		body["resolution"] = resolution
+	}
+}
+
+func isXAINativeVideoModel(modelKey string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(modelKey))
+	return strings.HasPrefix(normalized, "grok-") ||
+		strings.HasPrefix(normalized, "xai/") ||
+		strings.HasPrefix(normalized, "x-ai/")
 }
 
 func appendOpenRouterVideoReferences(body map[string]any, references []GatewayVideoReference) error {

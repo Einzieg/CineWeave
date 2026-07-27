@@ -42,6 +42,7 @@ type openAICompatibleConfig struct {
 	VideoExtensionField         string `json:"videoExtensionField"`
 	VideoExtensionModeField     string `json:"videoExtensionModeField"`
 	VideoExtensionModeValue     string `json:"videoExtensionModeValue"`
+	VideoForwardNativeLayout    *bool  `json:"videoForwardNativeLayout"`
 	TimeoutMS                   int    `json:"timeoutMs"`
 	VideoPollTimeoutMS          int    `json:"videoPollTimeoutMs"`
 	DisableV1Prefix             bool   `json:"disableV1Prefix"`

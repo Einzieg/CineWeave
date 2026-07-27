@@ -877,11 +877,14 @@ func (s *Service) executeGatewayVideoPoll(ctx context.Context, req GatewayVideoP
 			var mediaErr error
 			stored, mediaErr = s.downloadAndStoreGatewayVideoMedia(ctx, callID, task.OrganizationID, firstNonEmpty(req.ProjectID, task.ProjectID), selection, pollSourceTask.ExternalTaskID, result, videoInput)
 			if mediaErr != nil {
-				errorCode, errorMessage, standardError = gatewayVideoMediaFailure(mediaErr)
-				status = "running"
-				callStatus = "failed"
-				mediaTransferPending = true
-				normalizedOutput = gatewayVideoMediaPendingOutput(result.NormalizedOutput, errorCode, errorMessage)
+				outcome := normalizeGatewayVideoMediaFailure(result.NormalizedOutput, mediaErr)
+				errorCode = outcome.ErrorCode
+				errorMessage = outcome.ErrorMessage
+				standardError = outcome.ResponseError
+				status = outcome.TaskStatus
+				callStatus = outcome.CallStatus
+				mediaTransferPending = outcome.TransferPending
+				normalizedOutput = outcome.NormalizedOutput
 			} else {
 				output = stored.Output
 				usage = estimateVideoCost(videoInput, output.DurationSeconds, model.Capabilities)
@@ -956,6 +959,50 @@ func normalizeGatewayVideoPollFailure(err error) gatewayVideoPollFailureOutcome 
 		outcome.ResponseError = nil
 	}
 	return outcome
+}
+
+type gatewayVideoMediaFailureOutcome struct {
+	TaskStatus       string
+	CallStatus       string
+	TransferPending  bool
+	ErrorCode        string
+	ErrorMessage     string
+	ResponseError    *StandardError
+	NormalizedOutput json.RawMessage
+}
+
+func normalizeGatewayVideoMediaFailure(normalizedOutput json.RawMessage, err error) gatewayVideoMediaFailureOutcome {
+	code, message, standard := gatewayVideoMediaFailure(err)
+	if gatewayVideoMediaTransferCanRetry(code, standard) {
+		return gatewayVideoMediaFailureOutcome{
+			TaskStatus:       "running",
+			CallStatus:       "failed",
+			TransferPending:  true,
+			ErrorCode:        code,
+			ErrorMessage:     message,
+			ResponseError:    standard,
+			NormalizedOutput: gatewayVideoMediaPendingOutput(normalizedOutput, code, message),
+		}
+	}
+	if standard != nil {
+		terminal := *standard
+		terminal.Retryable = false
+		standard = &terminal
+	}
+	return gatewayVideoMediaFailureOutcome{
+		TaskStatus:       "failed",
+		CallStatus:       "failed",
+		ErrorCode:        code,
+		ErrorMessage:     message,
+		ResponseError:    standard,
+		NormalizedOutput: gatewayVideoMediaTerminalOutput(normalizedOutput, code, message),
+	}
+}
+
+func gatewayVideoMediaTransferCanRetry(code string, standard *StandardError) bool {
+	return strings.EqualFold(strings.TrimSpace(code), CodeMediaDownloadFailed) &&
+		standard != nil &&
+		standard.Retryable
 }
 
 func (s *Service) CancelVideoTask(ctx context.Context, req GatewayVideoCancelTaskRequest) (GatewayVideoCancelTaskResponse, error) {
@@ -1556,6 +1603,18 @@ func gatewayVideoMediaPendingOutput(normalizedOutput json.RawMessage, errorCode,
 	output["mediaTransferStatus"] = "pending"
 	output["mediaTransferErrorCode"] = strings.TrimSpace(errorCode)
 	output["mediaTransferErrorMessage"] = strings.TrimSpace(errorMessage)
+	return mustJSON(output)
+}
+
+func gatewayVideoMediaTerminalOutput(normalizedOutput json.RawMessage, errorCode, errorMessage string) json.RawMessage {
+	var output map[string]any
+	if err := json.Unmarshal(normalizedOutput, &output); err != nil || output == nil {
+		output = map[string]any{}
+	}
+	output["status"] = "failed"
+	output["mediaTransferStatus"] = "failed"
+	output["errorCode"] = strings.TrimSpace(errorCode)
+	output["errorMessage"] = strings.TrimSpace(errorMessage)
 	return mustJSON(output)
 }
 

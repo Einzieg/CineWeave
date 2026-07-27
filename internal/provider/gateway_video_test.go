@@ -43,6 +43,38 @@ func TestGatewayVideoMediaPendingOutputPreservesUpstreamResult(t *testing.T) {
 	}
 }
 
+func TestNormalizeGatewayVideoMediaFailureRetriesOnlyTransientTransfer(t *testing.T) {
+	retryable := normalizeGatewayVideoMediaFailure(
+		json.RawMessage(`{"status":"succeeded","videoUrl":"https://provider.example/video.mp4"}`),
+		gatewayMediaStageFailure("download", context.DeadlineExceeded),
+	)
+	if retryable.TaskStatus != "running" || retryable.CallStatus != "failed" || !retryable.TransferPending ||
+		retryable.ErrorCode != CodeMediaDownloadFailed || retryable.ResponseError == nil || !retryable.ResponseError.Retryable {
+		t.Fatalf("retryable media outcome = %+v", retryable)
+	}
+	if videoStringField(retryable.NormalizedOutput, "mediaTransferStatus") != "pending" {
+		t.Fatalf("retryable normalized output = %s", retryable.NormalizedOutput)
+	}
+
+	terminal := normalizeGatewayVideoMediaFailure(
+		json.RawMessage(`{"status":"succeeded","videoUrl":"https://provider.example/video.mp4"}`),
+		&StandardErrorError{Standard: StandardError{
+			Code:      CodeUpstreamOutputMismatch,
+			Message:   "provider returned video layout 960x960, expected aspect ratio 9:16",
+			Retryable: true,
+		}},
+	)
+	if terminal.TaskStatus != "failed" || terminal.CallStatus != "failed" || terminal.TransferPending ||
+		terminal.ErrorCode != CodeUpstreamOutputMismatch || terminal.ResponseError == nil || terminal.ResponseError.Retryable {
+		t.Fatalf("terminal media outcome = %+v", terminal)
+	}
+	if videoStringField(terminal.NormalizedOutput, "status") != "failed" ||
+		videoStringField(terminal.NormalizedOutput, "mediaTransferStatus") != "failed" ||
+		videoStringField(terminal.NormalizedOutput, "videoUrl") != "https://provider.example/video.mp4" {
+		t.Fatalf("terminal normalized output = %s", terminal.NormalizedOutput)
+	}
+}
+
 func TestValidateGatewayVideoCreateTaskIdentityRejectsCrossExecutionReuse(t *testing.T) {
 	task := gatewayVideoTask{
 		NodeRunID: "node-old", NodeExecutionToken: "token-old", NodeAttemptGeneration: 1,
