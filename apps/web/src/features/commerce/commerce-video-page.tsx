@@ -492,7 +492,7 @@ function ScriptVideoRow({
             onClick={onGenerate}
           >
             {activeJob ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-            {activeJob ? "生成中" : latestJob ? "重新生成" : "生成视频"}
+            {activeJob ? "生成中" : "准备生成"}
           </Button>
           {jobs.length ? (
             <Button type="button" size="sm" variant="ghost" onClick={onHistory}>
