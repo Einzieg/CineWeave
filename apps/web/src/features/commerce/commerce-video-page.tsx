@@ -571,13 +571,13 @@ function ScriptEditorDialog({
 }) {
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-4xl">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>{state?.mode === "edit" ? "编辑广告脚本" : "新增广告脚本"}</DialogTitle>
           <DialogDescription>脚本将直接作为视频生成内容，不经过分镜或提示词改写。</DialogDescription>
         </DialogHeader>
         {state ? (
-          <div className="space-y-4">
+          <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
             <div className="space-y-2">
               <Label htmlFor="commerce-script-title">脚本名称</Label>
               <Input
@@ -591,7 +591,7 @@ function ScriptEditorDialog({
               <Label htmlFor="commerce-script-content">广告脚本</Label>
               <Textarea
                 id="commerce-script-content"
-                className="min-h-[420px] resize-y font-mono text-sm leading-6"
+                className="field-sizing-fixed h-[clamp(14rem,50dvh,32rem)] min-h-56 max-h-[50dvh] resize-y overflow-y-auto overscroll-contain font-mono text-sm leading-6"
                 value={state.content}
                 onChange={(event) => onChange({ ...state, content: event.target.value })}
                 placeholder="输入完整广告脚本，可使用任意语言。"
