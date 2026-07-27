@@ -130,13 +130,12 @@ func (s *Service) validateCommerceDirectVideoExecutionRequest(
 		capabilityHash != strings.TrimSpace(req.CapabilitySnapshotHash) {
 		return commerceDirectVideoContractError("带货视频直生成任务的模型路由与冻结快照不一致")
 	}
-	var contract commerceDirectVideoExecutionContract
-	if err := json.Unmarshal(executionContractRaw, &contract); err != nil {
-		return commerceDirectVideoContractError("带货视频直生成执行契约已损坏")
-	}
-	hash, err := stableJSONHash(contract)
-	if err != nil || hash != executionContractHash {
-		return commerceDirectVideoContractError("带货视频直生成执行契约完整性校验失败")
+	contract, inputContractHash, err := decodeCommerceDirectVideoExecutionContract(
+		executionContractRaw,
+		executionContractHash,
+	)
+	if err != nil {
+		return err
 	}
 	if contract.ContractVersion != "commerce-direct-video/v1" ||
 		contract.Route.ModelProfileID != modelProfileID ||
@@ -148,8 +147,7 @@ func (s *Service) validateCommerceDirectVideoExecutionRequest(
 		contract.Route.CapabilitySnapshotHash != capabilityHash {
 		return commerceDirectVideoContractError("带货视频直生成执行路由与冻结快照不一致")
 	}
-	inputContractHash, err := stableJSONHash(contract.Route.InputContract)
-	if err != nil || inputContractHash != contract.InputContractHash ||
+	if inputContractHash != contract.InputContractHash ||
 		strings.TrimSpace(req.InputContractKey) != contract.Route.InputContract.ContractKey ||
 		strings.TrimSpace(req.InputContractHash) != contract.InputContractHash {
 		return commerceDirectVideoContractError("带货视频直生成输入契约不一致")
@@ -211,6 +209,40 @@ func (s *Service) validateCommerceDirectVideoExecutionRequest(
 	}
 	_ = referenceSetHash
 	return nil
+}
+
+func decodeCommerceDirectVideoExecutionContract(
+	raw []byte,
+	expectedHash string,
+) (commerceDirectVideoExecutionContract, string, error) {
+	var contract commerceDirectVideoExecutionContract
+	hash, err := stableJSONHash(json.RawMessage(raw))
+	if err != nil {
+		return contract, "", commerceDirectVideoContractError("带货视频直生成执行契约已损坏")
+	}
+	if hash != strings.TrimSpace(expectedHash) {
+		return contract, "", commerceDirectVideoContractError("带货视频直生成执行契约完整性校验失败")
+	}
+	var envelope struct {
+		Route json.RawMessage `json:"route"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || len(envelope.Route) == 0 {
+		return contract, "", commerceDirectVideoContractError("带货视频直生成执行契约已损坏")
+	}
+	var routeEnvelope struct {
+		InputContract json.RawMessage `json:"inputContract"`
+	}
+	if err := json.Unmarshal(envelope.Route, &routeEnvelope); err != nil || len(routeEnvelope.InputContract) == 0 {
+		return contract, "", commerceDirectVideoContractError("带货视频直生成执行契约已损坏")
+	}
+	inputContractHash, err := stableJSONHash(routeEnvelope.InputContract)
+	if err != nil {
+		return contract, "", commerceDirectVideoContractError("带货视频直生成执行契约已损坏")
+	}
+	if err := json.Unmarshal(raw, &contract); err != nil {
+		return contract, "", commerceDirectVideoContractError("带货视频直生成执行契约已损坏")
+	}
+	return contract, inputContractHash, nil
 }
 
 func (s *Service) loadCommerceDirectVideoReferences(
