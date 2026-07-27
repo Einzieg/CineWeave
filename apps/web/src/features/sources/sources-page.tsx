@@ -753,11 +753,11 @@ export function SourcesPage({
           </div>
 
           <Dialog open={importOpen} onOpenChange={setImportOpen}>
-            <DialogContent className="sm:max-w-md">
+            <DialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>添加内容</DialogTitle>
               </DialogHeader>
-              <div className="grid gap-4">
+              <div className="grid min-h-0 gap-4 overflow-y-auto pr-1">
                 <div className="grid gap-2">
                   <Label htmlFor="source-file">文件</Label>
                   <Input
@@ -795,7 +795,7 @@ export function SourcesPage({
                     <Label htmlFor="source-content">正文</Label>
                     <Textarea
                       id="source-content"
-                      className="min-h-48"
+                      className="field-sizing-fixed min-h-48 resize-y"
                       value={importContent}
                       onChange={(event) => setImportContent(event.target.value)}
                     />
