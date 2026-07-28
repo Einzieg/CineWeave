@@ -247,6 +247,12 @@ func TestAgentGoalEffectClassification(t *testing.T) {
 		{name: "diagnose deletion", goal: "检查为什么删除剧本失败", write: false},
 		{name: "read status", goal: "查看当前项目状态", write: false},
 		{name: "explicit update", goal: "请修改第一集剧本", write: true},
+		{name: "read only commerce smoke", goal: "只读取第8条广告脚本，确认脚本存在，并仅返回脚本标题和正文前50个字符；不要修改、覆盖、创建或删除任何数据。", write: false},
+		{name: "negated update", goal: "不要修改第一条脚本", write: false},
+		{name: "read without update", goal: "无需修改，只需查看", write: false},
+		{name: "negated delete followed by create", goal: "不要删除旧脚本，请创建新脚本", write: true},
+		{name: "diagnose generation failure", goal: "请检查为什么生成失败", write: false},
+		{name: "read then start workflow", goal: "查看当前状态并启动工作流", write: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

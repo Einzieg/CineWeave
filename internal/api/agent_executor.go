@@ -258,9 +258,70 @@ func agentGoalRequiresWriteEffect(goal string) bool {
 	if goal == "" {
 		return false
 	}
-	interrogative := containsAnyFold(goal, "为什么", "什么原因", "是否", "能否", "能不能", "查看", "检查", "分析", "说明")
-	direct := containsAnyFold(goal, "请删除", "帮我删除", "立即删除", "彻底删除", "清空", "重置", "归档", "覆盖", "替换", "修改", "更新", "创建", "生成", "启动", "执行", "取消")
-	return direct && (!interrogative || containsAnyFold(goal, "请", "帮我", "立即", "彻底", "清空", "执行"))
+	for _, clause := range agentGoalIntentClauses(goal) {
+		if !containsAnyFold(clause, agentWriteIntentVerbs...) || agentGoalClauseNegatesWriteEffect(clause) {
+			continue
+		}
+		interrogative := containsAnyFold(clause, "为什么", "什么原因", "是否", "能否", "能不能", "查看", "检查", "分析", "说明", "吗")
+		if !interrogative || agentGoalClauseHasExplicitWriteDirective(clause) {
+			return true
+		}
+	}
+	return false
+}
+
+var agentWriteIntentVerbs = []string{
+	"删除", "清空", "重置", "归档", "覆盖", "替换", "修改", "更新",
+	"创建", "生成", "启动", "执行", "取消", "修复",
+}
+
+func agentGoalIntentClauses(goal string) []string {
+	normalized := strings.NewReplacer(
+		"但是", "，",
+		"而是", "，",
+		"然后", "，",
+		"随后", "，",
+		"接着", "，",
+		"并且", "，",
+	).Replace(goal)
+	for _, verb := range agentWriteIntentVerbs {
+		for _, connector := range []string{"并", "再", "后", "且"} {
+			normalized = strings.ReplaceAll(normalized, connector+verb, "，"+verb)
+		}
+	}
+	return strings.FieldsFunc(normalized, func(r rune) bool {
+		switch r {
+		case '，', ',', '。', '.', '；', ';', '！', '!', '？', '?', '\n', '\r':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+func agentGoalClauseNegatesWriteEffect(clause string) bool {
+	firstWrite := len(clause)
+	for _, verb := range agentWriteIntentVerbs {
+		if index := strings.Index(clause, verb); index >= 0 && index < firstWrite {
+			firstWrite = index
+		}
+	}
+	if firstWrite == len(clause) {
+		return false
+	}
+	prefix := clause[:firstWrite]
+	return containsAnyFold(prefix, "不要", "无需", "无须", "不需要", "不必", "不得", "禁止", "请勿", "勿", "不允许", "避免", "不能")
+}
+
+func agentGoalClauseHasExplicitWriteDirective(clause string) bool {
+	for _, verb := range agentWriteIntentVerbs {
+		for _, prefix := range []string{"请", "帮我", "立即", "直接", "务必", "马上", "现在"} {
+			if containsAnyFold(clause, prefix+verb) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func agentGoalRequestsProductionContentClear(goal string) bool {
