@@ -94,8 +94,11 @@ func TestCommercePlannerRulesResolveOrdinalAndAskOnAmbiguity(t *testing.T) {
 		"第 N 条脚本",
 		"commerce.script.list",
 		"stableOrdinal=N",
+		"expectedRevision",
 		"agent.ask_user",
 		"禁止按标题",
+		"commerce.script.revise",
+		"后端读取完整正文",
 	} {
 		if !strings.Contains(rules, fragment) {
 			t.Fatalf("commerce planner rules missing %q", fragment)

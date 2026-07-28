@@ -789,6 +789,8 @@ func agentToolErrorNextActions(toolName, code string) []agentToolNextAction {
 		return []agentToolNextAction{{Label: "检查工具参数并重新提交", Reason: "当前工具输入不符合后端 schema"}}
 	case "COMMERCE_SCRIPT_SELECTION_STALE":
 		return []agentToolNextAction{{Label: "重新读取广告脚本列表后继续", Tool: "commerce.script.list", Reason: "脚本列表已变化或当前序号无法定位"}}
+	case "COMMERCE_SCRIPT_REVISION_OUTPUT_INVALID":
+		return []agentToolNextAction{{Label: "缩小改写范围后重新执行", Tool: "commerce.script.revise", Reason: "模型连续三次未生成满足当前视频模型长度限制的完整脚本"}}
 	case "TEMPORAL_UNAVAILABLE":
 		return []agentToolNextAction{{Label: "检查 Temporal 服务后重试", Reason: "长任务调度服务不可用"}}
 	case "PROVIDER_SERVICE_UNAVAILABLE", "PROVIDER_GATEWAY_ERROR", "UPSTREAM_TIMEOUT":
@@ -830,6 +832,7 @@ func scriptAgentToolLabel(name string) string {
 		"list_workflow_runs":             "列出任务",
 		"start_production_action":        "启动生产动作",
 		"cancel_workflow":                "取消任务",
+		"commerce.script.revise":         "按要求改写广告脚本",
 	}
 	if label, ok := labels[name]; ok {
 		return label

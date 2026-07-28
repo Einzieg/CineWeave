@@ -87,3 +87,9 @@ func TestResolveCommerceAgentScriptSelectionRequiresExistingOrdinal(t *testing.T
 		t.Fatalf("missing stable ordinal error = %v", err)
 	}
 }
+
+func TestCommerceScriptReviseUsesStableScriptIdentity(t *testing.T) {
+	if got := commerceScriptTargetArgument["commerce.script.revise"]; got != "scriptUnitId" {
+		t.Fatalf("commerce.script.revise identity argument = %q", got)
+	}
+}

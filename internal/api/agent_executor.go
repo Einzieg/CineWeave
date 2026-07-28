@@ -900,6 +900,33 @@ func (s *Server) verifyAgentToolResult(ctx context.Context, project Project, res
 			return fail("VERIFIER_SCRIPT_VERSION_NOT_FOUND", "script version was not found")
 		}
 		return ok("script version exists")
+	case "commerce.script.revise":
+		scriptUnitID := stringValueFromAny(result.Data["scriptUnitId"])
+		expectedHash := stringValueFromAny(result.Data["contentHash"])
+		expectedRevision := agentInt64Value(result.Data["revision"])
+		if scriptUnitID == "" || expectedHash == "" || expectedRevision <= 0 {
+			return fail(
+				"VERIFIER_MISSING_COMMERCE_SCRIPT_REVISION",
+				"scriptUnitId, revision and contentHash are required in tool output",
+			)
+		}
+		scriptUnit, err := s.commerceCatalog.GetScriptUnit(
+			ctx,
+			s.db,
+			project.OrganizationID,
+			project.ID,
+			scriptUnitID,
+		)
+		if err != nil {
+			return fail("VERIFIER_COMMERCE_SCRIPT_NOT_FOUND", err.Error())
+		}
+		if !commerceScriptRevisionSnapshotMatches(scriptUnit, expectedRevision, expectedHash) {
+			return fail(
+				"VERIFIER_COMMERCE_SCRIPT_REVISION_MISMATCH",
+				"advertising script revision or content hash does not match tool output",
+			)
+		}
+		return ok("advertising script revision and content hash match the committed update")
 	case "prompt.activate_version":
 		versionID := stringValueFromAny(result.Data["versionId"])
 		var status string
@@ -930,6 +957,15 @@ func (s *Server) verifyAgentToolResult(ctx context.Context, project Project, res
 	default:
 		return map[string]any{"status": "skipped", "reason": "no verifier for tool"}
 	}
+}
+
+func commerceScriptRevisionSnapshotMatches(
+	scriptUnit commercepkg.ScriptUnit,
+	expectedRevision int64,
+	expectedHash string,
+) bool {
+	return scriptUnit.Revision == expectedRevision &&
+		scriptUnit.CurrentContentHash == strings.TrimSpace(expectedHash)
 }
 
 func scriptVersionIDFromWorkflowOutput(raw json.RawMessage) string {

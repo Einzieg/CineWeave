@@ -23,6 +23,7 @@ var commerceScriptBareOrdinalPattern = regexp.MustCompile(
 
 var commerceScriptTargetArgument = map[string]string{
 	"commerce.script.get":            "scriptUnitId",
+	"commerce.script.revise":         "scriptUnitId",
 	"commerce.script.update":         "scriptUnitId",
 	"commerce.script.archive":        "scriptUnitId",
 	"commerce.script.derive.preview": "sourceScriptUnitId",

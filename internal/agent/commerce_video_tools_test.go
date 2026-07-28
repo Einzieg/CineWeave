@@ -17,6 +17,7 @@ func TestCommerceVideoToolsExposeScriptDerivationLifecycle(t *testing.T) {
 		maySpendProvider bool
 		startsWorkflow   bool
 	}{
+		"commerce.script.revise":              {maySpendProvider: true},
 		"commerce.script.derive.preview":      {maySpendProvider: true},
 		"commerce.script.derive.batch":        {maySpendProvider: true, startsWorkflow: true},
 		"commerce.script.derivation.get":      {},
@@ -116,6 +117,10 @@ func TestCommerceScriptToolsAcceptStableOrdinalWithoutCopiedUUID(t *testing.T) {
 		{
 			Tool: "commerce.script.derive.preview",
 			Args: json.RawMessage(`{"stableOrdinal":2,"expectedScriptUnitsRevision":7,"count":5,"dimension":"scene","instruction":"替换场景"}`),
+		},
+		{
+			Tool: "commerce.script.revise",
+			Args: json.RawMessage(`{"stableOrdinal":2,"expectedScriptUnitsRevision":7,"expectedRevision":3,"instruction":"压缩到当前视频模型限制内"}`),
 		},
 		{
 			Tool: "commerce.video.generate",

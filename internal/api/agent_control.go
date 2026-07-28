@@ -662,7 +662,8 @@ func (s *Server) buildAgentPlannerPrompt(r *http.Request, principal auth.Princip
 		builder.WriteString("\n")
 	}
 	if project.ProjectKind.IsCommerce() {
-		builder.WriteString("按脚本稳定排序处理“第几条脚本”；无法唯一定位时先 commerce.script.list，再用 agent.ask_user 让用户选择。读取正文必须调用 commerce.script.get。\n")
+		builder.WriteString("按脚本稳定排序处理“第几条脚本”；无法唯一定位时先 commerce.script.list，再用 agent.ask_user 让用户选择。修改脚本时把所选列表项的 revision 传为 expectedRevision。只有需要向用户展示、分析或引用正文时才调用 commerce.script.get。\n")
+		builder.WriteString("用户用自然语言要求压缩、润色、改人物、改场景或调整现有广告脚本时，使用 commerce.script.revise；该工具会在后端读取完整正文并自动遵守当前视频模型长度上限，禁止先反复 commerce.script.get 再把截断正文传给 commerce.script.update。只有用户已经给出完整替换正文或精确字段值时才使用 commerce.script.update。\n")
 		builder.WriteString("用户明确要求多个场景或其他维度变体时，先用 commerce.script.derive.preview 形成候选，再把最终完整 variations 交给 commerce.script.derive.batch；每个变体只能创建一个独立脚本，不能覆盖源脚本。\n")
 		builder.WriteString("用户明确了源脚本、维度、数量和候选时，不增加无意义提问。未给候选但要求生成若干不同候选时，可以由助手提出差异明确且可执行的候选。\n")
 		builder.WriteString("生成视频前先用 commerce.video.options 读取当前可执行时长、分辨率和参考图契约。未指定时长时使用可执行时长最大值，未指定参考图时使用商品活动参考图。\n")
@@ -775,7 +776,7 @@ func (s *Server) persistAgentPlanWithSummaryPatch(
 			stateGate = agentStateGateDecision{
 				Allowed: false,
 				Reason:  "agent_runtime_repeated_action",
-				Message: "助手在相同观察状态下重复了相同动作，已停止以避免无限循环。",
+				Message: "助手连续重复了没有推进任务的相同操作，已停止以避免无限循环。请恢复任务，让助手改用可推进目标的工具。",
 				Details: map[string]any{"tool": step.Tool, "repeatCount": repeatedActionCount, "maxRepeats": agentRuntimeMaxRepeatedAction},
 			}
 		}
@@ -1594,6 +1595,8 @@ func agentEstimatedProviderCostCents(toolName string, args map[string]any, targe
 	case "timeline.compose":
 		return 15
 	case "commerce.script.derive.preview":
+		return 2
+	case "commerce.script.revise":
 		return 2
 	case "commerce.script.derive.batch", "commerce.script.derive.retry_failed":
 		variations, _ := args["variations"].([]any)

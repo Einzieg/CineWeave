@@ -1226,6 +1226,7 @@ function toolLabel(tool: string) {
     "commerce.product.update": "修改商品配置",
     "commerce.script.list": "列出广告脚本",
     "commerce.script.get": "读取广告脚本",
+    "commerce.script.revise": "按要求改写广告脚本",
     "commerce.script.create": "新增广告脚本",
     "commerce.script.update": "修改广告脚本",
     "commerce.script.archive": "归档广告脚本",
@@ -1256,6 +1257,8 @@ function supervisorReasonLabel(reason: string) {
     no_target_shots: "没有可处理镜头",
     shot_image_required: "缺少镜头图片",
     video_generation_disabled: "视频生成已禁用",
+    agent_runtime_action_limit: "助手已达到本次任务的最大行动数",
+    agent_runtime_repeated_action: "助手连续重复了没有推进任务的相同操作",
   };
   return labels[reason] || reason;
 }

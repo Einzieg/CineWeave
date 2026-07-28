@@ -15,6 +15,24 @@ func CommerceVideoTools() []AgentTool {
 	preserveSchema := arraySchema("必须保持不变的内容。", enumSchema("保持项。", []string{
 		"product_facts", "selling_points", "prohibited_claims", "language", "cta", "approximate_duration",
 	}))
+	scriptReviseTool := writeTool(
+		"commerce.script.revise",
+		"按要求改写广告脚本",
+		"后端读取广告脚本完整正文，按自然语言要求改写并以乐观锁更新；适用于压缩、润色、调整人物或场景等非精确替换。",
+		authz.PermissionScriptWrite,
+		objectSchemaRequired(map[string]any{
+			"scriptUnitId":                scriptUnitID,
+			"stableOrdinal":               stableOrdinal,
+			"expectedScriptUnitsRevision": scriptUnitsRevision,
+			"expectedRevision":            integerSchema("当前脚本 revision。", 1, 1000000000),
+			"instruction":                 stringSchema("对当前完整脚本执行的改写要求。"),
+			"targetMaxLength":             integerSchema("可选的更严格目标长度；最终结果始终受当前视频模型长度上限约束。", 1, 1000000),
+			"targetLengthUnit":            enumSchema("目标长度单位。", []string{"characters", "utf8_bytes"}),
+			"preserve":                    preserveSchema,
+		}, "expectedRevision", "instruction"),
+		true,
+	)
+	scriptReviseTool.Effects.MaySpendProvider = true
 	return []AgentTool{
 		readTool("commerce.project.read_summary", "带货项目摘要", "读取商品、活动参考图、广告脚本、脚本裂变批次和直生成视频任务摘要。", authz.PermissionProjectRead, emptyObjectSchema()),
 		readTool("commerce.product.get", "读取商品配置", "读取当前商品事实、版本和修订号。", authz.PermissionAssetRead, emptyObjectSchema()),
@@ -46,6 +64,7 @@ func CommerceVideoTools() []AgentTool {
 			"stableOrdinal":               stableOrdinal,
 			"expectedScriptUnitsRevision": scriptUnitsRevision,
 		}, false)),
+		scriptReviseTool,
 		writeTool("commerce.script.create", "新增广告脚本", "创建一个独立广告脚本。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
 			"expectedScriptUnitsRevision": integerSchema("当前脚本集合 revision。", 1, 1000000000),
 			"title":                       stringSchema("脚本标题。"),
@@ -55,7 +74,7 @@ func CommerceVideoTools() []AgentTool {
 			"targetDurationSeconds":       integerSchema("目标视频秒数。", 1, 3600),
 			"targetPlatform":              stringSchema("目标平台。"),
 		}, "expectedScriptUnitsRevision", "title", "content", "languageMode", "targetDurationSeconds", "targetPlatform"), true),
-		writeTool("commerce.script.update", "修改广告脚本", "直接更新广告脚本当前正文和配置。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
+		writeTool("commerce.script.update", "修改广告脚本", "使用用户提供的完整替换正文或精确字段补丁更新广告脚本；自然语言改写应使用 commerce.script.revise。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
 			"scriptUnitId":                scriptUnitID,
 			"stableOrdinal":               stableOrdinal,
 			"expectedScriptUnitsRevision": scriptUnitsRevision,

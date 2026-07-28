@@ -3,11 +3,13 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/videoproduction"
 )
 
 func TestInvokeAgentCommerceHandlerPreservesIdentityAndIdempotency(t *testing.T) {
@@ -114,6 +116,9 @@ func TestCommerceAgentSafetyClassification(t *testing.T) {
 	if !agentToolMaySpendProvider("commerce.script.derive.preview", nil) {
 		t.Fatal("derivation preview must respect provider cost constraints")
 	}
+	if !agentToolMaySpendProvider("commerce.script.revise", nil) {
+		t.Fatal("script revision must respect provider cost constraints")
+	}
 	if agentToolMayGenerateVideo("commerce.script.derive.retry_failed", nil) {
 		t.Fatal("derivation retry does not generate video")
 	}
@@ -135,5 +140,100 @@ func TestCommerceAgentSafetyClassification(t *testing.T) {
 		if agentToolReadOnly(legacy) || agentToolMaySpendProvider(legacy, nil) || agentToolMayGenerateVideo(legacy, nil) {
 			t.Fatalf("legacy tool %s must not participate in active safety classification", legacy)
 		}
+	}
+}
+
+func TestCommerceScriptRevisionInstructionCarriesFullRewriteContract(t *testing.T) {
+	product := commercepkg.Product{
+		CurrentVersion: &commercepkg.ProductVersion{
+			Name:              "头盔",
+			Brand:             "CineWeave",
+			SellingPoints:     json.RawMessage(`["轻量","哑光"]`),
+			ImmutableFeatures: json.RawMessage(`{"color":"black"}`),
+			ProhibitedClaims:  json.RawMessage(`["绝对安全"]`),
+			FactsSnapshot:     json.RawMessage(`{"material":"ABS"}`),
+		},
+	}
+	instruction := commerceScriptRevisionInstruction(
+		"压缩重复描述",
+		[]string{"product_facts", "language", "cta"},
+		product,
+		commerceScriptRevisionConstraint{
+			MaxLength: 4096,
+			Unit:      "utf8_bytes",
+			Source:    "current_video_model",
+		},
+		2,
+		5030,
+	)
+	for _, required := range []string{
+		"压缩重复描述",
+		"product_facts、language、cta",
+		`"material":"ABS"`,
+		"4096 个 UTF-8 字节",
+		"上一次结果长度为 5030",
+		"只返回改写后的完整广告脚本正文",
+	} {
+		if !strings.Contains(instruction, required) {
+			t.Fatalf("revision instruction missing %q:\n%s", required, instruction)
+		}
+	}
+}
+
+func TestCommerceScriptRevisionPromptVariablesPreserveFullSourceContent(t *testing.T) {
+	source := strings.Repeat("完整广告脚本段落，", 900) + "结尾校验标记"
+	variables := commerceScriptRevisionPromptVariables(
+		Project{
+			ID: "project-1", Name: "长脚本项目",
+			VideoProductionBinding: &videoproduction.Binding{ProfileKey: "single_frame_i2v"},
+		},
+		commercepkg.ScriptUnit{
+			ID:       "script-1",
+			Title:    "第八条广告脚本",
+			Revision: 17,
+		},
+		source,
+		"压缩到当前视频模型允许的长度",
+	)
+	script, ok := variables["script"].(map[string]any)
+	if !ok {
+		t.Fatalf("script variables type = %T", variables["script"])
+	}
+	if got := stringValueFromAny(script["content"]); got != source {
+		t.Fatalf("source content was truncated: got %d runes, want %d", len([]rune(got)), len([]rune(source)))
+	}
+	if !strings.HasSuffix(stringValueFromAny(script["content"]), "结尾校验标记") {
+		t.Fatal("source content lost its final sentinel")
+	}
+	input, ok := variables["input"].(map[string]any)
+	if !ok || stringValueFromAny(input["instruction"]) != "压缩到当前视频模型允许的长度" {
+		t.Fatalf("input variables = %#v", variables["input"])
+	}
+}
+
+func TestTrimCommerceScriptRewriteOutputRemovesOnlyOuterFence(t *testing.T) {
+	input := "```markdown\n第一行\n第二行\n```"
+	if got := trimCommerceScriptRewriteOutput(input); got != "第一行\n第二行" {
+		t.Fatalf("trimmed output = %q", got)
+	}
+	plain := "第一行\n```不是外层围栏```"
+	if got := trimCommerceScriptRewriteOutput(plain); got != plain {
+		t.Fatalf("plain output changed = %q", got)
+	}
+}
+
+func TestCommerceScriptRevisionSnapshotMatchesCommittedIdentity(t *testing.T) {
+	script := commercepkg.ScriptUnit{
+		Revision:           18,
+		CurrentContentHash: "sha256:committed",
+	}
+	if !commerceScriptRevisionSnapshotMatches(script, 18, "sha256:committed") {
+		t.Fatal("matching committed script identity was rejected")
+	}
+	if commerceScriptRevisionSnapshotMatches(script, 17, "sha256:committed") {
+		t.Fatal("stale script revision was accepted")
+	}
+	if commerceScriptRevisionSnapshotMatches(script, 18, "sha256:other") {
+		t.Fatal("mismatched script content hash was accepted")
 	}
 }
