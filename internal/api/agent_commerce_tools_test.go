@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
 )
 
@@ -69,6 +70,34 @@ func TestInvokeAgentCommerceHandlerPreservesStructuredError(t *testing.T) {
 	}
 	if result.Data["httpStatus"] != float64(http.StatusConflict) && result.Data["httpStatus"] != http.StatusConflict {
 		t.Fatalf("http status = %#v", result.Data["httpStatus"])
+	}
+}
+
+func TestAnnotateAgentCommerceScriptListAddsStableIdentity(t *testing.T) {
+	firstID := "11111111-1111-4111-8111-111111111111"
+	secondID := "22222222-2222-4222-8222-222222222222"
+	data := map[string]any{
+		"items": []any{
+			map[string]any{"id": secondID, "title": "第二条"},
+			map[string]any{"id": "archived", "title": "不在活动列表"},
+		},
+	}
+	annotateAgentCommerceScriptList(data, commercepkg.ScriptUnitList{
+		ScriptUnitsRevision: 7,
+		Items: []commercepkg.ScriptUnit{
+			{ID: firstID},
+			{ID: secondID},
+		},
+	})
+	items := data["items"].([]any)
+	if got := agentIntArg(items[0].(map[string]any), "stableOrdinal", 0, 0, 100); got != 2 {
+		t.Fatalf("stableOrdinal = %d", got)
+	}
+	if _, exists := items[1].(map[string]any)["stableOrdinal"]; exists {
+		t.Fatal("non-active script must not receive an active stable ordinal")
+	}
+	if got := agentInt64Value(data["scriptUnitsRevision"]); got != 7 {
+		t.Fatalf("scriptUnitsRevision = %d", got)
 	}
 }
 

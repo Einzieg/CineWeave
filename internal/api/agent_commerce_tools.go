@@ -58,6 +58,9 @@ func (s *Server) agentToolCommerce(
 	if !project.ProjectKind.IsCommerce() {
 		return agentToolError(step.ToolName, args, newAPIError(http.StatusConflict, "PROJECT_KIND_MISMATCH", "当前项目不是带货视频项目"))
 	}
+	if err := s.normalizeAgentCommerceScriptArgs(r.Context(), project, task, step.ToolName, args); err != nil {
+		return agentToolError(step.ToolName, args, err)
+	}
 	projectPath := "/api/projects/" + url.PathEscape(project.ID) + "/commerce"
 	invoke := func(method, path string, pathValues map[string]string, query url.Values, body map[string]any, handler agentCommerceHandler) agentToolResult {
 		if pathValues == nil {
@@ -109,13 +112,23 @@ func (s *Server) agentToolCommerce(
 		return result
 	case "commerce.script.list":
 		query := make(url.Values)
-		query.Set("filter[status]", agentStringArg(args, "status"))
+		status := agentStringArg(args, "status")
+		query.Set("filter[status]", status)
 		query.Set("cursor", agentStringArg(args, "cursor"))
 		query.Set("include", "productionSummary")
 		if limit := agentIntArg(args, "limit", 50, 1, 200); limit > 0 {
 			query.Set("limit", strconv.Itoa(limit))
 		}
-		return invoke(http.MethodGet, "/script-units", nil, query, nil, s.listCommerceScriptUnits)
+		result := invoke(http.MethodGet, "/script-units", nil, query, nil, s.listCommerceScriptUnits)
+		if result.Status != "succeeded" || (status != "" && status != "active") {
+			return result
+		}
+		scripts, err := s.listAgentCommerceScriptsForSelection(r.Context(), project)
+		if err != nil {
+			return agentToolError(step.ToolName, args, err)
+		}
+		annotateAgentCommerceScriptList(result.Data, scripts)
+		return result
 	case "commerce.script.get":
 		return invoke(http.MethodGet, "/script-units/"+url.PathEscape(scriptUnitID), map[string]string{"scriptUnitId": scriptUnitID}, nil, nil, s.getCommerceScriptUnit)
 	case "commerce.script.create":
@@ -544,6 +557,33 @@ func agentCommerceResultData(data, meta any) map[string]any {
 		}
 	}
 	return result
+}
+
+func annotateAgentCommerceScriptList(data map[string]any, scripts commercepkg.ScriptUnitList) {
+	if data == nil {
+		return
+	}
+	ordinals := make(map[string]int, len(scripts.Items))
+	for index, item := range scripts.Items {
+		ordinals[strings.TrimSpace(item.ID)] = index + 1
+	}
+	items, ok := data["items"].([]any)
+	if !ok {
+		return
+	}
+	for _, value := range items {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		ordinal := ordinals[strings.TrimSpace(stringValueFromAny(item["id"]))]
+		if ordinal > 0 {
+			item["stableOrdinal"] = ordinal
+		}
+	}
+	if scripts.ScriptUnitsRevision > 0 {
+		data["scriptUnitsRevision"] = scripts.ScriptUnitsRevision
+	}
 }
 
 func agentCommerceValueData(value any) (map[string]any, error) {

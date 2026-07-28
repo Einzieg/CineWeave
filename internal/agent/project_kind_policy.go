@@ -45,8 +45,8 @@ func PolicyForProjectKind(projectKind string) (ProjectKindPolicy, error) {
 				"当前项目是带货视频，只使用商品、广告脚本、脚本裂变和直生成视频工具。",
 				"不得规划小说事件、改编计划、叙事剧本、分镜、镜头图片、镜头视频、时间线或成片合成工具。",
 				"脚本正文需要从 commerce.script.get 读取，不得根据标题猜测脚本身份。",
-				"用户说“第 N 条脚本”时，先读取 commerce.script.list，并且只按返回项的 stableOrdinal=N 解析脚本 ID；禁止按标题、创建时间或 UUID 猜测。",
-				"stableOrdinal 不存在、列表分页未覆盖目标或文字描述匹配多个脚本时，必须调用 agent.ask_user，给出稳定 ID 选项并允许用户自定义。",
+				"用户用“第 N 条”或“第 N 条脚本”指定广告脚本时，先读取 commerce.script.list，后续工具只传 stableOrdinal=N 和返回的 scriptUnitsRevision；后端负责解析真实脚本 ID。",
+				"禁止按标题、创建时间或 UUID 猜测脚本身份，也禁止复制或拼接 UUID。stableOrdinal 不存在、列表分页未覆盖目标或文字描述匹配多个脚本时，必须调用 agent.ask_user，给出候选脚本并允许用户自定义。",
 			},
 			QuickCommandIDs: []string{"commerce_product", "commerce_scripts", "commerce_create_script", "commerce_update_script", "commerce_derive_script", "commerce_generate_video", "commerce_batch_generate_video", "commerce_video_tasks", "commerce_cancel_video"},
 			tools: func() []AgentTool {

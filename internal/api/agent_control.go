@@ -393,7 +393,7 @@ func (s *Server) planAgentTask(r *http.Request, principal auth.Principal, projec
 		autoPlan = normalizeStoryboardAgentPlan(autoPlan, task.UserGoal)
 		plan, err := agent.ValidatePlan(autoPlan, registry, agentRuntimeMaxPlanSteps(task))
 		if err == nil {
-			err = s.validateAgentPlanProjectContext(r.Context(), project, task, plan)
+			err = s.normalizeAndValidateAgentPlanProjectContext(r.Context(), project, task, &plan)
 		}
 		if err != nil {
 			_, _ = s.db.Exec(r.Context(), `
@@ -465,7 +465,7 @@ func (s *Server) planAgentTask(r *http.Request, principal auth.Principal, projec
 			lastParsed = parsed
 			validated, validateErr := agent.ValidatePlan(parsed, registry, agentRuntimeMaxPlanSteps(task))
 			if validateErr == nil {
-				validateErr = s.validateAgentPlanProjectContext(r.Context(), project, task, validated)
+				validateErr = s.normalizeAndValidateAgentPlanProjectContext(r.Context(), project, task, &validated)
 			}
 			if validateErr == nil {
 				if err := s.persistAgentPlan(r, principal, project, task, registry, validated, runID, gatewayResp); err != nil {
@@ -711,7 +711,7 @@ func (s *Server) persistAgentPlanWithSummaryPatch(
 	gatewayResp provider.GatewayTextResponse,
 	summaryPatch map[string]any,
 ) error {
-	if err := s.validateAgentPlanProjectContext(r.Context(), project, task, plan); err != nil {
+	if err := s.normalizeAndValidateAgentPlanProjectContext(r.Context(), project, task, &plan); err != nil {
 		return err
 	}
 	tx, err := s.db.Begin(r.Context())

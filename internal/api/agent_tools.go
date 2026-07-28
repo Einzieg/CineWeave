@@ -787,6 +787,8 @@ func agentToolErrorNextActions(toolName, code string) []agentToolNextAction {
 		return []agentToolNextAction{{Label: "刷新项目数据后重新选择目标", Reason: "目标资源不存在或已被删除"}}
 	case "VALIDATION_FAILED":
 		return []agentToolNextAction{{Label: "检查工具参数并重新提交", Reason: "当前工具输入不符合后端 schema"}}
+	case "COMMERCE_SCRIPT_SELECTION_STALE":
+		return []agentToolNextAction{{Label: "重新读取广告脚本列表后继续", Tool: "commerce.script.list", Reason: "脚本列表已变化或当前序号无法定位"}}
 	case "TEMPORAL_UNAVAILABLE":
 		return []agentToolNextAction{{Label: "检查 Temporal 服务后重试", Reason: "长任务调度服务不可用"}}
 	case "PROVIDER_SERVICE_UNAVAILABLE", "PROVIDER_GATEWAY_ERROR", "UPSTREAM_TIMEOUT":

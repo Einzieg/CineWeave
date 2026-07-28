@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -98,6 +99,32 @@ func TestCommerceVideoToolsDoNotExposeLegacyStoryboardProduction(t *testing.T) {
 	} {
 		if _, ok := registry.Get(name); ok {
 			t.Errorf("legacy tool %s must not be active for commerce video projects", name)
+		}
+	}
+}
+
+func TestCommerceScriptToolsAcceptStableOrdinalWithoutCopiedUUID(t *testing.T) {
+	registry, err := NewRegistry(CommerceVideoTools()...)
+	if err != nil {
+		t.Fatalf("commerce video registry: %v", err)
+	}
+	tests := []PlanStep{
+		{
+			Tool: "commerce.script.get",
+			Args: json.RawMessage(`{"stableOrdinal":2,"expectedScriptUnitsRevision":7}`),
+		},
+		{
+			Tool: "commerce.script.derive.preview",
+			Args: json.RawMessage(`{"stableOrdinal":2,"expectedScriptUnitsRevision":7,"count":5,"dimension":"scene","instruction":"替换场景"}`),
+		},
+		{
+			Tool: "commerce.video.generate",
+			Args: json.RawMessage(`{"stableOrdinal":2,"expectedScriptUnitsRevision":7}`),
+		},
+	}
+	for _, step := range tests {
+		if _, err := ValidatePlan(Plan{Steps: []PlanStep{step}}, registry, 1); err != nil {
+			t.Errorf("%s stable ordinal args rejected: %v", step.Tool, err)
 		}
 	}
 }
