@@ -152,8 +152,8 @@ export function AssetsPage({
     queryFn: (session) => studioApi.listArtifacts(session, projectId).then((response) => response.items || []),
   });
   const { data: workflowRuns = [] } = useApiQuery({
-    key: qk.workflowRuns(projectId),
-    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId).then((response) => response.items || []),
+    key: qk.workflowRuns(projectId, { status: "active", limit: 100 }),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "active", limit: 100 }).then((response) => response.items || []),
     refetchInterval: (query) =>
       pollingFallback && query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
   });

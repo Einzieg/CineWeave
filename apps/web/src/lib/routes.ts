@@ -12,15 +12,21 @@ import {
   PlaySquare,
   ShoppingBag,
 } from "lucide-react";
+import { editionEntry } from "@cineweave/edition-entry";
 import type { ProjectKind } from "./types";
 
-export const globalNavItems = [
+const coreGlobalNavItems = [
   { label: "项目", href: "/projects", icon: FolderKanban, section: "projects", systemOnly: false },
   { label: "供应商中心", href: "/providers", icon: KeyRound, section: "providers", systemOnly: false },
   { label: "提示词中心", href: "/prompts", icon: FileCode2, section: "prompts", systemOnly: false },
   { label: "组织与权限", href: "/access", icon: ShieldCheck, section: "access", systemOnly: false },
   { label: "系统组织", href: "/system/organizations", icon: Landmark, section: "system-organizations", systemOnly: true },
   { label: "设置", href: "/settings", icon: Settings2, section: "settings", systemOnly: false },
+] as const;
+
+export const globalNavItems = [
+  ...coreGlobalNavItems,
+  ...editionEntry.navigation,
 ] as const;
 
 export const narrativeProjectNavItems = [

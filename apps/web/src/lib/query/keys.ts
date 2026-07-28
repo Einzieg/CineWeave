@@ -10,6 +10,13 @@ export type CanonicalAssetListQueryShape = {
   previewExpiresSeconds?: number;
 };
 
+export type WorkflowRunListQueryShape = {
+  status?: "active" | "terminal" | "all";
+  view?: "activity";
+  limit?: number;
+  cursor?: string;
+};
+
 function canonicalAssetListShape(shape: CanonicalAssetListQueryShape = {}) {
   return [
     shape.status ?? "active",
@@ -52,7 +59,17 @@ export const qk = {
   modelProfiles: () => ["model-profiles"] as const,
   promptTemplates: () => ["prompt-templates"] as const,
   artifacts: (projectId?: string) => ["artifacts", projectId ?? "all"] as const,
-  workflowRuns: (projectId?: string) => ["workflow-runs", projectId ?? "all"] as const,
+  workflowRuns: (projectId?: string, shape?: WorkflowRunListQueryShape) =>
+    shape
+      ? [
+          "workflow-runs",
+          projectId ?? "all",
+          shape.status ?? "all",
+          shape.view ?? "history",
+          shape.limit ?? 20,
+          shape.cursor?.trim() || "first",
+        ] as const
+      : ["workflow-runs", projectId ?? "all"] as const,
   workflowNodes: (workflowRunId: string) => ["workflow-nodes", workflowRunId] as const,
   workflowVideoProduction: (workflowRunId: string) => ["workflow-video-production", workflowRunId] as const,
   workflowDerivedAssetBatch: (workflowRunId: string) => ["workflow-derived-asset-batch", workflowRunId] as const,

@@ -76,6 +76,7 @@ import type {
   DownloadUrlResponse,
   DerivedAssetBatchCommandResult,
   DerivedAssetBatchProjection,
+  EntitlementSnapshot,
   FinalVideoVersion,
   EpisodeAudio,
   GenerateAssetCardResponse,
@@ -158,6 +159,7 @@ import type {
   StoryboardPlanEditResponse,
   ScriptTimingAnalysis,
   StudioSession,
+  SystemEdition,
   SystemOrganizationList,
   Team,
   TeamImpact,
@@ -182,6 +184,7 @@ import type {
   VideoProductionRebuildItem,
   WorkflowNodeRun,
   WorkflowRun,
+  WorkflowActivityClearResult,
   WorkflowVideoProductionActivity,
   Workspace,
 } from "./types";
@@ -208,6 +211,12 @@ type CanonicalAssetListOptions = {
   assetType?: string;
   includePreviewUrl?: boolean;
   previewExpiresSeconds?: number;
+};
+type WorkflowRunListOptions = {
+  status?: "active" | "terminal" | "all";
+  view?: "activity";
+  limit?: number;
+  cursor?: string;
 };
 
 export class StudioApiError extends Error {
@@ -312,6 +321,7 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
 }
 
 export const studioApi = {
+  getSystemEdition: () => apiRequest<SystemEdition>("/api/system/edition"),
   getSetupState: () => apiRequest<SetupState>("/api/system/setup-state"),
   setupSystem: (body: JsonRecord) => apiRequest<AuthResponse>("/api/system/setup", { method: "POST", body }),
   login: (body: JsonRecord) => apiRequest<LoginResponse>("/api/auth/login", { method: "POST", body }),
@@ -341,6 +351,8 @@ export const studioApi = {
     membership: OrganizationMember;
     permissions: string[];
   }>("/api/auth/me", { session }),
+  getMyEntitlements: (session: StudioSession) =>
+    apiRequest<EntitlementSnapshot>("/api/me/entitlements", { session }),
   updateProfile: (session: StudioSession, body: { displayName?: string; avatarUrl?: string }) =>
     apiRequest<AuthResponse["user"]>("/api/auth/me", { method: "PATCH", session, body }),
   setInitialUsername: (session: StudioSession, username: string) =>
@@ -1635,8 +1647,23 @@ export const studioApi = {
   createWorkflowRun: (session: StudioSession, body: JsonRecord) => apiRequest<WorkflowRun>("/api/workflow-runs", { method: "POST", session, body }),
   createAssetBatch: (session: StudioSession, projectId: string, body: CreateAssetBatchRequest) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/asset-batches`, { method: "POST", session, body }),
-  listWorkflowRuns: (session: StudioSession, projectId?: string) =>
-    apiRequest<ListEnvelope<WorkflowRun>>("/api/workflow-runs", { session, query: projectId ? { "filter[projectId]": projectId } : undefined }),
+  listWorkflowRuns: (session: StudioSession, projectId?: string, options: WorkflowRunListOptions = {}) =>
+    apiRequest<ListEnvelope<WorkflowRun>>("/api/workflow-runs", {
+      session,
+      query: {
+        "filter[projectId]": projectId,
+        "filter[status]": options.status,
+        view: options.view,
+        limit: options.limit,
+        cursor: options.cursor,
+      },
+    }),
+  clearCompletedWorkflowActivity: (session: StudioSession, projectId: string) =>
+    apiRequest<WorkflowActivityClearResult>(`/api/projects/${projectId}/workflow-activity/clear-completed`, {
+      method: "POST",
+      session,
+      body: {},
+    }),
   cancelWorkflowRun: (session: StudioSession, workflowRunId: string, reason: string) =>
     apiRequest<WorkflowRun>(`/api/workflow-runs/${workflowRunId}/cancel`, { method: "POST", session, body: { reason } }),
   retryFailedWorkflowRun: (session: StudioSession, workflowRunId: string, body: RetryFailedWorkflowRequest) =>

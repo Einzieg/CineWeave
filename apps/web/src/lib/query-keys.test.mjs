@@ -57,3 +57,20 @@ test("asset reference metadata and preview keys cannot collide", () => {
   assert.deepEqual(metadata.slice(0, root.length), root);
   assert.deepEqual(preview.slice(0, root.length), root);
 });
+
+test("workflow run list keys isolate activity pages while preserving the invalidation root", () => {
+  const root = qk.workflowRuns("project-1");
+  const active = qk.workflowRuns("project-1", { status: "active", view: "activity", limit: 100 });
+  const firstTerminalPage = qk.workflowRuns("project-1", { status: "terminal", view: "activity", limit: 20 });
+  const nextTerminalPage = qk.workflowRuns("project-1", {
+    status: "terminal",
+    view: "activity",
+    limit: 20,
+    cursor: "cursor-2",
+  });
+
+  assert.deepEqual(active.slice(0, root.length), root);
+  assert.deepEqual(firstTerminalPage.slice(0, root.length), root);
+  assert.notDeepEqual(active, firstTerminalPage);
+  assert.notDeepEqual(firstTerminalPage, nextTerminalPage);
+});

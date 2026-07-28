@@ -13,6 +13,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
+	editionpkg "github.com/Einzieg/cineweave/internal/edition"
 	"github.com/Einzieg/cineweave/internal/events"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/provider"
@@ -40,6 +41,7 @@ type Server struct {
 	commerceDerivations          *commercepkg.ScriptDerivationService
 	storage                      *storage.Client
 	temporal                     temporalClient
+	editionRuntime               *editionpkg.Runtime
 	assetBatchSnapshotLockedHook func()
 }
 
@@ -118,14 +120,19 @@ func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provide
 			commercepkg.NewRepository(),
 		),
 		storage: storageClient, temporal: temporalClient,
+		editionRuntime: editionpkg.MustCommunityRuntime(),
 	}
 }
 
 func (s *Server) Handler() http.Handler {
+	if s.editionRuntime == nil {
+		s.editionRuntime = editionpkg.MustCommunityRuntime()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", httpx.HealthHandler("api"))
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /api/system/status", s.systemStatus)
+	mux.HandleFunc("GET /api/system/edition", s.systemEdition)
 	mux.HandleFunc("GET /api/system/setup-state", s.systemSetupState)
 	mux.HandleFunc("POST /api/system/setup", s.systemSetup)
 	mux.HandleFunc("GET /api/system/organizations", s.withAuth(s.listSystemOrganizations))
@@ -143,6 +150,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("POST /api/auth/password-reset/complete", s.completePasswordReset)
 	mux.HandleFunc("GET /api/auth/me", s.withAuth(s.me))
+	mux.HandleFunc("GET /api/me/entitlements", s.withAuth(s.meEntitlements))
 	mux.HandleFunc("PATCH /api/auth/me", s.withAuth(s.updateProfile))
 	mux.HandleFunc("POST /api/auth/me/username", s.withAuth(s.setInitialUsername))
 	mux.HandleFunc("POST /api/organization-invitations/resolve", s.resolveOrganizationInvitation)
@@ -527,6 +535,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/prompts/render-test", s.withAuth(s.renderPromptTest))
 	mux.HandleFunc("POST /api/workflow-runs", s.withAuth(s.createWorkflowRun))
 	mux.HandleFunc("GET /api/workflow-runs", s.withAuth(s.listWorkflowRuns))
+	mux.HandleFunc("POST /api/projects/{projectId}/workflow-activity/clear-completed", s.withAuth(s.clearCompletedWorkflowActivity))
 	mux.HandleFunc("GET /api/workflow-runs/{workflowRunId}", s.withAuth(s.getWorkflowRun))
 	mux.HandleFunc("POST /api/workflow-runs/{workflowRunId}/cancel", s.withAuth(s.cancelWorkflowRun))
 	mux.HandleFunc("POST /api/workflow-runs/{workflowRunId}/retry-failed", s.withAuth(s.retryFailedWorkflowRun))
@@ -1499,6 +1508,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var catalogErr provider.CatalogError
 	var videoProductionErr videoproduction.Error
 	var commerceErr commercepkg.Error
+	var editionErr editionpkg.AuthorizationError
 	var appErr apiError
 	standardErr, hasStandardErr := provider.StandardErrorFromError(err)
 	switch {
@@ -1516,6 +1526,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, videoProductionErrorStatus(videoProductionErr.Code), videoProductionErr.Code, videoProductionErr.Message, nil, videoProductionErr.Retryable)
 	case errors.As(err, &commerceErr):
 		httpx.WriteError(w, r, commerceErrorStatus(commerceErr.Code), commerceErr.Code, commerceErr.Message, commerceErr.Details, commerceErr.Retryable)
+	case errors.As(err, &editionErr):
+		httpx.WriteError(w, r, http.StatusForbidden, string(editionErr.Code), editionErr.Message, editionErr.Details, editionErr.Retryable)
 	case errors.Is(err, authz.ErrAccessDenied):
 		httpx.WriteError(w, r, http.StatusForbidden, "ACCESS_DENIED", "access denied", nil, false)
 	case errors.Is(err, auth.ErrInvalidCredentials):

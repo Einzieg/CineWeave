@@ -3,6 +3,8 @@ export type JsonRecord = { [key: string]: JsonValue };
 
 export type ListEnvelope<TItem> = {
   items: TItem[];
+  hasMore?: boolean;
+  nextCursor?: string;
 };
 
 export type ApiErrorBody = {
@@ -173,6 +175,92 @@ export type SetupState = {
   needsSetup: boolean;
   userCount: number;
   organizationCount: number;
+};
+
+export type DeploymentEdition = "community" | "cloud" | "enterprise";
+
+export type EditionOperationalMode = "normal" | "commercial_restricted";
+
+export type EditionRestrictionReason =
+  | "license_invalid"
+  | "license_not_yet_valid"
+  | "license_expired"
+  | "license_revoked"
+  | "clock_rollback_suspected"
+  | "deployment_mismatch";
+
+export type EditionFeatureKey =
+  | "core.workflow"
+  | "core.provider_gateway"
+  | "core.self_hosting"
+  | "billing.shadow_account"
+  | "billing.balance"
+  | "billing.top_up"
+  | "billing.subscription"
+  | "billing.organization_wallet"
+  | "billing.reconciliation"
+  | "billing.invoice"
+  | "governance.sso"
+  | "governance.scim"
+  | "governance.audit_export"
+  | "operations.supported_ha_tooling"
+  | "operations.managed_disaster_recovery";
+
+export type EditionCompiledModule = {
+  key: string;
+  featureKey: EditionFeatureKey;
+  contentHash: string;
+};
+
+export type SystemEdition = {
+  deploymentEdition: DeploymentEdition;
+  distributionId: string;
+  coreReleaseId: string;
+  commercialReleaseId?: string;
+  contractVersion: "edition.v1";
+  contractHash: string;
+  compiledFeatures: EditionFeatureKey[];
+  compiledModules: EditionCompiledModule[];
+  operationalMode: EditionOperationalMode;
+  restrictionReason?: EditionRestrictionReason;
+};
+
+export type EntitlementDenialCode =
+  | "feature_unknown"
+  | "feature_not_compiled"
+  | "deployment_license_invalid"
+  | "deployment_license_not_yet_valid"
+  | "deployment_license_expired"
+  | "deployment_license_revoked"
+  | "deployment_clock_rollback_suspected"
+  | "plan_entitlement_required"
+  | "billing_account_suspended"
+  | "permission_denied"
+  | "billing_binding_invalid"
+  | "billing_account_scope_mismatch"
+  | "billing_authority_mismatch"
+  | "billing_sponsorship_required"
+  | "billing_routing_candidate_missing";
+
+export type EntitlementDecision = {
+  featureKey: EditionFeatureKey | string;
+  compiled: boolean;
+  deploymentLicensed: boolean;
+  tenantEntitled: boolean;
+  allowed: boolean;
+  reason?: EntitlementDenialCode;
+};
+
+export type EntitlementSnapshot = {
+  contractVersion: "edition.v1";
+  edition: DeploymentEdition;
+  subject: {
+    userId: string;
+    organizationId: string;
+    billingAccountId?: string;
+  };
+  decisions: EntitlementDecision[];
+  evaluatedAt: string;
 };
 
 export type ProjectKind = "narrative" | "commerce_video";
@@ -2935,6 +3023,11 @@ export type StoryboardShotTransition = {
   metadata: JsonRecord;
   createdAt: string;
   updatedAt: string;
+};
+
+export type WorkflowActivityClearResult = {
+  clearedCount: number;
+  clearedThrough: string;
 };
 
 export type EpisodeVideoProductionProviderTask = {

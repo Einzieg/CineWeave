@@ -52,6 +52,13 @@ func main() {
 		config.Duration("CINEWEAVE_REFRESH_TOKEN_TTL", 30*24*time.Hour),
 	)
 	apiServer := api.New(pool, authService, providerService, storageClient, temporalClient, authz.New(pool))
+	editionRuntime, err := buildEditionRuntime()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := apiServer.SetEditionRuntime(editionRuntime); err != nil {
+		log.Fatal(err)
+	}
 	activities := api.NewProjectAgentActivities(apiServer)
 
 	workerOptions, err := workerkit.TemporalWorkerOptions("agent-worker")

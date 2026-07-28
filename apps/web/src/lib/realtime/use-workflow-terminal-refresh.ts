@@ -9,7 +9,7 @@ import { isTerminalWorkflowStatus } from "@/lib/workflow-status";
 
 type WorkflowStatusSnapshot = {
   projectId: string;
-  statuses: Map<string, string>;
+  runs: Map<string, WorkflowRun>;
 };
 
 export function useWorkflowTerminalRefresh(projectId: string, workflowRuns: WorkflowRun[], ready: boolean) {
@@ -19,17 +19,21 @@ export function useWorkflowTerminalRefresh(projectId: string, workflowRuns: Work
   useEffect(() => {
     if (!ready || !projectId) return;
 
-    const nextStatuses = new Map(workflowRuns.map((run) => [run.id, run.status]));
+    const nextRuns = new Map(workflowRuns.map((run) => [run.id, run]));
     const previous = snapshotRef.current;
-    snapshotRef.current = { projectId, statuses: nextStatuses };
+    snapshotRef.current = { projectId, runs: nextRuns };
     if (!previous || previous.projectId !== projectId) return;
 
     const keys: QueryKey[] = [];
     for (const run of workflowRuns) {
       if (!isTerminalWorkflowStatus(run.status)) continue;
-      const previousStatus = previous.statuses.get(run.id);
-      if (previousStatus && isTerminalWorkflowStatus(previousStatus)) continue;
+      const previousRun = previous.runs.get(run.id);
+      if (previousRun && isTerminalWorkflowStatus(previousRun.status)) continue;
       keys.push(...keysForTerminalWorkflowRun(projectId, run.workflowType, run.output));
+    }
+    for (const previousRun of previous.runs.values()) {
+      if (isTerminalWorkflowStatus(previousRun.status) || nextRuns.has(previousRun.id)) continue;
+      keys.push(...keysForTerminalWorkflowRun(projectId, previousRun.workflowType, previousRun.output));
     }
     if (keys.length > 0) {
       invalidate(uniqueQueryKeys(keys));

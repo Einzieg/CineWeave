@@ -9,13 +9,13 @@ import { StatusBadge } from "@/components/shared/status-badge";
 
 export function WorkflowsPage({ projectId }: { projectId: string }) {
   const { data: workflows = [], isLoading } = useApiQuery({
-    key: qk.workflowRuns(projectId),
-    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId).then(r => r.items),
+    key: qk.workflowRuns(projectId, { status: "all", limit: 20 }),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "all", limit: 20 }).then(r => r.items),
   });
 
   return (
     <Surface>
-      <SectionTitle title="工作流" description="查看项目中的所有工作流运行记录" />
+      <SectionTitle title="工作流" description="查看项目最近的工作流运行记录" />
       {isLoading ? (
         <div className="p-4 space-y-2">
           <Skeleton className="h-16" />

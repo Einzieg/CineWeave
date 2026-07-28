@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "cineweave.route-sources.v1",
+  "sources": [
+    {
+      "path": "internal/api/server.go",
+      "parser": "go-http-mux"
+    },
+    {
+      "path": "apps/realtime/main.go",
+      "parser": "go-http-mux"
+    },
+    {
+      "path": "services/provider-gateway/main.go",
+      "parser": "go-http-mux",
+      "defaultImplicitMethod": "post"
+    }
+  ],
+  "implicitMethods": {
+    "/healthz": "get",
+    "/readyz": "get",
+    "/api/realtime/events": "get"
+  },
+  "allowMissingOpenAPI": []
+}

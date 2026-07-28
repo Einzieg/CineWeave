@@ -1,0 +1,139 @@
+{
+  "schemaVersion": "cineweave.edition-contract.v1",
+  "contractVersion": "edition.v1",
+  "editions": [
+    "community",
+    "cloud",
+    "enterprise"
+  ],
+  "operationalModes": [
+    "normal",
+    "commercial_restricted"
+  ],
+  "restrictionReasons": [
+    "license_invalid",
+    "license_not_yet_valid",
+    "license_expired",
+    "license_revoked",
+    "clock_rollback_suspected",
+    "deployment_mismatch"
+  ],
+  "featureKeys": [
+    "core.workflow",
+    "core.provider_gateway",
+    "core.self_hosting",
+    "billing.shadow_account",
+    "billing.balance",
+    "billing.top_up",
+    "billing.subscription",
+    "billing.organization_wallet",
+    "billing.reconciliation",
+    "billing.invoice",
+    "governance.sso",
+    "governance.scim",
+    "governance.audit_export",
+    "operations.supported_ha_tooling",
+    "operations.managed_disaster_recovery"
+  ],
+  "denialCodes": [
+    "feature_unknown",
+    "feature_not_compiled",
+    "deployment_license_invalid",
+    "deployment_license_not_yet_valid",
+    "deployment_license_expired",
+    "deployment_license_revoked",
+    "deployment_clock_rollback_suspected",
+    "plan_entitlement_required",
+    "billing_account_suspended",
+    "permission_denied",
+    "billing_binding_invalid",
+    "billing_account_scope_mismatch",
+    "billing_authority_mismatch",
+    "billing_sponsorship_required",
+    "billing_routing_candidate_missing"
+  ],
+  "providerManagementScopes": [
+    "tenant_managed",
+    "system_managed"
+  ],
+  "billingAccountScopes": [
+    "organization",
+    "personal"
+  ],
+  "licenseStates": [
+    "valid",
+    "signature_grace",
+    "invalid",
+    "not_yet_valid",
+    "expired",
+    "revoked",
+    "clock_rollback_suspected",
+    "deployment_mismatch"
+  ],
+  "licenseOperations": [
+    "read_or_export",
+    "core_operation",
+    "license_renewal",
+    "commercial_write",
+    "paid_provider_create",
+    "async_poll_or_cancel",
+    "finalization",
+    "idempotent_recovery"
+  ],
+  "goInterfaces": {
+    "EditionProvider": [
+      "Manifest",
+      "OperationalState"
+    ],
+    "EntitlementService": [
+      "Evaluate"
+    ],
+    "BillingRoutingAuthorizer": [
+      "Authorize"
+    ],
+    "CommercialModuleRegistry": [
+      "APIModules",
+      "EventConsumers",
+      "BackgroundTasks"
+    ]
+  },
+  "webEditionEntrySlots": [
+    "contractVersion",
+    "navigation",
+    "routes",
+    "queryClients",
+    "entitlementGuards"
+  ],
+  "effectiveSpendAuthorization": {
+    "allOf": [
+      "ProjectOperationAllowedByRBAC",
+      "BillingSpendAllowedByRBACForProject",
+      "ActiveBindingMatchesContextRevision",
+      "AccountScopeCondition"
+    ],
+    "organizationAccountScopeCondition": [
+      "AccountAndProjectSameOrganization"
+    ],
+    "personalAccountScopeCondition": [
+      "AccountOwnerMatchesSponsorshipSponsor",
+      "SponsorshipActiveForProjectAndRevision"
+    ],
+    "sponsorshipCreatesRBACPermission": false
+  },
+  "billingAuthorityIsolation": {
+    "allEqual": [
+      "ContextAuthorityRef",
+      "AccountAuthorityRef",
+      "CredentialAuthorityRef"
+    ],
+    "sameOrganization": [
+      "ContextOrganizationID",
+      "AccountOrganizationID",
+      "CredentialOrganizationID"
+    ],
+    "sameBillingAccount": [
+      "ContextBillingAccountID",
+      "CredentialBillingAccountID"
+    ]
+  }
+}

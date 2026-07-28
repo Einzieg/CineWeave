@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
-  "headVersion": 69,
-  "migrationCount": 69,
-  "bundleSha256": "803c4390f5eee6e98fd4dda6513fbb6a1377846907904ecc99c1dd0f0726d5da",
+  "headVersion": 70,
+  "migrationCount": 70,
+  "bundleSha256": "dba81b5391c5a6f60869f134c55cd11798a869459c287792e2800865a9a5c309",
   "migrations": [
     {
       "version": 1,
@@ -348,6 +348,11 @@
       "version": 69,
       "name": "000069_commerce_script_derivation_prompt_hash.sql",
       "sha256": "eb188eb0f16d8ca6d12d1ecf21673364f3ffa618318d3868c17c1bd1784ef55e"
+    },
+    {
+      "version": 70,
+      "name": "000070_workflow_activity_views.sql",
+      "sha256": "4d40b59dc383399b9182490282e2e70345c0080c259ce593e6a6af70bac9e630"
     }
   ]
 }

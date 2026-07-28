@@ -18,6 +18,8 @@ const commands = [
     ],
   ],
   ["python", ["scripts/check-openapi-routes.py"]],
+  ["python", ["scripts/test-openapi-route-checker.py"]],
+  ["python", ["scripts/check-edition-contract.py"]],
   ["python", ["scripts/check-commerce-development-contract.py"]],
   ["pwsh", ["-NoProfile", "-File", "scripts/test-commerce-smoke-script.ps1"]],
   ["pwsh", ["-NoProfile", "-File", "scripts/test-commerce-deploy-script.ps1"]],

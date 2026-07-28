@@ -69,6 +69,13 @@ func main() {
 	}
 	defer temporalClient.Close()
 	server := api.New(pool, authService, providerService, storageClient, temporalClient, authz.New(pool))
+	editionRuntime, err := buildEditionRuntime()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := server.SetEditionRuntime(editionRuntime); err != nil {
+		log.Fatal(err)
+	}
 	go server.RunWorkflowCancellationReconciler(ctx, logger)
 	go server.RunWorkflowStartDispatcher(ctx, logger)
 

@@ -16,6 +16,8 @@ import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
 import { isActiveWorkflowStatus } from "@/lib/workflow-status";
 import type { StudioSession } from "@/lib/types";
 
+const activeWorkflowListShape = { status: "active", limit: 100 } as const;
+
 export function TopBar({
   title,
   description,
@@ -39,8 +41,8 @@ export function TopBar({
   const projectId = activeProjectId || session.currentProjectId;
   const pollingFallback = useProjectPollingFallback(projectId);
   const { data: workflowRuns = [], isFetched: workflowRunsReady } = useApiQuery({
-    key: qk.workflowRuns(projectId || "none"),
-    queryFn: (apiSession) => studioApi.listWorkflowRuns(apiSession, projectId).then((response) => response.items),
+    key: qk.workflowRuns(projectId || "none", activeWorkflowListShape),
+    queryFn: (apiSession) => studioApi.listWorkflowRuns(apiSession, projectId, activeWorkflowListShape).then((response) => response.items),
     enabled: !hideProjectActions && !!projectId,
     refetchInterval: (query) =>
       pollingFallback && query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,

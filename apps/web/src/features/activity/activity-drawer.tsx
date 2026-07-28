@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Activity, AlertCircle, Ban, CheckCircle2, Clock3, Loader2, Radio, RefreshCcw, XCircle } from "lucide-react";
+import { Activity, AlertCircle, Ban, CheckCircle2, Clock3, Loader2, Radio, RefreshCcw, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,12 +29,16 @@ import type {
   DerivedAssetBatchProjection,
   DerivedAssetRequestItemProjection,
   EpisodeVideoProductionItem,
+  ListEnvelope,
   WorkflowNodeRun,
   WorkflowRun,
   WorkflowVideoProductionActivity,
 } from "@/lib/types";
 
 const emptyEvents: ActivityRealtimeEvent[] = [];
+const emptyWorkflowRuns: WorkflowRun[] = [];
+const activeWorkflowListShape = { status: "active", view: "activity", limit: 100 } as const;
+const terminalWorkflowListShape = { status: "terminal", view: "activity", limit: 20 } as const;
 const nodeLabels: Record<string, string> = {
   extract_novel_events: "小说事件提取 Agent",
   generate_adaptation_plan: "改编计划 Agent",
@@ -57,9 +61,16 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
   const activityOpen = useUiStore((state) => state.activityOpen);
   const setActivityOpen = useUiStore((state) => state.setActivityOpen);
   const invalidate = useInvalidateKeys();
-  const [selectedActivityId, setSelectedActivityId] = useState("");
+  const [selectedActivity, setSelectedActivity] = useState({ projectId: "", id: "" });
+  const [additionalTerminalPageState, setAdditionalTerminalPageState] = useState<{
+    projectId: string;
+    firstPageKey: string;
+    pages: ListEnvelope<WorkflowRun>[];
+  }>({ projectId: "", firstPageKey: "", pages: [] });
   const liveEvents = useActivityStore((state) => state.eventsByProject[projectId] ?? emptyEvents);
   const connectionStatus = useActivityStore((state) => state.connectionByProject[projectId] ?? "idle");
+  const selectedActivityId = selectedActivity.projectId === projectId ? selectedActivity.id : "";
+  const setSelectedActivityId = (id: string) => setSelectedActivity({ projectId, id });
 
   const { data: project } = useApiQuery({
     key: qk.project(projectId),
@@ -68,19 +79,56 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
   });
 
   const {
-    data: workflowRuns = [],
-    isLoading: workflowRunsLoading,
-    isFetching: workflowRunsFetching,
-    refetch: refetchWorkflowRuns,
+    data: activeWorkflowPage,
+    isLoading: activeWorkflowRunsLoading,
+    isFetching: activeWorkflowRunsFetching,
+    refetch: refetchActiveWorkflowRuns,
   } = useApiQuery({
-    key: qk.workflowRuns(projectId),
-    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId).then((response) => response.items),
+    key: qk.workflowRuns(projectId, activeWorkflowListShape),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, activeWorkflowListShape),
     enabled: activityOpen,
     refetchInterval: (query) =>
-      activityOpen && connectionStatus !== "connected" && query.state.data?.some(isActiveWorkflow) ? 5000 : false,
+      activityOpen && connectionStatus !== "connected" && query.state.data?.items.some(isActiveWorkflow) ? 5000 : false,
   });
 
-  const activeWorkflowCount = useMemo(() => workflowRuns.filter(isActiveWorkflow).length, [workflowRuns]);
+  const {
+    data: terminalWorkflowPage,
+    isLoading: terminalWorkflowRunsLoading,
+    isFetching: terminalWorkflowRunsFetching,
+    refetch: refetchTerminalWorkflowRuns,
+  } = useApiQuery({
+    key: qk.workflowRuns(projectId, terminalWorkflowListShape),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, terminalWorkflowListShape),
+    enabled: activityOpen,
+  });
+  const activeWorkflowRuns = activeWorkflowPage?.items ?? emptyWorkflowRuns;
+  const firstTerminalPageKey = `${terminalWorkflowPage?.items[0]?.id ?? "empty"}:${terminalWorkflowPage?.nextCursor ?? "end"}`;
+  const additionalTerminalPages = useMemo(
+    () =>
+      additionalTerminalPageState.projectId === projectId
+      && additionalTerminalPageState.firstPageKey === firstTerminalPageKey
+        ? additionalTerminalPageState.pages
+        : [],
+    [additionalTerminalPageState, firstTerminalPageKey, projectId],
+  );
+  const terminalWorkflowRuns = useMemo(
+    () => [
+      ...(terminalWorkflowPage?.items ?? emptyWorkflowRuns),
+      ...additionalTerminalPages.flatMap((page) => page.items),
+    ],
+    [additionalTerminalPages, terminalWorkflowPage?.items],
+  );
+  const workflowRuns = useMemo(
+    () => [...activeWorkflowRuns, ...terminalWorkflowRuns],
+    [activeWorkflowRuns, terminalWorkflowRuns],
+  );
+  const activeWorkflowCount = activeWorkflowRuns.length;
+  const lastTerminalPage = additionalTerminalPages.at(-1) ?? terminalWorkflowPage;
+  const terminalNextCursor = lastTerminalPage?.nextCursor ?? "";
+  const terminalHasMore = lastTerminalPage?.hasMore === true && terminalNextCursor !== "";
+  const workflowRunsLoading = activeWorkflowRunsLoading || terminalWorkflowRunsLoading;
+  const workflowRunsFetching = activeWorkflowRunsFetching || terminalWorkflowRunsFetching;
+
   const selectedRun = useMemo(
     () => {
       if (selectedActivityId.startsWith("workflow:")) {
@@ -195,6 +243,35 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     onError: (error) => toast.error("重试失败：" + error.message),
   });
 
+  const loadMoreTerminalMutation = useApiMutation({
+    mutationFn: (session, cursor: string) => studioApi.listWorkflowRuns(session, projectId, {
+      ...terminalWorkflowListShape,
+      cursor,
+    }),
+    onSuccess: (page) => {
+      setAdditionalTerminalPageState((current) => ({
+        projectId,
+        firstPageKey: firstTerminalPageKey,
+        pages: [
+          ...(current.projectId === projectId && current.firstPageKey === firstTerminalPageKey ? current.pages : []),
+          page,
+        ],
+      }));
+    },
+    onError: (error) => toast.error("加载更多任务失败：" + error.message),
+  });
+
+  const clearCompletedMutation = useApiMutation({
+    mutationFn: (session) => studioApi.clearCompletedWorkflowActivity(session, projectId),
+    onSuccess: (result) => {
+      setSelectedActivityId("");
+      setAdditionalTerminalPageState({ projectId, firstPageKey: firstTerminalPageKey, pages: [] });
+      invalidate([qk.workflowRuns(projectId)]);
+      toast.success(result.clearedCount > 0 ? `已清空 ${result.clearedCount} 条已结束任务` : "没有需要清空的已结束任务");
+    },
+    onError: (error) => toast.error("清空失败：" + error.message),
+  });
+
   const retryVideoItemsMutation = useApiMutation({
     mutationFn: async (session, activity: WorkflowVideoProductionActivity) => {
       const groups = failedVideoItemsByEpisode(activity);
@@ -224,7 +301,9 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
   });
 
   const refreshSelected = () => {
-    void refetchWorkflowRuns();
+    setAdditionalTerminalPageState({ projectId, firstPageKey: firstTerminalPageKey, pages: [] });
+    void refetchActiveWorkflowRuns();
+    void refetchTerminalWorkflowRuns();
     if (selectedWorkflowRunId) {
       void refetchWorkflowNodes();
       if (selectedVideoBatchWorkflow) {
@@ -255,10 +334,23 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                 {(workflowRunsFetching || workflowNodesFetching || videoProductionActivityFetching || derivedAssetBatchFetching) && <span>同步中</span>}
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={refreshSelected}>
-              <RefreshCcw className="h-3.5 w-3.5" />
-              刷新
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => clearCompletedMutation.mutate()}
+                disabled={clearCompletedMutation.isPending || terminalWorkflowRuns.length === 0}
+              >
+                {clearCompletedMutation.isPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Trash2 className="h-3.5 w-3.5" />}
+                清空已结束
+              </Button>
+              <Button variant="outline" size="sm" onClick={refreshSelected}>
+                <RefreshCcw className="h-3.5 w-3.5" />
+                刷新
+              </Button>
+            </div>
           </div>
         </SheetHeader>
 
@@ -299,6 +391,19 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                         <div className="line-clamp-2 text-xs text-muted-foreground">{workflowInputSummary(run)}</div>
                       </button>
                     ))}
+                    {terminalHasMore ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => loadMoreTerminalMutation.mutate(terminalNextCursor)}
+                        disabled={loadMoreTerminalMutation.isPending}
+                      >
+                        {loadMoreTerminalMutation.isPending
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <RefreshCcw className="h-3.5 w-3.5" />}
+                        加载更多
+                      </Button>
+                    ) : null}
                   </>
                 )}
               </div>

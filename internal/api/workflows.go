@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/workflows"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.temporal.io/api/serviceerror"
 )
@@ -84,6 +86,11 @@ type Artifact struct {
 	CreatedAt        time.Time       `json:"createdAt"`
 	PreviewURL       *string         `json:"previewUrl,omitempty"`
 	PreviewExpiresAt *time.Time      `json:"previewExpiresAt,omitempty"`
+}
+
+type workflowRunCursor struct {
+	CreatedAt time.Time `json:"createdAt"`
+	ID        string    `json:"id"`
 }
 
 func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -269,7 +276,7 @@ func (s *Server) createWorkflowRun(w http.ResponseWriter, r *http.Request, princ
 
 func (s *Server) listWorkflowRuns(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
-	projectID := r.URL.Query().Get("filter[projectId]")
+	projectID := strings.TrimSpace(r.URL.Query().Get("filter[projectId]"))
 	if projectID != "" {
 		if !s.authorize(w, r, principal, authz.PermissionWorkflowRead, authz.Resource{ProjectID: projectID}) {
 			return
@@ -277,12 +284,68 @@ func (s *Server) listWorkflowRuns(w http.ResponseWriter, r *http.Request, princi
 	} else if !s.authorize(w, r, principal, authz.PermissionWorkflowRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
+
+	statusFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("filter[status]")))
+	if statusFilter == "" {
+		statusFilter = "all"
+	}
+	if statusFilter != "active" && statusFilter != "terminal" && statusFilter != "all" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "filter[status] must be active, terminal, or all", nil, false)
+		return
+	}
+	view := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("view")))
+	if view != "" && view != "activity" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "view must be activity when provided", nil, false)
+		return
+	}
+	activityView := view == "activity"
+	if activityView && projectID == "" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "filter[projectId] is required for the activity view", nil, false)
+		return
+	}
+	limit := queryInt(r, "limit", 20)
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	var cursorCreatedAt *time.Time
+	var cursorID *string
+	if rawCursor := strings.TrimSpace(r.URL.Query().Get("cursor")); rawCursor != "" {
+		cursor, err := decodeWorkflowRunCursor(rawCursor)
+		if err != nil {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "cursor is invalid", nil, false)
+			return
+		}
+		cursorCreatedAt = &cursor.CreatedAt
+		cursorID = &cursor.ID
+	}
+
 	rows, err := s.db.Query(r.Context(), workflowRunSelectSQL(`
 		WHERE organization_id = $1
-		  AND ($2 = '' OR project_id = $2::uuid)
-		ORDER BY created_at DESC
-		LIMIT 100
-	`), orgID, projectID)
+		  AND ($2 = '' OR project_id = NULLIF($2, '')::uuid)
+		  AND (
+		        $3 = 'all'
+		        OR ($3 = 'active' AND status NOT IN ('succeeded', 'partial_succeeded', 'completed', 'failed', 'cancelled', 'skipped'))
+		        OR ($3 = 'terminal' AND status IN ('succeeded', 'partial_succeeded', 'completed', 'failed', 'cancelled', 'skipped'))
+		      )
+		  AND (
+		        $4::timestamptz IS NULL
+		        OR created_at < $4::timestamptz
+		        OR (created_at = $4::timestamptz AND id < $5::uuid)
+		      )
+		  AND (
+		        NOT $6::boolean
+		        OR status NOT IN ('succeeded', 'partial_succeeded', 'completed', 'failed', 'cancelled', 'skipped')
+		        OR COALESCE(completed_at, cancelled_at, updated_at) > COALESCE((
+		            SELECT cleared_terminal_through
+		            FROM workflow_activity_views
+		            WHERE organization_id = $1
+		              AND project_id = NULLIF($2, '')::uuid
+		              AND user_id = $7::uuid
+		        ), '-infinity'::timestamptz)
+		      )
+		ORDER BY created_at DESC, id DESC
+		LIMIT $8
+	`), orgID, projectID, statusFilter, cursorCreatedAt, cursorID, activityView, principal.UserID, limit+1)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -297,7 +360,85 @@ func (s *Server) listWorkflowRuns(w http.ResponseWriter, r *http.Request, princi
 		}
 		items = append(items, item)
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	if err := rows.Err(); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(items) > 0 {
+		nextCursor = encodeWorkflowRunCursor(items[len(items)-1])
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"items":      items,
+		"hasMore":    hasMore,
+		"nextCursor": nextCursor,
+	}, nil)
+}
+
+func (s *Server) clearCompletedWorkflowActivity(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionWorkflowRead)
+	if !ok {
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var clearedThrough time.Time
+	if err := tx.QueryRow(r.Context(), `SELECT now()`).Scan(&clearedThrough); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var clearedCount int
+	if err := tx.QueryRow(r.Context(), `
+		SELECT count(*)
+		FROM workflow_runs
+		WHERE organization_id = $1
+		  AND project_id = $2
+		  AND status IN ('succeeded', 'partial_succeeded', 'completed', 'failed', 'cancelled', 'skipped')
+		  AND COALESCE(completed_at, cancelled_at, updated_at) <= $4
+		  AND COALESCE(completed_at, cancelled_at, updated_at) > COALESCE((
+		      SELECT cleared_terminal_through
+		      FROM workflow_activity_views
+		      WHERE organization_id = $1
+		        AND project_id = $2
+		        AND user_id = $3
+		  ), '-infinity'::timestamptz)
+	`, project.OrganizationID, project.ID, principal.UserID, clearedThrough).Scan(&clearedCount); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		INSERT INTO workflow_activity_views(
+		    organization_id, project_id, user_id, cleared_terminal_through, updated_at
+		)
+		VALUES ($1, $2, $3, $4, now())
+		ON CONFLICT (project_id, user_id) DO UPDATE
+		SET organization_id = EXCLUDED.organization_id,
+		    cleared_terminal_through = GREATEST(
+		        workflow_activity_views.cleared_terminal_through,
+		        EXCLUDED.cleared_terminal_through
+		    ),
+		    updated_at = now()
+	`, project.OrganizationID, project.ID, principal.UserID, clearedThrough); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"clearedCount":   clearedCount,
+		"clearedThrough": clearedThrough,
+	}, nil)
 }
 
 func (s *Server) getWorkflowRun(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -460,6 +601,31 @@ func isTerminalWorkflowStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func encodeWorkflowRunCursor(run WorkflowRun) string {
+	payload, _ := json.Marshal(workflowRunCursor{CreatedAt: run.CreatedAt.UTC(), ID: run.ID})
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeWorkflowRunCursor(raw string) (workflowRunCursor, error) {
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		return workflowRunCursor{}, err
+	}
+	var cursor workflowRunCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil {
+		return workflowRunCursor{}, err
+	}
+	if cursor.CreatedAt.IsZero() {
+		return workflowRunCursor{}, errors.New("workflow run cursor createdAt is required")
+	}
+	if _, err := uuid.Parse(strings.TrimSpace(cursor.ID)); err != nil {
+		return workflowRunCursor{}, errors.New("workflow run cursor id is invalid")
+	}
+	cursor.CreatedAt = cursor.CreatedAt.UTC()
+	cursor.ID = strings.TrimSpace(cursor.ID)
+	return cursor, nil
 }
 
 func (s *Server) insertWorkflowCancelWarning(ctx context.Context, run WorkflowRun, reason string, cause error) error {
