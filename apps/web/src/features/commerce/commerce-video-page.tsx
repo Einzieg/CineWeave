@@ -3,7 +3,8 @@
 import type { Route } from "next";
 import NextImage from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   Check,
@@ -74,6 +75,7 @@ import type {
   CommerceDirectVideoReferenceSelection,
   CommercePromptLengthConstraint,
   CommerceProductReference,
+  CommerceScriptDerivationBatch,
   CommerceScriptReferenceImage,
   CommerceScriptUnit,
   CommerceScriptVersionMutation,
@@ -96,14 +98,41 @@ type GenerateState = {
   selectedCustomReferenceIds: string[];
 };
 
+type ScriptDerivationMetadataView = {
+  batchId: string;
+  rootBatchId: string;
+  itemId: string;
+  sourceScriptUnitId: string;
+  sourceScriptTitle: string;
+  dimension: string;
+  variationKey: string;
+  variationLabel: string;
+  variationBrief: string;
+};
+
+type ScriptDisplayBlock =
+  | { kind: "unit"; key: string; unit: CommerceScriptUnit }
+  | {
+      kind: "derivation";
+      key: string;
+      batchId: string;
+      metadata: ScriptDerivationMetadataView;
+      batch?: CommerceScriptDerivationBatch;
+      units: CommerceScriptUnit[];
+    };
+
+type ScriptDerivationBlock = Extract<ScriptDisplayBlock, { kind: "derivation" }>;
+
 export function CommerceVideoPage({ projectId }: { projectId: string }) {
   const invalidate = useInvalidateKeys();
+  const searchParams = useSearchParams();
   const [editor, setEditor] = useState<ScriptEditorState | null>(null);
   const [generate, setGenerate] = useState<GenerateState | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<CommerceScriptUnit | null>(null);
   const [historyUnit, setHistoryUnit] = useState<CommerceScriptUnit | null>(null);
   const [videoPreview, setVideoPreview] = useState<CommerceDirectVideoJob | null>(null);
   const terminalNotifications = useRef(new Map<string, string>());
+  const handledNavigationIntent = useRef("");
 
   const projectQuery = useApiQuery({
     key: qk.project(projectId),
@@ -131,6 +160,14 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
         limit: 100,
       }),
   });
+  const derivationsQuery = useApiQuery({
+    key: qk.commerceScriptDerivations(projectId, "all", "all"),
+    queryFn: (session) =>
+      studioApi.listCommerceScriptDerivations(session, projectId, {
+        status: "all",
+        limit: 100,
+      }),
+  });
   const jobsQuery = useApiQuery({
     key: qk.commerceDirectVideos(projectId),
     queryFn: (session) => studioApi.listCommerceDirectVideos(session, projectId),
@@ -146,6 +183,14 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
     [productReferencesQuery.data?.items],
   );
   const jobsByUnit = useMemo(() => groupJobsByUnit(jobs), [jobs]);
+  const derivations = useMemo(
+    () => derivationsQuery.data?.items ?? [],
+    [derivationsQuery.data?.items],
+  );
+  const scriptBlocks = useMemo(
+    () => buildScriptDisplayBlocks(units, derivations),
+    [derivations, units],
+  );
 
   useEffect(() => {
     for (const job of jobs) {
@@ -285,32 +330,133 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
     onError: (error) => toast.error(userFacingErrorMessage(error, "视频任务提交失败")),
   });
 
-  const openGenerate = (unit: CommerceScriptUnit) => {
-    const durationSeconds =
-      options?.defaultDurationSeconds
-      ?? maximumExecutableDuration(options?.executableDurationSeconds ?? []);
-    const compatibleResolutions = options
-      ? directVideoResolutionsForDuration(options, durationSeconds)
-      : [];
-    const resolution =
-      compatibleResolutions.includes(options?.defaultResolution ?? "")
-        ? options?.defaultResolution ?? ""
-        : compatibleResolutions[0] ?? "";
-    const referenceLimit = options
-      ? directRouteReferenceLimit(options, durationSeconds, resolution)
-      : 0;
-    setGenerate({
-      unit,
-      durationSeconds,
-      resolution,
-      selectedProductReferenceIds: productReferences
-        .slice(0, referenceLimit)
-        .map((item) => item.id),
-      selectedCustomReferenceIds: [],
-    });
-  };
+  const batchCreateVideos = useApiMutation({
+    mutationFn: async (session, block: ScriptDerivationBlock) => {
+      if (!options) {
+        throw new Error("视频模型配置尚未加载完成");
+      }
+      const eligibleUnits = block.units.filter(
+        (unit) => !(jobsByUnit.get(unit.id) ?? []).some((job) => activeJobStatuses.has(job.status)),
+      );
+      const results = await mapWithConcurrency(eligibleUnits, 5, async (unit) => {
+        try {
+          const input = defaultGenerateState(unit, options, productReferences);
+          if (!input) {
+            throw new Error("当前视频模型没有可执行的时长、分辨率或商品参考图组合");
+          }
+          const references: CommerceDirectVideoReferenceSelection[] = input.selectedProductReferenceIds.map(
+            (sourceId) => ({ sourceType: "product", sourceId }),
+          );
+          const job = await studioApi.createCommerceDirectVideo(
+            session,
+            projectId,
+            unit.id,
+            {
+              durationSeconds: input.durationSeconds,
+              resolution: input.resolution,
+              aspectRatio: options.defaultAspectRatio,
+              generateAudio: true,
+              references,
+            },
+            `commerce-derivation-video-${block.batchId}-${unit.id}-${crypto.randomUUID()}`,
+          );
+          return { unit, job, error: null as Error | null };
+        } catch (error) {
+          return {
+            unit,
+            job: null,
+            error: error instanceof Error ? error : new Error("视频任务提交失败"),
+          };
+        }
+      });
+      return { block, results };
+    },
+    onSuccess: ({ results }) => {
+      const succeeded = results.filter((result) => result.job);
+      const failed = results.filter((result) => result.error);
+      for (const result of succeeded) {
+        if (result.job) terminalNotifications.current.set(result.job.id, result.job.status);
+      }
+      invalidate([
+        qk.commerceDirectVideosRoot(projectId),
+        qk.workflowRuns(projectId),
+      ]);
+      if (failed.length === 0) {
+        toast.success(`已提交 ${succeeded.length} 个视频任务`);
+      } else if (succeeded.length > 0) {
+        toast.warning(`已提交 ${succeeded.length} 个，${failed.length} 个提交失败`);
+      } else {
+        toast.error(
+          userFacingErrorMessage(failed[0]?.error, `${failed.length} 个视频任务均提交失败`),
+        );
+      }
+    },
+    onError: (error) => toast.error(userFacingErrorMessage(error, "批量视频任务提交失败")),
+  });
 
-  const loading = unitsQuery.isLoading || optionsQuery.isLoading || jobsQuery.isLoading;
+  const openGenerate = useCallback((unit: CommerceScriptUnit) => {
+    const next = options ? defaultGenerateState(unit, options, productReferences) : null;
+    if (!next) {
+      toast.error("当前视频模型没有可执行的时长、分辨率或商品参考图组合");
+      return;
+    }
+    setGenerate(next);
+  }, [options, productReferences]);
+
+  useEffect(() => {
+    const generateScriptUnitId = searchParams.get("generateScriptUnitId")?.trim() ?? "";
+    const scriptUnitId = searchParams.get("scriptUnitId")?.trim() ?? "";
+    const intentKey = generateScriptUnitId
+      ? `generate:${generateScriptUnitId}`
+      : scriptUnitId
+        ? `view:${scriptUnitId}`
+        : "";
+    if (!intentKey || handledNavigationIntent.current === intentKey || units.length === 0) return;
+    const targetID = generateScriptUnitId || scriptUnitId;
+    const unit = units.find((candidate) => candidate.id === targetID);
+    if (!unit) return;
+    handledNavigationIntent.current = intentKey;
+    window.requestAnimationFrame(() => {
+      document.getElementById(`commerce-script-${unit.id}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      if (generateScriptUnitId) openGenerate(unit);
+    });
+  }, [openGenerate, searchParams, units]);
+
+  const loading =
+    unitsQuery.isLoading
+    || optionsQuery.isLoading
+    || jobsQuery.isLoading
+    || derivationsQuery.isLoading;
+
+  const renderScriptRow = (unit: CommerceScriptUnit) => {
+    const unitJobs = jobsByUnit.get(unit.id) ?? [];
+    const latestJob = unitJobs[0];
+    const activeJob = unitJobs.find((job) => activeJobStatuses.has(job.status));
+    return (
+      <ScriptVideoRow
+        key={unit.id}
+        unit={unit}
+        derivation={scriptDerivationMetadata(unit)}
+        jobs={unitJobs}
+        latestJob={latestJob}
+        activeJob={activeJob}
+        canGenerate={Boolean(options && productReferences.length)}
+        onEdit={() => setEditor({
+          mode: "edit",
+          unit,
+          title: unit.title,
+          content: unit.currentSourceVersion?.content ?? unit.draftContent,
+        })}
+        onGenerate={() => openGenerate(unit)}
+        onHistory={() => setHistoryUnit(unit)}
+        onArchive={() => setArchiveTarget(unit)}
+        onPreview={(job) => setVideoPreview(job)}
+      />
+    );
+  };
 
   return (
     <div className="space-y-5">
@@ -355,30 +501,59 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
           {[1, 2, 3].map((item) => <Skeleton key={item} className="h-52 w-full" />)}
         </div>
       ) : units.length ? (
-        <div className="divide-y border-y">
-          {units.map((unit) => {
-            const unitJobs = jobsByUnit.get(unit.id) ?? [];
-            const latestJob = unitJobs[0];
-            const activeJob = unitJobs.find((job) => activeJobStatuses.has(job.status));
+        <div className="space-y-4">
+          {scriptBlocks.map((block) => {
+            if (block.kind === "unit") {
+              return <div key={block.key} className="border-y">{renderScriptRow(block.unit)}</div>;
+            }
+            const batchPending =
+              batchCreateVideos.isPending
+              && batchCreateVideos.variables?.batchId === block.batchId;
+            const eligibleCount = block.units.filter(
+              (unit) => !(jobsByUnit.get(unit.id) ?? []).some((job) => activeJobStatuses.has(job.status)),
+            ).length;
             return (
-              <ScriptVideoRow
-                key={unit.id}
-                unit={unit}
-                jobs={unitJobs}
-                latestJob={latestJob}
-                activeJob={activeJob}
-                canGenerate={Boolean(options && productReferences.length)}
-                onEdit={() => setEditor({
-                  mode: "edit",
-                  unit,
-                  title: unit.title,
-                  content: unit.currentSourceVersion?.content ?? unit.draftContent,
-                })}
-                onGenerate={() => openGenerate(unit)}
-                onHistory={() => setHistoryUnit(unit)}
-                onArchive={() => setArchiveTarget(unit)}
-                onPreview={(job) => setVideoPreview(job)}
-              />
+              <section key={block.key} className="overflow-hidden border-y">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-3 py-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="secondary">脚本裂变批次</Badge>
+                      <span className="truncate text-sm font-medium">
+                        源自：{block.metadata.sourceScriptTitle || "原始广告脚本"}
+                      </span>
+                      <Badge variant="outline">
+                        {commerceDerivationDimensionLabel(block.metadata.dimension)}
+                      </Badge>
+                      {block.batch ? (
+                        <Badge variant="outline">
+                          {commerceDerivationBatchStatusLabel(block.batch.status)}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      已生成 {block.units.length} 个独立脚本
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      batchPending
+                      || eligibleCount === 0
+                      || !options
+                      || productReferences.length === 0
+                    }
+                    onClick={() => batchCreateVideos.mutate(block)}
+                  >
+                    {batchPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+                    {batchPending ? "正在提交" : `批量生成视频 (${eligibleCount})`}
+                  </Button>
+                </div>
+                <div className="divide-y">
+                  {block.units.map(renderScriptRow)}
+                </div>
+              </section>
             );
           })}
         </div>
@@ -460,6 +635,7 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
 
 function ScriptVideoRow({
   unit,
+  derivation,
   jobs,
   latestJob,
   activeJob,
@@ -471,6 +647,7 @@ function ScriptVideoRow({
   onPreview,
 }: {
   unit: CommerceScriptUnit;
+  derivation: ScriptDerivationMetadataView | null;
   jobs: CommerceDirectVideoJob[];
   latestJob?: CommerceDirectVideoJob;
   activeJob?: CommerceDirectVideoJob;
@@ -484,14 +661,31 @@ function ScriptVideoRow({
   const scriptChanged = Boolean(latestJob && latestJob.scriptUnitRevision !== unit.revision);
   const script = unit.currentSourceVersion?.content ?? unit.draftContent;
   return (
-    <article className="grid gap-4 bg-background py-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+    <article
+      id={`commerce-script-${unit.id}`}
+      className="grid scroll-mt-28 gap-4 bg-background py-4 lg:grid-cols-[minmax(0,1fr)_280px]"
+    >
       <div className="min-w-0 px-1">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline">第 {unit.unitNo} 条</Badge>
           <h2 className="min-w-0 truncate text-base font-semibold">{unit.title}</h2>
+          {derivation ? (
+            <>
+              <Badge variant="secondary">裂变脚本</Badge>
+              <Badge variant="outline">{commerceDerivationDimensionLabel(derivation.dimension)}</Badge>
+            </>
+          ) : (
+            <Badge variant="outline">原始脚本</Badge>
+          )}
           {scriptChanged ? <Badge variant="secondary">脚本已更新</Badge> : null}
           {latestJob ? <DirectJobStatusBadge status={latestJob.status} /> : <Badge variant="outline">未生成</Badge>}
         </div>
+        {derivation ? (
+          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className="truncate">源自：{derivation.sourceScriptTitle || "原始广告脚本"}</span>
+            {derivation.variationLabel ? <span>变体：{derivation.variationLabel}</span> : null}
+          </div>
+        ) : null}
         <p className="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
           {script || "暂无脚本正文"}
         </p>
@@ -1179,6 +1373,155 @@ function groupJobsByUnit(jobs: CommerceDirectVideoJob[]) {
     items.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   }
   return result;
+}
+
+function buildScriptDisplayBlocks(
+  units: CommerceScriptUnit[],
+  batches: CommerceScriptDerivationBatch[],
+): ScriptDisplayBlock[] {
+  const latestBatchByRoot = new Map<string, CommerceScriptDerivationBatch>();
+  for (const batch of [...batches].sort(
+    (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+  )) {
+    const rootID = batch.rootBatchId || batch.id;
+    if (!latestBatchByRoot.has(rootID)) latestBatchByRoot.set(rootID, batch);
+  }
+  const derivationBlocks = new Map<string, ScriptDerivationBlock>();
+  const blocks: ScriptDisplayBlock[] = [];
+  for (const unit of units) {
+    const metadata = scriptDerivationMetadata(unit);
+    if (!metadata) {
+      blocks.push({ kind: "unit", key: `unit:${unit.id}`, unit });
+      continue;
+    }
+    const batchID = metadata.rootBatchId || metadata.batchId;
+    const existing = derivationBlocks.get(batchID);
+    if (existing) {
+      existing.units.push(unit);
+      continue;
+    }
+    const block: ScriptDerivationBlock = {
+      kind: "derivation",
+      key: `derivation:${batchID}`,
+      batchId: batchID,
+      metadata,
+      batch: latestBatchByRoot.get(batchID),
+      units: [unit],
+    };
+    derivationBlocks.set(batchID, block);
+    blocks.push(block);
+  }
+  return blocks;
+}
+
+function scriptDerivationMetadata(unit: CommerceScriptUnit): ScriptDerivationMetadataView | null {
+  const raw = recordValue(unit.metadata.scriptDerivation);
+  const batchId = stringRecordValue(raw, "batchId");
+  if (!raw || !batchId) return null;
+  return {
+    batchId,
+    rootBatchId: stringRecordValue(raw, "rootBatchId"),
+    itemId: stringRecordValue(raw, "itemId"),
+    sourceScriptUnitId: stringRecordValue(raw, "sourceScriptUnitId"),
+    sourceScriptTitle: stringRecordValue(raw, "sourceScriptTitle"),
+    dimension: stringRecordValue(raw, "dimension"),
+    variationKey: stringRecordValue(raw, "variationKey"),
+    variationLabel: stringRecordValue(raw, "variationLabel"),
+    variationBrief: stringRecordValue(raw, "variationBrief"),
+  };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function stringRecordValue(value: Record<string, unknown> | null, key: string) {
+  const candidate = value?.[key];
+  return typeof candidate === "string" ? candidate : "";
+}
+
+function commerceDerivationDimensionLabel(value: string) {
+  switch (value) {
+    case "scene":
+      return "场景";
+    case "hook":
+      return "开场钩子";
+    case "audience":
+      return "受众";
+    case "tone":
+      return "表达语气";
+    case "language":
+      return "语言";
+    case "cta":
+      return "行动号召";
+    case "custom":
+      return "自定义";
+    default:
+      return value || "脚本裂变";
+  }
+}
+
+function commerceDerivationBatchStatusLabel(status: CommerceScriptDerivationBatch["status"]) {
+  switch (status) {
+    case "queued":
+      return "等待执行";
+    case "running":
+      return "运行中";
+    case "partial_succeeded":
+      return "部分完成";
+    case "succeeded":
+      return "已完成";
+    case "failed":
+      return "失败";
+    case "cancelling":
+      return "取消中";
+    case "cancelled":
+      return "已取消";
+  }
+}
+
+function defaultGenerateState(
+  unit: CommerceScriptUnit,
+  options: CommerceDirectVideoOptions,
+  productReferences: CommerceProductReference[],
+): GenerateState | null {
+  const durationSeconds = maximumExecutableDuration(options.executableDurationSeconds);
+  if (!durationSeconds) return null;
+  const compatibleResolutions = directVideoResolutionsForDuration(options, durationSeconds);
+  const resolution = compatibleResolutions.includes(options.defaultResolution)
+    ? options.defaultResolution
+    : compatibleResolutions[0] ?? "";
+  if (!resolution) return null;
+  const referenceLimit = directRouteReferenceLimit(options, durationSeconds, resolution);
+  if (referenceLimit <= 0 || productReferences.length === 0) return null;
+  return {
+    unit,
+    durationSeconds,
+    resolution,
+    selectedProductReferenceIds: productReferences.slice(0, referenceLimit).map((item) => item.id),
+    selectedCustomReferenceIds: [],
+  };
+}
+
+async function mapWithConcurrency<TInput, TOutput>(
+  values: TInput[],
+  concurrency: number,
+  run: (value: TInput, index: number) => Promise<TOutput>,
+) {
+  const results = new Array<TOutput>(values.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), values.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < values.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await run(values[index], index);
+      }
+    }),
+  );
+  return results;
 }
 
 function directJobStatusLabel(status: CommerceDirectVideoJob["status"]) {

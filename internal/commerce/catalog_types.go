@@ -101,6 +101,8 @@ type Product struct {
 	Status              string          `json:"status"`
 	Revision            int64           `json:"revision"`
 	ScriptUnitsRevision int64           `json:"scriptUnitsRevision"`
+	NextScriptUnitNo    int64           `json:"-"`
+	NextScriptSortOrder int64           `json:"-"`
 	Metadata            json.RawMessage `json:"metadata"`
 	CurrentVersion      *ProductVersion `json:"currentVersion,omitempty"`
 	CreatedAt           time.Time       `json:"createdAt"`
@@ -277,6 +279,8 @@ type ScriptUnit struct {
 	TargetPlatform          string                       `json:"targetPlatform"`
 	DraftContent            string                       `json:"draftContent"`
 	DraftContentHash        *string                      `json:"draftContentHash,omitempty"`
+	CurrentContent          string                       `json:"currentContent"`
+	CurrentContentHash      string                       `json:"currentContentHash"`
 	DraftUpdatedAt          *time.Time                   `json:"draftUpdatedAt,omitempty"`
 	ActiveUnitGenerationID  *string                      `json:"activeUnitGenerationId,omitempty"`
 	UnitGenerationNo        int64                        `json:"unitGenerationNo"`
@@ -292,6 +296,14 @@ type ScriptUnit struct {
 	CreatedAt               time.Time                    `json:"createdAt"`
 	UpdatedAt               time.Time                    `json:"updatedAt"`
 	ArchivedAt              *time.Time                   `json:"archivedAt,omitempty"`
+}
+
+type CurrentScriptContent struct {
+	ScriptUnitID    string  `json:"scriptUnitId"`
+	Content         string  `json:"content"`
+	ContentHash     string  `json:"contentHash"`
+	SourceVersionID *string `json:"sourceVersionId,omitempty"`
+	UnitRevision    int64   `json:"unitRevision"`
 }
 
 type ScriptUnitProductionSummary struct {

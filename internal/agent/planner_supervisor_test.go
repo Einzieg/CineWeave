@@ -25,6 +25,33 @@ func TestParsePlanToolCalls(t *testing.T) {
 	}
 }
 
+func TestParsePlanAllowsExplicitCompletion(t *testing.T) {
+	plan, err := ParsePlan(`{"summary":"目标已经完成","complete":true,"steps":[]}`)
+	if err != nil {
+		t.Fatalf("parse completion: %v", err)
+	}
+	if !plan.Complete || len(plan.Steps) != 0 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	if _, err := ValidatePlan(plan, registry, 1); err != nil {
+		t.Fatalf("validate completion: %v", err)
+	}
+}
+
+func TestValidatePlanRejectsEmptyIncompletePlan(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	if _, err := ValidatePlan(Plan{Summary: "没有动作"}, registry, 1); err == nil {
+		t.Fatal("expected incomplete empty plan to fail")
+	}
+}
+
 func TestValidatePlanRejectsUnknownTools(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
@@ -126,6 +153,27 @@ func TestSuperviseToolRequiresApprovalForWorkflow(t *testing.T) {
 	})
 	if !decision.Allowed || decision.ExecutionAllowed || !decision.RequiresApproval {
 		t.Fatalf("decision = %+v", decision)
+	}
+}
+
+func TestSuperviseToolUsesEffectsInsteadOfToolName(t *testing.T) {
+	decision := SuperviseTool(DefaultSupervisorPolicy(), SupervisionRequest{
+		Tool: AgentTool{
+			Name:       "arbitrary.provider.operation",
+			Risk:       ToolRiskDraft,
+			Permission: "script.read",
+			Effects: ToolEffects{
+				MaySpendProvider: true,
+			},
+		},
+		Mode:              TaskModeSupervised,
+		UserHasPermission: true,
+	})
+	if !decision.Allowed || decision.ExecutionAllowed || !decision.RequiresApproval {
+		t.Fatalf("decision = %+v", decision)
+	}
+	if !decision.Effects.MaySpendProvider {
+		t.Fatalf("decision effects = %+v", decision.Effects)
 	}
 }
 

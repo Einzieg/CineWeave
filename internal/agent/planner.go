@@ -7,8 +7,9 @@ import (
 )
 
 type Plan struct {
-	Summary string     `json:"summary"`
-	Steps   []PlanStep `json:"steps"`
+	Summary  string     `json:"summary"`
+	Steps    []PlanStep `json:"steps"`
+	Complete bool       `json:"complete,omitempty"`
 }
 
 type PlanStep struct {
@@ -47,6 +48,7 @@ func ParsePlan(raw string) (Plan, error) {
 	var payload struct {
 		Summary        string        `json:"summary"`
 		Message        string        `json:"message"`
+		Complete       bool          `json:"complete"`
 		Steps          []PlanStep    `json:"steps"`
 		ToolCalls      []rawToolCall `json:"toolCalls"`
 		ToolCallsSnake []rawToolCall `json:"tool_calls"`
@@ -65,7 +67,7 @@ func ParsePlan(raw string) (Plan, error) {
 	if summary == "" {
 		summary = strings.TrimSpace(payload.Message)
 	}
-	return Plan{Summary: summary, Steps: normalizePlanSteps(steps)}, nil
+	return Plan{Summary: summary, Steps: normalizePlanSteps(steps), Complete: payload.Complete}, nil
 }
 
 func ValidatePlan(plan Plan, registry *Registry, maxSteps int) (Plan, error) {
@@ -73,6 +75,9 @@ func ValidatePlan(plan Plan, registry *Registry, maxSteps int) (Plan, error) {
 		maxSteps = 20
 	}
 	steps := normalizePlanSteps(plan.Steps)
+	if len(steps) == 0 && !plan.Complete {
+		return Plan{}, fmt.Errorf("agent plan must contain one step or declare complete")
+	}
 	if len(steps) > maxSteps {
 		steps = steps[:maxSteps]
 	}

@@ -94,6 +94,36 @@ func (s *CatalogService) GetScriptUnit(ctx context.Context, db rowQuerier, organ
 	return item, nil
 }
 
+func (s *CatalogService) ResolveCurrentScriptContent(
+	ctx context.Context,
+	db rowQuerier,
+	organizationID string,
+	projectID string,
+	unitID string,
+) (CurrentScriptContent, error) {
+	item, err := s.repository.LoadScriptUnit(ctx, db, organizationID, projectID, unitID, false)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CurrentScriptContent{}, Error{Code: CodeScriptUnitRequired, Message: "脚本单元不存在", Cause: err}
+	}
+	if err != nil {
+		return CurrentScriptContent{}, err
+	}
+	content := strings.TrimSpace(item.CurrentContent)
+	if content == "" {
+		return CurrentScriptContent{}, Error{
+			Code: CodeScriptDerivationSourceEmpty, Message: "源广告脚本当前正文为空",
+		}
+	}
+	contentHash := strings.TrimSpace(item.CurrentContentHash)
+	if contentHash == "" {
+		contentHash = hashText(content)
+	}
+	return CurrentScriptContent{
+		ScriptUnitID: item.ID, Content: content, ContentHash: contentHash,
+		SourceVersionID: item.CurrentSourceVersionID, UnitRevision: item.Revision,
+	}, nil
+}
+
 func (s *CatalogService) CreateScriptUnit(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -145,6 +175,7 @@ func (s *CatalogService) UpdateScriptUnit(
 	organizationID string,
 	projectID string,
 	unitID string,
+	updatedBy string,
 	expectedRevision int64,
 	input UpdateScriptUnitInput,
 ) (ScriptUnit, error) {
@@ -164,14 +195,38 @@ func (s *CatalogService) UpdateScriptUnit(
 	if err := validateScriptUnitUpdate(current, &input); err != nil {
 		return ScriptUnit{}, err
 	}
-	productionChanged := (input.LanguageMode != nil && *input.LanguageMode != current.LanguageMode) ||
+	contentChanged := input.DraftContent != nil && *input.DraftContent != current.CurrentContent
+	productionChanged := contentChanged ||
+		(input.LanguageMode != nil && *input.LanguageMode != current.LanguageMode) ||
 		input.ExplicitTargetLanguage != nil ||
 		(input.TargetDurationSeconds != nil && *input.TargetDurationSeconds != current.TargetDurationSeconds) ||
 		(input.TargetPlatform != nil && strings.TrimSpace(*input.TargetPlatform) != current.TargetPlatform)
-	if productionChanged && current.ActiveUnitGenerationID != nil {
+	if productionChanged && current.ActiveUnitGenerationID != nil && !contentChanged {
 		return ScriptUnit{}, Error{Code: CodeScriptVersionStale, Message: "该脚本已有生产结果，请先确认单元重建影响"}
 	}
+	if contentChanged {
+		version, versionErr := s.repository.InsertScriptVersion(
+			ctx, tx, current, *input.DraftContent, nil, current.CurrentSourceVersionID, true, updatedBy,
+		)
+		if versionErr != nil {
+			return ScriptUnit{}, versionErr
+		}
+		current, err = s.repository.ActivateScriptVersion(ctx, tx, current, version)
+		if err != nil {
+			return ScriptUnit{}, err
+		}
+		input.DraftContent = nil
+		if !hasScriptUnitMetadataUpdate(input) {
+			return current, nil
+		}
+	}
 	return s.repository.UpdateScriptUnit(ctx, tx, current, input)
+}
+
+func hasScriptUnitMetadataUpdate(input UpdateScriptUnitInput) bool {
+	return input.Title != nil || input.LanguageMode != nil ||
+		input.ExplicitTargetLanguage != nil || input.TargetDurationSeconds != nil ||
+		input.TargetPlatform != nil
 }
 
 func (s *CatalogService) ArchiveScriptUnit(ctx context.Context, tx pgx.Tx, organizationID, projectID, unitID string, expectedRevision int64) (ScriptUnit, error) {
@@ -616,7 +671,11 @@ func normalizeScriptUnitInput(input *CreateScriptUnitInput) error {
 	}
 	if input.DerivationKind != nil {
 		value := strings.TrimSpace(*input.DerivationKind)
-		if value != "copy" && value != "language_variant" && value != "agent_idea" {
+		switch value {
+		case "copy", "language_variant", "agent_idea",
+			"scene_variant", "hook_variant", "audience_variant", "tone_variant",
+			"cta_variant", "custom_variant":
+		default:
 			return errors.New("script unit derivation kind is invalid")
 		}
 		input.DerivationKind = &value
@@ -634,6 +693,9 @@ func validateScriptUnitUpdate(current ScriptUnit, input *UpdateScriptUnitInput) 
 	}
 	if input.DraftContent != nil {
 		value := strings.TrimSpace(*input.DraftContent)
+		if value == "" {
+			return Error{Code: CodeScriptRequired, Message: "广告脚本不能为空"}
+		}
 		input.DraftContent = &value
 	}
 	mode := current.LanguageMode

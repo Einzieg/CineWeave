@@ -45,6 +45,13 @@ func TestGatewayTextRuntimeIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
 	})
+	if _, err := pool.Exec(ctx, `
+		UPDATE provider_model_capabilities
+		SET provider_options_schema = '{"xCapabilities":{"supportsReasoning":true,"supportsReasoningLevels":true,"reasoningLevels":["low","medium","high"],"defaultReasoningLevel":"high"}}'
+		WHERE provider_model_id = $1
+	`, modelID); err != nil {
+		t.Fatalf("configure model default reasoning level: %v", err)
+	}
 
 	gatewayService := NewService(pool, vault)
 	gatewayService.EnableGatewayRuntime()
@@ -114,12 +121,16 @@ func openAICompatibleMock(t *testing.T) http.Handler {
 			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-integration"}]}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions":
 			var request struct {
-				Stream bool `json:"stream"`
+				Stream          bool   `json:"stream"`
+				ReasoningEffort string `json:"reasoning_effort"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				t.Errorf("decode upstream request: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
 				return
+			}
+			if request.ReasoningEffort != "high" {
+				t.Errorf("reasoning_effort = %q, want high", request.ReasoningEffort)
 			}
 			if request.Stream {
 				w.Header().Set("Content-Type", "text/event-stream")

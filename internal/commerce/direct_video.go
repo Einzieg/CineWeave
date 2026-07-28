@@ -721,8 +721,8 @@ func directMinInt(left, right int) int {
 }
 
 func validateDirectVideoJobInput(input CreateDirectVideoJobInput) error {
-	if input.DurationSeconds <= 0 {
-		return errors.New("durationSeconds must be positive")
+	if input.DurationSeconds < 0 {
+		return errors.New("durationSeconds cannot be negative")
 	}
 	for _, reference := range input.References {
 		if reference.SourceType != "product" && reference.SourceType != "custom" {

@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-func TestApplyTextRuntimeOptionsUsesBindingReasoningLevel(t *testing.T) {
-	model := reasoningLevelTestModel("low", "medium", "high")
+func TestApplyTextRuntimeOptionsUsesModelDefaultReasoningLevel(t *testing.T) {
+	model := reasoningLevelTestModel("medium", "low", "medium", "high")
 	input, err := applyTextRuntimeOptions(
 		json.RawMessage(`{"prompt":"hello"}`),
 		model,
-		ModelProfileBindingRuntimeOptions{ReasoningLevel: "medium"},
+		ModelProfileBindingRuntimeOptions{},
 	)
 	if err != nil {
 		t.Fatalf("applyTextRuntimeOptions() error = %v", err)
@@ -25,8 +25,27 @@ func TestApplyTextRuntimeOptionsUsesBindingReasoningLevel(t *testing.T) {
 	}
 }
 
-func TestApplyTextRuntimeOptionsRequestOverridesBinding(t *testing.T) {
-	model := reasoningLevelTestModel("low", "medium", "high")
+func TestApplyTextRuntimeOptionsBindingOverridesModelDefault(t *testing.T) {
+	model := reasoningLevelTestModel("medium", "low", "medium", "high")
+	input, err := applyTextRuntimeOptions(
+		json.RawMessage(`{"prompt":"hello"}`),
+		model,
+		ModelProfileBindingRuntimeOptions{ReasoningLevel: "low"},
+	)
+	if err != nil {
+		t.Fatalf("applyTextRuntimeOptions() error = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(input, &decoded); err != nil {
+		t.Fatalf("decode effective input: %v", err)
+	}
+	if decoded["reasoningLevel"] != "low" {
+		t.Fatalf("reasoningLevel = %#v, want low", decoded["reasoningLevel"])
+	}
+}
+
+func TestApplyTextRuntimeOptionsRequestOverridesBindingAndModel(t *testing.T) {
+	model := reasoningLevelTestModel("medium", "low", "medium", "high")
 	input, err := applyTextRuntimeOptions(
 		json.RawMessage(`{"prompt":"hello","reasoningEffort":"HIGH"}`),
 		model,
@@ -48,7 +67,7 @@ func TestApplyTextRuntimeOptionsRequestOverridesBinding(t *testing.T) {
 }
 
 func TestApplyTextRuntimeOptionsRejectsUnsupportedReasoningLevel(t *testing.T) {
-	model := reasoningLevelTestModel("low", "medium", "high")
+	model := reasoningLevelTestModel("", "low", "medium", "high")
 	_, err := applyTextRuntimeOptions(
 		json.RawMessage(`{"prompt":"hello"}`),
 		model,
@@ -69,16 +88,56 @@ func TestNormalizeModelProfileBindingRuntimeOptionsRequiresDeclaredLevels(t *tes
 	}
 }
 
-func reasoningLevelTestModel(levels ...string) Model {
+func TestNormalizeReasoningCapabilityDefaultsCanonicalizesDeclaredLevel(t *testing.T) {
+	normalized, err := normalizeReasoningCapabilityDefaults(json.RawMessage(`{
+		"xCapabilities": {
+			"supportsReasoning": true,
+			"supportsReasoningLevels": true,
+			"reasoningLevels": ["low", "medium", "high"],
+			"defaultReasoningLevel": "HIGH"
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("normalizeReasoningCapabilityDefaults() error = %v", err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(normalized, &schema); err != nil {
+		t.Fatalf("decode normalized schema: %v", err)
+	}
+	xCapabilities := schema["xCapabilities"].(map[string]any)
+	if xCapabilities["defaultReasoningLevel"] != "high" {
+		t.Fatalf("defaultReasoningLevel = %#v, want high", xCapabilities["defaultReasoningLevel"])
+	}
+}
+
+func TestNormalizeReasoningCapabilityDefaultsRejectsUndeclaredLevel(t *testing.T) {
+	_, err := normalizeReasoningCapabilityDefaults(json.RawMessage(`{
+		"xCapabilities": {
+			"supportsReasoning": true,
+			"supportsReasoningLevels": true,
+			"reasoningLevels": ["low", "medium", "high"],
+			"defaultReasoningLevel": "max"
+		}
+	}`))
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("error = %v, want validation", err)
+	}
+}
+
+func reasoningLevelTestModel(defaultLevel string, levels ...string) Model {
+	xCapabilities := map[string]any{
+		"supportsReasoning":       true,
+		"supportsReasoningLevels": true,
+		"reasoningLevels":         levels,
+	}
+	if defaultLevel != "" {
+		xCapabilities["defaultReasoningLevel"] = defaultLevel
+	}
 	return Model{
 		Modality: "text",
 		Capabilities: []Capability{{
 			ProviderOptionsSchema: mustJSON(map[string]any{
-				"xCapabilities": map[string]any{
-					"supportsReasoning":       true,
-					"supportsReasoningLevels": true,
-					"reasoningLevels":         levels,
-				},
+				"xCapabilities": xCapabilities,
 			}),
 		}},
 	}

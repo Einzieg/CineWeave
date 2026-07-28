@@ -230,6 +230,33 @@ func (a Activities) storeEpisodeTimingAnalysis(
 	provenance timingAnalysisProvenance,
 	analysis storyboardpkg.TimingAnalysisResult,
 ) (TimingAnalysisActivityOutput, error) {
+	return retryTimingAnalysisStoreAfterTransientWriteFence(func() (TimingAnalysisActivityOutput, error) {
+		return a.storeEpisodeTimingAnalysisOnce(ctx, input, episode, nodeExecution, provenance, analysis)
+	})
+}
+
+func retryTimingAnalysisStoreAfterTransientWriteFence(
+	store func() (TimingAnalysisActivityOutput, error),
+) (TimingAnalysisActivityOutput, error) {
+	output, err := store()
+	if !isWorkflowWriteFenced(err) {
+		return output, err
+	}
+	// The transaction itself rechecks the immutable node execution token,
+	// workflow status, production generation, and binding before writing. A
+	// second transaction can recover from a transient lock-state observation,
+	// while a real cancellation or production-generation change remains fenced.
+	return store()
+}
+
+func (a Activities) storeEpisodeTimingAnalysisOnce(
+	ctx context.Context,
+	input AnalyzeEpisodeTimingInput,
+	episode ScriptStoryboardEpisodeRecord,
+	nodeExecution NodeExecution,
+	provenance timingAnalysisProvenance,
+	analysis storyboardpkg.TimingAnalysisResult,
+) (TimingAnalysisActivityOutput, error) {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return TimingAnalysisActivityOutput{}, err

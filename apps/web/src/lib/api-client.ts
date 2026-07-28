@@ -1,6 +1,8 @@
 import type {
   AgentMessage,
   AgentApproval,
+  AgentImageAttachment,
+  AgentImageAttachmentUpload,
   AgentSession,
   AgentTask,
   AgentToolDescriptor,
@@ -28,6 +30,10 @@ import type {
   CommerceDirectVideoJob,
   CommerceDirectVideoOptions,
   CommerceScriptReferenceImage,
+  CommerceScriptDerivationBatch,
+  CommerceScriptDerivationBatchList,
+  CommerceScriptDerivationBatchStatus,
+  CreateCommerceScriptDerivationRequest,
   CreateCommerceDirectVideoRequest,
   CommerceProduct,
   CommerceProductMutationResult,
@@ -218,6 +224,21 @@ export class StudioApiError extends Error {
     this.retryable = retryable;
     this.details = details;
   }
+}
+
+function signedUploadHeaders(
+  values: Record<string, string | string[]> | undefined,
+  fallbackMimeType: string,
+) {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(values ?? {})) {
+    const normalized = Array.isArray(value) ? value.join(", ") : value;
+    if (normalized.trim()) headers.set(name, normalized.trim());
+  }
+  if (!headers.has("Content-Type") && fallbackMimeType.trim()) {
+    headers.set("Content-Type", fallbackMimeType.trim());
+  }
+  return headers;
 }
 
 export async function apiRequest<TData>(path: string, options: ApiRequestOptions = {}): Promise<TData> {
@@ -544,7 +565,11 @@ export const studioApi = {
   uploadCommerceProductReferenceFile: async (upload: CommerceProductReferenceUpload, file: File) => {
     let response: Response;
     try {
-      response = await fetch(upload.uploadUrl, { method: upload.method || "PUT", headers: upload.headers, body: file });
+      response = await fetch(upload.uploadUrl, {
+        method: upload.method || "PUT",
+        headers: signedUploadHeaders(upload.headers, file.type),
+        body: file,
+      });
     } catch {
       throw new StudioApiError(
         "无法连接对象存储，请检查网络或存储域名配置后重试",
@@ -744,7 +769,7 @@ export const studioApi = {
     try {
       response = await fetch(upload.uploadUrl, {
         method: upload.method || "PUT",
-        headers: upload.headers,
+        headers: signedUploadHeaders(upload.headers, file.type),
         body: file,
       });
     } catch {
@@ -797,6 +822,74 @@ export const studioApi = {
   ) => apiRequest<CommerceDirectVideoJob>(
     `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/direct-videos`,
     { method: "POST", session, body, idempotencyKey },
+  ),
+  createCommerceScriptDerivation: (
+    session: StudioSession,
+    projectId: string,
+    scriptUnitId: string,
+    body: CreateCommerceScriptDerivationRequest,
+    idempotencyKey: string,
+  ) => apiRequest<CommerceScriptDerivationBatch>(
+    `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/derivations`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  listCommerceScriptDerivations: (
+    session: StudioSession,
+    projectId: string,
+    options?: {
+      status?: CommerceScriptDerivationBatchStatus | "all";
+      sourceScriptUnitId?: string;
+      cursor?: string;
+      limit?: number;
+    },
+  ) => apiRequest<CommerceScriptDerivationBatchList>(
+    `/api/projects/${projectId}/commerce/script-derivations`,
+    {
+      session,
+      query: {
+        "filter[status]": options?.status,
+        "filter[sourceScriptUnitId]": options?.sourceScriptUnitId,
+        cursor: options?.cursor,
+        limit: options?.limit,
+      },
+    },
+  ),
+  getCommerceScriptDerivation: (
+    session: StudioSession,
+    projectId: string,
+    batchId: string,
+    includeLineage = true,
+  ) => apiRequest<CommerceScriptDerivationBatch>(
+    `/api/projects/${projectId}/commerce/script-derivations/${batchId}`,
+    { session, query: includeLineage ? { include: "lineage" } : undefined },
+  ),
+  retryCommerceScriptDerivation: (
+    session: StudioSession,
+    projectId: string,
+    batchId: string,
+    idempotencyKey: string,
+  ) => apiRequest<CommerceScriptDerivationBatch>(
+    `/api/projects/${projectId}/commerce/script-derivations/${batchId}/retry-failed`,
+    { method: "POST", session, body: {}, idempotencyKey },
+  ),
+  cancelCommerceScriptDerivation: (
+    session: StudioSession,
+    projectId: string,
+    batchId: string,
+    idempotencyKey: string,
+    reason?: string,
+  ) => apiRequest<CommerceScriptDerivationBatch>(
+    `/api/projects/${projectId}/commerce/script-derivations/${batchId}/cancel`,
+    { method: "POST", session, body: { reason }, idempotencyKey },
+  ),
+  cancelCommerceDirectVideo: (
+    session: StudioSession,
+    projectId: string,
+    jobId: string,
+    reason?: string,
+  ) => apiRequest<CommerceDirectVideoJob>(
+    `/api/projects/${projectId}/commerce/direct-videos/${jobId}/cancel`,
+    { method: "POST", session, body: { reason } },
   ),
   activateCommerceScriptVersion: (
     session: StudioSession,
@@ -1379,17 +1472,11 @@ export const studioApi = {
     apiRequest<ReviewResponse>(`/api/projects/${projectId}/script-scenes/${sceneId}/review`, { method: "POST", session, body }),
 
   listAgentSessions: (session: StudioSession, projectId: string) =>
-    apiRequest<ListEnvelope<AgentSession>>(`/api/projects/${projectId}/script-agent/sessions`, { session }),
+    apiRequest<ListEnvelope<AgentSession>>(`/api/projects/${projectId}/agent/sessions`, { session }),
   createAgentSession: (session: StudioSession, projectId: string, title: string) =>
-    apiRequest<AgentSession>(`/api/projects/${projectId}/script-agent/sessions`, { method: "POST", session, body: { title } }),
+    apiRequest<AgentSession>(`/api/projects/${projectId}/agent/sessions`, { method: "POST", session, body: { title } }),
   listAgentMessages: (session: StudioSession, projectId: string, sessionId: string) =>
-    apiRequest<ListEnvelope<AgentMessage>>(`/api/projects/${projectId}/script-agent/sessions/${sessionId}/messages`, { session }),
-  createAgentMessage: (session: StudioSession, projectId: string, sessionId: string, content: string) =>
-    apiRequest<AgentMessage>(`/api/projects/${projectId}/script-agent/sessions/${sessionId}/messages`, {
-      method: "POST",
-      session,
-      body: { role: "user", content },
-    }),
+    apiRequest<ListEnvelope<AgentMessage>>(`/api/projects/${projectId}/agent/sessions/${sessionId}/messages`, { session }),
   generateScript: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<{ scriptId: string; versionId: string; content: string; agentRunId: string }>(`/api/projects/${projectId}/script-agent/generate-script`, {
       method: "POST",
@@ -1404,6 +1491,48 @@ export const studioApi = {
     }),
   listAgentTools: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<AgentToolDescriptor>>(`/api/projects/${projectId}/agent/tools`, { session }),
+  createAgentImageAttachmentUpload: (
+    session: StudioSession,
+    projectId: string,
+    body: { fileName: string; mimeType: string; expiresSeconds?: number },
+    idempotencyKey: string,
+  ) => apiRequest<AgentImageAttachmentUpload>(
+    `/api/projects/${projectId}/agent/image-attachments/upload-url`,
+    { method: "POST", session, body, idempotencyKey },
+  ),
+  uploadAgentImageAttachmentFile: async (upload: AgentImageAttachmentUpload, file: File) => {
+    let response: Response;
+    try {
+      response = await fetch(upload.uploadUrl, {
+        method: upload.method || "PUT",
+        headers: signedUploadHeaders(upload.headers, file.type),
+        body: file,
+      });
+    } catch {
+      throw new StudioApiError(
+        "无法连接对象存储，请检查网络或存储域名配置后重试",
+        "UPLOAD_NETWORK_ERROR",
+        0,
+        true,
+      );
+    }
+    if (!response.ok) {
+      throw new StudioApiError(
+        `助手图片上传失败：HTTP ${response.status}`,
+        "UPLOAD_FAILED",
+        response.status,
+        true,
+      );
+    }
+  },
+  completeAgentImageAttachment: (
+    session: StudioSession,
+    projectId: string,
+    attachmentId: string,
+  ) => apiRequest<AgentImageAttachment>(
+    `/api/projects/${projectId}/agent/image-attachments/${attachmentId}/complete`,
+    { method: "POST", session, body: {} },
+  ),
   createAgentTask: (session: StudioSession, projectId: string, body: JsonRecord) =>
     apiRequest<AgentTask>(`/api/projects/${projectId}/agent/tasks`, { method: "POST", session, body }),
   listAgentTasks: (session: StudioSession, projectId: string, query?: Record<string, string | number | boolean | undefined | null>) =>

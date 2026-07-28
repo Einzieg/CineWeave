@@ -112,7 +112,7 @@ function ProjectShellContent({ projectId, children }: { projectId: string; child
       </div>
 
       {/* AI助手常驻面板 */}
-      <AgentDrawer projectId={projectId} />
+      <AgentDrawer projectId={projectId} projectKind={project?.projectKind} />
       <ActivityDrawer projectId={projectId} />
     </div>
   );

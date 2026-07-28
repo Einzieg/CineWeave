@@ -87,3 +87,41 @@ func TestValidateShotPlannerImageDialogueIsolation(t *testing.T) {
 		t.Fatalf("video dialogue should be allowed: %v", err)
 	}
 }
+
+func TestApplyScenePlannerRetryGuidanceRequiresCompleteJSONAndShotStates(t *testing.T) {
+	context := map[string]any{}
+	applyScenePlannerRetryGuidance(context, scenePlannerRetryFeedback{
+		ErrorCode:    "INVALID_REQUEST",
+		ErrorMessage: "plannedEntryState: action.entry and action.exit are required",
+	})
+
+	requirements, ok := context["outputRequirements"].(map[string]any)
+	if !ok {
+		t.Fatalf("output requirements = %#v", context["outputRequirements"])
+	}
+	if !strings.Contains(requirements["json"].(string), "UUID 字符串必须保留结束引号") {
+		t.Fatalf("json requirement = %q", requirements["json"])
+	}
+	if !strings.Contains(requirements["shotStateActions"].(string), "plannedEntryState.action") ||
+		!strings.Contains(requirements["shotStateActions"].(string), "plannedExitState.action") {
+		t.Fatalf("shot state requirement = %q", requirements["shotStateActions"])
+	}
+
+	feedback, ok := context["retryFeedback"].(map[string]any)
+	if !ok {
+		t.Fatalf("retry feedback = %#v", context["retryFeedback"])
+	}
+	if feedback["errorCode"] != "INVALID_REQUEST" ||
+		!strings.Contains(feedback["errorMessage"].(string), "action.entry") ||
+		!strings.Contains(feedback["instruction"].(string), "不得原样重复失败结构") {
+		t.Fatalf("retry feedback = %#v", feedback)
+	}
+}
+
+func TestApplyScenePlannerRetryGuidanceOmitsEmptyFeedback(t *testing.T) {
+	context := map[string]any{}
+	applyScenePlannerRetryGuidance(context, scenePlannerRetryFeedback{})
+	if _, exists := context["retryFeedback"]; exists {
+		t.Fatalf("empty retry feedback should be omitted: %#v", context["retryFeedback"])
+	}
+}

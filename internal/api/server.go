@@ -37,6 +37,7 @@ type Server struct {
 	commerce                     *commercepkg.Service
 	commerceCatalog              *commercepkg.CatalogService
 	commerceDirect               *commercepkg.DirectVideoService
+	commerceDerivations          *commercepkg.ScriptDerivationService
 	storage                      *storage.Client
 	temporal                     temporalClient
 	assetBatchSnapshotLockedHook func()
@@ -113,7 +114,10 @@ func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provide
 		commerce:        commercepkg.NewService(commercepkg.NewRepository()),
 		commerceCatalog: commercepkg.NewCatalogService(commercepkg.NewRepository()),
 		commerceDirect:  commercepkg.NewDirectVideoService(commercepkg.NewRepository()),
-		storage:         storageClient, temporal: temporalClient,
+		commerceDerivations: commercepkg.NewScriptDerivationService(
+			commercepkg.NewRepository(),
+		),
+		storage: storageClient, temporal: temporalClient,
 	}
 }
 
@@ -243,7 +247,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/references/{referenceId}", s.withAuth(s.archiveCommerceScriptReference))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/direct-videos", s.withAuth(s.listCommerceDirectVideos))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/direct-videos", s.withAuth(s.createCommerceDirectVideo))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/derivations", s.withAuth(s.createCommerceScriptDerivation))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-derivations", s.withAuth(s.listCommerceScriptDerivations))
+	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-derivations/{batchId}", s.withAuth(s.getCommerceScriptDerivation))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-derivations/{batchId}/retry-failed", s.withAuth(s.retryCommerceScriptDerivation))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-derivations/{batchId}/cancel", s.withAuth(s.cancelCommerceScriptDerivation))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/direct-videos/{jobId}", s.withAuth(s.getCommerceDirectVideo))
+	mux.HandleFunc("POST /api/projects/{projectId}/commerce/direct-videos/{jobId}/cancel", s.withAuth(s.cancelCommerceDirectVideo))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-resolution", s.withAuth(s.resolveCommerceScriptLanguage))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-resolution", s.withAuth(s.getCommerceScriptLanguageResolution))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-confirmation", s.withAuth(s.confirmCommerceScriptLanguage))
@@ -379,7 +389,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/sessions/{sessionId}/messages", s.withAuth(s.createScriptAgentMessage))
 	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/generate-script", s.withAuth(s.generateScriptFromAgent))
 	mux.HandleFunc("POST /api/projects/{projectId}/script-agent/rewrite-script", s.withAuth(s.rewriteScriptFromAgent))
+	mux.HandleFunc("POST /api/projects/{projectId}/agent/sessions", s.withAuth(s.createProjectAgentSession))
+	mux.HandleFunc("GET /api/projects/{projectId}/agent/sessions", s.withAuth(s.listProjectAgentSessions))
+	mux.HandleFunc("GET /api/projects/{projectId}/agent/sessions/{sessionId}/messages", s.withAuth(s.listProjectAgentMessages))
 	mux.HandleFunc("GET /api/projects/{projectId}/agent/tools", s.withAuth(s.listAgentTools))
+	mux.HandleFunc("POST /api/projects/{projectId}/agent/image-attachments/upload-url", s.withAuth(s.createAgentImageAttachmentUploadURL))
+	mux.HandleFunc("POST /api/projects/{projectId}/agent/image-attachments/{attachmentId}/complete", s.withAuth(s.completeAgentImageAttachment))
+	mux.HandleFunc("POST /api/projects/{projectId}/agent/image-attachments/{attachmentId}/assign", s.withAuth(s.assignAgentImageAttachment))
 	mux.HandleFunc("POST /api/projects/{projectId}/agent/tasks", s.withAuth(s.createAgentTask))
 	mux.HandleFunc("GET /api/projects/{projectId}/agent/tasks", s.withAuth(s.listAgentTasks))
 	mux.HandleFunc("GET /api/projects/{projectId}/agent/tasks/{taskId}", s.withAuth(s.getAgentTask))

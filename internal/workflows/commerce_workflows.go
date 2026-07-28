@@ -352,6 +352,8 @@ func RegisterCommerceWorkflows(registrar CommerceWorkflowRegistrar) {
 }
 
 func RegisterCommerceGenerationWorkflows(registrar CommerceWorkflowRegistrar) {
+	registrar.RegisterWorkflowWithOptions(CommerceScriptDerivationBatchWorkflow, workflow.RegisterOptions{Name: CommerceScriptDerivationBatchWorkflowName})
+	registrar.RegisterWorkflowWithOptions(CommerceScriptDerivationItemWorkflow, workflow.RegisterOptions{Name: CommerceScriptDerivationItemWorkflowName})
 	registrar.RegisterWorkflowWithOptions(CommerceScriptUnitPreparationWorkflow, workflow.RegisterOptions{Name: CommerceScriptUnitPreparationWorkflowName})
 	registrar.RegisterWorkflowWithOptions(CommerceScriptOrganizationWorkflow, workflow.RegisterOptions{Name: CommerceScriptOrganizationWorkflowName})
 	registrar.RegisterWorkflowWithOptions(CommerceStoryboardPlanningWorkflow, workflow.RegisterOptions{Name: CommerceStoryboardPlanningWorkflowName})
@@ -368,6 +370,13 @@ func RegisterCommerceActivities(registrar CommerceActivityRegistrar, activities 
 }
 
 func RegisterCommerceGenerationActivities(registrar CommerceActivityRegistrar, activities CommerceActivities) {
+	registrar.RegisterActivityWithOptions(activities.StartCommerceScriptDerivationBatch, activity.RegisterOptions{Name: StartCommerceScriptDerivationBatchActivity})
+	registrar.RegisterActivityWithOptions(activities.LoadCommerceScriptDerivationItem, activity.RegisterOptions{Name: LoadCommerceScriptDerivationItemActivity})
+	registrar.RegisterActivityWithOptions(activities.CallCommerceScriptDerivationAgent, activity.RegisterOptions{Name: CallCommerceScriptDerivationAgentActivity})
+	registrar.RegisterActivityWithOptions(activities.CommitCommerceScriptDerivationItem, activity.RegisterOptions{Name: CommitCommerceScriptDerivationItemActivity})
+	registrar.RegisterActivityWithOptions(activities.FailCommerceScriptDerivationItem, activity.RegisterOptions{Name: FailCommerceScriptDerivationItemActivity})
+	registrar.RegisterActivityWithOptions(activities.FinalizeCommerceScriptDerivationBatch, activity.RegisterOptions{Name: FinalizeCommerceScriptDerivationBatchActivity})
+	registrar.RegisterActivityWithOptions(activities.CancelCommerceScriptDerivationBatch, activity.RegisterOptions{Name: CancelCommerceScriptDerivationBatchActivity})
 	registrar.RegisterActivityWithOptions(activities.LoadCommerceScriptUnitPreparation, activity.RegisterOptions{Name: LoadCommerceScriptUnitPreparationActivityName})
 	registrar.RegisterActivityWithOptions(activities.ResolveCommerceLanguage, activity.RegisterOptions{Name: ResolveCommerceLanguageActivityName})
 	registrar.RegisterActivityWithOptions(activities.PersistCommerceLanguageResolution, activity.RegisterOptions{Name: PersistCommerceLanguageResolutionActivityName})
@@ -1061,24 +1070,7 @@ func (a CommerceActivities) runCommerceTextAgent(ctx context.Context, input Comm
 }
 
 func withCommerceOutputContract(rendered promptsvc.RenderedPrompt) promptsvc.RenderedPrompt {
-	var metadata struct {
-		OutputContract json.RawMessage `json:"outputContract"`
-	}
-	if len(rendered.Metadata) == 0 || json.Unmarshal(rendered.Metadata, &metadata) != nil || len(metadata.OutputContract) == 0 {
-		return rendered
-	}
-	var contract any
-	if json.Unmarshal(metadata.OutputContract, &contract) != nil {
-		return rendered
-	}
-	encoded, err := json.Marshal(contract)
-	if err != nil {
-		return rendered
-	}
-	rendered.RenderedText = strings.TrimSpace(rendered.RenderedText) +
-		"\n\n输出必须严格匹配以下 JSON Schema，不得增加未声明字段，也不得改变字段类型：\n" + string(encoded)
-	rendered.RenderedHash = promptsvc.HashText(rendered.RenderedText)
-	return rendered
+	return promptsvc.WithOutputContract(rendered)
 }
 
 func commerceAgentNodeKey(input CommerceAgentCallInput) string {

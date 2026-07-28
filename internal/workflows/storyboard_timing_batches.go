@@ -33,6 +33,16 @@ type timingTextBatch struct {
 	ScriptSceneIDs    []string `json:"scriptSceneIds,omitempty"`
 }
 
+type timingBatchValidationFeedback struct {
+	ErrorCode    string `json:"errorCode"`
+	ErrorMessage string `json:"errorMessage"`
+}
+
+type timingBatchActionDurationRange struct {
+	MinimumSeconds float64 `json:"minimumSeconds"`
+	MaximumSeconds float64 `json:"maximumSeconds"`
+}
+
 type timingBatchActivityOutput struct {
 	BatchKey          string                             `json:"batchKey"`
 	BatchOrdinal      int                                `json:"batchOrdinal"`
@@ -272,28 +282,15 @@ func (a Activities) analyzeEpisodeTimingBatch(
 	batch timingTextBatch,
 	batchCount int,
 ) (timingBatchActivityOutput, error) {
-	contextJSON := mustJSON(map[string]any{
-		"project": map[string]any{
-			"timelineTimebase": project.TimelineTimebase,
-			"fpsNumerator":     project.FPSNumerator,
-			"fpsDenominator":   project.FPSDenominator,
-		},
-		"episode": map[string]any{
-			"id":      episode.ID,
-			"index":   episode.EpisodeIndex,
-			"title":   episode.EpisodeTitle,
-			"content": batch.Content,
-		},
-		"analysisScope": map[string]any{
-			"batchKey":          batch.Key,
-			"batchOrdinal":      batch.Ordinal,
-			"batchCount":        batchCount,
-			"sourceStartOffset": batch.SourceStartOffset,
-			"sourceEndOffset":   batch.SourceEndOffset,
-			"sourceHash":        batch.SourceHash,
-			"scriptSceneIds":    batch.ScriptSceneIDs,
-		},
-	})
+	nodeKey := fmt.Sprintf("%s_%s", nodeKeyForID(nodeAnalyzeEpisodeTimingPrefix, input.ScriptEpisodeID), batch.Key)
+	feedback, err := a.loadTimingBatchValidationFeedback(ctx, input.WorkflowRunID, nodeKey)
+	if err != nil {
+		return timingBatchActivityOutput{}, err
+	}
+	contextJSON, err := timingBatchPromptContext(project, episode, batch, batchCount, feedback)
+	if err != nil {
+		return timingBatchActivityOutput{}, err
+	}
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardTimingBatchAnalyzer, map[string]any{
 		"context": map[string]any{"json": string(contextJSON)},
 	})
@@ -306,7 +303,6 @@ func (a Activities) analyzeEpisodeTimingBatch(
 		return existing, nil
 	}
 
-	nodeKey := fmt.Sprintf("%s_%s", nodeKeyForID(nodeAnalyzeEpisodeTimingPrefix, input.ScriptEpisodeID), batch.Key)
 	nodeExecution, err := StartNodeRun(ctx, a.db, NodeRunInput{
 		OrganizationID: input.OrganizationID,
 		ProjectID:      input.ProjectID,
@@ -374,7 +370,7 @@ func (a Activities) analyzeEpisodeTimingBatch(
 		},
 		EpisodeContent: batch.Content,
 	}); err != nil {
-		return fail(workflowError{Code: "TIMING_BATCH_SOURCE_MISMATCH", Message: err.Error(), Retryable: true, RetryabilityKnown: true})
+		return fail(timingBatchSemanticValidationError(err))
 	}
 	output := timingBatchActivityOutput{
 		BatchKey:          batch.Key,
@@ -393,6 +389,114 @@ func (a Activities) analyzeEpisodeTimingBatch(
 		return timingBatchActivityOutput{}, err
 	}
 	return output, nil
+}
+
+func timingBatchPromptContext(
+	project ProjectProductionSettings,
+	episode ScriptStoryboardEpisodeRecord,
+	batch timingTextBatch,
+	batchCount int,
+	feedback timingBatchValidationFeedback,
+) (json.RawMessage, error) {
+	actionRanges, err := timingBatchActionDurationRanges()
+	if err != nil {
+		return nil, err
+	}
+	promptContext := map[string]any{
+		"project": map[string]any{
+			"timelineTimebase": project.TimelineTimebase,
+			"fpsNumerator":     project.FPSNumerator,
+			"fpsDenominator":   project.FPSDenominator,
+		},
+		"episode": map[string]any{
+			"id":      episode.ID,
+			"index":   episode.EpisodeIndex,
+			"title":   episode.EpisodeTitle,
+			"content": batch.Content,
+		},
+		"analysisScope": map[string]any{
+			"batchKey":          batch.Key,
+			"batchOrdinal":      batch.Ordinal,
+			"batchCount":        batchCount,
+			"sourceStartOffset": batch.SourceStartOffset,
+			"sourceEndOffset":   batch.SourceEndOffset,
+			"sourceHash":        batch.SourceHash,
+			"scriptSceneIds":    batch.ScriptSceneIDs,
+		},
+		"timingRules": map[string]any{
+			"actionDurationSecondsByKind": actionRanges,
+			"suggestedSecondsRule":        "不确定时填 0，由确定性规则选择默认时长；非 0 值必须位于 actionKind 对应范围内。只有原文明确要求慢动作、长停顿、复杂群体调度或一镜到底等例外时才可超出范围，并且必须填写 exceptionReason。",
+		},
+	}
+	if strings.TrimSpace(feedback.ErrorMessage) != "" {
+		promptContext["retryFeedback"] = map[string]any{
+			"errorCode":    feedback.ErrorCode,
+			"errorMessage": feedback.ErrorMessage,
+			"instruction":  "上一次输出未通过确定性校验。必须修正该错误；不得原样重复失败值，也不得修改或遗漏输入原文。",
+		}
+	}
+	return mustJSON(promptContext), nil
+}
+
+func timingBatchActionDurationRanges() (map[string]timingBatchActionDurationRange, error) {
+	kinds := []storyboardpkg.ActionKind{
+		storyboardpkg.ActionMicro,
+		storyboardpkg.ActionSimple,
+		storyboardpkg.ActionMovement,
+		storyboardpkg.ActionEstablishing,
+		storyboardpkg.ActionCombat,
+		storyboardpkg.ActionTransition,
+	}
+	ranges := make(map[string]timingBatchActionDurationRange, len(kinds))
+	for _, kind := range kinds {
+		estimate, err := storyboardpkg.EstimateActionDuration(kind, 0, "", storyboardpkg.DefaultTimebase())
+		if err != nil {
+			return nil, fmt.Errorf("load action duration range %s: %w", kind, err)
+		}
+		ranges[string(kind)] = timingBatchActionDurationRange{
+			MinimumSeconds: estimate.MinimumSeconds,
+			MaximumSeconds: estimate.MaximumSeconds,
+		}
+	}
+	return ranges, nil
+}
+
+func (a Activities) loadTimingBatchValidationFeedback(ctx context.Context, workflowRunID, nodeKey string) (timingBatchValidationFeedback, error) {
+	var feedback timingBatchValidationFeedback
+	err := a.db.QueryRow(ctx, `
+		SELECT COALESCE(error_code, ''), COALESCE(error_message, '')
+		FROM workflow_node_runs
+		WHERE workflow_run_id = $1
+		  AND node_key = $2
+		  AND status = 'failed'
+	`, workflowRunID, nodeKey).Scan(&feedback.ErrorCode, &feedback.ErrorMessage)
+	if err == pgx.ErrNoRows {
+		return timingBatchValidationFeedback{}, nil
+	}
+	if err != nil {
+		return timingBatchValidationFeedback{}, err
+	}
+	if !strings.HasPrefix(feedback.ErrorCode, "TIMING_BATCH_") {
+		return timingBatchValidationFeedback{}, nil
+	}
+	return feedback, nil
+}
+
+func timingBatchSemanticValidationError(cause error) workflowError {
+	message := cause.Error()
+	code := "TIMING_BATCH_SEMANTIC_INVALID"
+	switch {
+	case strings.Contains(message, "source text was not found"):
+		code = "TIMING_BATCH_SOURCE_MISMATCH"
+	case strings.Contains(message, "action duration"), strings.Contains(message, "unsupported action kind"):
+		code = "TIMING_BATCH_DURATION_INVALID"
+	}
+	return workflowError{
+		Code:              code,
+		Message:           message,
+		Retryable:         true,
+		RetryabilityKnown: true,
+	}
 }
 
 func canonicalizeTimingBatchOutput(output storyboardpkg.TimingAnalyzerOutput, episodeIndex int, batch timingTextBatch) storyboardpkg.TimingAnalyzerOutput {

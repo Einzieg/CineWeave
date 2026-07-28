@@ -59,6 +59,24 @@ func TestRenderedHashStable(t *testing.T) {
 	}
 }
 
+func TestWithOutputContractAppendsSchemaAndUpdatesHash(t *testing.T) {
+	rendered := RenderedPrompt{
+		RenderedText: "Return JSON.",
+		RenderedHash: HashText("Return JSON."),
+		Metadata:     json.RawMessage(`{"outputContract":{"type":"object","additionalProperties":false}}`),
+	}
+	withContract := WithOutputContract(rendered)
+	if !strings.Contains(withContract.RenderedText, `"additionalProperties":false`) {
+		t.Fatalf("rendered text = %q", withContract.RenderedText)
+	}
+	if withContract.RenderedHash == rendered.RenderedHash {
+		t.Fatal("rendered hash was not updated")
+	}
+	if withContract.RenderedHash != HashText(withContract.RenderedText) {
+		t.Fatalf("rendered hash = %q", withContract.RenderedHash)
+	}
+}
+
 func TestRenderPreservesVersionMetadata(t *testing.T) {
 	prompt := testResolvedPrompt("Hello.")
 	prompt.Metadata = json.RawMessage(`{"outputContract":{"type":"object"}}`)

@@ -16,12 +16,14 @@ type SupervisionRequest struct {
 }
 
 type SupervisionDecision struct {
-	Allowed          bool     `json:"allowed"`
-	ExecutionAllowed bool     `json:"executionAllowed"`
-	RequiresApproval bool     `json:"requiresApproval"`
-	Risk             ToolRisk `json:"risk"`
-	Permission       string   `json:"permission,omitempty"`
-	Reasons          []string `json:"reasons,omitempty"`
+	Allowed          bool        `json:"allowed"`
+	ExecutionAllowed bool        `json:"executionAllowed"`
+	RequiresApproval bool        `json:"requiresApproval"`
+	Risk             ToolRisk    `json:"risk"`
+	Permission       string      `json:"permission,omitempty"`
+	Permissions      []string    `json:"permissions"`
+	Effects          ToolEffects `json:"effects"`
+	Reasons          []string    `json:"reasons,omitempty"`
 }
 
 func DefaultSupervisorPolicy() SupervisorPolicy {
@@ -41,8 +43,10 @@ func SuperviseTool(policy SupervisorPolicy, req SupervisionRequest) SupervisionD
 		RequiresApproval: req.Tool.RequiresApproval,
 		Risk:             req.Tool.Risk,
 		Permission:       req.Tool.Permission,
+		Permissions:      req.Tool.RequiredPermissions(),
+		Effects:          req.Tool.EffectiveEffects(),
 	}
-	if req.Tool.Permission != "" && !req.UserHasPermission {
+	if len(decision.Permissions) > 0 && !req.UserHasPermission {
 		decision.Allowed = false
 		decision.ExecutionAllowed = false
 		decision.Reasons = append(decision.Reasons, "missing_permission")
@@ -75,10 +79,22 @@ func SuperviseTool(policy SupervisorPolicy, req SupervisionRequest) SupervisionD
 		decision.RequiresApproval = true
 		decision.Reasons = append(decision.Reasons, "unknown_risk")
 	}
+	effects := decision.Effects
+	if effects.WritesProject && policy.RequireApprovalForWrite {
+		decision.RequiresApproval = true
+	}
+	if effects.StartsWorkflow && policy.RequireApprovalForWorkflow {
+		decision.RequiresApproval = true
+	}
+	if effects.MaySpendProvider && policy.RequireApprovalForCosted {
+		decision.RequiresApproval = true
+	}
+	if effects.Destructive && policy.RequireApprovalForDestructive {
+		decision.RequiresApproval = true
+	}
 	switch permissionMode {
 	case PermissionModeAutoApprove:
-		switch req.Tool.Risk {
-		case ToolRiskWrite, ToolRiskWorkflow, ToolRiskCosted:
+		if !effects.Destructive && req.Tool.Risk != ToolRiskAdmin {
 			decision.RequiresApproval = false
 		}
 	case PermissionModeFullAccess:

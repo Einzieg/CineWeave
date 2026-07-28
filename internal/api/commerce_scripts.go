@@ -137,7 +137,7 @@ func (s *Server) updateCommerceScriptUnit(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback(r.Context())
 	item, err := s.commerceCatalog.UpdateScriptUnit(r.Context(), tx, project.OrganizationID, project.ID,
-		r.PathValue("scriptUnitId"), req.ExpectedRevision, commercepkg.UpdateScriptUnitInput{
+		r.PathValue("scriptUnitId"), principal.UserID, req.ExpectedRevision, commercepkg.UpdateScriptUnitInput{
 			Title: req.Title, DraftContent: req.DraftContent, LanguageMode: req.LanguageMode,
 			ExplicitTargetLanguage: req.ExplicitTargetLanguage, TargetDurationSeconds: req.TargetDurationSeconds,
 			TargetPlatform: req.TargetPlatform,

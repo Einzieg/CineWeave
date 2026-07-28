@@ -67,7 +67,7 @@ func TestGatewayRoutingIntegration(t *testing.T) {
 		assertProviderCallStatus(t, ctx, pool, resp.Attempts[1].ProviderCallID, "succeeded", "")
 	})
 
-	t.Run("binding reasoning level reaches upstream", func(t *testing.T) {
+	t.Run("model default reasoning level reaches upstream", func(t *testing.T) {
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var request map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -86,20 +86,12 @@ func TestGatewayRoutingIntegration(t *testing.T) {
 		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID) })
 		if _, err := pool.Exec(ctx, `
 			UPDATE provider_model_capabilities
-			SET provider_options_schema = '{"xCapabilities":{"supportsReasoning":true,"supportsReasoningLevels":true,"reasoningLevels":["low","medium","high"]}}'
+			SET provider_options_schema = '{"xCapabilities":{"supportsReasoning":true,"supportsReasoningLevels":true,"reasoningLevels":["low","medium","high"],"defaultReasoningLevel":"high"}}'
 			WHERE provider_model_id = $1
 		`, modelID); err != nil {
 			t.Fatalf("configure reasoning capability: %v", err)
 		}
 		profileKey := insertRoutingProfile(t, ctx, pool, orgID, "text_reasoning_default", []string{modelID})
-		if _, err := pool.Exec(ctx, `
-			UPDATE model_profile_bindings b
-			SET runtime_options = '{"reasoningLevel":"high"}'
-			FROM model_profiles p
-			WHERE p.id = b.model_profile_id AND p.organization_id = $1 AND p.profile_key = $2
-		`, orgID, profileKey); err != nil {
-			t.Fatalf("configure binding runtime options: %v", err)
-		}
 
 		service := NewService(pool, vault)
 		service.EnableGatewayRuntime()

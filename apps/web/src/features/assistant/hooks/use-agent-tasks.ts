@@ -28,7 +28,13 @@ export function useAgentTasks(projectId: string, sessionId?: string | null, enab
   const workflowEventRevision = useActivityStore((state) => {
     const events = state.eventsByProject[projectId] ?? [];
     for (let index = events.length - 1; index >= 0; index -= 1) {
-      if (events[index].eventType.startsWith("workflow.") || events[index].eventType.startsWith("storyboard.") || events[index].eventType.startsWith("video.production.")) {
+      if (
+        events[index].eventType.startsWith("workflow.")
+        || events[index].eventType.startsWith("storyboard.")
+        || events[index].eventType.startsWith("video.production.")
+        || events[index].eventType.startsWith("commerce.direct_video.")
+        || events[index].eventType.startsWith("commerce.script_derivation.")
+      ) {
         return events[index].id;
       }
     }
@@ -248,6 +254,12 @@ function projectAgentProductionInvalidationKeys(projectId: string) {
     qk.assetsRoot(projectId),
     qk.requirements(projectId),
     qk.artifacts(projectId),
+    qk.commerceProduct(projectId),
+    qk.commerceProductReferencesRoot(projectId),
+    qk.commerceScriptUnitsRoot(projectId),
+    qk.commerceScriptDerivationsRoot(projectId),
+    qk.commerceDirectVideoOptions(projectId),
+    qk.commerceDirectVideosRoot(projectId),
   ];
 }
 

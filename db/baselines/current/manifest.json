@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
-  "headVersion": 66,
-  "migrationCount": 66,
-  "bundleSha256": "6beb40a57f4c3a5c72c2082099ad363eb46b37dd8cd60dcad4b354b0c1da3f67",
+  "headVersion": 69,
+  "migrationCount": 69,
+  "bundleSha256": "803c4390f5eee6e98fd4dda6513fbb6a1377846907904ecc99c1dd0f0726d5da",
   "migrations": [
     {
       "version": 1,
@@ -333,6 +333,21 @@
       "version": 66,
       "name": "000066_commerce_direct_video_runtime.sql",
       "sha256": "86913f9545d98edb7a9a99e4e5b0c9691a7488d44e27e7cb84e84e6cd6f04771"
+    },
+    {
+      "version": 67,
+      "name": "000067_commerce_script_derivation.sql",
+      "sha256": "9798d813e87767f62bc6d80d55073b1cfed99bdd7759bd4f9dd15dcfa5e58ca6"
+    },
+    {
+      "version": 68,
+      "name": "000068_agent_image_attachments.sql",
+      "sha256": "a8b2a70ffcfb5264b64978ef6062b171a12d09091b82fbe4bff140f98483f5c5"
+    },
+    {
+      "version": 69,
+      "name": "000069_commerce_script_derivation_prompt_hash.sql",
+      "sha256": "eb188eb0f16d8ca6d12d1ecf21673364f3ffa618318d3868c17c1bd1784ef55e"
     }
   ]
 }

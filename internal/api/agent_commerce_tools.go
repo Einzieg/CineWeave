@@ -11,7 +11,10 @@ import (
 	"strings"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
+	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/google/uuid"
 )
 
@@ -66,8 +69,128 @@ func (s *Server) agentToolCommerce(
 
 	scriptUnitID := agentReferenceStringArg(args, "scriptUnitId")
 	switch step.ToolName {
+	case "commerce.project.read_summary":
+		summary, err := s.commerceAgentPlannerContext(r.Context(), project)
+		if err != nil {
+			return agentToolError(step.ToolName, args, err)
+		}
+		return agentToolOK(step.ToolName, args, "已读取带货项目摘要", summary)
 	case "commerce.product.get":
 		return invoke(http.MethodGet, "/product", nil, nil, nil, s.getCommerceProduct)
+	case "commerce.product.references.list":
+		query := make(url.Values)
+		query.Set("filter[status]", agentStringArg(args, "status"))
+		return invoke(http.MethodGet, "/product/references", nil, query, nil, s.listCommerceProductReferences)
+	case "commerce.attachment.assign":
+		attachmentID := agentReferenceStringArg(args, "attachmentId")
+		if !agentTaskHasImageAttachment(task, attachmentID) {
+			return agentToolError(
+				step.ToolName,
+				args,
+				newAPIError(http.StatusUnprocessableEntity, "AGENT_IMAGE_ATTACHMENTS_INVALID", "只能绑定当前助手任务附加的图片"),
+			)
+		}
+		result := s.invokeAgentCommerceHandler(
+			r, principal, task, step, args,
+			http.MethodPost,
+			"/api/projects/"+url.PathEscape(project.ID)+"/agent/image-attachments/"+url.PathEscape(attachmentID)+"/assign",
+			map[string]string{"projectId": project.ID, "attachmentId": attachmentID},
+			nil,
+			agentCommerceSelectArgs(args, "scope", "scriptUnitId", "referenceRole", "setPrimary"),
+			s.assignAgentImageAttachment,
+		)
+		if result.Status == "succeeded" {
+			if err := s.recordAgentTaskImageAttachmentUsage(
+				r.Context(), task.ID, attachmentID, agentStringArg(args, "scope"),
+			); err != nil {
+				return agentToolError(step.ToolName, args, err)
+			}
+		}
+		return result
+	case "commerce.script.list":
+		query := make(url.Values)
+		query.Set("filter[status]", agentStringArg(args, "status"))
+		query.Set("cursor", agentStringArg(args, "cursor"))
+		query.Set("include", "productionSummary")
+		if limit := agentIntArg(args, "limit", 50, 1, 200); limit > 0 {
+			query.Set("limit", strconv.Itoa(limit))
+		}
+		return invoke(http.MethodGet, "/script-units", nil, query, nil, s.listCommerceScriptUnits)
+	case "commerce.script.get":
+		return invoke(http.MethodGet, "/script-units/"+url.PathEscape(scriptUnitID), map[string]string{"scriptUnitId": scriptUnitID}, nil, nil, s.getCommerceScriptUnit)
+	case "commerce.script.create":
+		return invoke(http.MethodPost, "/script-units", nil, nil, args, s.createCommerceScriptUnit)
+	case "commerce.script.update":
+		body := agentCommercePatchBody(args)
+		return invoke(http.MethodPatch, "/script-units/"+url.PathEscape(scriptUnitID), map[string]string{"scriptUnitId": scriptUnitID}, nil, body, s.updateCommerceScriptUnit)
+	case "commerce.script.archive":
+		return invoke(http.MethodDelete, "/script-units/"+url.PathEscape(scriptUnitID), map[string]string{"scriptUnitId": scriptUnitID}, nil,
+			agentCommerceSelectArgs(args, "expectedRevision"), s.archiveCommerceScriptUnit)
+	case "commerce.script.derive.preview":
+		return s.agentToolCommerceScriptDerivationPreview(r, project, task, step, args)
+	case "commerce.script.derive.batch":
+		sourceScriptUnitID := agentReferenceStringArg(args, "sourceScriptUnitId")
+		return invoke(
+			http.MethodPost,
+			"/script-units/"+url.PathEscape(sourceScriptUnitID)+"/derivations",
+			map[string]string{"scriptUnitId": sourceScriptUnitID},
+			nil,
+			agentCommerceSelectArgs(args, "dimension", "instruction", "preserve", "variations"),
+			s.createCommerceScriptDerivation,
+		)
+	case "commerce.script.derivation.get":
+		batchID := agentReferenceStringArg(args, "batchId")
+		query := make(url.Values)
+		if include := agentStringArg(args, "include"); include != "" {
+			query.Set("include", include)
+		}
+		return invoke(
+			http.MethodGet,
+			"/script-derivations/"+url.PathEscape(batchID),
+			map[string]string{"batchId": batchID},
+			query,
+			nil,
+			s.getCommerceScriptDerivation,
+		)
+	case "commerce.script.derive.retry_failed":
+		batchID := agentReferenceStringArg(args, "batchId")
+		return invoke(
+			http.MethodPost,
+			"/script-derivations/"+url.PathEscape(batchID)+"/retry-failed",
+			map[string]string{"batchId": batchID},
+			nil,
+			map[string]any{},
+			s.retryCommerceScriptDerivation,
+		)
+	case "commerce.script.derive.cancel":
+		batchID := agentReferenceStringArg(args, "batchId")
+		return invoke(
+			http.MethodPost,
+			"/script-derivations/"+url.PathEscape(batchID)+"/cancel",
+			map[string]string{"batchId": batchID},
+			nil,
+			agentCommerceSelectArgs(args, "reason"),
+			s.cancelCommerceScriptDerivation,
+		)
+	case "commerce.video.options":
+		return invoke(http.MethodGet, "/video-options", nil, nil, nil, s.getCommerceDirectVideoOptions)
+	case "commerce.video.list":
+		query := make(url.Values)
+		query.Set("filter[scriptUnitId]", scriptUnitID)
+		return invoke(http.MethodGet, "/direct-videos", nil, query, nil, s.listCommerceDirectVideos)
+	case "commerce.video.get":
+		jobID := agentReferenceStringArg(args, "jobId")
+		return invoke(http.MethodGet, "/direct-videos/"+url.PathEscape(jobID), map[string]string{"jobId": jobID}, nil, nil, s.getCommerceDirectVideo)
+	case "commerce.video.generate":
+		return invoke(http.MethodPost, "/script-units/"+url.PathEscape(scriptUnitID)+"/direct-videos",
+			map[string]string{"scriptUnitId": scriptUnitID}, nil,
+			agentCommerceSelectArgs(args, "durationSeconds", "resolution", "aspectRatio", "generateAudio", "references"),
+			s.createCommerceDirectVideo)
+	case "commerce.video.cancel":
+		jobID := agentReferenceStringArg(args, "jobId")
+		return invoke(http.MethodPost, "/direct-videos/"+url.PathEscape(jobID)+"/cancel",
+			map[string]string{"jobId": jobID}, nil,
+			agentCommerceSelectArgs(args, "reason"), s.cancelCommerceDirectVideo)
 	case "commerce.product.version.list":
 		return invoke(http.MethodGet, "/product/versions", nil, nil, nil, s.listCommerceProductVersions)
 	case "commerce.product.version.create":
@@ -217,6 +340,102 @@ func (s *Server) agentToolCommerce(
 	}
 }
 
+func (s *Server) agentToolCommerceScriptDerivationPreview(
+	r *http.Request,
+	project Project,
+	task AgentTask,
+	step AgentStep,
+	args map[string]any,
+) agentToolResult {
+	input := commercepkg.ScriptDerivationPreviewInput{
+		SourceScriptUnitID: agentReferenceStringArg(args, "sourceScriptUnitId"),
+		Count:              agentIntArg(args, "count", 0, 1, commercepkg.ScriptDerivationMaxVariations),
+		Dimension:          agentStringArg(args, "dimension"),
+		Instruction:        agentStringArg(args, "instruction"),
+		CandidateValues:    agentStringSliceArg(args, "candidateValues"),
+		Preserve:           agentStringSliceArg(args, "preserve"),
+	}
+	prepared, err := s.commerceDerivations.PreparePreview(
+		r.Context(), s.db, project.OrganizationID, project.ID, input,
+	)
+	if err != nil {
+		return agentToolError(step.ToolName, args, err)
+	}
+	variables, err := prepared.PromptVariables()
+	if err != nil {
+		return agentToolError(step.ToolName, args, err)
+	}
+	rendered, err := promptsvc.Render(prepared.Prompt, variables)
+	if err != nil {
+		return agentToolError(step.ToolName, args, err)
+	}
+	rendered = promptsvc.WithOutputContract(rendered)
+	idempotencyKey := agentStepIdempotencyKey(task, step)
+	response, err := provider.NewGatewayClientFromEnv().GenerateText(
+		r.Context(),
+		provider.GatewayTextRequest{
+			OrganizationID:    project.OrganizationID,
+			WorkspaceID:       project.WorkspaceID,
+			ProjectID:         project.ID,
+			ModelProfileKey:   prepared.Routing.ModelProfileKey,
+			ProviderModelID:   prepared.Routing.ProviderModelID,
+			PromptTemplateKey: rendered.TemplateKey,
+			PromptVersionID:   rendered.PromptVersionID,
+			PromptHash:        rendered.RenderedHash,
+			PromptSource:      rendered.Source,
+			IdempotencyKey:    idempotencyKey,
+			Input: mustRawJSON(map[string]any{
+				"prompt": rendered.RenderedText, "responseFormat": "json",
+				"maxOutputTokens": 8000,
+			}),
+			Options: provider.GatewayTextOptions{
+				IdempotencyKey: idempotencyKey,
+			},
+		},
+	)
+	if err != nil {
+		if standard, ok := provider.StandardErrorFromError(err); ok {
+			return agentToolError(step.ToolName, args, apiError{
+				Status: provider.HTTPStatusForStandardError(standard),
+				Code:   standard.Code, Message: standard.Message,
+				Retryable: standard.Retryable,
+			})
+		}
+		return agentToolError(step.ToolName, args, err)
+	}
+	preview, err := commercepkg.DecodeScriptDerivationPreview(
+		response.Output.Text, prepared.Input, prepared.Source,
+	)
+	if err != nil {
+		return agentToolError(step.ToolName, args, err)
+	}
+	preview.ProviderRequestID = response.ProviderRequestID
+	preview.ProviderCallID = response.ProviderCallID
+	preview.ProviderModelID = response.ModelID
+	preview.PromptTemplateKey = rendered.TemplateKey
+	preview.PromptVersionID = rendered.PromptVersionID
+	preview.PromptHash = rendered.RenderedHash
+	data, err := agentCommerceValueData(preview)
+	if err != nil {
+		return agentToolError(step.ToolName, args, err)
+	}
+	data["confirmation"] = map[string]any{
+		"sourceScriptUnitId": preview.SourceScriptUnitID,
+		"sourceScriptTitle":  preview.SourceScriptTitle,
+		"dimension":          preview.Dimension,
+		"count":              len(preview.Variations),
+		"preserve":           preview.Preserve,
+		"variations":         preview.Variations,
+		"maySpendProvider":   true,
+	}
+	return agentToolOK(
+		step.ToolName,
+		args,
+		fmt.Sprintf("已生成 %d 个裂变候选，确认后可创建独立广告脚本", len(preview.Variations)),
+		data,
+	)
+}
+
 func (s *Server) invokeAgentCommerceHandler(
 	parent *http.Request,
 	principal auth.Principal,
@@ -291,6 +510,21 @@ func agentCommerceSelectArgs(args map[string]any, keys ...string) map[string]any
 	return result
 }
 
+func agentCommercePatchBody(args map[string]any) map[string]any {
+	result := agentCommerceSelectArgs(args, "expectedRevision")
+	patch, ok := mapFromAny(args["patch"])
+	if !ok {
+		return result
+	}
+	for key, value := range patch {
+		if key == "content" {
+			key = "draftContent"
+		}
+		result[key] = value
+	}
+	return result
+}
+
 func agentCommerceResultData(data, meta any) map[string]any {
 	result := make(map[string]any)
 	if object, ok := data.(map[string]any); ok {
@@ -310,6 +544,18 @@ func agentCommerceResultData(data, meta any) map[string]any {
 		}
 	}
 	return result
+}
+
+func agentCommerceValueData(value any) (map[string]any, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]any)
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *Server) agentCommerceStepDryRunOutput(r *http.Request, project Project, toolName string, args map[string]any) map[string]any {
@@ -338,6 +584,9 @@ func (s *Server) agentCommerceStepDryRunOutput(r *http.Request, project Project,
 	} else if commerceAgentToolRequiresScriptUnit(toolName) {
 		scriptUnitID := agentReferenceStringArg(args, "scriptUnitId")
 		if scriptUnitID == "" {
+			scriptUnitID = agentReferenceStringArg(args, "sourceScriptUnitId")
+		}
+		if scriptUnitID == "" {
 			return map[string]any{
 				"status":       "blocked",
 				"errorCode":    "COMMERCE_SCRIPT_UNIT_SELECTION_REQUIRED",
@@ -352,6 +601,32 @@ func (s *Server) agentCommerceStepDryRunOutput(r *http.Request, project Project,
 		preview["scriptUnitTitle"] = item.Title
 		preview["scriptUnitRevision"] = item.Revision
 	}
+	switch toolName {
+	case "commerce.script.derive.preview":
+		preview["summary"] = fmt.Sprintf(
+			"将基于“%s”的当前正文生成 %d 个裂变候选，不创建新脚本。",
+			stringValueFromAny(preview["scriptUnitTitle"]),
+			agentIntArg(args, "count", 1, 1, commercepkg.ScriptDerivationMaxVariations),
+		)
+		preview["dimension"] = agentStringArg(args, "dimension")
+		preview["instruction"] = agentStringArg(args, "instruction")
+		preview["preserve"] = args["preserve"]
+	case "commerce.script.derive.batch":
+		variationCount := 0
+		if variations, ok := args["variations"].([]any); ok {
+			variationCount = len(variations)
+		}
+		preview["summary"] = fmt.Sprintf(
+			"将基于“%s”创建 %d 个独立广告脚本。",
+			stringValueFromAny(preview["scriptUnitTitle"]),
+			variationCount,
+		)
+		preview["dimension"] = agentStringArg(args, "dimension")
+		preview["instruction"] = agentStringArg(args, "instruction")
+		preview["preserve"] = args["preserve"]
+		preview["variations"] = args["variations"]
+		preview["variationCount"] = variationCount
+	}
 	if shotIDs := agentReferenceStringSliceArg(args, "shotIds"); len(shotIDs) > 0 {
 		preview["targetShotCount"] = len(shotIDs)
 		preview["targetShotIds"] = shotIDs
@@ -363,6 +638,12 @@ func (s *Server) agentCommerceStepDryRunOutput(r *http.Request, project Project,
 }
 
 func commerceAgentToolRequiresScriptUnit(toolName string) bool {
+	switch toolName {
+	case "commerce.script.get", "commerce.script.update", "commerce.script.archive",
+		"commerce.script.derive.preview", "commerce.script.derive.batch",
+		"commerce.video.options", "commerce.video.generate":
+		return true
+	}
 	return strings.HasPrefix(toolName, "commerce.script_unit.") &&
 		toolName != "commerce.script_unit.list" &&
 		!strings.HasPrefix(toolName, "commerce.script_unit.batch.")

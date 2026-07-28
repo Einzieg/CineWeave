@@ -314,7 +314,7 @@ func TestCreateDraftAndActivateInitialBindings(t *testing.T) {
 	updatedTitle := currentScriptUnit.Title + "（标题已编辑）"
 	currentScriptUnit, err = catalog.UpdateScriptUnit(
 		ctx, tx, organizationID, draft.ProjectID, currentScriptUnit.ID,
-		currentScriptUnit.Revision, UpdateScriptUnitInput{Title: &updatedTitle},
+		userID, currentScriptUnit.Revision, UpdateScriptUnitInput{Title: &updatedTitle},
 	)
 	if err != nil {
 		t.Fatalf("update commerce script unit title: %v", err)

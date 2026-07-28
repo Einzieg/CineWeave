@@ -2884,7 +2884,7 @@ paths:
   /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/direct-videos:
     post:
       operationId: createCommerceDirectVideo
-      description: Queues direct provider video generation from the active script version and selected references without storyboard or prompt-agent stages.
+      description: Queues direct provider video generation from the active script version and selected references without storyboard or prompt-agent stages. Requires workflow.run.
       security:
         - bearerAuth: []
       parameters:
@@ -2907,6 +2907,170 @@ paths:
         "401":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/derivations:
+    post:
+      operationId: createCommerceScriptDerivation
+      description: Creates an immutable derivation batch that materializes each approved variation as an independent script unit. Requires both script.write and workflow.run.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommerceScriptDerivationRequest"
+      responses:
+        "202":
+          description: Existing idempotent result or newly queued script derivation batch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-derivations:
+    get:
+      operationId: listCommerceScriptDerivations
+      description: Lists script derivation batches using server-side terminal counts and stable cursor pagination.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: filter[status]
+          in: query
+          schema:
+            type: string
+            enum: [all, queued, running, partial_succeeded, succeeded, failed, cancelling, cancelled]
+        - name: filter[sourceScriptUnitId]
+          in: query
+          schema: {type: string, format: uuid}
+        - name: cursor
+          in: query
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 30}
+      responses:
+        "200":
+          description: Script derivation batches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptDerivationBatchListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-derivations/{batchId}:
+    get:
+      operationId: getCommerceScriptDerivation
+      description: Returns one derivation batch, its items and attempts, with optional retry lineage.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptDerivationBatchId"
+        - name: include
+          in: query
+          schema:
+            type: string
+            enum: [lineage]
+      responses:
+        "200":
+          description: Script derivation batch detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-derivations/{batchId}/retry-failed:
+    post:
+      operationId: retryCommerceScriptDerivation
+      description: Creates a child batch containing only retryable failed items and freezes the current script-model route. Requires both script.write and workflow.run.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptDerivationBatchId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "202":
+          description: Retry child batch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/script-derivations/{batchId}/cancel:
+    post:
+      operationId: cancelCommerceScriptDerivation
+      description: Idempotently requests cancellation of a queued or running script derivation batch. Requires workflow.cancel.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CommerceScriptDerivationBatchId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelCommerceScriptDerivationRequest"
+      responses:
+        "200":
+          description: The batch was already terminal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
+        "202":
+          description: Cancellation request accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
@@ -2936,6 +3100,48 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/commerce/direct-videos/{jobId}/cancel:
+    post:
+      operationId: cancelCommerceDirectVideo
+      description: Idempotently cancels a queued or running direct-video job and its workflow. Requires workflow.cancel.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: jobId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelCommerceDirectVideoRequest"
+      responses:
+        "200":
+          description: The job was already terminal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceDirectVideoJobEnvelope"
+        "202":
+          description: Cancellation was accepted or completed before workflow start
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommerceDirectVideoJobEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/commerce/script-units/{scriptUnitId}/language-resolution:
     get:
@@ -4579,7 +4785,7 @@ paths:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/FinalVideoVersionId"
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
@@ -6381,6 +6587,181 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScriptAgentResultEnvelope"
+  /api/projects/{projectId}/agent/sessions:
+    get:
+      operationId: listProjectAgentSessions
+      description: Lists active project-control assistant sessions for either narrative or Commerce projects.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project-control assistant sessions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSessionListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createProjectAgentSession
+      description: Creates a project-control assistant session shared by all supported project kinds.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  maxLength: 120
+      responses:
+        "201":
+          description: Created project-control assistant session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSessionEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/agent/sessions/{sessionId}/messages:
+    get:
+      operationId: listProjectAgentMessages
+      description: Lists persisted messages and task activity for one project-control assistant session.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Project-control assistant messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentMessageListEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/agent/image-attachments/upload-url:
+    post:
+      operationId: createAgentImageAttachmentUploadUrl
+      description: Creates an idempotent, short-lived signed PUT URL for an image attached to a project-agent task.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentImageAttachmentUploadRequest"
+      responses:
+        "201":
+          description: Signed project-agent image upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentImageAttachmentUploadEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/agent/image-attachments/{attachmentId}/complete:
+    post:
+      operationId: completeAgentImageAttachment
+      description: Validates and stores an uploaded project-agent image as an immutable Artifact and MediaFile.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: attachmentId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Existing completed attachment returned for an idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentImageAttachmentEnvelope"
+        "201":
+          description: Completed project-agent image attachment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentImageAttachmentEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{projectId}/agent/image-attachments/{attachmentId}/assign:
+    post:
+      operationId: assignAgentImageAttachment
+      description: Binds a completed project-agent image to the Commerce product or one Commerce script without copying the media object.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: attachmentId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignAgentImageAttachmentRequest"
+      responses:
+        "200":
+          description: Attachment binding result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentImageAttachmentAssignmentEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/agent/tools:
     get:
       operationId: listAgentTools
@@ -9657,6 +10038,13 @@ components:
       schema:
         type: string
         format: uuid
+    CommerceScriptDerivationBatchId:
+      name: batchId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     CommerceScriptUnitGenerationId:
       name: scriptUnitGenerationId
       in: path
@@ -12064,7 +12452,7 @@ components:
           format: date-time
     AgentToolDescriptor:
       type: object
-      required: [name, label, description, risk, inputSchema, requiresApproval]
+      required: [name, label, description, risk, permissions, inputSchema, requiresApproval, effects]
       properties:
         name:
           type: string
@@ -12077,14 +12465,143 @@ components:
           enum: [read, draft, write, workflow, costed, destructive, admin]
         permission:
           type: string
+        permissions:
+          type: array
+          items:
+            type: string
         inputSchema:
           type: object
           additionalProperties: true
         requiresApproval:
           type: boolean
+        effects:
+          $ref: "#/components/schemas/AgentToolEffects"
+    AgentToolEffects:
+      type: object
+      required: [maySpendProvider, startsWorkflow, writesProject, destructive]
+      properties:
+        maySpendProvider:
+          type: boolean
+        startsWorkflow:
+          type: boolean
+        writesProject:
+          type: boolean
+        destructive:
+          type: boolean
     AgentPermissionMode:
       type: string
       enum: [require_approval, auto_approve, full_access]
+    CreateAgentImageAttachmentUploadRequest:
+      type: object
+      required: [fileName, mimeType]
+      properties:
+        fileName:
+          type: string
+          minLength: 1
+        mimeType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        expiresSeconds:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          default: 900
+    AgentImageAttachmentUpload:
+      type: object
+      required: [attachmentId, uploadUrl, method, headers, expiresAt]
+      properties:
+        attachmentId:
+          type: string
+          format: uuid
+        uploadUrl:
+          type: string
+          format: uri
+        method:
+          type: string
+          enum: [PUT]
+        headers:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string}
+        expiresAt:
+          type: string
+          format: date-time
+    AgentImageAttachment:
+      type: object
+      required: [id, projectId, fileName, mimeType, byteSize, width, height, contentHash, status, createdAt, expiresAt]
+      properties:
+        id: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        fileName: {type: string}
+        mimeType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        byteSize: {type: integer, format: int64, minimum: 0}
+        width: {type: integer, minimum: 0}
+        height: {type: integer, minimum: 0}
+        contentHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        status:
+          type: string
+          enum: [pending, completed, abandoned]
+        artifactId: {type: string, format: uuid}
+        mediaFileId: {type: string, format: uuid}
+        previewUrl: {type: string, format: uri}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+    AgentTaskImageAttachment:
+      type: object
+      required: [attachmentId, usage]
+      properties:
+        attachmentId: {type: string, format: uuid}
+        usage:
+          type: string
+          enum: [unspecified, product_common, script_custom, visual_reference]
+        artifactId: {type: string, format: uuid}
+        mediaFileId: {type: string, format: uuid}
+        fileName: {type: string}
+        mimeType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        width: {type: integer, minimum: 1}
+        height: {type: integer, minimum: 1}
+        contentHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    AssignAgentImageAttachmentRequest:
+      type: object
+      required: [scope]
+      properties:
+        scope:
+          type: string
+          enum: [product_common, script_custom]
+        scriptUnitId:
+          type: string
+          format: uuid
+        referenceRole:
+          $ref: "#/components/schemas/CommerceProductReferenceRole"
+        setPrimary:
+          type: boolean
+          default: false
+    AgentImageAttachmentAssignment:
+      type: object
+      required: [attachmentId, scope, duplicate]
+      properties:
+        attachmentId: {type: string, format: uuid}
+        scope:
+          type: string
+          enum: [product_common, script_custom]
+        duplicate: {type: boolean}
+        productReferenceId: {type: string, format: uuid}
+        productReference:
+          $ref: "#/components/schemas/CommerceProductReference"
+        commerceScriptUnitId: {type: string, format: uuid}
+        scriptReferenceId: {type: string, format: uuid}
+        scriptReference:
+          $ref: "#/components/schemas/CommerceScriptReferenceImage"
     AgentTask:
       type: object
       required: [id, organizationId, projectId, agentType, userGoal, mode, status, constraints, plan, summary, createdAt, updatedAt]
@@ -12119,6 +12636,11 @@ components:
           properties:
             permissionMode:
               $ref: "#/components/schemas/AgentPermissionMode"
+            attachments:
+              type: array
+              maxItems: 8
+              items:
+                $ref: "#/components/schemas/AgentTaskImageAttachment"
         plan:
           type: object
           additionalProperties: true
@@ -12268,6 +12790,11 @@ components:
           properties:
             permissionMode:
               $ref: "#/components/schemas/AgentPermissionMode"
+            attachments:
+              type: array
+              maxItems: 8
+              items:
+                $ref: "#/components/schemas/AgentTaskImageAttachment"
     CancelAgentTaskRequest:
       type: object
       properties:
@@ -18292,6 +18819,31 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/AgentMessage"
+    AgentImageAttachmentUploadEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AgentImageAttachmentUpload"
+            meta:
+              type: object
+              properties:
+                idempotentReplay: {type: boolean}
+    AgentImageAttachmentEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AgentImageAttachment"
+    AgentImageAttachmentAssignmentEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/AgentImageAttachmentAssignment"
     AgentToolDescriptorListEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -19108,6 +19660,10 @@ components:
           type: array
           items:
             type: string
+        defaultReasoningLevel:
+          type: string
+          minLength: 1
+          description: Default reasoning level for text requests. The value must be declared in reasoningLevels.
         referenceTypes:
           type: array
           items:
@@ -20155,7 +20711,7 @@ components:
           properties:
             reasoningLevel:
               type: string
-              description: Optional per-request override for the selected binding's default reasoning level. It is normalized to the upstream OpenAI-compatible reasoning_effort field.
+              description: Optional per-request override for the binding override or model capability default. It is normalized to the upstream OpenAI-compatible reasoning_effort field.
           additionalProperties: true
         options:
           $ref: "#/components/schemas/GatewayTextOptions"
@@ -21590,7 +22146,7 @@ components:
         reasoningLevel:
           type: string
           minLength: 1
-          description: Default reasoning level for text requests routed through this binding. The value must be declared by the selected model's reasoningLevels capability.
+          description: Optional per-binding override for the model capability default. The value must be declared by the selected model's reasoningLevels capability.
           example: high
       additionalProperties: false
     ModelProfile:
@@ -23017,7 +23573,7 @@ components:
         templateId: {type: string, format: uuid}
         templateKey: {type: string}
         version: {type: integer, minimum: 1}
-        contentHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        contentHash: {type: string, pattern: "^(sha256:)?[0-9a-f]{64}$"}
         configurationSnapshot: {type: object, additionalProperties: true}
         promptBindings: {type: object, additionalProperties: true}
         agentModelContracts: {type: object, additionalProperties: true}
@@ -24075,7 +24631,6 @@ components:
             previewUrl: {type: string, format: uri}
     CreateCommerceDirectVideoRequest:
       type: object
-      required: [durationSeconds, resolution]
       properties:
         durationSeconds: {type: integer, minimum: 1}
         resolution: {type: string, minLength: 1}
@@ -24088,6 +24643,362 @@ components:
           uniqueItems: true
           items:
             $ref: "#/components/schemas/CommerceDirectVideoReferenceSelection"
+    CommerceScriptDerivationVariation:
+      type: object
+      additionalProperties: false
+      required: [key, label, brief]
+      properties:
+        ordinal: {type: integer, minimum: 1}
+        key: {type: string, minLength: 1, maxLength: 100}
+        label: {type: string, minLength: 1, maxLength: 200}
+        brief: {type: string, minLength: 1, maxLength: 4000}
+    CreateCommerceScriptDerivationRequest:
+      type: object
+      additionalProperties: false
+      required: [dimension, instruction, variations]
+      properties:
+        dimension:
+          type: string
+          enum: [scene, hook, audience, tone, language, cta, custom]
+        instruction: {type: string, minLength: 1, maxLength: 8000}
+        preserve:
+          type: array
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 100}
+        variations:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/CommerceScriptDerivationVariation"
+    CancelCommerceScriptDerivationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: {type: string, maxLength: 500}
+    CommerceScriptDerivationPromptBinding:
+      type: object
+      required: [templateKey, promptVersionId, contentHash]
+      properties:
+        templateKey: {type: string}
+        promptVersionId: {type: string, format: uuid}
+        contentHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        metadata:
+          type: object
+          additionalProperties: true
+    CommerceScriptDerivationPromptContract:
+      type: object
+      required: [candidatePlanner, generator, reviewer, reviser]
+      properties:
+        candidatePlanner:
+          $ref: "#/components/schemas/CommerceScriptDerivationPromptBinding"
+        generator:
+          $ref: "#/components/schemas/CommerceScriptDerivationPromptBinding"
+        reviewer:
+          $ref: "#/components/schemas/CommerceScriptDerivationPromptBinding"
+        reviser:
+          $ref: "#/components/schemas/CommerceScriptDerivationPromptBinding"
+    CommerceScriptDerivationAttemptCall:
+      type: object
+      required:
+        - id
+        - batchId
+        - itemId
+        - attemptId
+        - roundNo
+        - phase
+        - modelProfileKey
+        - promptTemplateKey
+        - promptVersionId
+        - promptHash
+        - status
+        - startedAt
+        - createdAt
+      properties:
+        id: {type: string, format: uuid}
+        batchId: {type: string, format: uuid}
+        itemId: {type: string, format: uuid}
+        attemptId: {type: string, format: uuid}
+        roundNo: {type: integer, minimum: 1, maximum: 3}
+        phase: {type: string, enum: [generate, review, revise]}
+        providerRequestId: {type: string, format: uuid, nullable: true}
+        providerCallId: {type: string, format: uuid, nullable: true}
+        modelProfileKey: {type: string}
+        modelProfileBindingId: {type: string, format: uuid, nullable: true}
+        providerModelId: {type: string, format: uuid, nullable: true}
+        promptTemplateKey: {type: string}
+        promptVersionId: {type: string, format: uuid}
+        promptHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        outputContentHash: {type: string, pattern: "^[0-9a-f]{64}$", nullable: true}
+        status: {type: string, enum: [running, succeeded, failed]}
+        errorCode: {type: string, nullable: true}
+        errorMessage: {type: string, nullable: true}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time, nullable: true}
+        createdAt: {type: string, format: date-time}
+    CommerceScriptDerivationAttempt:
+      type: object
+      required:
+        - id
+        - batchId
+        - itemId
+        - attemptNo
+        - status
+        - reviewRound
+        - reviewResult
+        - createdAt
+        - updatedAt
+        - calls
+      properties:
+        id: {type: string, format: uuid}
+        batchId: {type: string, format: uuid}
+        itemId: {type: string, format: uuid}
+        attemptNo: {type: integer, minimum: 1}
+        rootAttemptId: {type: string, format: uuid, nullable: true}
+        retryOfAttemptId: {type: string, format: uuid, nullable: true}
+        status:
+          type: string
+          enum: [queued, generating, reviewing, revising, succeeded, failed, cancelled]
+        finalOutputContentHash: {type: string, pattern: "^[0-9a-f]{64}$", nullable: true}
+        reviewRound: {type: integer, minimum: 0, maximum: 3}
+        reviewResult:
+          type: object
+          additionalProperties: true
+        reviewFeedback: {type: string, nullable: true}
+        errorCode: {type: string, nullable: true}
+        errorMessage: {type: string, nullable: true}
+        startedAt: {type: string, format: date-time, nullable: true}
+        completedAt: {type: string, format: date-time, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceScriptDerivationAttemptCall"
+    CommerceScriptDerivationItem:
+      type: object
+      required:
+        - id
+        - batchId
+        - inputOrdinal
+        - variationKey
+        - variationLabel
+        - variationBrief
+        - inputSnapshot
+        - inputHash
+        - reservedUnitNo
+        - reservedSortOrder
+        - status
+        - revision
+        - createdAt
+        - updatedAt
+        - attempts
+      properties:
+        id: {type: string, format: uuid}
+        batchId: {type: string, format: uuid}
+        inputOrdinal: {type: integer, minimum: 1}
+        rootItemId: {type: string, format: uuid, nullable: true}
+        retryOfItemId: {type: string, format: uuid, nullable: true}
+        variationKey: {type: string}
+        variationLabel: {type: string}
+        variationBrief: {type: string}
+        inputSnapshot:
+          type: object
+          additionalProperties: true
+        inputHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        reservedUnitNo: {type: integer, format: int64, minimum: 1}
+        reservedSortOrder: {type: integer, format: int64, minimum: 1}
+        status:
+          type: string
+          enum: [queued, running, reviewing, succeeded, failed_retryable, failed_terminal, cancelled]
+        currentAttemptId: {type: string, format: uuid, nullable: true}
+        outputScriptUnitId: {type: string, format: uuid, nullable: true}
+        outputScriptVersionId: {type: string, format: uuid, nullable: true}
+        errorCode: {type: string, nullable: true}
+        errorMessage: {type: string, nullable: true}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time, nullable: true}
+        completedAt: {type: string, format: date-time, nullable: true}
+        updatedAt: {type: string, format: date-time}
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceScriptDerivationAttempt"
+    CommerceScriptDerivationBatchSummary:
+      type: object
+      required:
+        - id
+        - retryDepth
+        - status
+        - succeededCount
+        - failedRetryableCount
+        - failedTerminalCount
+        - cancelledCount
+      properties:
+        id: {type: string, format: uuid}
+        rootBatchId: {type: string, format: uuid, nullable: true}
+        retryOfBatchId: {type: string, format: uuid, nullable: true}
+        retryDepth: {type: integer, minimum: 0}
+        status:
+          type: string
+          enum: [queued, running, partial_succeeded, succeeded, failed, cancelling, cancelled]
+        succeededCount: {type: integer, minimum: 0}
+        failedRetryableCount: {type: integer, minimum: 0}
+        failedTerminalCount: {type: integer, minimum: 0}
+        cancelledCount: {type: integer, minimum: 0}
+    CommerceScriptDerivationLineageResult:
+      type: object
+      required:
+        - variationKey
+        - variationLabel
+        - rootItemId
+        - latestResult
+        - items
+      properties:
+        variationKey: {type: string}
+        variationLabel: {type: string}
+        rootItemId: {type: string, format: uuid}
+        latestResult:
+          $ref: "#/components/schemas/CommerceScriptDerivationItem"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceScriptDerivationItem"
+    CommerceScriptDerivationBatch:
+      type: object
+      required:
+        - id
+        - organizationId
+        - projectId
+        - productId
+        - sourceScriptUnitId
+        - sourceContentHash
+        - productVersionId
+        - productSnapshotHash
+        - productionGenerationId
+        - videoProductionBindingId
+        - videoProductionBindingRevision
+        - productionConfigurationHash
+        - scriptModelProfileKey
+        - modelProfileBindingRevision
+        - routingSnapshotHash
+        - promptContract
+        - dimension
+        - instruction
+        - preserve
+        - variations
+        - requestedCount
+        - retryDepth
+        - status
+        - queuedCount
+        - runningCount
+        - succeededCount
+        - failedRetryableCount
+        - failedTerminalCount
+        - cancelledCount
+        - revision
+        - createdAt
+        - updatedAt
+        - items
+        - lineage
+      properties:
+        id: {type: string, format: uuid}
+        organizationId: {type: string, format: uuid}
+        projectId: {type: string, format: uuid}
+        productId: {type: string, format: uuid}
+        sourceScriptUnitId: {type: string, format: uuid}
+        sourceContentSnapshot: {type: string}
+        sourceContentHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        productVersionId: {type: string, format: uuid}
+        productSnapshotHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        productionGenerationId: {type: string, format: uuid}
+        videoProductionBindingId: {type: string, format: uuid}
+        videoProductionBindingRevision: {type: integer, format: int64, minimum: 1}
+        productionConfigurationHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        scriptModelProfileKey: {type: string}
+        modelProfileBindingId: {type: string, format: uuid, nullable: true}
+        modelProfileBindingRevision: {type: integer, format: int64, minimum: 0}
+        providerModelId: {type: string, format: uuid, nullable: true}
+        routingSnapshotHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        promptContract:
+          $ref: "#/components/schemas/CommerceScriptDerivationPromptContract"
+        dimension:
+          type: string
+          enum: [scene, hook, audience, tone, language, cta, custom]
+        instruction: {type: string}
+        preserve:
+          type: array
+          items: {type: string}
+        variations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceScriptDerivationVariation"
+        requestedCount: {type: integer, minimum: 1, maximum: 20}
+        rootBatchId: {type: string, format: uuid, nullable: true}
+        retryOfBatchId: {type: string, format: uuid, nullable: true}
+        retryDepth: {type: integer, minimum: 0}
+        workflowRunId: {type: string, format: uuid, nullable: true}
+        status:
+          type: string
+          enum: [queued, running, partial_succeeded, succeeded, failed, cancelling, cancelled]
+        queuedCount: {type: integer, minimum: 0}
+        runningCount: {type: integer, minimum: 0}
+        succeededCount: {type: integer, minimum: 0}
+        failedRetryableCount: {type: integer, minimum: 0}
+        failedTerminalCount: {type: integer, minimum: 0}
+        cancelledCount: {type: integer, minimum: 0}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdBy: {type: string, format: uuid, nullable: true}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time, nullable: true}
+        completedAt: {type: string, format: date-time, nullable: true}
+        cancelledAt: {type: string, format: date-time, nullable: true}
+        updatedAt: {type: string, format: date-time}
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceScriptDerivationItem"
+        lineage:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceScriptDerivationBatchSummary"
+        lineageResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceScriptDerivationLineageResult"
+    CommerceScriptDerivationBatchList:
+      type: object
+      required: [items, hasMore]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommerceScriptDerivationBatch"
+        nextCursor: {type: string}
+        hasMore: {type: boolean}
+    CommerceScriptDerivationBatchEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptDerivationBatch"
+    CommerceScriptDerivationBatchListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/CommerceScriptDerivationBatchList"
+    CancelCommerceDirectVideoRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 500
     CommerceDirectVideoJob:
       type: object
       required:

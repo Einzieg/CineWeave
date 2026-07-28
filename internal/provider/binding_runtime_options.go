@@ -78,6 +78,25 @@ func modelReasoningLevels(model Model) []string {
 	return levels
 }
 
+func modelDefaultReasoningLevel(model Model) string {
+	for _, capability := range model.Capabilities {
+		var schema map[string]any
+		if err := json.Unmarshal(capability.ProviderOptionsSchema, &schema); err != nil {
+			continue
+		}
+		values := schema
+		if nested, ok := schema["xCapabilities"].(map[string]any); ok {
+			values = nested
+		}
+		if level, ok := values["defaultReasoningLevel"].(string); ok {
+			if level = strings.TrimSpace(level); level != "" {
+				return level
+			}
+		}
+	}
+	return ""
+}
+
 func validateModelReasoningLevel(model Model, requested string) (string, error) {
 	requested = strings.TrimSpace(requested)
 	if requested == "" {
@@ -123,6 +142,9 @@ func applyTextRuntimeOptions(input json.RawMessage, model Model, options ModelPr
 	}
 	if !explicit {
 		requested = strings.TrimSpace(options.ReasoningLevel)
+		if requested == "" {
+			requested = modelDefaultReasoningLevel(model)
+		}
 	}
 	if requested == "" {
 		return input, nil
@@ -140,6 +162,49 @@ func applyTextRuntimeOptions(input json.RawMessage, model Model, options ModelPr
 		return nil, fmt.Errorf("encode text runtime options: %w", err)
 	}
 	return raw, nil
+}
+
+func normalizeReasoningCapabilityDefaults(providerOptionsSchema json.RawMessage) (json.RawMessage, error) {
+	var schema map[string]any
+	if err := json.Unmarshal(providerOptionsSchema, &schema); err != nil {
+		return nil, fmt.Errorf("%w: providerOptionsSchema must be valid JSON", ErrValidation)
+	}
+	if schema == nil {
+		return providerOptionsSchema, nil
+	}
+	values, ok := schema["xCapabilities"].(map[string]any)
+	if !ok {
+		return providerOptionsSchema, nil
+	}
+	rawDefault, declared := values["defaultReasoningLevel"]
+	if !declared {
+		return providerOptionsSchema, nil
+	}
+	defaultLevel, ok := rawDefault.(string)
+	if !ok || strings.TrimSpace(defaultLevel) == "" {
+		return nil, fmt.Errorf("%w: defaultReasoningLevel must be a non-empty string", ErrValidation)
+	}
+	if supported, _ := values["supportsReasoning"].(bool); !supported {
+		return nil, fmt.Errorf("%w: defaultReasoningLevel requires supportsReasoning", ErrValidation)
+	}
+	if supported, _ := values["supportsReasoningLevels"].(bool); !supported {
+		return nil, fmt.Errorf("%w: defaultReasoningLevel requires supportsReasoningLevels", ErrValidation)
+	}
+	for _, level := range stringsFromAny(values["reasoningLevels"]) {
+		if strings.EqualFold(strings.TrimSpace(level), strings.TrimSpace(defaultLevel)) {
+			values["defaultReasoningLevel"] = strings.TrimSpace(level)
+			normalized, err := json.Marshal(schema)
+			if err != nil {
+				return nil, fmt.Errorf("encode provider options schema: %w", err)
+			}
+			return normalized, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"%w: defaultReasoningLevel %q is not declared in reasoningLevels",
+		ErrValidation,
+		strings.TrimSpace(defaultLevel),
+	)
 }
 
 func validateExistingModelBindingRuntimeOptions(ctx context.Context, tx pgx.Tx, modelID, modality string) error {

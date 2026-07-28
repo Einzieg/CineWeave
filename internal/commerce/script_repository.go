@@ -66,16 +66,11 @@ func (r *Repository) InsertScriptUnit(
 	input CreateScriptUnitInput,
 	createdBy string,
 ) (ScriptUnit, error) {
-	var unitNo, sortOrder int64
-	if err := tx.QueryRow(ctx, `
-		SELECT product.next_script_unit_no,
-		       COALESCE((SELECT max(sort_order) FROM commerce_script_units WHERE product_id = product.id AND status <> 'archived'), 0) + 10
-		FROM commerce_products product
-		WHERE product.id = $1
-		FOR UPDATE
-	`, product.ID).Scan(&unitNo, &sortOrder); err != nil {
+	positions, err := r.ReserveScriptUnitPositions(ctx, tx, product.ID, 1)
+	if err != nil {
 		return ScriptUnit{}, err
 	}
+	unitNo, sortOrder := positions[0].UnitNo, positions[0].SortOrder
 	draftHash := nullableTextHash(input.Content)
 	var unitID string
 	if err := tx.QueryRow(ctx, `
@@ -97,9 +92,90 @@ func (r *Repository) InsertScriptUnit(
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE commerce_products
-		SET next_script_unit_no = next_script_unit_no + 1,
-		    script_units_revision = script_units_revision + 1,
+		SET script_units_revision = script_units_revision + 1,
 		    revision = revision + 1, updated_at = now()
+		WHERE id = $1
+	`, product.ID); err != nil {
+		return ScriptUnit{}, err
+	}
+	return r.LoadScriptUnit(ctx, tx, product.OrganizationID, product.ProjectID, unitID, true)
+}
+
+type ScriptUnitPosition struct {
+	UnitNo    int64
+	SortOrder int64
+}
+
+func (r *Repository) ReserveScriptUnitPositions(
+	ctx context.Context,
+	tx pgx.Tx,
+	productID string,
+	count int,
+) ([]ScriptUnitPosition, error) {
+	if count <= 0 {
+		return nil, errors.New("script unit position count must be positive")
+	}
+	var nextUnitNo, nextSortOrder int64
+	if err := tx.QueryRow(ctx, `
+		SELECT next_script_unit_no, next_script_sort_order
+		FROM commerce_products
+		WHERE id = $1
+		FOR UPDATE
+	`, productID).Scan(&nextUnitNo, &nextSortOrder); err != nil {
+		return nil, err
+	}
+	positions := make([]ScriptUnitPosition, count)
+	for index := range positions {
+		positions[index] = ScriptUnitPosition{
+			UnitNo:    nextUnitNo + int64(index),
+			SortOrder: nextSortOrder + int64(index)*10,
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE commerce_products
+		SET next_script_unit_no = next_script_unit_no + $2,
+		    next_script_sort_order = next_script_sort_order + ($2 * 10),
+		    revision = revision + 1,
+		    updated_at = now()
+		WHERE id = $1
+	`, productID, count); err != nil {
+		return nil, err
+	}
+	return positions, nil
+}
+
+func (r *Repository) InsertReservedScriptUnit(
+	ctx context.Context,
+	tx pgx.Tx,
+	product Product,
+	position ScriptUnitPosition,
+	input CreateScriptUnitInput,
+	createdBy string,
+) (ScriptUnit, error) {
+	draftHash := nullableTextHash(input.Content)
+	var unitID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO commerce_script_units(
+			organization_id, project_id, product_id, unit_no, title, sort_order,
+			language_mode, explicit_target_language, target_duration_seconds,
+			target_platform, draft_content, draft_content_hash, draft_updated_at,
+			derived_from_script_unit_id, derivation_kind, created_by
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10, $11,
+		        NULLIF($12, ''), CASE WHEN $11 = '' THEN NULL ELSE now() END,
+		        NULLIF($13, '')::uuid, NULLIF($14, ''), $15)
+		RETURNING id::text
+	`, product.OrganizationID, product.ProjectID, product.ID, position.UnitNo, input.Title, position.SortOrder,
+		input.LanguageMode, optionalString(input.ExplicitTargetLanguage), input.TargetDurationSeconds,
+		input.TargetPlatform, input.Content, draftHash, optionalString(input.DerivedFromScriptUnitID),
+		optionalString(input.DerivationKind), createdBy).Scan(&unitID); err != nil {
+		return ScriptUnit{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE commerce_products
+		SET script_units_revision = script_units_revision + 1,
+		    revision = revision + 1,
+		    updated_at = now()
 		WHERE id = $1
 	`, product.ID); err != nil {
 		return ScriptUnit{}, err
@@ -225,7 +301,12 @@ func (r *Repository) ReorderScriptUnits(ctx context.Context, tx pgx.Tx, product 
 	var revision int64
 	if err := tx.QueryRow(ctx, `
 		UPDATE commerce_products
-		SET script_units_revision = script_units_revision + 1, revision = revision + 1, updated_at = now()
+		SET script_units_revision = script_units_revision + 1,
+		    next_script_sort_order = greatest(
+		        next_script_sort_order,
+		        (SELECT COALESCE(max(sort_order), 0) + 10 FROM commerce_script_units WHERE product_id = $1)
+		    ),
+		    revision = revision + 1, updated_at = now()
 		WHERE id = $1 AND script_units_revision = $2
 		RETURNING script_units_revision
 	`, product.ID, expectedRevision).Scan(&revision); err != nil {
@@ -534,6 +615,16 @@ const scriptUnitReturningColumns = `
 	unit.current_source_version_id::text, unit.current_localization_id::text,
 	unit.language_mode, unit.explicit_target_language, unit.target_duration_seconds,
 	unit.target_platform, unit.draft_content, unit.draft_content_hash, unit.draft_updated_at,
+	COALESCE((
+		SELECT current_version.content
+		FROM commerce_ad_script_versions current_version
+		WHERE current_version.id = unit.current_source_version_id
+	), unit.draft_content),
+	COALESCE((
+		SELECT current_version.content_hash
+		FROM commerce_ad_script_versions current_version
+		WHERE current_version.id = unit.current_source_version_id
+	), unit.draft_content_hash, ''),
 	unit.active_unit_generation_id::text, unit.unit_generation_no,
 	COALESCE((
 		SELECT generation.storyboard_strategy
@@ -568,7 +659,8 @@ func scanScriptUnit(row scanRow) (ScriptUnit, error) {
 		&item.UnitNo, &item.Title, &item.SortOrder, &item.Status,
 		&currentSource, &currentLocalization, &item.LanguageMode, &targetLanguage,
 		&item.TargetDurationSeconds, &item.TargetPlatform, &item.DraftContent,
-		&draftHash, &draftUpdatedAt, &activeGeneration, &item.UnitGenerationNo,
+		&draftHash, &draftUpdatedAt, &item.CurrentContent, &item.CurrentContentHash,
+		&activeGeneration, &item.UnitGenerationNo,
 		&item.StoryboardStrategy,
 		&derivedFrom, &derivationKind, &item.Revision, &item.Metadata,
 		&item.CreatedAt, &item.UpdatedAt, &archivedAt,

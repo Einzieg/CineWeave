@@ -159,6 +159,7 @@ type ModelForm = {
   supportsReasoning: boolean;
   supportsReasoningLevels: boolean;
   reasoningLevelsText: string;
+  defaultReasoningLevel: string;
   supportsMultimodalInput: boolean;
   supportedInputLanguagesText: string;
   supportedOutputLanguagesText: string;
@@ -1628,7 +1629,7 @@ export function ProvidersPage() {
                         </div>
                         {selectedDraftReasoningLevels.length > 0 && (
                           <div className="space-y-1.5">
-                            <Label>默认思考等级</Label>
+                            <Label>绑定覆盖思考等级</Label>
                             <Select
                               value={draft.reasoningLevel || "__provider_default__"}
                               onValueChange={(value) => updateBusinessBindingDraft(slot.profileKey, {
@@ -1639,7 +1640,7 @@ export function ProvidersPage() {
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="__provider_default__">供应商默认</SelectItem>
+                                <SelectItem value="__provider_default__">使用模型能力默认值</SelectItem>
                                 {selectedDraftReasoningLevels.map((level) => (
                                   <SelectItem key={level} value={level}>{reasoningLevelLabel(level)}</SelectItem>
                                 ))}
@@ -2578,6 +2579,7 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
   const isImage = modelForm.modality === "image" || modelForm.modality === "multimodal";
   const isVideo = modelForm.modality === "video" || modelForm.modality === "multimodal";
   const isAudio = modelForm.modality === "audio" || modelForm.modality === "multimodal";
+  const reasoningLevels = splitList(modelForm.reasoningLevelsText);
   return (
     <div className="space-y-4 rounded-lg border p-4">
       <div className="space-y-3">
@@ -2682,11 +2684,33 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
               })}
             />
             {modelForm.supportsReasoningLevels && (
-              <LabeledListInput
-                label="可用思考等级"
-                value={modelForm.reasoningLevelsText}
-                onChange={(value) => update({ reasoningLevelsText: value })}
-              />
+              <>
+                <LabeledListInput
+                  label="可用思考等级"
+                  value={modelForm.reasoningLevelsText}
+                  onChange={(value) => update({ reasoningLevelsText: value })}
+                />
+                <div className="space-y-1.5">
+                  <Label>默认思考等级</Label>
+                  <Select
+                    value={modelForm.defaultReasoningLevel || "__select_default__"}
+                    onValueChange={(value) => update({
+                      defaultReasoningLevel: value === "__select_default__" ? "" : value,
+                    })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="请选择默认等级" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__select_default__">请选择默认等级</SelectItem>
+                      {reasoningLevels.map((level) => (
+                        <SelectItem key={level} value={level}>{reasoningLevelLabel(level)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">模型测试和正式文本任务未单独覆盖时使用此等级。</p>
+                </div>
+              </>
             )}
             <SwitchField label="支持多模态输入" checked={modelForm.supportsMultimodalInput} onChange={(checked) => update({ supportsMultimodalInput: checked })} />
           </div>
@@ -3072,7 +3096,7 @@ function BusinessBindingRow({
         </div>
         {reasoningLevels.length > 0 && (
           <div className="space-y-1.5">
-            <Label htmlFor={`binding-reasoning-${binding.id}`}>默认思考等级</Label>
+            <Label htmlFor={`binding-reasoning-${binding.id}`}>绑定覆盖思考等级</Label>
             <Select
               value={reasoningLevel || "__provider_default__"}
               onValueChange={(value) => setReasoningLevel(value === "__provider_default__" ? "" : value)}
@@ -3082,13 +3106,13 @@ function BusinessBindingRow({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__provider_default__">供应商默认</SelectItem>
+                <SelectItem value="__provider_default__">使用模型能力默认值</SelectItem>
                 {reasoningLevels.map((level) => (
                   <SelectItem key={level} value={level}>{reasoningLevelLabel(level)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <div className="text-xs text-muted-foreground">用于该业务模型的所有文本请求</div>
+            <div className="text-xs text-muted-foreground">仅覆盖该业务绑定；留空时使用模型能力默认值</div>
           </div>
         )}
         <div className="flex h-16 items-center justify-between gap-3 rounded-md border px-3">
@@ -3179,6 +3203,7 @@ function defaultCapabilityFormFields(modality: string, taskTypes: string[]) {
     supportsReasoning: false,
     supportsReasoningLevels: false,
     reasoningLevelsText: "",
+    defaultReasoningLevel: "",
     supportsMultimodalInput: modality === "multimodal",
     supportedInputLanguagesText: "",
     supportedOutputLanguagesText: "",
@@ -3292,6 +3317,7 @@ function capabilityFormFieldsFromValues(
     supportsReasoning: booleanFromValue(xCapabilities.supportsReasoning, defaults.supportsReasoning),
     supportsReasoningLevels: booleanFromValue(xCapabilities.supportsReasoningLevels, defaults.supportsReasoningLevels),
     reasoningLevelsText: listText(arrayFromValue(xCapabilities.reasoningLevels)),
+    defaultReasoningLevel: textFromValue(xCapabilities.defaultReasoningLevel),
     supportsMultimodalInput: booleanFromValue(xCapabilities.supportsMultimodalInput, defaults.supportsMultimodalInput),
     supportedInputLanguagesText: listText(arrayFromValue(xCapabilities.supportedInputLanguages)),
     supportedOutputLanguagesText: listText(arrayFromValue(xCapabilities.supportedOutputLanguages)),
@@ -3680,9 +3706,18 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
       toast.error("支持思考等级时必须填写至少一个可用等级");
       return null;
     }
+    const defaultReasoningLevel = reasoningLevels.find(
+      (level) => level.toLowerCase() === modelForm.defaultReasoningLevel.trim().toLowerCase(),
+    );
+    if (!defaultReasoningLevel) {
+      toast.error("请选择一个已声明的默认思考等级");
+      return null;
+    }
     xCapabilities.reasoningLevels = reasoningLevels;
+    xCapabilities.defaultReasoningLevel = defaultReasoningLevel;
   } else {
     delete xCapabilities.reasoningLevels;
+    delete xCapabilities.defaultReasoningLevel;
   }
   xCapabilities.supportsMultimodalInput = modelForm.supportsMultimodalInput;
   xCapabilities.supportedInputLanguages = supportedInputLanguages;
@@ -4192,7 +4227,10 @@ function modelCapabilityLabels(model: ProviderModel) {
   }
   if (xCapabilities.supportsReasoning === true) {
     const levels = Array.isArray(xCapabilities.reasoningLevels) ? xCapabilities.reasoningLevels.map(String).join("/") : "";
-    labels.push(levels ? `思考 ${levels}` : "思考");
+    const defaultLevel = typeof xCapabilities.defaultReasoningLevel === "string"
+      ? reasoningLevelLabel(xCapabilities.defaultReasoningLevel)
+      : "";
+    labels.push(levels ? `思考 ${levels}${defaultLevel ? `（默认 ${defaultLevel}）` : ""}` : "思考");
   }
   if (xCapabilities.supportsMultimodalInput === true) {
     labels.push("多模态输入");

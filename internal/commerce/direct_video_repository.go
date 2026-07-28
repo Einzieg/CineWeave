@@ -343,12 +343,21 @@ func (s *DirectVideoService) PrepareJob(
 	if err != nil {
 		return PreparedDirectVideoJob{}, err
 	}
-	if unit.Status == "archived" || unit.CurrentSourceVersion == nil || strings.TrimSpace(unit.CurrentSourceVersion.Content) == "" {
+	if unit.Status == "archived" {
 		return PreparedDirectVideoJob{}, Error{Code: CodeScriptRequired, Message: "请先保存广告脚本"}
+	}
+	currentContent, err := s.catalog.ResolveCurrentScriptContent(
+		ctx, tx, params.OrganizationID, params.ProjectID, params.ScriptUnitID,
+	)
+	if err != nil {
+		return PreparedDirectVideoJob{}, err
 	}
 	options, err := BuildDirectVideoOptions(production)
 	if err != nil {
 		return PreparedDirectVideoJob{}, err
+	}
+	if params.Input.DurationSeconds == 0 {
+		params.Input.DurationSeconds = options.DefaultDurationSeconds
 	}
 	if strings.TrimSpace(params.Input.Resolution) == "" {
 		params.Input.Resolution = options.DefaultResolution
@@ -360,7 +369,7 @@ func (s *DirectVideoService) PrepareJob(
 	if err != nil {
 		return PreparedDirectVideoJob{}, err
 	}
-	if err := ValidateDirectVideoScript(unit.CurrentSourceVersion.Content, route.PromptConstraint); err != nil {
+	if err := ValidateDirectVideoScript(currentContent.Content, route.PromptConstraint); err != nil {
 		return PreparedDirectVideoJob{}, err
 	}
 	references, err := s.loadSelectedReferences(ctx, tx, product, unit, params.Input.References)
@@ -420,8 +429,8 @@ func (s *DirectVideoService) PrepareJob(
 	if err != nil {
 		return PreparedDirectVideoJob{}, err
 	}
-	script := strings.TrimSpace(unit.CurrentSourceVersion.Content)
-	scriptHash := DirectVideoTextHash(script)
+	script := currentContent.Content
+	scriptHash := currentContent.ContentHash
 	payload := map[string]any{
 		"projectId": params.ProjectID, "scriptUnitId": unit.ID, "scriptUnitRevision": unit.Revision,
 		"generationId": production.Generation.ID, "bindingId": production.VideoBinding.ID,

@@ -18,7 +18,6 @@ import { toast } from "sonner";
 interface SessionSelectorProps {
   projectId: string;
   currentSessionId: string | null;
-  agentType: string | null;
   onSessionChange: (sessionId: string) => void;
 }
 

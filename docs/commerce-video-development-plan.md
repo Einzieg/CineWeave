@@ -359,8 +359,8 @@ GET  /api/projects/{projectId}/commerce/direct-videos/{jobId}
   "aspectRatio": "9:16",
   "generateAudio": true,
   "references": [
-    {"sourceType": "product_reference", "sourceId": "reference-id"},
-    {"sourceType": "script_reference", "sourceId": "custom-reference-id"}
+    {"sourceType": "product", "sourceId": "reference-id"},
+    {"sourceType": "custom", "sourceId": "custom-reference-id"}
   ]
 }
 ```
@@ -370,7 +370,8 @@ GET  /api/projects/{projectId}/commerce/direct-videos/{jobId}
 ## 10. 权限、安全与错误
 
 - 查看选项和任务需要 Workflow read。
-- 创建视频任务需要 Workflow execute。
+- 创建视频任务需要 `workflow.run`。
+- 取消视频任务需要 `workflow.cancel`。
 - 查看参考图需要 Asset read。
 - 上传或归档自定义参考图需要 Asset write。
 - 商品和脚本写操作继续使用对应项目权限。
@@ -395,7 +396,7 @@ GET  /api/projects/{projectId}/commerce/direct-videos/{jobId}
 
 ### 11.2 事件目录
 
-以下目录必须与 `packages/events/catalog.yaml` 中全部 `commerce.*` 事件完全一致。`commerce.direct_video.*` 和 `commerce.script_reference.*` 是当前直生成路径；其余事件为仍受类型系统约束的历史或内部 Commerce 运行事件，不代表当前用户页面必须暴露旧流程。
+以下目录必须与 `packages/events/catalog.yaml` 中全部 `commerce.*` 事件完全一致。`commerce.direct_video.*`、`commerce.script_derivation.*` 和 `commerce.script_reference.*` 是当前直生成及脚本裂变路径；其余事件为仍受类型系统约束的历史或内部 Commerce 运行事件，不代表当前用户页面必须暴露旧流程。
 
 ```text
 commerce.final_video.activated
@@ -426,6 +427,19 @@ commerce.script.localization.approved
 commerce.script.localization.created
 commerce.script.version.activated
 commerce.script.version.created
+commerce.script_derivation.batch.cancelled
+commerce.script_derivation.batch.cancelling
+commerce.script_derivation.batch.created
+commerce.script_derivation.batch.failed
+commerce.script_derivation.batch.partial_succeeded
+commerce.script_derivation.batch.progressed
+commerce.script_derivation.batch.started
+commerce.script_derivation.batch.succeeded
+commerce.script_derivation.item.cancelled
+commerce.script_derivation.item.failed
+commerce.script_derivation.item.reviewing
+commerce.script_derivation.item.started
+commerce.script_derivation.item.succeeded
 commerce.script_reference.added
 commerce.script_reference.archived
 commerce.script_unit.archived
@@ -471,6 +485,18 @@ commerce.workflow_binding.created
 - 放宽脚本单元目标时长为任意正整数；真正可执行时长由 `/commerce/video-options` 返回。
 - 提供对应 Down migration。
 
+`000067_commerce_script_derivation.sql`：
+
+- 创建脚本裂变批次、条目、尝试和 Provider 调用溯源表。
+- 为脚本位置分配、来源谱系、部分成功、失败重试和取消提供数据库约束。
+- 扩展 Commerce Prompt Registry seed，提供结构化裂变生成、审核和修正契约。
+
+`000068_agent_image_attachments.sql`：
+
+- 创建助手图片上传生命周期表和任务附件关联表。
+- 图片完成上传后复用现有 Artifact/MediaFile，不在 Agent Task 中保存 Base64。
+- 任务冻结附件身份、顺序和最终用途，支持绑定为商品公共参考图或脚本自定义参考图。
+
 迁移必须同步：
 
 - `db/migrations/embed.go`
@@ -478,7 +504,7 @@ commerce.workflow_binding.created
 - `db/baselines/current/consolidated-up.sql`
 - `db/baselines/current/manifest.json`
 
-不得改写 `000065` 或更早迁移。部署前必须按 `AGENTS.md` 的生产发布清单检查活动 Workflow、Provider Task、数据库备份、迁移头、Seed、镜像和 Temporal Build ID。
+不得改写 `000068` 或更早迁移；后续结构调整使用新的前向迁移。部署前必须按 `AGENTS.md` 的生产发布清单检查活动 Workflow、Provider Task、数据库备份、迁移头、Seed、镜像和 Temporal Build ID。
 
 ## 13. 测试与验收
 

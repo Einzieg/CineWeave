@@ -1,6 +1,8 @@
 package workflows
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -66,5 +68,78 @@ func TestCanonicalizeAndMergeTimingBatchOutputsUsesGlobalStableOrdinals(t *testi
 	}
 	if strings.Join(provenance.ProviderCallIDs, ",") != "call-1,call-2" {
 		t.Fatalf("provider calls = %v", provenance.ProviderCallIDs)
+	}
+}
+
+func TestTimingBatchPromptContextIncludesActionRangesAndRetryFeedback(t *testing.T) {
+	contextJSON, err := timingBatchPromptContext(
+		ProjectProductionSettings{
+			TimelineTimebase: 90_000,
+			FPSNumerator:     24,
+			FPSDenominator:   1,
+		},
+		ScriptStoryboardEpisodeRecord{
+			ID:           "episode-1",
+			EpisodeIndex: 1,
+			EpisodeTitle: "正文",
+			Content:      "她往回走了两步。",
+		},
+		timingTextBatch{
+			Key:               "batch_006",
+			Ordinal:           6,
+			Content:           "她往回走了两步。",
+			SourceStartOffset: 0,
+			SourceEndOffset:   9,
+			SourceHash:        "sha256:test",
+		},
+		9,
+		timingBatchValidationFeedback{
+			ErrorCode:    "TIMING_BATCH_DURATION_INVALID",
+			ErrorMessage: "timing unit ep001_b006_u0000: action duration 1.200s is outside 2.000-5.000s without an exception reason",
+		},
+	)
+	if err != nil {
+		t.Fatalf("build timing batch prompt context: %v", err)
+	}
+	var context struct {
+		TimingRules struct {
+			ActionDurationSecondsByKind map[string]timingBatchActionDurationRange `json:"actionDurationSecondsByKind"`
+			SuggestedSecondsRule        string                                    `json:"suggestedSecondsRule"`
+		} `json:"timingRules"`
+		RetryFeedback struct {
+			ErrorCode    string `json:"errorCode"`
+			ErrorMessage string `json:"errorMessage"`
+			Instruction  string `json:"instruction"`
+		} `json:"retryFeedback"`
+	}
+	if err := json.Unmarshal(contextJSON, &context); err != nil {
+		t.Fatalf("decode timing batch prompt context: %v", err)
+	}
+	movement, ok := context.TimingRules.ActionDurationSecondsByKind[string(storyboardpkg.ActionMovement)]
+	if !ok || movement.MinimumSeconds != 2 || movement.MaximumSeconds != 5 {
+		t.Fatalf("movement duration range = %+v, found = %v", movement, ok)
+	}
+	if !strings.Contains(context.TimingRules.SuggestedSecondsRule, "不确定时填 0") {
+		t.Fatalf("suggested seconds rule = %q", context.TimingRules.SuggestedSecondsRule)
+	}
+	if context.RetryFeedback.ErrorCode != "TIMING_BATCH_DURATION_INVALID" ||
+		!strings.Contains(context.RetryFeedback.ErrorMessage, "1.200s") ||
+		!strings.Contains(context.RetryFeedback.Instruction, "不得原样重复失败值") {
+		t.Fatalf("retry feedback = %+v", context.RetryFeedback)
+	}
+}
+
+func TestTimingBatchSemanticValidationErrorClassifiesDurationSeparatelyFromSource(t *testing.T) {
+	duration := timingBatchSemanticValidationError(errors.New(
+		"timing unit ep001_b006_u0000: action duration 1.200s is outside 2.000-5.000s without an exception reason",
+	))
+	if duration.Code != "TIMING_BATCH_DURATION_INVALID" || !duration.Retryable {
+		t.Fatalf("duration error = %+v", duration)
+	}
+	source := timingBatchSemanticValidationError(errors.New(
+		"timing unit ep001_b006_u0000 source text was not found in episode content",
+	))
+	if source.Code != "TIMING_BATCH_SOURCE_MISMATCH" || !source.Retryable {
+		t.Fatalf("source error = %+v", source)
 	}
 }

@@ -9,13 +9,24 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SessionSelector } from "./components/session-selector";
 import { MessageList } from "./components/message-list";
 import { MessageInput } from "./components/message-input";
-import { ASSISTANT_QUICK_ACTIONS } from "./components/quick-actions";
+import { assistantQuickActionsForProjectKind } from "./components/quick-actions";
 import { AgentTaskConversationActivity } from "./components/agent-task-panel";
-import type { AgentPermissionMode, AgentTask } from "@/lib/types";
+import { studioApi } from "@/lib/api-client";
+import { userFacingErrorMessage } from "@/lib/error-localization";
+import { useApiMutation } from "@/lib/query/use-api";
+import type {
+  AgentImageAttachment,
+  AgentPermissionMode,
+  AgentTask,
+  JsonRecord,
+  ProjectKind,
+} from "@/lib/types";
 import { Bot, PanelRightClose } from "lucide-react";
+import { toast } from "sonner";
 
 interface AgentDrawerProps {
   projectId: string;
+  projectKind?: ProjectKind;
 }
 
 const AGENT_PERMISSION_MODE_KEY = "cineweave.agent.permissionMode";
@@ -25,11 +36,10 @@ const AGENT_PERMISSION_MODES: Array<{ value: AgentPermissionMode; label: string 
   { value: "full_access", label: "完全访问" },
 ];
 
-export function AgentDrawer({ projectId }: AgentDrawerProps) {
+export function AgentDrawer({ projectId, projectKind }: AgentDrawerProps) {
   const {
     isOpen,
     currentSessionId,
-    agentType,
     close,
     setSessionId,
     setAgentType,
@@ -38,6 +48,8 @@ export function AgentDrawer({ projectId }: AgentDrawerProps) {
   const agentTasks = useAgentTasks(projectId, currentSessionId, isOpen);
   const { messages, isLoading } = useAgentChat(projectId, currentSessionId, isOpen, agentTasks.isActive);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>(() => readStoredPermissionMode());
+  const [imageAttachments, setImageAttachments] = useState<AgentImageAttachment[]>([]);
+  const quickActions = assistantQuickActionsForProjectKind(projectKind);
   const taskActivityKey = agentTasks.task ? agentTaskActivityKey(agentTasks.task) : "";
   const taskActivity =
     agentTasks.task || agentTasks.isLoading ? (
@@ -67,15 +79,76 @@ export function AgentDrawer({ projectId }: AgentDrawerProps) {
     window.localStorage.setItem(AGENT_PERMISSION_MODE_KEY, permissionMode);
   }, [permissionMode]);
 
+  const uploadImages = useApiMutation({
+    mutationFn: async (session, files: File[]) => {
+      const results = await mapWithConcurrency(files, 3, async (file) => {
+        try {
+          const upload = await studioApi.createAgentImageAttachmentUpload(
+            session,
+            projectId,
+            { fileName: file.name, mimeType: file.type || "application/octet-stream" },
+            `agent-image-${projectId}-${crypto.randomUUID()}`,
+          );
+          await studioApi.uploadAgentImageAttachmentFile(upload, file);
+          const attachment = await studioApi.completeAgentImageAttachment(
+            session,
+            projectId,
+            upload.attachmentId,
+          );
+          return { attachment, error: null as Error | null };
+        } catch (error) {
+          return {
+            attachment: null,
+            error: error instanceof Error ? error : new Error("图片上传失败"),
+          };
+        }
+      });
+      return results;
+    },
+    onSuccess: (results) => {
+      const completed = results.flatMap((result) => result.attachment ? [result.attachment] : []);
+      const failed = results.filter((result) => result.error);
+      if (completed.length > 0) {
+        setImageAttachments((current) => {
+          const next = new Map(current.map((item) => [item.id, item]));
+          for (const item of completed) next.set(item.id, item);
+          return [...next.values()].slice(0, 8);
+        });
+      }
+      if (failed.length > 0) {
+        toast.error(
+          failed.length === results.length
+            ? userFacingErrorMessage(failed[0]?.error, "图片上传失败")
+            : `${completed.length} 张已上传，${failed.length} 张失败`,
+        );
+      }
+    },
+    onError: (error) => toast.error(userFacingErrorMessage(error, "图片上传失败")),
+  });
+
   const handleQuickAction = (action: string) => {
-    const quickAction = ASSISTANT_QUICK_ACTIONS.find((item) => item.id === action);
+    const quickAction = quickActions.find((item) => item.id === action);
     if (quickAction) {
-      agentTasks.createTask({ goal: quickAction.goal, mode: quickAction.mode, permissionMode });
+      agentTasks.createTask({
+        goal: quickAction.goal,
+        mode: quickAction.mode,
+        permissionMode,
+        constraints: agentImageAttachmentConstraints(imageAttachments),
+      }, {
+        onSuccess: () => setImageAttachments([]),
+      });
     }
   };
 
   const handleProjectGoal = (content: string) => {
-    agentTasks.createTask({ goal: content, mode: "supervised", permissionMode });
+    agentTasks.createTask({
+      goal: content,
+      mode: "supervised",
+      permissionMode,
+      constraints: agentImageAttachmentConstraints(imageAttachments),
+    }, {
+      onSuccess: () => setImageAttachments([]),
+    });
   };
 
   const handlePermissionModeChange = (value: string) => {
@@ -105,8 +178,10 @@ export function AgentDrawer({ projectId }: AgentDrawerProps) {
             <SessionSelector
               projectId={projectId}
               currentSessionId={currentSessionId}
-              agentType={agentType}
-              onSessionChange={setSessionId}
+              onSessionChange={(sessionId) => {
+                setImageAttachments([]);
+                setSessionId(sessionId);
+              }}
             />
             <ToggleGroup
               type="single"
@@ -136,10 +211,16 @@ export function AgentDrawer({ projectId }: AgentDrawerProps) {
         <div className="shrink-0 border-t px-5 py-4">
           <MessageInput
             onSend={handleProjectGoal}
-            quickActions={ASSISTANT_QUICK_ACTIONS}
+            quickActions={quickActions}
             onQuickAction={handleQuickAction}
             isLoading={agentTasks.isCreatingTask}
+            isUploading={uploadImages.isPending}
             placeholder="输入项目控制目标，/ 调用工具"
+            attachments={imageAttachments}
+            onAttachFiles={(files) => uploadImages.mutate(files)}
+            onRemoveAttachment={(attachmentId) =>
+              setImageAttachments((current) => current.filter((item) => item.id !== attachmentId))
+            }
           />
         </div>
       </div>
@@ -170,4 +251,34 @@ function agentTaskActivityKey(task: AgentTask) {
     })
     .join("|");
   return `${task.id}:${task.status}:${task.updatedAt}:${task.completedAt || ""}:${stepKey}`;
+}
+
+function agentImageAttachmentConstraints(attachments: AgentImageAttachment[]): JsonRecord {
+  if (attachments.length === 0) return {};
+  return {
+    attachments: attachments.map((attachment) => ({
+      attachmentId: attachment.id,
+      usage: "unspecified" as const,
+    })),
+  };
+}
+
+async function mapWithConcurrency<TInput, TOutput>(
+  values: TInput[],
+  concurrency: number,
+  run: (value: TInput, index: number) => Promise<TOutput>,
+) {
+  const results = new Array<TOutput>(values.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), values.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < values.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await run(values[index], index);
+      }
+    }),
+  );
+  return results;
 }

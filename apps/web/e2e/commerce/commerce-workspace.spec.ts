@@ -107,7 +107,7 @@ test("商品配置独立管理商品资料和默认参考图", async ({ page }) 
   await expect(page.getByText("广告脚本", { exact: true })).toHaveCount(0);
 });
 
-test("广告脚本按视频模型可执行时长直接生成视频", async ({ page }) => {
+test("广告脚本默认按视频模型最大可执行时长直接生成视频", async ({ page }) => {
   let createVideoBody: Record<string, unknown> | undefined;
   await installScenarioApiRoute(page, async (request, url) => {
     if (
@@ -123,7 +123,7 @@ test("广告脚本按视频模型可执行时长直接生成视频", async ({ pa
   await page.goto(`/projects/${projectId}/commerce/video`);
   const scriptRow = page.locator("article").filter({ hasText: "头盔通勤广告" });
   await expect(scriptRow.getByText("未生成", { exact: true })).toBeVisible();
-  await scriptRow.getByRole("button", { name: "生成视频" }).click();
+  await scriptRow.getByRole("button", { name: "准备生成" }).click();
 
   const dialog = page.getByRole("dialog", { name: "生成广告视频" });
   await expect(dialog.getByRole("button", { name: "6 秒", exact: true })).toBeVisible();
@@ -137,7 +137,7 @@ test("广告脚本按视频模型可执行时长直接生成视频", async ({ pa
 
   await expect.poll(() => createVideoBody).toBeTruthy();
   expect(createVideoBody).toMatchObject({
-    durationSeconds: 6,
+    durationSeconds: 16,
     resolution: "720p",
     aspectRatio: "9:16",
     generateAudio: true,

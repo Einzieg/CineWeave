@@ -11,6 +11,7 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/agent"
 	"github.com/Einzieg/cineweave/internal/auth"
+	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	reviewpkg "github.com/Einzieg/cineweave/internal/review"
@@ -27,7 +28,7 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 	if task.Mode == string(agent.TaskModePlanOnly) || isTerminalAgentTaskStatus(task.Status) {
 		return s.agentTaskWithDetails(r, project.ID, task.ID)
 	}
-	registry, err := s.projectAgentRegistry()
+	registry, err := s.projectAgentRegistry(project)
 	if err != nil {
 		return AgentTask{}, err
 	}
@@ -82,7 +83,16 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 			if appendedQuestionContinuation {
 				continue
 			}
-			appended, stopped, err := s.appendAgentAutoContinuationPlan(r, principal, project, task.ID)
+			derivationGoalSatisfied, err := s.agentTaskCommerceScriptDerivationGoalSatisfied(
+				r.Context(), project.ID, task,
+			)
+			if err != nil {
+				return AgentTask{}, err
+			}
+			if derivationGoalSatisfied {
+				return s.finishAgentTaskState(r.Context(), project.ID, task.ID, "succeeded", "", "")
+			}
+			appended, complete, stopped, err := s.appendAgentRuntimeNextAction(r, principal, project, task.ID)
 			if err != nil {
 				return AgentTask{}, err
 			}
@@ -92,7 +102,14 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 			if appended {
 				continue
 			}
-			appendedGoalEffect, stopped, err := s.appendAgentGoalEffectPlan(r, principal, project, task)
+			if !complete {
+				return s.finishAgentTaskState(r.Context(), project.ID, task.ID, "failed", "AGENT_RUNTIME_INCOMPLETE", "助手未能确定下一步动作。")
+			}
+			currentTask, err := s.agentTask(r, project.ID, task.ID)
+			if err != nil {
+				return AgentTask{}, err
+			}
+			appendedGoalEffect, stopped, err := s.appendAgentGoalEffectPlan(r, principal, project, currentTask)
 			if err != nil {
 				return AgentTask{}, err
 			}
@@ -134,6 +151,9 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 		}
 		if result.Status == "failed" {
 			return s.finishAgentTaskState(r.Context(), project.ID, task.ID, "failed", firstNonEmpty(result.ErrorCode, "AGENT_STEP_FAILED"), result.ErrorMessage)
+		}
+		if _, err := s.persistAgentRuntimeSnapshot(r.Context(), project, task.ID); err != nil {
+			return AgentTask{}, err
 		}
 		pendingRuns, err = s.agentTaskPendingWorkflowRuns(r.Context(), project.ID, task.ID)
 		if err != nil {
@@ -184,7 +204,7 @@ func (s *Server) appendAgentGoalEffectPlan(r *http.Request, principal auth.Princ
 		stopped, err := s.blockAgentGoalWithoutEffect(r.Context(), project, task.ID)
 		return false, &stopped, err
 	}
-	registry, err := s.projectAgentRegistry()
+	registry, err := s.projectAgentRegistry(project)
 	if err != nil {
 		return false, nil, err
 	}
@@ -199,7 +219,7 @@ func (s *Server) appendAgentGoalEffectPlan(r *http.Request, principal auth.Princ
 			ExpectedResult: "保留小说原文及分卷分集，切换到新的空白生产代并清空其余生产内容",
 		}},
 	}
-	validated, err := agent.ValidatePlan(plan, registry, 20)
+	validated, err := agent.ValidatePlan(plan, registry, agentRuntimeMaxPlanSteps(task))
 	if err != nil {
 		return false, nil, err
 	}
@@ -359,25 +379,15 @@ func nextExecutableAgentStep(steps []AgentStep) (*AgentStep, string) {
 func (s *Server) executeAgentStep(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, registry *agent.Registry) (agentToolResult, error) {
 	tool, ok := registry.Get(step.ToolName)
 	if !ok {
-		result := agentToolResult{
-			Name:         step.ToolName,
-			Label:        step.ToolName,
-			Status:       "failed",
-			Summary:      "工具不在后端白名单中，未执行。",
-			ErrorCode:    "UNKNOWN_TOOL",
-			ErrorMessage: "unknown tool",
-		}
+		result := unavailableAgentToolResult(project, step.ToolName)
 		return result, s.storeAgentStepResult(r.Context(), project, task.ID, step.ID, result)
 	}
-	if strings.TrimSpace(tool.Permission) != "" {
-		resource := agentToolPermissionResource(project, tool.Permission)
-		if err := s.authorizer.Authorize(r.Context(), principal, tool.Permission, resource); err != nil {
-			result := agentToolError(step.ToolName, map[string]any{}, err)
-			result.Label = tool.Label
-			return result, s.storeAgentStepResult(r.Context(), project, task.ID, step.ID, result)
-		}
+	if err := s.authorizeAgentToolPermissions(r.Context(), principal, project, tool); err != nil {
+		result := agentToolError(step.ToolName, map[string]any{}, err)
+		result.Label = tool.Label
+		return result, s.storeAgentStepResult(r.Context(), project, task.ID, step.ID, result)
 	}
-	stateGate := s.superviseAgentStepState(r, project, task, step.ToolName, step.Input)
+	stateGate := s.superviseAgentStepState(r, project, task, tool, step.Input)
 	if !stateGate.Allowed {
 		message := firstNonEmpty(stateGate.Message, stateGate.Reason, "agent step is blocked")
 		result := agentToolResult{
@@ -432,7 +442,7 @@ func (s *Server) executeAgentStep(r *http.Request, principal auth.Principal, pro
 	if result.Status == "" {
 		result.Status = "succeeded"
 	}
-	if result.Status == "succeeded" && tool.StartsWorkflow {
+	if result.Status == "succeeded" && tool.EffectiveEffects().StartsWorkflow {
 		workflowRunIDs, workflowErr := agentWorkflowRunIDsFromValue(result.Data)
 		if workflowErr != nil || len(workflowRunIDs) == 0 {
 			result.Status = "failed"
@@ -453,6 +463,23 @@ func (s *Server) executeAgentStep(r *http.Request, principal auth.Principal, pro
 		return agentToolResult{}, err
 	}
 	return result, nil
+}
+
+func unavailableAgentToolResult(project Project, toolName string) agentToolResult {
+	result := agentToolResult{
+		Name:         toolName,
+		Label:        toolName,
+		Status:       "failed",
+		Summary:      "工具不在后端白名单中，未执行。",
+		ErrorCode:    "UNKNOWN_TOOL",
+		ErrorMessage: "unknown tool",
+	}
+	if agent.ToolBelongsToDifferentProjectKind(string(project.ProjectKind), toolName) {
+		result.Summary = "当前项目类型不支持此工具，未执行任何写入或供应商调用。"
+		result.ErrorCode = "PROJECT_KIND_MISMATCH"
+		result.ErrorMessage = "project kind does not allow agent tool"
+	}
+	return result
 }
 
 func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, tool agent.AgentTool) agentToolResult {
@@ -969,14 +996,15 @@ type agentPendingWorkflowRun struct {
 }
 
 type agentCompletedWorkflowRun struct {
-	ID             string `json:"id"`
-	WorkflowType   string `json:"workflowType,omitempty"`
-	Status         string `json:"status"`
-	TotalItems     int    `json:"totalItems,omitempty"`
-	CompletedItems int    `json:"completedItems,omitempty"`
-	FailedItems    int    `json:"failedItems,omitempty"`
-	ErrorCode      string `json:"errorCode,omitempty"`
-	ErrorMessage   string `json:"errorMessage,omitempty"`
+	ID             string          `json:"id"`
+	WorkflowType   string          `json:"workflowType,omitempty"`
+	Status         string          `json:"status"`
+	TotalItems     int             `json:"totalItems,omitempty"`
+	CompletedItems int             `json:"completedItems,omitempty"`
+	FailedItems    int             `json:"failedItems,omitempty"`
+	ErrorCode      string          `json:"errorCode,omitempty"`
+	ErrorMessage   string          `json:"errorMessage,omitempty"`
+	Input          json.RawMessage `json:"-"`
 }
 
 func (s *Server) finishAgentTaskWaitingForWorkflows(ctx context.Context, project Project, taskID string, runs []agentPendingWorkflowRun) (AgentTask, error) {
@@ -1036,7 +1064,7 @@ func (s *Server) agentTaskPendingWorkflowRuns(ctx context.Context, projectID, ta
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			w.id::text,
-			COALESCE(w.input->>'workflowType', w.template_id::text, ''),
+			COALESCE(NULLIF(w.input->>'workflowType', ''), NULLIF(w.workflow_type, ''), w.template_id::text, ''),
 			w.status,
 			(
 				SELECT count(*)
@@ -1082,7 +1110,7 @@ func (s *Server) agentTaskFailedWorkflowRuns(ctx context.Context, projectID, tas
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			w.id::text,
-			COALESCE(w.input->>'workflowType', w.template_id::text, ''),
+			COALESCE(NULLIF(w.input->>'workflowType', ''), NULLIF(w.workflow_type, ''), w.template_id::text, ''),
 			w.status,
 			0,
 			0,
@@ -1093,6 +1121,7 @@ func (s *Server) agentTaskFailedWorkflowRuns(ctx context.Context, projectID, tas
 		WHERE w.project_id = $1
 		  AND w.id = ANY($2::uuid[])
 		  AND w.status IN ('failed', 'cancelled')
+		ORDER BY w.created_at DESC, w.id DESC
 	`, projectID, ids)
 	if err != nil {
 		return nil, err
@@ -1107,6 +1136,24 @@ func (s *Server) agentTaskFailedWorkflowRuns(ctx context.Context, projectID, tas
 		var run agentPendingWorkflowRun
 		if err := rows.Scan(&run.ID, &run.WorkflowType, &run.Status, &run.ActiveNodeRuns, &run.ActiveProviderTasks, &run.ErrorCode, &run.ErrorMessage, &run.Input); err != nil {
 			return nil, err
+		}
+		if run.WorkflowType == agentCommerceScriptDerivationWorkflowType {
+			state, err := s.agentScriptDerivationLineageState(ctx, projectID, run)
+			if err != nil {
+				return nil, err
+			}
+			if state.RootBatchID != "" {
+				if handled[state.LatestWorkflowRunID] || handled[run.ID] {
+					state.Status = "succeeded"
+				}
+				if state.Status == "succeeded" || state.Status == "running" {
+					continue
+				}
+				if handled["commerce-script-derivation-root:"+state.RootBatchID] {
+					continue
+				}
+				handled["commerce-script-derivation-root:"+state.RootBatchID] = true
+			}
 		}
 		if handled[run.ID] {
 			continue
@@ -1131,7 +1178,10 @@ func (s *Server) agentTaskHandledFailedWorkflowRuns(ctx context.Context, taskID 
 	return handled, nil
 }
 
-const agentWorkflowRecoveryMaxAttempts = 3
+const (
+	agentWorkflowRecoveryMaxAttempts          = 3
+	agentCommerceScriptDerivationWorkflowType = "commerce_script_derivation"
+)
 
 func (s *Server) appendAgentWorkflowRecoveryPlan(
 	r *http.Request,
@@ -1156,11 +1206,11 @@ func (s *Server) appendAgentWorkflowRecoveryPlan(
 	if err != nil || !ok {
 		return false, err
 	}
-	registry, err := s.projectAgentRegistry()
+	registry, err := s.projectAgentRegistry(project)
 	if err != nil {
 		return false, err
 	}
-	validated, err := agent.ValidatePlan(plan, registry, 20)
+	validated, err := agent.ValidatePlan(plan, registry, agentRuntimeMaxPlanSteps(task))
 	if err != nil {
 		return false, err
 	}
@@ -1469,7 +1519,214 @@ func (s *Server) agentTaskWorkflowRunIDs(ctx context.Context, taskID string) ([]
 			ids = append(ids, id)
 		}
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		return ids, nil
+	}
+	lineageRows, err := s.db.Query(ctx, `
+		WITH RECURSIVE derivation_lineage AS (
+			SELECT batch.id, batch.workflow_run_id
+			FROM commerce_script_derivation_batches batch
+			WHERE batch.workflow_run_id = ANY($1::uuid[])
+			UNION
+			SELECT child.id, child.workflow_run_id
+			FROM commerce_script_derivation_batches child
+			JOIN derivation_lineage parent ON child.retry_of_batch_id = parent.id
+		)
+		SELECT DISTINCT workflow_run_id::text
+		FROM derivation_lineage
+		WHERE workflow_run_id IS NOT NULL
+	`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer lineageRows.Close()
+	for lineageRows.Next() {
+		var workflowRunID string
+		if err := lineageRows.Scan(&workflowRunID); err != nil {
+			return nil, err
+		}
+		if seen[workflowRunID] {
+			continue
+		}
+		seen[workflowRunID] = true
+		ids = append(ids, workflowRunID)
+	}
+	return ids, lineageRows.Err()
+}
+
+type agentScriptDerivationLineageProjection struct {
+	RootBatchID         string
+	LatestWorkflowRunID string
+	Status              string
+	TotalItems          int
+	CompletedItems      int
+	FailedItems         int
+}
+
+func (s *Server) agentScriptDerivationLineageState(
+	ctx context.Context,
+	projectID string,
+	run agentPendingWorkflowRun,
+) (agentScriptDerivationLineageProjection, error) {
+	input := rawObject(run.Input)
+	batchID := strings.TrimSpace(stringValueFromAny(input["batchId"]))
+	if batchID == "" {
+		return agentScriptDerivationLineageProjection{}, nil
+	}
+	var (
+		organizationID      string
+		rootBatchID         string
+		latestWorkflowRunID string
+	)
+	err := s.db.QueryRow(ctx, `
+		WITH selected AS (
+			SELECT organization_id, COALESCE(root_batch_id, id) AS root_batch_id
+			FROM commerce_script_derivation_batches
+			WHERE id = $1 AND project_id = $2
+		),
+		latest AS (
+			SELECT batch.workflow_run_id
+			FROM commerce_script_derivation_batches batch
+			JOIN selected ON batch.id = selected.root_batch_id
+			                  OR batch.root_batch_id = selected.root_batch_id
+			WHERE batch.workflow_run_id IS NOT NULL
+			ORDER BY batch.retry_depth DESC, batch.created_at DESC, batch.id DESC
+			LIMIT 1
+		)
+		SELECT selected.organization_id::text,
+		       selected.root_batch_id::text,
+		       COALESCE((SELECT workflow_run_id::text FROM latest), '')
+		FROM selected
+	`, batchID, projectID).Scan(&organizationID, &rootBatchID, &latestWorkflowRunID)
+	if err == pgx.ErrNoRows {
+		return agentScriptDerivationLineageProjection{}, nil
+	}
+	if err != nil {
+		return agentScriptDerivationLineageProjection{}, err
+	}
+	batch, err := s.commerceDerivations.GetBatch(
+		ctx, s.db, organizationID, projectID, rootBatchID, true,
+	)
+	if err != nil {
+		return agentScriptDerivationLineageProjection{}, err
+	}
+	return agentScriptDerivationLineageProjectionFromBatch(rootBatchID, latestWorkflowRunID, batch), nil
+}
+
+func agentScriptDerivationLineageProjectionFromBatch(
+	rootBatchID string,
+	latestWorkflowRunID string,
+	batch commercepkg.ScriptDerivationBatch,
+) agentScriptDerivationLineageProjection {
+	projection := agentScriptDerivationLineageProjection{
+		RootBatchID:         rootBatchID,
+		LatestWorkflowRunID: latestWorkflowRunID,
+		TotalItems:          len(batch.LineageResults),
+	}
+	activeItems := 0
+	cancelledItems := 0
+	for _, result := range batch.LineageResults {
+		switch result.LatestResult.Status {
+		case "succeeded":
+			projection.CompletedItems++
+		case "queued", "running", "reviewing":
+			activeItems++
+		case "cancelled":
+			cancelledItems++
+			projection.FailedItems++
+		case "failed_retryable", "failed_terminal":
+			projection.FailedItems++
+		}
+	}
+	switch {
+	case activeItems > 0:
+		projection.Status = "running"
+	case projection.TotalItems > 0 && projection.CompletedItems == projection.TotalItems:
+		projection.Status = "succeeded"
+	case projection.CompletedItems > 0:
+		projection.Status = "partial_succeeded"
+	case cancelledItems > 0 && cancelledItems == projection.TotalItems:
+		projection.Status = "cancelled"
+	case projection.FailedItems > 0:
+		projection.Status = "failed"
+	default:
+		projection.Status = batch.Status
+		projection.TotalItems = batch.RequestedCount
+		projection.CompletedItems = batch.SucceededCount
+		projection.FailedItems = batch.FailedRetryableCount + batch.FailedTerminalCount + batch.CancelledCount
+	}
+	return projection
+}
+
+func (s *Server) agentTaskCommerceScriptDerivationGoalSatisfied(
+	ctx context.Context,
+	projectID string,
+	task AgentTask,
+) (bool, error) {
+	if !agentGoalIsCommerceScriptDerivationOnly(task.UserGoal) {
+		return false, nil
+	}
+	var hasSucceededDerivationStep bool
+	if err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_steps
+			WHERE task_id = $1
+			  AND tool_name IN ('commerce.script.derive.batch', 'commerce.script.derive.retry_failed')
+			  AND status = 'succeeded'
+		)
+	`, task.ID).Scan(&hasSucceededDerivationStep); err != nil {
+		return false, err
+	}
+	if !hasSucceededDerivationStep {
+		return false, nil
+	}
+	workflows, err := s.agentTaskCompletedWorkflowRuns(ctx, projectID, task.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, result := range workflows {
+		if result.WorkflowType == agentCommerceScriptDerivationWorkflowType &&
+			result.Status == "succeeded" &&
+			result.TotalItems > 0 &&
+			result.CompletedItems == result.TotalItems {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func agentGoalIsCommerceScriptDerivationOnly(goal string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(goal), ""))
+	requestsDerivation := false
+	for _, marker := range []string{
+		"裂变", "场景变体", "脚本变体", "不同场景", "多个场景版本", "场景替换",
+		"scriptvariant", "scenevariant", "derivescript", "derivescripts",
+	} {
+		if strings.Contains(normalized, marker) {
+			requestsDerivation = true
+			break
+		}
+	}
+	if !requestsDerivation {
+		return false
+	}
+	for _, marker := range []string{
+		"生成视频", "制作视频", "创建视频", "开始生成视频", "批量生成视频",
+		"修改商品", "更新商品", "删除商品", "更换商品", "上传商品",
+		"归档脚本", "删除脚本", "取消任务", "生成图片", "制作图片",
+		"generatevideo", "createvideo", "rendervideo", "producevideo",
+		"updateproduct", "deleteproduct", "archivescript", "deletescript",
+	} {
+		if strings.Contains(normalized, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 // legacyAgentToolWaitsForWorkflow is only used for step results written before
@@ -1588,11 +1845,11 @@ func (s *Server) appendAgentAutoContinuationPlan(r *http.Request, principal auth
 			"projectGapSummary": gapSummary,
 		})
 	}
-	registry, err := s.projectAgentRegistry()
+	registry, err := s.projectAgentRegistry(project)
 	if err != nil {
 		return false, nil, err
 	}
-	validated, err := agent.ValidatePlan(plan, registry, 20)
+	validated, err := agent.ValidatePlan(plan, registry, agentRuntimeMaxPlanSteps(task))
 	if err != nil {
 		return false, nil, err
 	}
@@ -1787,6 +2044,7 @@ func (s *Server) mergeAgentTaskCompletionSummary(ctx context.Context, projectID,
 	if len(workflowResults) > 0 {
 		patch["summary"] = agentCompletedWorkflowSummary(workflowResults)
 		patch["waitingForWorkflowRuns"] = []agentPendingWorkflowRun{}
+		patch["failedWorkflowRuns"] = []agentPendingWorkflowRun{}
 		patch["completedWorkflowRuns"] = workflowResults
 	}
 	if len(patch) == 0 {
@@ -1807,32 +2065,69 @@ func (s *Server) agentTaskCompletedWorkflowRuns(ctx context.Context, projectID, 
 	}
 	rows, err := s.db.Query(ctx, `
 		SELECT w.id::text,
-		       COALESCE(w.input->>'workflowType', w.template_id::text, ''),
+		       COALESCE(NULLIF(w.input->>'workflowType', ''), NULLIF(w.workflow_type, ''), w.template_id::text, ''),
 		       w.status, w.total_items, w.completed_items, w.failed_items,
-		       COALESCE(w.error_code, ''), COALESCE(w.error_message, '')
+		       COALESCE(w.error_code, ''), COALESCE(w.error_message, ''),
+		       w.input
 		FROM workflow_runs w
 		WHERE w.project_id = $1
 		  AND w.id = ANY($2::uuid[])
 		  AND w.status IN ('succeeded', 'partial_succeeded', 'failed', 'cancelled', 'skipped')
-		ORDER BY w.created_at, w.id
+		ORDER BY w.created_at DESC, w.id DESC
 	`, projectID, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	results := make([]agentCompletedWorkflowRun, 0, len(ids))
+	rawResults := make([]agentCompletedWorkflowRun, 0, len(ids))
 	for rows.Next() {
 		var result agentCompletedWorkflowRun
 		if err := rows.Scan(
 			&result.ID, &result.WorkflowType, &result.Status,
 			&result.TotalItems, &result.CompletedItems, &result.FailedItems,
-			&result.ErrorCode, &result.ErrorMessage,
+			&result.ErrorCode, &result.ErrorMessage, &result.Input,
 		); err != nil {
 			return nil, err
 		}
-		results = append(results, result)
+		rawResults = append(rawResults, result)
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	results := make([]agentCompletedWorkflowRun, 0, len(rawResults))
+	projectedDerivations := make(map[string]bool)
+	for _, result := range rawResults {
+		if result.WorkflowType != agentCommerceScriptDerivationWorkflowType {
+			results = append(results, result)
+			continue
+		}
+		state, err := s.agentScriptDerivationLineageState(ctx, projectID, agentPendingWorkflowRun{
+			ID: result.ID, WorkflowType: result.WorkflowType, Status: result.Status, Input: result.Input,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if state.RootBatchID == "" {
+			results = append(results, result)
+			continue
+		}
+		if projectedDerivations[state.RootBatchID] {
+			continue
+		}
+		projectedDerivations[state.RootBatchID] = true
+		results = append(results, agentCompletedWorkflowRun{
+			ID:             firstNonEmpty(state.LatestWorkflowRunID, result.ID),
+			WorkflowType:   agentCommerceScriptDerivationWorkflowType,
+			Status:         state.Status,
+			TotalItems:     state.TotalItems,
+			CompletedItems: state.CompletedItems,
+			FailedItems:    state.FailedItems,
+		})
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		return results[i].ID < results[j].ID
+	})
+	return results, nil
 }
 
 func agentCompletedWorkflowSummary(results []agentCompletedWorkflowRun) string {

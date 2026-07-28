@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type ToolRisk string
@@ -68,18 +69,32 @@ type ToolNextAction struct {
 
 type ToolFunc func(context.Context, ToolContext, json.RawMessage) (ToolResult, error)
 
+type ToolEffects struct {
+	MaySpendProvider bool `json:"maySpendProvider"`
+	StartsWorkflow   bool `json:"startsWorkflow"`
+	WritesProject    bool `json:"writesProject"`
+	Destructive      bool `json:"destructive"`
+}
+
+func (e ToolEffects) ReadOnly() bool {
+	return !e.MaySpendProvider && !e.StartsWorkflow && !e.WritesProject && !e.Destructive
+}
+
 type AgentTool struct {
 	Name             string
 	Label            string
 	Description      string
 	Risk             ToolRisk
 	Permission       string
+	Permissions      []string
 	InputSchema      json.RawMessage
 	RequiresApproval bool
-	StartsWorkflow   bool
-	DryRun           ToolFunc
-	Execute          ToolFunc
-	Verifier         ToolFunc
+	Effects          ToolEffects
+	// StartsWorkflow is retained while older tool declarations migrate to Effects.
+	StartsWorkflow bool
+	DryRun         ToolFunc
+	Execute        ToolFunc
+	Verifier       ToolFunc
 }
 
 type ToolDescriptor struct {
@@ -88,8 +103,52 @@ type ToolDescriptor struct {
 	Description      string          `json:"description"`
 	Risk             ToolRisk        `json:"risk"`
 	Permission       string          `json:"permission,omitempty"`
+	Permissions      []string        `json:"permissions"`
 	InputSchema      json.RawMessage `json:"inputSchema"`
 	RequiresApproval bool            `json:"requiresApproval"`
+	Effects          ToolEffects     `json:"effects"`
+}
+
+func (t AgentTool) RequiredPermissions() []string {
+	permissions := make([]string, 0, len(t.Permissions)+1)
+	seen := make(map[string]struct{}, len(t.Permissions)+1)
+	appendPermission := func(permission string) {
+		permission = strings.TrimSpace(permission)
+		if permission == "" {
+			return
+		}
+		if _, exists := seen[permission]; exists {
+			return
+		}
+		seen[permission] = struct{}{}
+		permissions = append(permissions, permission)
+	}
+	appendPermission(t.Permission)
+	for _, permission := range t.Permissions {
+		appendPermission(permission)
+	}
+	return permissions
+}
+
+func (t AgentTool) EffectiveEffects() ToolEffects {
+	effects := t.Effects
+	if t.StartsWorkflow {
+		effects.StartsWorkflow = true
+	}
+	switch t.Risk {
+	case ToolRiskWrite:
+		effects.WritesProject = true
+	case ToolRiskWorkflow:
+		effects.WritesProject = true
+	case ToolRiskCosted:
+		effects.MaySpendProvider = true
+	case ToolRiskDestructive:
+		effects.WritesProject = true
+		effects.Destructive = true
+	case ToolRiskAdmin:
+		effects.WritesProject = true
+	}
+	return effects
 }
 
 func (t AgentTool) Descriptor() ToolDescriptor {
@@ -103,8 +162,10 @@ func (t AgentTool) Descriptor() ToolDescriptor {
 		Description:      t.Description,
 		Risk:             t.Risk,
 		Permission:       t.Permission,
+		Permissions:      t.RequiredPermissions(),
 		InputSchema:      cloneRawMessage(inputSchema),
 		RequiresApproval: t.RequiresApproval,
+		Effects:          t.EffectiveEffects(),
 	}
 }
 

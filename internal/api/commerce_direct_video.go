@@ -343,6 +343,237 @@ func (s *Server) getCommerceDirectVideo(w http.ResponseWriter, r *http.Request, 
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
+func (s *Server) cancelCommerceDirectVideo(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionWorkflowCancel)
+	if !ok {
+		return
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		httpx.WriteError(
+			w, r, http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_REQUIRED",
+			"取消视频任务需要请求标识", nil, false,
+		)
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	jobID := strings.TrimSpace(r.PathValue("jobId"))
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "用户取消带货视频任务"
+	}
+	requestHash := idempotencyRequestHash(map[string]any{
+		"projectId": project.ID, "jobId": jobID,
+		"userId": principal.UserID, "reason": reason,
+	})
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	claim, err := claimIdempotencyTx(
+		r.Context(), tx, project.OrganizationID,
+		"commerce_direct_video:cancel:"+jobID,
+		idempotencyKey, requestHash,
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if len(claim.replaySnapshot) > 0 {
+		var replay commercepkg.DirectVideoJob
+		if err := json.Unmarshal(claim.replaySnapshot, &replay); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		current, loadErr := s.commerceDirect.GetJob(
+			r.Context(), s.db, project.OrganizationID, project.ID, jobID,
+		)
+		if loadErr != nil {
+			s.writeError(w, r, loadErr)
+			return
+		}
+		if !commerceDirectVideoTerminal(current.Status) {
+			if err := s.requestCommerceDirectVideoCancellation(
+				r, project, current, reason,
+			); err != nil {
+				s.writeError(w, r, err)
+				return
+			}
+		}
+		status := claim.replayStatus
+		if status != http.StatusOK && status != http.StatusAccepted {
+			status = http.StatusAccepted
+		}
+		items := []commercepkg.DirectVideoJob{replay}
+		s.attachCommerceDirectVideoPreviews(r, items)
+		httpx.WriteJSON(
+			w, r, status, items[0],
+			map[string]any{"idempotentReplay": true},
+		)
+		return
+	}
+	job, err := s.commerceDirect.GetJob(
+		r.Context(), tx, project.OrganizationID, project.ID, jobID,
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if commerceDirectVideoTerminal(job.Status) {
+		if err := completeIdempotencyTxWithStatus(
+			r.Context(), tx, claim.state, http.StatusOK, job,
+		); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		items := []commercepkg.DirectVideoJob{job}
+		s.attachCommerceDirectVideoPreviews(r, items)
+		httpx.WriteJSON(w, r, http.StatusOK, items[0], nil)
+		return
+	}
+	if job.WorkflowRunID == nil || strings.TrimSpace(*job.WorkflowRunID) == "" {
+		httpx.WriteError(
+			w, r, http.StatusConflict, commercepkg.CodeDirectVideoStateConflict,
+			"视频任务缺少可取消的工作流", nil, false,
+		)
+		return
+	}
+	tag, err := tx.Exec(r.Context(), `
+		UPDATE commerce_direct_video_jobs
+		SET status = 'cancelling',
+		    error_code = 'USER_CANCELLED',
+		    error_message = $4,
+		    updated_at = now()
+		WHERE id = $1 AND organization_id = $2 AND project_id = $3
+		  AND status IN ('queued', 'running', 'cancelling')
+	`, job.ID, project.OrganizationID, project.ID, reason)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if tag.RowsAffected() != 1 {
+		s.writeError(w, r, newAPIError(
+			http.StatusConflict, commercepkg.CodeDirectVideoStateConflict,
+			"视频任务状态已变化，请刷新后重试",
+		))
+		return
+	}
+	job.Status = "cancelling"
+	errorCode := "USER_CANCELLED"
+	job.ErrorCode = &errorCode
+	job.ErrorMessage = &reason
+	if err := completeIdempotencyTxWithStatus(
+		r.Context(), tx, claim.state, http.StatusAccepted, job,
+	); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := s.requestCommerceDirectVideoCancellation(r, project, job, reason); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	items := []commercepkg.DirectVideoJob{job}
+	s.attachCommerceDirectVideoPreviews(r, items)
+	httpx.WriteJSON(w, r, http.StatusAccepted, items[0], nil)
+}
+
+func (s *Server) requestCommerceDirectVideoCancellation(
+	r *http.Request,
+	project Project,
+	job commercepkg.DirectVideoJob,
+	reason string,
+) error {
+	if job.WorkflowRunID == nil || strings.TrimSpace(*job.WorkflowRunID) == "" {
+		return newAPIError(
+			http.StatusConflict, commercepkg.CodeDirectVideoStateConflict,
+			"视频任务缺少可取消的工作流",
+		)
+	}
+	run, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
+		WHERE id = $1 AND organization_id = $2 AND project_id = $3
+	`), *job.WorkflowRunID, project.OrganizationID, project.ID))
+	if err != nil {
+		return err
+	}
+	updatedRun, err := s.cancelWorkflowRunItem(r.Context(), run, reason)
+	if err != nil {
+		return err
+	}
+	if updatedRun.Status == "cancelled" {
+		return s.finalizePreStartCommerceDirectVideoCancellation(r, project, job, reason)
+	}
+	return nil
+}
+
+func commerceDirectVideoTerminal(status string) bool {
+	switch status {
+	case "succeeded", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) finalizePreStartCommerceDirectVideoCancellation(
+	r *http.Request,
+	project Project,
+	job commercepkg.DirectVideoJob,
+	reason string,
+) error {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(r.Context())
+	tag, err := tx.Exec(r.Context(), `
+		UPDATE commerce_direct_video_jobs
+		SET status = 'cancelled',
+		    completed_at = now(),
+		    cancelled_at = now(),
+		    error_code = 'USER_CANCELLED',
+		    error_message = $4,
+		    updated_at = now()
+		WHERE id = $1 AND organization_id = $2 AND project_id = $3
+		  AND status = 'cancelling'
+	`, job.ID, project.OrganizationID, project.ID, reason)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		if err := insertAPIEvent(
+			r.Context(), tx, project.OrganizationID, project.ID,
+			"commerce.direct_video.cancelled", "commerce_direct_video_job", job.ID,
+			mustRawJSON(map[string]any{
+				"workflowRunId":        job.WorkflowRunID,
+				"commerceScriptUnitId": job.ScriptUnitID,
+				"reason":               reason,
+			}),
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(r.Context())
+}
+
 func (s *Server) createCommerceDirectVideo(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionWorkflowRun)
 	if !ok {

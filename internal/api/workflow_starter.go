@@ -89,6 +89,7 @@ var workflowStartDefinitions = map[string]workflowStartDefinition{
 	"commerce_video_prompt_batch":            {workflows.CommerceVideoPromptBatchWorkflow, decodeWorkflowStartInput[workflows.CommerceVideoBatchInput]},
 	"commerce_shot_video_batch":              {workflows.CommerceShotVideoBatchWorkflow, decodeWorkflowStartInput[workflows.CommerceVideoBatchInput]},
 	"commerce_direct_video":                  {workflows.CommerceDirectVideoWorkflow, decodeWorkflowStartInput[workflows.CommerceDirectVideoInput]},
+	"commerce_script_derivation":             {workflows.CommerceScriptDerivationBatchWorkflow, decodeWorkflowStartInput[workflows.CommerceScriptDerivationBatchInput]},
 	"commerce_final_compose":                 {workflows.CommerceFinalComposeWorkflow, decodeWorkflowStartInput[workflows.CommerceFinalComposeInput]},
 	"commerce_script_unit_batch_coordinator": {workflows.CommerceScriptUnitBatchCoordinatorWorkflow, decodeWorkflowStartInput[workflows.CommerceScriptUnitBatchCoordinatorInput]},
 	"text_to_storyboard":                     {workflows.TextToStoryboardWorkflow, decodeWorkflowStartInput[workflows.TextToStoryboardInput]},

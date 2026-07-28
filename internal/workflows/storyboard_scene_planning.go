@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	promptKeyStoryboardScenePlanner = "storyboard_scene_planner"
-	nodePlanStoryboardScenePrefix   = "storyboard_scene_plan"
+	promptKeyStoryboardScenePlanner       = "storyboard_scene_planner"
+	nodePlanStoryboardScenePrefix         = "storyboard_scene_plan"
+	storyboardScenePlannerMaxOutputTokens = 24_000
 )
 
 type PlanStoryboardSceneInput struct {
@@ -105,6 +106,11 @@ type sceneTimingUnitRecord struct {
 	BlockOrdinal      int
 }
 
+type scenePlannerRetryFeedback struct {
+	ErrorCode    string `json:"errorCode"`
+	ErrorMessage string `json:"errorMessage"`
+}
+
 func (a Activities) PlanStoryboardScene(ctx context.Context, input PlanStoryboardSceneInput) (PlanStoryboardSceneOutput, error) {
 	if strings.TrimSpace(input.ScenePlanID) == "" || strings.TrimSpace(input.StoryboardPlanID) == "" || strings.TrimSpace(input.SceneKey) == "" {
 		return PlanStoryboardSceneOutput{}, fmt.Errorf("scenePlanId, storyboardPlanId, and sceneKey are required")
@@ -159,7 +165,7 @@ func (a Activities) PlanStoryboardScene(ctx context.Context, input PlanStoryboar
 	if err != nil {
 		return PlanStoryboardSceneOutput{}, a.failStoryboardSceneActivity(ctx, input, NodeExecution{}, "STORYBOARD_PLAN_INVALID", err.Error())
 	}
-	contextJSON := mustJSON(map[string]any{
+	promptContext := map[string]any{
 		"project": map[string]any{
 			"videoRatio":     project.VideoRatio,
 			"artStyle":       project.ArtStyle,
@@ -180,7 +186,13 @@ func (a Activities) PlanStoryboardScene(ctx context.Context, input PlanStoryboar
 		"shotSlots":         sceneShotSlotsForPrompt(shots, units),
 		"assets":            assets,
 		"corrections":       input.CorrectionHints,
-	})
+	}
+	retryFeedback, err := a.loadScenePlannerRetryFeedback(ctx, input.WorkflowRunID, nodeKey)
+	if err != nil {
+		return PlanStoryboardSceneOutput{}, err
+	}
+	applyScenePlannerRetryGuidance(promptContext, retryFeedback)
+	contextJSON := mustJSON(promptContext)
 	rendered, err := a.renderWorkflowPrompt(ctx, input.OrganizationID, input.ProjectID, promptKeyStoryboardScenePlanner, map[string]any{
 		"context": map[string]any{"json": string(contextJSON)},
 	})
@@ -229,7 +241,7 @@ func (a Activities) PlanStoryboardScene(ctx context.Context, input PlanStoryboar
 		PromptVersionID:   rendered.PromptVersionID,
 		PromptHash:        rendered.RenderedHash,
 		PromptSource:      rendered.Source,
-		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText, "responseFormat": "json", "maxOutputTokens": 16_000}),
+		Input:             mustJSON(map[string]any{"prompt": rendered.RenderedText, "responseFormat": "json", "maxOutputTokens": storyboardScenePlannerMaxOutputTokens}),
 		Options:           providerTextGatewayOptions(),
 	})
 	if err != nil {
@@ -838,6 +850,39 @@ func (a Activities) existingScenePlanningOutput(ctx context.Context, workflowRun
 		return PlanStoryboardSceneOutput{}, false, err
 	}
 	return output, output.ScenePlanID != "" && output.Status == "ready", nil
+}
+
+func (a Activities) loadScenePlannerRetryFeedback(ctx context.Context, workflowRunID, nodeKey string) (scenePlannerRetryFeedback, error) {
+	var feedback scenePlannerRetryFeedback
+	err := a.db.QueryRow(ctx, `
+		SELECT COALESCE(error_code, ''), COALESCE(error_message, '')
+		FROM workflow_node_runs
+		WHERE workflow_run_id = $1
+		  AND node_key = $2
+		  AND status = 'failed'
+	`, workflowRunID, nodeKey).Scan(&feedback.ErrorCode, &feedback.ErrorMessage)
+	if err == pgx.ErrNoRows {
+		return scenePlannerRetryFeedback{}, nil
+	}
+	if err != nil {
+		return scenePlannerRetryFeedback{}, err
+	}
+	return feedback, nil
+}
+
+func applyScenePlannerRetryGuidance(promptContext map[string]any, feedback scenePlannerRetryFeedback) {
+	promptContext["outputRequirements"] = map[string]any{
+		"json":             "必须输出完整且合法的单个 JSON 对象；UUID 字符串必须保留结束引号，不得输出 Markdown 或 JSON 之外的文字。",
+		"shotStateActions": "每个镜头的 plannedEntryState.action 和 plannedExitState.action 都必须包含非空 entry 与 exit。",
+	}
+	if strings.TrimSpace(feedback.ErrorMessage) == "" {
+		return
+	}
+	promptContext["retryFeedback"] = map[string]any{
+		"errorCode":    feedback.ErrorCode,
+		"errorMessage": feedback.ErrorMessage,
+		"instruction":  "上一轮输出未通过严格校验。必须逐项修复该错误，不得原样重复失败结构，并再次检查所有镜头状态字段和 JSON 语法。",
+	}
 }
 
 func continuityBlueprintScene(blueprint storyboardpkg.ContinuityBlueprintOutput, sceneKey string) (storyboardpkg.ContinuityBlueprintScene, bool) {

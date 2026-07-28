@@ -121,7 +121,7 @@ func TestCommerceCatalogLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("reorder units: %v", err)
 	}
-	updated, err := catalog.UpdateScriptUnit(ctx, tx, organizationID, projectID, firstUnit.ScriptUnit.ID, firstUnit.ScriptUnit.Revision+1,
+	updated, err := catalog.UpdateScriptUnit(ctx, tx, organizationID, projectID, firstUnit.ScriptUnit.ID, userID, firstUnit.ScriptUnit.Revision+1,
 		UpdateScriptUnitInput{DraftContent: stringPointer("出门怕晒黑？\n清爽防晒，轻轻一喷。")})
 	if err != nil {
 		t.Fatalf("update draft: %v", err)

@@ -766,7 +766,7 @@ export type CommerceProductReferenceUpload = {
   uploadId: string;
   uploadUrl: string;
   method: string;
-  headers: Record<string, string>;
+  headers: Record<string, string | string[]>;
   expiresAt: string;
 };
 
@@ -905,6 +905,8 @@ export type CommerceScriptUnit = {
   targetPlatform: string;
   draftContent: string;
   draftContentHash?: string;
+  currentContent: string;
+  currentContentHash: string;
   draftUpdatedAt?: string;
   activeUnitGenerationId?: string;
   unitGenerationNo: number;
@@ -935,6 +937,210 @@ export type CommerceScriptUnitList = {
   nextCursor?: string;
   hasMore: boolean;
   scriptUnitsRevision: number;
+};
+
+export type CommerceScriptDerivationDimension =
+  | "scene"
+  | "hook"
+  | "audience"
+  | "tone"
+  | "language"
+  | "cta"
+  | "custom";
+
+export type CommerceScriptDerivationVariation = {
+  ordinal?: number;
+  key: string;
+  label: string;
+  brief: string;
+};
+
+export type CreateCommerceScriptDerivationRequest = {
+  dimension: CommerceScriptDerivationDimension;
+  instruction: string;
+  preserve?: string[];
+  variations: CommerceScriptDerivationVariation[];
+};
+
+export type CommerceScriptDerivationPromptBinding = {
+  templateKey: string;
+  promptVersionId: string;
+  contentHash: string;
+  metadata?: JsonRecord;
+};
+
+export type CommerceScriptDerivationPromptContract = {
+  candidatePlanner: CommerceScriptDerivationPromptBinding;
+  generator: CommerceScriptDerivationPromptBinding;
+  reviewer: CommerceScriptDerivationPromptBinding;
+  reviser: CommerceScriptDerivationPromptBinding;
+};
+
+export type CommerceScriptDerivationAttemptCall = {
+  id: string;
+  batchId: string;
+  itemId: string;
+  attemptId: string;
+  roundNo: number;
+  phase: "generate" | "review" | "revise";
+  providerRequestId?: string;
+  providerCallId?: string;
+  modelProfileKey: string;
+  modelProfileBindingId?: string;
+  providerModelId?: string;
+  promptTemplateKey: string;
+  promptVersionId: string;
+  promptHash: string;
+  outputContentHash?: string;
+  status: "running" | "succeeded" | "failed";
+  errorCode?: string;
+  errorMessage?: string;
+  startedAt: string;
+  completedAt?: string;
+  createdAt: string;
+};
+
+export type CommerceScriptDerivationAttempt = {
+  id: string;
+  batchId: string;
+  itemId: string;
+  attemptNo: number;
+  rootAttemptId?: string;
+  retryOfAttemptId?: string;
+  status: "queued" | "generating" | "reviewing" | "revising" | "succeeded" | "failed" | "cancelled";
+  finalOutputContentHash?: string;
+  reviewRound: number;
+  reviewResult: JsonRecord;
+  reviewFeedback?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  startedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  calls: CommerceScriptDerivationAttemptCall[];
+};
+
+export type CommerceScriptDerivationItemStatus =
+  | "queued"
+  | "running"
+  | "reviewing"
+  | "succeeded"
+  | "failed_retryable"
+  | "failed_terminal"
+  | "cancelled";
+
+export type CommerceScriptDerivationItem = {
+  id: string;
+  batchId: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  inputOrdinal: number;
+  rootItemId?: string;
+  retryOfItemId?: string;
+  variationKey: string;
+  variationLabel: string;
+  variationBrief: string;
+  inputSnapshot: JsonRecord;
+  inputHash: string;
+  reservedUnitNo: number;
+  reservedSortOrder: number;
+  status: CommerceScriptDerivationItemStatus;
+  currentAttemptId?: string;
+  outputScriptUnitId?: string;
+  outputScriptVersionId?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  revision: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+  attempts: CommerceScriptDerivationAttempt[];
+};
+
+export type CommerceScriptDerivationBatchStatus =
+  | "queued"
+  | "running"
+  | "partial_succeeded"
+  | "succeeded"
+  | "failed"
+  | "cancelling"
+  | "cancelled";
+
+export type CommerceScriptDerivationBatchSummary = {
+  id: string;
+  rootBatchId?: string;
+  retryOfBatchId?: string;
+  retryDepth: number;
+  status: CommerceScriptDerivationBatchStatus;
+  succeededCount: number;
+  failedRetryableCount: number;
+  failedTerminalCount: number;
+  cancelledCount: number;
+};
+
+export type CommerceScriptDerivationLineageResult = {
+  variationKey: string;
+  variationLabel: string;
+  rootItemId: string;
+  latestResult: CommerceScriptDerivationItem;
+  items: CommerceScriptDerivationItem[];
+};
+
+export type CommerceScriptDerivationBatch = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  productId: string;
+  sourceScriptUnitId: string;
+  sourceContentSnapshot: string;
+  sourceContentHash: string;
+  productVersionId: string;
+  productSnapshotHash: string;
+  productionGenerationId: string;
+  videoProductionBindingId: string;
+  videoProductionBindingRevision: number;
+  productionConfigurationHash: string;
+  scriptModelProfileKey: string;
+  modelProfileBindingId?: string;
+  modelProfileBindingRevision: number;
+  providerModelId?: string;
+  routingSnapshotHash: string;
+  promptContract: CommerceScriptDerivationPromptContract;
+  dimension: CommerceScriptDerivationDimension;
+  instruction: string;
+  preserve: string[];
+  variations: CommerceScriptDerivationVariation[];
+  requestedCount: number;
+  rootBatchId?: string;
+  retryOfBatchId?: string;
+  retryDepth: number;
+  workflowRunId?: string;
+  status: CommerceScriptDerivationBatchStatus;
+  queuedCount: number;
+  runningCount: number;
+  succeededCount: number;
+  failedRetryableCount: number;
+  failedTerminalCount: number;
+  cancelledCount: number;
+  revision: number;
+  createdBy?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  cancelledAt?: string;
+  updatedAt: string;
+  items: CommerceScriptDerivationItem[];
+  lineage: CommerceScriptDerivationBatchSummary[];
+  lineageResults?: CommerceScriptDerivationLineageResult[];
+};
+
+export type CommerceScriptDerivationBatchList = {
+  items: CommerceScriptDerivationBatch[];
+  nextCursor?: string;
+  hasMore: boolean;
 };
 
 export type CommerceScriptVersionMutation = {
@@ -1114,8 +1320,8 @@ export type CommerceDirectVideoJob = {
 };
 
 export type CreateCommerceDirectVideoRequest = {
-  durationSeconds: number;
-  resolution: string;
+  durationSeconds?: number;
+  resolution?: string;
   aspectRatio?: string;
   generateAudio?: boolean;
   references?: CommerceDirectVideoReferenceSelection[];
@@ -2215,9 +2421,47 @@ export type AgentMessage = {
   createdAt?: string;
 };
 
+export type AgentImageAttachmentUpload = {
+  attachmentId: string;
+  uploadUrl: string;
+  method: string;
+  headers: Record<string, string | string[]>;
+  expiresAt: string;
+};
+
+export type AgentImageAttachment = {
+  id: string;
+  projectId: string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  width: number;
+  height: number;
+  contentHash: string;
+  status: "pending" | "completed" | "abandoned";
+  artifactId?: string;
+  mediaFileId?: string;
+  previewUrl?: string;
+  createdAt: string;
+  expiresAt: string;
+  completedAt?: string;
+};
+
+export type AgentTaskImageAttachmentInput = {
+  attachmentId: string;
+  usage: "unspecified" | "product_common" | "script_custom" | "visual_reference";
+};
+
 export type AgentToolRisk = "read" | "draft" | "write" | "workflow" | "costed" | "destructive" | "admin" | string;
 
 export type AgentPermissionMode = "require_approval" | "auto_approve" | "full_access";
+
+export type AgentToolEffects = {
+  maySpendProvider: boolean;
+  startsWorkflow: boolean;
+  writesProject: boolean;
+  destructive: boolean;
+};
 
 export type AgentToolDescriptor = {
   name: string;
@@ -2225,8 +2469,10 @@ export type AgentToolDescriptor = {
   description: string;
   risk: AgentToolRisk;
   permission?: string;
+  permissions: string[];
   inputSchema: JsonRecord;
   requiresApproval: boolean;
+  effects: AgentToolEffects;
 };
 
 export type AgentStep = {
@@ -3971,6 +4217,7 @@ export type ProviderModelXCapabilities = JsonRecord & {
   supportedOutputTypes?: string[];
   requestModes?: string[];
   reasoningLevels?: string[];
+  defaultReasoningLevel?: string;
   referenceTypes?: string[];
   maxReferenceImages?: number;
   maxReferenceVideos?: number;

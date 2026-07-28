@@ -75,6 +75,12 @@ export const qk = {
   commerceScriptUnitsRoot: (projectId: string) => ["project", projectId, "commerce-script-units"] as const,
   commerceScriptUnit: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-script-unit", scriptUnitId] as const,
   commerceScriptVersions: (projectId: string, scriptUnitId: string) => ["project", projectId, "commerce-script-versions", scriptUnitId] as const,
+  commerceScriptDerivations: (projectId: string, status = "all", sourceScriptUnitId = "all") =>
+    ["project", projectId, "commerce-script-derivations", status, sourceScriptUnitId] as const,
+  commerceScriptDerivationsRoot: (projectId: string) =>
+    ["project", projectId, "commerce-script-derivations"] as const,
+  commerceScriptDerivation: (projectId: string, batchId: string) =>
+    ["project", projectId, "commerce-script-derivation", batchId] as const,
   commerceDirectVideoOptions: (projectId: string) => ["project", projectId, "commerce-direct-video-options"] as const,
   commerceScriptReferences: (projectId: string, scriptUnitId: string, status = "active") =>
     ["project", projectId, "commerce-script-references", scriptUnitId, status] as const,

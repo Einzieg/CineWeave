@@ -11,6 +11,44 @@ func DefaultRegistry() (*Registry, error) {
 }
 
 func DefaultTools() []AgentTool {
+	return append(CommonTools(), NarrativeTools()...)
+}
+
+func CommonTools() []AgentTool {
+	return filterAgentTools(allNarrativeTools(), func(tool AgentTool) bool {
+		_, ok := commonToolNames[tool.Name]
+		return ok
+	})
+}
+
+func NarrativeTools() []AgentTool {
+	return filterAgentTools(allNarrativeTools(), func(tool AgentTool) bool {
+		_, common := commonToolNames[tool.Name]
+		return !common
+	})
+}
+
+var commonToolNames = map[string]struct{}{
+	"agent.ask_user":       {},
+	"artifact.list":        {},
+	"artifact.preview_url": {},
+	"provider.list_status": {},
+	"workflow.cancel":      {},
+	"workflow.read_nodes":  {},
+	"workflow.read_runs":   {},
+}
+
+func filterAgentTools(tools []AgentTool, include func(AgentTool) bool) []AgentTool {
+	filtered := make([]AgentTool, 0, len(tools))
+	for _, tool := range tools {
+		if include(tool) {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
+}
+
+func allNarrativeTools() []AgentTool {
 	tools := []AgentTool{
 		draftTool("agent.ask_user", "询问用户", "当目标存在多种合理路径或缺少关键偏好时，暂停任务并向用户提出一个可选择的问题。", authz.PermissionProjectRead, objectSchemaRequired(map[string]any{
 			"question": stringSchema("需要用户回答的问题。"),
@@ -62,22 +100,22 @@ func DefaultTools() []AgentTool {
 			"reason":       stringSchema("清空原因。"),
 		}, "confirmation")),
 
-		draftTool("review.run", "运行审阅", "运行 deterministic review 和可选 agent review。", authz.PermissionProjectRead, objectSchema(map[string]any{
+		costedDraftTool("review.run", "运行审阅", "运行 deterministic review 和可选 agent review。", authz.PermissionProjectRead, objectSchema(map[string]any{
 			"reviewType":                 enumSchema("审阅类型。", []string{"project", "workflow", "asset", "storyboard", "timeline", "final_video"}),
 			"includeAgent":               booleanSchema("是否启用 agent review。"),
 			"includeDeterministicChecks": booleanSchema("是否运行 deterministic checks。"),
 		}, false), false),
-		draftTool("review.generate_fix", "生成修复建议", "生成 review fix 草稿，不直接应用。", authz.PermissionProjectWrite, objectSchemaRequired(map[string]any{
+		costedDraftTool("review.generate_fix", "生成修复建议", "生成 review fix 草稿，不直接应用。", authz.PermissionProjectWrite, objectSchemaRequired(map[string]any{
 			"itemId":      stringSchema("Review item ID。"),
 			"mode":        enumSchema("修复模式。", []string{"deterministic", "agent"}),
 			"instruction": stringSchema("给 agent fix 的额外要求。"),
 		}, "itemId"), false),
-		draftTool("prompt.render_test", "提示词测试", "渲染 prompt 并执行低风险测试。", authz.PermissionPromptRead, objectSchemaRequired(map[string]any{
+		costedDraftTool("prompt.render_test", "提示词测试", "渲染 prompt 并执行低风险测试。", authz.PermissionPromptRead, objectSchemaRequired(map[string]any{
 			"templateKey": stringSchema("Prompt template key。"),
 			"variables":   objectSchema(nil, false),
 			"input":       objectSchema(nil, false),
 		}, "templateKey"), false),
-		draftTool("script.rewrite_preview", "剧本改写预览", "生成改写预览，不写入剧本版本。", authz.PermissionScriptRead, objectSchemaRequired(map[string]any{
+		costedDraftTool("script.rewrite_preview", "剧本改写预览", "生成改写预览，不写入剧本版本。", authz.PermissionScriptRead, objectSchemaRequired(map[string]any{
 			"scriptId":      stringSchema("剧本 ID。"),
 			"versionId":     stringSchema("剧本版本 ID。为空时使用当前版本。"),
 			"instruction":   stringSchema("改写要求。"),
@@ -283,7 +321,7 @@ func DefaultTools() []AgentTool {
 			"finalVideoId": stringSchema("成片 ID。"),
 		}, "finalVideoId")),
 
-		adminTool("provider.test_model", "测试模型", "测试供应商模型可用性。", authz.PermissionProviderManage, objectSchemaRequired(map[string]any{
+		costedAdminTool("provider.test_model", "测试模型", "测试供应商模型可用性。", authz.PermissionProviderManage, objectSchemaRequired(map[string]any{
 			"modelId":  stringSchema("供应商模型 ID。"),
 			"testType": enumSchema("测试类型。", []string{"connection_test", "auth_test", "model_discovery_test", "text_generation_test", "streaming_test", "image_generation_test", "video_generation_test"}),
 			"prompt":   stringSchema("测试 prompt。"),
@@ -351,7 +389,7 @@ func DefaultTools() []AgentTool {
 			"versionId": stringSchema("Prompt version ID。"),
 		}, "versionId")),
 	}
-	return append(tools, commerceDefaultTools()...)
+	return tools
 }
 
 func readTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
@@ -362,32 +400,48 @@ func draftTool(name, label, description, permission string, schema json.RawMessa
 	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskDraft, Permission: permission, InputSchema: schema, RequiresApproval: requiresApproval}
 }
 
+func costedDraftTool(name, label, description, permission string, schema json.RawMessage, requiresApproval bool) AgentTool {
+	tool := draftTool(name, label, description, permission, schema, requiresApproval)
+	tool.Effects.MaySpendProvider = true
+	return tool
+}
+
 func writeTool(name, label, description, permission string, schema json.RawMessage, requiresApproval bool) AgentTool {
-	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskWrite, Permission: permission, InputSchema: schema, RequiresApproval: requiresApproval}
+	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskWrite, Permission: permission, InputSchema: schema, RequiresApproval: requiresApproval, Effects: ToolEffects{WritesProject: true}}
 }
 
 func workflowTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
-	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskWorkflow, Permission: permission, InputSchema: schema, RequiresApproval: true}
+	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskWorkflow, Permission: permission, InputSchema: schema, RequiresApproval: true, Effects: ToolEffects{WritesProject: true}}
 }
 
 func childWorkflowTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
 	tool := workflowTool(name, label, description, permission, schema)
+	tool.Effects.MaySpendProvider = true
+	tool.Effects.StartsWorkflow = true
 	tool.StartsWorkflow = true
 	return tool
 }
 
 func asyncWriteTool(name, label, description, permission string, schema json.RawMessage, requiresApproval bool) AgentTool {
 	tool := writeTool(name, label, description, permission, schema, requiresApproval)
+	tool.Effects.MaySpendProvider = true
+	tool.Effects.StartsWorkflow = true
 	tool.StartsWorkflow = true
 	return tool
 }
 
 func destructiveTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
-	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskDestructive, Permission: permission, InputSchema: schema, RequiresApproval: true}
+	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskDestructive, Permission: permission, InputSchema: schema, RequiresApproval: true, Effects: ToolEffects{WritesProject: true, Destructive: true}}
 }
 
 func adminTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
-	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskAdmin, Permission: permission, InputSchema: schema, RequiresApproval: true}
+	return AgentTool{Name: name, Label: label, Description: description, Risk: ToolRiskAdmin, Permission: permission, InputSchema: schema, RequiresApproval: true, Effects: ToolEffects{WritesProject: true}}
+}
+
+func costedAdminTool(name, label, description, permission string, schema json.RawMessage) AgentTool {
+	tool := adminTool(name, label, description, permission, schema)
+	tool.Effects.MaySpendProvider = true
+	return tool
 }
 
 func emptyObjectSchema() json.RawMessage {

@@ -10,8 +10,12 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 )
 
-func (s *Server) projectAgentRegistry() (*agent.Registry, error) {
-	tools := agent.DefaultTools()
+func (s *Server) projectAgentRegistry(project Project) (*agent.Registry, error) {
+	policy, err := agent.PolicyForProjectKind(string(project.ProjectKind))
+	if err != nil {
+		return nil, err
+	}
+	tools := policy.Tools()
 	for i := range tools {
 		tool := tools[i]
 		tools[i].Execute = s.projectAgentExecuteFunc(tool)
@@ -25,6 +29,9 @@ func (s *Server) projectAgentExecuteFunc(tool agent.AgentTool) agent.ToolFunc {
 		project, err := s.project(r, toolCtx.ProjectID)
 		if err != nil {
 			return agent.ToolResult{}, err
+		}
+		if !agent.ToolAllowedForProjectKind(string(project.ProjectKind), tool.Name) {
+			return agent.ToolResult{}, newAPIError(http.StatusConflict, "PROJECT_KIND_MISMATCH", "当前项目类型不支持此工具")
 		}
 		task, err := s.agentTask(r, project.ID, toolCtx.TaskID)
 		if err != nil {

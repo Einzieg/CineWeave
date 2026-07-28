@@ -2642,6 +2642,10 @@ func normalizeCapabilityInput(input CapabilityInput) (CapabilityInput, error) {
 		return CapabilityInput{}, fmt.Errorf("%w: pricingPolicy must be valid JSON", ErrValidation)
 	}
 	providerOptionsSchema = normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimits, outputLimits, qualityTiers)
+	providerOptionsSchema, err = normalizeReasoningCapabilityDefaults(providerOptionsSchema)
+	if err != nil {
+		return CapabilityInput{}, err
+	}
 	normalized := CapabilityInput{
 		TaskTypes:                     taskTypes,
 		InputLimits:                   inputLimits,

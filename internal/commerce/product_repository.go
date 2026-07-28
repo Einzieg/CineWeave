@@ -405,7 +405,8 @@ func (r *Repository) ArchiveProductReference(ctx context.Context, tx pgx.Tx, org
 const productSelectSQL = `
 	SELECT product.id::text, product.organization_id::text, product.project_id::text,
 	       product.current_version_id::text, product.status, product.revision,
-	       product.script_units_revision, product.metadata, product.created_at, product.updated_at,
+	       product.script_units_revision, product.next_script_unit_no,
+	       product.next_script_sort_order, product.metadata, product.created_at, product.updated_at,
 	       version.id::text, version.organization_id::text, version.project_id::text,
 	       version.product_id::text, COALESCE(version.version, 0), COALESCE(version.name, ''),
 	       COALESCE(version.brand, ''), COALESCE(version.selling_points, '[]'::jsonb),
@@ -451,7 +452,8 @@ func scanProduct(row scanRow) (Product, error) {
 	var sourceVersionID pgtype.Text
 	err := row.Scan(
 		&item.ID, &item.OrganizationID, &item.ProjectID, &currentVersionID,
-		&item.Status, &item.Revision, &item.ScriptUnitsRevision, &item.Metadata,
+		&item.Status, &item.Revision, &item.ScriptUnitsRevision,
+		&item.NextScriptUnitNo, &item.NextScriptSortOrder, &item.Metadata,
 		&item.CreatedAt, &item.UpdatedAt,
 		&versionID, &versionOrganizationID, &versionProjectID, &versionProductID,
 		&version.Version, &version.Name, &version.Brand, &version.SellingPoints,

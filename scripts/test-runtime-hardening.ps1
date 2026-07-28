@@ -4,6 +4,7 @@ param(
   [switch]$ProviderVideoOnly,
   [switch]$SourceToScriptOnly,
   [switch]$DerivedAssetOnly,
+  [switch]$ScriptDerivationOnly,
   [switch]$CommerceOnly,
   [switch]$ProjectDeletionOnly,
   [switch]$KeepEnvironment
@@ -139,6 +140,15 @@ try {
       '-run', $derivedAssetTests
     )
     Write-Host 'Derived-asset V2 migration and integration tests passed.'
+    return
+  }
+
+  if ($ScriptDerivationOnly) {
+    Invoke-GoContainer -Integration -Arguments @(
+      'go', 'test', '-count=1', './internal/commerce',
+      '-run', '^TestScriptDerivationMaterializationRetryAndLineageIntegration$'
+    )
+    Write-Host 'Script derivation migration and attempt-call provenance integration test passed.'
     return
   }
 

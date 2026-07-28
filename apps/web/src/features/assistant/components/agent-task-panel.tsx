@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,7 +13,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { studioApi } from "@/lib/api-client";
 import { localizePlatformError } from "@/lib/error-localization";
+import { qk } from "@/lib/query/keys";
+import { useApiMutation, useInvalidateKeys } from "@/lib/query/use-api";
 import type { AgentApproval, AgentStep, AgentTask, JsonRecord, JsonValue } from "@/lib/types";
 import { projectHref } from "@/lib/routes";
 import Link from "next/link";
@@ -24,9 +28,12 @@ import {
   ChevronUp,
   CheckCircle2,
   Clock3,
+  FileText,
   FileDiff,
+  GitFork,
   ListChecks,
   Loader2,
+  Play,
   RotateCcw,
   ShieldCheck,
   SquareTerminal,
@@ -87,6 +94,7 @@ export function AgentTaskPanel({ projectId, task, isLoading, onApproveStep, onRe
     return items;
   }, [task?.approvals]);
   const visibleTaskSteps = useMemo(() => sequentialVisibleAgentSteps(task?.steps || []), [task?.steps]);
+  const taskAttachments = useMemo(() => agentTaskImageAttachmentLabels(task), [task]);
 
   if (!task && !isLoading) {
     return null;
@@ -125,6 +133,15 @@ export function AgentTaskPanel({ projectId, task, isLoading, onApproveStep, onRe
         </div>
         {task ? <TaskStatusBadge status={task.status} /> : null}
       </div>
+      {taskAttachments.length > 0 ? (
+        <div className="mb-3 flex min-w-0 flex-wrap gap-1.5">
+          {taskAttachments.map((attachment) => (
+            <Badge key={attachment.id} variant="outline" className="max-w-full">
+              <span className="truncate">图片：{attachment.fileName}</span>
+            </Badge>
+          ))}
+        </div>
+      ) : null}
 
       {task ? (
         <div className="w-full min-w-0 max-w-full space-y-3 overflow-hidden">
@@ -136,9 +153,11 @@ export function AgentTaskPanel({ projectId, task, isLoading, onApproveStep, onRe
                   key={step.id}
                   projectId={projectId}
                   step={step}
+                  taskStatus={task.status}
                   approval={approvalsByStep.get(step.id)}
                   onApprove={() => setPendingDecision({ kind: "approve", step })}
                   onReject={() => setPendingDecision({ kind: "reject", step })}
+                  onResumeTask={() => onResumeTask(task.id)}
                   onAnswerQuestion={(payload) =>
                     onApproveStep({
                       taskId: step.taskId,
@@ -299,9 +318,11 @@ export function AgentTaskConversationActivity({
                 key={step.id}
                 projectId={projectId}
                 step={step}
+                taskStatus={task?.status || ""}
                 approval={approvalsByStep.get(step.id)}
                 onApprove={() => onApproveStep({ taskId: step.taskId, stepId: step.id })}
                 onReject={() => onRejectStep({ taskId: step.taskId, stepId: step.id })}
+                onResumeTask={() => onResumeTask(step.taskId)}
                 onAnswerQuestion={(payload) =>
                   onApproveStep({
                     taskId: step.taskId,
@@ -435,17 +456,21 @@ function conversationActiveStep(steps: AgentStep[]) {
 function ToolCallCard({
   projectId,
   step,
+  taskStatus,
   approval,
   onApprove,
   onReject,
+  onResumeTask,
   onAnswerQuestion,
   busy,
 }: {
   projectId: string;
   step: AgentStep;
+  taskStatus: string;
   approval?: AgentApproval;
   onApprove: () => void;
   onReject: () => void;
+  onResumeTask: () => void;
   onAnswerQuestion: (payload: { note?: string; decision: JsonRecord }) => void;
   busy?: boolean;
 }) {
@@ -467,6 +492,8 @@ function ToolCallCard({
   const questionPrompt = agentQuestionPrompt(approval, step);
   const streamProgress = stepStreamProgress(step);
   const workflowProgress = stepWorkflowProgress(step);
+  const derivationPlan = stepScriptDerivationPlan(step);
+  const derivationProgress = stepScriptDerivationProgress(step);
   const displayStatus = stepDisplayStatus(step, workflowProgress);
 
   const submitQuestionOption = (option: AgentQuestionOption) => {
@@ -533,6 +560,14 @@ function ToolCallCard({
       ) : null}
 
       {stepOutputText(step) ? <div className="mt-2 break-words text-xs text-muted-foreground">{stepOutputText(step)}</div> : null}
+      {derivationPlan ? <ScriptDerivationPlanCard plan={derivationPlan} /> : null}
+      {derivationProgress ? (
+        <ScriptDerivationProgressCard
+          projectId={projectId}
+          batch={derivationProgress}
+          onRetryStarted={canResume(taskStatus) ? onResumeTask : undefined}
+        />
+      ) : null}
       {streamProgress ? <StreamProgress progress={streamProgress} /> : null}
       {workflowProgress ? <WorkflowProgress progress={workflowProgress} /> : null}
       {nextActions.length > 0 ? (
@@ -551,7 +586,13 @@ function ToolCallCard({
         <div className="mt-2 flex flex-wrap gap-1.5">
           {businessLinks.map((link) => (
             <Button asChild key={`${link.label}-${link.href}`} size="sm" variant="outline" className="h-7 px-2 text-xs">
-              <Link href={link.href as Route}>{link.label}</Link>
+              <Link
+                href={link.href as Route}
+                target={isExternalHref(link.href) ? "_blank" : undefined}
+                rel={isExternalHref(link.href) ? "noreferrer" : undefined}
+              >
+                {link.label}
+              </Link>
             </Button>
           ))}
         </div>
@@ -586,11 +627,11 @@ function ToolCallCard({
       {waitingApproval && !questionPrompt ? (
         <div className="mt-3 flex justify-end gap-2">
           <Button size="sm" variant="outline" onClick={onReject} disabled={busy || approval?.status !== "pending"}>
-            拒绝
+            {step.toolName === "commerce.script.derive.batch" ? "调整方案" : "拒绝"}
           </Button>
           <Button size="sm" onClick={onApprove} disabled={busy || approval?.status !== "pending"}>
             <ShieldCheck className="mr-1 h-3.5 w-3.5" />
-            批准
+            {step.toolName === "commerce.script.derive.batch" ? "批准并创建" : "批准"}
           </Button>
         </div>
       ) : null}
@@ -630,6 +671,196 @@ type StepWorkflowProgress = {
     errorMessage: string;
   };
 };
+
+type ScriptDerivationPlanView = {
+  sourceTitle: string;
+  dimension: string;
+  instruction: string;
+  preserve: string[];
+  variations: Array<{ key: string; label: string; brief: string }>;
+};
+
+type ScriptDerivationBatchView = {
+  id: string;
+  retryBatchId: string;
+  status: string;
+  requestedCount: number;
+  queuedCount: number;
+  runningCount: number;
+  succeededCount: number;
+  failedRetryableCount: number;
+  failedTerminalCount: number;
+  cancelledCount: number;
+  items: Array<{
+    id: string;
+    batchId: string;
+    inputOrdinal: number;
+    variationLabel: string;
+    variationBrief: string;
+    status: string;
+    outputScriptUnitId: string;
+    errorCode: string;
+    errorMessage: string;
+  }>;
+};
+
+function ScriptDerivationPlanCard({ plan }: { plan: ScriptDerivationPlanView }) {
+  return (
+    <div className="mt-2 min-w-0 overflow-hidden rounded-md border border-primary/20 bg-primary/5 p-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+        <GitFork className="size-3.5 text-primary" />
+        <span className="font-medium text-primary">脚本裂变方案</span>
+        <Badge variant="outline">{scriptDerivationDimensionLabel(plan.dimension)}</Badge>
+        <Badge variant="outline">{plan.variations.length} 个独立脚本</Badge>
+        <Badge variant="outline">可能产生文本模型费用</Badge>
+      </div>
+      {plan.sourceTitle ? (
+        <div className="mt-2 text-xs text-muted-foreground">源脚本：{plan.sourceTitle}</div>
+      ) : null}
+      {plan.instruction ? (
+        <div className="mt-1 break-words text-xs text-muted-foreground">要求：{plan.instruction}</div>
+      ) : null}
+      {plan.preserve.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {plan.preserve.map((item) => (
+            <Badge key={item} variant="secondary">{scriptDerivationPreserveLabel(item)}</Badge>
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-2 grid gap-1.5">
+        {plan.variations.map((variation, index) => (
+          <div key={`${variation.key}-${index}`} className="rounded border bg-background/80 px-2 py-1.5">
+            <div className="text-xs font-medium">{index + 1}. {variation.label}</div>
+            <div className="mt-0.5 break-words text-xs text-muted-foreground">{variation.brief}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ScriptDerivationProgressCard({
+  projectId,
+  batch,
+  onRetryStarted,
+}: {
+  projectId: string;
+  batch: ScriptDerivationBatchView;
+  onRetryStarted?: () => void;
+}) {
+  const invalidate = useInvalidateKeys();
+  const retryFailed = useApiMutation({
+    mutationFn: (
+      session,
+      input: { batchId: string; idempotencyKey: string },
+    ) => studioApi.retryCommerceScriptDerivation(
+      session,
+      projectId,
+      input.batchId,
+      input.idempotencyKey,
+    ),
+    onSuccess: (childBatch) => {
+      invalidate([
+        qk.commerceScriptDerivationsRoot(projectId),
+        qk.commerceScriptDerivation(projectId, batch.id),
+        qk.commerceScriptDerivation(projectId, childBatch.id),
+        qk.commerceScriptUnitsRoot(projectId),
+        qk.workflowRuns(projectId),
+      ]);
+      toast.success(`已提交 ${childBatch.requestedCount} 个失败变体重试`);
+      onRetryStarted?.();
+    },
+    onError: (error) => toast.error(
+      `重试失败：${localizePlatformError(error.message, "COMMERCE_SCRIPT_DERIVATION_STATE_CONFLICT")}`,
+    ),
+  });
+  const active = ["queued", "running", "cancelling"].includes(batch.status);
+  const completed = batch.succeededCount + batch.failedRetryableCount
+    + batch.failedTerminalCount + batch.cancelledCount;
+  return (
+    <div className="mt-2 min-w-0 overflow-hidden rounded-md border border-primary/20 bg-primary/5 p-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+        {active ? <Loader2 className="size-3.5 animate-spin text-primary" /> : <CheckCircle2 className="size-3.5 text-emerald-600" />}
+        <span className="font-medium text-primary">裂变任务</span>
+        <Badge variant={scriptDerivationBatchVariant(batch.status)}>
+          {scriptDerivationBatchStatusLabel(batch.status)}
+        </Badge>
+        <Badge variant="outline">完成 {completed}/{batch.requestedCount}</Badge>
+        {batch.failedRetryableCount > 0 ? <Badge variant="secondary">可重试 {batch.failedRetryableCount}</Badge> : null}
+        {batch.failedRetryableCount > 0 && !active ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="ml-auto h-7 px-2 text-xs"
+            disabled={retryFailed.isPending}
+            onClick={() => retryFailed.mutate({
+              batchId: batch.retryBatchId,
+              idempotencyKey: `assistant-derivation-retry-${batch.retryBatchId}-${crypto.randomUUID()}`,
+            })}
+          >
+            {retryFailed.isPending
+              ? <Loader2 className="size-3.5 animate-spin" />
+              : <RotateCcw className="size-3.5" />}
+            {retryFailed.isPending ? "正在重试" : "重试失败项"}
+          </Button>
+        ) : null}
+      </div>
+      <div className="mt-2 grid gap-1.5">
+        {batch.items.map((item) => {
+          const running = ["queued", "running", "reviewing"].includes(item.status);
+          return (
+            <div key={item.id} className="rounded border bg-background/80 px-2 py-1.5">
+              <div className="flex min-w-0 items-center gap-2">
+                {running ? (
+                  <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+                ) : item.status === "succeeded" ? (
+                  <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600" />
+                ) : (
+                  <XCircle className="size-3.5 shrink-0 text-destructive" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                  {item.inputOrdinal}. {item.variationLabel}
+                </span>
+                <Badge variant={item.status === "succeeded" ? "outline" : running ? "secondary" : "destructive"}>
+                  {scriptDerivationItemStatusLabel(item.status)}
+                </Badge>
+              </div>
+              {item.variationBrief ? (
+                <div className="mt-1 break-words text-xs text-muted-foreground">{item.variationBrief}</div>
+              ) : null}
+              {item.errorMessage ? (
+                <div className="mt-1 break-words text-xs text-destructive">
+                  {localizePlatformError(item.errorMessage, item.errorCode)}
+                </div>
+              ) : null}
+              {item.status === "succeeded" && item.outputScriptUnitId ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
+                    <Link
+                      href={`${projectHref(projectId, "commerce/video")}?scriptUnitId=${encodeURIComponent(item.outputScriptUnitId)}` as Route}
+                    >
+                      <FileText className="size-3.5" />
+                      查看脚本
+                    </Link>
+                  </Button>
+                  <Button asChild size="sm" variant="outline" className="h-7 px-2 text-xs">
+                    <Link
+                      href={`${projectHref(projectId, "commerce/video")}?generateScriptUnitId=${encodeURIComponent(item.outputScriptUnitId)}` as Route}
+                    >
+                      <Play className="size-3.5" />
+                      生成视频
+                    </Link>
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function StreamProgress({ progress }: { progress: StepStreamProgress }) {
   const title =
@@ -989,6 +1220,25 @@ function toolLabel(tool: string) {
     "shot.cancel_running_videos": "取消镜头视频",
     "timeline.compose": "合成时间线",
     "final_video.activate": "激活成片",
+    "commerce.project.read_summary": "读取带货项目摘要",
+    "commerce.product.get": "读取商品配置",
+    "commerce.product.references.list": "列出商品参考图",
+    "commerce.product.update": "修改商品配置",
+    "commerce.script.list": "列出广告脚本",
+    "commerce.script.get": "读取广告脚本",
+    "commerce.script.create": "新增广告脚本",
+    "commerce.script.update": "修改广告脚本",
+    "commerce.script.archive": "归档广告脚本",
+    "commerce.script.derive.preview": "预览脚本裂变",
+    "commerce.script.derive.batch": "创建脚本裂变",
+    "commerce.script.derivation.get": "查看脚本裂变",
+    "commerce.script.derive.retry_failed": "重试失败变体",
+    "commerce.script.derive.cancel": "取消脚本裂变",
+    "commerce.video.options": "读取视频生成选项",
+    "commerce.video.list": "列出视频任务",
+    "commerce.video.get": "查看视频任务",
+    "commerce.video.generate": "生成带货视频",
+    "commerce.video.cancel": "取消视频任务",
   };
   return labels[tool] || tool;
 }
@@ -1153,6 +1403,233 @@ function stepWorkflowProgress(step: AgentStep): StepWorkflowProgress | null {
   };
 }
 
+function stepScriptDerivationPlan(step: AgentStep): ScriptDerivationPlanView | null {
+  if (!["commerce.script.derive.preview", "commerce.script.derive.batch"].includes(step.toolName)) {
+    return null;
+  }
+  const input = asRecord(step.input) || {};
+  const dryRun = asRecord(step.dryRunOutput) || {};
+  const data = asRecord(step.output?.data) || {};
+  const confirmation = asRecord(data.confirmation) || {};
+  const rawVariations = Array.isArray(confirmation.variations)
+    ? confirmation.variations
+    : Array.isArray(data.variations)
+      ? data.variations
+      : Array.isArray(input.variations)
+        ? input.variations
+        : [];
+  const variations = rawVariations
+    .map((value) => asRecord(value))
+    .filter((value): value is Record<string, unknown> => Boolean(value))
+    .map((value, index) => ({
+      key: stringValue(value.key) || `variation-${index + 1}`,
+      label: stringValue(value.label) || `方案 ${index + 1}`,
+      brief: stringValue(value.brief),
+    }));
+  if (variations.length === 0 && step.toolName === "commerce.script.derive.preview") {
+    return null;
+  }
+  return {
+    sourceTitle: firstNonEmptyString(
+      stringValue(confirmation.sourceScriptTitle),
+      stringValue(data.sourceScriptTitle),
+      stringValue(dryRun.scriptUnitTitle),
+    ),
+    dimension: firstNonEmptyString(
+      stringValue(confirmation.dimension),
+      stringValue(data.dimension),
+      stringValue(input.dimension),
+    ),
+    instruction: firstNonEmptyString(
+      stringValue(data.instruction),
+      stringValue(input.instruction),
+    ),
+    preserve: arrayOfStrings(confirmation.preserve).length > 0
+      ? arrayOfStrings(confirmation.preserve)
+      : arrayOfStrings(data.preserve).length > 0
+        ? arrayOfStrings(data.preserve)
+        : arrayOfStrings(input.preserve),
+    variations,
+  };
+}
+
+function stepScriptDerivationProgress(step: AgentStep): ScriptDerivationBatchView | null {
+  const data = asRecord(step.output?.data);
+  const batch = asRecord(data?.scriptDerivation);
+  if (!batch || !stringValue(batch.id)) {
+    return null;
+  }
+  const lineageItems = Array.isArray(batch.lineageResults)
+    ? batch.lineageResults
+        .map((value) => asRecord(asRecord(value)?.latestResult))
+        .filter((value): value is Record<string, unknown> => Boolean(value))
+    : [];
+  const currentItems = Array.isArray(batch.items)
+    ? batch.items
+        .map((value) => asRecord(value))
+        .filter((value): value is Record<string, unknown> => Boolean(value))
+    : [];
+  const items = (lineageItems.length > 0 ? lineageItems : currentItems)
+    .map((value) => ({
+      id: stringValue(value.id),
+      batchId: stringValue(value.batchId),
+      inputOrdinal: numberValue(value.inputOrdinal),
+      variationLabel: stringValue(value.variationLabel),
+      variationBrief: stringValue(value.variationBrief),
+      status: stringValue(value.status),
+      outputScriptUnitId: stringValue(value.outputScriptUnitId),
+      errorCode: stringValue(value.errorCode),
+      errorMessage: stringValue(value.errorMessage),
+    }));
+  const succeededCount = items.filter((item) => item.status === "succeeded").length;
+  const failedRetryableCount = items.filter((item) => item.status === "failed_retryable").length;
+  const failedTerminalCount = items.filter((item) => item.status === "failed_terminal").length;
+  const cancelledCount = items.filter((item) => item.status === "cancelled").length;
+  const queuedCount = items.filter((item) => item.status === "queued").length;
+  const runningCount = items.filter((item) => ["running", "reviewing"].includes(item.status)).length;
+  const requestedCount = lineageItems.length > 0
+    ? items.length
+    : numberValue(batch.requestedCount);
+  const effectiveStatus = lineageItems.length > 0
+    ? scriptDerivationLineageStatus(items.map((item) => item.status))
+    : stringValue(batch.status);
+  const retryBatchId = items.find((item) => item.status === "failed_retryable")?.batchId
+    || stringValue(batch.id);
+  return {
+    id: stringValue(batch.id),
+    retryBatchId,
+    status: effectiveStatus,
+    requestedCount,
+    queuedCount: lineageItems.length > 0 ? queuedCount : numberValue(batch.queuedCount),
+    runningCount: lineageItems.length > 0 ? runningCount : numberValue(batch.runningCount),
+    succeededCount: lineageItems.length > 0 ? succeededCount : numberValue(batch.succeededCount),
+    failedRetryableCount: lineageItems.length > 0
+      ? failedRetryableCount
+      : numberValue(batch.failedRetryableCount),
+    failedTerminalCount: lineageItems.length > 0
+      ? failedTerminalCount
+      : numberValue(batch.failedTerminalCount),
+    cancelledCount: lineageItems.length > 0 ? cancelledCount : numberValue(batch.cancelledCount),
+    items,
+  };
+}
+
+function scriptDerivationLineageStatus(statuses: string[]) {
+  if (statuses.some((status) => ["queued", "running", "reviewing"].includes(status))) {
+    return "running";
+  }
+  const succeeded = statuses.filter((status) => status === "succeeded").length;
+  const failed = statuses.filter((status) => ["failed_retryable", "failed_terminal"].includes(status)).length;
+  const cancelled = statuses.filter((status) => status === "cancelled").length;
+  if (statuses.length > 0 && succeeded === statuses.length) {
+    return "succeeded";
+  }
+  if (succeeded > 0) {
+    return "partial_succeeded";
+  }
+  if (statuses.length > 0 && cancelled === statuses.length) {
+    return "cancelled";
+  }
+  if (failed > 0) {
+    return "failed";
+  }
+  return "queued";
+}
+
+function scriptDerivationDimensionLabel(value: string) {
+  switch (value) {
+    case "scene":
+      return "场景";
+    case "audience":
+      return "受众";
+    case "hook":
+      return "开场钩子";
+    case "tone":
+      return "表达语气";
+    case "language":
+      return "语言";
+    case "cta":
+      return "行动号召";
+    case "custom":
+      return "自定义";
+    default:
+      return value || "脚本裂变";
+  }
+}
+
+function scriptDerivationPreserveLabel(value: string) {
+  switch (value) {
+    case "product_facts":
+      return "商品事实";
+    case "selling_points":
+      return "核心卖点";
+    case "prohibited_claims":
+      return "宣传边界";
+    case "cta":
+      return "行动号召";
+    case "language":
+      return "原脚本语言";
+    case "approximate_duration":
+      return "目标时长";
+    default:
+      return value;
+  }
+}
+
+function scriptDerivationBatchVariant(
+  status: string,
+): "outline" | "secondary" | "destructive" | "default" {
+  if (["failed", "failed_terminal"].includes(status)) return "destructive";
+  if (["queued", "running", "cancelling", "partial_succeeded"].includes(status)) return "secondary";
+  if (["succeeded", "completed"].includes(status)) return "outline";
+  return "default";
+}
+
+function scriptDerivationBatchStatusLabel(status: string) {
+  switch (status) {
+    case "queued":
+      return "等待执行";
+    case "running":
+      return "运行中";
+    case "cancelling":
+      return "取消中";
+    case "cancelled":
+      return "已取消";
+    case "partial_succeeded":
+      return "部分完成";
+    case "failed":
+    case "failed_terminal":
+      return "失败";
+    case "succeeded":
+    case "completed":
+      return "已完成";
+    default:
+      return status || "未知状态";
+  }
+}
+
+function scriptDerivationItemStatusLabel(status: string) {
+  switch (status) {
+    case "queued":
+      return "等待执行";
+    case "running":
+      return "生成中";
+    case "reviewing":
+      return "审核中";
+    case "succeeded":
+      return "已生成";
+    case "failed_retryable":
+      return "可重试";
+    case "failed_terminal":
+    case "failed":
+      return "失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return status || "未知状态";
+  }
+}
+
 function workflowNodeStageLabel(nodeType: string, nodeKey: string) {
   if (nodeType === "agent.image_prompt.generate" || nodeKey.startsWith("generate_shot_image_prompt_")) return "图片提示词生成";
   if (nodeType === "agent.image_prompt.review" || nodeKey.startsWith("review_shot_image_prompt_")) return "图片提示词审核";
@@ -1216,10 +1693,34 @@ function stepBusinessLinks(projectId: string, step: AgentStep) {
   addBusinessLink(links, input.workflowRunId ?? data.workflowRunId ?? asRecord(data.workflowRun)?.id, "查看任务", projectHref(projectId, "video"));
   addBusinessLink(links, input.finalVideoId ?? data.finalVideoId, "查看成片", projectHref(projectId, "final"));
   addBusinessLink(links, input.fixId ?? data.fixId, "查看审阅", projectHref(projectId, "review"));
+  addBusinessLink(
+    links,
+    input.scriptUnitId ?? data.scriptUnitId ?? data.commerceScriptUnitId,
+    "查看广告脚本",
+    projectHref(projectId, "commerce/video"),
+  );
+  addBusinessLink(
+    links,
+    input.jobId ?? data.jobId,
+    "查看视频生成",
+    projectHref(projectId, "commerce/video"),
+  );
+  const directVideo = asRecord(data.directVideo);
+  const previewUrl = firstNonEmptyString(
+    stringValue(directVideo?.outputPreviewUrl),
+    stringValue(data.outputPreviewUrl),
+  );
+  if (previewUrl) {
+    links.push({ label: "预览视频", href: previewUrl });
+  }
   if (Array.isArray(data.artifacts) || Array.isArray(data.artifactIds) || stringValue(data.artifactId)) {
     links.push({ label: "查看产物", href: projectHref(projectId, "assets") });
   }
   return dedupeBusinessLinks(links);
+}
+
+function isExternalHref(href: string) {
+  return /^https?:\/\//i.test(href);
 }
 
 function addBusinessLink(links: Array<{ label: string; href: string }>, value: unknown, label: string, href: string) {
@@ -1245,6 +1746,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function agentTaskImageAttachmentLabels(task: AgentTask | null) {
+  const raw = task?.constraints?.attachments;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((value) => asRecord(value))
+    .filter((value): value is Record<string, unknown> => Boolean(value))
+    .map((value) => ({
+      id: stringValue(value.attachmentId),
+      fileName: stringValue(value.fileName) || "已附加图片",
+    }))
+    .filter((value) => value.id);
 }
 
 function arrayOfStrings(value: unknown) {

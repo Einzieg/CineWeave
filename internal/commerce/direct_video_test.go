@@ -139,6 +139,15 @@ func TestSelectDirectVideoRouteOnlyHardMatchesDurationAndResolution(t *testing.T
 	}
 }
 
+func TestValidateDirectVideoJobInputAllowsDefaultDuration(t *testing.T) {
+	if err := validateDirectVideoJobInput(CreateDirectVideoJobInput{}); err != nil {
+		t.Fatalf("validateDirectVideoJobInput() omitted duration error = %v", err)
+	}
+	if err := validateDirectVideoJobInput(CreateDirectVideoJobInput{DurationSeconds: -1}); err == nil {
+		t.Fatal("validateDirectVideoJobInput() accepted negative duration")
+	}
+}
+
 func TestAssignDirectVideoReferenceRolesUsesFirstFrameThenSemanticReferences(t *testing.T) {
 	contract := DirectVideoInputContract{
 		ContractKey: "first_frame_plus_references",

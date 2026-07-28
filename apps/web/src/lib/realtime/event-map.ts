@@ -17,6 +17,7 @@ type InvalidationHandler =
   | "commerceProduct"
   | "commerceProject"
   | "commerceDirect"
+  | "commerceDerivation"
   | "commerceScript"
   | "commerceStoryboard"
   | "export"
@@ -73,6 +74,19 @@ export const projectEventInvalidation = {
   "commerce.direct_video.progressed": "commerceDirect",
   "commerce.direct_video.started": "commerceDirect",
   "commerce.direct_video.succeeded": "commerceDirect",
+  "commerce.script_derivation.batch.cancelled": "commerceDerivation",
+  "commerce.script_derivation.batch.cancelling": "commerceDerivation",
+  "commerce.script_derivation.batch.created": "commerceDerivation",
+  "commerce.script_derivation.batch.failed": "commerceDerivation",
+  "commerce.script_derivation.batch.partial_succeeded": "commerceDerivation",
+  "commerce.script_derivation.batch.progressed": "commerceDerivation",
+  "commerce.script_derivation.batch.started": "commerceDerivation",
+  "commerce.script_derivation.batch.succeeded": "commerceDerivation",
+  "commerce.script_derivation.item.cancelled": "commerceDerivation",
+  "commerce.script_derivation.item.failed": "commerceDerivation",
+  "commerce.script_derivation.item.reviewing": "commerceDerivation",
+  "commerce.script_derivation.item.started": "commerceDerivation",
+  "commerce.script_derivation.item.succeeded": "commerceDerivation",
   "commerce.product.reference.added": "commerceProduct",
   "commerce.product.reference.archived": "commerceProduct",
   "commerce.product.reference.updated": "commerceProduct",
@@ -319,6 +333,8 @@ export function keysForProjectEvent(
   const providerModelId = stringPayload(payload, "providerModelId");
   const rebuildId = stringPayload(payload, "rebuildId");
   const commerceScriptUnitId = stringPayload(payload, "commerceScriptUnitId");
+  const commerceScriptDerivationBatchId = stringPayload(payload, "batchId");
+  const outputCommerceScriptUnitId = stringPayload(payload, "outputScriptUnitId");
   const commerceProductionRunId = stringPayload(payload, "commerceProductionRunId");
   const commerceStoryboardPlanId = stringPayload(payload, "commerceStoryboardPlanId");
   const commerceReferencePackId = stringPayload(payload, "referencePackId");
@@ -428,6 +444,19 @@ export function keysForProjectEvent(
           qk.commerceDirectVideos(projectId, commerceScriptUnitId),
         );
       }
+      break;
+    case "commerceDerivation":
+      keys.push(
+        qk.commerceScriptDerivationsRoot(projectId),
+        qk.commerceScriptUnitsRoot(projectId),
+        qk.workflowRuns(projectId),
+        ...(commerceScriptDerivationBatchId
+          ? [qk.commerceScriptDerivation(projectId, commerceScriptDerivationBatchId)]
+          : []),
+        ...(outputCommerceScriptUnitId
+          ? [qk.commerceScriptUnit(projectId, outputCommerceScriptUnitId)]
+          : []),
+      );
       break;
     case "commerceProject":
       keys.push(

@@ -92,16 +92,17 @@ func TestAgentToolsAndTasksAPI(t *testing.T) {
 	assertAgentToolListed(t, tools.Items, "provider.install_catalog_preset", "admin", true)
 	assertAgentToolListed(t, tools.Items, "prompt.create_version", "admin", true)
 	assertAgentToolListed(t, tools.Items, "prompt.activate_version", "admin", true)
-	assertAgentToolListed(t, tools.Items, "commerce.product.get", "read", false)
-	assertAgentToolListed(t, tools.Items, "commerce.product.rebuild", "destructive", true)
-	assertAgentToolListed(t, tools.Items, "commerce.script_unit.storyboard.generate", "workflow", true)
-	assertAgentToolListed(t, tools.Items, "commerce.script_unit.shot_videos.generate", "workflow", true)
-	assertAgentToolListed(t, tools.Items, "commerce.script_unit.batch.advance", "workflow", true)
-	registry, err := seed.apiServer.projectAgentRegistry()
+	assertAgentToolNotListed(t, tools.Items, "commerce.product.get")
+	assertAgentToolNotListed(t, tools.Items, "commerce.script_unit.storyboard.generate")
+	project, err := seed.apiServer.project(requestWithContext(seed.ctx), seed.projectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	registry, err := seed.apiServer.projectAgentRegistry(project)
 	if err != nil {
 		t.Fatalf("project agent registry: %v", err)
 	}
-	for _, name := range []string{"project.read_summary", "workflow.start", "script.create_version", "asset.batch_generate_prompts", "asset.batch_generate_images", "commerce.product.get", "commerce.script_unit.storyboard.generate"} {
+	for _, name := range []string{"project.read_summary", "workflow.start", "script.create_version", "asset.batch_generate_prompts", "asset.batch_generate_images"} {
 		tool, ok := registry.Get(name)
 		if !ok || tool.Execute == nil {
 			t.Fatalf("registry tool %s execute = %v, exists=%v", name, tool.Execute, ok)
@@ -1407,7 +1408,7 @@ func TestProjectAgentScriptVersionToolsRequireApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load agent step: %v", err)
 	}
-	registry, err := seed.apiServer.projectAgentRegistry()
+	registry, err := seed.apiServer.projectAgentRegistry(project)
 	if err != nil {
 		t.Fatalf("project agent registry: %v", err)
 	}
@@ -2373,6 +2374,20 @@ func assertAgentToolListed(t *testing.T, items []struct {
 		return
 	}
 	t.Fatalf("tool %s not found in %+v", name, items)
+}
+
+func assertAgentToolNotListed(t *testing.T, items []struct {
+	Name             string         `json:"name"`
+	Risk             string         `json:"risk"`
+	RequiresApproval bool           `json:"requiresApproval"`
+	InputSchema      map[string]any `json:"inputSchema"`
+}, name string) {
+	t.Helper()
+	for _, item := range items {
+		if item.Name == name {
+			t.Fatalf("tool %s must not be available for this project kind", name)
+		}
+	}
 }
 
 func newAgentPlannerGateway(t *testing.T, plan map[string]any) *httptest.Server {

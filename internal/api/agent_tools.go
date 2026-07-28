@@ -898,6 +898,7 @@ func isAgentReferencePlaceholder(value string) bool {
 
 var agentUUIDArgumentKeys = map[string]bool{
 	"accountId":       true,
+	"attachmentId":    true,
 	"artifactId":      true,
 	"assetId":         true,
 	"chapterId":       true,

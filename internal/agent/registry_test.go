@@ -58,8 +58,8 @@ func TestDefaultRegistryDeclaresChildWorkflowTools(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected tool %s", name)
 		}
-		if !tool.StartsWorkflow {
-			t.Errorf("%s StartsWorkflow = false, want true", name)
+		if !tool.EffectiveEffects().StartsWorkflow {
+			t.Errorf("%s startsWorkflow effect = false, want true", name)
 		}
 	}
 	for _, name := range []string{"shot.status", "workflow.cancel", "final_video.activate", "storyboard.reorder"} {
@@ -67,8 +67,8 @@ func TestDefaultRegistryDeclaresChildWorkflowTools(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected tool %s", name)
 		}
-		if tool.StartsWorkflow {
-			t.Errorf("%s StartsWorkflow = true, want false", name)
+		if tool.EffectiveEffects().StartsWorkflow {
+			t.Errorf("%s startsWorkflow effect = true, want false", name)
 		}
 	}
 }
