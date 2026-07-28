@@ -1090,8 +1090,9 @@ PROJECT_KIND_MISMATCH
 7. `cineweave-script-worker`、`cineweave-agent-worker`、`cineweave-media-worker`、`cineweave-audio-worker` 的 Temporal current Build ID 均为本次发布 SHA，ramping 已清空。旧 Script Build `bc4326a0aa81-storyboard-57b15e4b46a4` 和旧 Agent/Media/Audio Build `bc4326a0aa810a31e7962f03339489cb9e592c40` 均连续三次确认 drained，可安全作为回滚版本保留。
 8. API `/healthz`、`/readyz`、Realtime、Web、公开站点和 MinIO 公共健康端点均返回 HTTP 200；新增脚本裂变 API 的未认证请求返回 401 而不是 404；Provider Gateway 在 Docker 网络内可解析并访问 `new-api:3000`。
 9. 生产浏览器以已登录账号验证项目列表和新建项目页，页面已显示“带货视频 / 商品图片与多脚本独立成片”。本次发布 smoke 未创建项目、未启动工作流、未调用真实付费 Provider。
-10. 发布前后活动 Workflow、Workflow Node、Provider Request/Call/Async Task/Lease/Test Run 均为 `0`，近 15 分钟核心服务与新 Worker 日志无 panic、fatal、迁移失败或 Temporal nondeterminism。
+10. 停写门禁和发布 smoke 完成时，活动 Workflow、Workflow Node、Provider Request/Call/Async Task/Lease/Test Run 均为 `0`；近 15 分钟核心服务与新 Worker 日志无 panic、fatal、迁移失败或 Temporal nondeterminism。
 11. 服务器 `/soft/CineWeave/current`、`.compose.release.yml` 和 `.env` 的 Release ID 已切换到本次发布；旧 release 目录、旧镜像、旧 Worker 容器、Provider 快照和数据库备份均保留。数据库回滚只允许在明确授权后使用上述备份或审阅后的 down migration。
+12. 恢复流量后，用户新提交的 `batch_generate_shot_images` Workflow `283564c0-c02c-4620-a1d0-655e4549bfad` 由新 Build ID 接管并以五并发完成 `67/71`，终态为 `partial_succeeded`；1 项为上游内部错误，3 项因上游图片黑/透明空白区域过大被质量校验拒绝。任务终态后活动运行时计数重新归零，该任务不属于发布 smoke。
 
 真实 Provider 验收记录：
 
