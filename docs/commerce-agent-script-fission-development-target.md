@@ -1,9 +1,9 @@
 # CineWeave 带货项目 AI 助手与脚本裂变开发目标
 
-- 状态：P0-P4 代码与 P5 本地验收已完成；真实 Provider 直生成视频与五场景脚本裂变 E2E 已通过；待生产发布
+- 状态：P0-P5 全部完成；真实 Provider 直生成视频、五场景脚本裂变 E2E 与生产发布均已通过
 - 更新时间：2026-07-28
 - 适用仓库：`D:\Code\CineWeave`
-- 实施基线：`bc4326a0aa810a31e7962f03339489cb9e592c40`
+- 实施基线：`a7ec5d5f0394332861bc7c4d2f331701fd3b1fd4`
 - 当前迁移头：`000069_commerce_script_derivation_prompt_hash.sql`
 - 关联文档：
   - `docs/commerce-video-development-plan.md`
@@ -1077,16 +1077,21 @@ PROJECT_KIND_MISMATCH
 - [x] 更新 OpenAPI、事件目录和开发文档。
 - [x] 运行全仓验证、Compose 验证和无付费浏览器验收。
 - [x] 完成包含真实 Provider 调用的浏览器端到端验收。
-- [ ] 按 `AGENTS.md` 生产发布清单部署。
+- [x] 按 `AGENTS.md` 生产发布清单部署。
 
-发布前最新审计（2026-07-28）：
+生产发布记录（2026-07-28）：
 
-1. 基于最新共享工作区重新执行 `pnpm run test`，Go 全仓、迁移与 seed 校验、Web 测试/typecheck/lint、OpenAPI 425 条路由、Commerce 25 项操作/73 项事件和 Compose 配置全部通过。
-2. 本地 Compose 常驻服务全部 Up，带健康检查的服务全部 healthy；API `/readyz` 与 Web 均返回 HTTP 200。
-3. 本地数据库迁移头为 `69`，活动 `workflow_runs`、`provider_async_tasks`、`agent_tasks` 均为 `0`。
-4. 生产环境只读预检显示迁移头仍为 `66`，活动 Workflow、Provider 异步任务和 Agent 任务均为 `0`；主栈与独立 Worker 栈全部运行，Agent/Script/Media/Audio Worker 均 healthy。
-5. 生产环境仍运行基于提交 `bc4326a0aa810a31e7962f03339489cb9e592c40` 的旧镜像及既有分镜专项镜像，尚未包含当前未提交的脚本裂变实现。
-6. 生产发布必须先获得本次变更的明确提交、推送与主环境发布授权，再按不可变 release、备份、迁移 `66 -> 69`、完整服务重建、Temporal 路由、API/浏览器 smoke 和回滚目标流程执行；预检结果不得替代正式发布。
+1. 发布提交 `a7ec5d5f0394332861bc7c4d2f331701fd3b1fd4` 已推送到 `origin/main`；生产使用 `/soft/CineWeave/releases/a7ec5d5f0394332861bc7c4d2f331701fd3b1fd4/source` 的干净不可变源码，未覆盖服务器原 dirty checkout。
+2. 精确 Git archive 为 `/soft/CineWeave/releases/a7ec5d5f0394332861bc7c4d2f331701fd3b1fd4/source-git.tar.gz`，SHA256 为 `368b1db07c57c8346e73d8593d37d9ee5c76fcf9c5d4de2ee5f7fbe84ee086a2`。
+3. `release-check.ps1 -RequireClean -SkipImageBuild` 全绿，覆盖 secret scan、`go vet`、`govulncheck`、依赖审计、`pnpm run test`、Web production build、Commerce 6/6 E2E 和隔离迁移 Up/Down/Up；`google.golang.org/grpc` 已升级至无已知可达漏洞的 `v1.82.1`。
+4. 生产数据库已从迁移头 `66` 升级至 `69`，`cineweave-migrate verify`、seed apply/verify 均通过。升级前 custom-format 备份为 `/soft/CineWeave/backups/cineweave-pre-a7ec5d5f0394332861bc7c4d2f331701fd3b1fd4-20260728T085248Z.dump`，大小 `38235494` 字节，SHA256 为 `601336b5d9afbacd1eac8543026aea8c9bf01235d10e1c79e6df4d6bb76e3f21`，`pg_restore -l` 可读取 `2518` 条目录项。
+5. Provider 配置在停写窗口内完成 12 张配置表和 8 张历史表保护快照及复核。快照为 `/soft/CineWeave/backups/provider-protection-a7ec5d5f0394332861bc7c4d2f331701fd3b1fd4-before.json`，SHA256 为 `459a392e835a3b4b703369999ddb187fa849ff0e09e0d7bdc6f5369739b1d304`；复核通过后已解除写冻结。
+6. API、Realtime、Provider Gateway、Event Publisher、Web、Script Worker、Agent Worker、Media Worker、Audio Worker 均运行 `a7ec5d5f0394332861bc7c4d2f331701fd3b1fd4` 不可变镜像并处于 healthy。完整镜像清单和远端 digest 保存在发布目录的 `IMAGE_DIGESTS.txt`。
+7. `cineweave-script-worker`、`cineweave-agent-worker`、`cineweave-media-worker`、`cineweave-audio-worker` 的 Temporal current Build ID 均为本次发布 SHA，ramping 已清空。旧 Script Build `bc4326a0aa81-storyboard-57b15e4b46a4` 和旧 Agent/Media/Audio Build `bc4326a0aa810a31e7962f03339489cb9e592c40` 均连续三次确认 drained，可安全作为回滚版本保留。
+8. API `/healthz`、`/readyz`、Realtime、Web、公开站点和 MinIO 公共健康端点均返回 HTTP 200；新增脚本裂变 API 的未认证请求返回 401 而不是 404；Provider Gateway 在 Docker 网络内可解析并访问 `new-api:3000`。
+9. 生产浏览器以已登录账号验证项目列表和新建项目页，页面已显示“带货视频 / 商品图片与多脚本独立成片”。本次发布 smoke 未创建项目、未启动工作流、未调用真实付费 Provider。
+10. 发布前后活动 Workflow、Workflow Node、Provider Request/Call/Async Task/Lease/Test Run 均为 `0`，近 15 分钟核心服务与新 Worker 日志无 panic、fatal、迁移失败或 Temporal nondeterminism。
+11. 服务器 `/soft/CineWeave/current`、`.compose.release.yml` 和 `.env` 的 Release ID 已切换到本次发布；旧 release 目录、旧镜像、旧 Worker 容器、Provider 快照和数据库备份均保留。数据库回滚只允许在明确授权后使用上述备份或审阅后的 down migration。
 
 真实 Provider 验收记录：
 
