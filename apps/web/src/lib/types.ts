@@ -177,17 +177,13 @@ export type SetupState = {
   organizationCount: number;
 };
 
-export type DeploymentEdition = "community" | "cloud" | "enterprise";
+export type DeploymentEdition = "community" | "cloud";
 
 export type EditionOperationalMode = "normal" | "commercial_restricted";
 
 export type EditionRestrictionReason =
-  | "license_invalid"
-  | "license_not_yet_valid"
-  | "license_expired"
-  | "license_revoked"
-  | "clock_rollback_suspected"
-  | "deployment_mismatch";
+  | "internal_release_mismatch"
+  | "commercial_writes_frozen";
 
 export type EditionFeatureKey =
   | "core.workflow"
@@ -217,7 +213,7 @@ export type SystemEdition = {
   distributionId: string;
   coreReleaseId: string;
   commercialReleaseId?: string;
-  contractVersion: "edition.v1";
+  contractVersion: "edition.v2";
   contractHash: string;
   compiledFeatures: EditionFeatureKey[];
   compiledModules: EditionCompiledModule[];
@@ -228,11 +224,8 @@ export type SystemEdition = {
 export type EntitlementDenialCode =
   | "feature_unknown"
   | "feature_not_compiled"
-  | "deployment_license_invalid"
-  | "deployment_license_not_yet_valid"
-  | "deployment_license_expired"
-  | "deployment_license_revoked"
-  | "deployment_clock_rollback_suspected"
+  | "internal_release_mismatch"
+  | "commercial_writes_frozen"
   | "plan_entitlement_required"
   | "billing_account_suspended"
   | "permission_denied"
@@ -249,14 +242,14 @@ export type EntitlementDenialCode =
 export type EntitlementDecision = {
   featureKey: EditionFeatureKey | string;
   compiled: boolean;
-  deploymentLicensed: boolean;
+  deploymentEnabled: boolean;
   tenantEntitled: boolean;
   allowed: boolean;
   reason?: EntitlementDenialCode;
 };
 
 export type EntitlementSnapshot = {
-  contractVersion: "edition.v1";
+  contractVersion: "edition.v2";
   edition: DeploymentEdition;
   subject: {
     userId: string;

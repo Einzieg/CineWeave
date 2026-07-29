@@ -4,13 +4,13 @@
 
 ## 当前结论
 
-截至 2026-07-29，只读核验确认 `Einzieg/CineWeave` GitHub 仓库是 public，默认分支是 `main`。仓库根目录仍没有 `LICENSE`、`NOTICE`、版权声明、商标政策、贡献政策或 CLA。源码公开可见不等于公众已经获得复制、修改或再分发授权，因此当前状态不能被标记为“CE 许可证已发布”，也不能据此宣称已具备 AGPL 与商业双重许可条件。
+截至 2026-07-29，只读核验确认 `Einzieg/CineWeave` GitHub 仓库是 public，默认分支是 `main`。仓库根目录仍没有 `LICENSE`、`NOTICE`、版权声明、商标政策、贡献政策或 CLA。源码公开可见不等于公众已经获得复制、修改或再分发授权，因此当前状态不能被标记为“CE 许可证已发布”，也不能据此宣称公共 Core 已获准进入同一主体的内部 Commercial 组合。
 
 工程侧已经提供可重复清单，但以下决定必须由有资质的律师和权利人完成：
 
-1. 确认所有历史贡献的版权归属、雇佣/委托关系和可双重许可授权链。
+1. 确认所有历史贡献的版权归属、雇佣/委托关系，以及公共 AGPL 发行和同一主体内部 Commercial 组合所需的授权链。
 2. 确认 CE 使用的准确 SPDX 表达式和许可证正文版本。
-3. 确认商业许可、CLA/DCO、NOTICE、第三方归属和商标政策。
+3. 确认内部 Commercial 使用权、CLA/DCO、NOTICE、第三方归属和商标政策；当前范围不要求客户商业软件许可。
 4. 审核强/弱 copyleft、数据/文档许可证、二进制资产和容器镜像的组合与交付义务。
 5. 生成受控法律事项编号或签名批准记录；公共仓库只保存最小批准元数据，不保存律师特权内容。
 
@@ -43,11 +43,11 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 python scripts/audit-source-licensing.py `
   --output tmp/source-licensing-audit.json `
-  --approval <controlled-source-license-approval.v1.json> `
+  --approval <controlled-source-license-approval.v2.json> `
   --require-legal-approval
 ```
 
-批准文件必须符合 `packages/edition/source-license-approval.schema.json`，绑定当前 `inventorySha256`，并由 `reviewerRole=qualified_counsel` 的受控记录确认软件许可证、双重许可权、贡献授权、第三方 NOTICE 和商标政策。批准文件作为受控 CI/法务输入，不提交到公共 Core，避免其自身新增 commit 造成循环 hash；Release Manifest 只记录批准记录 hash 和不可变证据引用。任何依赖、资产、Git 历史或法律文件变化都会改变 inventory hash，使旧批准自动失效。
+批准文件必须符合 `packages/edition/source-license-approval.schema.json`，绑定当前 `inventorySha256`，并由 `reviewerRole=qualified_counsel` 的受控记录确认公共 AGPL 许可证、同一主体内部 Commercial 组合使用权、贡献授权、第三方 NOTICE 和商标政策。批准文件作为受控 CI/法务输入，不提交到公共 Core，避免其自身新增 commit 造成循环 hash；Release Manifest 只记录批准记录 hash 和不可变证据引用。任何依赖、资产、Git 历史或法律文件变化都会改变 inventory hash，使旧批准自动失效。
 
 ## 当前需重点复核的类别
 
@@ -60,7 +60,7 @@ python scripts/audit-source-licensing.py `
 - 存在单独的 logo/资产授权文件，自动分类器只记录 hash，要求人工确认。
 - Git 跟踪的二进制资产需要逐项建立来源和再分发证据。
 
-这些类别不自动等于“禁止使用”，也不自动等于“与目标双重许可兼容”；它们必须结合链接方式、分发形式、修改、NOTICE、源代码提供方式和商业交付范围由律师判断。
+这些类别不自动等于“禁止使用”，也不自动等于“适合公共 AGPL 发行或内部 Commercial 组合”；它们必须结合链接方式、网络交互、分发形式、修改、NOTICE、源代码提供方式和内部运行范围由律师判断。
 
 ## 贡献治理切换
 

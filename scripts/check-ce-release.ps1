@@ -60,20 +60,22 @@ function Assert-CommunityBinaryRejectsCommercialEdition {
   $previousEdition = $env:CINEWEAVE_EDITION
   $previousNativePreference = $PSNativeCommandUseErrorActionPreference
   try {
-    $env:CINEWEAVE_EDITION = 'enterprise'
-    $PSNativeCommandUseErrorActionPreference = $false
-    $output = @(& $BinaryPath 2>&1)
-    $exitCode = $LASTEXITCODE
+    foreach ($requestedEdition in @('cloud', 'enterprise')) {
+      $env:CINEWEAVE_EDITION = $requestedEdition
+      $PSNativeCommandUseErrorActionPreference = $false
+      $output = @(& $BinaryPath 2>&1)
+      $exitCode = $LASTEXITCODE
+      if ($exitCode -eq 0) {
+        throw "CE binary unexpectedly started with CINEWEAVE_EDITION=$requestedEdition`: $BinaryPath"
+      }
+      $message = $output -join "`n"
+      if ($message -notmatch 'feature_not_compiled') {
+        throw "CE binary did not fail at the Edition boundary for $requestedEdition`: $BinaryPath`n$message"
+      }
+    }
   } finally {
     $env:CINEWEAVE_EDITION = $previousEdition
     $PSNativeCommandUseErrorActionPreference = $previousNativePreference
-  }
-  if ($exitCode -eq 0) {
-    throw "CE binary unexpectedly started with CINEWEAVE_EDITION=enterprise: $BinaryPath"
-  }
-  $message = $output -join "`n"
-  if ($message -notmatch 'feature_not_compiled') {
-    throw "CE binary did not fail at the Edition boundary: $BinaryPath`n$message"
   }
 }
 
@@ -231,7 +233,6 @@ try {
   }
 
   foreach ($name in @(
-    'CINEWEAVE_LICENSE_SIGNING_PRIVATE_KEY',
     'CINEWEAVE_SIGNING_PRIVATE_KEY',
     'NEW_API_ADMIN_TOKEN',
     'NEW_API_ADMIN_API_KEY',

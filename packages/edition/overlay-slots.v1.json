@@ -13,7 +13,7 @@
     "pnpm-lock.yaml",
     "packages/edition/ce-release-policy.v1.json",
     "packages/edition/ddl-owners.v1.json",
-    "packages/edition/edition.v1.json",
+    "packages/edition/edition.v2.json",
     "packages/edition/overlay-slots.v1.json",
     "packages/edition/release-manifest.schema.json"
   ],

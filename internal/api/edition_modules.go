@@ -71,12 +71,12 @@ func authorizeEditionAPIModule(
 			BillingAccountID: strings.TrimSpace(billingAccountID),
 		},
 		FeatureKeys: []editionpkg.FeatureKey{registration.FeatureKey},
-		Operation:   registration.LicenseOperation,
+		Operation:   registration.Operation,
 	})
 	if err != nil {
 		return err
 	}
-	if snapshot.ContractVersion != editionpkg.ContractVersionV1 ||
+	if snapshot.ContractVersion != editionpkg.ContractVersionV2 ||
 		snapshot.Subject.UserID != principal.UserID ||
 		snapshot.Subject.OrganizationID != principal.OrganizationID ||
 		snapshot.Subject.BillingAccountID != strings.TrimSpace(billingAccountID) {
@@ -99,7 +99,7 @@ func authorizeEditionAPIModule(
 		}
 	}
 	if decision.Allowed {
-		if !decision.Compiled || !decision.DeploymentLicensed || !decision.TenantEntitled || decision.Reason != "" {
+		if !decision.Compiled || !decision.DeploymentEnabled || !decision.TenantEntitled || decision.Reason != "" {
 			return fmt.Errorf("commercial entitlement allow decision is internally inconsistent")
 		}
 	} else {

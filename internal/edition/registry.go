@@ -86,7 +86,7 @@ func defaultFeatureDescriptors() []FeatureDescriptor {
 func coreFeature(key FeatureKey, enforcementPoint, frontendEntry string) FeatureDescriptor {
 	return FeatureDescriptor{
 		Key:                       key,
-		MinimumContractVersion:    ContractVersionV1,
+		MinimumContractVersion:    ContractVersionV2,
 		RequiresTenantEntitlement: false,
 		RequiredPermissions:       []string{},
 		BackendEnforcementPoint:   enforcementPoint,
@@ -102,7 +102,7 @@ func coreFeature(key FeatureKey, enforcementPoint, frontendEntry string) Feature
 func commercialFeature(key FeatureKey, permissions []string, enforcementPoint, frontendEntry string, affectsInFlight bool) FeatureDescriptor {
 	return FeatureDescriptor{
 		Key:                       key,
-		MinimumContractVersion:    ContractVersionV1,
+		MinimumContractVersion:    ContractVersionV2,
 		RequiresTenantEntitlement: true,
 		RequiredPermissions:       permissions,
 		BackendEnforcementPoint:   enforcementPoint,

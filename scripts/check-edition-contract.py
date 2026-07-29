@@ -9,7 +9,7 @@ import yaml
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CONTRACT_PATH = ROOT / "packages" / "edition" / "edition.v1.json"
+CONTRACT_PATH = ROOT / "packages" / "edition" / "edition.v2.json"
 GO_CONTRACT_PATH = ROOT / "internal" / "edition" / "contracts.go"
 GO_AUTHORIZATION_PATH = ROOT / "internal" / "edition" / "community.go"
 WEB_TYPES_PATH = ROOT / "apps" / "web" / "src" / "lib" / "types.ts"
@@ -53,7 +53,7 @@ def openapi_enum(document: dict, schema_name: str, property_name: str | None = N
 def assert_same_ordered_values(label: str, expected: list[str], actual: list[str]) -> None:
     require(
         actual == expected,
-        f"{label} drifted from edition.v1.json: expected={expected}, actual={actual}",
+        f"{label} drifted from edition.v2.json: expected={expected}, actual={actual}",
     )
 
 
@@ -87,21 +87,30 @@ def main() -> int:
     try:
         contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
         require(
-            contract.get("schemaVersion") == "cineweave.edition-contract.v1",
+            contract.get("schemaVersion") == "cineweave.edition-contract.v2",
             "edition contract schemaVersion is invalid",
         )
-        require(contract.get("contractVersion") == "edition.v1", "edition contractVersion is invalid")
+        require(contract.get("contractVersion") == "edition.v2", "edition contractVersion is invalid")
 
         go_contract = GO_CONTRACT_PATH.read_text(encoding="utf-8")
         go_authorization = (
             GO_AUTHORIZATION_PATH.read_text(encoding="utf-8")
             + "\n"
-            + (ROOT / "internal" / "edition" / "license.go").read_text(encoding="utf-8")
+            + (ROOT / "internal" / "edition" / "authorization.go").read_text(
+                encoding="utf-8"
+            )
         )
         web_types = WEB_TYPES_PATH.read_text(encoding="utf-8")
         web_entry = WEB_ENTRY_CONTRACT_PATH.read_text(encoding="utf-8")
         openapi = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
-
+        require(
+            not (ROOT / "packages" / "edition" / "edition.v1.json").exists(),
+            "legacy Edition v1 contract must not remain in the Core source",
+        )
+        require(
+            not (ROOT / "internal" / "edition" / "license.go").exists(),
+            "customer deployment License runtime must not remain in the Core source",
+        )
         assert_same_ordered_values(
             "Go editions",
             contract["editions"],
@@ -143,20 +152,9 @@ def main() -> int:
             go_typed_constant_values(go_contract, "APIResourceScope"),
         )
         assert_same_ordered_values(
-            "Go license states",
-            contract["licenseStates"],
-            go_typed_constant_values(
-                (ROOT / "internal" / "edition" / "license.go").read_text(encoding="utf-8"),
-                "LicenseState",
-            ),
-        )
-        assert_same_ordered_values(
-            "Go license operations",
-            contract["licenseOperations"],
-            go_typed_constant_values(
-                (ROOT / "internal" / "edition" / "license.go").read_text(encoding="utf-8"),
-                "LicenseOperation",
-            ),
+            "Go commercial operations",
+            contract["commercialOperations"],
+            go_typed_constant_values(go_contract, "CommercialOperation"),
         )
 
         assert_same_ordered_values(
@@ -228,6 +226,19 @@ def main() -> int:
             go_struct_fields(go_contract, "APIModuleRegistration"),
         )
         api_module_source = API_MODULE_PATH.read_text(encoding="utf-8")
+        public_contract_sources = "\n".join(
+            (go_contract, go_authorization, web_types, api_module_source)
+        )
+        for forbidden in (
+            "DeploymentLicenseClaims",
+            "LicenseOperation",
+            "deploymentLicensed",
+            "deployment_license_expired",
+        ):
+            require(
+                forbidden not in public_contract_sources,
+                f"legacy customer License contract remains: {forbidden}",
+            )
         require(
             "s.withAuth" in api_module_source,
             "commercial API module registration must use Core authentication",
@@ -276,7 +287,7 @@ def main() -> int:
         print(f"Edition contract check failed: {exc}", file=sys.stderr)
         return 1
 
-    print("Edition v1 contract matches Go, Web, OpenAPI, and authorization formula.")
+    print("Edition v2 contract matches Go, Web, OpenAPI, and authorization formula.")
     return 0
 
 

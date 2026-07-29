@@ -31,7 +31,7 @@ func TestSystemEditionReturnsSafeCommunityManifest(t *testing.T) {
 		envelope.Data.OperationalState.Mode != editionpkg.OperationalModeNormal {
 		t.Fatalf("edition response = %+v", envelope.Data)
 	}
-	if envelope.Data.ContractVersion != editionpkg.ContractVersionV1 || envelope.Data.ContractHash == "" {
+	if envelope.Data.ContractVersion != editionpkg.ContractVersionV2 || envelope.Data.ContractHash == "" {
 		t.Fatalf("contract identity = %+v", envelope.Data.Manifest)
 	}
 	if envelope.Data.CommercialReleaseID != nil || len(envelope.Data.CompiledModules) != 0 {

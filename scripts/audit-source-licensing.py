@@ -17,7 +17,7 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REPORT_SCHEMA_VERSION = "cineweave.source-licensing-audit.v1"
-APPROVAL_SCHEMA_VERSION = "cineweave.source-license-approval.v1"
+APPROVAL_SCHEMA_VERSION = "cineweave.source-license-approval.v2"
 EXPECTED_SOFTWARE_LICENSE_SPDX = "AGPL-3.0-or-later"
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 LEGAL_ARTIFACTS = {
@@ -644,7 +644,7 @@ def load_approval(path: pathlib.Path, inventory_hash: str) -> dict[str, Any]:
     )
     for field in (
         "softwareLicenseApproved",
-        "dualLicenseApproved",
+        "internalCommercialUseApproved",
         "contributorGrantApproved",
         "thirdPartyNoticesApproved",
         "trademarkPolicyApproved",

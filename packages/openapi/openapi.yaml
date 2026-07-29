@@ -10638,7 +10638,7 @@ components:
       properties:
         deploymentEdition:
           type: string
-          enum: [community, cloud, enterprise]
+          enum: [community, cloud]
         distributionId:
           type: string
         coreReleaseId:
@@ -10647,7 +10647,7 @@ components:
           type: string
         contractVersion:
           type: string
-          const: edition.v1
+          const: edition.v2
         contractHash:
           type: string
           minLength: 1
@@ -10696,12 +10696,8 @@ components:
     EditionRestrictionReason:
       type: string
       enum:
-        - license_invalid
-        - license_not_yet_valid
-        - license_expired
-        - license_revoked
-        - clock_rollback_suspected
-        - deployment_mismatch
+        - internal_release_mismatch
+        - commercial_writes_frozen
     EntitlementSnapshotEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -10716,10 +10712,10 @@ components:
       properties:
         contractVersion:
           type: string
-          const: edition.v1
+          const: edition.v2
         edition:
           type: string
-          enum: [community, cloud, enterprise]
+          enum: [community, cloud]
         subject:
           $ref: "#/components/schemas/EntitlementSubject"
         decisions:
@@ -10744,13 +10740,13 @@ components:
           format: uuid
     EntitlementDecision:
       type: object
-      required: [featureKey, compiled, deploymentLicensed, tenantEntitled, allowed]
+      required: [featureKey, compiled, deploymentEnabled, tenantEntitled, allowed]
       properties:
         featureKey:
           type: string
         compiled:
           type: boolean
-        deploymentLicensed:
+        deploymentEnabled:
           type: boolean
         tenantEntitled:
           type: boolean
@@ -10763,11 +10759,8 @@ components:
       enum:
         - feature_unknown
         - feature_not_compiled
-        - deployment_license_invalid
-        - deployment_license_not_yet_valid
-        - deployment_license_expired
-        - deployment_license_revoked
-        - deployment_clock_rollback_suspected
+        - internal_release_mismatch
+        - commercial_writes_frozen
         - plan_entitlement_required
         - billing_account_suspended
         - permission_denied

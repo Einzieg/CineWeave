@@ -54,7 +54,7 @@ func NewCommunityRuntime(options CommunityOptions) (*Runtime, error) {
 		DeploymentEdition: EditionCommunity,
 		DistributionID:    CommunityDistributionID,
 		CoreReleaseID:     coreReleaseID,
-		ContractVersion:   ContractVersionV1,
+		ContractVersion:   ContractVersionV2,
 		ContractHash:      contractHash,
 		CompiledFeatures:  append([]FeatureKey(nil), communityCompiledFeatures...),
 		CompiledModules:   []CompiledModule{},
@@ -193,11 +193,11 @@ func (s communityEntitlementService) Evaluate(_ context.Context, request Entitle
 		}
 		_, isCompiled := compiled[key]
 		decision := EntitlementDecision{
-			FeatureKey:         key,
-			Compiled:           isCompiled,
-			DeploymentLicensed: isCompiled,
-			TenantEntitled:     isCompiled,
-			Allowed:            isCompiled,
+			FeatureKey:        key,
+			Compiled:          isCompiled,
+			DeploymentEnabled: isCompiled,
+			TenantEntitled:    isCompiled,
+			Allowed:           isCompiled,
 		}
 		if !isCompiled {
 			decision.Reason = DenialFeatureNotCompiled
@@ -284,7 +284,7 @@ func EvaluateEffectiveSpendAuthorization(facts EffectiveSpendAuthorizationFacts)
 }
 
 func validateManifest(manifest Manifest, registry FeatureRegistry) error {
-	if manifest.DeploymentEdition != EditionCommunity && manifest.DeploymentEdition != EditionCloud && manifest.DeploymentEdition != EditionEnterprise {
+	if manifest.DeploymentEdition != EditionCommunity && manifest.DeploymentEdition != EditionCloud {
 		return fmt.Errorf("deployment edition %q is invalid", manifest.DeploymentEdition)
 	}
 	if strings.TrimSpace(manifest.DistributionID) == "" ||
@@ -403,8 +403,8 @@ func validateAPIModuleRegistration(
 	if !strings.HasPrefix(registration.Pattern, "/api/") || strings.ContainsAny(registration.Pattern, " \t\r\n") {
 		return fmt.Errorf("commercial API operation %q has invalid API pattern %q", registration.OperationID, registration.Pattern)
 	}
-	if !validLicenseOperation(registration.LicenseOperation) {
-		return fmt.Errorf("commercial API operation %q has invalid license operation %q", registration.OperationID, registration.LicenseOperation)
+	if !validCommercialOperation(registration.Operation) {
+		return fmt.Errorf("commercial API operation %q has invalid operation policy %q", registration.OperationID, registration.Operation)
 	}
 	if len(registration.RequiredPermissions) == 0 {
 		return fmt.Errorf("commercial API operation %q must require RBAC permission", registration.OperationID)
@@ -481,16 +481,15 @@ func validAPIMethod(method string) bool {
 	}
 }
 
-func validLicenseOperation(operation LicenseOperation) bool {
+func validCommercialOperation(operation CommercialOperation) bool {
 	switch operation {
-	case LicenseOperationReadOrExport,
-		LicenseOperationCore,
-		LicenseOperationRenewal,
-		LicenseOperationCommercialWrite,
-		LicenseOperationPaidProviderCreate,
-		LicenseOperationAsyncPollOrCancel,
-		LicenseOperationFinalization,
-		LicenseOperationIdempotentRecovery:
+	case CommercialOperationReadOrExport,
+		CommercialOperationCore,
+		CommercialOperationWrite,
+		CommercialOperationPaidProviderCreate,
+		CommercialOperationAsyncPollOrCancel,
+		CommercialOperationFinalization,
+		CommercialOperationIdempotentRecovery:
 		return true
 	default:
 		return false
@@ -503,7 +502,7 @@ func patternContainsPathParameter(pattern, parameter string) bool {
 
 func validRestrictionReason(reason RestrictionReason) bool {
 	switch reason {
-	case RestrictionLicenseInvalid, RestrictionLicenseNotYetValid, RestrictionLicenseExpired, RestrictionLicenseRevoked, RestrictionClockRollback, RestrictionDeploymentMismatch:
+	case RestrictionInternalReleaseMismatch, RestrictionCommercialWritesFrozen:
 		return true
 	default:
 		return false
@@ -522,7 +521,7 @@ func cloneManifest(manifest Manifest) Manifest {
 
 func communityContractHash(registry FeatureRegistry) string {
 	hash := sha256.New()
-	_, _ = hash.Write([]byte(ContractVersionV1))
+	_, _ = hash.Write([]byte(ContractVersionV2))
 	for _, descriptor := range registry.All() {
 		_, _ = hash.Write([]byte{0})
 		_, _ = hash.Write([]byte(descriptor.Key))

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cineweave.example/contracts/source-license-approval.v1.schema.json",
-  "title": "CineWeave Source License Approval v1",
+  "$id": "https://cineweave.example/contracts/source-license-approval.v2.schema.json",
+  "title": "CineWeave Source License Approval v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
     "reviewerRole",
     "softwareLicenseSpdx",
     "softwareLicenseApproved",
-    "dualLicenseApproved",
+    "internalCommercialUseApproved",
     "contributorGrantApproved",
     "thirdPartyNoticesApproved",
     "trademarkPolicyApproved",
@@ -20,7 +20,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "cineweave.source-license-approval.v1"
+      "const": "cineweave.source-license-approval.v2"
     },
     "inventorySha256": {
       "type": "string",
@@ -43,7 +43,7 @@
     "softwareLicenseApproved": {
       "const": true
     },
-    "dualLicenseApproved": {
+    "internalCommercialUseApproved": {
       "const": true
     },
     "contributorGrantApproved": {

@@ -2,13 +2,13 @@
 
 ## 1. 目的与边界
 
-本门禁证明 Community Edition（CE）可以只使用公共 Core 源码构建，并阻止私有商业实现、商业迁移、许可证签发材料、管理凭据和本地构建产物进入公共历史或发行物。
+本门禁证明 Community Edition（CE）可以只使用公共 Core 源码构建，并阻止私有商业实现、商业迁移、内部发布签名材料、管理凭据和本地构建产物进入公共历史或发行物。
 
 它不替代以下门禁：
 
 - `LICENSE`、`NOTICE`、商标、CLA、版权归属和第三方许可证的法律审查。
 - 公共仓库可见性、分支保护、制品签名和 Registry 发布审批。
-- Cloud/Enterprise Commercial Assembly 的独立装配与商业迁移审计。
+- Internal Commercial Assembly 的独立装配与商业迁移审计。
 
 技术审计通过不等于已获准公开发布。
 
@@ -19,7 +19,7 @@
 1. 对本地 `refs/heads`、`refs/remotes` 和 `refs/tags` 下所有可达对象执行完整扫描，包括 blob、commit message 和 annotated tag，不只检查当前工作树；Codex 等开发工具的内部快照 ref 不属于可发布历史，只有同一对象进入正式分支、远端分支或 tag 时才阻断。
 2. 从固定 Git tree 生成不可变源码归档，检查禁止路径、私有模块引用、Secret 和生成物。
 3. 在归档解压目录中使用 `community` build tag 执行全量 Go 测试、构建全部 main package，并扫描所有二进制。
-4. 使用 `CINEWEAVE_EDITION=enterprise` 启动 CE API 和 Agent Worker，要求在连接数据库前以 `feature_not_compiled` 失败。
+4. 分别使用 `CINEWEAVE_EDITION=cloud` 和遗留 `enterprise` 值启动 CE API 与 Agent Worker，要求均在连接数据库前以 `feature_not_compiled` 失败。
 5. 在归档目录中独立安装依赖并构建 Web，逐文件扫描 chunk、server bundle 和 source map。
 6. 校验 Compose build service 与策略矩阵无遗漏，使用 digest 固定的基础镜像构建 12 个第一方镜像，并要求 `org.cineweave.edition=community` 标签存在。
 7. 解析 `docker image save` 的 `manifest.json`，展开每一个声明的 OCI/Docker layer，扫描层内路径和内容。`layers=0` 会 fail-closed。
@@ -88,7 +88,7 @@ pwsh -NoProfile -File scripts/check-ce-release.ps1 `
 
 ### 5.1 CE 全新安装工程验收
 
-发行泄漏审计之外，开发期还必须证明公共 Core 能在没有私有仓库、商业许可证和 New API 管理凭据时从空库完整启动：
+发行泄漏审计之外，开发期还必须证明公共 Core 能在没有私有仓库、Commercial 运行配置和 New API 管理凭据时从空库完整启动：
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -99,7 +99,7 @@ pnpm run test:ce:fresh
 该门禁会：
 
 1. 为 PostgreSQL、MinIO、Compose 网络和所有宿主端口创建随机隔离资源，不停止或重建已有 `cineweave` 栈。
-2. 清除商业许可证、Commercial、New API 管理和 Billing 环境变量，强制使用 `community` Edition 与唯一 Release ID。
+2. 清除 Commercial、New API 管理和 Billing 环境变量，强制使用 `community` Edition 与唯一 Release ID。
 3. 从当前 Core 源状态构建完整 app profile，并等待 API、Web、Realtime、Provider Gateway、四类 Worker、Event Publisher 及基础设施共 14 个长期服务健康。
 4. 校验容器不存在商业服务或商业凭据环境变量，`/api/system/edition` 只报告 Community，商业计费路由返回 404。
 5. 在全新 migration 空库上执行零费用 `TestWorkflowGatewayIntegration` 文本生产链路，要求 Provider mock 成功且不产生真实计费调用。

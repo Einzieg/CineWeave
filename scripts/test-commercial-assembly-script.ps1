@@ -67,7 +67,7 @@ function Test-PathWithin {
 New-Item -ItemType Directory -Path $coreRoot, $commercialRoot | Out-Null
 try {
   $coreFiles = @(
-    'packages/edition/edition.v1.json',
+    'packages/edition/edition.v2.json',
     'packages/edition/ddl-owners.v1.json',
     'packages/edition/overlay-slots.v1.json',
     'packages/edition/release-manifest.schema.json',
@@ -110,7 +110,7 @@ try {
     schemaVersion = 'cineweave.core-lock.v1'
     coreRepository = 'https://example.invalid/cineweave-core.git'
     coreCommit = $coreCommit
-    editionContractSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/edition/edition.v1.json'))
+    editionContractSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/edition/edition.v2.json'))
     ddlOwnerManifestSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/edition/ddl-owners.v1.json'))
     overlaySlotsSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/edition/overlay-slots.v1.json'))
     releaseManifestSchemaSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/edition/release-manifest.schema.json'))

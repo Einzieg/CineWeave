@@ -13,7 +13,7 @@ from typing import Any
 RUNTIME_SCHEMA_VERSION = "cineweave.new-api-runtime-image.v1"
 UPSTREAM_SCHEMA_VERSION = "cineweave.new-api-upstream-evidence.v1"
 CONTRACT_SCHEMA_VERSION = "cineweave.new-api-contract-fixtures.v1"
-RELEASE_SCHEMA_VERSION = "cineweave.release-manifest.v1"
+RELEASE_SCHEMA_VERSION = "cineweave.release-manifest.v2"
 
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_REFERENCE = re.compile(

@@ -128,7 +128,7 @@ def main() -> int:
         directory = pathlib.Path(temp)
         upstream_path = write_json(directory, "upstream", upstream)
         release = {
-            "schemaVersion": "cineweave.release-manifest.v1",
+            "schemaVersion": "cineweave.release-manifest.v2",
             "upstreamNewAPI": {
                 "registry": REPOSITORY,
                 "imageDigest": DIGEST,

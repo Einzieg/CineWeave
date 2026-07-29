@@ -133,16 +133,13 @@ func HTTPStatusForStandardError(standard *StandardError) int {
 	case string(editionpkg.DenialPermission):
 		return http.StatusForbidden
 	case string(editionpkg.DenialBillingAccountSuspended),
-		string(editionpkg.DenialBillingCredentialUnavailable):
+		string(editionpkg.DenialBillingCredentialUnavailable),
+		string(editionpkg.DenialCommercialWritesFrozen):
 		return http.StatusLocked
-	case string(editionpkg.DenialBillingUpstreamUnavailable):
+	case string(editionpkg.DenialBillingUpstreamUnavailable),
+		string(editionpkg.DenialInternalReleaseMismatch):
 		return http.StatusServiceUnavailable
 	case string(editionpkg.DenialFeatureNotCompiled),
-		string(editionpkg.DenialDeploymentLicenseInvalid),
-		string(editionpkg.DenialDeploymentLicenseNotYetValid),
-		string(editionpkg.DenialDeploymentLicenseExpired),
-		string(editionpkg.DenialDeploymentLicenseRevoked),
-		string(editionpkg.DenialDeploymentClockRollbackSuspected),
 		string(editionpkg.DenialPlanEntitlementRequired),
 		string(editionpkg.DenialBillingBindingInvalid),
 		string(editionpkg.DenialBillingAccountScopeMismatch),

@@ -60,9 +60,9 @@ func TestCommercialAPIModuleRegistrationRequiresManifestEntitlementAndRBAC(t *te
 			},
 		},
 		{
-			name: "license operation is missing",
+			name: "operation policy is missing",
 			mutate: func(registration *APIModuleRegistration) {
-				registration.LicenseOperation = ""
+				registration.Operation = ""
 			},
 		},
 		{
@@ -146,7 +146,7 @@ func testCommercialManifest() Manifest {
 		DistributionID:      "cineweave-cloud",
 		CoreReleaseID:       "core-release",
 		CommercialReleaseID: &releaseID,
-		ContractVersion:     ContractVersionV1,
+		ContractVersion:     ContractVersionV2,
 		ContractHash:        strings.Repeat("a", 64),
 		CompiledFeatures:    []FeatureKey{FeatureBillingBalance},
 		CompiledModules: []CompiledModule{
@@ -166,7 +166,7 @@ func testCommercialAPIRegistration() APIModuleRegistration {
 		Method:                http.MethodGet,
 		Pattern:               "/api/projects/{projectId}/billing-account",
 		OperationID:           "getProjectBillingAccount",
-		LicenseOperation:      LicenseOperationReadOrExport,
+		Operation:             CommercialOperationReadOrExport,
 		RequiredPermissions:   []string{"billing.read"},
 		ResourceScope:         APIResourceScopeProject,
 		ResourcePathParameter: "projectId",

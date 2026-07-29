@@ -1,8 +1,15 @@
 {
-  "schemaVersion": "cineweave.release-manifest.v1",
+  "schemaVersion": "cineweave.release-manifest.v2",
   "releaseId": "release-0123456789abcdef",
-  "edition": "enterprise",
+  "edition": "cloud",
   "distributionId": "distribution-example-001",
+  "internalOperation": {
+    "scope": "same_legal_entity_internal_operation",
+    "deploymentId": "distribution-example-001",
+    "operatorRecordId": "operator-record-example-001",
+    "externalDistributionProhibited": true,
+    "customerSoftwareLicensingEnabled": false
+  },
   "generatedAt": "2026-07-29T00:00:00Z",
   "assembly": {
     "coreCommit": "1111111111111111111111111111111111111111",
@@ -15,12 +22,8 @@
     "cleanCommercialTree": true
   },
   "editionManifest": {
-    "contractVersion": "edition.v1",
-    "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
-    "licenseSerial": "license-example-001",
-    "licenseStateFormatVersion": "license-state.v1",
-    "trustedTimeAlgorithmVersion": "trusted-time.v1",
-    "revocationGeneration": 3
+    "contractVersion": "edition.v2",
+    "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
   },
   "migrations": {
     "ddlOwnerManifestSha256": "5ee446ec09ae1a83ccba5a1522f068bcc4332e8224796c4a3890b41c43b69932",
@@ -33,7 +36,7 @@
     },
     "commercial": {
       "streamId": "commercial",
-      "head": 9,
+      "head": 10,
       "controlSchema": "cineweave_commercial_migrations",
       "ledgerTable": "schema_versions",
       "auditTable": "migration_audit"
@@ -196,7 +199,7 @@
     "modified": false,
     "modificationAssessment": "unmodified_verified",
     "patchSha256": null,
-    "deliveryMode": "independent_service",
+    "deliveryMode": "internal_independent_service",
     "legalBasis": "agpl_compliance",
     "sourceOfferLocation": "https://example.invalid/source-offer",
     "attributionLocation": "https://example.invalid/third-party-notices",

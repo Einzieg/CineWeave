@@ -27,7 +27,7 @@ WINDOWS_RESERVED_SEGMENT = re.compile(
 )
 
 CORE_HASH_PATHS = {
-    "editionContractSha256": "packages/edition/edition.v1.json",
+    "editionContractSha256": "packages/edition/edition.v2.json",
     "ddlOwnerManifestSha256": "packages/edition/ddl-owners.v1.json",
     "overlaySlotsSha256": "packages/edition/overlay-slots.v1.json",
     "releaseManifestSchemaSha256": "packages/edition/release-manifest.schema.json",

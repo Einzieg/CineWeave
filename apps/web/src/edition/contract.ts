@@ -2,7 +2,7 @@ import type { ComponentType } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { EditionFeatureKey, EntitlementDenialCode } from "@/lib/types";
 
-export const EDITION_ENTRY_CONTRACT_VERSION = "edition.v1" as const;
+export const EDITION_ENTRY_CONTRACT_VERSION = "edition.v2" as const;
 
 export type EditionNavigationRegistration = {
   key: string;

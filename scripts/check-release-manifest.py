@@ -518,6 +518,11 @@ def validate_semantics(
     release_id = manifest["releaseId"]
     fail(release_id.lower() not in MUTABLE_IDS, "releaseId is mutable")
     fail(manifest["distributionId"].lower() not in MUTABLE_IDS, "distributionId is mutable")
+    internal_operation = manifest["internalOperation"]
+    fail(
+        internal_operation["deploymentId"] == manifest["distributionId"],
+        "internalOperation.deploymentId does not match distributionId",
+    )
 
     owner_hash = sha256_file(ddl_owner_path)
     fail(
@@ -643,7 +648,7 @@ def validate_semantics(
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate a CineWeave combined Commercial Release Manifest.",
+        description="Validate a CineWeave internal Commercial Release Manifest.",
     )
     parser.add_argument("--manifest", type=pathlib.Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--schema", type=pathlib.Path, default=DEFAULT_SCHEMA)

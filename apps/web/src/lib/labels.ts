@@ -893,11 +893,8 @@ export function entitlementDenialLabel(value?: string) {
   const labels: Record<string, string> = {
     feature_unknown: "商业功能未登记",
     feature_not_compiled: "当前发行版未包含此功能",
-    deployment_license_invalid: "部署许可证无效",
-    deployment_license_not_yet_valid: "部署许可证尚未生效",
-    deployment_license_expired: "部署许可证已过期",
-    deployment_license_revoked: "部署许可证已吊销",
-    deployment_clock_rollback_suspected: "系统时间校验异常",
+    internal_release_mismatch: "内部发行身份不一致",
+    commercial_writes_frozen: "商业写入已由运维冻结",
     plan_entitlement_required: "当前组织套餐未包含此功能",
     billing_account_suspended: "付费账户已停用",
     permission_denied: "当前账号权限不足",
@@ -911,5 +908,5 @@ export function entitlementDenialLabel(value?: string) {
     billing_model_forbidden: "当前套餐不可使用该模型",
     billing_upstream_unavailable: "计费服务暂时不可用",
   };
-  return labels[value || ""] || "商业授权校验未通过";
+  return labels[value || ""] || "商业权限校验未通过";
 }

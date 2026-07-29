@@ -199,6 +199,22 @@ def main() -> int:
         return 1
 
     mutations: dict[str, Callable[[dict], None]] = {
+        "enterprise-edition": lambda doc: doc.__setitem__("edition", "enterprise"),
+        "external-distribution-enabled": lambda doc: doc["internalOperation"].__setitem__(
+            "externalDistributionProhibited", False
+        ),
+        "customer-license-enabled": lambda doc: doc["internalOperation"].__setitem__(
+            "customerSoftwareLicensingEnabled", True
+        ),
+        "deployment-id-drift": lambda doc: doc["internalOperation"].__setitem__(
+            "deploymentId", "distribution-different-001"
+        ),
+        "legacy-new-api-delivery-mode": lambda doc: doc["upstreamNewAPI"].__setitem__(
+            "deliveryMode", "independent_service"
+        ),
+        "commercial-oem-legal-basis": lambda doc: doc["upstreamNewAPI"].__setitem__(
+            "legalBasis", "commercial_oem_license"
+        ),
         "component-release-drift": lambda doc: doc["componentReleaseIds"].__setitem__(
             "api", "release-different-001"
         ),

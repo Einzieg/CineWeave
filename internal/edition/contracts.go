@@ -6,14 +6,13 @@ import (
 	"time"
 )
 
-const ContractVersionV1 = "edition.v1"
+const ContractVersionV2 = "edition.v2"
 
 type Edition string
 
 const (
-	EditionCommunity  Edition = "community"
-	EditionCloud      Edition = "cloud"
-	EditionEnterprise Edition = "enterprise"
+	EditionCommunity Edition = "community"
+	EditionCloud     Edition = "cloud"
 )
 
 type OperationalMode string
@@ -26,12 +25,8 @@ const (
 type RestrictionReason string
 
 const (
-	RestrictionLicenseInvalid     RestrictionReason = "license_invalid"
-	RestrictionLicenseNotYetValid RestrictionReason = "license_not_yet_valid"
-	RestrictionLicenseExpired     RestrictionReason = "license_expired"
-	RestrictionLicenseRevoked     RestrictionReason = "license_revoked"
-	RestrictionClockRollback      RestrictionReason = "clock_rollback_suspected"
-	RestrictionDeploymentMismatch RestrictionReason = "deployment_mismatch"
+	RestrictionInternalReleaseMismatch RestrictionReason = "internal_release_mismatch"
+	RestrictionCommercialWritesFrozen  RestrictionReason = "commercial_writes_frozen"
 )
 
 type FeatureKey string
@@ -58,25 +53,34 @@ const (
 type DenialCode string
 
 const (
-	DenialFeatureUnknown                   DenialCode = "feature_unknown"
-	DenialFeatureNotCompiled               DenialCode = "feature_not_compiled"
-	DenialDeploymentLicenseInvalid         DenialCode = "deployment_license_invalid"
-	DenialDeploymentLicenseNotYetValid     DenialCode = "deployment_license_not_yet_valid"
-	DenialDeploymentLicenseExpired         DenialCode = "deployment_license_expired"
-	DenialDeploymentLicenseRevoked         DenialCode = "deployment_license_revoked"
-	DenialDeploymentClockRollbackSuspected DenialCode = "deployment_clock_rollback_suspected"
-	DenialPlanEntitlementRequired          DenialCode = "plan_entitlement_required"
-	DenialBillingAccountSuspended          DenialCode = "billing_account_suspended"
-	DenialPermission                       DenialCode = "permission_denied"
-	DenialBillingBindingInvalid            DenialCode = "billing_binding_invalid"
-	DenialBillingAccountScopeMismatch      DenialCode = "billing_account_scope_mismatch"
-	DenialBillingAuthorityMismatch         DenialCode = "billing_authority_mismatch"
-	DenialBillingSponsorshipRequired       DenialCode = "billing_sponsorship_required"
-	DenialBillingRoutingCandidateMissing   DenialCode = "billing_routing_candidate_missing"
-	DenialBillingInsufficientBalance       DenialCode = "billing_insufficient_balance"
-	DenialBillingCredentialUnavailable     DenialCode = "billing_credential_unavailable"
-	DenialBillingModelForbidden            DenialCode = "billing_model_forbidden"
-	DenialBillingUpstreamUnavailable       DenialCode = "billing_upstream_unavailable"
+	DenialFeatureUnknown                 DenialCode = "feature_unknown"
+	DenialFeatureNotCompiled             DenialCode = "feature_not_compiled"
+	DenialInternalReleaseMismatch        DenialCode = "internal_release_mismatch"
+	DenialCommercialWritesFrozen         DenialCode = "commercial_writes_frozen"
+	DenialPlanEntitlementRequired        DenialCode = "plan_entitlement_required"
+	DenialBillingAccountSuspended        DenialCode = "billing_account_suspended"
+	DenialPermission                     DenialCode = "permission_denied"
+	DenialBillingBindingInvalid          DenialCode = "billing_binding_invalid"
+	DenialBillingAccountScopeMismatch    DenialCode = "billing_account_scope_mismatch"
+	DenialBillingAuthorityMismatch       DenialCode = "billing_authority_mismatch"
+	DenialBillingSponsorshipRequired     DenialCode = "billing_sponsorship_required"
+	DenialBillingRoutingCandidateMissing DenialCode = "billing_routing_candidate_missing"
+	DenialBillingInsufficientBalance     DenialCode = "billing_insufficient_balance"
+	DenialBillingCredentialUnavailable   DenialCode = "billing_credential_unavailable"
+	DenialBillingModelForbidden          DenialCode = "billing_model_forbidden"
+	DenialBillingUpstreamUnavailable     DenialCode = "billing_upstream_unavailable"
+)
+
+type CommercialOperation string
+
+const (
+	CommercialOperationReadOrExport       CommercialOperation = "read_or_export"
+	CommercialOperationCore               CommercialOperation = "core_operation"
+	CommercialOperationWrite              CommercialOperation = "commercial_write"
+	CommercialOperationPaidProviderCreate CommercialOperation = "paid_provider_create"
+	CommercialOperationAsyncPollOrCancel  CommercialOperation = "async_poll_or_cancel"
+	CommercialOperationFinalization       CommercialOperation = "finalization"
+	CommercialOperationIdempotentRecovery CommercialOperation = "idempotent_recovery"
 )
 
 type FeatureDescriptor struct {
@@ -137,18 +141,19 @@ type EntitlementSubject struct {
 }
 
 type EntitlementRequest struct {
-	Subject     EntitlementSubject
-	FeatureKeys []FeatureKey
-	Operation   LicenseOperation
+	Subject                          EntitlementSubject
+	FeatureKeys                      []FeatureKey
+	Operation                        CommercialOperation
+	ProvesNoAdditionalProviderCharge bool
 }
 
 type EntitlementDecision struct {
-	FeatureKey         FeatureKey `json:"featureKey"`
-	Compiled           bool       `json:"compiled"`
-	DeploymentLicensed bool       `json:"deploymentLicensed"`
-	TenantEntitled     bool       `json:"tenantEntitled"`
-	Allowed            bool       `json:"allowed"`
-	Reason             DenialCode `json:"reason,omitempty"`
+	FeatureKey        FeatureKey `json:"featureKey"`
+	Compiled          bool       `json:"compiled"`
+	DeploymentEnabled bool       `json:"deploymentEnabled"`
+	TenantEntitled    bool       `json:"tenantEntitled"`
+	Allowed           bool       `json:"allowed"`
+	Reason            DenialCode `json:"reason,omitempty"`
 }
 
 type EntitlementSnapshot struct {
@@ -260,7 +265,7 @@ type APIModuleRegistration struct {
 	Method                string
 	Pattern               string
 	OperationID           string
-	LicenseOperation      LicenseOperation
+	Operation             CommercialOperation
 	RequiredPermissions   []string
 	ResourceScope         APIResourceScope
 	ResourcePathParameter string

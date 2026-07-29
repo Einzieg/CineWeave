@@ -31,7 +31,7 @@ func TestAuthorizeEditionAPIModuleSeparatesEntitlementAndRBACDenials(t *testing.
 		ModuleKey:           "billing-api",
 		FeatureKey:          editionpkg.FeatureBillingBalance,
 		OperationID:         "getBillingBalance",
-		LicenseOperation:    editionpkg.LicenseOperationReadOrExport,
+		Operation:           editionpkg.CommercialOperationReadOrExport,
 		RequiredPermissions: []string{"billing.read"},
 	}
 
@@ -40,12 +40,12 @@ func TestAuthorizeEditionAPIModuleSeparatesEntitlementAndRBACDenials(t *testing.
 		err := authorizeEditionAPIModule(
 			t.Context(),
 			fixedEntitlementService(principal, "", registration.FeatureKey, editionpkg.EntitlementDecision{
-				FeatureKey:         registration.FeatureKey,
-				Compiled:           true,
-				DeploymentLicensed: true,
-				TenantEntitled:     false,
-				Allowed:            false,
-				Reason:             editionpkg.DenialPlanEntitlementRequired,
+				FeatureKey:        registration.FeatureKey,
+				Compiled:          true,
+				DeploymentEnabled: true,
+				TenantEntitled:    false,
+				Allowed:           false,
+				Reason:            editionpkg.DenialPlanEntitlementRequired,
 			}),
 			editionPermissionAuthorizerFunc(func(context.Context, auth.Principal, string, authz.Resource) error {
 				permissionCalls++
@@ -84,7 +84,7 @@ func TestAuthorizeEditionAPIModuleBindsOperationAndBillingAccount(t *testing.T) 
 		ModuleKey:           "billing-api",
 		FeatureKey:          editionpkg.FeatureBillingTopUp,
 		OperationID:         "createBillingTopUp",
-		LicenseOperation:    editionpkg.LicenseOperationCommercialWrite,
+		Operation:           editionpkg.CommercialOperationWrite,
 		RequiredPermissions: []string{"billing.topup"},
 	}
 	var evaluated editionpkg.EntitlementRequest
@@ -94,7 +94,7 @@ func TestAuthorizeEditionAPIModuleBindsOperationAndBillingAccount(t *testing.T) 
 		entitlementServiceFunc(func(_ context.Context, request editionpkg.EntitlementRequest) (editionpkg.EntitlementSnapshot, error) {
 			evaluated = request
 			return editionpkg.EntitlementSnapshot{
-				ContractVersion: editionpkg.ContractVersionV1,
+				ContractVersion: editionpkg.ContractVersionV2,
 				Edition:         editionpkg.EditionCloud,
 				Subject:         request.Subject,
 				Decisions:       []editionpkg.EntitlementDecision{allowedEntitlementDecision(registration.FeatureKey)},
@@ -112,7 +112,7 @@ func TestAuthorizeEditionAPIModuleBindsOperationAndBillingAccount(t *testing.T) 
 	if err != nil {
 		t.Fatalf("authorizeEditionAPIModule: %v", err)
 	}
-	if evaluated.Operation != editionpkg.LicenseOperationCommercialWrite ||
+	if evaluated.Operation != editionpkg.CommercialOperationWrite ||
 		evaluated.Subject.BillingAccountID != "billing-account-1" {
 		t.Fatalf("entitlement request = %+v", evaluated)
 	}
@@ -125,17 +125,17 @@ func TestAuthorizeEditionAPIModuleRejectsInconsistentAllowDecision(t *testing.T)
 	principal := auth.Principal{UserID: "user-1", OrganizationID: "org-1"}
 	registration := editionpkg.APIModuleRegistration{
 		FeatureKey:          editionpkg.FeatureBillingBalance,
-		LicenseOperation:    editionpkg.LicenseOperationReadOrExport,
+		Operation:           editionpkg.CommercialOperationReadOrExport,
 		RequiredPermissions: []string{"billing.read"},
 	}
 	err := authorizeEditionAPIModule(
 		t.Context(),
 		fixedEntitlementService(principal, "", registration.FeatureKey, editionpkg.EntitlementDecision{
-			FeatureKey:         registration.FeatureKey,
-			Compiled:           true,
-			DeploymentLicensed: false,
-			TenantEntitled:     true,
-			Allowed:            true,
+			FeatureKey:        registration.FeatureKey,
+			Compiled:          true,
+			DeploymentEnabled: false,
+			TenantEntitled:    true,
+			Allowed:           true,
 		}),
 		editionPermissionAuthorizerFunc(func(context.Context, auth.Principal, string, authz.Resource) error {
 			t.Fatal("RBAC must not run for an inconsistent entitlement response")
@@ -186,7 +186,7 @@ func fixedEntitlementService(
 			return editionpkg.EntitlementSnapshot{}, errors.New("unexpected feature request")
 		}
 		return editionpkg.EntitlementSnapshot{
-			ContractVersion: editionpkg.ContractVersionV1,
+			ContractVersion: editionpkg.ContractVersionV2,
 			Edition:         editionpkg.EditionCloud,
 			Subject: editionpkg.EntitlementSubject{
 				UserID:           principal.UserID,
@@ -200,11 +200,11 @@ func fixedEntitlementService(
 
 func allowedEntitlementDecision(featureKey editionpkg.FeatureKey) editionpkg.EntitlementDecision {
 	return editionpkg.EntitlementDecision{
-		FeatureKey:         featureKey,
-		Compiled:           true,
-		DeploymentLicensed: true,
-		TenantEntitled:     true,
-		Allowed:            true,
+		FeatureKey:        featureKey,
+		Compiled:          true,
+		DeploymentEnabled: true,
+		TenantEntitled:    true,
+		Allowed:           true,
 	}
 }
 

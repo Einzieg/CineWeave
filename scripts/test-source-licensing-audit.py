@@ -65,14 +65,14 @@ def main() -> int:
         approval_path = pathlib.Path(temp_directory) / "approval.json"
         inventory_hash = "a" * 64
         approval = {
-            "schemaVersion": "cineweave.source-license-approval.v1",
+            "schemaVersion": "cineweave.source-license-approval.v2",
             "inventorySha256": inventory_hash,
             "reviewId": "LEGAL-TEST",
             "reviewedAt": "2026-07-29T00:00:00Z",
             "reviewerRole": "qualified_counsel",
             "softwareLicenseSpdx": "AGPL-3.0-or-later",
             "softwareLicenseApproved": True,
-            "dualLicenseApproved": True,
+            "internalCommercialUseApproved": True,
             "contributorGrantApproved": True,
             "thirdPartyNoticesApproved": True,
             "trademarkPolicyApproved": True,

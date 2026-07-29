@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cineweave.local/schemas/release-manifest.v1.json",
-  "title": "CineWeave Combined Commercial Release Manifest v1",
+  "$id": "https://cineweave.local/schemas/release-manifest.v2.json",
+  "title": "CineWeave Internal Commercial Release Manifest v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -9,6 +9,7 @@
     "releaseId",
     "edition",
     "distributionId",
+    "internalOperation",
     "generatedAt",
     "assembly",
     "editionManifest",
@@ -23,19 +24,44 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "cineweave.release-manifest.v1"
+      "const": "cineweave.release-manifest.v2"
     },
     "releaseId": {
       "$ref": "#/$defs/immutableId"
     },
     "edition": {
-      "enum": [
-        "cloud",
-        "enterprise"
-      ]
+      "const": "cloud"
     },
     "distributionId": {
       "$ref": "#/$defs/immutableId"
+    },
+    "internalOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "deploymentId",
+        "operatorRecordId",
+        "externalDistributionProhibited",
+        "customerSoftwareLicensingEnabled"
+      ],
+      "properties": {
+        "scope": {
+          "const": "same_legal_entity_internal_operation"
+        },
+        "deploymentId": {
+          "$ref": "#/$defs/immutableId"
+        },
+        "operatorRecordId": {
+          "$ref": "#/$defs/immutableId"
+        },
+        "externalDistributionProhibited": {
+          "const": true
+        },
+        "customerSoftwareLicensingEnabled": {
+          "const": false
+        }
+      }
     },
     "generatedAt": {
       "type": "string",
@@ -86,31 +112,14 @@
       "additionalProperties": false,
       "required": [
         "contractVersion",
-        "sha256",
-        "licenseSerial",
-        "licenseStateFormatVersion",
-        "trustedTimeAlgorithmVersion",
-        "revocationGeneration"
+        "sha256"
       ],
       "properties": {
         "contractVersion": {
-          "const": "edition.v1"
+          "const": "edition.v2"
         },
         "sha256": {
           "$ref": "#/$defs/sha256"
-        },
-        "licenseSerial": {
-          "$ref": "#/$defs/immutableId"
-        },
-        "licenseStateFormatVersion": {
-          "$ref": "#/$defs/version"
-        },
-        "trustedTimeAlgorithmVersion": {
-          "$ref": "#/$defs/version"
-        },
-        "revocationGeneration": {
-          "type": "integer",
-          "minimum": 0
         }
       }
     },
@@ -407,17 +416,10 @@
           ]
         },
         "deliveryMode": {
-          "enum": [
-            "independent_service",
-            "modified_or_redistributed",
-            "commercial_oem"
-          ]
+          "const": "internal_independent_service"
         },
         "legalBasis": {
-          "enum": [
-            "agpl_compliance",
-            "commercial_oem_license"
-          ]
+          "const": "agpl_compliance"
         },
         "sourceOfferLocation": {
           "type": "string",

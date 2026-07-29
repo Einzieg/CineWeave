@@ -1,6 +1,6 @@
 # Commercial Assembly 迁移与组合发行契约
 
-本文档定义 CineWeave Community Core 与私有 Commercial Assembly 的数据库迁移、DDL 所有权和组合 Release Manifest 接口。它是公共装配契约，不包含商业业务实现、私有迁移或许可证签发能力。
+本文档定义 CineWeave Community Core 与私有 Internal Commercial Assembly 的数据库迁移、DDL 所有权和组合 Release Manifest 接口。它是公共装配契约，不包含商业业务实现、私有迁移或客户 License 签发能力。
 
 ## 1. 固定边界
 
@@ -57,12 +57,12 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 - 在 Edition Manifest 的 `compiledModules` 中声明相同 module key 和 feature key。
 - 使用集中 Feature Registry 中需要租户权益的商业 feature。
-- 声明规范化 HTTP method、`/api/` path、唯一 `operationId` 和许可证操作类型。
+- 声明规范化 HTTP method、`/api/` path、唯一 `operationId` 和运行操作策略类型。
 - 声明至少一个属于该 feature 的 Core RBAC permission。
 - 使用 Core 内置的 organization/workspace/project 资源作用域和真实 path parameter。
 - 只提供业务 Handler，不能替换或绕过 Core authentication、Entitlement、RBAC 或资源解析。
 
-API Server 固定按“Core 身份认证 -> Deployment License/tenant Entitlement -> Core RBAC -> 私有 Handler 内资源状态”执行。Entitlement 响应的 subject、contract version 和 allow flags 不一致时 fail-closed。CE registry 永远为空，所以商业 URL 在 CE 返回 `404`。
+API Server 固定按“Core 身份认证 -> 内部发行身份/tenant Entitlement -> Core RBAC -> 私有 Handler 内资源状态”执行。Entitlement 响应的 subject、contract version 和 allow flags 不一致时 fail-closed。CE registry 永远为空，所以商业 URL 在 CE 返回 `404`。
 
 私有 API 模块同时生成 `cineweave.edition-api-routes.v1` route list。Assembly 使用以下命令合并公共与私有契约：
 
@@ -83,7 +83,7 @@ python scripts/check-openapi-routes.py `
 
 机器契约和回归入口：
 
-- `packages/edition/edition.v1.json`
+- `packages/edition/edition.v2.json`
 - `scripts/assemble-commercial-contracts.py`
 - `scripts/check-openapi-routes.py`
 - `scripts/test-commercial-contract-assembly.py`
@@ -138,11 +138,11 @@ go run ./cmd/cineweave-ddl-owner-check <private-migration-directory>
 
 任一步失败都停止发布。不得通过手工修改任一 ledger、跳过 hash audit 或重写已应用 SQL 继续。
 
-许可证过期或从 EE 降级到 CE 不会自动回滚或删除 Commercial 表。降级必须先冻结新的商业写操作、完成在途安全收尾、导出商业数据，并确认 Core 数据可以独立运行。
+内部发行身份漂移或切换回 CE 不会自动回滚或删除 Commercial 表。切换必须先冻结新的商业写操作、完成在途安全收尾、导出商业数据，并确认 Core 数据可以独立运行；不得通过运行时开关把同一实例动态降级。
 
 ## 6. 组合 Release Manifest
 
-Cloud/EE 的最终产物必须生成符合以下 Schema 的 JSON：
+内部 Commercial 的最终产物必须生成符合以下 Schema 的 JSON：
 
 - `packages/edition/release-manifest.schema.json`
 
@@ -182,17 +182,17 @@ $PSNativeCommandUseErrorActionPreference = $true
 Manifest 至少绑定：
 
 - 不可变 Core commit、Commercial Assembly commit、`core.lock`、Overlay allowlist 和装配脚本 hash。
-- 最终源码归档、Edition Manifest、DDL owner manifest。
+- 最终源码归档、Edition Manifest、内部运行范围（同一主体自营、禁止外部分发、不启用客户软件授权）、部署 ID 和 DDL owner manifest。
 - Core/Commercial migration head 和各自 ledger identity。
 - Core/Commercial seed、合并 OpenAPI/Event Catalog、webhook、retention policy、Core FK action manifest 及仓库外法务/安全批准证据。
 - 完整服务镜像 tag/digest、Web build ID、四个 Temporal Worker Build ID、SBOM 和签名。
 - Community Core 权利/第三方许可证 inventory、受控律师批准记录和两者 hash。
-- New API 镜像 digest、源码 commit、LICENSE/README/NOTICE hash、修改补丁、交付方式、许可依据和法律复核记录。
+- New API 镜像 digest、源码 commit、LICENSE/README/NOTICE hash、修改补丁、内部独立服务运行方式、AGPL 合规依据和法律复核记录。
 - API、Web、Gateway、Worker、双 migrator、双 seed 和 Billing Bridge 的统一 `releaseId`。
 
-校验器拒绝可移动 ID、缺失或重复镜像、组件 Release ID 漂移、Worker Build ID 漂移、DDL owner hash 漂移、双 ledger 身份漂移、retention policy/FK manifest/批准证据 hash 复用或缺失、未来日期的 retention 批准、源码许可证报告/批准 hash 漂移、非 `AGPL-3.0-or-later` 的 CE 许可批准、New API 未验证修改状态、修改无 patch hash 及未批准法律复核。
+校验器拒绝可移动 ID、`enterprise` Edition、允许外部分发或客户软件授权、部署 ID 漂移、缺失或重复镜像、组件 Release ID 漂移、Worker Build ID 漂移、DDL owner hash 漂移、双 ledger 身份漂移、retention policy/FK manifest/批准证据 hash 复用或缺失、未来日期的 retention 批准、源码许可证报告/批准 hash 漂移、非 `AGPL-3.0-or-later` 的 CE 许可批准、New API 非内部独立服务/非 AGPL 合规模式、未验证修改状态、修改无 patch hash及未批准法律复核。
 
-仓库中的 `packages/edition/fixtures/combined-release-manifest.valid.json` 只用于契约回归，所有 commit、digest、许可证记录和 URL 都是非生产示例，不能用于发布。
+仓库中的 `packages/edition/fixtures/combined-release-manifest.valid.json` 只用于契约回归，所有 commit、digest、内部运营记录和 URL 都是非生产示例，不能用于发布。
 
 ## 7. 验证证据
 

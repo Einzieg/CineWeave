@@ -7,7 +7,7 @@ import { EDITION_ENTRY_CONTRACT_VERSION } from "../edition/contract.ts";
 test("community edition entry is an explicit no-op contract", () => {
   const source = readFileSync(new URL("../edition/community-entry.ts", import.meta.url), "utf8");
   const selectedSource = readFileSync(new URL("../edition/selected-entry.ts", import.meta.url), "utf8");
-  assert.equal(EDITION_ENTRY_CONTRACT_VERSION, "edition.v1");
+  assert.equal(EDITION_ENTRY_CONTRACT_VERSION, "edition.v2");
   assert.match(source, /contractVersion:\s*EDITION_ENTRY_CONTRACT_VERSION/);
   for (const slot of ["navigation", "routes", "queryClients", "entitlementGuards", "topBarItems"]) {
     assert.match(source, new RegExp(`${slot}:\\s*Object\\.freeze\\(\\[\\]\\)`));
@@ -28,7 +28,7 @@ test("edition denial reasons are localized before rendering", () => {
   const labels = readFileSync(new URL("./labels.ts", import.meta.url), "utf8");
   const editionContract = JSON.parse(
     readFileSync(
-      new URL("../../../../packages/edition/edition.v1.json", import.meta.url),
+      new URL("../../../../packages/edition/edition.v2.json", import.meta.url),
       "utf8",
     ),
   );
