@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -61,6 +62,90 @@ func TestEpisodeBatchGenerateShotVideosWorkflowBoundsTenEpisodeConcurrency(t *te
 	}
 	if completed.Status != "succeeded" || len(completed.SucceededShotIDs) != 10 {
 		t.Fatalf("completed = %+v", completed)
+	}
+}
+
+func TestEpisodeBatchStopsUnstartedPlansOnInsufficientBalance(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	plans := make([]EpisodeVideoProductionPlan, 11)
+	shotIDs := make([]string, 11)
+	for index := range plans {
+		shotIDs[index] = fmt.Sprintf("shot-%d", index+1)
+		plans[index] = episodeVideoTestPlan(index, shotIDs[index])
+	}
+	env.RegisterActivityWithOptions(func(
+		context.Context,
+		PrepareEpisodeVideoProductionsInput,
+	) ([]EpisodeVideoProductionPlan, error) {
+		return plans, nil
+	}, activity.RegisterOptions{Name: "PrepareEpisodeVideoProductions"})
+	startedPlans := make([]int, 0, defaultEpisodeWorkflowParallel)
+	env.RegisterWorkflowWithOptions(func(
+		_ workflow.Context,
+		input EpisodeVideoProductionInput,
+	) (BatchShotProductionOutput, error) {
+		startedPlans = append(startedPlans, input.Plan.EpisodeIndex)
+		output := newBatchShotVideoOutput(
+			TextToStoryboardInput{WorkflowRunID: input.Plan.WorkflowRunID},
+			input.Plan.TargetShotIDs,
+		)
+		if input.Plan.EpisodeIndex == 0 {
+			shotID := input.Plan.TargetShotIDs[0]
+			output.FailedShotIDs = []string{shotID}
+			output.ErrorCodes[shotID] = billingInsufficientBalanceCode
+			output.Errors[shotID] = "New API 账户余额不足"
+			output.Status = "failed"
+			return output, nil
+		}
+		output.SucceededShotIDs = append(output.SucceededShotIDs, input.Plan.TargetShotIDs...)
+		output.Status = "succeeded"
+		return output, nil
+	}, workflow.RegisterOptions{Name: "EpisodeVideoProductionWorkflow"})
+	failedCheckpoints := make([]string, 0, 1)
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		input FailEpisodeVideoProductionCheckpointInput,
+	) error {
+		failedCheckpoints = append(failedCheckpoints, input.Plan.CheckpointID)
+		if input.FailureCode != billingInsufficientBalanceCode {
+			t.Fatalf("checkpoint failure = %+v", input)
+		}
+		return nil
+	}, activity.RegisterOptions{Name: "FailEpisodeVideoProductionCheckpoint"})
+	var completed BatchShotProductionOutput
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		_ TextToStoryboardInput,
+		output BatchShotProductionOutput,
+	) error {
+		completed = output
+		return nil
+	}, activity.RegisterOptions{Name: "CompleteBatchShotProductionWorkflow"})
+
+	env.ExecuteWorkflow(EpisodeBatchGenerateShotVideosWorkflow, TextToStoryboardInput{
+		OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user",
+		Input: mustJSON(BatchShotProductionOptions{
+			ShotIDs: shotIDs, MaxConcurrency: DefaultShotVideoConcurrency,
+		}),
+	})
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	if len(startedPlans) != defaultEpisodeWorkflowParallel {
+		t.Fatalf("started plans = %v, want only initial episode window", startedPlans)
+	}
+	expectedFailedCheckpoints := make([]string, 0, len(plans)-defaultEpisodeWorkflowParallel)
+	for _, plan := range plans[defaultEpisodeWorkflowParallel:] {
+		expectedFailedCheckpoints = append(expectedFailedCheckpoints, plan.CheckpointID)
+	}
+	if fmt.Sprint(failedCheckpoints) != fmt.Sprint(expectedFailedCheckpoints) {
+		t.Fatalf("failed checkpoints = %v, want %v", failedCheckpoints, expectedFailedCheckpoints)
+	}
+	if completed.ErrorCodes[shotIDs[10]] != billingInsufficientBalanceCode ||
+		!strings.Contains(completed.Errors[shotIDs[10]], "未发起") {
+		t.Fatalf("unstarted shot output = %+v", completed)
 	}
 }
 

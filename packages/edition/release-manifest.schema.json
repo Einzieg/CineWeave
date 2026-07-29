@@ -1,0 +1,707 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cineweave.local/schemas/release-manifest.v1.json",
+  "title": "CineWeave Combined Commercial Release Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "releaseId",
+    "edition",
+    "distributionId",
+    "generatedAt",
+    "assembly",
+    "editionManifest",
+    "migrations",
+    "seeds",
+    "contracts",
+    "retention",
+    "sourceLicensing",
+    "artifacts",
+    "upstreamNewAPI",
+    "componentReleaseIds"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "cineweave.release-manifest.v1"
+    },
+    "releaseId": {
+      "$ref": "#/$defs/immutableId"
+    },
+    "edition": {
+      "enum": [
+        "cloud",
+        "enterprise"
+      ]
+    },
+    "distributionId": {
+      "$ref": "#/$defs/immutableId"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "assembly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coreCommit",
+        "commercialAssemblyCommit",
+        "coreLockSha256",
+        "overlayAllowlistSha256",
+        "assemblyScriptSha256",
+        "sourceArchiveSha256",
+        "cleanCoreTree",
+        "cleanCommercialTree"
+      ],
+      "properties": {
+        "coreCommit": {
+          "$ref": "#/$defs/gitCommit"
+        },
+        "commercialAssemblyCommit": {
+          "$ref": "#/$defs/gitCommit"
+        },
+        "coreLockSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "overlayAllowlistSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assemblyScriptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceArchiveSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cleanCoreTree": {
+          "const": true
+        },
+        "cleanCommercialTree": {
+          "const": true
+        }
+      }
+    },
+    "editionManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "sha256",
+        "licenseSerial",
+        "licenseStateFormatVersion",
+        "trustedTimeAlgorithmVersion",
+        "revocationGeneration"
+      ],
+      "properties": {
+        "contractVersion": {
+          "const": "edition.v1"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "licenseSerial": {
+          "$ref": "#/$defs/immutableId"
+        },
+        "licenseStateFormatVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "trustedTimeAlgorithmVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "revocationGeneration": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "migrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ddlOwnerManifestSha256",
+        "core",
+        "commercial"
+      ],
+      "properties": {
+        "ddlOwnerManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "core": {
+          "$ref": "#/$defs/coreMigrationStream"
+        },
+        "commercial": {
+          "$ref": "#/$defs/commercialMigrationStream"
+        }
+      }
+    },
+    "seeds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coreVersion",
+        "coreSha256",
+        "commercialVersion",
+        "commercialSha256"
+      ],
+      "properties": {
+        "coreVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "coreSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "commercialVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "commercialSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coreOpenAPISha256",
+        "mergedOpenAPISha256",
+        "coreEventCatalogSha256",
+        "mergedEventCatalogSha256",
+        "webhookContractVersion"
+      ],
+      "properties": {
+        "coreOpenAPISha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "mergedOpenAPISha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "coreEventCatalogSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "mergedEventCatalogSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "webhookContractVersion": {
+          "$ref": "#/$defs/version"
+        }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policyVersion",
+        "policySha256",
+        "coreForeignKeyActionManifestSha256",
+        "approvalEvidenceSha256",
+        "legalReviewRecordId",
+        "securityReviewRecordId",
+        "evidenceReference",
+        "reviewedAt",
+        "approved"
+      ],
+      "properties": {
+        "policyVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "policySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "coreForeignKeyActionManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "approvalEvidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "legalReviewRecordId": {
+          "$ref": "#/$defs/immutableId"
+        },
+        "securityReviewRecordId": {
+          "$ref": "#/$defs/immutableId"
+        },
+        "evidenceReference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewedAt": {
+          "type": "string",
+          "format": "date"
+        },
+        "approved": {
+          "const": true
+        }
+      }
+    },
+    "sourceLicensing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventorySha256",
+        "reportSha256",
+        "approvalSha256",
+        "approvalRecordId",
+        "evidenceReference",
+        "softwareLicenseSpdx",
+        "approved"
+      ],
+      "properties": {
+        "inventorySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reportSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "approvalSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "approvalRecordId": {
+          "$ref": "#/$defs/immutableId"
+        },
+        "evidenceReference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "softwareLicenseSpdx": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approved": {
+          "const": true
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "webBuildId",
+        "webAssetsSha256",
+        "images",
+        "temporalWorkerBuilds",
+        "sboms",
+        "thirdPartyLicenseReportSha256",
+        "signatures"
+      ],
+      "properties": {
+        "webBuildId": {
+          "$ref": "#/$defs/immutableId"
+        },
+        "webAssetsSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "images": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/image"
+          }
+        },
+        "temporalWorkerBuilds": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "$ref": "#/$defs/temporalWorkerBuild"
+          }
+        },
+        "sboms": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/sbom"
+          }
+        },
+        "thirdPartyLicenseReportSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signatures": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/signature"
+          }
+        }
+      }
+    },
+    "upstreamNewAPI": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry",
+        "imageDigest",
+        "evidenceSha256",
+        "sourceCommit",
+        "sourceTag",
+        "licenseSha256",
+        "readmeSha256",
+        "readmeLicenseSectionSha256",
+        "noticePresent",
+        "noticeSha256",
+        "modified",
+        "modificationAssessment",
+        "patchSha256",
+        "deliveryMode",
+        "legalBasis",
+        "sourceOfferLocation",
+        "attributionLocation",
+        "legalReview"
+      ],
+      "properties": {
+        "registry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "imageDigest": {
+          "$ref": "#/$defs/imageDigest"
+        },
+        "evidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/gitCommit"
+        },
+        "sourceTag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "licenseSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "readmeSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "readmeLicenseSectionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "noticePresent": {
+          "type": "boolean"
+        },
+        "noticeSha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modified": {
+          "type": "boolean"
+        },
+        "modificationAssessment": {
+          "enum": [
+            "unmodified_verified",
+            "modified_patch_bound"
+          ]
+        },
+        "patchSha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deliveryMode": {
+          "enum": [
+            "independent_service",
+            "modified_or_redistributed",
+            "commercial_oem"
+          ]
+        },
+        "legalBasis": {
+          "enum": [
+            "agpl_compliance",
+            "commercial_oem_license"
+          ]
+        },
+        "sourceOfferLocation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attributionLocation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "legalReview": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "approved",
+            "reviewer",
+            "reviewDate",
+            "recordId",
+            "reReviewTriggers"
+          ],
+          "properties": {
+            "approved": {
+              "const": true
+            },
+            "reviewer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reviewDate": {
+              "type": "string",
+              "format": "date"
+            },
+            "recordId": {
+              "$ref": "#/$defs/immutableId"
+            },
+            "reReviewTriggers": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "noticePresent": {
+                "const": true
+              }
+            },
+            "required": [
+              "noticePresent"
+            ]
+          },
+          "then": {
+            "properties": {
+              "noticeSha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "noticeSha256": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "modified": {
+                "const": true
+              }
+            },
+            "required": [
+              "modified"
+            ]
+          },
+          "then": {
+            "properties": {
+              "patchSha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "modificationAssessment": {
+                "const": "modified_patch_bound"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "patchSha256": {
+                "type": "null"
+              },
+              "modificationAssessment": {
+                "const": "unmodified_verified"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "componentReleaseIds": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/immutableId"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "imageDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "immutableId": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^(?!latest$|main$|local-dev$)[A-Za-z0-9][A-Za-z0-9._-]+$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "coreMigrationStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "streamId",
+        "head",
+        "controlSchema",
+        "ledgerTable",
+        "auditTable"
+      ],
+      "properties": {
+        "streamId": {
+          "const": "core"
+        },
+        "head": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "controlSchema": {
+          "const": "cineweave_migrations"
+        },
+        "ledgerTable": {
+          "const": "cineweave_schema_versions"
+        },
+        "auditTable": {
+          "const": "cineweave_migration_audit"
+        }
+      }
+    },
+    "commercialMigrationStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "streamId",
+        "head",
+        "controlSchema",
+        "ledgerTable",
+        "auditTable"
+      ],
+      "properties": {
+        "streamId": {
+          "const": "commercial"
+        },
+        "head": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "controlSchema": {
+          "const": "cineweave_commercial_migrations"
+        },
+        "ledgerTable": {
+          "const": "schema_versions"
+        },
+        "auditTable": {
+          "const": "migration_audit"
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service",
+        "tag",
+        "digest"
+      ],
+      "properties": {
+        "service": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "$ref": "#/$defs/immutableId"
+        },
+        "digest": {
+          "$ref": "#/$defs/imageDigest"
+        }
+      }
+    },
+    "temporalWorkerBuild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment",
+        "buildId"
+      ],
+      "properties": {
+        "deployment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "buildId": {
+          "$ref": "#/$defs/immutableId"
+        }
+      }
+    },
+    "sbom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "format",
+        "sha256"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "format": {
+          "enum": [
+            "spdx-json",
+            "cyclonedx-json"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "algorithm",
+        "keyId",
+        "signatureRef"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "algorithm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "keyId": {
+          "$ref": "#/$defs/immutableId"
+        },
+        "signatureRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

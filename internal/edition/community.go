@@ -114,7 +114,7 @@ func (r *Runtime) Validate(ctx context.Context) error {
 	if state.Mode == OperationalModeCommercialRestricted && !validRestrictionReason(state.RestrictionReason) {
 		return fmt.Errorf("commercial restricted state requires a public restriction reason")
 	}
-	return validateModuleRegistry(ctx, manifest, r.CommercialModules)
+	return validateModuleRegistry(ctx, manifest, r.CommercialModules, r.Features)
 }
 
 func (r *Runtime) SystemEdition(ctx context.Context) (SystemEdition, error) {
@@ -127,6 +127,22 @@ func (r *Runtime) SystemEdition(ctx context.Context) (SystemEdition, error) {
 		return SystemEdition{}, err
 	}
 	return SystemEdition{Manifest: manifest, OperationalState: state}, nil
+}
+
+func (r *Runtime) ValidatedAPIModules(ctx context.Context) ([]APIModuleRegistration, error) {
+	if err := r.Validate(ctx); err != nil {
+		return nil, err
+	}
+	registrations, err := r.CommercialModules.APIModules(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load commercial API modules: %w", err)
+	}
+	cloned := make([]APIModuleRegistration, 0, len(registrations))
+	for _, registration := range registrations {
+		registration.RequiredPermissions = append([]string(nil), registration.RequiredPermissions...)
+		cloned = append(cloned, registration)
+	}
+	return cloned, nil
 }
 
 type staticEditionProvider struct {
@@ -292,13 +308,31 @@ func validateManifest(manifest Manifest, registry FeatureRegistry) error {
 			return fmt.Errorf("community manifest cannot contain commercial release identity or modules")
 		}
 	}
+	moduleKeys := make(map[string]struct{}, len(manifest.CompiledModules))
+	for _, module := range manifest.CompiledModules {
+		moduleKey := strings.TrimSpace(module.Key)
+		if moduleKey == "" || strings.TrimSpace(module.ContentHash) == "" {
+			return fmt.Errorf("compiled module identity is incomplete")
+		}
+		if _, exists := moduleKeys[moduleKey]; exists {
+			return fmt.Errorf("compiled module %q is duplicated", moduleKey)
+		}
+		if _, ok := seen[module.FeatureKey]; !ok {
+			return fmt.Errorf("compiled module %q uses uncompiled feature %q", moduleKey, module.FeatureKey)
+		}
+		moduleKeys[moduleKey] = struct{}{}
+	}
 	return nil
 }
 
-func validateModuleRegistry(ctx context.Context, manifest Manifest, registry CommercialModuleRegistry) error {
+func validateModuleRegistry(ctx context.Context, manifest Manifest, registry CommercialModuleRegistry, features FeatureRegistry) error {
 	compiled := make(map[FeatureKey]struct{}, len(manifest.CompiledFeatures))
 	for _, feature := range manifest.CompiledFeatures {
 		compiled[feature] = struct{}{}
+	}
+	compiledModules := make(map[string]CompiledModule, len(manifest.CompiledModules))
+	for _, module := range manifest.CompiledModules {
+		compiledModules[module.Key] = module
 	}
 	apiModules, err := registry.APIModules(ctx)
 	if err != nil {
@@ -312,31 +346,159 @@ func validateModuleRegistry(ctx context.Context, manifest Manifest, registry Com
 	if err != nil {
 		return fmt.Errorf("load commercial background tasks: %w", err)
 	}
+	apiRoutes := make(map[string]struct{}, len(apiModules))
+	operationIDs := make(map[string]struct{}, len(apiModules))
 	for _, registration := range apiModules {
-		if registration.ModuleKey == "" || registration.Method == "" || registration.Pattern == "" || registration.OperationID == "" || registration.Handler == nil {
-			return fmt.Errorf("commercial API module registration is incomplete")
+		if err := validateAPIModuleRegistration(registration, compiled, compiledModules, features); err != nil {
+			return err
 		}
-		if _, ok := compiled[registration.FeatureKey]; !ok {
-			return fmt.Errorf("commercial API module %q uses uncompiled feature %q", registration.ModuleKey, registration.FeatureKey)
+		routeKey := registration.Method + " " + registration.Pattern
+		if _, exists := apiRoutes[routeKey]; exists {
+			return fmt.Errorf("commercial API route %q is duplicated", routeKey)
 		}
+		apiRoutes[routeKey] = struct{}{}
+		if _, exists := operationIDs[registration.OperationID]; exists {
+			return fmt.Errorf("commercial API operationId %q is duplicated", registration.OperationID)
+		}
+		operationIDs[registration.OperationID] = struct{}{}
 	}
 	for _, registration := range eventConsumers {
 		if registration.ModuleKey == "" || registration.EventKey == "" || registration.ConsumerKey == "" || registration.Consume == nil {
 			return fmt.Errorf("commercial event consumer registration is incomplete")
 		}
-		if _, ok := compiled[registration.FeatureKey]; !ok {
-			return fmt.Errorf("commercial event consumer %q uses uncompiled feature %q", registration.ConsumerKey, registration.FeatureKey)
+		if err := validateCommercialModuleIdentity(registration.ModuleKey, registration.FeatureKey, compiled, compiledModules, features); err != nil {
+			return fmt.Errorf("commercial event consumer %q: %w", registration.ConsumerKey, err)
 		}
 	}
 	for _, registration := range backgroundTasks {
 		if registration.ModuleKey == "" || registration.TaskKey == "" || registration.Run == nil {
 			return fmt.Errorf("commercial background task registration is incomplete")
 		}
-		if _, ok := compiled[registration.FeatureKey]; !ok {
-			return fmt.Errorf("commercial background task %q uses uncompiled feature %q", registration.TaskKey, registration.FeatureKey)
+		if err := validateCommercialModuleIdentity(registration.ModuleKey, registration.FeatureKey, compiled, compiledModules, features); err != nil {
+			return fmt.Errorf("commercial background task %q: %w", registration.TaskKey, err)
 		}
 	}
 	return nil
+}
+
+func validateAPIModuleRegistration(
+	registration APIModuleRegistration,
+	compiled map[FeatureKey]struct{},
+	compiledModules map[string]CompiledModule,
+	features FeatureRegistry,
+) error {
+	if strings.TrimSpace(registration.ModuleKey) == "" ||
+		strings.TrimSpace(registration.Method) == "" ||
+		strings.TrimSpace(registration.Pattern) == "" ||
+		strings.TrimSpace(registration.OperationID) == "" ||
+		registration.Handler == nil {
+		return fmt.Errorf("commercial API module registration is incomplete")
+	}
+	if err := validateCommercialModuleIdentity(registration.ModuleKey, registration.FeatureKey, compiled, compiledModules, features); err != nil {
+		return fmt.Errorf("commercial API operation %q: %w", registration.OperationID, err)
+	}
+	if registration.Method != strings.ToUpper(registration.Method) || !validAPIMethod(registration.Method) {
+		return fmt.Errorf("commercial API operation %q has invalid method %q", registration.OperationID, registration.Method)
+	}
+	if !strings.HasPrefix(registration.Pattern, "/api/") || strings.ContainsAny(registration.Pattern, " \t\r\n") {
+		return fmt.Errorf("commercial API operation %q has invalid API pattern %q", registration.OperationID, registration.Pattern)
+	}
+	if !validLicenseOperation(registration.LicenseOperation) {
+		return fmt.Errorf("commercial API operation %q has invalid license operation %q", registration.OperationID, registration.LicenseOperation)
+	}
+	if len(registration.RequiredPermissions) == 0 {
+		return fmt.Errorf("commercial API operation %q must require RBAC permission", registration.OperationID)
+	}
+	descriptor, ok := features.Lookup(registration.FeatureKey)
+	if !ok || !descriptor.RequiresTenantEntitlement {
+		return fmt.Errorf("commercial API operation %q must use a tenant-entitled commercial feature", registration.OperationID)
+	}
+	allowedPermissions := make(map[string]struct{}, len(descriptor.RequiredPermissions))
+	for _, permission := range descriptor.RequiredPermissions {
+		allowedPermissions[permission] = struct{}{}
+	}
+	permissions := make(map[string]struct{}, len(registration.RequiredPermissions))
+	for _, permission := range registration.RequiredPermissions {
+		permission = strings.TrimSpace(permission)
+		if permission == "" {
+			return fmt.Errorf("commercial API operation %q contains an empty permission", registration.OperationID)
+		}
+		if _, exists := permissions[permission]; exists {
+			return fmt.Errorf("commercial API operation %q duplicates permission %q", registration.OperationID, permission)
+		}
+		if _, allowed := allowedPermissions[permission]; !allowed {
+			return fmt.Errorf("commercial API operation %q uses permission %q outside feature %q", registration.OperationID, permission, registration.FeatureKey)
+		}
+		permissions[permission] = struct{}{}
+	}
+	switch registration.ResourceScope {
+	case APIResourceScopeOrganization:
+		if registration.ResourcePathParameter != "" &&
+			!patternContainsPathParameter(registration.Pattern, registration.ResourcePathParameter) {
+			return fmt.Errorf("commercial API operation %q does not declare resource path parameter %q", registration.OperationID, registration.ResourcePathParameter)
+		}
+	case APIResourceScopeWorkspace, APIResourceScopeProject:
+		if strings.TrimSpace(registration.ResourcePathParameter) == "" ||
+			!patternContainsPathParameter(registration.Pattern, registration.ResourcePathParameter) {
+			return fmt.Errorf("commercial API operation %q requires a declared %s path parameter", registration.OperationID, registration.ResourceScope)
+		}
+	default:
+		return fmt.Errorf("commercial API operation %q has invalid resource scope %q", registration.OperationID, registration.ResourceScope)
+	}
+	return nil
+}
+
+func validateCommercialModuleIdentity(
+	moduleKey string,
+	featureKey FeatureKey,
+	compiled map[FeatureKey]struct{},
+	compiledModules map[string]CompiledModule,
+	features FeatureRegistry,
+) error {
+	if _, ok := compiled[featureKey]; !ok {
+		return fmt.Errorf("module %q uses uncompiled feature %q", moduleKey, featureKey)
+	}
+	descriptor, ok := features.Lookup(featureKey)
+	if !ok || !descriptor.RequiresTenantEntitlement {
+		return fmt.Errorf("module %q must use a tenant-entitled commercial feature", moduleKey)
+	}
+	module, ok := compiledModules[moduleKey]
+	if !ok {
+		return fmt.Errorf("module %q is not declared in the Edition Manifest", moduleKey)
+	}
+	if module.FeatureKey != featureKey {
+		return fmt.Errorf("module %q feature %q does not match manifest feature %q", moduleKey, featureKey, module.FeatureKey)
+	}
+	return nil
+}
+
+func validAPIMethod(method string) bool {
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE":
+		return true
+	default:
+		return false
+	}
+}
+
+func validLicenseOperation(operation LicenseOperation) bool {
+	switch operation {
+	case LicenseOperationReadOrExport,
+		LicenseOperationCore,
+		LicenseOperationRenewal,
+		LicenseOperationCommercialWrite,
+		LicenseOperationPaidProviderCreate,
+		LicenseOperationAsyncPollOrCancel,
+		LicenseOperationFinalization,
+		LicenseOperationIdempotentRecovery:
+		return true
+	default:
+		return false
+	}
+}
+
+func patternContainsPathParameter(pattern, parameter string) bool {
+	return strings.Contains(pattern, "{"+strings.TrimSpace(parameter)+"}")
 }
 
 func validRestrictionReason(reason RestrictionReason) bool {

@@ -118,7 +118,7 @@ func (s *Server) generateReviewFixCore(ctx context.Context, principal auth.Princ
 	var draft reviewFixDraft
 	switch mode {
 	case "agent":
-		draft, err = s.generateAgentReviewFix(ctx, project, item, target, strings.TrimSpace(req.Instruction))
+		draft, err = s.generateAgentReviewFix(ctx, principal, project, item, target, strings.TrimSpace(req.Instruction))
 	case "deterministic":
 		draft, err = deterministicReviewFix(item, target)
 	default:
@@ -429,7 +429,7 @@ func noteReviewFix(title, explanation string) reviewFixDraft {
 	return reviewFixDraft{FixType: "note", Title: title, Explanation: explanation, Patch: map[string]any{}}
 }
 
-func (s *Server) generateAgentReviewFix(ctx context.Context, project Project, item ReviewItem, target reviewpkg.ReviewFixTarget, instruction string) (reviewFixDraft, error) {
+func (s *Server) generateAgentReviewFix(ctx context.Context, principal auth.Principal, project Project, item ReviewItem, target reviewpkg.ReviewFixTarget, instruction string) (reviewFixDraft, error) {
 	reviewContext, err := reviewpkg.BuildProjectReviewContext(ctx, s.db, project.ID)
 	if err != nil {
 		return reviewFixDraft{}, err
@@ -450,6 +450,11 @@ func (s *Server) generateAgentReviewFix(ctx context.Context, project Project, it
 	agentCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	resp, err := provider.NewGatewayClientFromEnv().GenerateText(agentCtx, provider.GatewayTextRequest{
+		GatewayBillingIdentity: provider.GatewayBillingIdentity{
+			RequestedByUserID:          principal.UserID,
+			BillingOperationPermission: authz.PermissionProjectWrite,
+			BillingContextReason:       provider.BillingContextReasonManualProvider,
+		},
 		OrganizationID:    project.OrganizationID,
 		ProjectID:         project.ID,
 		ModelProfileKey:   project.ScriptModelProfileKey,
@@ -461,7 +466,17 @@ func (s *Server) generateAgentReviewFix(ctx context.Context, project Project, it
 			"prompt":         rendered.RenderedText,
 			"responseFormat": "json",
 		}),
-		Options: provider.GatewayTextOptions{TimeoutMS: 15000},
+		Options: provider.GatewayTextOptions{
+			TimeoutMS: 15000,
+			IdempotencyKey: gatewayProviderIdempotencyKey(
+				ctx,
+				provider.TaskTypeTextGenerate,
+				project.ID,
+				item.ID,
+				"review-fix",
+				rendered.RenderedHash,
+			),
+		},
 	})
 	if err != nil {
 		return reviewFixDraft{}, err

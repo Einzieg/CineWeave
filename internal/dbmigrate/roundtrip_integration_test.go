@@ -84,6 +84,7 @@ func TestEmptyDatabaseUpDownUpProducesStableSchema(t *testing.T) {
 	assertProviderModelHardDeleteRollbackPreflight(t, ctx, runner, testConfig)
 	assertVersion36NullRenderPlanRollbackPreflight(t, ctx, runner, testConfig)
 	assertProjectDeletionHardDeletePath(t, ctx, testConfig)
+	assertWorkflowBillingContextBindOnce(t, ctx, testConfig)
 	first := normalizedSchemaSnapshot(t, ctx, testConfig)
 
 	if err := runner.Run(ctx, "reset", 0); err != nil {
@@ -96,6 +97,90 @@ func TestEmptyDatabaseUpDownUpProducesStableSchema(t *testing.T) {
 	second := normalizedSchemaSnapshot(t, ctx, testConfig)
 	if first != second {
 		t.Fatalf("normalized schema changed after up/down/up\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func assertWorkflowBillingContextBindOnce(
+	t *testing.T,
+	ctx context.Context,
+	config *pgx.ConnConfig,
+) {
+	t.Helper()
+	conn, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect Billing Context migration fixture database: %v", err)
+	}
+	defer conn.Close(context.Background())
+	workflowRunID := uuid.NewString()
+	billingContextID := uuid.NewString()
+	if _, err := conn.Exec(ctx, `SET session_replication_role = replica`); err != nil {
+		t.Fatalf("disable Billing Context fixture foreign key triggers: %v", err)
+	}
+	replicationRoleReset := false
+	defer func() {
+		if !replicationRoleReset {
+			_, _ = conn.Exec(context.Background(), `SET session_replication_role = origin`)
+		}
+	}()
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO workflow_runs (
+			id,
+			organization_id,
+			project_id,
+			temporal_workflow_id,
+			status,
+			created_by,
+			production_generation_id,
+			video_production_binding_id,
+			video_production_binding_revision
+		) VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, 1)
+	`, workflowRunID,
+		uuid.NewString(),
+		uuid.NewString(),
+		"billing-context-migration-"+workflowRunID,
+		uuid.NewString(),
+		uuid.NewString(),
+		uuid.NewString(),
+	); err != nil {
+		t.Fatalf("insert Billing Context workflow fixture: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SET session_replication_role = origin`); err != nil {
+		t.Fatalf("restore Billing Context fixture foreign key triggers: %v", err)
+	}
+	replicationRoleReset = true
+	if _, err := conn.Exec(ctx, `
+		UPDATE workflow_runs
+		SET billing_context_id = $2,
+		    billing_context_revision = 1,
+		    billing_context_snapshot_hash = $3
+		WHERE id = $1
+	`, workflowRunID, billingContextID, strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("bind workflow Billing Context once: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		UPDATE workflow_runs
+		SET billing_context_revision = 2
+		WHERE id = $1
+	`, workflowRunID); err == nil {
+		t.Fatal("workflow Billing Context revision mutation unexpectedly succeeded")
+	}
+	if _, err := conn.Exec(ctx, `
+		UPDATE workflow_runs
+		SET billing_context_id = $2
+		WHERE id = $1
+	`, workflowRunID, uuid.NewString()); err == nil {
+		t.Fatal("workflow Billing Context identity mutation unexpectedly succeeded")
+	}
+	if _, err := conn.Exec(ctx, `
+		UPDATE workflow_runs
+		SET status = 'succeeded',
+		    completed_at = now()
+		WHERE id = $1
+	`, workflowRunID); err != nil {
+		t.Fatalf("update workflow non-billing state after context bind: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `DELETE FROM workflow_runs WHERE id = $1`, workflowRunID); err != nil {
+		t.Fatalf("delete Billing Context workflow fixture: %v", err)
 	}
 }
 

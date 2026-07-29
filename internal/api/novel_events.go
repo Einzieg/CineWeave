@@ -633,6 +633,14 @@ func (s *Server) generateAdaptationPlan(w http.ResponseWriter, r *http.Request, 
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "no novel events are available for adaptation plan", nil, false)
 		return
 	}
+	operationPermission := s.firstAuthorizedProjectPermission(
+		r.Context(),
+		principal,
+		project.ID,
+		authz.PermissionAdaptationPlanWrite,
+		authz.PermissionScriptWrite,
+		authz.PermissionSourceWrite,
+	)
 	rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "adaptation_plan_generation", map[string]any{
 		"project": projectPromptVariables(project),
 		"input": map[string]any{
@@ -642,7 +650,7 @@ func (s *Server) generateAdaptationPlan(w http.ResponseWriter, r *http.Request, 
 			"instruction":           strings.TrimSpace(req.Instruction),
 		},
 		"events": map[string]any{"items": string(mustMarshal(events))},
-	}, true)
+	}, true, operationPermission, provider.BillingContextReasonManualProvider)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -688,7 +696,22 @@ func (s *Server) generateScriptFromAdaptationPlan(w http.ResponseWriter, r *http
 		s.writeError(w, r, err)
 		return
 	}
-	episodeDrafts, providerCallIDs, modelIDs, versionPromptVersionID, versionPromptHash, err := s.generateScriptEpisodeDraftsFromPlan(r, project, plan, req, events, novelContext)
+	operationPermission := s.firstAuthorizedProjectPermission(
+		r.Context(),
+		principal,
+		project.ID,
+		authz.PermissionAdaptationPlanWrite,
+		authz.PermissionScriptWrite,
+	)
+	episodeDrafts, providerCallIDs, modelIDs, versionPromptVersionID, versionPromptHash, err := s.generateScriptEpisodeDraftsFromPlan(
+		r,
+		project,
+		plan,
+		req,
+		events,
+		novelContext,
+		operationPermission,
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -716,7 +739,15 @@ func (s *Server) generateScriptFromAdaptationPlan(w http.ResponseWriter, r *http
 	}, nil)
 }
 
-func (s *Server) generateScriptEpisodeDraftsFromPlan(r *http.Request, project Project, plan AdaptationPlan, req generateScriptFromAdaptationPlanRequest, events []NovelEvent, novelContext scriptNovelContext) ([]scriptEpisodeDraft, []string, []string, string, string, error) {
+func (s *Server) generateScriptEpisodeDraftsFromPlan(
+	r *http.Request,
+	project Project,
+	plan AdaptationPlan,
+	req generateScriptFromAdaptationPlanRequest,
+	events []NovelEvent,
+	novelContext scriptNovelContext,
+	operationPermission string,
+) ([]scriptEpisodeDraft, []string, []string, string, string, error) {
 	if len(novelContext.Chapters) == 0 {
 		rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "script_from_adaptation_plan", map[string]any{
 			"project": projectPromptVariables(project),
@@ -724,7 +755,7 @@ func (s *Server) generateScriptEpisodeDraftsFromPlan(r *http.Request, project Pr
 			"plan":    map[string]any{"id": plan.ID, "title": plan.Title, "content": plan.Content, "structure": string(plan.Structure)},
 			"events":  map[string]any{"items": string(mustMarshal(events))},
 			"novel":   novelContext,
-		}, false)
+		}, false, operationPermission, provider.BillingContextReasonManualProvider)
 		if err != nil {
 			return nil, nil, nil, "", "", err
 		}
@@ -774,7 +805,7 @@ func (s *Server) generateScriptEpisodeDraftsFromPlan(r *http.Request, project Pr
 			"plan":    map[string]any{"id": plan.ID, "title": plan.Title, "content": plan.Content, "structure": string(plan.Structure)},
 			"events":  map[string]any{"items": string(mustMarshal(chapterEvents))},
 			"novel":   perChapterContext,
-		}, false)
+		}, false, operationPermission, provider.BillingContextReasonManualProvider)
 		if err != nil {
 			return nil, nil, nil, "", "", err
 		}
@@ -822,7 +853,15 @@ func (s *Server) requireProjectAccessAny(w http.ResponseWriter, r *http.Request,
 	return project, true
 }
 
-func (s *Server) runTextGatewayPrompt(r *http.Request, project Project, templateKey string, variables map[string]any, jsonResponse bool) (promptsvc.RenderedPrompt, provider.GatewayTextResponse, error) {
+func (s *Server) runTextGatewayPrompt(
+	r *http.Request,
+	project Project,
+	templateKey string,
+	variables map[string]any,
+	jsonResponse bool,
+	operationPermission string,
+	reason string,
+) (promptsvc.RenderedPrompt, provider.GatewayTextResponse, error) {
 	resolved, err := promptsvc.NewService(s.db).Resolve(r.Context(), promptsvc.ResolveRequest{
 		OrganizationID: project.OrganizationID,
 		ProjectID:      project.ID,
@@ -840,6 +879,11 @@ func (s *Server) runTextGatewayPrompt(r *http.Request, project Project, template
 		input["responseFormat"] = "json"
 	}
 	resp, err := provider.NewGatewayClientFromEnv().GenerateText(r.Context(), provider.GatewayTextRequest{
+		GatewayBillingIdentity: gatewayBillingIdentityFromContext(
+			r.Context(),
+			operationPermission,
+			reason,
+		),
 		OrganizationID:    project.OrganizationID,
 		ProjectID:         project.ID,
 		ModelProfileKey:   project.ScriptModelProfileKey,
@@ -848,6 +892,15 @@ func (s *Server) runTextGatewayPrompt(r *http.Request, project Project, template
 		PromptHash:        rendered.RenderedHash,
 		PromptSource:      rendered.Source,
 		Input:             json.RawMessage(mustMarshal(input)),
+		Options: provider.GatewayTextOptions{
+			IdempotencyKey: gatewayProviderIdempotencyKey(
+				r.Context(),
+				provider.TaskTypeTextGenerate,
+				project.ID,
+				templateKey,
+				rendered.RenderedHash,
+			),
+		},
 	})
 	return rendered, resp, err
 }

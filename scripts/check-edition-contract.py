@@ -15,6 +15,7 @@ GO_AUTHORIZATION_PATH = ROOT / "internal" / "edition" / "community.go"
 WEB_TYPES_PATH = ROOT / "apps" / "web" / "src" / "lib" / "types.ts"
 WEB_ENTRY_CONTRACT_PATH = ROOT / "apps" / "web" / "src" / "edition" / "contract.ts"
 OPENAPI_PATH = ROOT / "packages" / "openapi" / "openapi.yaml"
+API_MODULE_PATH = ROOT / "internal" / "api" / "edition_modules.go"
 
 
 def require(condition: bool, message: str) -> None:
@@ -64,6 +65,16 @@ def interface_methods(source: str, interface_name: str) -> list[str]:
     )
     require(match is not None, f"Go interface {interface_name} is missing")
     return re.findall(r"^\s*([A-Z][A-Za-z0-9_]*)\(", match.group(1), re.MULTILINE)
+
+
+def go_struct_fields(source: str, struct_name: str) -> list[str]:
+    match = re.search(
+        rf"type {re.escape(struct_name)} struct \{{(.*?)\n\}}",
+        source,
+        re.DOTALL,
+    )
+    require(match is not None, f"Go struct {struct_name} is missing")
+    return re.findall(r"^\s*([A-Z][A-Za-z0-9_]*)\s+", match.group(1), re.MULTILINE)
 
 
 def web_entry_slots(source: str) -> list[str]:
@@ -125,6 +136,11 @@ def main() -> int:
             "Go BillingAccount scopes",
             contract["billingAccountScopes"],
             go_typed_constant_values(go_contract, "BillingAccountScope"),
+        )
+        assert_same_ordered_values(
+            "Go commercial API resource scopes",
+            contract["apiResourceScopes"],
+            go_typed_constant_values(go_contract, "APIResourceScope"),
         )
         assert_same_ordered_values(
             "Go license states",
@@ -205,6 +221,28 @@ def main() -> int:
             "Web EditionEntry slots",
             contract["webEditionEntrySlots"],
             web_entry_slots(web_entry),
+        )
+        assert_same_ordered_values(
+            "Go APIModuleRegistration fields",
+            contract["apiModuleRegistration"]["requiredFields"],
+            go_struct_fields(go_contract, "APIModuleRegistration"),
+        )
+        api_module_source = API_MODULE_PATH.read_text(encoding="utf-8")
+        require(
+            "s.withAuth" in api_module_source,
+            "commercial API module registration must use Core authentication",
+        )
+        require(
+            api_module_source.index("entitlements.Evaluate")
+            < api_module_source.index("authorizer.Authorize"),
+            "commercial API entitlement must be evaluated before RBAC",
+        )
+        register_start = api_module_source.index("func (s *Server) registerEditionAPIModules")
+        authorize_call = api_module_source.index("authorizeEditionAPIModule(", register_start)
+        handler_call = api_module_source.index("registration.Handler(", register_start)
+        require(
+            authorize_call < handler_call,
+            "commercial API authorization must run before the private handler",
         )
 
         formula = contract["effectiveSpendAuthorization"]

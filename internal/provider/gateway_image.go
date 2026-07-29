@@ -79,6 +79,19 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	if err := s.assertProviderProjectWritable(ctx, req.OrganizationID, req.ProjectID); err != nil {
 		return GatewayImageResponse{}, err
 	}
+	var err error
+	req.GatewayBillingIdentity, err = s.resolveGatewayBillingIdentity(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.WorkflowRunID,
+		TaskTypeImageGenerate,
+		gatewayImageIdempotencyKey(req),
+		req.GatewayBillingIdentity,
+	)
+	if err != nil {
+		return GatewayImageResponse{}, err
+	}
 	input, err := normalizeJSON(req.Input, "{}")
 	if err != nil {
 		return GatewayImageResponse{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
@@ -88,7 +101,7 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 	if err != nil {
 		return GatewayImageResponse{}, err
 	}
-	start, err := s.beginProviderRequest(ctx, providerRequestStartInput{
+	startInput := providerRequestStartInput{
 		OrganizationID: req.OrganizationID,
 		ProjectID:      req.ProjectID,
 		WorkflowRunID:  req.WorkflowRunID,
@@ -97,7 +110,12 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 		IdempotencyKey: gatewayImageIdempotencyKey(req),
 		RequestHash:    requestHash,
 		Retry:          req.Options.Retry,
-	})
+	}
+	applyBillingIdentityToProviderRequest(
+		&startInput,
+		req.GatewayBillingIdentity,
+	)
+	start, err := s.beginProviderRequest(ctx, startInput)
 	if err != nil {
 		return GatewayImageResponse{}, err
 	}
@@ -116,7 +134,10 @@ func (s *Service) GenerateImage(ctx context.Context, req GatewayImageRequest) (G
 
 	response, runErr := s.executeGatewayImage(ctx, req, start.Request.ID, start.Request.AttemptGeneration)
 	if runErr != nil {
-		if errors.Is(runErr, ErrValidation) || errors.Is(runErr, pgx.ErrNoRows) {
+		_, standardFailure := StandardErrorFromError(runErr)
+		if standardFailure ||
+			errors.Is(runErr, ErrValidation) ||
+			errors.Is(runErr, pgx.ErrNoRows) {
 			_, code, message, _, _ := normalizedProviderFailure(runErr)
 			standard := standardErrorFromRunError(runErr, code, message)
 			response = GatewayImageResponse{
@@ -212,7 +233,13 @@ func (s *Service) executeGatewayImage(ctx context.Context, req GatewayImageReque
 			return final, nil
 		}
 		candidate := candidates[i]
-		selection, err := s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidate)
+		selection, err := s.completeGatewaySelectionFromCandidateWithBilling(
+			ctx,
+			req.OrganizationID,
+			req.ProjectID,
+			req.GatewayBillingIdentity,
+			candidate,
+		)
 		if err != nil {
 			return GatewayImageResponse{}, err
 		}
@@ -489,7 +516,17 @@ func (s *Service) selectGatewayImageModel(ctx context.Context, req GatewayImageR
 		if err != nil {
 			return gatewayModelSelection{}, err
 		}
-		return s.completeGatewaySelection(ctx, req.OrganizationID, account, model, "", "", "")
+		return s.completeGatewaySelectionWithBilling(
+			ctx,
+			req.OrganizationID,
+			req.ProjectID,
+			req.GatewayBillingIdentity,
+			account,
+			model,
+			"",
+			"",
+			"",
+		)
 	}
 
 	profileKey := strings.TrimSpace(req.ModelProfileKey)
@@ -507,7 +544,13 @@ func (s *Service) selectGatewayImageModel(ctx context.Context, req GatewayImageR
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	return s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidates[0])
+	return s.completeGatewaySelectionFromCandidateWithBilling(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.GatewayBillingIdentity,
+		candidates[0],
+	)
 }
 
 func parseGatewayImageInput(input json.RawMessage) (gatewayImageInput, error) {

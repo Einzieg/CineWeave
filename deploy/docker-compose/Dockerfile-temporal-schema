@@ -1,15 +1,18 @@
 FROM temporalio/admin-tools:1.31.2@sha256:dbc5fcd6ee8f0f4d808bf765af9a87dea9d8a283abfdcfbd2fc148496ba66107 AS temporal-tools
 
-FROM golang:1.26.5-alpine AS build
+FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS build
 
+ARG CINEWEAVE_GO_BUILD_TAGS=community
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -o /out/temporal-schema ./cmd/temporal-schema
+RUN test "${CINEWEAVE_GO_BUILD_TAGS}" = "community"
+RUN go build -trimpath -tags "${CINEWEAVE_GO_BUILD_TAGS}" -o /out/temporal-schema ./cmd/temporal-schema
 
-FROM alpine:3.21
+FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
 
+LABEL org.cineweave.edition="community"
 RUN adduser -D -H cineweave
 COPY --from=temporal-tools /usr/local/bin/temporal-sql-tool /usr/local/bin/temporal-sql-tool
 COPY --from=temporal-tools /etc/temporal/schema /etc/temporal/schema

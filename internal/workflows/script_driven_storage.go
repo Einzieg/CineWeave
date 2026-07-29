@@ -435,7 +435,9 @@ func (a Activities) insertScriptStoryboardArtifactShotsAndRequirements(ctx conte
 			        NULLIF($20, ''), NULLIF($21, ''), NULLIF($22, ''), NULLIF($23, ''), NULLIF($24, ''), NULLIF($25, ''), $26,
 			        'storyboard_ready', $27, $31)
 			ON CONFLICT (workflow_run_id, shot_index)
-				WHERE workflow_run_id IS NOT NULL AND deleted_at IS NULL
+				WHERE storyboard_plan_id IS NULL
+					AND workflow_run_id IS NOT NULL
+					AND deleted_at IS NULL
 			DO UPDATE SET
 				storyboard_artifact_id = EXCLUDED.storyboard_artifact_id,
 				script_id = EXCLUDED.script_id,

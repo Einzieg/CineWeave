@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Einzieg/cineweave/internal/db"
@@ -32,7 +33,19 @@ func TestGatewayProviderLimitIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new vault: %v", err)
 	}
-	upstream := httptest.NewServer(http.NotFoundHandler())
+	var upstreamCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-limit-test",
+			"choices":[{
+				"message":{"role":"assistant","content":"ok"},
+				"finish_reason":"stop"
+			}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`))
+	}))
 	defer upstream.Close()
 
 	t.Run("image concurrency block", func(t *testing.T) {
@@ -69,13 +82,14 @@ func TestGatewayProviderLimitIntegration(t *testing.T) {
 		assertNoCostRecord(t, ctx, pool, resp.ProviderCallID)
 	})
 
-	t.Run("text daily budget block", func(t *testing.T) {
+	t.Run("text legacy daily budget is non authoritative", func(t *testing.T) {
 		orgID, _, modelID := seedGatewayIntegrationData(t, ctx, pool, vault, upstream.URL)
 		t.Cleanup(func() {
 			_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID)
 		})
 		accountID := providerAccountIDForModel(t, ctx, pool, modelID)
 		insertLimitPolicy(t, ctx, pool, orgID, accountID, modelID, TaskTypeTextGenerate, map[string]any{"daily_budget": "0.00000000"})
+		before := upstreamCalls.Load()
 
 		service := NewService(pool, vault)
 		service.EnableGatewayRuntime()
@@ -87,9 +101,17 @@ func TestGatewayProviderLimitIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("generate text: %v", err)
 		}
-		assertBlockedGatewayResponse(t, resp.Status, resp.Error, CodeProviderDailyQuotaExceeded)
-		assertBlockedCallLog(t, ctx, pool, resp.ProviderCallID, TaskTypeTextGenerate, CodeProviderDailyQuotaExceeded)
-		assertNoCostRecord(t, ctx, pool, resp.ProviderCallID)
+		if resp.Status != "succeeded" || resp.Error != nil {
+			t.Fatalf("legacy daily budget response = %#v", resp)
+		}
+		if upstreamCalls.Load() != before+1 {
+			t.Fatalf(
+				"upstream calls = %d, want %d",
+				upstreamCalls.Load(),
+				before+1,
+			)
+		}
+		assertCostRecordPersisted(t, ctx, pool, resp.ProviderCallID)
 	})
 }
 

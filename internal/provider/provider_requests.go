@@ -18,27 +18,31 @@ import (
 )
 
 type ProviderRequest struct {
-	ID                string          `json:"id"`
-	OrganizationID    string          `json:"organizationId"`
-	ProjectID         *string         `json:"projectId,omitempty"`
-	WorkflowRunID     *string         `json:"workflowRunId,omitempty"`
-	NodeRunID         *string         `json:"nodeRunId,omitempty"`
-	TaskType          string          `json:"taskType"`
-	IdempotencyKey    *string         `json:"idempotencyKey,omitempty"`
-	RequestHash       string          `json:"requestHash"`
-	HashSchemaVersion int             `json:"hashSchemaVersion"`
-	Status            string          `json:"status"`
-	AttemptGeneration int             `json:"attemptGeneration"`
-	ResultSnapshot    json.RawMessage `json:"resultSnapshot"`
-	ArtifactIDs       json.RawMessage `json:"artifactIds"`
-	MediaFileIDs      json.RawMessage `json:"mediaFileIds"`
-	ErrorCode         *string         `json:"errorCode,omitempty"`
-	ErrorMessage      *string         `json:"errorMessage,omitempty"`
-	ExpiresAt         *time.Time      `json:"expiresAt,omitempty"`
-	CreatedAt         time.Time       `json:"createdAt"`
-	StartedAt         *time.Time      `json:"startedAt,omitempty"`
-	CompletedAt       *time.Time      `json:"completedAt,omitempty"`
-	UpdatedAt         time.Time       `json:"updatedAt"`
+	ID                         string          `json:"id"`
+	OrganizationID             string          `json:"organizationId"`
+	ProjectID                  *string         `json:"projectId,omitempty"`
+	WorkflowRunID              *string         `json:"workflowRunId,omitempty"`
+	NodeRunID                  *string         `json:"nodeRunId,omitempty"`
+	TaskType                   string          `json:"taskType"`
+	IdempotencyKey             *string         `json:"idempotencyKey,omitempty"`
+	RequestHash                string          `json:"requestHash"`
+	HashSchemaVersion          int             `json:"hashSchemaVersion"`
+	Status                     string          `json:"status"`
+	AttemptGeneration          int             `json:"attemptGeneration"`
+	ResultSnapshot             json.RawMessage `json:"resultSnapshot"`
+	ArtifactIDs                json.RawMessage `json:"artifactIds"`
+	MediaFileIDs               json.RawMessage `json:"mediaFileIds"`
+	ErrorCode                  *string         `json:"errorCode,omitempty"`
+	ErrorMessage               *string         `json:"errorMessage,omitempty"`
+	RequestedByUserID          *string         `json:"requestedByUserId,omitempty"`
+	BillingContextID           *string         `json:"billingContextId,omitempty"`
+	BillingContextRevision     *int64          `json:"billingContextRevision,omitempty"`
+	BillingContextSnapshotHash *string         `json:"billingContextSnapshotHash,omitempty"`
+	ExpiresAt                  *time.Time      `json:"expiresAt,omitempty"`
+	CreatedAt                  time.Time       `json:"createdAt"`
+	StartedAt                  *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt                *time.Time      `json:"completedAt,omitempty"`
+	UpdatedAt                  time.Time       `json:"updatedAt"`
 }
 
 type providerRequestStartInput struct {
@@ -59,6 +63,10 @@ type providerRequestStartInput struct {
 	RequestHash                    string
 	HashSchemaVersion              int
 	Retry                          bool
+	RequestedByUserID              string
+	BillingContextID               string
+	BillingContextRevision         int64
+	BillingContextSnapshotHash     string
 }
 
 type providerRequestDisposition string
@@ -88,6 +96,9 @@ func (s *Service) beginProviderRequest(ctx context.Context, input providerReques
 	input.TaskType = strings.TrimSpace(input.TaskType)
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
 	input.RequestHash = strings.TrimSpace(input.RequestHash)
+	input.RequestedByUserID = strings.TrimSpace(input.RequestedByUserID)
+	input.BillingContextID = strings.TrimSpace(input.BillingContextID)
+	input.BillingContextSnapshotHash = strings.TrimSpace(input.BillingContextSnapshotHash)
 	if input.HashSchemaVersion <= 0 {
 		input.HashSchemaVersion = gatewayRequestHashSchemaVersion
 	}
@@ -166,12 +177,16 @@ func insertProviderRequest(ctx context.Context, tx pgx.Tx, input providerRequest
 			operation_id, operation_item_id, operation_item_attempt,
 			video_render_plan_id, video_render_segment_id,
 			task_type, idempotency_key, request_hash, status,
-			attempt_generation, hash_schema_version, started_at, updated_at
+			attempt_generation, hash_schema_version, started_at, updated_at,
+			requested_by_user_id, billing_context_id,
+			billing_context_revision, billing_context_snapshot_hash
 		)
 		VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, NULLIF($7, 0),
 		        NULLIF($8, '')::uuid, NULLIF($9, '')::uuid, NULLIF($10, 0),
 		        NULLIF($11, '')::uuid, NULLIF($12, '')::uuid,
-		        $13, $14, $15, 'running', 1, $16, now(), now())
+		        $13, $14, $15, 'running', 1, $16, now(), now(),
+		        NULLIF($17, '')::uuid, NULLIF($18, '')::uuid,
+		        NULLIF($19, 0), NULLIF($20, ''))
 		ON CONFLICT (organization_id, task_type, idempotency_key)
 			WHERE idempotency_key IS NOT NULL
 		DO NOTHING
@@ -179,12 +194,16 @@ func insertProviderRequest(ctx context.Context, tx pgx.Tx, input providerRequest
 			id, organization_id, project_id, workflow_run_id, node_run_id,
 			task_type, idempotency_key, request_hash, status, attempt_generation,
 			result_snapshot, artifact_ids, media_file_ids, error_code, error_message,
-			expires_at, created_at, started_at, completed_at, updated_at, hash_schema_version
+			expires_at, created_at, started_at, completed_at, updated_at, hash_schema_version,
+			requested_by_user_id, billing_context_id,
+			billing_context_revision, billing_context_snapshot_hash
 	`, input.OrganizationID, nullString(input.ProjectID), nullString(input.WorkflowRunID), nullString(input.NodeRunID),
 		input.ProductionGenerationID, input.VideoProductionBindingID, input.VideoProductionBindingRevision,
 		input.OperationID, input.OperationItemID, input.OperationItemAttempt,
 		input.ExecutionPlanID, input.RenderSegmentID,
-		input.TaskType, nullString(input.IdempotencyKey), input.RequestHash, input.HashSchemaVersion)
+		input.TaskType, nullString(input.IdempotencyKey), input.RequestHash, input.HashSchemaVersion,
+		input.RequestedByUserID, input.BillingContextID,
+		input.BillingContextRevision, input.BillingContextSnapshotHash)
 	return scanProviderRequest(row)
 }
 
@@ -194,7 +213,9 @@ func selectProviderRequestForUpdate(ctx context.Context, tx pgx.Tx, organization
 			id, organization_id, project_id, workflow_run_id, node_run_id,
 			task_type, idempotency_key, request_hash, status, attempt_generation,
 			result_snapshot, artifact_ids, media_file_ids, error_code, error_message,
-			expires_at, created_at, started_at, completed_at, updated_at, hash_schema_version
+			expires_at, created_at, started_at, completed_at, updated_at, hash_schema_version,
+			requested_by_user_id, billing_context_id,
+			billing_context_revision, billing_context_snapshot_hash
 		FROM provider_requests
 		WHERE organization_id = $1 AND task_type = $2 AND idempotency_key = $3
 		FOR UPDATE
@@ -220,7 +241,9 @@ func restartProviderRequest(ctx context.Context, tx pgx.Tx, requestID string, ge
 			id, organization_id, project_id, workflow_run_id, node_run_id,
 			task_type, idempotency_key, request_hash, status, attempt_generation,
 			result_snapshot, artifact_ids, media_file_ids, error_code, error_message,
-			expires_at, created_at, started_at, completed_at, updated_at, hash_schema_version
+			expires_at, created_at, started_at, completed_at, updated_at, hash_schema_version,
+			requested_by_user_id, billing_context_id,
+			billing_context_revision, billing_context_snapshot_hash
 	`, requestID, generation)
 	return scanProviderRequest(row)
 }
@@ -446,6 +469,8 @@ func scanProviderRequest(row rowScanner) (ProviderRequest, error) {
 	var item ProviderRequest
 	var projectID, workflowRunID, nodeRunID, idempotencyKey sql.NullString
 	var errorCode, errorMessage sql.NullString
+	var requestedByUserID, billingContextID, billingContextSnapshotHash sql.NullString
+	var billingContextRevision sql.NullInt64
 	var resultSnapshot, artifactIDs, mediaFileIDs []byte
 	var expiresAt, startedAt, completedAt sql.NullTime
 	err := row.Scan(
@@ -453,6 +478,8 @@ func scanProviderRequest(row rowScanner) (ProviderRequest, error) {
 		&item.TaskType, &idempotencyKey, &item.RequestHash, &item.Status, &item.AttemptGeneration,
 		&resultSnapshot, &artifactIDs, &mediaFileIDs, &errorCode, &errorMessage,
 		&expiresAt, &item.CreatedAt, &startedAt, &completedAt, &item.UpdatedAt, &item.HashSchemaVersion,
+		&requestedByUserID, &billingContextID,
+		&billingContextRevision, &billingContextSnapshotHash,
 	)
 	item.ProjectID = stringPtr(projectID)
 	item.WorkflowRunID = stringPtr(workflowRunID)
@@ -460,6 +487,12 @@ func scanProviderRequest(row rowScanner) (ProviderRequest, error) {
 	item.IdempotencyKey = stringPtr(idempotencyKey)
 	item.ErrorCode = stringPtr(errorCode)
 	item.ErrorMessage = stringPtr(errorMessage)
+	item.RequestedByUserID = stringPtr(requestedByUserID)
+	item.BillingContextID = stringPtr(billingContextID)
+	item.BillingContextSnapshotHash = stringPtr(billingContextSnapshotHash)
+	if billingContextRevision.Valid {
+		item.BillingContextRevision = &billingContextRevision.Int64
+	}
 	item.ResultSnapshot = rawOrDefault(resultSnapshot, "{}")
 	item.ArtifactIDs = rawOrDefault(artifactIDs, "[]")
 	item.MediaFileIDs = rawOrDefault(mediaFileIDs, "[]")

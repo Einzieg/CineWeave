@@ -12,6 +12,7 @@ import (
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -114,6 +115,67 @@ func TestCommerceScriptDerivationBatchUsesBoundedChildrenAndKeepsPartialSuccess(
 	defer mu.Unlock()
 	require.Equal(t, input.MaxConcurrency, maxActive)
 	require.Equal(t, 3, generateCalls["item-2"], "provider activity must stop at its configured retry limit")
+}
+
+func TestCommerceScriptDerivationBatchStopsUnstartedItemsOnInsufficientBalance(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	input := CommerceScriptDerivationBatchInput{
+		OrganizationID: "organization", ProjectID: "project", BatchID: "batch",
+		WorkflowRunID: "workflow", MaxConcurrency: 2,
+	}
+	itemIDs := []string{"item-1", "item-2", "item-3", "item-4", "item-5"}
+	env.RegisterActivityWithOptions(func(
+		context.Context,
+		CommerceScriptDerivationBatchInput,
+	) (CommerceScriptDerivationBatchSnapshot, error) {
+		return CommerceScriptDerivationBatchSnapshot{
+			Batch: commerce.ScriptDerivationBatch{ID: input.BatchID}, ItemIDs: itemIDs,
+		}, nil
+	}, activity.RegisterOptions{Name: StartCommerceScriptDerivationBatchActivity})
+	started := make([]string, 0, 2)
+	env.RegisterWorkflowWithOptions(func(
+		ctx workflow.Context,
+		item CommerceScriptDerivationItemInput,
+	) (CommerceScriptDerivationItemOutput, error) {
+		started = append(started, item.ItemID)
+		if item.ItemID == "item-1" {
+			return CommerceScriptDerivationItemOutput{}, temporal.NewNonRetryableApplicationError(
+				"New API 账户余额不足",
+				billingInsufficientBalanceCode,
+				nil,
+			)
+		}
+		if err := workflow.Sleep(ctx, time.Minute); err != nil {
+			return CommerceScriptDerivationItemOutput{}, err
+		}
+		return CommerceScriptDerivationItemOutput{ItemID: item.ItemID, Status: "succeeded"}, nil
+	}, workflow.RegisterOptions{Name: CommerceScriptDerivationItemWorkflowName})
+	stopped := make([]string, 0, 3)
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		failure CommerceScriptDerivationFailureInput,
+	) error {
+		stopped = append(stopped, failure.WorkflowInput.ItemID)
+		require.False(t, failure.Retryable)
+		require.Equal(t, billingInsufficientBalanceCode, failure.ErrorCode)
+		return nil
+	}, activity.RegisterOptions{Name: FailCommerceScriptDerivationItemActivity})
+	env.RegisterActivityWithOptions(func(
+		context.Context,
+		CommerceScriptDerivationBatchInput,
+	) (CommerceScriptDerivationBatchOutput, error) {
+		return CommerceScriptDerivationBatchOutput{
+			BatchID: input.BatchID, Status: "partial_succeeded",
+			RequestedCount: 5, SucceededCount: 1, FailedTerminalCount: 4,
+		}, nil
+	}, activity.RegisterOptions{Name: FinalizeCommerceScriptDerivationBatchActivity})
+
+	env.ExecuteWorkflow(CommerceScriptDerivationBatchWorkflow, input)
+
+	require.NoError(t, env.GetWorkflowError())
+	require.ElementsMatch(t, []string{"item-1", "item-2"}, started)
+	require.Equal(t, []string{"item-3", "item-4", "item-5"}, stopped)
 }
 
 func TestCommerceScriptDerivationItemStopsAfterThreeReviewRounds(t *testing.T) {

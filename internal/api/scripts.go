@@ -1064,7 +1064,16 @@ func (s *Server) runScriptAgentPromptWithOptions(r *http.Request, principal auth
 		return "", "", promptsvc.RenderedPrompt{}, provider.GatewayTextResponse{}, err
 	}
 	gatewayClient := provider.NewGatewayClientFromEnv()
+	idempotencyKey := strings.TrimSpace(options.IdempotencyKey)
+	if idempotencyKey == "" {
+		idempotencyKey = "script-agent-run:" + runID
+	}
 	gatewayReq := provider.GatewayTextRequest{
+		GatewayBillingIdentity: gatewayBillingIdentityFromContext(
+			r.Context(),
+			authz.PermissionScriptWrite,
+			provider.BillingContextReasonAgentAction,
+		),
 		OrganizationID:    project.OrganizationID,
 		ProjectID:         project.ID,
 		ModelProfileKey:   project.ScriptModelProfileKey,
@@ -1076,7 +1085,7 @@ func (s *Server) runScriptAgentPromptWithOptions(r *http.Request, principal auth
 			"prompt": rendered.RenderedText,
 		}),
 		Options: provider.GatewayTextOptions{
-			IdempotencyKey: strings.TrimSpace(options.IdempotencyKey),
+			IdempotencyKey: idempotencyKey,
 		},
 	}
 	var streamed strings.Builder

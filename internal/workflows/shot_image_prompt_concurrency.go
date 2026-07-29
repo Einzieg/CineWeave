@@ -23,9 +23,13 @@ func generateShotImagePromptsConcurrently(
 	}
 
 	limit := clampConcurrency(maxConcurrency, DefaultShotImagePromptConcurrency, MaxShotImagePromptConcurrency)
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
 	selector := workflow.NewSelector(ctx)
 	nextIndex := 0
 	inFlight := 0
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	schedule := func(index int) {
 		item := items[index]
 		future := workflow.ExecuteActivity(promptCtx, "PrepareShotImagePrompt", PrepareShotImagePromptInput{
@@ -47,6 +51,13 @@ func generateShotImagePromptsConcurrently(
 			var output PrepareShotImagePromptOutput
 			err := completed.Get(ctx, &output)
 			results[index] = shotImagePromptResult{Output: output, Err: err}
+			if stopOnBalance && !stopScheduling {
+				if code, message, ok := billingInsufficientBalanceFailure(err); ok {
+					stopScheduling = true
+					stopCode = code
+					stopMessage = message
+				}
+			}
 			inFlight--
 		})
 	}
@@ -60,8 +71,15 @@ func generateShotImagePromptsConcurrently(
 		if err := ctx.Err(); isWorkflowCancellationError(err) {
 			return nil, err
 		}
-		for nextIndex < len(items) && inFlight < limit {
+		for !stopScheduling && nextIndex < len(items) && inFlight < limit {
 			schedule(nextIndex)
+			nextIndex++
+		}
+	}
+	if stopScheduling {
+		code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+		for nextIndex < len(items) {
+			results[nextIndex].Err = billingInsufficientBalanceError(code, message)
 			nextIndex++
 		}
 	}

@@ -80,6 +80,7 @@ type gatewayVideoTask struct {
 	RenderSegmentID                string
 	VideoVariantKey                string
 	CapabilitySnapshotHash         string
+	GatewayBillingIdentity
 }
 
 type gatewayVideoExecutionProvenance struct {
@@ -95,6 +96,19 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 		return GatewayVideoCreateTaskResponse{}, fmt.Errorf("%w: organizationId is required", ErrValidation)
 	}
 	if err := s.assertProviderProjectWritable(ctx, req.OrganizationID, req.ProjectID); err != nil {
+		return GatewayVideoCreateTaskResponse{}, err
+	}
+	var err error
+	req.GatewayBillingIdentity, err = s.resolveGatewayBillingIdentity(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.WorkflowRunID,
+		TaskTypeVideoCreateTask,
+		gatewayVideoIdempotencyKey(req.IdempotencyKey, req.Options),
+		req.GatewayBillingIdentity,
+	)
+	if err != nil {
 		return GatewayVideoCreateTaskResponse{}, err
 	}
 	input, err := normalizeJSON(req.Input, "{}")
@@ -115,7 +129,7 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 	if err != nil {
 		return GatewayVideoCreateTaskResponse{}, err
 	}
-	start, err := s.beginProviderRequest(ctx, providerRequestStartInput{
+	startInput := providerRequestStartInput{
 		OrganizationID:                 req.OrganizationID,
 		ProjectID:                      req.ProjectID,
 		ProductionGenerationID:         req.ProductionGenerationID,
@@ -132,7 +146,12 @@ func (s *Service) CreateVideoTask(ctx context.Context, req GatewayVideoCreateTas
 		IdempotencyKey:                 gatewayVideoIdempotencyKey(req.IdempotencyKey, req.Options),
 		RequestHash:                    requestHash,
 		Retry:                          req.Options.Retry,
-	})
+	}
+	applyBillingIdentityToProviderRequest(
+		&startInput,
+		req.GatewayBillingIdentity,
+	)
+	start, err := s.beginProviderRequest(ctx, startInput)
 	if err != nil {
 		return GatewayVideoCreateTaskResponse{}, err
 	}
@@ -233,7 +252,7 @@ func (s *Service) executeGatewayVideoCreate(ctx context.Context, req GatewayVide
 	}
 
 	if strings.TrimSpace(req.ProviderModelID) != "" {
-		selection, err := s.selectGatewayVideoModel(ctx, req.OrganizationID, req.ProviderModelID, req.ModelProfileKey)
+		selection, err := s.selectGatewayVideoModel(ctx, req)
 		if err != nil {
 			return GatewayVideoCreateTaskResponse{}, err
 		}
@@ -260,7 +279,13 @@ func (s *Service) executeGatewayVideoCreate(ctx context.Context, req GatewayVide
 	var final GatewayVideoCreateTaskResponse
 	for i := 0; i < maxAttempts; i++ {
 		candidate := candidates[i]
-		selection, err := s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidate)
+		selection, err := s.completeGatewaySelectionFromCandidateWithBilling(
+			ctx,
+			req.OrganizationID,
+			req.ProjectID,
+			req.GatewayBillingIdentity,
+			candidate,
+		)
 		if err != nil {
 			return GatewayVideoCreateTaskResponse{}, err
 		}
@@ -539,6 +564,10 @@ func (s *Service) PollVideoTask(ctx context.Context, req GatewayVideoPollTaskReq
 		RequestHash:                    requestHash,
 		Retry:                          req.Options.Retry,
 	}
+	applyBillingIdentityToProviderRequest(
+		&startInput,
+		task.GatewayBillingIdentity,
+	)
 	start, err := s.beginProviderRequest(ctx, startInput)
 	if err != nil {
 		return GatewayVideoPollTaskResponse{}, err
@@ -1023,7 +1052,7 @@ func (s *Service) CancelVideoTask(ctx context.Context, req GatewayVideoCancelTas
 	if err != nil {
 		return GatewayVideoCancelTaskResponse{}, err
 	}
-	start, err := s.beginProviderRequest(ctx, providerRequestStartInput{
+	startInput := providerRequestStartInput{
 		OrganizationID:                 task.OrganizationID,
 		ProjectID:                      task.ProjectID,
 		ProductionGenerationID:         task.ProductionGenerationID,
@@ -1040,7 +1069,12 @@ func (s *Service) CancelVideoTask(ctx context.Context, req GatewayVideoCancelTas
 		IdempotencyKey:                 gatewayVideoIdempotencyKey(req.IdempotencyKey, req.Options),
 		RequestHash:                    requestHash,
 		Retry:                          req.Options.Retry,
-	})
+	}
+	applyBillingIdentityToProviderRequest(
+		&startInput,
+		task.GatewayBillingIdentity,
+	)
+	start, err := s.beginProviderRequest(ctx, startInput)
 	if err != nil {
 		return GatewayVideoCancelTaskResponse{}, err
 	}
@@ -1288,9 +1322,12 @@ func (s *Service) executeGatewayVideoCancel(ctx context.Context, req GatewayVide
 	}, nil
 }
 
-func (s *Service) selectGatewayVideoModel(ctx context.Context, organizationID, providerModelID, modelProfileKey string) (gatewayModelSelection, error) {
-	if strings.TrimSpace(providerModelID) != "" {
-		model, err := s.GetModel(ctx, organizationID, providerModelID)
+func (s *Service) selectGatewayVideoModel(
+	ctx context.Context,
+	req GatewayVideoCreateTaskRequest,
+) (gatewayModelSelection, error) {
+	if strings.TrimSpace(req.ProviderModelID) != "" {
+		model, err := s.GetModel(ctx, req.OrganizationID, req.ProviderModelID)
 		if err != nil {
 			return gatewayModelSelection{}, err
 		}
@@ -1303,18 +1340,32 @@ func (s *Service) selectGatewayVideoModel(ctx context.Context, organizationID, p
 		if !modelSupportsTaskType(model, TaskTypeVideoCreateTask) {
 			return gatewayModelSelection{}, fmt.Errorf("%w: provider model does not support %s", ErrValidation, TaskTypeVideoCreateTask)
 		}
-		account, err := s.GetAccount(ctx, organizationID, model.ProviderAccountID)
+		account, err := s.GetAccount(
+			ctx,
+			req.OrganizationID,
+			model.ProviderAccountID,
+		)
 		if err != nil {
 			return gatewayModelSelection{}, err
 		}
-		return s.completeGatewaySelection(ctx, organizationID, account, model, "", "", "")
+		return s.completeGatewaySelectionWithBilling(
+			ctx,
+			req.OrganizationID,
+			req.ProjectID,
+			req.GatewayBillingIdentity,
+			account,
+			model,
+			"",
+			"",
+			"",
+		)
 	}
-	profileKey := strings.TrimSpace(modelProfileKey)
+	profileKey := strings.TrimSpace(req.ModelProfileKey)
 	if profileKey == "" {
 		return gatewayModelSelection{}, fmt.Errorf("%w: modelProfileKey or providerModelId is required", ErrValidation)
 	}
 	candidates, err := s.ResolveRoutingCandidates(ctx, RoutingRequest{
-		OrganizationID:  organizationID,
+		OrganizationID:  req.OrganizationID,
 		ModelProfileKey: profileKey,
 		TaskType:        TaskTypeVideoCreateTask,
 		Modality:        "video",
@@ -1322,7 +1373,13 @@ func (s *Service) selectGatewayVideoModel(ctx context.Context, organizationID, p
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	return s.completeGatewaySelectionFromCandidate(ctx, organizationID, candidates[0])
+	return s.completeGatewaySelectionFromCandidateWithBilling(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.GatewayBillingIdentity,
+		candidates[0],
+	)
 }
 
 func parseGatewayVideoInput(input json.RawMessage) (gatewayVideoInput, error) {
@@ -1724,7 +1781,8 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 			request_hash,
 			requested_duration_seconds, actual_duration_seconds, media_probe,
 			video_render_plan_id, video_render_segment_id, video_variant_key, capability_snapshot_hash,
-			node_execution_token, node_attempt_generation
+			node_execution_token, node_attempt_generation,
+			billing_context_id
 		)
 		VALUES (
 			$1,
@@ -1741,7 +1799,8 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 			$27, $28, $29,
 			NULLIF($30, '')::uuid, NULLIF($31, '')::uuid,
 			(SELECT variant_key FROM video_render_plans WHERE id = NULLIF($30, '')::uuid), NULLIF($32, ''),
-			NULLIF($33, '')::uuid, NULLIF($34, 0)
+			NULLIF($33, '')::uuid, NULLIF($34, 0),
+			(SELECT billing_context_id FROM provider_requests WHERE id = NULLIF($3, '')::uuid)
 		)
 		RETURNING id
 	`, taskID, call.ID, providerRequestID, req.OrganizationID, nullString(req.ProjectID), nullString(req.WorkflowRunID), nullString(req.NodeRunID),
@@ -2092,6 +2151,8 @@ func (s *Service) getGatewayVideoTask(ctx context.Context, req GatewayVideoPollT
 	var videoProductionBindingRevision sql.NullInt64
 	var nodeAttemptGeneration sql.NullInt32
 	var operationItemID, executionPlanID, renderSegmentID, videoVariantKey, capabilitySnapshotHash sql.NullString
+	var requestedByUserID, billingContextID, billingContextSnapshotHash sql.NullString
+	var billingContextRevision sql.NullInt64
 	var operationItemAttempt sql.NullInt32
 	var normalizedOutput []byte
 	if strings.TrimSpace(req.ProviderAsyncTaskID) != "" {
@@ -2101,6 +2162,8 @@ func (s *Service) getGatewayVideoTask(ctx context.Context, req GatewayVideoPollT
 			&promptVersionID, &promptHash,
 			&externalTaskID, &task.Status, &task.Input, &normalizedOutput, &task.PollCount,
 			&executionPlanID, &renderSegmentID, &videoVariantKey, &capabilitySnapshotHash,
+			&requestedByUserID, &billingContextID, &billingContextRevision,
+			&billingContextSnapshotHash,
 		)
 		if err != nil {
 			return gatewayVideoTask{}, err
@@ -2115,6 +2178,8 @@ func (s *Service) getGatewayVideoTask(ctx context.Context, req GatewayVideoPollT
 			&promptVersionID, &promptHash,
 			&externalTaskID, &task.Status, &task.Input, &normalizedOutput, &task.PollCount,
 			&executionPlanID, &renderSegmentID, &videoVariantKey, &capabilitySnapshotHash,
+			&requestedByUserID, &billingContextID, &billingContextRevision,
+			&billingContextSnapshotHash,
 		)
 		if err != nil {
 			return gatewayVideoTask{}, err
@@ -2150,6 +2215,14 @@ func (s *Service) getGatewayVideoTask(ctx context.Context, req GatewayVideoPollT
 	task.RenderSegmentID = nullStringText(renderSegmentID)
 	task.VideoVariantKey = nullStringText(videoVariantKey)
 	task.CapabilitySnapshotHash = nullStringText(capabilitySnapshotHash)
+	task.RequestedByUserID = nullStringText(requestedByUserID)
+	task.BillingContextID = nullStringText(billingContextID)
+	if billingContextRevision.Valid {
+		task.BillingContextRevision = billingContextRevision.Int64
+	}
+	task.BillingContextSnapshotHash = nullStringText(
+		billingContextSnapshotHash,
+	)
 	task.PromptTemplateKey = videoStringField(task.Input, "promptTemplateKey")
 	task.PromptSource = videoStringField(task.Input, "promptSource")
 	if task.ProviderModelID == "" {
@@ -2250,9 +2323,14 @@ func gatewayVideoTaskSelect(where string) string {
 		       t.provider_account_id, t.provider_model_id, t.credential_id, t.model_profile_id, t.model_profile_binding_id, t.model_profile_key,
 		       l.prompt_version_id::text, l.prompt_hash,
 		       t.external_task_id, t.status, t.input, t.normalized_output, t.poll_count,
-		       t.video_render_plan_id::text, t.video_render_segment_id::text, t.video_variant_key, t.capability_snapshot_hash
+		       t.video_render_plan_id::text, t.video_render_segment_id::text, t.video_variant_key, t.capability_snapshot_hash,
+		       request.requested_by_user_id::text,
+		       COALESCE(t.billing_context_id, request.billing_context_id)::text,
+		       request.billing_context_revision,
+		       request.billing_context_snapshot_hash
 		FROM provider_async_tasks t
 		JOIN provider_call_logs l ON l.id = t.provider_call_id
+		LEFT JOIN provider_requests request ON request.id = t.provider_request_id
 	` + where
 }
 

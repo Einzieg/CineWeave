@@ -199,8 +199,28 @@ func (s *Server) createStoryboardShotRenderPlan(w http.ResponseWriter, r *http.R
 		s.writeError(w, r, err)
 		return
 	}
+	operationPermission := s.firstAuthorizedProjectPermission(
+		r.Context(),
+		principal,
+		project.ID,
+		authz.PermissionStoryboardGenerate,
+		authz.PermissionProjectWrite,
+	)
 	plan, err := provider.NewGatewayClientFromEnv().PlanVideo(r.Context(), provider.GatewayVideoPlanRequest{
+		GatewayBillingIdentity: gatewayBillingIdentityFromContext(
+			r.Context(),
+			operationPermission,
+			provider.BillingContextReasonManualProvider,
+		),
 		OrganizationID: project.OrganizationID, ProjectID: project.ID,
+		IdempotencyKey: gatewayProviderIdempotencyKey(
+			r.Context(),
+			provider.TaskTypeVideoCreateTask,
+			project.ID,
+			shot.ID,
+			modelProfileKey,
+			strings.TrimSpace(req.ProviderModelID),
+		),
 		ProductionGenerationID:         productionContext.Generation.ID,
 		VideoProductionBindingID:       productionContext.Binding.ID,
 		VideoProductionBindingRevision: productionContext.Binding.Revision,

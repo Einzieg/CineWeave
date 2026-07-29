@@ -167,6 +167,8 @@ services:
         SERVICE_PATH: apps/api
     environment:
       CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
+      CINEWEAVE_EDITION: community
+      CINEWEAVE_RELEASE_ID: ${CINEWEAVE_RELEASE_ID:-local-dev}
       CINEWEAVE_API_ADDR: ":8080"
       CINEWEAVE_CREDENTIAL_MASTER_KEY: ${CINEWEAVE_CREDENTIAL_MASTER_KEY:-}
       CINEWEAVE_SERVICE_TOKEN: ${CINEWEAVE_SERVICE_TOKEN:-dev-service-token}
@@ -305,6 +307,7 @@ services:
         SERVICE_PATH: workers/agent-worker
     environment:
       CINEWEAVE_ENV: ${CINEWEAVE_ENV:-development}
+      CINEWEAVE_EDITION: community
       DATABASE_URL: postgres://cineweave:cineweave_dev_password@postgres:5432/cineweave?sslmode=disable
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}

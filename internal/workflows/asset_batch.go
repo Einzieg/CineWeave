@@ -19,12 +19,13 @@ import (
 )
 
 const (
-	AssetBatchOperationGeneratePrompts  = "generate_prompts"
-	AssetBatchOperationGenerateImages   = "generate_images"
-	DefaultAssetBatchConcurrency        = 5
-	MaxAssetBatchConcurrency            = 16
-	assetBatchItemsPerRun               = 50
-	assetBatchCancellationDrainDeadline = 2 * time.Minute
+	AssetBatchOperationGeneratePrompts   = "generate_prompts"
+	AssetBatchOperationGenerateImages    = "generate_images"
+	DefaultAssetBatchConcurrency         = 5
+	MaxAssetBatchConcurrency             = 16
+	assetBatchItemsPerRun                = 50
+	failUnstartedAssetBatchItemsActivity = "FailUnstartedAssetBatchItems"
+	assetBatchCancellationDrainDeadline  = 2 * time.Minute
 )
 
 type AssetBatchVisualSnapshot struct {
@@ -185,6 +186,13 @@ type AssetBatchWorkflowOutput struct {
 	Items          []AssetBatchItemOutput `json:"items"`
 }
 
+type FailUnstartedAssetBatchItemsInput struct {
+	Batch        AssetBatchWorkflowInput  `json:"batch"`
+	Items        []AssetBatchItemSnapshot `json:"items"`
+	ErrorCode    string                   `json:"errorCode"`
+	ErrorMessage string                   `json:"errorMessage"`
+}
+
 func AssetBatchNodeKey(operation, assetID string) string {
 	prefix := "asset_prompt"
 	if operation == AssetBatchOperationGenerateImages {
@@ -237,6 +245,10 @@ func runAssetBatchWorkflow(ctx workflow.Context, input AssetBatchWorkflowInput) 
 	if end > len(input.Items) {
 		end = len(input.Items)
 	}
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	for batchStart := start; batchStart < end; batchStart += input.MaxConcurrency {
 		batchEnd := batchStart + input.MaxConcurrency
 		if batchEnd > end {
@@ -272,6 +284,28 @@ func runAssetBatchWorkflow(ctx workflow.Context, input AssetBatchWorkflowInput) 
 				itemOutput = AssetBatchItemOutput{AssetID: item.AssetID, Status: "failed", ErrorCode: code, ErrorMessage: message}
 			}
 			output.Items = append(output.Items, itemOutput)
+			if stopOnBalance && !stopScheduling && isBillingInsufficientBalanceCode(itemOutput.ErrorCode) {
+				stopScheduling = true
+				stopCode = itemOutput.ErrorCode
+				stopMessage = itemOutput.ErrorMessage
+			}
+		}
+		if stopScheduling {
+			code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+			var unstarted []AssetBatchItemOutput
+			if err := workflow.ExecuteActivity(
+				workflow.WithActivityOptions(ctx, defaultActivityOptions()),
+				failUnstartedAssetBatchItemsActivity,
+				FailUnstartedAssetBatchItemsInput{
+					Batch: input, Items: append([]AssetBatchItemSnapshot(nil), input.Items[batchEnd:]...),
+					ErrorCode: code, ErrorMessage: message,
+				},
+			).Get(ctx, &unstarted); err != nil {
+				return AssetBatchWorkflowOutput{}, err
+			}
+			output.Items = append(output.Items, unstarted...)
+			end = len(input.Items)
+			break
 		}
 	}
 	if end < len(input.Items) {
@@ -284,6 +318,56 @@ func runAssetBatchWorkflow(ctx workflow.Context, input AssetBatchWorkflowInput) 
 		return AssetBatchWorkflowOutput{}, err
 	}
 	return output, nil
+}
+
+func (a Activities) FailUnstartedAssetBatchItems(
+	ctx context.Context,
+	input FailUnstartedAssetBatchItemsInput,
+) ([]AssetBatchItemOutput, error) {
+	if !isBillingInsufficientBalanceCode(input.ErrorCode) {
+		return nil, temporal.NewNonRetryableApplicationError(
+			"unstarted asset batch failures require a billing balance denial",
+			"INVALID_ASSET_BATCH_BALANCE_STOP",
+			nil,
+		)
+	}
+	code, message := unstartedBillingInsufficientBalanceFailure(input.ErrorCode, input.ErrorMessage)
+	outputs := make([]AssetBatchItemOutput, 0, len(input.Items))
+	nodeType := "asset.prompt.generate"
+	if input.Batch.Operation == AssetBatchOperationGenerateImages {
+		nodeType = "asset.image.generate"
+	}
+	for _, item := range input.Items {
+		output := AssetBatchItemOutput{
+			AssetID: item.AssetID, Status: "failed",
+			ErrorCode: code, ErrorMessage: message,
+		}
+		execution, err := StartNodeRun(ctx, a.db, NodeRunInput{
+			OrganizationID:    input.Batch.OrganizationID,
+			ProjectID:         input.Batch.ProjectID,
+			WorkflowRunID:     input.Batch.WorkflowRunID,
+			NodeKey:           AssetBatchNodeKey(input.Batch.Operation, item.AssetID),
+			NodeType:          nodeType,
+			Input:             mustJSON(item),
+			AttemptGeneration: input.Batch.AttemptGeneration,
+		})
+		if err != nil {
+			return nil, err
+		}
+		output.NodeRunID = execution.NodeRunID
+		if err := FailNodeRunWithOutput(
+			ctx,
+			a.db,
+			execution,
+			code,
+			message,
+			mustJSON(output),
+		); err != nil {
+			return nil, err
+		}
+		outputs = append(outputs, output)
+	}
+	return outputs, nil
 }
 
 func drainAssetBatchChildrenAfterCancellation(
@@ -380,6 +464,17 @@ func workflowExecutionError(err error) (string, string) {
 		message := strings.TrimSpace(workflowErr.Message)
 		if message == "" {
 			message = "任务步骤执行失败"
+		}
+		return code, message
+	}
+	if standard, ok := provider.StandardErrorFromError(err); ok {
+		code := strings.TrimSpace(standard.Code)
+		if code == "" {
+			code = codeActivityFailed
+		}
+		message := strings.TrimSpace(standard.Message)
+		if message == "" {
+			message = strings.TrimSpace(err.Error())
 		}
 		return code, message
 	}

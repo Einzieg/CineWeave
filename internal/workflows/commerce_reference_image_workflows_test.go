@@ -75,6 +75,62 @@ func TestCommerceReferenceImageBatchWorkflowUsesBoundedConcurrencyAndKeepsPartia
 	require.Equal(t, 1, calls["shot-2"], "paid image activity must not be retried automatically")
 }
 
+func TestCommerceReferenceImageBatchStopsLaterWindowsOnInsufficientBalance(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	input := testCommerceReferenceImageBatchInput(
+		2,
+		[]string{"shot-1", "shot-2", "shot-3", "shot-4"},
+	)
+	var mu sync.Mutex
+	calls := make([]string, 0, 2)
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		_ CommerceReferenceImageBatchInput,
+		shotID string,
+	) (CommerceReferenceImageItemOutput, error) {
+		mu.Lock()
+		calls = append(calls, shotID)
+		mu.Unlock()
+		if shotID == "shot-1" {
+			return CommerceReferenceImageItemOutput{
+				ShotID: shotID, Status: commerce.ItemFailedTerminal,
+				ErrorCode:    billingInsufficientBalanceCode,
+				ErrorMessage: "New API 账户余额不足",
+			}, nil
+		}
+		return CommerceReferenceImageItemOutput{
+			ShotID: shotID, Status: commerce.ItemSucceeded,
+		}, nil
+	}, activity.RegisterOptions{Name: GenerateCommerceReferenceImageItemActivityName})
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		_ CommerceReferenceImageBatchInput,
+		output CommerceReferenceImageBatchOutput,
+	) (CommerceReferenceImageBatchOutput, error) {
+		return output, nil
+	}, activity.RegisterOptions{Name: FinalizeCommerceReferenceImageBatchActivityName})
+	env.RegisterActivityWithOptions(
+		func(context.Context, FinalizeCommerceReferenceImageFailureInput) error { return nil },
+		activity.RegisterOptions{Name: FinalizeCommerceReferenceImageFailureActivityName},
+	)
+
+	env.ExecuteWorkflow(CommerceReferenceImageBatchWorkflow, input)
+
+	require.NoError(t, env.GetWorkflowError())
+	mu.Lock()
+	gotCalls := append([]string(nil), calls...)
+	mu.Unlock()
+	require.ElementsMatch(t, []string{"shot-1", "shot-2"}, gotCalls)
+	var output CommerceReferenceImageBatchOutput
+	require.NoError(t, env.GetWorkflowResult(&output))
+	require.Len(t, output.Items, 4)
+	require.Equal(t, 1, output.Succeeded)
+	require.Equal(t, 3, output.Failed)
+	require.Equal(t, billingInsufficientBalanceCode, output.Items[2].ErrorCode)
+	require.Contains(t, output.Items[2].ErrorMessage, "未发起")
+}
+
 func TestValidateCommerceImagePromptPlanRejectsAudioAndTextLeakage(t *testing.T) {
 	identity := testCommerceReferenceImageIdentity()
 	snapshot := CommerceReferenceImageShotSnapshot{

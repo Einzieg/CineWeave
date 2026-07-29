@@ -504,7 +504,11 @@ func upsertStoryboardShotsTx(ctx context.Context, tx pgx.Tx, input GenerateStory
 			        $8, $9, $10, $11, $12, $13,
 			        NULLIF($14, ''), NULLIF($15, ''), NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''), $20,
 			        'storyboard_ready', $21, $25)
-			ON CONFLICT (workflow_run_id, shot_index) DO UPDATE SET
+			ON CONFLICT (workflow_run_id, shot_index)
+				WHERE storyboard_plan_id IS NULL
+					AND workflow_run_id IS NOT NULL
+					AND deleted_at IS NULL
+			DO UPDATE SET
 				storyboard_artifact_id = EXCLUDED.storyboard_artifact_id,
 				shot_no = EXCLUDED.shot_no,
 				title = EXCLUDED.title,
@@ -846,6 +850,17 @@ func workflowErrorFields(err error, fallbackCode string) (string, string) {
 	var workflowErr workflowError
 	if errors.As(err, &workflowErr) {
 		return workflowErr.Code, workflowErr.Message
+	}
+	if standard, ok := provider.StandardErrorFromError(err); ok {
+		code := strings.TrimSpace(standard.Code)
+		if code == "" {
+			code = fallbackCode
+		}
+		message := strings.TrimSpace(standard.Message)
+		if message == "" {
+			message = strings.TrimSpace(err.Error())
+		}
+		return code, message
 	}
 	if commerceErr, ok := commerce.AsError(err); ok {
 		code := strings.TrimSpace(commerceErr.Code)

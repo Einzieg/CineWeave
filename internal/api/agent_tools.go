@@ -708,6 +708,11 @@ func streamScriptAgentText(r *http.Request, project Project, prompt, templateKey
 		input["responseFormat"] = "json"
 	}
 	resp, err := provider.NewGatewayClientFromEnv().StreamText(r.Context(), provider.GatewayTextRequest{
+		GatewayBillingIdentity: gatewayBillingIdentityFromContext(
+			r.Context(),
+			authz.PermissionScriptWrite,
+			provider.BillingContextReasonAgentAction,
+		),
 		OrganizationID:    project.OrganizationID,
 		WorkspaceID:       project.WorkspaceID,
 		ProjectID:         project.ID,

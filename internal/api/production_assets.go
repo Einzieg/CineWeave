@@ -623,7 +623,15 @@ func (s *Server) generateAssetCard(w http.ResponseWriter, r *http.Request, princ
 	var draft assetCardDraft
 	providerCallIDs := make([]string, 0, 2)
 	for attempt := 0; attempt < 3; attempt++ {
-		rendered, gatewayResp, err = s.runTextGatewayPrompt(r, project, "asset_card_generation", variables, true)
+		rendered, gatewayResp, err = s.runTextGatewayPrompt(
+			r,
+			project,
+			"asset_card_generation",
+			variables,
+			true,
+			authz.PermissionAssetWrite,
+			provider.BillingContextReasonManualProvider,
+		)
 		if err != nil {
 			s.writeError(w, r, err)
 			return
@@ -1216,6 +1224,11 @@ func (s *Server) generateCanonicalAssetImage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	gatewayResp, err := provider.NewGatewayClientFromEnv().GenerateImage(r.Context(), provider.GatewayImageRequest{
+		GatewayBillingIdentity: gatewayBillingIdentityFromContext(
+			r.Context(),
+			authz.PermissionAssetGenerate,
+			provider.BillingContextReasonManualProvider,
+		),
 		OrganizationID:    project.OrganizationID,
 		ProjectID:         project.ID,
 		ModelProfileKey:   project.ImageModelProfileKey,
@@ -1225,6 +1238,15 @@ func (s *Server) generateCanonicalAssetImage(w http.ResponseWriter, r *http.Requ
 		PromptSource:      rendered.Source,
 		Input:             mustMarshal(assetprompts.CanonicalImageInput(rendered.RenderedText, asset.AssetType, project.ImageQuality)),
 		References:        lockedCanonicalAssetImageReferences(asset),
+		Options: provider.GatewayImageOptions{
+			IdempotencyKey: gatewayProviderIdempotencyKey(
+				r.Context(),
+				provider.TaskTypeImageGenerate,
+				project.ID,
+				asset.ID,
+				rendered.RenderedHash,
+			),
+		},
 	})
 	if err != nil {
 		if markErr := s.markCanonicalAssetImageFailed(asset.ID, err); markErr != nil {

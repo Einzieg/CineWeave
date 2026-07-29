@@ -888,3 +888,28 @@ export function projectDeletionStatusLabel(value?: string) {
   };
   return labels[value || ""] || "删除中";
 }
+
+export function entitlementDenialLabel(value?: string) {
+  const labels: Record<string, string> = {
+    feature_unknown: "商业功能未登记",
+    feature_not_compiled: "当前发行版未包含此功能",
+    deployment_license_invalid: "部署许可证无效",
+    deployment_license_not_yet_valid: "部署许可证尚未生效",
+    deployment_license_expired: "部署许可证已过期",
+    deployment_license_revoked: "部署许可证已吊销",
+    deployment_clock_rollback_suspected: "系统时间校验异常",
+    plan_entitlement_required: "当前组织套餐未包含此功能",
+    billing_account_suspended: "付费账户已停用",
+    permission_denied: "当前账号权限不足",
+    billing_binding_invalid: "项目付费账户绑定无效",
+    billing_account_scope_mismatch: "付费账户不属于当前组织",
+    billing_authority_mismatch: "付费账户所属计费服务不匹配",
+    billing_sponsorship_required: "需要钱包所有者授权",
+    billing_routing_candidate_missing: "没有可用的计费凭据",
+    billing_insufficient_balance: "付费账户余额不足",
+    billing_credential_unavailable: "付费凭据当前不可用",
+    billing_model_forbidden: "当前套餐不可使用该模型",
+    billing_upstream_unavailable: "计费服务暂时不可用",
+  };
+  return labels[value || ""] || "商业授权校验未通过";
+}

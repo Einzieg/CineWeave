@@ -10,6 +10,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/production"
+	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -54,7 +55,7 @@ func (s *Server) parseScriptScenes(w http.ResponseWriter, r *http.Request, princ
 	rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "script_scene_parser", map[string]any{
 		"project": projectPromptVariables(project),
 		"script":  map[string]any{"id": script.ID, "versionId": version.ID, "title": script.Title, "content": version.Content, "episodes": string(mustRawJSON(episodeRefs))},
-	}, true)
+	}, true, authz.PermissionScriptWrite, provider.BillingContextReasonManualProvider)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

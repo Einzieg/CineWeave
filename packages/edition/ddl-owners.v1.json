@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "cineweave.ddl-owners.v1",
+  "manifestVersion": 1,
+  "streams": {
+    "core": {
+      "streamId": "core",
+      "sourceOwner": "public_core",
+      "sourceContract": "db/migrations embedded by the Community migration binary",
+      "controlSchema": "cineweave_migrations",
+      "ledgerTable": "cineweave_schema_versions",
+      "auditTable": "cineweave_migration_audit",
+      "auditIndex": "cineweave_migration_audit_version_idx",
+      "advisoryLockKey": "4848492533564916054",
+      "versionSpaceStartsAt": 1
+    },
+    "commercial": {
+      "streamId": "commercial",
+      "sourceOwner": "private_commercial_assembly",
+      "sourceContract": "private embedded filesystem supplied only to the Commercial migration binary",
+      "controlSchema": "cineweave_commercial_migrations",
+      "ledgerTable": "schema_versions",
+      "auditTable": "migration_audit",
+      "auditIndex": "migration_audit_version_idx",
+      "advisoryLockKey": "4848492533564916557",
+      "versionSpaceStartsAt": 1
+    }
+  },
+  "owners": {
+    "core": {
+      "ownedSchemas": [
+        "public",
+        "cineweave_migrations"
+      ],
+      "includesFutureObjects": true,
+      "neutralOpaqueFieldsAreCoreOwned": true
+    },
+    "commercial": {
+      "ownedSchemas": [
+        "cineweave_commercial",
+        "cineweave_commercial_migrations"
+      ],
+      "migrationWritableSchemas": [
+        "cineweave_commercial"
+      ],
+      "includesFutureObjects": true
+    }
+  },
+  "rules": {
+    "commercialTargetsMustBeSchemaQualified": true,
+    "commercialMayReferenceCoreFromCommercialObjects": true,
+    "commercialMayAlterCoreObjects": false,
+    "commercialMayCreateCoreTriggers": false,
+    "commercialMayCreateReverseForeignKeys": false,
+    "commercialMayMutateEitherLedgerFromSQL": false,
+    "communityMigratorMayLoadCommercialFilesystem": false,
+    "deploymentOrder": [
+      "core.migrate",
+      "core.verify",
+      "commercial.migrate",
+      "commercial.verify",
+      "core.seed",
+      "core.seed.verify",
+      "commercial.seed",
+      "commercial.seed.verify"
+    ]
+  }
+}

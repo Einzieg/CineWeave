@@ -1,0 +1,227 @@
+{
+  "schemaVersion": 1,
+  "edition": "community",
+  "contentChunkBytes": 1048576,
+  "contentOverlapBytes": 65536,
+  "forbiddenPathRules": [
+    {
+      "id": "private-root",
+      "regex": "(^|/)(commercial|enterprise|private)(/|$)"
+    },
+    {
+      "id": "commercial-migration-stream",
+      "regex": "(^|/)(db|migrations?)/(commercial|enterprise)([-_]?migrations?)?(/|$)"
+    },
+    {
+      "id": "commercial-migration-name",
+      "regex": "(^|/)(commercial|enterprise)[-_]?migrations?(/|$)"
+    },
+    {
+      "id": "billing-bridge-service",
+      "regex": "(^|/)(apps|services|workers)/(new-api-)?billing-bridge(/|$)"
+    },
+    {
+      "id": "private-web-package",
+      "regex": "(^|/)packages/(commercial|enterprise)([-_/]|$)"
+    },
+    {
+      "id": "license-issuer",
+      "regex": "(^|/)(apps|cmd|services)/(license|entitlement)[-_]?(issuer|signer)(/|$)"
+    },
+    {
+      "id": "generated-source-artifact",
+      "regex": "(^|/)(__pycache__|node_modules|\\.next|dist|coverage)(/|$)|\\.(pyc|pyo)$",
+      "scopes": [
+        "git-history",
+        "source-archive"
+      ]
+    },
+    {
+      "id": "local-environment-file",
+      "regex": "(^|/)\\.env($|\\.(?!example$)[^/]+$)"
+    }
+  ],
+  "forbiddenContentRules": [
+    {
+      "id": "private-go-module",
+      "regex": "github\\.com/[A-Za-z0-9_.-]+/cineweave-(commercial|enterprise)(/|\\b)",
+      "allowPathRegexes": [
+        "^docs/"
+      ]
+    },
+    {
+      "id": "private-web-module",
+      "regex": "@cineweave/(commercial|enterprise)([-_/]|\\b)",
+      "allowPathRegexes": [
+        "^docs/"
+      ]
+    },
+    {
+      "id": "private-implementation-path",
+      "regex": "(^|[\"'`\\s])(services/new-api-billing-bridge|db/commercial|internal/(commercial|enterprise))(/|[\"'`\\s])",
+      "allowPathRegexes": [
+        "^docs/"
+      ]
+    },
+    {
+      "id": "license-signing-secret-name",
+      "regex": "CINEWEAVE_(LICENSE_)?SIGNING_PRIVATE_KEY",
+      "allowPathRegexes": [
+        "^scripts/check-ce-release\\.ps1$"
+      ]
+    },
+    {
+      "id": "new-api-management-secret-name",
+      "regex": "NEW_API_ADMIN_(TOKEN|API_KEY|SECRET)",
+      "allowPathRegexes": [
+        "^scripts/check-ce-release\\.ps1$"
+      ]
+    }
+  ],
+  "secretRules": [
+    {
+      "id": "openai-compatible-key",
+      "regex": "(?<![A-Za-z0-9])sk-(?!(ssh|ecdsa)-)[A-Za-z0-9_-]{20,}"
+    },
+    {
+      "id": "openrouter-key",
+      "regex": "(?<![A-Za-z0-9])sk-or-v1-[A-Za-z0-9]{20,}"
+    },
+    {
+      "id": "aws-access-key",
+      "regex": "(?<![0-9A-Z])AKIA[0-9A-Z]{16}(?![0-9A-Z])"
+    },
+    {
+      "id": "private-key",
+      "regex": "-----BEGIN (RSA |EC |OPENSSH |ED25519 )?PRIVATE KEY-----[\\r\\n]+[A-Za-z0-9+/=\\r\\n]{80,}-----END (RSA |EC |OPENSSH |ED25519 )?PRIVATE KEY-----"
+    }
+  ],
+  "sourceMapSuffixes": [
+    ".js.map",
+    ".css.map",
+    ".map"
+  ],
+  "images": [
+    {
+      "name": "database-tools",
+      "dockerfile": "deploy/docker-compose/Dockerfile-database-tools",
+      "composeServices": [
+        "migrate",
+        "seed",
+        "temporal-release"
+      ],
+      "buildArgs": {}
+    },
+    {
+      "name": "temporal-schema",
+      "dockerfile": "deploy/docker-compose/Dockerfile-temporal-schema",
+      "composeServices": [
+        "temporal-schema"
+      ],
+      "buildArgs": {}
+    },
+    {
+      "name": "temporal-namespace",
+      "dockerfile": "deploy/docker-compose/Dockerfile-go",
+      "composeServices": [
+        "temporal-namespace"
+      ],
+      "buildArgs": {
+        "SERVICE_PATH": "cmd/temporal-namespace"
+      }
+    },
+    {
+      "name": "api",
+      "dockerfile": "deploy/docker-compose/Dockerfile-go",
+      "composeServices": [
+        "api"
+      ],
+      "buildArgs": {
+        "SERVICE_PATH": "apps/api"
+      }
+    },
+    {
+      "name": "realtime",
+      "dockerfile": "deploy/docker-compose/Dockerfile-go",
+      "composeServices": [
+        "realtime"
+      ],
+      "buildArgs": {
+        "SERVICE_PATH": "apps/realtime"
+      }
+    },
+    {
+      "name": "script-worker",
+      "dockerfile": "deploy/docker-compose/Dockerfile-go",
+      "composeServices": [
+        "script-worker"
+      ],
+      "buildArgs": {
+        "SERVICE_PATH": "workers/script-worker"
+      }
+    },
+    {
+      "name": "agent-worker",
+      "dockerfile": "deploy/docker-compose/Dockerfile-go",
+      "composeServices": [
+        "agent-worker"
+      ],
+      "buildArgs": {
+        "SERVICE_PATH": "workers/agent-worker"
+      }
+    },
+    {
+      "name": "media-worker",
+      "dockerfile": "deploy/docker-compose/Dockerfile-media-worker",
+      "composeServices": [
+        "media-worker"
+      ],
+      "buildArgs": {
+        "SERVICE_PATH": "workers/media-worker"
+      }
+    },
+    {
+      "name": "audio-worker",
+      "dockerfile": "deploy/docker-compose/Dockerfile-media-worker",
+      "composeServices": [
+        "audio-worker"
+      ],
+      "buildArgs": {
+        "SERVICE_PATH": "workers/audio-worker"
+      }
+    },
+    {
+      "name": "provider-gateway",
+      "dockerfile": "deploy/docker-compose/Dockerfile-provider-gateway",
+      "composeServices": [
+        "provider-gateway"
+      ],
+      "buildArgs": {
+        "SERVICE_PATH": "services/provider-gateway"
+      }
+    },
+    {
+      "name": "event-publisher",
+      "dockerfile": "deploy/docker-compose/Dockerfile-go",
+      "composeServices": [
+        "event-publisher"
+      ],
+      "buildArgs": {
+        "SERVICE_PATH": "services/event-publisher"
+      }
+    },
+    {
+      "name": "web",
+      "dockerfile": "apps/web/Dockerfile",
+      "composeServices": [
+        "web"
+      ],
+      "buildArgs": {
+        "CINEWEAVE_WEB_EDITION": "community",
+        "NEXT_PUBLIC_API_BASE_URL": "",
+        "NEXT_PUBLIC_REALTIME_URL": "",
+        "S3_PUBLIC_ENDPOINT": "http://localhost:19290"
+      }
+    }
+  ]
+}

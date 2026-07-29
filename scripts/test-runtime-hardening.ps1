@@ -1,6 +1,7 @@
 param(
   [switch]$MigrationOnly,
   [switch]$ProviderModelDeleteOnly,
+  [switch]$ProviderManagedOnly,
   [switch]$ProviderVideoOnly,
   [switch]$SourceToScriptOnly,
   [switch]$DerivedAssetOnly,
@@ -92,8 +93,8 @@ try {
   }
 
   Invoke-GoContainer -Integration -Arguments @(
-    'go', 'test', '-count=1', './internal/dbmigrate',
-    '-run', '^(TestEmptyDatabaseUpDownUpProducesStableSchema|TestConsolidatedBaselineMatchesMigrationChain)$'
+    'go', 'test', '-count=1', './internal/dbmigrate', './internal/editionmigration',
+    '-run', '^(TestEmptyDatabaseUpDownUpProducesStableSchema|TestConsolidatedBaselineMatchesMigrationChain|TestCoreAndCommercialStreamsUseIndependentLedgersUpDownUp)$'
   )
   if ($MigrationOnly) {
     Write-Host 'Migration roundtrip passed in an isolated PostgreSQL container.'
@@ -111,6 +112,15 @@ try {
       '-run', '^(TestDeleteModelHardDeletesAndAllowsRecreate|TestDeleteModelRejectsActiveRuntimeWork)$'
     )
     Write-Host 'Provider model hard-delete migration and integration tests passed.'
+    return
+  }
+
+  if ($ProviderManagedOnly) {
+    Invoke-GoContainer -Integration -Arguments @(
+      'go', 'test', '-count=1', './internal/provider',
+      '-run', '^TestManagedProviderCredentialLifecycleAndTenantIsolation$'
+    )
+    Write-Host 'System-managed Provider account and sealed credential lifecycle tests passed.'
     return
   }
 

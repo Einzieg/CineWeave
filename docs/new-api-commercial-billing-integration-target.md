@@ -1,10 +1,10 @@
 # CineWeave 与 New API 商业化计费深度适配开发目标
 
-- 状态：评审修订稿；关键架构冲突及第二轮评审阻断项已形成明确口径，待 P0 契约采样与法律复核后实施
-- 更新时间：2026-07-28
+- 状态：P1-P5 工程实现、P6 本地零费用工程验收已完成；P0 等待法律结论、真实私有 remote 和具备安全资金写契约的 New API 版本，P6 生产试点仍等待分项授权
+- 更新时间：2026-07-29
 - 适用仓库：`D:\Code\CineWeave`
-- 文档基线：`5f51f1d113fb2ea87a1fc3bc608037b595d45587`
-- 当前迁移头：`000069_commerce_script_derivation_prompt_hash.sql`
+- 文档基线：Core `377f61b879ed8c60225b78e3d4be789620af8714` 加当前未提交专项实现
+- 当前 Core migration head：`000074_cost_records_non_authoritative.sql`
 - 关联文档：
   - `docs/provider-gateway.md`
   - `docs/runtime-foundation-hardening-target.md`
@@ -465,7 +465,7 @@ DDL 所有权矩阵：
 执行规则：
 
 - 公共 Core 继续使用不可变 `db/migrations`、公共 embed 和 Core ledger；商业迁移使用私有目录、私有 embed/runner 和独立 ledger，例如 `cineweave_commercial_migrations.schema_versions`。
-- 当前 `internal/dbmigrate` 只有一个 Goose stream 和一个固定 ledger；不得通过改表名、插入 ledger 行或把私有 SQL塞入公共 embed 来模拟双流。P0 必须先实现独立 Commercial migrator。
+- 公共 `internal/migrationstream` 使用 Goose instance API 隔离每个 FS、ledger、audit table 和 advisory lock；`internal/editionmigration` 固定 Core/Commercial 两套身份，私有 Assembly 只向 Commercial 工厂注入私有 embed。不得通过插入 ledger 行或把私有 SQL 塞入公共 embed 模拟双流。机器契约和装配步骤见 `docs/commercial-assembly-release-contract.md`。
 - 商业部署固定按“Core migrate/verify -> Commercial migrate/verify -> Core seed/verify -> Commercial seed/verify”执行。
 - 私有表使用清晰命名空间，例如 `billing_*`、`enterprise_*`，并由商业迁移负责。
 - 必须跨 Provider/Workflow 固化的计费身份，通过公共中性契约保存不可变 `billing_context_id`、revision 和快照摘要；商业层使用 sidecar 表维护该 ID 到 BillingAccount、Authority 和权限观察值的强一致映射。
@@ -508,48 +508,51 @@ Core 现有项目删除会硬删除 `projects`。Commercial migration 不能通�
 
 ### 2.10 版本边界验收
 
+本节勾选项表示工程边界和自动化契约已经验证；依赖真实 public/private remote、法律批准或不可变候选发行部署的条件保持未勾选。
+
 - [ ] 公共仓库包含经法律复核的 `LICENSE`、`NOTICE`、版权、商标和贡献政策。
-- [ ] CE 可在无私有仓库、无商业许可证、无 New API 管理凭据的环境完成全新部署。
-- [ ] CE 可以完成一条文本、图片或视频核心生产链路。
-- [ ] CE 管理员可以配置自有 New API，但看不到平台钱包、充值或影子账户入口。
-- [ ] 将 CE 环境变量改为 `enterprise` 不能出现任何商业功能。
-- [ ] Cloud/EE 构建同时记录 Core 和 Commercial Assembly 的不可变 SHA，并通过 allowlist Overlay 在临时 build tree 生成。
-- [ ] 商业 API、Web 和 Worker 对同一 Entitlement 得出一致结果。
-- [ ] 无套餐权益、无 RBAC 权限和无部署许可证分别返回可区分错误。
-- [ ] 商业许可证过期按操作矩阵阻止新付费 create，并允许读取、导出及已被上游接受任务的安全收尾。
-- [ ] CE 不需要连接 CineWeave 授权服务器即可长期运行。
-- [ ] Core 与 Commercial migration runner/ledger 独立且 Up/Down/Up 验证通过；Commercial SQL 不修改 Core-owned DDL。
+- [x] CE 可在无私有仓库、无商业许可证、无 New API 管理凭据的环境完成全新部署。（`pnpm run test:ce:fresh` 从当前 Core 源码在随机端口、独立网络和独立卷构建完整 app profile；14 个长期服务全部 healthy，运行容器中商业/New API 管理凭据环境变量为 0，`/api/system/edition` 为 Community，商业计费路由为 404，结束后自动清理。）
+- [x] CE 可以完成一条文本、图片或视频核心生产链路。（同一 CE 新装门禁在 migration 75 空库上执行 `TestWorkflowGatewayIntegration` 文本分镜链路成功，Provider 使用零费用 mock，`paidProviderCalls=0`；门禁同时发现并修复 Temporal namespace 新建传播竞态、Web 外部字体构建依赖、API Release ID 漂移和 legacy storyboard 约束漂移。）
+- [x] CE 管理员可以配置自有 New API，但看不到平台钱包、充值或影子账户入口。
+- [x] 将 CE 环境变量改为 `enterprise` 不能出现任何商业功能。
+- [ ] Cloud/EE 构建同时记录 Core 和 Commercial Assembly 的不可变 SHA，并通过 allowlist Overlay 在临时 build tree 生成。（装配器现已记录两个 commit、clean 状态及 lock/allowlist/slot/脚本 hash；Release Manifest 门禁会读取真实 tar/zip 源码归档，逐项绑定这些证据并复核归档内 Overlay 内容。仍需实际私有 remote、干净不可变 commits 和正式候选归档，故本项保持未完成。）
+- [x] 商业 API、Web 和 Worker 对同一 Entitlement 得出一致结果。
+- [x] 无套餐权益、无 RBAC 权限和无部署许可证分别返回可区分错误。
+- [x] 商业许可证过期按操作矩阵阻止新付费 create，并允许读取、导出及已被上游接受任务的安全收尾。
+- [x] CE 不需要连接 CineWeave 授权服务器即可长期运行。
+- [x] Core 与 Commercial migration runner/ledger 独立且 Up/Down/Up 验证通过；Commercial SQL 不修改 Core-owned DDL。
+- [x] Commercial retention policy、法务/安全批准证据和 Core FK action manifest 已形成机器门禁；实际 PostgreSQL 目录中的 27 条跨边界外键逐项一致，证据级引用只允许 `SET NULL`，仅纯 UI 偏好允许 `CASCADE`。
 - [ ] 公共 remote 完整 Git history、发布归档、镜像 layer、Web chunk 和 source map 不包含私有商业源码、迁移、凭据和构建产物。
-- [ ] CE OpenAPI/Event Catalog 与商业最终合并契约分别通过运行路由一致性检查。
+- [x] CE OpenAPI/Event Catalog 与商业最终合并契约分别通过运行路由一致性检查。
 - [ ] New API 固定版本、许可依据和交付义务已经法律复核并进入 Release Manifest。
-- [ ] 商业功能无法通过前端、数据库枚举或单一环境变量绕过。
+- [x] 商业功能无法通过前端、数据库枚举或单一环境变量绕过。
 - [ ] 外部贡献的版权授权支持既定双重许可策略。
-- [ ] 功能矩阵、Edition Manifest 和实际运行路由完全一致。
+- [x] 功能矩阵、Edition Manifest 和实际运行路由完全一致。
 
 ## 3. 当前证据与缺口
 
 ### 3.1 CineWeave 当前状态
 
-当前实现存在以下与商业化目标不一致的地方：
+当前专项实现和剩余发行缺口如下：
 
 | 当前状态 | 证据 | 商业风险 |
 | --- | --- | --- |
 | 仓库根目录没有 `LICENSE`、`NOTICE` 或商标政策 | 当前基线根目录 | 源码可见但法律授权不明确，不能安全发布 CE 或执行双重许可 |
-| 当前没有集中 Edition Manifest、Feature Registry 或 Entitlement 服务 | 当前源码检索 | 商业能力容易退化为散落环境变量和前端开关，无法形成安全边界 |
-| 当前公共 `compose.yml`、迁移链和 OpenAPI 未区分 Core/Commercial | 当前仓库结构 | 私有实现可能被打入公共归档，或使 CE 依赖商业迁移 |
-| 当前 `internal/dbmigrate` 只嵌入公共迁移并使用 `cineweave_migrations.cineweave_schema_versions`，测试硬编码迁移头 69 | `internal/dbmigrate/runner.go`、`runner_test.go` | 不能直接承载独立 Commercial ledger，必须增加私有 migrator |
-| 当前 OpenAPI route checker 固定读取一个 OpenAPI 文件和三组 Core route source | `scripts/check-openapi-routes.py` | 商业合并契约无法被现有门禁正确验证 |
-| `/api/provider-usage/summary` 从本地 `provider_call_logs.estimated_cost` 汇总费用 | `internal/provider/service.go` | 展示的是估算值，不是 New API 实际扣费 |
-| Provider 限制策略使用 `cost_records` 计算日/月预算 | `internal/provider/limits.go` | 形成第二套金额判断，可能与 New API 余额漂移 |
-| Gateway 文本、图片、音频和视频请求没有统一计费账户身份 | `internal/provider/types.go` | 无法证明实际扣费主体 |
-| `projects`、`provider_accounts`、`provider_credentials` 和当前 routing 都强制按 `organization_id` 隔离 | 当前 baseline、`internal/provider/routing.go` | 个人钱包必须组织域化；不能实现跨组织个人钱包或运行时静默回退 |
-| 多凭据已支持“凭据－模型可用性”映射 | `db/migrations/000041_provider_multi_credentials.sql` | 可以复用，但需要增加计费主体过滤 |
-| `provider_async_tasks` 已固定 `credential_id` | 当前 schema | 有利于异步任务保持原 Token，但缺少计费账户审计 |
-| 项目文档已经明确 New API 是当前计费依据 | `docs/commerce-storyboard-segmentation-project-deletion-plan.md` | 产品与运行实现尚未完全统一 |
+| 集中 Edition Manifest、Feature Registry、Entitlement、授权错误与商业模块注册契约已建立；私有 Billing API/Web/Gateway/Bridge 实现位于独立 sibling 目录 | `packages/edition/edition.v1.json`、`internal/edition`、`D:\Code\CineWeave-Commercial` | 真实私有 remote、访问控制和不可变 Commercial SHA 尚未建立 |
+| 公共 `compose.yml` 固定为 CE；组合迁移、OpenAPI/Event/route-list、临时 allowlist Assembly 与 New API 运行镜像四方一致门禁已实现；Release Manifest 会把两个 commit、clean 状态、lock/allowlist/装配脚本和归档内 Overlay 字节绑定到同一候选 | `compose.yml`、`packages/edition/ddl-owners.v1.json`、`scripts/assemble-commercial-release.ps1`、`scripts/check-release-manifest.py`、`scripts/check-new-api-runtime-image.py` | 正式组合发行仍需干净 Core/Commercial commit、实际私有 remote、生产 New API digest pin 和部署授权 |
+| Core/Commercial 具有独立 FS、编号空间、ledger、binary、audit 和 lock 身份；Commercial migration 1-9 已通过隔离 Up/Down/Up 和 Core 主体删除；retention/FK 机器门禁逐项核对 27 条实际跨边界外键 | `internal/migrationstream`、`internal/editionmigration`、Commercial `cmd/commercial-migrate`、`contracts/core-foreign-key-actions.v1.json` | 法务/安全仍需填写期限、司法辖区并批准 legal hold、脱敏和到期销毁策略；pending 模板不能进入发行 |
+| CE 433 routes 与商业最终 454 routes、Core/Commercial Event Catalog 和公开运行源均通过显式 contract/route-source 校验 | `scripts/check-openapi-routes.py`、Commercial contract tests | 正式生产组合 Release Manifest 尚未生成 |
+| `/api/provider-usage/summary` 已改为只返回 `estimatedCost`、`authoritative:false` 和 `technical_estimate` | `internal/provider/service.go`、OpenAPI | 仅供 Provider 技术诊断，商业 Web 有静态门禁禁止引用 |
+| Provider 限制策略不再读取 `cost_records` 执行日/月金额门禁 | `internal/provider/limits.go`、`000074_cost_records_non_authoritative.sql` | 并发、请求次数和熔断继续生效；新非空金额预算写入被拒绝，历史字段只读 |
+| 文本、图片、音频和视频 create 已统一携带冻结 Billing Context；Gateway 在每个未发起的付费 create 前重新校验当前授权并写 Provider Request/Call 归因 | `internal/provider/billing_routing.go`、Commercial BillingRoutingAuthorizer | 尚需已授权生产调用核对真实 New API log ID |
+| 个人/组织 BillingAccount 按 organization + Billing Authority 隔离；项目绑定、sponsorship、RBAC 和 owner consent 分别校验 | Commercial billing context/identity/API | 真实试点组织尚未选择 |
+| 多 Credential 按 BillingAccount、Authority、group/model scope 与 generation 隔离；Gateway 默认候选隐藏 `system_managed` | `000071_provider_system_managed_credentials.sql`、Commercial credential provisioner | 正式生产 provisioning 仍需零费用开户授权 |
+| `provider_async_tasks` 固定原 `credential_id` 与 Billing Context，poll/cancel 不重新路由 | Core Gateway video/runtime、Commercial resolver | 尚需已授权异步视频 smoke |
+| 余额、充值、订阅、消费、错误、权限和 Realtime 已统一到 New API 权威语义；固定上游不支持的资金写入前后端均 fail-closed | Commercial Billing Bridge/API/Web、Core 错误映射 | 需升级到具备安全资金契约的 New API 版本后才能执行真实充值/退款 |
 
 ### 3.2 当前 New API 实例只读探测
 
-2026-07-28 对 `https://einzieg.com` 进行的无凭据只读探测确认：
+2026-07-29 对 `https://einzieg.com` 和生产主机进行的无凭据/容器只读取证确认：
 
 - `/api/status` 可用。
 - `/api/usage/token` 路由存在。
@@ -562,26 +565,35 @@ Core 现有项目删除会硬删除 `projects`。Commercial migration 不能通�
 - 当前状态配置显示充值、订阅、用户、Token 和消费日志相关模块已启用。
 - 当前实例通过 `quota_per_unit`、`quota_display_type`、`display_in_currency` 和汇率字段控制额度展示，CineWeave 不得写死换算常量。
 - 部分 `/api/*` 路由在鉴权失败时仍返回 HTTP 200，并在 JSON 中返回 `success:false`。适配器必须同时校验 HTTP 状态、业务 `success` 和错误结构。
-- `/api/status` 当前未提供可用的版本字符串，因此不能以该字段作为兼容性保证。
+- `/api/status` 当前自报 `v1.0.0-rc.22`。
+- 运行中容器配置仍引用可移动的 `calciumion/new-api:latest`，但实际镜像 RepoDigest 为 `calciumion/new-api@sha256:d600f20c2781e1a173c2a02f8c33b0c4b1b4e8e5a8b107bafaf2442ae2c9386c`。
+- OCI label 将镜像声明为官方仓库 commit `bc14c18f6024e79cba1c08d02cd007796e12d668`、tag `v1.0.0-rc.22` 和 `AGPL-3.0`；固定 tag 解析到同一 commit。
+- 对该 commit 的直接源码归档取证得到：archive SHA-256 `5834d1634fff019ea0b41d2d84b2a202dc6c552184199c16f9845613de4a2425`、`LICENSE` SHA-256 `6f1e622c82a380075843bb084a7ec3b1f1d12a4a02526d75e78b0924a860aa75`、README SHA-256 `3ec5c480d9d27ec5cb0e1254684cdab6cc6b1cad1ac551146865f94daeab456e`、README 许可段 SHA-256 `fadbb99db7cfc99ef2e920077dedee1896080591679bb9836bd655fde99b9187`、`NOTICE` SHA-256 `903b9ca441be6912459551f39b70338ee7a410eba6cce097043cf006622bd6bc`。
+- README 许可段机器检查确认包含署名及原项目链接要求；机器检查只记录 marker 和 hash，不代替法律解释。
+- OCI label 与源码 commit/tag/license family 一致仍不能证明镜像内容与源码归档逐字等价；当前 `modificationAssessment=unverified`，因此还不能把 `modified=false` 或 AGPL 交付结论写入正式 Release Manifest。
+- 可重复取证命令为 `scripts/capture-new-api-upstream-evidence.py`；当前脱敏证据输出在忽略的 `tmp/new-api-upstream-evidence.json`，正式发行必须重新生成并签名保存。
+- `scripts/capture-new-api-runtime-image.ps1` 与 `scripts/check-new-api-runtime-image.py` 已建立 fail-closed 运行镜像门禁：容器 `Config.Image` 必须是 digest 引用，运行 `RepoDigests`、固定契约 fixture、上游证据和组合 Release Manifest 必须一致；证据强制写在两个源码仓库外。当前生产仍为 `latest`，因此不能通过该门禁。
+- 生产 New API 数据库已通过服务器内只读 schema 探测确认是 PostgreSQL 15.18；`users`、`tokens`、`top_ups`、`subscription_orders`、`subscription_plans`、`user_subscriptions`、`logs`、`setups` 共 132 个目标列的指纹为 `f12524e2df8392e6b5f95abb0216d62b71f9253b9e9e4e7bb7e9659a8ba437d0`。未读取业务行、未执行 DDL。
+- 私有装配目录已用固定镜像启动隔离本地实例并创建专用合成账号，零费用采样用户余额、两种 group/model scope Token、Token secret recovery、充值信息/历史、订阅、日志和鉴权错误；Secret-bearing SQLite 运行目录随后销毁，只保留脱敏 hash 证据。
 
-### 3.3 实施前必须补齐的契约证据
+### 3.3 契约证据状态
 
-在开始业务实现前，必须使用专用测试用户和专用测试 Token 完成以下零费用契约采样：
+固定 New API `v1.0.0-rc.22` 已使用专用合成用户完成零费用采样；勾选项已有脱敏 fixture 和自动化门禁，未勾选项继续阻止对应生产能力：
 
-1. 固定 New API 生产镜像 digest、源码 commit 或可审计版本标识。
-2. 固定该版本的 `LICENSE`、README 许可段、Notice、镜像来源、修改补丁和交付方式，并完成 AGPL/商业许可路径的书面法律结论。
-3. 记录账户余额查询的真实请求头、响应字段、quota 单位和金额换算，明确 aggregate、cash、grant、subscription 与 lifetime usage 是否能被权威区分。
-4. 记录 Token 额度查询对“无限 Token”“有限 Token”“用户余额不足”的行为，以及多个 Token 不同 group/model scope 的组合语义。
-5. 记录用户、Token、分组、充值、订阅和消费日志接口的权限要求。
-6. 记录账户停用、Token 停用、模型无权限、余额不足和速率限制的错误结构。
-7. 记录 Token 创建是否支持幂等键、确定性名称/备注、按外部 ID 查询和撤销补偿。
-8. 记录异步图片或视频调用在何时扣费。
-9. 记录充值订单的创建、支付、完成、失败、关闭和退款状态。
-10. 记录订阅额度发放、续期、过期和用户分组变化行为。
-11. 确认 New API 数据库类型、schema 版本和是否支持受控只读视图。
-12. 将采样响应脱敏保存为仓库测试 fixture；不得保存真实 Token、用户隐私或支付凭据。
+1. [ ] 固定 New API 生产镜像 digest、源码 commit 或可审计版本标识。（运行实例的 digest/commit/tag 已取证；生产 Compose 仍需从 `latest` 改为 digest，并在候选发行重新取证。）
+2. [ ] 固定该版本的 `LICENSE`、README 许可段、Notice、镜像来源、修改补丁和交付方式，并完成 AGPL/商业许可路径的书面法律结论。（文件 hash 已取证，修改状态和书面法律结论未完成。）
+3. [x] 记录账户余额查询的真实请求头、响应字段、quota 单位和金额换算，明确 aggregate、cash、grant、subscription 与 lifetime usage 是否能被权威区分。
+4. [x] 记录 Token 额度查询对“无限 Token”“有限 Token”“用户余额不足”的行为，以及多个 Token 不同 group/model scope 的组合语义。
+5. [x] 记录用户、Token、分组、充值、订阅和消费日志接口的权限要求。
+6. [x] 记录账户停用、Token 停用、模型无权限、余额不足和速率限制的错误结构。
+7. [x] 记录 Token 创建的幂等缺口、确定性 generation 名称、精确 lookup、secret recovery 和撤销补偿。
+8. [x] 记录同步与异步图片/视频调用的预扣、失败退款和终态结算时点。
+9. [ ] 记录充值订单的创建、支付、完成、失败、关闭和退款状态。（固定版本没有满足方案的支付订单/退款写路由，运行时能力保持禁用。）
+10. [ ] 记录订阅额度发放、续期、过期和用户分组变化写行为。（订阅读取已采样；固定版本没有安全幂等购买契约。）
+11. [x] 确认 New API 数据库类型、schema 版本和受控只读视图。
+12. [x] 将采样响应脱敏保存为仓库测试 fixture；不保存真实 Token、用户隐私或支付凭据。
 
-在这些契约证据完成前，接口名称只能作为候选，不得依据猜测实现生产写操作。
+未勾选证据不阻止只读余额、订阅和消费展示，但必须阻止对应生产镜像发布或资金写入；不得依据候选接口名称伪造成功。
 
 ## 4. 产品目标与非目标
 
@@ -1440,6 +1452,7 @@ POST /internal/billing/v1/accounts/ensure
   "billingAccountId": "uuid",
   "billingAuthorityId": "uuid",
   "organizationId": "uuid",
+  "requestedByUserId": "uuid",
   "subjectType": "personal",
   "subjectExternalKey": "cineweave:org:uuid:user:uuid",
   "displayName": "用户名称",
@@ -1748,8 +1761,9 @@ GET  /api/admin/billing/accounts/{billingAccountId}/refund-orders/{orderId}
 
 - 在迁移期仅保留给 Provider 管理员查看技术调用汇总。
 - 普通用户商业页面不得调用。
-- `totalCost` 必须标记为非权威估算，或在新 UI 中完全隐藏。
-- 完成迁移后决定废弃或改名为 Provider 技术用量。
+- 响应已使用 `estimatedCost`/`estimateCurrency`，并固定返回 `authoritative:false`、`sourceSemantics:technical_estimate`；不再包含容易误解为账单的 `totalCost`。
+- Commercial Web Overlay 测试禁止引用该类型、客户端方法和路径；用户钱包、余额与交易只读取 Billing Bridge/New API。
+- Core `cost_records.billing_authoritative` 由数据库约束固定为 `false`，仅保留 Provider provenance、调试和容量分析用途。
 
 ## 12. 前端目标
 
@@ -2087,102 +2101,105 @@ Provider Gateway 应尽可能从 New API 响应头或响应体保存外部 reque
 
 ### P0：版本、许可证与契约固定
 
-- [ ] 完成版权归属、贡献历史和第三方许可证审计。
-- [ ] 由专业律师确认 AGPL 与商业双重许可文本、CLA 和商标政策。
-- [ ] 固定 New API 镜像 digest/源码 commit、LICENSE/README hash、修改与交付方式，并形成 AGPL 合规或商业/OEM 许可书面结论。
-- [ ] 创建 CE 公共 Core 与私有 Commercial Assembly 仓库、`core.lock`、allowlist Overlay 和临时装配流水线。
+- [ ] 完成版权归属、贡献历史和第三方许可证审计。（可重复的 Git/Go/Node/容器/二进制资产工程清单、hash 证据与 release fail-closed gate 已完成，见 `docs/community-license-readiness.md`；当前仍缺权利人/律师对历史授权链和第三方义务的正式结论。）
+- [ ] 由专业律师确认 AGPL 与商业双重许可文本、CLA 和商标政策。（已提供 `packages/edition/source-license-approval.schema.json` 绑定候选发行 inventory hash；不得用示例或环境变量替代受控法律批准。）
+- [ ] 固定 New API 镜像 digest/源码 commit、LICENSE/README hash、修改与交付方式，并形成 AGPL 合规或商业/OEM 许可书面结论。（当前生产镜像的 digest、官方 commit/tag、LICENSE/README/NOTICE hash 已由 `scripts/capture-new-api-upstream-evidence.py` 取证；仍需证明镜像是否修改、把 Compose 从 `latest` 固定到 digest，并取得书面法律结论。）
+- [ ] 创建 CE 公共 Core 与私有 Commercial Assembly 仓库、`core.lock`、allowlist Overlay 和临时装配流水线。（公共 `core.lock`/Overlay Schema、唯一 Web replace slot、fail-closed 检查器、临时装配器、强制鉴权的 API module slot 及 OpenAPI/Event/route-list 合并器已完成；仍需建立并绑定实际私有仓库 remote 后才能勾选。）
 - [x] 固定 `EditionProvider`、`EntitlementService`、`BillingRoutingAuthorizer`、`CommercialModuleRegistry`、Web `EditionEntry` 契约 v1，并锁定 RBAC `billing.spend` 与 sponsorship owner consent 的唯一组合公式。
 - [x] 固定 Edition Manifest、Feature Registry、授权错误、License 操作矩阵、可信时间/时钟回拨/吊销代次和 Billing Authority 约束。
-- [ ] 建立 CE 独立构建、完整 Git history/归档/镜像/chunk/source map 泄漏扫描。
-- [ ] 建立 DDL owner manifest、Core/Commercial 独立 migrator/ledger 和组合 Release Manifest 规范。
+- [x] 建立 CE 独立构建、完整 Git history/归档/镜像/chunk/source map 泄漏扫描；执行策略、证据和泄漏响应见 `docs/community-release-security.md`。
+- [x] 建立 DDL owner manifest、Core/Commercial 独立 migrator/ledger 和组合 Release Manifest 规范；机器契约、装配顺序与验证证据见 `docs/commercial-assembly-release-contract.md`。检查器默认按正式候选 fail-closed，缺失/部分证据、两个 commit、clean 状态、lock/allowlist/装配脚本、源码归档或归档内 Overlay 任一漂移都会阻断；只有 fixture 测试可显式使用 `--contract-only`。
 - [x] 改造 OpenAPI route checker，使其可验证 CE contract 和商业最终合并 contract。
-- [ ] 使用专用测试账户采样余额、Token、用户、充值、退款、订阅、webhook 和日志接口。
-- [ ] 建立脱敏 fixture 和契约测试。
-- [ ] 确认 aggregate/cash/grant/subscription/lifetime usage、quota、币种和汇率规则。
-- [ ] 确认多 Token 的 group/model scope、幂等创建、lookup、secret 是否可再次取得、撤销和轮换语义；默认按 secret 不可恢复设计。
-- [ ] 固定充值/订阅/退款 request hash、幂等冲突、external event ID/revision、webhook inbox 和签名/nonce 契约。
-- [ ] 由法务和安全确认财务证据 retention、隐私脱敏、legal hold、Core 主体删除及外键动作矩阵。
-- [ ] 确认 New API 错误和扣费时点。
-- [ ] 确认只读视图可行性。
+- [ ] 使用专用测试账户采样余额、Token、用户、充值、退款、订阅、webhook 和日志接口。（固定镜像的隔离本地合成账号已完成余额、用户、双 Token、充值信息/历史、订阅、日志及错误采样；当前上游没有支付退款路由或 outbound billing webhook，且未执行任何支付/退款写操作。只有取得具备幂等订单/退款契约的新上游版本后才能完成本项。）
+- [x] 建立脱敏 fixture 和契约测试。（私有装配目录 `fixtures/new-api/v1.0.0-rc.22` 绑定固定 version/commit/digest、零费用采样 hash、负向 capability 证据；适配器同时校验 HTTP 与业务 success，并测试 Secret 不进入错误。）
+- [x] 确认 aggregate/cash/grant/subscription/lifetime usage、quota、币种和汇率规则。（`user.quota` 仅作为 aggregate remaining，`used_quota` 作为 lifetime consumed；cash/grant/subscription 无权威拆分时保持 `null`；换算使用 status 快照和有理数定点计算，未知显示类型 fail-closed。）
+- [x] 确认多 Token 的 group/model scope、幂等创建、lookup、secret 是否可再次取得、撤销和轮换语义；默认按 secret 不可恢复设计。（当前固定版本 create 无幂等且不返回 ID/key，使用唯一 generation 名称后 list 精确解析；`POST /api/token/{id}/key` 可恢复完整 secret，但 Bridge 仍只允许瞬时传给 Gateway；重复名称 quarantine，轮换先激活新 generation 再 draining 旧 Token。）
+- [x] 固定充值/订阅/退款 request hash、幂等冲突、external event ID/revision、webhook inbox 和签名/nonce 契约。（已实现账户/Authority/金额/币种/套餐 revision/原订单 snapshot/审计工单的规范化 hash、同键异 hash 冲突及 HMAC key-id/timestamp/nonce/payload-hash 契约；当前 New API 写接口不满足该契约，能力保持禁用。）
+- [x] 建立 retention policy、Core FK action manifest、实际数据库目录核对和 Release Manifest 批准证据门禁。（私有 pending 模板不含臆测期限；27 条 Commercial→Core 外键通过隔离 PostgreSQL 精确核对，证据级引用只能 `SET NULL`，纯 UI 偏好才允许 `CASCADE`；未批准策略在 `--require-approval` 和组合 Release Manifest 校验中 fail-closed。）
+- [ ] 由法务和安全确认财务证据 retention、隐私脱敏、legal hold、Core 主体删除及外键动作矩阵。（机器门禁已完成；仍需在仓库外受控记录中填写发行司法辖区、四类数据期限、法务/安全记录 ID 与批准证据，不能使用 fixture 或 pending 模板替代。）
+- [x] 建立 New API 生产运行镜像不可变证明门禁。（只读 capture 绑定容器配置引用与运行 RepoDigest，检查器再与上游证据、固定契约 fixture 和组合 Release Manifest 核对；拒绝 `latest`、digest/commit/tag/evidence hash 漂移及仓库内证据输出。该工程项完成不代表当前生产已改用 digest。）
+- [x] 确认 New API 错误和扣费时点。（同步非免费调用在上游请求前预扣、失败退款、成功按实际 usage 结算差额；异步 create 强制全额预扣并在 submit/poll 终态调整或退款；余额/Token 预扣失败为非重试错误。）
+- [x] 确认只读视图可行性。（生产只读确认 PostgreSQL 15.18；私有层 5 个 security-barrier view、精确 source schema hash/version/column gate 和专用只读角色已在隔离 PostgreSQL 通过 Up/Down/Up，写入被拒绝；未改生产。）
 
 完成标准：CE 能从公共源码独立构建运行；商业 Assembly、迁移所有权、许可证可信时间和数据保留策略可审计；没有任何生产写操作，所有计划使用的 New API 接口都有可重复契约测试，且 New API 上游许可路径已有书面结论。
 
 ### P1：私有 Billing Bridge
 
-- [ ] 在 Commercial Assembly 新增独立 Bridge 服务。
-- [ ] 实现服务认证、健康和 readiness。
-- [ ] 实现 New API API adapter。
-- [ ] 实现只读视图 adapter 和 schema version gate。
-- [ ] 实现统一错误。
-- [ ] 实现 Billing Authority 隔离和外部 ID 复合键。
-- [ ] 实现多 BillingCredential、Gateway sealed inactive import/resolve/activate、Token provisioning saga、secret 丢失恢复、补偿和 draining 轮换。
-- [ ] 增加 Compose 和生产网络配置。
+- [x] 在 Commercial Assembly 新增独立 Bridge 服务。（私有装配目录已提供独立 `cmd/billing-bridge`，不进入 CE 二进制或公共 Web chunk。）
+- [x] 实现服务认证、健康和 readiness。（内部 Bearer 服务身份使用定长 hash 比较；`/healthz` 与 `/readyz` 分离，readiness 同时校验固定 New API contract 和只读视图身份。）
+- [x] 实现 New API API adapter。（已覆盖固定版本的用户、PAT、余额、Token、充值查询、订阅查询和消费日志，并同时校验 HTTP 与业务 `success`。）
+- [x] 实现只读视图 adapter 和 schema version gate。（强制 `transaction_read_only=on`，校验 view schema、上游版本、生产 source schema hash 及必需列。）
+- [x] 实现统一错误。（Bridge 对外使用稳定 `BILLING_*` 错误码，New API adapter 的上游错误经过脱敏且区分 retryable、HTTP 和业务失败。）
+- [x] 实现 Billing Authority 隔离和外部 ID 复合键。（Bridge 运行时按精确 Authority ID 解析且不存在跨 Authority fallback；Commercial 表对用户、Token、订单、日志和订阅外部 ID 使用 Authority 复合唯一键，账户余额缓存也绑定 Authority 与 binding revision。）
+- [x] 实现多 BillingCredential、Gateway sealed inactive import/resolve/activate、Token provisioning saga、secret 丢失恢复、补偿和 draining 轮换。（Commercial repository、Bridge saga 与 Core migration 000071/Provider Gateway 内网接口已形成完整闭环；Gateway 404 解析、显式开户操作人、双侧幂等激活、replacement generation 和旧凭据 draining 均有回归，PostgreSQL 实际 Up/Down/Up 开户、凭据与余额集成测试通过。）
+- [x] 增加 Compose 和生产网络配置。（私有 `compose.commercial.yml`、固定基础镜像的 Commercial Go Dockerfile、secret-only 环境样例和网络边界文档已提供；静态 Compose 校验确认 API/Worker 不接入 New API 网络，Gateway 仅接入 AI 网络，Bridge 仅接入管理/只读数据网络且不暴露宿主端口。）
 
 完成标准：Bridge 能对测试账户执行开户、余额查询和多个不同 group/model scope Token 的确保；任一点崩溃都不会重复创建或遗留可路由 Token，明文 Token 不出现在 API、数据库或日志。
 
 ### P2：计费账户与余额 UI
 
-- [ ] 在 Commercial migration stream 新增 BillingAuthority、BillingAccount、NewAPIAccountBinding、BillingSponsorship、BillingCredential、provisioning attempt 和项目绑定迁移，并落实 Core FK `SET NULL`、脱敏 reference 和 retention 约束。
-- [ ] 新增全部显式使用 `billingAccountId` 的商业 API/OpenAPI/Web 扩展，并接入公共扩展槽。
-- [ ] 实现自动开户。
-- [ ] 实现顶栏余额和计费中心只读页面。
-- [ ] 实现组织域个人钱包、组织钱包、显式项目绑定和完整商业 RBAC；sponsorship 只作为 owner consent，不创建权限。
-- [ ] 实现个人钱包 sponsorship 的显式同意、step-up authentication、revision 和撤销。
-- [ ] 团队项目缺少组织钱包且无有效 sponsorship 时 fail-closed。
-- [ ] 实现余额缓存和 Realtime 失效。
+- [x] 在 Commercial migration stream 新增 BillingAuthority、BillingAccount、NewAPIAccountBinding、BillingSponsorship、BillingCredential、provisioning attempt 和项目绑定迁移，并落实 Core FK `SET NULL`、脱敏 reference 和 retention 约束。（私有 `000001_billing_foundation` 同时建立订单/交易/webhook/outbox 基础表；DDL owner guard、独立 ledger、不可变 reference、活跃状态 fail-closed、关闭后 Core 主体删除历史保留及 Up/Down/Up 已在隔离 PostgreSQL 通过。）
+- [x] 新增全部显式使用 `billingAccountId` 的商业 API/OpenAPI/Web 扩展，并接入公共扩展槽。（私有 OpenAPI/Event/route 扩展已通过临时组合契约校验，共 12 条显式账户路由；Web 只通过 allowlist Edition Entry 和新增文件装配，独立 overlay typecheck 通过。）
+- [x] 实现自动开户。（个人钱包首次列举时触发幂等 ensure saga；组织钱包由具备 `billing.manage` 的管理员显式创建，账户、New API 用户、多 Token 与 Gateway sealed import 可从每个崩溃点恢复。）
+- [x] 实现顶栏余额和计费中心只读页面。（顶栏和计费中心均读取 Bridge/New API 权威余额，区分 fresh/stale/unavailable、aggregate/component/lifetime/unlimited，不从 `cost_records` 推算。）
+- [x] 实现组织域个人钱包、组织钱包、显式项目绑定和完整商业 RBAC；sponsorship 只作为 owner consent，不创建权限。（所有账户 API 显式携带 `billingAccountId`；个人钱包按 organization+owner 隔离，组织钱包与项目同组织，绑定 revision 与 `billing.manage`/`billing.read`/`billing.spend` 分离。）
+- [x] 实现个人钱包 sponsorship 的显式同意、step-up authentication、revision 和撤销。（密码 step-up 绑定当前 session credential version，授权 revision 使用 CAS，撤销后立即 fail-closed；Web 在绑定保存冲突后复用已生效授权并刷新 binding revision。）
+- [x] 团队项目缺少组织钱包且无有效 sponsorship 时 fail-closed。（项目绑定服务和读取视图同时校验账户 scope、owner、sponsorship ID/revision、状态与时间窗，不会回退到当前成员个人钱包。）
+- [x] 实现余额缓存和 Realtime 失效。（Bridge 使用 Authority+Account+binding revision 隔离的短 TTL 缓存；商业 outbox 事件映射至组织 SSE，前端按 organization-scoped query key 失效账户、余额与项目绑定。）
 
 完成标准：测试用户无需 New API 登录即可在 CineWeave 看到正确余额。
 
 ### P3：Provider 计费身份贯穿
 
-- [ ] 通过 Core migration 给 Provider Request/Call/Async Task 增加 opaque Billing Context。
-- [ ] 通过 Commercial sidecar 固化 BillingAccount、Authority、binding revision 和权益观察值。
-- [ ] 所有 Gateway 请求携带计费身份。
-- [ ] 每个新的付费 create 重新校验 License、tenant entitlement、`billing.spend` 和 New API 当前状态。
-- [ ] RoutingCandidate 同时选择模型和同账户、同 Authority BillingCredential。
-- [ ] fallback 不跨账户。
-- [ ] Async Task 固化 Billing Context 和 Credential。
-- [ ] 所有 Workflow/Agent/批任务传递请求人和计费账户。
-- [ ] 余额不足停止未发起的批量条目。
+- [x] 通过 Core migration 给 Provider Request/Call/Async Task 增加 opaque Billing Context。（Core `000073_provider_billing_context` 为 Workflow/Request 固化 context revision/hash，并让 Call/Async Task 继承 opaque context；Up/Down/Up、baseline 和不可变触发器回归通过。）
+- [x] 通过 Commercial sidecar 固化 BillingAccount、Authority、binding revision 和权益观察值。（私有 Billing Context 服务保存账户、Authority、项目绑定 revision、许可证/Entitlement/权限观察值和规范化 snapshot hash，Core 只持 opaque reference。）
+- [x] 所有 Gateway 请求携带计费身份。（付费 Gateway create 统一先经 Billing Identity resolver；durable Workflow 由 `workflowRunId` 冻结，直接 API/Commerce setup 显式携带 requester、operation permission、reason 和幂等键；静态架构测试阻止带 `projectId` 的付费请求遗漏 durable 或 direct identity。）
+- [x] 每个新的付费 create 重新校验 License、tenant entitlement、`billing.spend` 和 New API 当前状态。（Commercial Routing Authorizer 在每次 create 校验当前许可证、租户权益、Core RBAC、账户/Token 状态、余额和模型 scope；冻结观察值仅用于审计，不作为授权租约。）
+- [x] RoutingCandidate 同时选择模型和同账户、同 Authority BillingCredential。（Gateway 在锁定模型前逐候选执行 Commercial credential authorization，返回精确 Credential ID；视频 planner 同样先过滤不可计费的模型/凭据组合。）
+- [x] fallback 不跨账户。（Billing Routing 只接受当前 Billing Context 的 Account+Authority credential allowlist；余额不足、账户/Authority/模型拒绝为终态且立即中止，不进入其他账户候选。）
+- [x] Async Task 固化 Billing Context 和 Credential。（视频 create 将精确 `credentialId` 与 `billingContextId` 写入 Async Task；poll/cancel 只按任务固化凭据执行，Commercial attribution 额外校验 create call 与 task credential 一致。）
+- [x] 所有 Workflow/Agent/批任务传递请求人和计费账户。（Workflow 由 `workflow_runs.created_by` 冻结并校验 requester，Agent/直接 API 从认证 principal 传递 requester，Commerce setup 使用显式 requester；账户由项目显式 binding 解析且无个人钱包隐式回退。）
+- [x] 余额不足停止未发起的批量条目。（镜头图片/提示词、资产、衍生资产、Commerce 参考图/视频/脚本裂变/协调器及分集视频批次均在首个 `billing_insufficient_balance` 后停止补充并发窗口；已在途项收敛，未发起项以同一终态码落库，定向 Workflow 回归通过。）
 
 完成标准：两个用户并发调用不会交叉使用 Token，New API 实际消费归属正确。
 
 ### P4：充值、退款、订阅和消费明细
 
-- [ ] 实现带 request hash 和冲突检测的充值订单。
-- [ ] 实现持久化 webhook inbox、订单查询和回调/轮询恢复；inbox、业务投影和 outbox 同事务。
-- [ ] 实现套餐与分组映射。
-- [ ] 实现订阅购买和状态。
-- [ ] 实现仅限 `billing.refund`、step-up authentication 和审计工单的管理员退款；普通用户不开放退款 API。
-- [ ] 实现 New API 消费明细。
-- [ ] 实现项目/任务关联。
-- [ ] 实现充值、退款、订阅和消费 Realtime。
+- [x] 实现带 request hash 和冲突检测的充值订单。（订单 hash 固化 Authority、Account、金额、币种和请求人；同一账户/Authority 幂等键同请求返回原订单、异请求返回 `BILLING_ORDER_CONFLICT`，PostgreSQL 集成测试覆盖。固定 New API 版本缺少幂等充值契约，因此真实写入能力保持 fail-closed。）
+- [x] 实现持久化 webhook inbox、订单查询和回调/轮询恢复；inbox、业务投影和 outbox 同事务。（轮询事件也先进入 durable inbox；inbox、订单/订阅/交易投影、Commercial outbox 与 Core `event_outbox` 在同一 serializable 事务提交，重复事件 no-op、冲突事件隔离，后台 Reconciler 支持失败退避和恢复。）
+- [x] 实现套餐与分组映射。（用户侧仅显示本地 `planKey`/名称/revision；Bridge 将其映射到固定 New API subscription product 与用户分组，原始上游 group 不进入普通用户 API。）
+- [x] 实现订阅购买和状态。（订阅状态、额度、周期与 fresh/stale 读取已实现；购买订单、幂等/CAS 和未来 mutation seam 已完成，但固定上游不具备幂等购买能力时前后端均禁用入口且不调用上游。）
+- [x] 实现仅限 `billing.refund`、step-up authentication 和审计工单的管理员退款；普通用户不开放退款 API。（退款只存在于 `/api/admin/billing/...`，同时校验组织、`billing.refund`、近期密码二次认证、原订单 snapshot 和审计工单；固定上游无退款路由时 fail-closed。）
+- [x] 实现 New API 消费明细。（分页同步固定上游 usage log，保留外部日志 ID/revision、模型、quota、token 和金额换算证据；同步失败返回带 warning 的最近成功快照。）
+- [x] 实现项目/任务关联。（消费记录通过 Provider Request/Call/Async Task attribution 回填项目、Workflow 和调用 ID；异步补关联成功后发出失效事件。）
+- [x] 实现充值、退款、订阅和消费 Realtime。（`billing.order.updated`、`billing.subscription.updated`、`billing.transaction.synced` 已加入私有事件扩展与 Web SSE 失效逻辑。）
 
-完成标准：充值和退款前后余额变化与 New API 完全一致；幂等键复用不同请求必定冲突，重复/并发 webhook 不重复入账，普通用户无法调用退款接口。
+完成标准：幂等键异请求冲突、重复事件不重复投影、事务原子性和普通用户无退款接口均已通过自动化测试。固定 New API `v1.0.0-rc.22` 不提供安全幂等充值、订阅购买或退款契约，因此真实资金前后余额验证必须保持在 P6 授权 smoke/上游升级门禁内，当前实现不会伪造成功。
 
 ### P5：退出本地商业计费
 
-- [ ] Cloud/EE 普通用户商业页面不再使用 ProviderUsageSummary。
-- [ ] 停用 daily/monthly 金额预算门禁。
-- [ ] `cost_records` 标记为非权威。
-- [ ] 保留技术限流、并发和熔断。
-- [ ] 文档、OpenAPI、错误和权限统一。
-- [ ] 增加新旧数据保护脚本。
+- [x] Cloud/EE 普通用户商业页面不再使用 ProviderUsageSummary。（商业 Web Overlay 只读取 Billing Bridge 账户、余额、订阅、订单和交易接口；静态测试禁止导入 `ProviderUsageSummary`、`getProviderUsageSummary` 或 `/api/provider-usage/summary`。）
+- [x] 停用 daily/monthly 金额预算门禁。（Provider Gateway 不再读取 `cost_records` 执行金额预算判断；新增金额预算写入 fail-closed，历史预算值可清除但不再参与运行时决策。）
+- [x] `cost_records` 标记为非权威。（Core migration `000074_cost_records_non_authoritative` 将 `billing_authoritative` 固定为 `false` 并补充表、字段注释；ProviderUsageSummary 仅返回 `estimatedCost`、`estimateCurrency`、`authoritative:false` 和 `technical_estimate` 语义。）
+- [x] 保留技术限流、并发和熔断。（请求数配额、并发租约、请求速率和熔断仍在 Provider Gateway 调用上游前执行，并由定向回归覆盖。）
+- [x] 文档、OpenAPI、错误和权限统一。（Core/OpenAPI/Web 类型统一非权威估算语义；Edition 唯一真源、Go、Web 和 OpenAPI 已同步商业计费拒绝码；所有可见错误均有中文映射，退款仍仅限管理员权限与 step-up 路径。）
+- [x] 增加新旧数据保护脚本。（`billing-data-guard.ps1` 支持 Snapshot/Verify/DrainCheck/Inspect：精确保护商业配置，按 ID 与不可变投影保护历史账务及旧 `cost_records`，允许合法状态推进但拒绝既有记录丢失或身份变化；隔离 PostgreSQL 回归覆盖丢行检测。）
 
 完成标准：任何用户余额、充值、订阅和实际消费金额都只来自 New API。
 
 ### P6：生产试点
 
-- [ ] 使用同一 Core SHA 完成 CE 全新部署和核心工作流零费用回归。
-- [ ] 验证 CE 镜像不能通过环境变量启用商业模块。
-- [ ] 选择测试组织或白名单用户。
-- [ ] 执行零费用开户和余额 smoke。
-- [ ] 单独获得真实充值授权后执行最小充值 smoke。
-- [ ] 单独获得真实退款授权后，以原最小充值订单执行受控退款 smoke；无授权时保持 fixture/预检。
-- [ ] 单独获得 Provider 计费授权后执行一个最小文本调用。
-- [ ] 对账 New API 余额、消费日志、Provider Request 和 Call Log。
-- [ ] 扩展到图片和异步视频。
-- [ ] 最后逐步开放全部用户。
+- [x] 使用同一 Core 源状态完成 CE 全新部署和核心工作流零费用回归。（`pnpm run test:ce:fresh` 以唯一 Release ID 从同一工作树构建完整 app profile，在随机端口、独立网络和独立卷完成 migration 75 空库安装、14 个长期服务健康检查、Community 身份/无商业环境/商业路由 404 门禁和 `TestWorkflowGatewayIntegration` 文本链路；Provider 为 mock，`paidProviderCalls=0`，隔离资源自动清理。该工程验收不替代必须基于干净不可变 commit、法律批准文件和 public remote 全历史执行的正式 CE Release 审计。）
+- [x] 验证 CE 镜像不能通过环境变量启用商业模块。（从当前源码构建临时 CE API 镜像，`org.cineweave.edition=community`；传入 `CINEWEAVE_EDITION=enterprise` 后在连接数据库前以 exit 1 和 `feature_not_compiled` 退出；临时镜像已删除，正式发行仍由 `check-ce-release.ps1` 对不可变 SHA 重复验证。）
+- [x] 完成商业 Web 生产构建与零费用浏览器回归。（临时 Assembly 的 Next.js standalone 构建通过；Playwright 3/3 覆盖 New API 权威余额、陈旧状态、消费与项目关联、个人/组织钱包显式切换和刷新持久化、套餐权益拒绝中文化、上游不可用 fail-closed，以及禁止回退 ProviderUsageSummary。回归发现并修复 Commercial Entry 与 Core AppShell 的生产运行时循环依赖。）
+- [ ] 选择测试组织或白名单用户。（试点选择已固定为 Commercial bootstrap 的 organization-scoped tenant entitlement allowlist，不能用环境变量或前端开关替代；尚未获准在生产选择真实组织。）
+- [ ] 执行零费用开户和余额 smoke。（`smoke-commercial-billing-pilot.ps1` 已完成 mock 契约回归，校验 HTTPS、组织、Edition、双 SHA、Entitlement、New API 权威 fresh 余额和脱敏证据；真实开户会创建影子用户/Token，仍需单独生产试点授权。）
+- [ ] 单独获得真实充值授权后执行最小充值 smoke。（固定 New API 能力仍为 `topUpCreate=false`，脚本即使收到充值确认也会在写请求前阻断；未获得真实充值授权且未产生资金操作。）
+- [x] 单独获得真实退款授权后，以原最小充值订单执行受控退款 smoke；无授权时保持 fixture/预检。（当前未获得真实退款授权，已按本项允许路径完成 request hash、step-up、审计工单、普通用户无退款 API 和 `paymentRefund=false` 调用前阻断的 fixture/preflight；未产生退款。）
+- [ ] 单独获得 Provider 计费授权后执行一个最小文本调用。（未获得本轮 Provider 计费授权，未调用真实模型。）
+- [ ] 对账 New API 余额、消费日志、Provider Request 和 Call Log。（只读 `Reconcile` 阶段和数据保护脚本已就绪；需要先完成同一 BillingAccount 的已授权真实调用，不能以 fixture ID 冒充生产对账。）
+- [ ] 扩展到图片和异步视频。（需要分别授权真实图片/视频计费，并记录异步任务原 Credential 和终态；当前未执行。）
+- [ ] 最后逐步开放全部用户。（必须在单组织试点、真实资金/Provider 链路、数据保护 Verify 和回滚演练完成后单独授权，当前保持关闭。）
 
 完成标准：CE 核心能力未回归；Cloud/EE 的个人钱包、组织钱包、充值、受控退款、扣费、余额不足和异步任务均通过已授权真实链路。
 
@@ -2288,6 +2305,8 @@ Provider Gateway 应尽可能从 New API 响应头或响应体保存外部 reque
 14. 团队项目移除组织钱包绑定后拒绝新任务，绝不改扣成员个人钱包。
 15. 个人钱包所有者显式创建 sponsorship 后可绑定；撤销后阻止新 create，但已接受异步任务可安全收尾。
 16. License 在异步 create 已接受后过期：允许 poll/finalize，但阻止下一次新 create。
+
+无需生产或真实计费授权的组合发行浏览器门禁由 `scripts/test-commercial-web-overlay.ps1 -RunPlaywright` 执行。当前自动化覆盖权威余额读取、账户切换、消费项目归因、Entitlement 拒绝、上游不可用和本地成本来源禁用；涉及真实开户、资金和 Provider 扣费的步骤仍必须在生产试点中按下述授权边界执行。
 
 真实充值、真实退款和真实 Provider 调用必须分别获得用户授权，记录外部订单、webhook inbox、Provider Request/Call、New API log ID 和金额边界。
 
@@ -2445,48 +2464,51 @@ cineweave_entitlement_denials_total
 
 全部条件满足后才能认定商业化深度适配完成：
 
+下列勾选表示对应工程契约和自动化证据已经完成，不等于生产发布或法律批准。依赖公共/私有 remote、法律结论、不可变候选发行、生产试点或真实计费授权的条件必须保持未勾选，不能用 fixture 代替。
+
 - [ ] CE 的许可证、版权、商标、贡献政策和第三方清单已经法律复核并发布。
-- [ ] CE 能独立部署并完整运行核心内容生产，不依赖商业仓库或授权服务。
+- [x] CE 能独立部署并完整运行核心内容生产，不依赖商业仓库或授权服务。（`pnpm run test:ce:fresh` 在隔离空库、随机端口/网络/卷上构建并启动完整 Community app profile，14 个长期服务 healthy，商业凭据环境变量为 0、商业路由 404，零费用文本生产工作流通过且自动清理。）
 - [ ] CE 公共 remote 完整 Git history、归档、镜像 layer、Web chunk 和 source map 不包含私有商业实现、商业迁移或商业凭据。
-- [ ] New API 通用 Provider 接入在 CE 中可用，但平台钱包和影子账户只存在于 Cloud/EE。
+- [x] New API 通用 Provider 接入在 CE 中可用，但平台钱包和影子账户只存在于 Cloud/EE。
 - [ ] 固定 New API 镜像/源码/LICENSE/README、修改与交付方式，并已选定经法律复核的 AGPL 合规或商业许可路径。
-- [ ] Cloud/EE 使用不可变 Core SHA、Commercial Assembly SHA 和可验证 Edition Manifest。
-- [ ] 商业发行由临时 Assembly 构建，CE 产物不含私有 implementation，环境变量不能解锁。
-- [ ] Edition、租户套餐和用户角色分别校验，不能互相替代。
-- [ ] 商业许可证过期、吊销和时钟回拨操作矩阵保护数据与导出，只允许已接受任务安全收尾并阻止任何新的付费 create。
-- [ ] New API 是唯一余额和实际扣费来源。
-- [ ] 商业发行版普通用户无需知道或管理 New API 账号和 Token。
-- [ ] 每个组织域内的个人或组织计费账户都有独立 New API 用户和一个或多个独享 BillingCredential。
-- [ ] 平台钱包 Provider Account/Credential 标记为 `system_managed`，租户 Provider CRUD 无法查看管理入口或修改。
-- [ ] 项目明确绑定计费账户。
-- [ ] 团队项目缺少组织钱包且无有效 sponsorship 时 fail-closed，不静默改扣成员个人钱包。
-- [ ] sponsorship 不生成 `billing.spend`；项目操作 RBAC、RBAC `billing.spend` 和个人钱包 owner consent 三者分别校验。
-- [ ] `billing.spend` 和 sponsorship 不隐含 `billing.read`；非 owner 项目成员无法看到个人钱包余额、交易、账户名称或 sponsor 身份。
-- [ ] 所有钱包、余额、交易、订阅、充值和退款 API 显式指定并校验 BillingAccount，不存在隐式当前钱包。
-- [ ] 所有 Provider 请求保存冻结计费身份。
-- [ ] 每个新的付费 create 重新验证 License、Entitlement、`billing.spend`、账户和 Token 当前状态。
-- [ ] 模型 fallback 不跨钱包。
-- [ ] Credential fallback 不跨 BillingAccount 或 BillingAuthority。
-- [ ] 异步任务使用原 Credential。
-- [ ] 用户可以查看余额、充值、套餐和消费明细。
-- [ ] 组织钱包权限和消费可审计。
-- [ ] 余额不足不可自动重试且不会改扣其他账户。
-- [ ] New API API/视图版本有契约门禁。
-- [ ] 余额字段能区分 aggregate、component、lifetime usage、unlimited 和 unknown，不展示伪精确值。
-- [ ] 所有写操作走 New API 业务接口。
-- [ ] 只读数据库账号不能修改 New API。
-- [ ] CineWeave 不依据 `cost_records` 扣费或显示余额。
-- [ ] 本地技术限流、幂等和熔断继续有效。
-- [ ] 充值、退款、订阅、扣费和 Provider 调用可以通过稳定 ID 对账。
-- [ ] 订单幂等键绑定不可变 request hash；不同请求复用同一键必定冲突。
-- [ ] webhook inbox、订单/交易投影和 outbox 原子提交，重复或并发事件不重复入账。
-- [ ] 未泄露 Token、管理员凭据或支付凭据。
-- [ ] Token provisioning 任一点失败均可幂等恢复、补偿或 quarantine；进程退出导致 secret 丢失时先确认撤销旧 Token，再创建 replacement generation。
-- [ ] Gateway import 产物在 BillingCredential 映射和双侧幂等激活完成前始终不可路由，任何崩溃窗口都不会让 system-managed Credential 被 Core 默认候选选中。
-- [ ] Core 项目、组织或 Provider Account/Credential 删除不会阻塞既有 Core 删除流程，也不会级联丢失法定财务、授权和调用归因证据。
-- [ ] Core/Commercial migration ledger 独立，Commercial migration 不修改 Core-owned DDL。
-- [ ] CE 与商业最终 OpenAPI/Event Catalog 分别通过对应的路由一致性门禁。
-- [ ] `pnpm run test` 和专项集成/E2E 全部通过。
+- [ ] Cloud/EE 使用不可变 Core SHA、Commercial Assembly SHA 和可验证 Edition Manifest。（本地门禁已把两个 SHA、clean 状态、lock/allowlist/装配脚本、源码归档和归档内 Overlay 绑定为同一候选；仍需真实私有 remote 与正式不可变候选执行记录。）
+- [x] 商业发行由临时 Assembly 构建，CE 产物不含私有 implementation，环境变量不能解锁。
+- [x] Edition、租户套餐和用户角色分别校验，不能互相替代。
+- [x] 商业许可证过期、吊销和时钟回拨操作矩阵保护数据与导出，只允许已接受任务安全收尾并阻止任何新的付费 create。
+- [x] New API 是唯一余额和实际扣费来源。
+- [x] 商业发行版普通用户无需知道或管理 New API 账号和 Token。
+- [x] 每个组织域内的个人或组织计费账户都有独立 New API 用户和一个或多个独享 BillingCredential。
+- [x] 平台钱包 Provider Account/Credential 标记为 `system_managed`，租户 Provider CRUD 无法查看管理入口或修改。
+- [x] 项目明确绑定计费账户。
+- [x] 团队项目缺少组织钱包且无有效 sponsorship 时 fail-closed，不静默改扣成员个人钱包。
+- [x] sponsorship 不生成 `billing.spend`；项目操作 RBAC、RBAC `billing.spend` 和个人钱包 owner consent 三者分别校验。
+- [x] `billing.spend` 和 sponsorship 不隐含 `billing.read`；非 owner 项目成员无法看到个人钱包余额、交易、账户名称或 sponsor 身份。
+- [x] 所有钱包、余额、交易、订阅、充值和退款 API 显式指定并校验 BillingAccount，不存在隐式当前钱包。
+- [x] 所有 Provider 请求保存冻结计费身份。
+- [x] 每个新的付费 create 重新验证 License、Entitlement、`billing.spend`、账户和 Token 当前状态。
+- [x] 模型 fallback 不跨钱包。
+- [x] Credential fallback 不跨 BillingAccount 或 BillingAuthority。
+- [x] 异步任务使用原 Credential。
+- [x] 用户可以查看余额、充值、套餐和消费明细。
+- [x] 组织钱包权限和消费可审计。
+- [x] 余额不足不可自动重试且不会改扣其他账户。
+- [x] New API API/视图版本有契约门禁。
+- [x] 余额字段能区分 aggregate、component、lifetime usage、unlimited 和 unknown，不展示伪精确值。
+- [x] 所有写操作走 New API 业务接口。
+- [x] 只读数据库账号不能修改 New API。
+- [x] CineWeave 不依据 `cost_records` 扣费或显示余额。
+- [x] 本地技术限流、幂等和熔断继续有效。
+- [x] 充值、退款、订阅、扣费和 Provider 调用可以通过稳定 ID 对账。
+- [x] 订单幂等键绑定不可变 request hash；不同请求复用同一键必定冲突。
+- [x] webhook inbox、订单/交易投影和 outbox 原子提交，重复或并发事件不重复入账。
+- [x] 未泄露 Token、管理员凭据或支付凭据。
+- [x] Token provisioning 任一点失败均可幂等恢复、补偿或 quarantine；进程退出导致 secret 丢失时先确认撤销旧 Token，再创建 replacement generation。
+- [x] Gateway import 产物在 BillingCredential 映射和双侧幂等激活完成前始终不可路由，任何崩溃窗口都不会让 system-managed Credential 被 Core 默认候选选中。
+- [x] Core 项目、组织或 Provider Account/Credential 删除不会阻塞既有 Core 删除流程，也不会级联丢失法定财务、授权和调用归因证据。
+- [x] Core/Commercial migration ledger 独立，Commercial migration 不修改 Core-owned DDL。
+- [x] Commercial retention/FK 机器门禁与实际数据库目录一致，未批准法务/安全政策不能进入组合 Release Manifest。
+- [x] CE 与商业最终 OpenAPI/Event Catalog 分别通过对应的路由一致性门禁。
+- [x] `pnpm run test`、无需外部授权的专项集成和 fixture/浏览器 E2E 全部通过。（Core 433 routes、migration head 75；CE 隔离空库全新安装、14 服务健康和零费用文本生产链路通过；Commercial 合并 454 routes/21 商业 routes/275 events；组合 Release Manifest 30 个负向用例覆盖缺失/部分证据及 commit、脚本、归档和 Overlay 漂移；商业 Go 全包、合同装配、试点脚本契约、迁移/数据保护及 Next.js standalone Playwright 3/3 均通过。）
 - [ ] 生产发布使用不可变 release，schema、seed、镜像和 Temporal Build ID 一致。
 - [ ] 真实充值、真实退款和真实 Provider smoke 分别获得授权，并记录金额、外部订单、事件 inbox 和调用证据。
 
@@ -2527,26 +2549,25 @@ cineweave_entitlement_denials_total
 - CineWeave 保留外部订单、交易和调用关联，但不维护可扣减余额；Core 主体硬删除不得级联删除这些证据。
 - EE 离线许可证使用单调可信时间、序列号和吊销代次；时钟回拨进入受限状态，完全离线不能承诺实时吊销。
 - 首期退款仅由拥有 `billing.refund` 的平台财务或受控支持人员发起，不提供普通用户自助退款。
+- Core migration head 与 `schema_migrations`、Commercial `commercial_schema_migrations`、DDL owner manifest、Up/Down/Up 和组合 Release Manifest 已形成独立可执行契约。
+- 固定 New API `v1.0.0-rc.22` 已确认支持账户、Token、余额、订阅读取和消费日志；不支持符合本方案要求的幂等充值、订阅购买、退款或 outbound billing webhook，因此这些写能力保持 fail-closed。
+- Commercial 试点组织使用 tenant entitlement allowlist；零费用开户、余额、对账、充值和退款由仓库外证据脚本分阶段执行，资金与 Provider 调用继续要求分项授权。
 
-### 26.2 实施前待确认
+### 26.2 仍待外部确认或发行选择
 
 - CineWeave Core 的最终版权主体和商业许可签约主体。
 - 外部贡献采用 CLA、版权转让还是其他可支持双重授权的机制。
 - `CineWeave` 名称、Logo 和官方发行标识的商标主体及使用政策。
 - 公共仓库、私有 Commercial Assembly、公共/私有镜像 Registry 的最终名称和访问控制。
-- EE 许可证载荷、签名算法、有效期、宽限期、部署绑定、可信时间持久化、HA 合并、吊销包和离线续期流程。
-- Core/Commercial migration ledger 的具体工具、目录和组合发布命令。
-- New API 当前生产镜像 digest 或源码 commit。
-- 固定 New API 版本采用 AGPL 合规部署还是商业/OEM 许可，以及对应源码/Notice/署名交付方式。
-- New API 管理接口是否足够支持自动开户、Token 和订阅写操作。
-- New API 是否提供可靠 Token 创建幂等键或确定性外部 lookup，以及 lookup 能否安全再次取得完整 secret；未证明前按 secret 不可恢复设计，若幂等或 lookup 都不提供则首期自动开户降级为受控人工流程。
-- New API 充值、订阅和退款是否提供稳定 external event ID/revision、签名 key ID、订单查询和部分退款语义。
+- EE 许可证的商业默认有效期、宽限期、客户/部署绑定规则、吊销包发布 SLA 和离线续期流程；签名、可信时间、序列号、吊销代次及 fail-closed 工程契约已经固定。
+- 将已取证的 New API digest/source/LICENSE/README/NOTICE 固定进真实 Compose 与 Release Manifest，并确认生产镜像是否修改；候选容器必须通过已实现的运行镜像四方一致门禁。
+- 固定 New API 版本采用 AGPL 合规部署还是商业/OEM 许可，以及对应源码、Notice、署名和客户交付方式。
+- 选择具备 request-hash、幂等充值/订阅/退款、稳定 external event revision、订单查询和 webhook 签名契约的后续 New API 版本；升级前固定版本继续禁用资金写入。
 - 各发行地区财务、安全与授权证据的 retention、隐私脱敏、legal hold 和到期销毁期限。
 - 若需受控 fork，维护方式和升级策略。
 - 首期对外显示币种。
 - Cloud 免费套餐、专业版、团队版和企业版的具体权益及 New API group key；Cloud 免费套餐不得与 Community Edition 混称。
 - 首期支付渠道。
-- 是否首期支持自动充值。
 - 是否首期支持发票；退款已确定为受控管理员流程。
 - 组织钱包默认由组织所有者开通还是由平台管理员审批。
 

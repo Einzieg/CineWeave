@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -104,6 +105,132 @@ func TestBatchGenerateDerivedAssetImagesWorkflowUsesDurableV2Activities(t *testi
 	}
 	if len(failedItems) != 1 || failedItems[0] != "execution-2" {
 		t.Fatalf("failed items = %v, want execution-2", failedItems)
+	}
+}
+
+func TestDerivedAssetBatchStopsProviderCallsAfterInsufficientBalance(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	items := make([]DerivedAssetBatchWorkItem, 0, 4)
+	for index := 1; index <= 4; index++ {
+		items = append(items, DerivedAssetBatchWorkItem{
+			ExecutionItemID: fmt.Sprintf("execution-%d", index),
+			RequestItemID:   fmt.Sprintf("request-%d", index),
+			BatchID:         "batch-1",
+			InputOrdinal:    index,
+			RequirementID:   fmt.Sprintf("requirement-%d", index),
+			NodeRunID:       fmt.Sprintf("node-%d", index),
+			NodeKey:         fmt.Sprintf("derived-asset:%d", index),
+			AttemptNo:       1,
+			Status:          "queued",
+		})
+	}
+	env.RegisterActivityWithOptions(func(
+		context.Context,
+		TextToStoryboardInput,
+		string,
+	) ([]DerivedAssetBatchWorkItem, error) {
+		return items, nil
+	}, activity.RegisterOptions{Name: "LoadDerivedAssetExecutionItems"})
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		input TextToStoryboardInput,
+		item DerivedAssetBatchWorkItem,
+		owner string,
+	) (DerivedAssetExecutionLease, error) {
+		return DerivedAssetExecutionLease{
+			DerivedAssetBatchWorkItem: item,
+			OrganizationID:            input.OrganizationID,
+			ProjectID:                 input.ProjectID,
+			WorkflowRunID:             input.WorkflowRunID,
+			LeaseOwner:                owner,
+			LeaseToken:                "lease-" + item.ExecutionItemID,
+			Execution: NodeExecution{
+				NodeRunID: item.NodeRunID, ExecutionToken: "token-" + item.ExecutionItemID,
+				AttemptGeneration: 1,
+			},
+		}, nil
+	}, activity.RegisterOptions{Name: "ClaimDerivedAssetExecution"})
+	var mu sync.Mutex
+	providerCalls := make([]string, 0, 2)
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		input DerivedAssetProviderExecutionInput,
+	) (DerivedAssetProviderExecutionOutput, error) {
+		mu.Lock()
+		providerCalls = append(providerCalls, input.Lease.ExecutionItemID)
+		mu.Unlock()
+		if input.Lease.ExecutionItemID == "execution-1" {
+			return DerivedAssetProviderExecutionOutput{}, temporal.NewNonRetryableApplicationError(
+				"New API 账户余额不足",
+				billingInsufficientBalanceCode,
+				nil,
+			)
+		}
+		return DerivedAssetProviderExecutionOutput{
+			Lease: input.Lease,
+			Response: provider.GatewayImageResponse{
+				ProviderCallID: "call-" + input.Lease.ExecutionItemID,
+				ModelID:        "model-1",
+				Status:         "succeeded",
+				Output: provider.GatewayImageOutput{
+					ArtifactID: "artifact-2", MediaFileID: "media-2", StorageKey: "derived/2.png",
+				},
+			},
+		}, nil
+	}, activity.RegisterOptions{Name: "RunDerivedAssetProvider"})
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		input DerivedAssetProviderExecutionOutput,
+	) (DerivedAssetMediaVerification, error) {
+		return DerivedAssetMediaVerification{
+			Lease: input.Lease, ProviderCallID: input.Response.ProviderCallID,
+			ModelID: input.Response.ModelID, ArtifactID: input.Response.Output.ArtifactID,
+			MediaFileID: input.Response.Output.MediaFileID, StorageKey: input.Response.Output.StorageKey,
+		}, nil
+	}, activity.RegisterOptions{Name: "VerifyDerivedAssetMedia"})
+	env.RegisterActivityWithOptions(
+		func(context.Context, DerivedAssetMediaVerification) error { return nil },
+		activity.RegisterOptions{Name: "CommitDerivedAssetExecution"},
+	)
+	failed := make(map[string]string)
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		failure DerivedAssetExecutionFailure,
+	) (bool, error) {
+		mu.Lock()
+		failed[failure.Lease.ExecutionItemID] = failure.ErrorCode
+		mu.Unlock()
+		return true, nil
+	}, activity.RegisterOptions{Name: "FailDerivedAssetExecution"})
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		_ TextToStoryboardInput,
+		batchID string,
+	) (DerivedAssetBatchOutput, error) {
+		return DerivedAssetBatchOutput{
+			BatchID: batchID, WorkflowRunID: "workflow-1", Status: "partial_succeeded",
+			TotalItems: 4, SucceededItems: 1, FailedTerminalItems: 3,
+		}, nil
+	}, activity.RegisterOptions{Name: "CompleteDerivedAssetBatchWorkflowV2"})
+
+	env.ExecuteWorkflow(BatchGenerateDerivedAssetImagesWorkflow, TextToStoryboardInput{
+		OrganizationID: "org-1", ProjectID: "project-1", WorkflowRunID: "workflow-1", CreatedBy: "user-1",
+		Input: json.RawMessage(`{"batchId":"batch-1","maxConcurrency":2}`),
+	})
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(providerCalls) != 2 {
+		t.Fatalf("provider calls = %v, want only initial window", providerCalls)
+	}
+	for _, executionID := range []string{"execution-1", "execution-3", "execution-4"} {
+		if failed[executionID] != billingInsufficientBalanceCode {
+			t.Fatalf("%s failure = %q, all failures = %v", executionID, failed[executionID], failed)
+		}
 	}
 }
 

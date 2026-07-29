@@ -12,6 +12,31 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestProviderLimitPolicyRejectsNewMonetaryBudgets(t *testing.T) {
+	dailyBudget := "10.00"
+	service := &Service{}
+	_, err := service.normalizeCreateLimitPolicy(
+		context.Background(),
+		"organization-1",
+		CreateProviderLimitPolicyRequest{
+			TaskType:    TaskTypeTextGenerate,
+			DailyBudget: &dailyBudget,
+		},
+	)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("create monetary budget error = %v", err)
+	}
+	_, err = service.normalizeUpdateLimitPolicy(
+		context.Background(),
+		"organization-1",
+		ProviderLimitPolicy{TaskType: TaskTypeTextGenerate},
+		UpdateProviderLimitPolicyRequest{MonthlyBudget: &dailyBudget},
+	)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("update monetary budget error = %v", err)
+	}
+}
+
 func TestProviderGuardLimitPolicies(t *testing.T) {
 	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
 		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run provider guard integration tests")
@@ -111,8 +136,13 @@ func TestProviderGuardLimitPolicies(t *testing.T) {
 	imageReq.TaskType = TaskTypeImageGenerate
 	imageReq.EstimatedCost = "0.00000000"
 	insertLimitPolicy(t, ctx, pool, orgID, accountID, modelID, TaskTypeImageGenerate, map[string]any{"daily_budget": "0.00000000"})
-	_, err = guard.Acquire(ctx, imageReq)
-	assertGuardCode(t, err, CodeProviderDailyQuotaExceeded)
+	legacyBudgetLease, err := guard.Acquire(ctx, imageReq)
+	if err != nil {
+		t.Fatalf("legacy monetary budget must not block: %v", err)
+	}
+	if err := guard.Release(ctx, legacyBudgetLease, ""); err != nil {
+		t.Fatalf("release legacy monetary budget lease: %v", err)
+	}
 
 	circuitReq := base
 	circuitReq.TaskType = TaskTypeVideoPollTask

@@ -549,6 +549,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/media-files/{mediaFileId}", s.withAuth(s.getMediaFile))
 	mux.HandleFunc("POST /api/media-files/{mediaFileId}/download-url", s.withAuth(s.createMediaFileDownloadURL))
 
+	s.registerEditionAPIModules(mux)
 	return httpx.WithCORS(httpx.WithRequestID(httpx.WithRecovery(mux)))
 }
 
@@ -1288,6 +1289,11 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, auth.Pri
 			s.writeError(w, r, err)
 			return
 		}
+		r = r.WithContext(withAPIProviderIdentity(
+			r.Context(),
+			principal,
+			httpx.RequestIDFromContext(r.Context()),
+		))
 		next(w, r, principal)
 	}
 }

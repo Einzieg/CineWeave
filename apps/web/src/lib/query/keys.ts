@@ -29,6 +29,7 @@ function canonicalAssetListShape(shape: CanonicalAssetListQueryShape = {}) {
 export const qk = {
   // 全局
   setupState: () => ["setup-state"] as const,
+  editionEntitlements: () => ["edition-entitlements"] as const,
   organizations: () => ["organizations"] as const,
   systemOrganizationsRoot: () => ["system-organizations"] as const,
   systemOrganizations: (search = "", page = 1) => ["system-organizations", search, page] as const,

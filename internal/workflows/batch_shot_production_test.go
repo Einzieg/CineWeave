@@ -518,6 +518,78 @@ func TestBatchGenerateShotImagesWorkflowContinuesAfterFailure(t *testing.T) {
 	}
 }
 
+func TestBatchGenerateShotImagesWorkflowStopsUnstartedItemsOnInsufficientBalance(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	registerSingleFrameShotAnchorWorkItemsTestActivity(env)
+	var mu sync.Mutex
+	called := make([]string, 0, 2)
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	active := 0
+	env.RegisterActivityWithOptions(func(ctx context.Context, input GenerateShotImageInput) (GenerateShotImageOutput, error) {
+		mu.Lock()
+		called = append(called, input.ShotID)
+		active++
+		if active == 2 {
+			startedOnce.Do(func() { close(started) })
+		}
+		mu.Unlock()
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			return GenerateShotImageOutput{}, errors.New("initial billing window did not start")
+		case <-ctx.Done():
+			return GenerateShotImageOutput{}, ctx.Err()
+		}
+		if input.ShotID == "shot-1" {
+			return GenerateShotImageOutput{}, temporal.NewNonRetryableApplicationError(
+				"New API 账户余额不足",
+				billingInsufficientBalanceCode,
+				nil,
+			)
+		}
+		time.Sleep(30 * time.Millisecond)
+		return GenerateShotImageOutput{
+			ShotID: input.ShotID, ProviderCallID: "call-" + input.ShotID,
+		}, nil
+	}, activity.RegisterOptions{Name: "GenerateShotImage"})
+	var completed BatchShotProductionOutput
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		_ TextToStoryboardInput,
+		output BatchShotProductionOutput,
+	) error {
+		completed = output
+		return nil
+	}, activity.RegisterOptions{Name: "CompleteBatchShotProductionWorkflow"})
+
+	env.ExecuteWorkflow(BatchGenerateShotImagesWorkflow, TextToStoryboardInput{
+		OrganizationID: "org", ProjectID: "project", WorkflowRunID: "workflow", CreatedBy: "user",
+		Input: json.RawMessage(`{"shotIds":["shot-1","shot-2","shot-3","shot-4","shot-5"],"force":true,"maxConcurrency":2}`),
+	})
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	mu.Lock()
+	gotCalls := append([]string(nil), called...)
+	mu.Unlock()
+	if len(gotCalls) != 2 ||
+		!((gotCalls[0] == "shot-1" && gotCalls[1] == "shot-2") ||
+			(gotCalls[0] == "shot-2" && gotCalls[1] == "shot-1")) {
+		t.Fatalf("provider-backed image calls = %v, want only initial window", gotCalls)
+	}
+	for _, shotID := range []string{"shot-1", "shot-3", "shot-4", "shot-5"} {
+		if completed.ErrorCodes[shotID] != billingInsufficientBalanceCode {
+			t.Fatalf("%s error code = %q, want %q", shotID, completed.ErrorCodes[shotID], billingInsufficientBalanceCode)
+		}
+	}
+	if !strings.Contains(completed.Errors["shot-3"], "未发起") {
+		t.Fatalf("unstarted item message = %q", completed.Errors["shot-3"])
+	}
+}
+
 func TestBatchShotImageErrorCode(t *testing.T) {
 	tests := map[string]string{
 		"activity failed (type: CONTENT_REJECTED): guardrail violation": provider.CodeContentRejected,

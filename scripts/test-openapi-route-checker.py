@@ -88,6 +88,56 @@ def main() -> int:
         if stale != [("post", "/api/stale")]:
             raise AssertionError(f"stale routes = {stale}")
 
+        route_list = temp / "commercial-routes.json"
+        route_list.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": "cineweave.edition-api-routes.v1",
+                    "routes": [
+                        {
+                            "method": "GET",
+                            "path": "/api/billing/accounts",
+                            "operationId": "listBillingAccounts",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": "cineweave.route-sources.v1",
+                    "sources": [
+                        {
+                            "path": str(source.relative_to(ROOT)).replace("\\", "/"),
+                            "parser": "go-http-mux",
+                        },
+                        {
+                            "path": str(route_list.relative_to(ROOT)).replace("\\", "/"),
+                            "parser": "route-list-json",
+                        },
+                    ],
+                    "implicitMethods": {"/healthz": "get"},
+                    "allowMissingOpenAPI": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        write_contract(
+            contract,
+            [
+                ("get", "/healthz"),
+                ("get", "/api/items/{itemId}"),
+                ("get", "/api/billing/accounts"),
+            ],
+        )
+        missing, stale, count = checker.check_routes(contract, manifest)
+        if missing or stale or count != 3:
+            raise AssertionError(
+                f"route-list contract failed: missing={missing}, stale={stale}, count={count}"
+            )
+
     try:
         temp_root.rmdir()
     except OSError:

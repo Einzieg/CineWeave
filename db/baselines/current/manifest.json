@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
-  "headVersion": 70,
-  "migrationCount": 70,
-  "bundleSha256": "dba81b5391c5a6f60869f134c55cd11798a869459c287792e2800865a9a5c309",
+  "headVersion": 75,
+  "migrationCount": 75,
+  "bundleSha256": "3b1369664aa246d149e76c18abf168c22e21a2fe3a754982522aa69896e8005e",
   "migrations": [
     {
       "version": 1,
@@ -353,6 +353,31 @@
       "version": 70,
       "name": "000070_workflow_activity_views.sql",
       "sha256": "4d40b59dc383399b9182490282e2e70345c0080c259ce593e6a6af70bac9e630"
+    },
+    {
+      "version": 71,
+      "name": "000071_provider_system_managed_credentials.sql",
+      "sha256": "9358832c1be88dc8e83f854efca67d88c7934a5bfed12eddf1bda12a9ce02168"
+    },
+    {
+      "version": 72,
+      "name": "000072_organization_event_streams.sql",
+      "sha256": "2becfc4149ab18e0d6c3758dc0350e6b9d04f7223e7a4027e9a84050c666b75e"
+    },
+    {
+      "version": 73,
+      "name": "000073_provider_billing_context.sql",
+      "sha256": "0df6e25a84d36e2128f5262103de9e951f1b20d65ddb5b27df85df28ffc3fdd9"
+    },
+    {
+      "version": 74,
+      "name": "000074_cost_records_non_authoritative.sql",
+      "sha256": "4687332216fa5a1ee09fad0f2acb0d923abf1fb461d81346bb688bb2a0585a95"
+    },
+    {
+      "version": 75,
+      "name": "000075_storyboard_legacy_plan_identity.sql",
+      "sha256": "c5b9a4fe71f2659f4c8f68532095961d6d96589888875b26850e6ea9292bc283"
     }
   ]
 }

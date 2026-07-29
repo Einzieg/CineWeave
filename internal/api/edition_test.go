@@ -71,3 +71,12 @@ func TestMeEntitlementsUsesOrganizationScopedPrincipal(t *testing.T) {
 	}
 	t.Fatal("billing balance entitlement decision is missing")
 }
+
+func TestCommunityHandlerDoesNotRegisterCommercialRoutes(t *testing.T) {
+	handler := (&Server{}).Handler()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/billing/accounts", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusNotFound, response.Body.String())
+	}
+}

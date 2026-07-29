@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	editionpkg "github.com/Einzieg/cineweave/internal/edition"
 )
 
 var (
@@ -114,7 +116,9 @@ func HTTPStatusForStandardError(standard *StandardError) int {
 	switch standard.Code {
 	case CodeRateLimited, CodeProviderRateLimited, CodeProviderConcurrencyLimited, CodeProviderCircuitOpen:
 		return http.StatusTooManyRequests
-	case CodeQuotaExceeded, CodeProviderDailyQuotaExceeded, CodeProviderMonthlyBudgetExceeded:
+	case CodeQuotaExceeded, CodeProviderDailyQuotaExceeded,
+		CodeProviderMonthlyBudgetExceeded,
+		string(editionpkg.DenialBillingInsufficientBalance):
 		return http.StatusPaymentRequired
 	case CodeUpstreamTimeout, CodePollingTimeout:
 		return http.StatusGatewayTimeout
@@ -126,6 +130,27 @@ func HTTPStatusForStandardError(standard *StandardError) int {
 		return http.StatusConflict
 	case CodeProviderGatewayRequired:
 		return http.StatusServiceUnavailable
+	case string(editionpkg.DenialPermission):
+		return http.StatusForbidden
+	case string(editionpkg.DenialBillingAccountSuspended),
+		string(editionpkg.DenialBillingCredentialUnavailable):
+		return http.StatusLocked
+	case string(editionpkg.DenialBillingUpstreamUnavailable):
+		return http.StatusServiceUnavailable
+	case string(editionpkg.DenialFeatureNotCompiled),
+		string(editionpkg.DenialDeploymentLicenseInvalid),
+		string(editionpkg.DenialDeploymentLicenseNotYetValid),
+		string(editionpkg.DenialDeploymentLicenseExpired),
+		string(editionpkg.DenialDeploymentLicenseRevoked),
+		string(editionpkg.DenialDeploymentClockRollbackSuspected),
+		string(editionpkg.DenialPlanEntitlementRequired),
+		string(editionpkg.DenialBillingBindingInvalid),
+		string(editionpkg.DenialBillingAccountScopeMismatch),
+		string(editionpkg.DenialBillingAuthorityMismatch),
+		string(editionpkg.DenialBillingSponsorshipRequired),
+		string(editionpkg.DenialBillingRoutingCandidateMissing),
+		string(editionpkg.DenialBillingModelForbidden):
+		return http.StatusUnprocessableEntity
 	default:
 		return http.StatusBadGateway
 	}

@@ -352,6 +352,75 @@ func passwordMatches(passwordHash, password string) bool {
 	return bcrypt.CompareHashAndPassword(storedHash, []byte(password)) == nil && hasStoredPassword
 }
 
+type StepUpVerification struct {
+	CredentialVersion int64
+}
+
+func (s *Service) VerifyCurrentPassword(
+	ctx context.Context,
+	userID string,
+	password string,
+	r *http.Request,
+) (StepUpVerification, error) {
+	userID = strings.TrimSpace(userID)
+	subject := "user:" + userID
+	if err := s.checkSecurityRateLimit(
+		ctx,
+		securityActionStepUp,
+		subject,
+		r,
+	); err != nil {
+		return StepUpVerification{}, err
+	}
+	var (
+		passwordHash      string
+		status            string
+		credentialVersion int64
+	)
+	err := s.db.QueryRow(ctx, `
+		SELECT
+			COALESCE(password_hash, ''),
+			status,
+			credential_version
+		FROM users
+		WHERE id = $1
+	`, userID).Scan(
+		&passwordHash,
+		&status,
+		&credentialVersion,
+	)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return StepUpVerification{}, err
+	}
+	if err != nil ||
+		status != "active" ||
+		strings.TrimSpace(password) == "" ||
+		!passwordMatches(passwordHash, password) {
+		if passwordHash == "" && strings.TrimSpace(password) != "" {
+			_ = passwordMatches("", password)
+		}
+		if failureErr := s.recordSecurityFailure(
+			ctx,
+			securityActionStepUp,
+			subject,
+			r,
+		); failureErr != nil {
+			return StepUpVerification{}, failureErr
+		}
+		return StepUpVerification{}, ErrInvalidCredentials
+	}
+	if err := s.clearSecurityIdentityFailures(
+		ctx,
+		securityActionStepUp,
+		subject,
+	); err != nil {
+		return StepUpVerification{}, err
+	}
+	return StepUpVerification{
+		CredentialVersion: credentialVersion,
+	}, nil
+}
+
 func (s *Service) Refresh(ctx context.Context, req RefreshRequest, r *http.Request) (TokenResponse, error) {
 	hash := hashRefreshToken(req.RefreshToken)
 	if hash == "" {

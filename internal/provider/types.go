@@ -447,6 +447,8 @@ type CallLog struct {
 	ProviderAccountID        string          `json:"providerAccountId"`
 	ProviderModelID          *string         `json:"providerModelId,omitempty"`
 	CredentialID             *string         `json:"credentialId,omitempty"`
+	BillingContextID         *string         `json:"billingContextId,omitempty"`
+	ProviderExternalLogID    *string         `json:"providerExternalLogId,omitempty"`
 	ModelProfileID           *string         `json:"modelProfileId,omitempty"`
 	ModelProfileBindingID    *string         `json:"modelProfileBindingId,omitempty"`
 	ModelProfileKey          *string         `json:"modelProfileKey,omitempty"`
@@ -493,6 +495,8 @@ type RecordCallRequest struct {
 	ProviderAccountID        string          `json:"providerAccountId"`
 	ProviderModelID          string          `json:"providerModelId"`
 	CredentialID             string          `json:"credentialId"`
+	BillingContextID         string          `json:"billingContextId,omitempty"`
+	ProviderExternalLogID    string          `json:"providerExternalLogId,omitempty"`
 	ModelProfileID           string          `json:"modelProfileId"`
 	ModelProfileBindingID    string          `json:"modelProfileBindingId"`
 	ModelProfileKey          string          `json:"modelProfileKey"`
@@ -529,10 +533,12 @@ type CallLogFilters struct {
 }
 
 type UsageSummary struct {
-	TotalCalls  int64  `json:"totalCalls"`
-	FailedCalls int64  `json:"failedCalls"`
-	TotalCost   string `json:"totalCost"`
-	Currency    string `json:"currency"`
+	TotalCalls       int64  `json:"totalCalls"`
+	FailedCalls      int64  `json:"failedCalls"`
+	EstimatedCost    string `json:"estimatedCost"`
+	EstimateCurrency string `json:"estimateCurrency"`
+	Authoritative    bool   `json:"authoritative"`
+	SourceSemantics  string `json:"sourceSemantics"`
 }
 
 type ProviderLimitPolicy struct {
@@ -635,7 +641,25 @@ type GatewayTextOptions struct {
 	Retry          bool   `json:"retry,omitempty"`
 }
 
+type GatewayBillingIdentity struct {
+	RequestedByUserID          string `json:"requestedByUserId,omitempty"`
+	BillingContextID           string `json:"billingContextId,omitempty"`
+	BillingContextRevision     int64  `json:"billingContextRevision,omitempty"`
+	BillingContextSnapshotHash string `json:"billingContextSnapshotHash,omitempty"`
+	BillingOperationPermission string `json:"billingOperationPermission,omitempty"`
+	BillingContextReason       string `json:"billingContextReason,omitempty"`
+}
+
+const (
+	BillingContextReasonWorkflowStart  = "workflow_start"
+	BillingContextReasonAgentAction    = "agent_action"
+	BillingContextReasonBatchStart     = "batch_start"
+	BillingContextReasonManualProvider = "manual_provider_request"
+	BillingContextReasonExplicitRetry  = "explicit_retry"
+)
+
 type GatewayTextRequest struct {
+	GatewayBillingIdentity
 	OrganizationID                      string                  `json:"organizationId"`
 	WorkspaceID                         string                  `json:"workspaceId,omitempty"`
 	ProjectID                           string                  `json:"projectId,omitempty"`
@@ -713,6 +737,7 @@ type GatewayImageReference struct {
 }
 
 type GatewayImageRequest struct {
+	GatewayBillingIdentity
 	OrganizationID                      string                  `json:"organizationId"`
 	WorkspaceID                         string                  `json:"workspaceId,omitempty"`
 	ProjectID                           string                  `json:"projectId,omitempty"`
@@ -764,6 +789,7 @@ type GatewayAudioOptions struct {
 }
 
 type GatewayTTSRequest struct {
+	GatewayBillingIdentity
 	OrganizationID   string              `json:"organizationId"`
 	WorkspaceID      string              `json:"workspaceId,omitempty"`
 	ProjectID        string              `json:"projectId,omitempty"`
@@ -809,6 +835,7 @@ type GatewayAudioSource struct {
 }
 
 type GatewayASRRequest struct {
+	GatewayBillingIdentity
 	OrganizationID  string              `json:"organizationId"`
 	WorkspaceID     string              `json:"workspaceId,omitempty"`
 	ProjectID       string              `json:"projectId,omitempty"`
@@ -888,6 +915,7 @@ type GatewayVideoReference struct {
 }
 
 type GatewayVideoCreateTaskRequest struct {
+	GatewayBillingIdentity
 	OrganizationID                 string                              `json:"organizationId"`
 	WorkspaceID                    string                              `json:"workspaceId,omitempty"`
 	ProjectID                      string                              `json:"projectId,omitempty"`

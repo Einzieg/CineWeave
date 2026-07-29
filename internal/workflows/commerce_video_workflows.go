@@ -172,6 +172,10 @@ func commerceVideoBatchWorkflow(
 	}
 	activityOptions.RetryPolicy.MaximumAttempts = 1
 	activityCtx := workflow.WithActivityOptions(ctx, activityOptions)
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	for offset := 0; offset < len(input.ShotIDs); offset += concurrency {
 		end := offset + concurrency
 		if end > len(input.ShotIDs) {
@@ -192,9 +196,14 @@ func commerceVideoBatchWorkflow(
 		for index, future := range futures {
 			var item CommerceVideoItemOutput
 			if err := future.Get(ctx, &item); err != nil {
+				code, message := workflowExecutionError(err)
 				item = CommerceVideoItemOutput{
 					ShotID: input.ShotIDs[offset+index], Status: commerce.ItemFailedRetryable,
-					ErrorCode: "COMMERCE_VIDEO_ACTIVITY_FAILED", ErrorMessage: err.Error(), Retryable: true,
+					ErrorCode: code, ErrorMessage: message, Retryable: true,
+				}
+				if isBillingInsufficientBalanceCode(code) {
+					item.Status = commerce.ItemFailedTerminal
+					item.Retryable = false
 				}
 			}
 			result.Items = append(result.Items, item)
@@ -203,6 +212,22 @@ func commerceVideoBatchWorkflow(
 			} else {
 				result.Failed++
 			}
+			if stopOnBalance && !stopScheduling && isBillingInsufficientBalanceCode(item.ErrorCode) {
+				stopScheduling = true
+				stopCode = item.ErrorCode
+				stopMessage = item.ErrorMessage
+			}
+		}
+		if stopScheduling {
+			code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+			for index := end; index < len(input.ShotIDs); index++ {
+				result.Items = append(result.Items, CommerceVideoItemOutput{
+					ShotID: input.ShotIDs[index], Status: commerce.ItemFailedTerminal,
+					ErrorCode: code, ErrorMessage: message, Retryable: false,
+				})
+				result.Failed++
+			}
+			break
 		}
 	}
 	result.Status = aggregateCommerceVideoBatchStatus(result)
@@ -539,7 +564,13 @@ func commerceVideoFailureStatus(retryable bool) commerce.ProductionItemStatus {
 
 func commerceVideoFailureOutput(shotID string, err error) CommerceVideoItemOutput {
 	code, message := workflowErrorFields(err, "COMMERCE_VIDEO_ITEM_FAILED")
-	return CommerceVideoItemOutput{ShotID: shotID, Status: commerce.ItemFailedRetryable, ErrorCode: code, ErrorMessage: message, Retryable: true}
+	status := commerce.ItemFailedRetryable
+	retryable := true
+	if isBillingInsufficientBalanceCode(code) {
+		status = commerce.ItemFailedTerminal
+		retryable = false
+	}
+	return CommerceVideoItemOutput{ShotID: shotID, Status: status, ErrorCode: code, ErrorMessage: message, Retryable: retryable}
 }
 
 func commerceStringSliceContains(values []string, target string) bool {

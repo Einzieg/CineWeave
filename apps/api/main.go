@@ -23,6 +23,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	editionRuntime, err := buildEditionRuntime()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	pool, err := db.Open(ctx, config.Get("DATABASE_URL", "postgres://cineweave:cineweave_dev_password@localhost:5432/cineweave?sslmode=disable"))
 	if err != nil {
 		log.Fatal(err)
@@ -69,10 +74,6 @@ func main() {
 	}
 	defer temporalClient.Close()
 	server := api.New(pool, authService, providerService, storageClient, temporalClient, authz.New(pool))
-	editionRuntime, err := buildEditionRuntime()
-	if err != nil {
-		log.Fatal(err)
-	}
 	if err := server.SetEditionRuntime(editionRuntime); err != nil {
 		log.Fatal(err)
 	}

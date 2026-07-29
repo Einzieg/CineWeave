@@ -43,6 +43,19 @@ func (s *Service) GenerateSpeech(ctx context.Context, req GatewayTTSRequest) (Ga
 	if strings.TrimSpace(req.OrganizationID) == "" {
 		return GatewayTTSResponse{}, fmt.Errorf("%w: organizationId is required", ErrValidation)
 	}
+	var err error
+	req.GatewayBillingIdentity, err = s.resolveGatewayBillingIdentity(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.WorkflowRunID,
+		TaskTypeAudioTTS,
+		gatewayTTSIdempotencyKey(req),
+		req.GatewayBillingIdentity,
+	)
+	if err != nil {
+		return GatewayTTSResponse{}, err
+	}
 	input, err := normalizeJSON(req.Input, "{}")
 	if err != nil {
 		return GatewayTTSResponse{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
@@ -52,7 +65,7 @@ func (s *Service) GenerateSpeech(ctx context.Context, req GatewayTTSRequest) (Ga
 	if err != nil {
 		return GatewayTTSResponse{}, err
 	}
-	start, err := s.beginProviderRequest(ctx, providerRequestStartInput{
+	startInput := providerRequestStartInput{
 		OrganizationID: req.OrganizationID,
 		ProjectID:      req.ProjectID,
 		WorkflowRunID:  req.WorkflowRunID,
@@ -61,7 +74,12 @@ func (s *Service) GenerateSpeech(ctx context.Context, req GatewayTTSRequest) (Ga
 		IdempotencyKey: gatewayTTSIdempotencyKey(req),
 		RequestHash:    requestHash,
 		Retry:          req.Options.Retry,
-	})
+	}
+	applyBillingIdentityToProviderRequest(
+		&startInput,
+		req.GatewayBillingIdentity,
+	)
+	start, err := s.beginProviderRequest(ctx, startInput)
 	if err != nil {
 		return GatewayTTSResponse{}, err
 	}
@@ -79,7 +97,10 @@ func (s *Service) GenerateSpeech(ctx context.Context, req GatewayTTSRequest) (Ga
 	}
 	response, runErr := s.executeGatewayTTS(ctx, req, start.Request.ID, start.Request.AttemptGeneration)
 	if runErr != nil {
-		if errors.Is(runErr, ErrValidation) || errors.Is(runErr, pgx.ErrNoRows) {
+		_, standardFailure := StandardErrorFromError(runErr)
+		if standardFailure ||
+			errors.Is(runErr, ErrValidation) ||
+			errors.Is(runErr, pgx.ErrNoRows) {
 			_, code, message, _, _ := normalizedProviderFailure(runErr)
 			standard := standardErrorFromRunError(runErr, code, message)
 			response = GatewayTTSResponse{ProviderRequestID: start.Request.ID, AttemptGeneration: start.Request.AttemptGeneration, Status: "failed", Error: standard}
@@ -125,7 +146,15 @@ func (s *Service) executeGatewayTTS(ctx context.Context, req GatewayTTSRequest, 
 		req.TimelineTimebase = 90_000
 	}
 
-	selections, strategy, err := s.gatewayAudioSelections(ctx, req.OrganizationID, req.ProviderModelID, req.ModelProfileKey, TaskTypeAudioTTS)
+	selections, strategy, err := s.gatewayAudioSelections(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.GatewayBillingIdentity,
+		req.ProviderModelID,
+		req.ModelProfileKey,
+		TaskTypeAudioTTS,
+	)
 	if err != nil {
 		return GatewayTTSResponse{}, err
 	}
@@ -156,6 +185,19 @@ func (s *Service) TranscribeAudio(ctx context.Context, req GatewayASRRequest) (G
 	if strings.TrimSpace(req.OrganizationID) == "" {
 		return GatewayASRResponse{}, fmt.Errorf("%w: organizationId is required", ErrValidation)
 	}
+	var err error
+	req.GatewayBillingIdentity, err = s.resolveGatewayBillingIdentity(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.WorkflowRunID,
+		TaskTypeAudioTranscribe,
+		gatewayASRIdempotencyKey(req),
+		req.GatewayBillingIdentity,
+	)
+	if err != nil {
+		return GatewayASRResponse{}, err
+	}
 	input, err := normalizeJSON(req.Input, "{}")
 	if err != nil {
 		return GatewayASRResponse{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
@@ -165,7 +207,7 @@ func (s *Service) TranscribeAudio(ctx context.Context, req GatewayASRRequest) (G
 	if err != nil {
 		return GatewayASRResponse{}, err
 	}
-	start, err := s.beginProviderRequest(ctx, providerRequestStartInput{
+	startInput := providerRequestStartInput{
 		OrganizationID: req.OrganizationID,
 		ProjectID:      req.ProjectID,
 		WorkflowRunID:  req.WorkflowRunID,
@@ -174,7 +216,12 @@ func (s *Service) TranscribeAudio(ctx context.Context, req GatewayASRRequest) (G
 		IdempotencyKey: gatewayASRIdempotencyKey(req),
 		RequestHash:    requestHash,
 		Retry:          req.Options.Retry,
-	})
+	}
+	applyBillingIdentityToProviderRequest(
+		&startInput,
+		req.GatewayBillingIdentity,
+	)
+	start, err := s.beginProviderRequest(ctx, startInput)
 	if err != nil {
 		return GatewayASRResponse{}, err
 	}
@@ -192,7 +239,10 @@ func (s *Service) TranscribeAudio(ctx context.Context, req GatewayASRRequest) (G
 	}
 	response, runErr := s.executeGatewayASR(ctx, req, start.Request.ID, start.Request.AttemptGeneration)
 	if runErr != nil {
-		if errors.Is(runErr, ErrValidation) || errors.Is(runErr, pgx.ErrNoRows) {
+		_, standardFailure := StandardErrorFromError(runErr)
+		if standardFailure ||
+			errors.Is(runErr, ErrValidation) ||
+			errors.Is(runErr, pgx.ErrNoRows) {
 			_, code, message, _, _ := normalizedProviderFailure(runErr)
 			standard := standardErrorFromRunError(runErr, code, message)
 			response = GatewayASRResponse{ProviderRequestID: start.Request.ID, AttemptGeneration: start.Request.AttemptGeneration, Status: "failed", Error: standard}
@@ -230,7 +280,15 @@ func (s *Service) executeGatewayASR(ctx context.Context, req GatewayASRRequest, 
 	if err != nil {
 		return GatewayASRResponse{}, err
 	}
-	selections, strategy, err := s.gatewayAudioSelections(ctx, req.OrganizationID, req.ProviderModelID, req.ModelProfileKey, TaskTypeAudioTranscribe)
+	selections, strategy, err := s.gatewayAudioSelections(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.GatewayBillingIdentity,
+		req.ProviderModelID,
+		req.ModelProfileKey,
+		TaskTypeAudioTranscribe,
+	)
 	if err != nil {
 		return GatewayASRResponse{}, err
 	}
@@ -279,7 +337,15 @@ func parseGatewayAudioInput(raw json.RawMessage) (gatewayAudioInput, error) {
 	return input, nil
 }
 
-func (s *Service) gatewayAudioSelections(ctx context.Context, organizationID, providerModelID, modelProfileKey, taskType string) ([]gatewayModelSelection, FallbackStrategy, error) {
+func (s *Service) gatewayAudioSelections(
+	ctx context.Context,
+	organizationID string,
+	projectID string,
+	identity GatewayBillingIdentity,
+	providerModelID string,
+	modelProfileKey string,
+	taskType string,
+) ([]gatewayModelSelection, FallbackStrategy, error) {
 	if strings.TrimSpace(providerModelID) != "" {
 		model, err := s.GetModel(ctx, organizationID, providerModelID)
 		if err != nil {
@@ -292,7 +358,17 @@ func (s *Service) gatewayAudioSelections(ctx context.Context, organizationID, pr
 		if err != nil {
 			return nil, FallbackStrategy{}, err
 		}
-		selection, err := s.completeGatewaySelection(ctx, organizationID, account, model, "", "", "")
+		selection, err := s.completeGatewaySelectionWithBilling(
+			ctx,
+			organizationID,
+			projectID,
+			identity,
+			account,
+			model,
+			"",
+			"",
+			"",
+		)
 		return []gatewayModelSelection{selection}, FallbackStrategy{Enabled: false, MaxAttempts: 1}, err
 	}
 	if strings.TrimSpace(modelProfileKey) == "" {
@@ -306,7 +382,13 @@ func (s *Service) gatewayAudioSelections(ctx context.Context, organizationID, pr
 	}
 	selections := make([]gatewayModelSelection, 0, len(candidates))
 	for _, candidate := range candidates {
-		selection, err := s.completeGatewaySelectionFromCandidate(ctx, organizationID, candidate)
+		selection, err := s.completeGatewaySelectionFromCandidateWithBilling(
+			ctx,
+			organizationID,
+			projectID,
+			identity,
+			candidate,
+		)
 		if err != nil {
 			return nil, FallbackStrategy{}, err
 		}

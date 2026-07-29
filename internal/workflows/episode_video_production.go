@@ -119,6 +119,10 @@ func EpisodeBatchGenerateShotVideosWorkflow(ctx workflow.Context, input TextToSt
 		return result, nil
 	}
 	result = newBatchShotVideoOutput(input, options.ShotIDs)
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	for start := 0; start < len(plans); start += defaultEpisodeWorkflowParallel {
 		end := start + defaultEpisodeWorkflowParallel
 		if end > len(plans) {
@@ -146,9 +150,44 @@ func EpisodeBatchGenerateShotVideosWorkflow(ctx workflow.Context, input TextToSt
 					result.ErrorCodes[shotID] = code
 					result.Errors[shotID] = message
 				}
+				if stopOnBalance && !stopScheduling {
+					if billingCode, billingMessage, ok := billingInsufficientBalanceFailure(err); ok {
+						stopScheduling = true
+						stopCode = billingCode
+						stopMessage = billingMessage
+					}
+				}
 				continue
 			}
 			mergeBatchShotVideoOutput(&result, episodeOutput)
+			if stopOnBalance && !stopScheduling {
+				if code, message, ok := batchShotBillingInsufficientBalance(episodeOutput); ok {
+					stopScheduling = true
+					stopCode = code
+					stopMessage = message
+				}
+			}
+		}
+		if stopScheduling {
+			code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+			for index := end; index < len(plans); index++ {
+				if err := workflow.ExecuteActivity(
+					activityCtx,
+					"FailEpisodeVideoProductionCheckpoint",
+					FailEpisodeVideoProductionCheckpointInput{
+						Plan: plans[index], FailureCode: code, FailureMessage: message,
+					},
+				).Get(activityCtx, nil); err != nil {
+					return result, err
+				}
+				markBatchShotTargetsUnstartedForBalance(
+					&result,
+					plans[index].TargetShotIDs,
+					code,
+					message,
+				)
+			}
+			break
 		}
 	}
 	result.Status = batchShotOutputStatus(result)
@@ -233,6 +272,7 @@ func episodeVideoProductionWorkflowV1(ctx workflow.Context, input EpisodeVideoPr
 
 func episodeVideoProductionWorkflowV2(ctx workflow.Context, input EpisodeVideoProductionInput) (result BatchShotProductionOutput, resultErr error) {
 	activityCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
 	defer func() {
 		if resultErr == nil || workflow.IsContinueAsNewError(resultErr) {
 			return
@@ -303,6 +343,32 @@ func episodeVideoProductionWorkflowV2(ctx workflow.Context, input EpisodeVideoPr
 				return result, err
 			}
 			return loadFinalOutput()
+		}
+		if stopOnBalance {
+			if code, message, ok := batchShotBillingInsufficientBalance(batchOutput); ok {
+				code, message = unstartedBillingInsufficientBalanceFailure(code, message)
+				if err := workflow.ExecuteActivity(
+					activityCtx,
+					"FailEpisodeVideoProductionCheckpoint",
+					FailEpisodeVideoProductionCheckpointInput{
+						Plan: input.Plan, FailureCode: code, FailureMessage: message,
+					},
+				).Get(activityCtx, nil); err != nil {
+					return result, err
+				}
+				output, err := loadFinalOutput()
+				if err != nil {
+					return result, err
+				}
+				markBatchShotTargetsUnstartedForBalance(
+					&output,
+					input.Plan.TargetShotIDs,
+					code,
+					message,
+				)
+				output.Status = batchShotOutputStatus(output)
+				return output, nil
+			}
 		}
 		if workflow.GetInfo(ctx).GetContinueAsNewSuggested() || batchCount+1 >= maximumEpisodeBatchesPerRun {
 			nextInput := input

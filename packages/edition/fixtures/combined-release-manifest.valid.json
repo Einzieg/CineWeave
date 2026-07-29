@@ -1,0 +1,231 @@
+{
+  "schemaVersion": "cineweave.release-manifest.v1",
+  "releaseId": "release-0123456789abcdef",
+  "edition": "enterprise",
+  "distributionId": "distribution-example-001",
+  "generatedAt": "2026-07-29T00:00:00Z",
+  "assembly": {
+    "coreCommit": "1111111111111111111111111111111111111111",
+    "commercialAssemblyCommit": "2222222222222222222222222222222222222222",
+    "coreLockSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "overlayAllowlistSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "assemblyScriptSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "sourceArchiveSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "cleanCoreTree": true,
+    "cleanCommercialTree": true
+  },
+  "editionManifest": {
+    "contractVersion": "edition.v1",
+    "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "licenseSerial": "license-example-001",
+    "licenseStateFormatVersion": "license-state.v1",
+    "trustedTimeAlgorithmVersion": "trusted-time.v1",
+    "revocationGeneration": 3
+  },
+  "migrations": {
+    "ddlOwnerManifestSha256": "5ee446ec09ae1a83ccba5a1522f068bcc4332e8224796c4a3890b41c43b69932",
+    "core": {
+      "streamId": "core",
+      "head": 75,
+      "controlSchema": "cineweave_migrations",
+      "ledgerTable": "cineweave_schema_versions",
+      "auditTable": "cineweave_migration_audit"
+    },
+    "commercial": {
+      "streamId": "commercial",
+      "head": 9,
+      "controlSchema": "cineweave_commercial_migrations",
+      "ledgerTable": "schema_versions",
+      "auditTable": "migration_audit"
+    }
+  },
+  "seeds": {
+    "coreVersion": "core-seed.v1",
+    "coreSha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "commercialVersion": "commercial-seed.v1",
+    "commercialSha256": "7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "contracts": {
+    "coreOpenAPISha256": "8888888888888888888888888888888888888888888888888888888888888888",
+    "mergedOpenAPISha256": "9999999999999999999999999999999999999999999999999999999999999999",
+    "coreEventCatalogSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "mergedEventCatalogSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "webhookContractVersion": "new-api-webhook.v1"
+  },
+  "retention": {
+    "policyVersion": "commercial-retention.v1",
+    "policySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "coreForeignKeyActionManifestSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "approvalEvidenceSha256": "abababababababababababababababababababababababababababababababab",
+    "legalReviewRecordId": "retention-legal-review-example-001",
+    "securityReviewRecordId": "retention-security-review-example-001",
+    "evidenceReference": "controlled://legal/retention-review-example-001",
+    "reviewedAt": "2026-07-28",
+    "approved": true
+  },
+  "sourceLicensing": {
+    "inventorySha256": "1212121212121212121212121212121212121212121212121212121212121212",
+    "reportSha256": "1313131313131313131313131313131313131313131313131313131313131313",
+    "approvalSha256": "1414141414141414141414141414141414141414141414141414141414141414",
+    "approvalRecordId": "source-license-review-example-001",
+    "evidenceReference": "controlled://legal/source-license-review-example-001",
+    "softwareLicenseSpdx": "AGPL-3.0-or-later",
+    "approved": true
+  },
+  "artifacts": {
+    "webBuildId": "release-0123456789abcdef",
+    "webAssetsSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "images": [
+      {
+        "service": "api",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "service": "web",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      {
+        "service": "provider-gateway",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "service": "realtime",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      {
+        "service": "event-publisher",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      {
+        "service": "script-worker",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+      },
+      {
+        "service": "agent-worker",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+      },
+      {
+        "service": "media-worker",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+      },
+      {
+        "service": "audio-worker",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      {
+        "service": "billing-bridge",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "service": "migrate-core",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      {
+        "service": "migrate-commercial",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "service": "seed-core",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      {
+        "service": "seed-commercial",
+        "tag": "release-0123456789abcdef",
+        "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    ],
+    "temporalWorkerBuilds": [
+      {
+        "deployment": "script-worker",
+        "buildId": "release-0123456789abcdef"
+      },
+      {
+        "deployment": "agent-worker",
+        "buildId": "release-0123456789abcdef"
+      },
+      {
+        "deployment": "media-worker",
+        "buildId": "release-0123456789abcdef"
+      },
+      {
+        "deployment": "audio-worker",
+        "buildId": "release-0123456789abcdef"
+      }
+    ],
+    "sboms": [
+      {
+        "artifact": "combined-source",
+        "format": "spdx-json",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    ],
+    "thirdPartyLicenseReportSha256": "1313131313131313131313131313131313131313131313131313131313131313",
+    "signatures": [
+      {
+        "artifact": "release-manifest",
+        "algorithm": "cosign-keyless",
+        "keyId": "release-signing-key-v1",
+        "signatureRef": "rekor-entry-example-001"
+      }
+    ]
+  },
+  "upstreamNewAPI": {
+    "registry": "example.invalid/new-api",
+    "imageDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "evidenceSha256": "1515151515151515151515151515151515151515151515151515151515151515",
+    "sourceCommit": "3333333333333333333333333333333333333333",
+    "sourceTag": "v0.8.8",
+    "licenseSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "readmeSha256": "1616161616161616161616161616161616161616161616161616161616161616",
+    "readmeLicenseSectionSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "noticePresent": true,
+    "noticeSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "modified": false,
+    "modificationAssessment": "unmodified_verified",
+    "patchSha256": null,
+    "deliveryMode": "independent_service",
+    "legalBasis": "agpl_compliance",
+    "sourceOfferLocation": "https://example.invalid/source-offer",
+    "attributionLocation": "https://example.invalid/third-party-notices",
+    "legalReview": {
+      "approved": true,
+      "reviewer": "example-legal-reviewer",
+      "reviewDate": "2026-07-29",
+      "recordId": "legal-review-example-001",
+      "reReviewTriggers": [
+        "New API source commit changes",
+        "delivery mode changes",
+        "license or README terms change"
+      ]
+    }
+  },
+  "componentReleaseIds": {
+    "api": "release-0123456789abcdef",
+    "web": "release-0123456789abcdef",
+    "provider-gateway": "release-0123456789abcdef",
+    "realtime": "release-0123456789abcdef",
+    "event-publisher": "release-0123456789abcdef",
+    "script-worker": "release-0123456789abcdef",
+    "agent-worker": "release-0123456789abcdef",
+    "media-worker": "release-0123456789abcdef",
+    "audio-worker": "release-0123456789abcdef",
+    "billing-bridge": "release-0123456789abcdef",
+    "migrate-core": "release-0123456789abcdef",
+    "migrate-commercial": "release-0123456789abcdef",
+    "seed-core": "release-0123456789abcdef",
+    "seed-commercial": "release-0123456789abcdef"
+  }
+}

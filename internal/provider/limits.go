@@ -123,9 +123,6 @@ func (g *ProviderGuard) Acquire(ctx context.Context, req GuardRequest) (GuardLea
 		if err := g.checkRequestRateTx(ctx, tx, req, *policy); err != nil {
 			return GuardLease{}, err
 		}
-		if err := g.checkBudgetTx(ctx, tx, req, *policy); err != nil {
-			return GuardLease{}, err
-		}
 	}
 
 	token := uuid.NewString()
@@ -294,62 +291,6 @@ func (g *ProviderGuard) checkRequestRateTx(ctx context.Context, tx pgx.Tx, req G
 		}
 	}
 	return nil
-}
-
-func (g *ProviderGuard) checkBudgetTx(ctx context.Context, tx pgx.Tx, req GuardRequest, policy effectiveLimitPolicy) error {
-	currency := currencyOrDefault(firstNonEmpty(policy.Currency, req.Currency))
-	estimatedCost := decimalValue(req.EstimatedCost)
-	if policy.DailyBudget != nil {
-		limit := decimalValue(*policy.DailyBudget)
-		if limit <= 0 {
-			return newGuardError(CodeProviderDailyQuotaExceeded, "provider daily budget was exceeded", false, 0)
-		}
-		spent, err := g.costSpentTx(ctx, tx, req, policy, currency, "day")
-		if err != nil {
-			return err
-		}
-		if spent+estimatedCost >= limit {
-			return newGuardError(CodeProviderDailyQuotaExceeded, "provider daily budget was exceeded", false, 0)
-		}
-	}
-	if policy.MonthlyBudget != nil {
-		limit := decimalValue(*policy.MonthlyBudget)
-		if limit <= 0 {
-			return newGuardError(CodeProviderMonthlyBudgetExceeded, "provider monthly budget was exceeded", false, 0)
-		}
-		spent, err := g.costSpentTx(ctx, tx, req, policy, currency, "month")
-		if err != nil {
-			return err
-		}
-		if spent+estimatedCost >= limit {
-			return newGuardError(CodeProviderMonthlyBudgetExceeded, "provider monthly budget was exceeded", false, 0)
-		}
-	}
-	return nil
-}
-
-func (g *ProviderGuard) costSpentTx(ctx context.Context, tx pgx.Tx, req GuardRequest, policy effectiveLimitPolicy, currency, window string) (float64, error) {
-	var raw sql.NullString
-	err := tx.QueryRow(ctx, `
-		SELECT COALESCE(sum(cr.amount), 0)::text
-		FROM cost_records cr
-		LEFT JOIN provider_models pm ON pm.id = cr.provider_model_id
-		WHERE cr.organization_id = $1
-		  AND cr.currency = $2
-		  AND (
-		    $3 = 'org'
-		    OR ($3 = 'account' AND pm.provider_account_id = NULLIF($4, '')::uuid)
-		    OR ($3 = 'model' AND cr.provider_model_id = NULLIF($5, '')::uuid)
-		  )
-		  AND (
-		    ($6 = 'day' AND cr.created_at >= date_trunc('day', now()))
-		    OR ($6 = 'month' AND cr.created_at >= date_trunc('month', now()))
-		  )
-	`, req.OrganizationID, currency, budgetScope(policy), scopeAccountID(req, policy), scopeModelID(req, policy), window).Scan(&raw)
-	if err != nil {
-		return 0, err
-	}
-	return decimalValue(raw.String), nil
 }
 
 func (s *Service) ListProviderLimitPolicies(ctx context.Context, organizationID string) ([]ProviderLimitPolicy, error) {
@@ -543,6 +484,13 @@ type normalizedLimitPolicy struct {
 }
 
 func (s *Service) normalizeCreateLimitPolicy(ctx context.Context, organizationID string, req CreateProviderLimitPolicyRequest) (normalizedLimitPolicy, error) {
+	if derefString(req.DailyBudget) != "" ||
+		derefString(req.MonthlyBudget) != "" {
+		return normalizedLimitPolicy{}, fmt.Errorf(
+			"%w: monetary budgets are managed by the external billing authority",
+			ErrValidation,
+		)
+	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -554,8 +502,8 @@ func (s *Service) normalizeCreateLimitPolicy(ctx context.Context, organizationID
 		MaxConcurrency:         nullableNonNegativeInt(req.MaxConcurrency),
 		RequestsPerMinute:      nullableNonNegativeInt(req.RequestsPerMinute),
 		RequestsPerDay:         nullableNonNegativeInt(req.RequestsPerDay),
-		DailyBudget:            derefString(req.DailyBudget),
-		MonthlyBudget:          derefString(req.MonthlyBudget),
+		DailyBudget:            "",
+		MonthlyBudget:          "",
 		Currency:               req.Currency,
 		FailureThreshold:       nullableNonNegativeInt(req.FailureThreshold),
 		FailureWindowSeconds:   nullableNonNegativeInt(req.FailureWindowSeconds),
@@ -565,6 +513,26 @@ func (s *Service) normalizeCreateLimitPolicy(ctx context.Context, organizationID
 }
 
 func (s *Service) normalizeUpdateLimitPolicy(ctx context.Context, organizationID string, current ProviderLimitPolicy, req UpdateProviderLimitPolicyRequest) (normalizedLimitPolicy, error) {
+	dailyBudget := derefString(current.DailyBudget)
+	if req.DailyBudget != nil {
+		if derefString(req.DailyBudget) != "" {
+			return normalizedLimitPolicy{}, fmt.Errorf(
+				"%w: monetary budgets are managed by the external billing authority",
+				ErrValidation,
+			)
+		}
+		dailyBudget = ""
+	}
+	monthlyBudget := derefString(current.MonthlyBudget)
+	if req.MonthlyBudget != nil {
+		if derefString(req.MonthlyBudget) != "" {
+			return normalizedLimitPolicy{}, fmt.Errorf(
+				"%w: monetary budgets are managed by the external billing authority",
+				ErrValidation,
+			)
+		}
+		monthlyBudget = ""
+	}
 	taskType := current.TaskType
 	if req.TaskType != nil {
 		taskType = *req.TaskType
@@ -584,8 +552,8 @@ func (s *Service) normalizeUpdateLimitPolicy(ctx context.Context, organizationID
 		MaxConcurrency:         nullableNonNegativeInt(firstIntPtr(req.MaxConcurrency, current.MaxConcurrency)),
 		RequestsPerMinute:      nullableNonNegativeInt(firstIntPtr(req.RequestsPerMinute, current.RequestsPerMinute)),
 		RequestsPerDay:         nullableNonNegativeInt(firstIntPtr(req.RequestsPerDay, current.RequestsPerDay)),
-		DailyBudget:            firstNonEmpty(derefString(req.DailyBudget), derefString(current.DailyBudget)),
-		MonthlyBudget:          firstNonEmpty(derefString(req.MonthlyBudget), derefString(current.MonthlyBudget)),
+		DailyBudget:            dailyBudget,
+		MonthlyBudget:          monthlyBudget,
 		Currency:               currency,
 		FailureThreshold:       nullableNonNegativeInt(firstIntPtr(req.FailureThreshold, current.FailureThreshold)),
 		FailureWindowSeconds:   nullableNonNegativeInt(firstIntPtr(req.FailureWindowSeconds, current.FailureWindowSeconds)),
@@ -778,16 +746,6 @@ func scopeModelID(req GuardRequest, policy effectiveLimitPolicy) string {
 		return req.ProviderModelID
 	}
 	return ""
-}
-
-func budgetScope(policy effectiveLimitPolicy) string {
-	if policy.ProviderModelID != "" {
-		return "model"
-	}
-	if policy.ProviderAccountID != "" {
-		return "account"
-	}
-	return "org"
 }
 
 func intValue(value *int) int {

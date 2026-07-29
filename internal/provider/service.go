@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	editionpkg "github.com/Einzieg/cineweave/internal/edition"
 	"github.com/Einzieg/cineweave/internal/provider/outbound"
 	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
@@ -35,6 +36,8 @@ type Service struct {
 	videoMediaProbe     VideoMediaProbeFunc
 	videoMediaFileProbe VideoMediaFileProbeFunc
 	guard               *ProviderGuard
+	billingRouting      editionpkg.BillingRoutingAuthorizer
+	billingIdentity     GatewayBillingIdentityResolver
 }
 
 type rowScanner interface {
@@ -52,7 +55,30 @@ func NewService(db *pgxpool.Pool, vault *Vault) *Service {
 		videoMediaProbe:     defaultVideoMediaProbe,
 		videoMediaFileProbe: defaultVideoMediaFileProbe,
 		guard:               NewProviderGuard(db),
+		billingRouting:      editionpkg.MustCommunityRuntime().BillingRoutingAuthorizer,
+		billingIdentity:     passthroughGatewayBillingIdentityResolver{},
 	}
+}
+
+func (s *Service) SetBillingRoutingAuthorizer(
+	authorizer editionpkg.BillingRoutingAuthorizer,
+) {
+	if authorizer == nil {
+		s.billingRouting = editionpkg.MustCommunityRuntime().
+			BillingRoutingAuthorizer
+		return
+	}
+	s.billingRouting = authorizer
+}
+
+func (s *Service) SetGatewayBillingIdentityResolver(
+	resolver GatewayBillingIdentityResolver,
+) {
+	if resolver == nil {
+		s.billingIdentity = passthroughGatewayBillingIdentityResolver{}
+		return
+	}
+	s.billingIdentity = resolver
 }
 
 func (s *Service) SetGateway(baseURL, token string) {
@@ -156,6 +182,12 @@ func (s *Service) ListAccounts(ctx context.Context, organizationID, status strin
 	rows, err := s.db.Query(ctx, accountSelect(`
 		WHERE a.organization_id = $1
 		  AND ($2 = 'all' OR a.status = $2)
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM provider_managed_accounts managed
+		      WHERE managed.provider_account_id = a.id
+		        AND managed.management_scope = 'system_managed'
+		  )
 		ORDER BY a.created_at DESC
 		LIMIT $3
 	`), organizationID, status, limit)
@@ -235,7 +267,7 @@ func (s *Service) GetAccount(ctx context.Context, organizationID, accountID stri
 }
 
 func (s *Service) ListCredentials(ctx context.Context, organizationID, accountID, status string) ([]Credential, error) {
-	if _, err := s.GetAccount(ctx, organizationID, accountID); err != nil {
+	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
 		return nil, err
 	}
 	status, err := normalizeCredentialStatusFilter(status)
@@ -246,6 +278,12 @@ func (s *Service) ListCredentials(ctx context.Context, organizationID, accountID
 		WHERE pc.organization_id = $1
 		  AND pc.provider_account_id = $2
 		  AND ($3 = 'all' OR pc.status = $3)
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM provider_managed_credentials managed
+		      WHERE managed.provider_credential_id = pc.id
+		        AND managed.management_scope = 'system_managed'
+		  )
 		ORDER BY pc.is_active DESC, pc.credential_key, pc.created_at DESC
 	`), organizationID, accountID, status)
 	if err != nil {
@@ -265,10 +303,19 @@ func (s *Service) ListCredentials(ctx context.Context, organizationID, accountID
 }
 
 func (s *Service) GetCredential(ctx context.Context, organizationID, accountID, credentialID string) (Credential, error) {
+	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
+		return Credential{}, err
+	}
 	row := s.db.QueryRow(ctx, credentialSelect(`
 		WHERE pc.organization_id = $1
 		  AND pc.provider_account_id = $2
 		  AND pc.id = $3
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM provider_managed_credentials managed
+		      WHERE managed.provider_credential_id = pc.id
+		        AND managed.management_scope = 'system_managed'
+		  )
 	`), organizationID, accountID, credentialID)
 	return scanCredential(row)
 }
@@ -285,7 +332,7 @@ func (s *Service) CreateCredential(ctx context.Context, organizationID, accountI
 	if credentialType == "" {
 		credentialType = "api_key"
 	}
-	if _, err := s.GetAccount(ctx, organizationID, accountID); err != nil {
+	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
 		return Credential{}, err
 	}
 
@@ -308,7 +355,7 @@ func (s *Service) CreateCredential(ctx context.Context, organizationID, accountI
 }
 
 func (s *Service) UpdateAccount(ctx context.Context, organizationID, accountID string, req UpdateAccountRequest) (Account, error) {
-	current, err := s.GetAccount(ctx, organizationID, accountID)
+	current, err := s.GetTenantAccount(ctx, organizationID, accountID)
 	if err != nil {
 		return Account{}, err
 	}
@@ -359,6 +406,9 @@ func (s *Service) UpdateAccount(ctx context.Context, organizationID, accountID s
 }
 
 func (s *Service) DeleteAccount(ctx context.Context, organizationID, accountID string) error {
+	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
+		return err
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -422,6 +472,9 @@ func (s *Service) RotateCredential(ctx context.Context, organizationID, accountI
 	if credentialKey == "" {
 		credentialKey = "default"
 	}
+	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
+		return Account{}, err
+	}
 	var credentialID string
 	if err := s.db.QueryRow(ctx, `
 		SELECT id
@@ -443,7 +496,7 @@ func (s *Service) RotateCredentialByID(ctx context.Context, organizationID, acco
 	if len(req.Credential) == 0 {
 		return Credential{}, fmt.Errorf("%w: credential is required", ErrValidation)
 	}
-	if _, err := s.GetAccount(ctx, organizationID, accountID); err != nil {
+	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
 		return Credential{}, err
 	}
 
@@ -498,6 +551,9 @@ func (s *Service) RotateCredentialByID(ctx context.Context, organizationID, acco
 }
 
 func (s *Service) RevokeCredential(ctx context.Context, organizationID, accountID, credentialID string) error {
+	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
+		return err
+	}
 	tag, err := s.db.Exec(ctx, `
 		UPDATE provider_credentials
 		SET is_active = false, status = 'revoked'
@@ -516,7 +572,7 @@ func (s *Service) RevokeCredential(ctx context.Context, organizationID, accountI
 }
 
 func (s *Service) ListModels(ctx context.Context, organizationID, accountID, status string) ([]Model, error) {
-	if _, err := s.GetAccount(ctx, organizationID, accountID); err != nil {
+	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
 		return nil, err
 	}
 	status, err := normalizeListStatusFilter(status)
@@ -556,7 +612,7 @@ func (s *Service) ListModels(ctx context.Context, organizationID, accountID, sta
 }
 
 func (s *Service) CreateModel(ctx context.Context, organizationID, accountID string, req CreateModelRequest) (Model, error) {
-	if _, err := s.GetAccount(ctx, organizationID, accountID); err != nil {
+	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
 		return Model{}, err
 	}
 	modelKey := strings.TrimSpace(req.ModelKey)
@@ -651,6 +707,9 @@ func (s *Service) GetModel(ctx context.Context, organizationID, modelID string) 
 }
 
 func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID string, req UpdateModelRequest) (Model, error) {
+	if err := s.EnsureTenantProviderModel(ctx, organizationID, modelID); err != nil {
+		return Model{}, err
+	}
 	current, err := s.GetModel(ctx, organizationID, modelID)
 	if err != nil {
 		return Model{}, err
@@ -726,6 +785,9 @@ func (s *Service) DeleteModel(ctx context.Context, organizationID, modelID strin
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return fmt.Errorf("%w: modelId is required", ErrValidation)
+	}
+	if err := s.EnsureTenantProviderModel(ctx, organizationID, modelID); err != nil {
+		return err
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -2040,7 +2102,8 @@ func (s *Service) ListCallLogs(ctx context.Context, organizationID string, filte
 			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
 			requested_duration_seconds::float8, actual_duration_seconds::float8, media_probe,
-			created_at, started_at, completed_at
+			created_at, started_at, completed_at,
+			billing_context_id, provider_external_log_id
 		FROM provider_call_logs
 		WHERE organization_id = $1
 		  AND ($2 = '' OR project_id = $2::uuid)
@@ -2066,7 +2129,7 @@ func (s *Service) ListCallLogs(ctx context.Context, organizationID string, filte
 
 func (s *Service) UsageSummary(ctx context.Context, organizationID string) (UsageSummary, error) {
 	var summary UsageSummary
-	var totalCost sql.NullString
+	var estimatedCost sql.NullString
 	if err := s.db.QueryRow(ctx, `
 		SELECT
 			count(*),
@@ -2074,14 +2137,20 @@ func (s *Service) UsageSummary(ctx context.Context, organizationID string) (Usag
 			COALESCE(sum(estimated_cost), 0)::text
 		FROM provider_call_logs
 		WHERE organization_id = $1
-	`, organizationID).Scan(&summary.TotalCalls, &summary.FailedCalls, &totalCost); err != nil {
+	`, organizationID).Scan(
+		&summary.TotalCalls,
+		&summary.FailedCalls,
+		&estimatedCost,
+	); err != nil {
 		return UsageSummary{}, err
 	}
-	summary.TotalCost = "0"
-	if totalCost.Valid {
-		summary.TotalCost = totalCost.String
+	summary.EstimatedCost = "0"
+	if estimatedCost.Valid {
+		summary.EstimatedCost = estimatedCost.String
 	}
-	summary.Currency = "USD"
+	summary.EstimateCurrency = "USD"
+	summary.Authoritative = false
+	summary.SourceSemantics = "technical_estimate"
 	return summary, nil
 }
 
@@ -2788,7 +2857,8 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
 			requested_duration_seconds, actual_duration_seconds, media_probe,
-			started_at, completed_at
+			started_at, completed_at,
+			billing_context_id, provider_external_log_id
 		)
 		VALUES (
 			COALESCE(NULLIF(@id, '')::uuid, gen_random_uuid()),
@@ -2805,7 +2875,16 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			@request_snapshot, @response_snapshot, @normalized_output, @artifact_ids, @media_file_ids,
 			@requested_duration_seconds, @actual_duration_seconds, @media_probe,
 			CASE WHEN @status IN ('running', 'succeeded', 'failed', 'skipped', 'blocked', 'unknown_outcome') THEN now() ELSE NULL END,
-			CASE WHEN @status IN ('succeeded', 'failed', 'cancelled', 'skipped', 'blocked', 'unknown_outcome') THEN now() ELSE NULL END
+			CASE WHEN @status IN ('succeeded', 'failed', 'cancelled', 'skipped', 'blocked', 'unknown_outcome') THEN now() ELSE NULL END,
+			COALESCE(
+			    NULLIF(@billing_context_id, '')::uuid,
+			    (
+			        SELECT billing_context_id
+			        FROM provider_requests
+			        WHERE id = NULLIF(@provider_request_id, '')::uuid
+			    )
+			),
+			NULLIF(@provider_external_log_id, '')
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			provider_request_id = COALESCE(EXCLUDED.provider_request_id, provider_call_logs.provider_request_id),
@@ -2851,6 +2930,14 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			requested_duration_seconds = EXCLUDED.requested_duration_seconds,
 			actual_duration_seconds = EXCLUDED.actual_duration_seconds,
 			media_probe = EXCLUDED.media_probe,
+			billing_context_id = COALESCE(
+			    provider_call_logs.billing_context_id,
+			    EXCLUDED.billing_context_id
+			),
+			provider_external_log_id = COALESCE(
+			    EXCLUDED.provider_external_log_id,
+			    provider_call_logs.provider_external_log_id
+			),
 			started_at = COALESCE(provider_call_logs.started_at, EXCLUDED.started_at),
 			completed_at = EXCLUDED.completed_at
 		RETURNING
@@ -2863,7 +2950,8 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 			error_code, error_message, upstream_status, upstream_error_code,
 			request_snapshot, response_snapshot, normalized_output, artifact_ids, media_file_ids,
 			requested_duration_seconds::float8, actual_duration_seconds::float8, media_probe,
-			created_at, started_at, completed_at
+			created_at, started_at, completed_at,
+			billing_context_id, provider_external_log_id
 	`, pgx.NamedArgs{
 		"id":                         strings.TrimSpace(req.ID),
 		"provider_request_id":        strings.TrimSpace(req.ProviderRequestID),
@@ -2909,6 +2997,8 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 		"requested_duration_seconds": nullFloat(req.RequestedDurationSeconds),
 		"actual_duration_seconds":    nullFloat(req.ActualDurationSeconds),
 		"media_probe":                mediaProbe,
+		"billing_context_id":         strings.TrimSpace(req.BillingContextID),
+		"provider_external_log_id":   strings.TrimSpace(req.ProviderExternalLogID),
 	})
 	return scanCallLog(row)
 }
@@ -2916,6 +3006,7 @@ func recordCall(ctx context.Context, db callWriter, req RecordCallRequest) (Call
 func scanCallLog(row rowScanner) (CallLog, error) {
 	var item CallLog
 	var providerRequestID sql.NullString
+	var billingContextID, providerExternalLogID sql.NullString
 	var projectID, productionGenerationID, workflowRunID, nodeRunID, providerModelID, credentialID sql.NullString
 	var modelProfileID, modelProfileBindingID, modelProfileKey sql.NullString
 	var errorCode, errorMessage, upstreamErrorCode sql.NullString
@@ -2963,6 +3054,8 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 		&item.CreatedAt,
 		&startedAt,
 		&completedAt,
+		&billingContextID,
+		&providerExternalLogID,
 	)
 	item.ProviderRequestID = stringPtr(providerRequestID)
 	item.ProjectID = stringPtr(projectID)
@@ -2971,6 +3064,8 @@ func scanCallLog(row rowScanner) (CallLog, error) {
 	item.NodeRunID = stringPtr(nodeRunID)
 	item.ProviderModelID = stringPtr(providerModelID)
 	item.CredentialID = stringPtr(credentialID)
+	item.BillingContextID = stringPtr(billingContextID)
+	item.ProviderExternalLogID = stringPtr(providerExternalLogID)
 	item.ModelProfileID = stringPtr(modelProfileID)
 	item.ModelProfileBindingID = stringPtr(modelProfileBindingID)
 	item.ModelProfileKey = stringPtr(modelProfileKey)

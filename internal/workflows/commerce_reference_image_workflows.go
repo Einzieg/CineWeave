@@ -201,6 +201,10 @@ func CommerceReferenceImageBatchWorkflow(ctx workflow.Context, input CommerceRef
 	if input.Operation == "generate_images" {
 		activityName = GenerateCommerceReferenceImageItemActivityName
 	}
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	for offset := 0; offset < len(input.ShotIDs); offset += concurrency {
 		end := offset + concurrency
 		if end > len(input.ShotIDs) {
@@ -213,9 +217,14 @@ func CommerceReferenceImageBatchWorkflow(ctx workflow.Context, input CommerceRef
 		for index, future := range futures {
 			var item CommerceReferenceImageItemOutput
 			if err := future.Get(activityCtx, &item); err != nil {
+				code, message := workflowExecutionError(err)
 				item = CommerceReferenceImageItemOutput{
 					ShotID: input.ShotIDs[offset+index], Status: commerce.ItemFailedRetryable,
-					ErrorCode: "COMMERCE_REFERENCE_IMAGE_ACTIVITY_FAILED", ErrorMessage: err.Error(), Retryable: true,
+					ErrorCode: code, ErrorMessage: message, Retryable: true,
+				}
+				if isBillingInsufficientBalanceCode(code) {
+					item.Status = commerce.ItemFailedTerminal
+					item.Retryable = false
 				}
 			}
 			result.Items = append(result.Items, item)
@@ -224,6 +233,22 @@ func CommerceReferenceImageBatchWorkflow(ctx workflow.Context, input CommerceRef
 			} else {
 				result.Failed++
 			}
+			if stopOnBalance && !stopScheduling && isBillingInsufficientBalanceCode(item.ErrorCode) {
+				stopScheduling = true
+				stopCode = item.ErrorCode
+				stopMessage = item.ErrorMessage
+			}
+		}
+		if stopScheduling {
+			code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+			for index := end; index < len(input.ShotIDs); index++ {
+				result.Items = append(result.Items, CommerceReferenceImageItemOutput{
+					ShotID: input.ShotIDs[index], Status: commerce.ItemFailedTerminal,
+					ErrorCode: code, ErrorMessage: message, Retryable: false,
+				})
+				result.Failed++
+			}
+			break
 		}
 	}
 	switch {

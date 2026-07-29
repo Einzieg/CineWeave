@@ -21,6 +21,11 @@ import (
 
 func main() {
 	ctx := context.Background()
+	editionRuntime, err := buildEditionRuntime()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	pool, err := db.Open(ctx, config.Get("DATABASE_URL", "postgres://cineweave:cineweave_dev_password@localhost:5432/cineweave?sslmode=disable"))
 	if err != nil {
 		log.Fatal(err)
@@ -52,10 +57,6 @@ func main() {
 		config.Duration("CINEWEAVE_REFRESH_TOKEN_TTL", 30*24*time.Hour),
 	)
 	apiServer := api.New(pool, authService, providerService, storageClient, temporalClient, authz.New(pool))
-	editionRuntime, err := buildEditionRuntime()
-	if err != nil {
-		log.Fatal(err)
-	}
 	if err := apiServer.SetEditionRuntime(editionRuntime); err != nil {
 		log.Fatal(err)
 	}

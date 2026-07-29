@@ -2,15 +2,26 @@
 
 import Link from "next/link";
 import type { Route } from "next";
+import { editionEntry } from "@cineweave/edition-entry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
+import {
+  editionFeatureAllowed,
+  useEditionEntitlements,
+} from "@/edition/use-entitlements";
 import { globalNavItems } from "@/lib/routes";
 import type { GlobalSection } from "@/lib/routes";
 import { useStudioSession } from "@/lib/session";
 
 export function MainSidebar({ active }: { active: GlobalSection }) {
   const { session } = useStudioSession();
-  const visibleItems = globalNavItems.filter((item) => !item.systemOnly || session.user?.systemAdministrator);
+  const entitlements = useEditionEntitlements(editionEntry.navigation.length > 0);
+  const visibleItems = globalNavItems.filter(
+    (item) =>
+      (!item.systemOnly || session.user?.systemAdministrator) &&
+      (!("featureKey" in item) ||
+        editionFeatureAllowed(entitlements.data, item.featureKey)),
+  );
   return (
     <aside className="hidden h-full w-16 shrink-0 border-r bg-sidebar lg:flex lg:flex-col">
       {/* Logo */}
@@ -52,7 +63,13 @@ export function MainSidebar({ active }: { active: GlobalSection }) {
 
 export function MobileGlobalNav({ active }: { active: GlobalSection }) {
   const { session } = useStudioSession();
-  const visibleItems = globalNavItems.filter((item) => !item.systemOnly || session.user?.systemAdministrator);
+  const entitlements = useEditionEntitlements(editionEntry.navigation.length > 0);
+  const visibleItems = globalNavItems.filter(
+    (item) =>
+      (!item.systemOnly || session.user?.systemAdministrator) &&
+      (!("featureKey" in item) ||
+        editionFeatureAllowed(entitlements.data, item.featureKey)),
+  );
   return (
     <nav className="flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar px-2 py-2 lg:hidden" aria-label="全局导航">
       {visibleItems.map((item) => {

@@ -37,6 +37,23 @@ func providerConfigurationFrozen() bool {
 	return strings.EqualFold(value, "true") || value == "1"
 }
 
+func (s *Server) requireTenantProviderModel(
+	w http.ResponseWriter,
+	r *http.Request,
+	organizationID string,
+	modelID string,
+) bool {
+	if err := s.providers.EnsureTenantProviderModel(
+		r.Context(),
+		organizationID,
+		modelID,
+	); err != nil {
+		s.writeError(w, r, err)
+		return false
+	}
+	return true
+}
+
 func (s *Server) listProviderCatalog(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	orgID := organizationID(r, principal)
 	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
@@ -151,7 +168,7 @@ func (s *Server) getProviderAccount(w http.ResponseWriter, r *http.Request, prin
 	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
-	item, err := s.providers.GetAccount(r.Context(), orgID, r.PathValue("accountId"))
+	item, err := s.providers.GetTenantAccount(r.Context(), orgID, r.PathValue("accountId"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -362,6 +379,9 @@ func (s *Server) testProviderModel(w http.ResponseWriter, r *http.Request, princ
 	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
+	if !s.requireTenantProviderModel(w, r, orgID, r.PathValue("modelId")) {
+		return
+	}
 	req.IdempotencyKey = idempotencyKey(r, req.IdempotencyKey)
 	requestHash := idempotencyRequestHash(map[string]any{
 		"modelId":  r.PathValue("modelId"),
@@ -390,6 +410,9 @@ func (s *Server) listProviderModelVideoCapabilityAttestations(w http.ResponseWri
 	if !s.authorize(w, r, principal, authz.PermissionProviderRead, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
+	if !s.requireTenantProviderModel(w, r, orgID, r.PathValue("modelId")) {
+		return
+	}
 	item, err := s.providers.ListVideoCapabilityAttestations(r.Context(), orgID, r.PathValue("modelId"))
 	if err != nil {
 		s.writeError(w, r, err)
@@ -405,6 +428,9 @@ func (s *Server) createProviderModelVideoCapabilityAttestation(w http.ResponseWr
 	}
 	orgID := organizationID(r, principal)
 	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	if !s.requireTenantProviderModel(w, r, orgID, r.PathValue("modelId")) {
 		return
 	}
 	item, err := s.providers.CreateVideoCapabilityAttestation(r.Context(), orgID, principal.UserID, r.PathValue("modelId"), req)
@@ -424,6 +450,9 @@ func (s *Server) revokeProviderModelVideoCapabilityAttestation(w http.ResponseWr
 	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
 		return
 	}
+	if !s.requireTenantProviderModel(w, r, orgID, r.PathValue("modelId")) {
+		return
+	}
 	item, err := s.providers.RevokeVideoCapabilityAttestation(
 		r.Context(), orgID, principal.UserID, r.PathValue("modelId"), r.PathValue("attestationId"), req,
 	)
@@ -441,6 +470,9 @@ func (s *Server) verifyProviderModelVideoCapabilities(w http.ResponseWriter, r *
 	}
 	orgID := organizationID(r, principal)
 	if !s.authorize(w, r, principal, authz.PermissionProviderManage, authz.Resource{OrganizationID: orgID}) {
+		return
+	}
+	if !s.requireTenantProviderModel(w, r, orgID, r.PathValue("modelId")) {
 		return
 	}
 	item, err := s.providers.VerifyVideoCapability(r.Context(), orgID, principal.UserID, r.PathValue("modelId"), req)

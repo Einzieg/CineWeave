@@ -9,4 +9,5 @@ export const communityEditionEntry: EditionEntry = Object.freeze({
   routes: Object.freeze([]),
   queryClients: Object.freeze([]),
   entitlementGuards: Object.freeze([]),
+  topBarItems: Object.freeze([]),
 });

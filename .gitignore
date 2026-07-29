@@ -16,6 +16,8 @@ apps/web/test-results/
 apps/web/blob-report/
 
 *.log
+__pycache__/
+*.py[cod]
 
 .turbo/
 .vercel/

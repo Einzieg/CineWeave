@@ -1,10 +1,15 @@
 "use client";
 
 import { Building2, ListChecks, LogOut, UserCircle2, Bot, PanelRightClose } from "lucide-react";
+import { editionEntry } from "@cineweave/edition-entry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
+import {
+  editionFeatureAllowed,
+  useEditionEntitlements,
+} from "@/edition/use-entitlements";
 import { studioApi } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { useApiQuery } from "@/lib/query/use-api";
@@ -50,6 +55,10 @@ export function TopBar({
   useWorkflowTerminalRefresh(projectId || "", workflowRuns, workflowRunsReady);
   const activeWorkflowCount = workflowRuns.filter((run) => isActiveWorkflowStatus(run.status)).length;
   const activeActivityCount = activeWorkflowCount;
+  const entitlements = useEditionEntitlements(editionEntry.topBarItems.length > 0);
+  const topBarItems = editionEntry.topBarItems.filter((item) =>
+    editionFeatureAllowed(entitlements.data, item.featureKey),
+  );
 
   return (
     <header className="sticky top-0 z-30 shrink-0 border-b bg-card/80 backdrop-blur-xl">
@@ -91,6 +100,11 @@ export function TopBar({
             <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="font-medium">{details.organizationName || "组织"}</span>
           </div>
+
+          {topBarItems.map((item) => {
+            const Component = item.component;
+            return <Component key={item.key} />;
+          })}
 
           <div className="hidden items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs lg:flex">
             <UserCircle2 className="h-3.5 w-3.5 text-muted-foreground" />

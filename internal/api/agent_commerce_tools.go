@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/authz"
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
@@ -876,6 +877,11 @@ func (s *Server) agentToolCommerceScriptDerivationPreview(
 	response, err := provider.NewGatewayClientFromEnv().GenerateText(
 		r.Context(),
 		provider.GatewayTextRequest{
+			GatewayBillingIdentity: gatewayBillingIdentityFromContext(
+				r.Context(),
+				authz.PermissionProjectWrite,
+				provider.BillingContextReasonAgentAction,
+			),
 			OrganizationID:    project.OrganizationID,
 			WorkspaceID:       project.WorkspaceID,
 			ProjectID:         project.ID,

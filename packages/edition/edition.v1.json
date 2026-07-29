@@ -50,7 +50,11 @@
     "billing_account_scope_mismatch",
     "billing_authority_mismatch",
     "billing_sponsorship_required",
-    "billing_routing_candidate_missing"
+    "billing_routing_candidate_missing",
+    "billing_insufficient_balance",
+    "billing_credential_unavailable",
+    "billing_model_forbidden",
+    "billing_upstream_unavailable"
   ],
   "providerManagementScopes": [
     "tenant_managed",
@@ -59,6 +63,11 @@
   "billingAccountScopes": [
     "organization",
     "personal"
+  ],
+  "apiResourceScopes": [
+    "organization",
+    "workspace",
+    "project"
   ],
   "licenseStates": [
     "valid",
@@ -102,8 +111,33 @@
     "navigation",
     "routes",
     "queryClients",
-    "entitlementGuards"
+    "entitlementGuards",
+    "topBarItems"
   ],
+  "apiModuleRegistration": {
+    "requiredFields": [
+      "ModuleKey",
+      "FeatureKey",
+      "Method",
+      "Pattern",
+      "OperationID",
+      "LicenseOperation",
+      "RequiredPermissions",
+      "ResourceScope",
+      "ResourcePathParameter",
+      "Handler"
+    ],
+    "authorizationOrder": [
+      "CoreAuthentication",
+      "DeploymentLicenseAndTenantEntitlement",
+      "CoreRBAC",
+      "ResourceState",
+      "Handler"
+    ],
+    "commercialRoutesRequireAuthentication": true,
+    "commercialRoutesRequireRBAC": true,
+    "commercialRoutesRequireManifestModule": true
+  },
   "effectiveSpendAuthorization": {
     "allOf": [
       "ProjectOperationAllowedByRBAC",

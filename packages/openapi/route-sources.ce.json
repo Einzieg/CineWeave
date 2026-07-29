@@ -10,7 +10,7 @@
       "parser": "go-http-mux"
     },
     {
-      "path": "services/provider-gateway/main.go",
+      "path": "internal/providergatewayserver/server.go",
       "parser": "go-http-mux",
       "defaultImplicitMethod": "post"
     }

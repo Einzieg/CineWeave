@@ -224,8 +224,12 @@ func CommerceScriptDerivationBatchWorkflow(
 	results := workflow.NewBufferedChannel(ctx, input.MaxConcurrency)
 	active := 0
 	next := 0
-	for next < len(snapshot.ItemIDs) || active > 0 {
-		for next < len(snapshot.ItemIDs) && active < input.MaxConcurrency {
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
+	for (!stopScheduling && next < len(snapshot.ItemIDs)) || active > 0 {
+		for !stopScheduling && next < len(snapshot.ItemIDs) && active < input.MaxConcurrency {
 			itemID := snapshot.ItemIDs[next]
 			next++
 			active++
@@ -249,7 +253,35 @@ func CommerceScriptDerivationBatchWorkflow(
 		var result childResult
 		results.Receive(ctx, &result)
 		active--
-		_ = result
+		if stopOnBalance && !stopScheduling {
+			if code, message, ok := billingInsufficientBalanceFailure(result.err); ok {
+				stopScheduling = true
+				stopCode = code
+				stopMessage = message
+			}
+		}
+	}
+	if stopScheduling {
+		code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+		for ; next < len(snapshot.ItemIDs); next++ {
+			itemInput := CommerceScriptDerivationItemInput{
+				OrganizationID: input.OrganizationID, ProjectID: input.ProjectID,
+				BatchID: input.BatchID, ItemID: snapshot.ItemIDs[next],
+				WorkflowRunID: input.WorkflowRunID,
+			}
+			if workflowErr = workflow.ExecuteActivity(
+				activityCtx,
+				FailCommerceScriptDerivationItemActivity,
+				CommerceScriptDerivationFailureInput{
+					WorkflowInput: itemInput,
+					Retryable:     false,
+					ErrorCode:     code,
+					ErrorMessage:  message,
+				},
+			).Get(activityCtx, nil); workflowErr != nil {
+				return CommerceScriptDerivationBatchOutput{}, workflowErr
+			}
+		}
 	}
 
 	if workflowErr = workflow.ExecuteActivity(

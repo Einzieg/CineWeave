@@ -33,10 +33,17 @@ export type EditionEntitlementGuardRegistration = {
   behavior: "not_found" | "forbidden" | "upgrade";
 };
 
+export type EditionTopBarRegistration = {
+  key: string;
+  featureKey: EditionFeatureKey;
+  component: ComponentType;
+};
+
 export type EditionEntry = {
   contractVersion: typeof EDITION_ENTRY_CONTRACT_VERSION;
   navigation: readonly EditionNavigationRegistration[];
   routes: readonly EditionRouteRegistration[];
   queryClients: readonly EditionQueryClientRegistration[];
   entitlementGuards: readonly EditionEntitlementGuardRegistration[];
+  topBarItems: readonly EditionTopBarRegistration[];
 };

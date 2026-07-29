@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cineweave.local/schemas/overlay-allowlist.v1.json",
+  "title": "CineWeave Commercial Overlay Allowlist v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "coreCommit",
+    "files"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "cineweave.overlay-allowlist.v1"
+    },
+    "coreCommit": {
+      "$ref": "#/$defs/gitCommit"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "destination",
+          "operation",
+          "sha256"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "destination": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "operation": {
+            "enum": [
+              "add",
+              "replace"
+            ]
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[^\\u0000]+$"
+    }
+  }
+}

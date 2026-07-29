@@ -256,6 +256,24 @@ func TestAuthenticationFailuresAreGenericAndRateLimited(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, registered.User.ID)
 	})
 
+	stepUp, err := service.VerifyCurrentPassword(
+		ctx,
+		registered.User.ID,
+		"Password123!",
+		request("/api/billing/step-up-sessions"),
+	)
+	if err != nil || stepUp.CredentialVersion < 0 {
+		t.Fatalf("verify current password = %+v, %v", stepUp, err)
+	}
+	if _, err := service.VerifyCurrentPassword(
+		ctx,
+		registered.User.ID,
+		"wrong-password",
+		request("/api/billing/step-up-sessions"),
+	); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("wrong step-up password error = %v", err)
+	}
+
 	_, duplicateEmailErr := service.Register(ctx, RegisterRequest{
 		Email: registered.User.Email, Username: "other-" + suffix, Password: "Password123!",
 	}, request("/api/auth/register"))
@@ -287,6 +305,8 @@ func TestAuthenticationFailuresAreGenericAndRateLimited(t *testing.T) {
 		service.securitySubjectHash(securityActionRegister, "identity", registrationRateSubject(registered.User.Email, "other-"+suffix)),
 		service.securitySubjectHash(securityActionRegister, "identity", registrationRateSubject("other-"+suffix+"@example.test", registered.User.Username)),
 		service.securitySubjectHash(securityActionRegister, "client", "198.51.100.44"),
+		service.securitySubjectHash(securityActionStepUp, "identity", "user:"+registered.User.ID),
+		service.securitySubjectHash(securityActionStepUp, "client", "198.51.100.44"),
 	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM auth_security_failures WHERE subject_hash = ANY($1::text[])`, hashes)

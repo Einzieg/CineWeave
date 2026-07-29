@@ -19,6 +19,7 @@ DEFAULT_OPENAPI_PATH = ROOT / "packages" / "openapi" / "openapi.yaml"
 DEFAULT_ROUTE_SOURCE_MANIFEST = ROOT / "packages" / "openapi" / "route-sources.ce.json"
 HTTP_METHODS = {"get", "post", "patch", "delete", "put"}
 MANIFEST_SCHEMA_VERSION = "cineweave.route-sources.v1"
+ROUTE_LIST_SCHEMA_VERSION = "cineweave.edition-api-routes.v1"
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ def load_route_source_manifest(path: pathlib.Path) -> RouteSourceManifest:
         default_implicit_method = raw_source.get("defaultImplicitMethod")
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise ValueError(f"route source {index} path is required")
-        if parser != "go-http-mux":
+        if parser not in {"go-http-mux", "route-list-json"}:
             raise ValueError(f"route source {raw_path} has unsupported parser {parser!r}")
         if default_implicit_method is not None:
             default_implicit_method = str(default_implicit_method).lower()
@@ -129,6 +130,9 @@ def actual_routes(manifest: RouteSourceManifest) -> set[tuple[str, str]]:
     routes: set[tuple[str, str]] = set()
     pattern = re.compile(r'mux\.Handle(?:Func)?\("([^"]+)"')
     for source in manifest.sources:
+        if source.parser == "route-list-json":
+            routes.update(route_list_routes(source.path))
+            continue
         text = source.path.read_text(encoding="utf-8")
         for match in pattern.finditer(text):
             registration = match.group(1)
@@ -149,6 +153,48 @@ def actual_routes(manifest: RouteSourceManifest) -> set[tuple[str, str]]:
                     f"route {route_path} in {source.path} uses unsupported method {normalized_method}"
                 )
             routes.add((normalized_method, route_path))
+    return routes
+
+
+def route_list_routes(path: pathlib.Path) -> set[tuple[str, str]]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read Edition API route list {path}: {exc}") from exc
+    if not isinstance(document, dict) or document.get("schemaVersion") != ROUTE_LIST_SCHEMA_VERSION:
+        raise ValueError(
+            f"Edition API route list {path} schemaVersion must be {ROUTE_LIST_SCHEMA_VERSION}"
+        )
+    raw_routes = document.get("routes")
+    if not isinstance(raw_routes, list) or not raw_routes:
+        raise ValueError(f"Edition API route list {path} must contain routes")
+    routes: set[tuple[str, str]] = set()
+    operation_ids: set[str] = set()
+    for index, item in enumerate(raw_routes):
+        if not isinstance(item, dict):
+            raise ValueError(f"Edition API route list {path} route {index} must be an object")
+        method = str(item.get("method", "")).lower()
+        route_path = item.get("path")
+        operation_id = item.get("operationId")
+        if (
+            method not in HTTP_METHODS
+            or not isinstance(route_path, str)
+            or not route_path.startswith("/api/")
+            or not isinstance(operation_id, str)
+            or not operation_id.strip()
+        ):
+            raise ValueError(f"Edition API route list {path} route {index} is invalid")
+        route = (method, route_path)
+        if route in routes:
+            raise ValueError(
+                f"Edition API route list {path} duplicates {method.upper()} {route_path}"
+            )
+        if operation_id in operation_ids:
+            raise ValueError(
+                f"Edition API route list {path} duplicates operationId {operation_id}"
+            )
+        routes.add(route)
+        operation_ids.add(operation_id)
     return routes
 
 

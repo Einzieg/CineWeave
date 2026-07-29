@@ -150,6 +150,10 @@ func CommerceScriptUnitBatchCoordinatorWorkflow(
 	if concurrency > commerceCoordinatorMaxConcurrency {
 		concurrency = commerceCoordinatorMaxConcurrency
 	}
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 
 	for batchStart := input.Cursor; batchStart < len(input.Children); batchStart += concurrency {
 		batchEnd := batchStart + concurrency
@@ -196,6 +200,15 @@ func CommerceScriptUnitBatchCoordinatorWorkflow(
 			}).Get(activityCtx, nil); err != nil {
 				return result, err
 			}
+			if stopOnBalance && !stopScheduling && isBillingInsufficientBalanceCode(code) {
+				stopScheduling = true
+				stopCode = code
+				stopMessage = message
+			}
+		}
+		if stopScheduling {
+			code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+			return result, billingInsufficientBalanceError(code, message)
 		}
 		nextCursor := batchEnd
 		if nextCursor < len(input.Children) && (workflow.GetInfo(ctx).GetContinueAsNewSuggested() || nextCursor-input.ExecutionStart >= commerceCoordinatorItemsPerExecution) {

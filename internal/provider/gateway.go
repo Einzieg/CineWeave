@@ -129,20 +129,33 @@ func (s *Service) executeProviderTextRequest(ctx context.Context, req GatewayTex
 	if err := s.assertProviderProjectWritable(ctx, req.OrganizationID, req.ProjectID); err != nil {
 		return GatewayTextResponse{}, err
 	}
+	taskType := TaskTypeTextGenerate
+	if stream {
+		taskType = TaskTypeTextStream
+	}
+	var err error
+	req.GatewayBillingIdentity, err = s.resolveGatewayBillingIdentity(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.WorkflowRunID,
+		taskType,
+		gatewayIdempotencyKey(req),
+		req.GatewayBillingIdentity,
+	)
+	if err != nil {
+		return GatewayTextResponse{}, err
+	}
 	input, err := normalizeJSON(req.Input, "{}")
 	if err != nil {
 		return GatewayTextResponse{}, fmt.Errorf("%w: input must be valid JSON", ErrValidation)
 	}
 	req.Input = input
-	taskType := TaskTypeTextGenerate
-	if stream {
-		taskType = TaskTypeTextStream
-	}
 	requestHash, err := gatewayRequestHash(req)
 	if err != nil {
 		return GatewayTextResponse{}, err
 	}
-	start, err := s.beginProviderRequest(ctx, providerRequestStartInput{
+	startInput := providerRequestStartInput{
 		OrganizationID: req.OrganizationID,
 		ProjectID:      req.ProjectID,
 		WorkflowRunID:  req.WorkflowRunID,
@@ -151,7 +164,12 @@ func (s *Service) executeProviderTextRequest(ctx context.Context, req GatewayTex
 		IdempotencyKey: gatewayIdempotencyKey(req),
 		RequestHash:    requestHash,
 		Retry:          req.Options.Retry,
-	})
+	}
+	applyBillingIdentityToProviderRequest(
+		&startInput,
+		req.GatewayBillingIdentity,
+	)
+	start, err := s.beginProviderRequest(ctx, startInput)
 	if err != nil {
 		return GatewayTextResponse{}, err
 	}
@@ -175,7 +193,10 @@ func (s *Service) executeProviderTextRequest(ctx context.Context, req GatewayTex
 
 	response, runErr := s.executeGatewayText(ctx, req, stream, emit, start.Request.ID, start.Request.AttemptGeneration)
 	if runErr != nil {
-		if errors.Is(runErr, ErrValidation) || errors.Is(runErr, pgx.ErrNoRows) {
+		_, standardFailure := StandardErrorFromError(runErr)
+		if standardFailure ||
+			errors.Is(runErr, ErrValidation) ||
+			errors.Is(runErr, pgx.ErrNoRows) {
 			_, code, message, _, _ := normalizedProviderFailure(runErr)
 			standard := standardErrorFromRunError(runErr, code, message)
 			response = GatewayTextResponse{
@@ -410,7 +431,13 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 	var final GatewayTextResponse
 	for i := 0; i < maxAttempts; i++ {
 		candidate := candidates[i]
-		selection, err := s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidate)
+		selection, err := s.completeGatewaySelectionFromCandidateWithBilling(
+			ctx,
+			req.OrganizationID,
+			req.ProjectID,
+			req.GatewayBillingIdentity,
+			candidate,
+		)
 		if err != nil {
 			return GatewayTextResponse{}, err
 		}
@@ -711,7 +738,17 @@ func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextReq
 		if err != nil {
 			return gatewayModelSelection{}, err
 		}
-		return s.completeGatewaySelection(ctx, req.OrganizationID, account, model, "", "", "")
+		return s.completeGatewaySelectionWithBilling(
+			ctx,
+			req.OrganizationID,
+			req.ProjectID,
+			req.GatewayBillingIdentity,
+			account,
+			model,
+			"",
+			"",
+			"",
+		)
 	}
 
 	profileKey := strings.TrimSpace(req.ModelProfileKey)
@@ -730,10 +767,32 @@ func (s *Service) selectGatewayTextModel(ctx context.Context, req GatewayTextReq
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	return s.completeGatewaySelectionFromCandidate(ctx, req.OrganizationID, candidates[0])
+	return s.completeGatewaySelectionFromCandidateWithBilling(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.GatewayBillingIdentity,
+		candidates[0],
+	)
 }
 
 func (s *Service) completeGatewaySelectionFromCandidate(ctx context.Context, organizationID string, candidate RoutingCandidate) (gatewayModelSelection, error) {
+	return s.completeGatewaySelectionFromCandidateWithBilling(
+		ctx,
+		organizationID,
+		"",
+		GatewayBillingIdentity{},
+		candidate,
+	)
+}
+
+func (s *Service) completeGatewaySelectionFromCandidateWithBilling(
+	ctx context.Context,
+	organizationID string,
+	projectID string,
+	identity GatewayBillingIdentity,
+	candidate RoutingCandidate,
+) (gatewayModelSelection, error) {
 	model, err := s.GetModel(ctx, organizationID, candidate.ProviderModelID)
 	if err != nil {
 		return gatewayModelSelection{}, err
@@ -742,7 +801,17 @@ func (s *Service) completeGatewaySelectionFromCandidate(ctx context.Context, org
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	selection, err := s.completeGatewaySelection(ctx, organizationID, account, model, candidate.ModelProfileID, candidate.ModelProfileBindingID, candidate.ModelProfileKey)
+	selection, err := s.completeGatewaySelectionWithBilling(
+		ctx,
+		organizationID,
+		projectID,
+		identity,
+		account,
+		model,
+		candidate.ModelProfileID,
+		candidate.ModelProfileBindingID,
+		candidate.ModelProfileKey,
+	)
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
@@ -751,10 +820,50 @@ func (s *Service) completeGatewaySelectionFromCandidate(ctx context.Context, org
 }
 
 func (s *Service) completeGatewaySelection(ctx context.Context, organizationID string, account Account, model Model, profileID, bindingID, profileKey string) (gatewayModelSelection, error) {
+	return s.completeGatewaySelectionWithBilling(
+		ctx,
+		organizationID,
+		"",
+		GatewayBillingIdentity{},
+		account,
+		model,
+		profileID,
+		bindingID,
+		profileKey,
+	)
+}
+
+func (s *Service) completeGatewaySelectionWithBilling(
+	ctx context.Context,
+	organizationID string,
+	projectID string,
+	identity GatewayBillingIdentity,
+	account Account,
+	model Model,
+	profileID string,
+	bindingID string,
+	profileKey string,
+) (gatewayModelSelection, error) {
 	if account.Status != "active" {
 		return gatewayModelSelection{}, fmt.Errorf("%w: provider account is not active", ErrValidation)
 	}
-	credential, credentialID, err := s.credentialPayloadForModel(ctx, organizationID, account.ID, model.ID)
+	credentialID, err := s.authorizeCredentialForModel(
+		ctx,
+		organizationID,
+		projectID,
+		identity,
+		account,
+		model,
+	)
+	if err != nil {
+		return gatewayModelSelection{}, err
+	}
+	credential, credentialID, err := s.activeCredentialPayloadByID(
+		ctx,
+		organizationID,
+		account.ID,
+		credentialID,
+	)
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}

@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/production"
+	"github.com/Einzieg/cineweave/internal/provider"
 )
 
 type assetPromptRevisionDraft struct {
@@ -86,7 +88,7 @@ func (s *Server) agentToolReviseCanonicalAssetPrompt(
 			"fields":      fields,
 		},
 		"scenes": scenes,
-	}, true)
+	}, true, authz.PermissionAssetWrite, provider.BillingContextReasonAgentAction)
 	if err != nil {
 		return agentToolError("asset.revise_prompt", args, err)
 	}

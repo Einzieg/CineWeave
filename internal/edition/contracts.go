@@ -73,6 +73,10 @@ const (
 	DenialBillingAuthorityMismatch         DenialCode = "billing_authority_mismatch"
 	DenialBillingSponsorshipRequired       DenialCode = "billing_sponsorship_required"
 	DenialBillingRoutingCandidateMissing   DenialCode = "billing_routing_candidate_missing"
+	DenialBillingInsufficientBalance       DenialCode = "billing_insufficient_balance"
+	DenialBillingCredentialUnavailable     DenialCode = "billing_credential_unavailable"
+	DenialBillingModelForbidden            DenialCode = "billing_model_forbidden"
+	DenialBillingUpstreamUnavailable       DenialCode = "billing_upstream_unavailable"
 )
 
 type FeatureDescriptor struct {
@@ -135,6 +139,7 @@ type EntitlementSubject struct {
 type EntitlementRequest struct {
 	Subject     EntitlementSubject
 	FeatureKeys []FeatureKey
+	Operation   LicenseOperation
 }
 
 type EntitlementDecision struct {
@@ -233,13 +238,33 @@ type BillingAuthorityIsolationFacts struct {
 	CredentialBillingAccountID string
 }
 
+type APIResourceScope string
+
+const (
+	APIResourceScopeOrganization APIResourceScope = "organization"
+	APIResourceScopeWorkspace    APIResourceScope = "workspace"
+	APIResourceScopeProject      APIResourceScope = "project"
+)
+
+type APIPrincipal struct {
+	UserID           string
+	OrganizationID   string
+	BillingAccountID string
+}
+
+type APIModuleHandler func(http.ResponseWriter, *http.Request, APIPrincipal)
+
 type APIModuleRegistration struct {
-	ModuleKey   string
-	FeatureKey  FeatureKey
-	Method      string
-	Pattern     string
-	OperationID string
-	Handler     http.Handler
+	ModuleKey             string
+	FeatureKey            FeatureKey
+	Method                string
+	Pattern               string
+	OperationID           string
+	LicenseOperation      LicenseOperation
+	RequiredPermissions   []string
+	ResourceScope         APIResourceScope
+	ResourcePathParameter string
+	Handler               APIModuleHandler
 }
 
 type EventMessage struct {

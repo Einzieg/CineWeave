@@ -141,8 +141,10 @@ type VideoContinuationCapability struct {
 }
 
 type GatewayVideoPlanRequest struct {
+	GatewayBillingIdentity
 	OrganizationID                      string                     `json:"organizationId"`
 	ProjectID                           string                     `json:"projectId"`
+	IdempotencyKey                      string                     `json:"idempotencyKey,omitempty"`
 	OperationID                         string                     `json:"operationId,omitempty"`
 	OperationItemID                     string                     `json:"operationItemId,omitempty"`
 	OperationItemAttempt                int                        `json:"operationItemAttempt,omitempty"`

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
@@ -53,6 +54,7 @@ type commerceSetupLanguageConfiguration struct {
 }
 
 type commerceSetupSnapshot struct {
+	RequestedBy string
 	Run         commerce.SetupRun
 	Session     commerce.SetupSession
 	Template    commerce.WorkflowTemplateVersion
@@ -484,7 +486,8 @@ func (r *CommerceSetupRuntime) loadSetupSnapshot(ctx context.Context, input Comm
 		return commerceSetupSnapshot{}, err
 	}
 	return commerceSetupSnapshot{
-		Run: run, Session: session, Template: template, Product: product, ProductData: productData,
+		RequestedBy: input.RequestedBy,
+		Run:         run, Session: session, Template: template, Product: product, ProductData: productData,
 		References: references, Unit: unit, Source: source, Segments: segments,
 		Preparation: preparation, Prompts: promptBindings, Models: modelContracts,
 	}, nil
@@ -976,6 +979,11 @@ func (r *CommerceSetupRuntime) runSetupAgent(
 	}
 	idempotencyKey := fmt.Sprintf("commerce:setup:%s:%s:r%d", snapshot.Run.ID, binding.Role, round)
 	response, err := r.gateway.GenerateText(ctx, provider.GatewayTextRequest{
+		GatewayBillingIdentity: provider.GatewayBillingIdentity{
+			RequestedByUserID:          snapshot.RequestedBy,
+			BillingOperationPermission: authz.PermissionProjectWrite,
+			BillingContextReason:       provider.BillingContextReasonWorkflowStart,
+		},
 		OrganizationID: snapshot.Session.OrganizationID, ProjectID: snapshot.Session.ProjectID,
 		ModelProfileKey: binding.ModelProfileKey, ProviderModelID: binding.ProviderModelID,
 		PromptTemplateKey: rendered.TemplateKey, PromptVersionID: rendered.PromptVersionID,

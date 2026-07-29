@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	editionpkg "github.com/Einzieg/cineweave/internal/edition"
 	"github.com/Einzieg/cineweave/internal/events"
 	"github.com/jackc/pgx/v5"
 )
@@ -72,6 +73,18 @@ func (s *Service) PlanVideo(ctx context.Context, req GatewayVideoPlanRequest) (G
 	if err != nil {
 		return GatewayVideoPlanResponse{}, err
 	}
+	req.GatewayBillingIdentity, err = s.resolveGatewayBillingIdentity(
+		ctx,
+		req.OrganizationID,
+		req.ProjectID,
+		req.WorkflowRunID,
+		TaskTypeVideoCreateTask,
+		req.IdempotencyKey,
+		req.GatewayBillingIdentity,
+	)
+	if err != nil {
+		return GatewayVideoPlanResponse{}, err
+	}
 	if req.StoryboardPlanID == "" {
 		req.StoryboardPlanID = shotState.StoryboardPlanID
 	}
@@ -81,6 +94,10 @@ func (s *Service) PlanVideo(ctx context.Context, req GatewayVideoPlanRequest) (G
 		return recovered, nil
 	}
 	candidates, err := s.resolveVideoPlanCandidates(ctx, req)
+	if err != nil {
+		return GatewayVideoPlanResponse{}, err
+	}
+	candidates, err = s.filterVideoPlanBillingCandidates(ctx, req, candidates)
 	if err != nil {
 		return GatewayVideoPlanResponse{}, err
 	}
@@ -374,6 +391,54 @@ func (s *Service) resolveVideoPlanCandidates(ctx context.Context, req GatewayVid
 		return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelCapabilityUnavailable, Message: "no remaining video model candidates are available after previous render failures", Retryable: false}}
 	}
 	return result, nil
+}
+
+func (s *Service) filterVideoPlanBillingCandidates(
+	ctx context.Context,
+	req GatewayVideoPlanRequest,
+	candidates []resolvedVideoPlanCandidate,
+) ([]resolvedVideoPlanCandidate, error) {
+	filtered := make([]resolvedVideoPlanCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, err := s.authorizeCredentialForModel(
+			ctx,
+			req.OrganizationID,
+			req.ProjectID,
+			req.GatewayBillingIdentity,
+			candidate.Account,
+			candidate.Model,
+		); err == nil {
+			filtered = append(filtered, candidate)
+		} else if !videoPlanBillingCandidateUnavailable(err) {
+			return nil, err
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, &StandardErrorError{Standard: StandardError{
+			Code:      string(editionpkg.DenialBillingRoutingCandidateMissing),
+			Message:   "no video model and credential pair satisfies the billing routing constraints",
+			Retryable: false,
+		}}
+	}
+	return filtered, nil
+}
+
+func videoPlanBillingCandidateUnavailable(err error) bool {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true
+	}
+	standard, ok := StandardErrorFromError(err)
+	if !ok {
+		return false
+	}
+	switch standard.Code {
+	case string(editionpkg.DenialBillingCredentialUnavailable),
+		string(editionpkg.DenialBillingModelForbidden),
+		string(editionpkg.DenialBillingRoutingCandidateMissing):
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) persistVideoRenderPlan(ctx context.Context, req GatewayVideoPlanRequest, selected matchedVideoPlanCandidate, fallbackCandidates json.RawMessage, planKey string, expiresAt time.Time) (GatewayVideoPlanResponse, error) {

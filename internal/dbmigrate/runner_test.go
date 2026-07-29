@@ -22,7 +22,7 @@ func TestLatestMigrationIsEmbedded(t *testing.T) {
 		t.Fatalf("loadMigrationFiles() error = %v", err)
 	}
 	latest := migrations[len(migrations)-1]
-	if latest.Version != 70 || latest.Name != "000070_workflow_activity_views.sql" {
+	if latest.Version != 75 || latest.Name != "000075_storyboard_legacy_plan_identity.sql" {
 		t.Fatalf("latest embedded migration = %d %s", latest.Version, latest.Name)
 	}
 }

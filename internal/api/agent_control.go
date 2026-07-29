@@ -424,6 +424,11 @@ func (s *Server) planAgentTask(r *http.Request, principal auth.Principal, projec
 	for attempt := 1; attempt <= agentRuntimeMaxInvalidPlans; attempt++ {
 		attemptPromptHash := promptsvc.HashText(plannerPrompt)
 		gatewayResp, gatewayErr := provider.NewGatewayClientFromEnv().GenerateText(r.Context(), provider.GatewayTextRequest{
+			GatewayBillingIdentity: gatewayBillingIdentityFromContext(
+				r.Context(),
+				authz.PermissionProjectRead,
+				provider.BillingContextReasonAgentAction,
+			),
 			OrganizationID:    project.OrganizationID,
 			WorkspaceID:       project.WorkspaceID,
 			ProjectID:         project.ID,
@@ -1188,19 +1193,18 @@ func (s *Server) superviseAgentStepState(r *http.Request, project Project, task 
 			return fail("provider_cost_disabled", "当前任务约束禁止产生供应商成本。", map[string]any{"estimatedCostCents": estimatedCostCents})
 		}
 		if budgetCents, exists := agentConstraintFloat(constraints, "maxProviderCostCents"); exists {
-			spentCents, err := s.agentProjectCostSpentCents(r, project.ID)
-			if err != nil {
-				return fail("cost_state_unavailable", err.Error(), nil)
-			}
-			if spentCents+estimatedCostCents > budgetCents {
-				return fail("cost_budget_exceeded", "当前任务预计成本超过预算约束。", map[string]any{
+			if estimatedCostCents > budgetCents {
+				return fail("cost_budget_exceeded", "当前步骤的技术成本估算超过任务约束。", map[string]any{
 					"budgetCents":        budgetCents,
-					"spentCents":         spentCents,
 					"estimatedCostCents": estimatedCostCents,
+					"authoritative":      false,
 				})
 			}
 		}
-		ok.Details = mergeAgentStateDetails(ok.Details, map[string]any{"estimatedCostCents": estimatedCostCents})
+		ok.Details = mergeAgentStateDetails(ok.Details, map[string]any{
+			"estimatedCostCents": estimatedCostCents,
+			"authoritative":      false,
+		})
 	}
 
 	workflowType, workflowErr := s.agentPlannedWorkflowType(r, project, toolName, args)
@@ -1243,20 +1247,17 @@ func (s *Server) superviseAgentStepState(r *http.Request, project Project, task 
 			}
 			estimatedCostCents = float64(targetCount) * 10
 			if budgetCents, exists := agentConstraintFloat(constraints, "maxProviderCostCents"); exists {
-				spentCents, err := s.agentProjectCostSpentCents(r, project.ID)
-				if err != nil {
-					return fail("cost_state_unavailable", err.Error(), nil)
-				}
-				if spentCents+estimatedCostCents > budgetCents {
-					return fail("cost_budget_exceeded", "镜头衍生资产预计成本超过当前任务预算。", map[string]any{
-						"budgetCents": budgetCents, "spentCents": spentCents,
-						"estimatedCostCents": estimatedCostCents, "targetRequirementCount": targetCount,
+				if estimatedCostCents > budgetCents {
+					return fail("cost_budget_exceeded", "镜头衍生资产的技术成本估算超过当前任务约束。", map[string]any{
+						"budgetCents": budgetCents, "estimatedCostCents": estimatedCostCents,
+						"targetRequirementCount": targetCount, "authoritative": false,
 					})
 				}
 			}
 			ok.Details = mergeAgentStateDetails(ok.Details, map[string]any{
 				"targetRequirementCount": targetCount,
 				"estimatedCostCents":     estimatedCostCents,
+				"authoritative":          false,
 			})
 		}
 	}
@@ -1291,20 +1292,21 @@ func (s *Server) superviseAgentStepState(r *http.Request, project Project, task 
 		}
 		estimatedCostCents = agentEstimatedProviderCostCents(toolName, args, len(targets))
 		if budgetCents, exists := agentConstraintFloat(constraints, "maxProviderCostCents"); exists {
-			spentCents, err := s.agentProjectCostSpentCents(r, project.ID)
-			if err != nil {
-				return fail("cost_state_unavailable", err.Error(), nil)
-			}
-			if spentCents+estimatedCostCents > budgetCents {
-				return fail("cost_budget_exceeded", "当前任务预计成本超过预算约束。", map[string]any{
+			if estimatedCostCents > budgetCents {
+				return fail("cost_budget_exceeded", "当前步骤的技术成本估算超过任务约束。", map[string]any{
 					"budgetCents":        budgetCents,
-					"spentCents":         spentCents,
 					"estimatedCostCents": estimatedCostCents,
 					"targetShotCount":    len(targets),
+					"authoritative":      false,
 				})
 			}
 		}
-		ok.Details = mergeAgentStateDetails(ok.Details, map[string]any{"targetShotCount": len(targets), "action": action, "estimatedCostCents": estimatedCostCents})
+		ok.Details = mergeAgentStateDetails(ok.Details, map[string]any{
+			"targetShotCount":    len(targets),
+			"action":             action,
+			"estimatedCostCents": estimatedCostCents,
+			"authoritative":      false,
+		})
 	case "timeline.compose":
 		status, err := s.productionStatus(r, project)
 		if err != nil {
@@ -1379,16 +1381,6 @@ func (s *Server) superviseScriptGenerateFromSourceStep(r *http.Request, project 
 		"chapterCount": chapterCount,
 		"example":      "chapterRange=1-10集",
 	})
-}
-
-func (s *Server) agentProjectCostSpentCents(r *http.Request, projectID string) (float64, error) {
-	var spent float64
-	err := s.db.QueryRow(r.Context(), `
-		SELECT COALESCE(sum(amount), 0)::float8 * 100
-		FROM cost_records
-		WHERE project_id = $1
-	`).Scan(&spent)
-	return spent, err
 }
 
 type agentBlockingReviewSummary struct {

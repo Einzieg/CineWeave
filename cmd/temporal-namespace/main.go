@@ -101,9 +101,39 @@ func ensureSearchAttributes(
 	namespace string,
 	required map[string]enumspb.IndexedValueType,
 ) (int, error) {
-	response, err := service.ListSearchAttributes(ctx, &operatorservice.ListSearchAttributesRequest{Namespace: namespace})
-	if err != nil {
-		return 0, fmt.Errorf("list Temporal search attributes for %s: %w", namespace, err)
+	return ensureSearchAttributesWithRetry(ctx, service, namespace, required, 250*time.Millisecond)
+}
+
+func ensureSearchAttributesWithRetry(
+	ctx context.Context,
+	service searchAttributeService,
+	namespace string,
+	required map[string]enumspb.IndexedValueType,
+	namespaceVisibilityRetryDelay time.Duration,
+) (int, error) {
+	var response *operatorservice.ListSearchAttributesResponse
+	for {
+		var err error
+		response, err = service.ListSearchAttributes(ctx, &operatorservice.ListSearchAttributesRequest{Namespace: namespace})
+		if err == nil {
+			break
+		}
+		var notFound *serviceerror.NamespaceNotFound
+		if !errors.As(err, &notFound) {
+			return 0, fmt.Errorf("list Temporal search attributes for %s: %w", namespace, err)
+		}
+		timer := time.NewTimer(namespaceVisibilityRetryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return 0, fmt.Errorf("wait for Temporal namespace %s visibility: %w", namespace, ctx.Err())
+		case <-timer.C:
+		}
 	}
 	missing := make(map[string]enumspb.IndexedValueType)
 	for name, valueType := range required {

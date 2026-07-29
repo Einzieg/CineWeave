@@ -27,6 +27,82 @@ func NewGatewayClientFromEnv() *GatewayClient {
 	}
 }
 
+func (c *GatewayClient) EnsureManagedProviderAccount(
+	ctx context.Context,
+	req EnsureManagedProviderAccountRequest,
+) (ManagedProviderAccountResult, error) {
+	var response ManagedProviderAccountResult
+	if err := c.postJSON(
+		ctx,
+		"/internal/provider/v1/managed-accounts/ensure",
+		req,
+		&response,
+	); err != nil {
+		return ManagedProviderAccountResult{}, err
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) ImportManagedCredential(
+	ctx context.Context,
+	req ImportManagedCredentialRequest,
+) (ManagedCredentialResult, error) {
+	var response ManagedCredentialResult
+	if err := c.postJSON(
+		ctx,
+		"/internal/provider/v1/credential-imports",
+		req,
+		&response,
+	); err != nil {
+		return ManagedCredentialResult{}, err
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) ResolveManagedCredential(
+	ctx context.Context,
+	req ResolveManagedCredentialRequest,
+) (ManagedCredentialResult, error) {
+	var response ManagedCredentialResult
+	if err := c.postJSON(
+		ctx,
+		"/internal/provider/v1/credential-imports/resolve",
+		req,
+		&response,
+	); err != nil {
+		return ManagedCredentialResult{}, err
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) ActivateManagedCredential(
+	ctx context.Context,
+	req ActivateManagedCredentialRequest,
+) (ManagedCredentialResult, error) {
+	var response ManagedCredentialResult
+	if err := c.postJSON(
+		ctx,
+		"/internal/provider/v1/credential-imports/activate",
+		req,
+		&response,
+	); err != nil {
+		return ManagedCredentialResult{}, err
+	}
+	return response, nil
+}
+
+func (c *GatewayClient) RevokeManagedCredential(
+	ctx context.Context,
+	req RevokeManagedCredentialRequest,
+) error {
+	return c.postJSON(
+		ctx,
+		"/internal/provider/v1/credential-imports/revoke",
+		req,
+		nil,
+	)
+}
+
 func (c *GatewayClient) ResolveModelConstraints(ctx context.Context, req GatewayModelConstraintsRequest) (GatewayModelConstraintsResponse, error) {
 	var response GatewayModelConstraintsResponse
 	if err := c.postJSON(ctx, "/internal/provider/models/constraints", req, &response); err != nil {

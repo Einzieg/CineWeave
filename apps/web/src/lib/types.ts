@@ -240,7 +240,11 @@ export type EntitlementDenialCode =
   | "billing_account_scope_mismatch"
   | "billing_authority_mismatch"
   | "billing_sponsorship_required"
-  | "billing_routing_candidate_missing";
+  | "billing_routing_candidate_missing"
+  | "billing_insufficient_balance"
+  | "billing_credential_unavailable"
+  | "billing_model_forbidden"
+  | "billing_upstream_unavailable";
 
 export type EntitlementDecision = {
   featureKey: EditionFeatureKey | string;
@@ -4574,8 +4578,10 @@ export type ProviderCallLog = {
 export type ProviderUsageSummary = {
   totalCalls: number;
   failedCalls: number;
-  totalCost: string;
-  currency: string;
+  estimatedCost: string;
+  estimateCurrency: string;
+  authoritative: false;
+  sourceSemantics: "technical_estimate";
 };
 
 export type ProviderTaskType =

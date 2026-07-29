@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "cineweave.overlay-allowlist.v1",
+  "coreCommit": "1111111111111111111111111111111111111111",
+  "files": [
+    {
+      "source": "overlay/fixture.txt",
+      "destination": "assembly/fixture.txt",
+      "operation": "add",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    }
+  ]
+}

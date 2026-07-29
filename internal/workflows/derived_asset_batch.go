@@ -238,6 +238,10 @@ func BatchGenerateDerivedAssetImagesWorkflow(
 		return output, err
 	}
 	limit := clampConcurrency(options.MaxConcurrency, DefaultDerivedAssetImageConcurrency, MaxDerivedAssetImageConcurrency)
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	for start := 0; start < len(items); start += limit {
 		end := start + limit
 		if end > len(items) {
@@ -257,12 +261,59 @@ func BatchGenerateDerivedAssetImagesWorkflow(
 			if temporal.IsCanceledError(itemErr) {
 				return output, itemErr
 			}
+			if stopOnBalance && !stopScheduling {
+				if code, message, ok := billingInsufficientBalanceFailure(itemErr); ok {
+					stopScheduling = true
+					stopCode = code
+					stopMessage = message
+				}
+			}
+		}
+		if stopScheduling {
+			code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+			for index := end; index < len(items); index++ {
+				if err := failUnstartedDerivedAssetWorkItem(ctx, input, items[index], code, message); err != nil {
+					return output, err
+				}
+			}
+			break
 		}
 	}
 	if err := workflow.ExecuteActivity(ctx, "CompleteDerivedAssetBatchWorkflowV2", input, options.BatchID).Get(ctx, &output); err != nil {
 		return output, err
 	}
 	return output, nil
+}
+
+func failUnstartedDerivedAssetWorkItem(
+	ctx workflow.Context,
+	input TextToStoryboardInput,
+	item DerivedAssetBatchWorkItem,
+	code string,
+	message string,
+) error {
+	owner := workflow.GetInfo(ctx).WorkflowExecution.ID + ":balance-stop:" + item.ExecutionItemID
+	var lease DerivedAssetExecutionLease
+	if err := workflow.ExecuteActivity(
+		ctx,
+		"ClaimDerivedAssetExecution",
+		input,
+		item,
+		owner,
+	).Get(ctx, &lease); err != nil {
+		return err
+	}
+	if lease.Terminal {
+		return nil
+	}
+	var ignored bool
+	return workflow.ExecuteActivity(
+		ctx,
+		"FailDerivedAssetExecution",
+		DerivedAssetExecutionFailure{
+			Lease: lease, ErrorCode: code, ErrorMessage: message, Retryable: false,
+		},
+	).Get(ctx, &ignored)
 }
 
 func executeDerivedAssetWorkItem(ctx workflow.Context, input TextToStoryboardInput, item DerivedAssetBatchWorkItem) error {

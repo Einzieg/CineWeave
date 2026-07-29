@@ -112,6 +112,83 @@ func TestBatchGenerateAssetImagesWorkflowReturnsPartialSucceeded(t *testing.T) {
 	}
 }
 
+func TestAssetBatchStopsUnstartedChildrenOnInsufficientBalance(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	input := assetBatchTestInput(5, 2)
+	started := make([]string, 0, 2)
+	env.RegisterWorkflowWithOptions(func(
+		_ workflow.Context,
+		itemInput AssetBatchItemActivityInput,
+	) (AssetBatchItemOutput, error) {
+		started = append(started, itemInput.Item.AssetID)
+		if itemInput.Item.AssetID == "asset-1" {
+			return AssetBatchItemOutput{}, temporal.NewNonRetryableApplicationError(
+				"New API 账户余额不足",
+				billingInsufficientBalanceCode,
+				nil,
+			)
+		}
+		return AssetBatchItemOutput{
+			AssetID: itemInput.Item.AssetID, Status: "succeeded",
+		}, nil
+	}, workflow.RegisterOptions{Name: "GenerateAssetCardItemWorkflow"})
+	var stopped []string
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		failure FailUnstartedAssetBatchItemsInput,
+	) ([]AssetBatchItemOutput, error) {
+		outputs := make([]AssetBatchItemOutput, 0, len(failure.Items))
+		for _, item := range failure.Items {
+			stopped = append(stopped, item.AssetID)
+			outputs = append(outputs, AssetBatchItemOutput{
+				AssetID: item.AssetID, Status: "failed",
+				ErrorCode: failure.ErrorCode, ErrorMessage: failure.ErrorMessage,
+			})
+		}
+		return outputs, nil
+	}, activity.RegisterOptions{Name: failUnstartedAssetBatchItemsActivity})
+	env.RegisterActivityWithOptions(func(
+		_ context.Context,
+		_ AssetBatchWorkflowInput,
+		requested AssetBatchWorkflowOutput,
+	) (AssetBatchWorkflowOutput, error) {
+		for _, item := range requested.Items {
+			if item.Status == "succeeded" {
+				requested.CompletedItems++
+			} else if item.Status == "failed" {
+				requested.FailedItems++
+			}
+		}
+		requested.Status = "partial_succeeded"
+		return requested, nil
+	}, activity.RegisterOptions{Name: "CompleteAssetBatchWorkflow"})
+
+	env.ExecuteWorkflow(BatchGenerateAssetCardsWorkflow, input)
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	if len(started) != 2 {
+		t.Fatalf("started children = %v, want only initial window", started)
+	}
+	if fmt.Sprint(stopped) != "[asset-3 asset-4 asset-5]" {
+		t.Fatalf("unstarted failures = %v", stopped)
+	}
+	var output AssetBatchWorkflowOutput
+	if err := env.GetWorkflowResult(&output); err != nil {
+		t.Fatal(err)
+	}
+	if output.FailedItems != 4 || output.CompletedItems != 1 {
+		t.Fatalf("output = %+v", output)
+	}
+	for _, item := range output.Items {
+		if item.AssetID == "asset-3" && item.ErrorCode != billingInsufficientBalanceCode {
+			t.Fatalf("unstarted output = %+v", item)
+		}
+	}
+}
+
 func TestAssetBatchHundredItemsContinuesAsNewIsolatesFailuresAndRetriesFailedOnly(t *testing.T) {
 	const (
 		itemCount      = 100

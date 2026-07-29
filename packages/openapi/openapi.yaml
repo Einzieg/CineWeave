@@ -63,19 +63,28 @@ paths:
   /api/realtime/events:
     get:
       operationId: subscribeRealtimeEvents
+      description: Subscribes to the current organization event stream when projectId is omitted, or to the authorized project stream when projectId is supplied.
+      security:
+        - bearerAuth: []
       parameters:
         - name: projectId
           in: query
+          required: false
+          description: Optional project scope. Omit it to subscribe to current-organization events.
           schema:
             type: string
             format: uuid
       responses:
         "200":
-          description: Server-sent project event stream
+          description: Server-sent organization or project event stream
           content:
             text/event-stream:
               schema:
                 type: string
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
   /api/system/setup-state:
     get:
       operationId: getSystemSetupState
@@ -9369,7 +9378,7 @@ paths:
         - $ref: "#/components/parameters/OrganizationHeader"
       responses:
         "200":
-          description: Provider usage summary
+          description: Technical Provider call and estimated-cost summary. It is never an account balance or billing authority.
           content:
             application/json:
               schema:
@@ -10040,6 +10049,140 @@ paths:
           $ref: "#/components/responses/GatewayError"
         "502":
           $ref: "#/components/responses/GatewayError"
+  /internal/provider/v1/managed-accounts/ensure:
+    post:
+      operationId: internalProviderEnsureManagedAccount
+      summary: Ensure a system-managed provider account
+      description: Internal API. Creates or resolves the provider account owned by a commercial billing integration without exposing credentials outside Provider Gateway.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnsureManagedProviderAccountRequest"
+      responses:
+        "200":
+          description: System-managed provider account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagedProviderAccountEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "409":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/v1/credential-imports:
+    post:
+      operationId: internalProviderImportManagedCredential
+      summary: Import an inactive system-managed provider credential
+      description: Internal API. Provider Gateway encrypts the submitted credential and stores it inactive until the billing authority explicitly activates the mapping.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportManagedCredentialRequest"
+      responses:
+        "201":
+          description: Imported inactive provider credential
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagedCredentialEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "409":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/v1/credential-imports/resolve:
+    post:
+      operationId: internalProviderResolveManagedCredential
+      summary: Resolve an idempotent managed credential import
+      description: Internal API. Resolves an existing import by its attempt and idempotency key without returning plaintext credential material.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveManagedCredentialRequest"
+      responses:
+        "200":
+          description: Managed credential import state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagedCredentialEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "404":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/v1/credential-imports/activate:
+    post:
+      operationId: internalProviderActivateManagedCredential
+      summary: Activate a system-managed provider credential
+      description: Internal API. Atomically binds the imported credential to its billing authority and makes it eligible for Provider Gateway routing.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivateManagedCredentialRequest"
+      responses:
+        "200":
+          description: Active managed credential
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagedCredentialEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "404":
+          $ref: "#/components/responses/GatewayError"
+        "409":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+  /internal/provider/v1/credential-imports/revoke:
+    post:
+      operationId: internalProviderRevokeManagedCredential
+      summary: Revoke a system-managed provider credential
+      description: Internal API. Idempotently revokes the credential and removes it from Provider Gateway routing.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeManagedCredentialRequest"
+      responses:
+        "200":
+          description: Managed credential revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagedCredentialRevocationEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "404":
+          $ref: "#/components/responses/GatewayError"
+        "409":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
 components:
   securitySchemes:
     bearerAuth:
@@ -10603,6 +10746,10 @@ components:
         - billing_authority_mismatch
         - billing_sponsorship_required
         - billing_routing_candidate_missing
+        - billing_insufficient_balance
+        - billing_credential_unavailable
+        - billing_model_forbidden
+        - billing_upstream_unavailable
     ErrorEnvelope:
       type: object
       required: [requestId, error]
@@ -10617,7 +10764,7 @@ components:
       properties:
         code:
           type: string
-          description: Includes PROVIDER_RATE_LIMITED, PROVIDER_CONCURRENCY_LIMITED, PROVIDER_DAILY_QUOTA_EXCEEDED, PROVIDER_MONTHLY_BUDGET_EXCEEDED, and PROVIDER_CIRCUIT_OPEN for Provider Gateway guard blocks.
+          description: Includes PROVIDER_RATE_LIMITED, PROVIDER_CONCURRENCY_LIMITED, PROVIDER_DAILY_QUOTA_EXCEEDED, and PROVIDER_CIRCUIT_OPEN for technical Provider Gateway guard blocks. Monetary balance errors come from the external billing authority.
         message:
           type: string
         details: {}
@@ -22204,6 +22351,180 @@ components:
           format: uuid
         error:
           $ref: "#/components/schemas/ProviderStandardError"
+    EnsureManagedProviderAccountRequest:
+      type: object
+      required:
+        - organizationId
+        - createdByUserId
+        - managementReference
+        - name
+        - connectorKey
+        - baseUrl
+        - authType
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        createdByUserId:
+          type: string
+          format: uuid
+        managementReference:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+        connectorKey:
+          type: string
+          minLength: 1
+        baseUrl:
+          type: string
+          format: uri
+        authType:
+          type: string
+          minLength: 1
+        config:
+          type: object
+          additionalProperties: true
+    ManagedProviderAccountResult:
+      type: object
+      required: [id, organizationId, managementReference]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        managementReference:
+          type: string
+    ImportManagedCredentialRequest:
+      type: object
+      required:
+        - attemptId
+        - organizationId
+        - providerAccountId
+        - credentialKey
+        - credentialType
+        - importIdempotencyKey
+        - requestHash
+        - managementReference
+        - credential
+      properties:
+        attemptId:
+          type: string
+          minLength: 1
+        organizationId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        credentialKey:
+          type: string
+          minLength: 1
+        credentialType:
+          type: string
+          minLength: 1
+        importIdempotencyKey:
+          type: string
+          minLength: 1
+        requestHash:
+          type: string
+          minLength: 1
+        managementReference:
+          type: string
+          minLength: 1
+        credential:
+          type: object
+          additionalProperties: true
+          description: Plaintext credential payload accepted only across the private service-token boundary and immediately encrypted by Provider Gateway.
+    ResolveManagedCredentialRequest:
+      type: object
+      required: [attemptId, importIdempotencyKey]
+      properties:
+        attemptId:
+          type: string
+          minLength: 1
+        importIdempotencyKey:
+          type: string
+          minLength: 1
+    ActivateManagedCredentialRequest:
+      type: object
+      required:
+        - attemptId
+        - activationIdempotencyKey
+        - providerCredentialId
+        - billingCredentialId
+        - credentialRevision
+        - billingAccountId
+        - billingAuthorityId
+        - mappingHash
+      properties:
+        attemptId:
+          type: string
+          minLength: 1
+        activationIdempotencyKey:
+          type: string
+          minLength: 1
+        providerCredentialId:
+          type: string
+          format: uuid
+        billingCredentialId:
+          type: string
+          format: uuid
+        credentialRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        billingAccountId:
+          type: string
+          format: uuid
+        billingAuthorityId:
+          type: string
+          minLength: 1
+        mappingHash:
+          type: string
+          minLength: 1
+    RevokeManagedCredentialRequest:
+      type: object
+      required: [attemptId, revocationIdempotencyKey, providerCredentialId]
+      properties:
+        attemptId:
+          type: string
+          minLength: 1
+        revocationIdempotencyKey:
+          type: string
+          minLength: 1
+        providerCredentialId:
+          type: string
+          format: uuid
+    ManagedCredentialResult:
+      type: object
+      required:
+        - state
+        - importId
+        - providerCredentialId
+        - providerCredentialReference
+      properties:
+        state:
+          type: string
+          enum: [imported_inactive, active, revoked, quarantined]
+        importId:
+          type: string
+          format: uuid
+        providerCredentialId:
+          type: string
+          format: uuid
+        providerCredentialReference:
+          type: string
+    ManagedCredentialRevocationResult:
+      type: object
+      required: [revoked]
+      properties:
+        revoked:
+          type: boolean
+          enum: [true]
     GatewayDiscoverModelsRequest:
       type: object
       required: [organizationId, accountId]
@@ -22620,16 +22941,23 @@ components:
           format: date-time
     ProviderUsageSummary:
       type: object
-      required: [totalCalls, failedCalls, totalCost, currency]
+      required: [totalCalls, failedCalls, estimatedCost, estimateCurrency, authoritative, sourceSemantics]
       properties:
         totalCalls:
           type: integer
         failedCalls:
           type: integer
-        totalCost:
+        estimatedCost:
           type: string
-        currency:
+          description: Non-authoritative technical estimate. Never use this field as wallet balance, invoice amount, or spend gate.
+        estimateCurrency:
           type: string
+        authoritative:
+          type: boolean
+          enum: [false]
+        sourceSemantics:
+          type: string
+          enum: [technical_estimate]
     ProviderLimitPolicy:
       type: object
       required: [id, organizationId, taskType, currency, enabled, createdAt, updatedAt]
@@ -22657,8 +22985,12 @@ components:
           type: integer
         dailyBudget:
           type: string
+          deprecated: true
+          description: Historical read-only value. Provider Gateway does not enforce local monetary budgets.
         monthlyBudget:
           type: string
+          deprecated: true
+          description: Historical read-only value. Provider Gateway does not enforce local monetary budgets.
         currency:
           type: string
           default: USD
@@ -22706,8 +23038,12 @@ components:
           minimum: 0
         dailyBudget:
           type: string
+          deprecated: true
+          description: Monetary budget writes are rejected; configure financial limits in the external billing authority.
         monthlyBudget:
           type: string
+          deprecated: true
+          description: Monetary budget writes are rejected; configure financial limits in the external billing authority.
         currency:
           type: string
           default: USD
@@ -22745,8 +23081,12 @@ components:
           minimum: 0
         dailyBudget:
           type: string
+          deprecated: true
+          description: Only an empty value may be supplied to clear a historical local budget.
         monthlyBudget:
           type: string
+          deprecated: true
+          description: Only an empty value may be supplied to clear a historical local budget.
         currency:
           type: string
         failureThreshold:
@@ -23029,6 +23369,27 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/GatewayDiscoverModelsResponse"
+    ManagedProviderAccountEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ManagedProviderAccountResult"
+    ManagedCredentialEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ManagedCredentialResult"
+    ManagedCredentialRevocationEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ManagedCredentialRevocationResult"
     GatewayModelConstraintsEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

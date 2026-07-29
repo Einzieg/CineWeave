@@ -21,6 +21,7 @@ const (
 	securityActionInvitationRegister = "invitation_register"
 	securityActionInvitationAccept   = "invitation_accept"
 	securityActionPasswordReset      = "password_reset"
+	securityActionStepUp             = "step_up"
 
 	securityFailureWindow = 15 * time.Minute
 	securityBlockDuration = 15 * time.Minute
@@ -38,6 +39,7 @@ var securityRatePolicies = map[string]securityRatePolicy{
 	securityActionInvitationRegister: {identityFailures: 8, clientFailures: 40},
 	securityActionInvitationAccept:   {identityFailures: 12, clientFailures: 60},
 	securityActionPasswordReset:      {identityFailures: 8, clientFailures: 40},
+	securityActionStepUp:             {identityFailures: 6, clientFailures: 30},
 }
 
 func (s *Service) checkSecurityRateLimit(ctx context.Context, action, subject string, r *http.Request) error {

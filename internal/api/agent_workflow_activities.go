@@ -164,6 +164,11 @@ func (s *Server) projectAgentActivityContext(ctx context.Context, input workflow
 		return nil, auth.Principal{}, Project{}, AgentTask{}, err
 	}
 	principal := auth.Principal{UserID: input.UserID, OrganizationID: project.OrganizationID}
+	r = r.WithContext(withAPIProviderIdentity(
+		r.Context(),
+		principal,
+		"agent-task:"+strings.TrimSpace(input.TaskID),
+	))
 	return r, principal, project, task, nil
 }
 

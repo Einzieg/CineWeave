@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "cineweave.overlay-slots.v1",
+  "replaceablePaths": [
+    "apps/web/src/edition/selected-entry.ts"
+  ],
+  "protectedPaths": [
+    ".gitattributes",
+    ".gitignore",
+    "AGENTS.md",
+    "go.mod",
+    "go.sum",
+    "package.json",
+    "pnpm-lock.yaml",
+    "packages/edition/ce-release-policy.v1.json",
+    "packages/edition/ddl-owners.v1.json",
+    "packages/edition/edition.v1.json",
+    "packages/edition/overlay-slots.v1.json",
+    "packages/edition/release-manifest.schema.json"
+  ],
+  "protectedPrefixes": [
+    ".git/",
+    ".github/",
+    "db/migrations/",
+    "db/seeds/",
+    "internal/edition/",
+    "internal/migrationstream/",
+    "scripts/ce_release_audit.py",
+    "scripts/check-ce-release.ps1",
+    "scripts/check-release-manifest.py"
+  ],
+  "rules": {
+    "explicitFilesOnly": true,
+    "directoriesAndGlobsForbidden": true,
+    "symlinksForbidden": true,
+    "caseInsensitiveDestinationUniqueness": true,
+    "addMustNotExistInCore": true,
+    "replaceMustUseDeclaredSlot": true,
+    "hashEverySourceFile": true
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cineweave.example/contracts/source-license-approval.v1.schema.json",
+  "title": "CineWeave Source License Approval v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "inventorySha256",
+    "reviewId",
+    "reviewedAt",
+    "reviewerRole",
+    "softwareLicenseSpdx",
+    "softwareLicenseApproved",
+    "dualLicenseApproved",
+    "contributorGrantApproved",
+    "thirdPartyNoticesApproved",
+    "trademarkPolicyApproved",
+    "evidenceReference"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "cineweave.source-license-approval.v1"
+    },
+    "inventorySha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "reviewId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviewedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reviewerRole": {
+      "const": "qualified_counsel"
+    },
+    "softwareLicenseSpdx": {
+      "const": "AGPL-3.0-or-later"
+    },
+    "softwareLicenseApproved": {
+      "const": true
+    },
+    "dualLicenseApproved": {
+      "const": true
+    },
+    "contributorGrantApproved": {
+      "const": true
+    },
+    "thirdPartyNoticesApproved": {
+      "const": true
+    },
+    "trademarkPolicyApproved": {
+      "const": true
+    },
+    "evidenceReference": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Immutable legal matter, signed approval, or controlled document reference. Do not store privileged advice in the public repository."
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "subject",
+          "decision",
+          "evidenceReference"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidenceReference": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	defaultEventPageSize = 200
-	eventStreamVersion   = "project-events.v2"
+	defaultEventPageSize           = 200
+	projectEventStreamVersion      = "project-events.v2"
+	organizationEventStreamVersion = "organization-events.v1"
 )
 
 type bearerParser interface {
@@ -42,6 +43,16 @@ type eventRepository interface {
 	ProjectOrganization(context.Context, string) (string, error)
 	Bounds(context.Context, string) (streamBounds, error)
 	EventsAfter(context.Context, string, int64, int) ([]projectEvent, error)
+}
+
+type organizationEventRepository interface {
+	OrganizationBounds(context.Context, string) (streamBounds, error)
+	OrganizationEventsAfter(
+		context.Context,
+		string,
+		int64,
+		int,
+	) ([]projectEvent, error)
 }
 
 type streamBounds struct {
@@ -132,6 +143,10 @@ func (h *realtimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projectID := strings.TrimSpace(r.URL.Query().Get("projectId"))
+	if projectID == "" {
+		h.serveOrganizationEvents(w, r, principal)
+		return
+	}
 	if uuid.Validate(projectID) != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "projectId must be a valid UUID", nil, false)
 		return
@@ -197,13 +212,181 @@ func (h *realtimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CineWeave-Stream-High-Watermark", strconv.FormatInt(bounds.HighWatermark, 10))
 	fmt.Fprint(w, "retry: 2000\n")
 	_ = writeSSEEvent(w, "stream.ready", 0, mustEventJSON(map[string]any{
-		"status": "connected", "streamVersion": eventStreamVersion,
+		"status": "connected", "streamVersion": projectEventStreamVersion,
 		"cursor": cursor, "highWatermark": bounds.HighWatermark, "retainedFrom": bounds.RetainedFrom,
 		"createdAt": time.Now().UTC().Format(time.RFC3339Nano),
 	}))
 	flusher.Flush()
 
 	h.streamProjectEvents(r.Context(), w, flusher, projectID, cursor)
+}
+
+func (h *realtimeHandler) serveOrganizationEvents(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal auth.Principal,
+) {
+	organizationID := strings.TrimSpace(principal.OrganizationID)
+	if uuid.Validate(organizationID) != nil {
+		httpx.WriteError(
+			w,
+			r,
+			http.StatusForbidden,
+			"ORGANIZATION_REQUIRED",
+			"an active organization is required",
+			nil,
+			false,
+		)
+		return
+	}
+	if err := h.authorizer.Authorize(
+		r.Context(),
+		principal,
+		authz.PermissionOrganizationRead,
+		authz.Resource{
+			Type:           authz.ResourceOrganization,
+			OrganizationID: organizationID,
+		},
+	); err != nil {
+		if errors.Is(err, authz.ErrAccessDenied) {
+			httpx.WriteError(
+				w,
+				r,
+				http.StatusForbidden,
+				"FORBIDDEN",
+				"permission is required",
+				nil,
+				false,
+			)
+			return
+		}
+		httpx.WriteError(
+			w,
+			r,
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"internal server error",
+			nil,
+			true,
+		)
+		return
+	}
+	events, ok := h.events.(organizationEventRepository)
+	if !ok {
+		httpx.WriteError(
+			w,
+			r,
+			http.StatusServiceUnavailable,
+			"REALTIME_UNAVAILABLE",
+			"organization event stream is unavailable",
+			nil,
+			true,
+		)
+		return
+	}
+	cursor, supplied, err := requestCursor(r)
+	if err != nil {
+		httpx.WriteError(
+			w,
+			r,
+			http.StatusBadRequest,
+			"INVALID_EVENT_CURSOR",
+			err.Error(),
+			nil,
+			false,
+		)
+		return
+	}
+	bounds, err := events.OrganizationBounds(r.Context(), organizationID)
+	if err != nil {
+		httpx.WriteError(
+			w,
+			r,
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"internal server error",
+			nil,
+			true,
+		)
+		return
+	}
+	if supplied && cursor < bounds.RetainedFrom-1 {
+		w.Header().Set(
+			"X-CineWeave-Stream-High-Watermark",
+			strconv.FormatInt(bounds.HighWatermark, 10),
+		)
+		httpx.WriteError(
+			w,
+			r,
+			http.StatusGone,
+			"EVENT_CURSOR_EXPIRED",
+			"event cursor is outside the retention window",
+			map[string]any{
+				"highWatermark": bounds.HighWatermark,
+				"retainedFrom":  bounds.RetainedFrom,
+			},
+			false,
+		)
+		return
+	}
+	if supplied && cursor > bounds.HighWatermark {
+		httpx.WriteError(
+			w,
+			r,
+			http.StatusConflict,
+			"EVENT_CURSOR_AHEAD",
+			"event cursor is ahead of the organization stream",
+			map[string]any{"highWatermark": bounds.HighWatermark},
+			false,
+		)
+		return
+	}
+	if !supplied {
+		cursor = bounds.HighWatermark
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		httpx.WriteError(
+			w,
+			r,
+			http.StatusInternalServerError,
+			"STREAM_UNSUPPORTED",
+			"streaming is not supported",
+			nil,
+			false,
+		)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set(
+		"X-CineWeave-Stream-High-Watermark",
+		strconv.FormatInt(bounds.HighWatermark, 10),
+	)
+	fmt.Fprint(w, "retry: 2000\n")
+	_ = writeSSEEvent(w, "stream.ready", 0, mustEventJSON(map[string]any{
+		"status":         "connected",
+		"streamVersion":  organizationEventStreamVersion,
+		"scopeType":      "organization",
+		"organizationId": organizationID,
+		"cursor":         cursor,
+		"highWatermark":  bounds.HighWatermark,
+		"retainedFrom":   bounds.RetainedFrom,
+		"createdAt":      time.Now().UTC().Format(time.RFC3339Nano),
+	}))
+	flusher.Flush()
+
+	h.streamOrganizationEvents(
+		r.Context(),
+		w,
+		flusher,
+		events,
+		organizationID,
+		cursor,
+	)
 }
 
 func requestCursor(r *http.Request) (int64, bool, error) {
@@ -222,6 +405,54 @@ func requestCursor(r *http.Request) (int64, bool, error) {
 }
 
 func (h *realtimeHandler) streamProjectEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, projectID string, cursor int64) {
+	h.streamEvents(
+		ctx,
+		w,
+		flusher,
+		cursor,
+		func(ctx context.Context, cursor int64, limit int) ([]projectEvent, error) {
+			return h.events.EventsAfter(ctx, projectID, cursor, limit)
+		},
+	)
+}
+
+func (h *realtimeHandler) streamOrganizationEvents(
+	ctx context.Context,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	events organizationEventRepository,
+	organizationID string,
+	cursor int64,
+) {
+	h.streamEvents(
+		ctx,
+		w,
+		flusher,
+		cursor,
+		func(ctx context.Context, cursor int64, limit int) ([]projectEvent, error) {
+			return events.OrganizationEventsAfter(
+				ctx,
+				organizationID,
+				cursor,
+				limit,
+			)
+		},
+	)
+}
+
+type scopedEventReader func(
+	context.Context,
+	int64,
+	int,
+) ([]projectEvent, error)
+
+func (h *realtimeHandler) streamEvents(
+	ctx context.Context,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	cursor int64,
+	read scopedEventReader,
+) {
 	pollInterval := h.pollInterval
 	if pollInterval <= 0 {
 		pollInterval = time.Second
@@ -240,7 +471,7 @@ func (h *realtimeHandler) streamProjectEvents(ctx context.Context, w http.Respon
 	defer heartbeat.Stop()
 
 	for {
-		next, written, err := drainProjectEvents(ctx, w, h.events, projectID, cursor, pageSize)
+		next, written, err := drainEvents(ctx, w, read, cursor, pageSize)
 		if err != nil {
 			_ = writeSSEEvent(w, "stream.error", 0, mustEventJSON(map[string]any{
 				"code": "EVENT_STREAM_READ_FAILED", "retryable": true,
@@ -264,12 +495,30 @@ func (h *realtimeHandler) streamProjectEvents(ctx context.Context, w http.Respon
 }
 
 func drainProjectEvents(ctx context.Context, w http.ResponseWriter, repository eventRepository, projectID string, cursor int64, pageSize int) (int64, int, error) {
+	return drainEvents(
+		ctx,
+		w,
+		func(ctx context.Context, cursor int64, limit int) ([]projectEvent, error) {
+			return repository.EventsAfter(ctx, projectID, cursor, limit)
+		},
+		cursor,
+		pageSize,
+	)
+}
+
+func drainEvents(
+	ctx context.Context,
+	w http.ResponseWriter,
+	read scopedEventReader,
+	cursor int64,
+	pageSize int,
+) (int64, int, error) {
 	if pageSize <= 0 {
 		pageSize = defaultEventPageSize
 	}
 	written := 0
 	for {
-		events, err := repository.EventsAfter(ctx, projectID, cursor, pageSize)
+		events, err := read(ctx, cursor, pageSize)
 		if err != nil {
 			return cursor, written, err
 		}
@@ -410,6 +659,85 @@ func (r *pgEventRepository) EventsAfter(ctx context.Context, projectID string, c
 		if err := rows.Scan(
 			&item.Position, &item.EventID, &item.EventType, &item.SchemaVersion, &item.AggregateType,
 			&item.AggregateID, &aggregateRevision, &item.Payload, &item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if aggregateRevision.Valid {
+			item.AggregateRevision = &aggregateRevision.Int64
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *pgEventRepository) OrganizationBounds(
+	ctx context.Context,
+	organizationID string,
+) (streamBounds, error) {
+	var bounds streamBounds
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(stream.next_position - 1, 0),
+			COALESCE(
+				(SELECT min(event.stream_position)
+				 FROM organization_event_log event
+				 WHERE event.organization_id = organization.id
+				   AND event.expires_at > now()),
+				COALESCE(stream.next_position, 1)
+			)
+		FROM organizations organization
+		LEFT JOIN organization_event_streams stream
+		  ON stream.organization_id = organization.id
+		WHERE organization.id = $1
+	`, organizationID).Scan(
+		&bounds.HighWatermark,
+		&bounds.RetainedFrom,
+	)
+	return bounds, err
+}
+
+func (r *pgEventRepository) OrganizationEventsAfter(
+	ctx context.Context,
+	organizationID string,
+	cursor int64,
+	limit int,
+) ([]projectEvent, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			stream_position,
+			event_id::text,
+			event_type,
+			schema_version,
+			aggregate_type,
+			COALESCE(aggregate_id::text, ''),
+			aggregate_revision,
+			payload,
+			created_at
+		FROM organization_event_log
+		WHERE organization_id = $1
+		  AND stream_position > $2
+		  AND expires_at > now()
+		ORDER BY stream_position
+		LIMIT $3
+	`, organizationID, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]projectEvent, 0, limit)
+	for rows.Next() {
+		var item projectEvent
+		var aggregateRevision sql.NullInt64
+		if err := rows.Scan(
+			&item.Position,
+			&item.EventID,
+			&item.EventType,
+			&item.SchemaVersion,
+			&item.AggregateType,
+			&item.AggregateID,
+			&aggregateRevision,
+			&item.Payload,
+			&item.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

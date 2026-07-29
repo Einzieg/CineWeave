@@ -132,7 +132,7 @@ func (s *Server) runProjectReviewCore(ctx context.Context, principal auth.Princi
 	}
 	var providerCallID, promptVersionID, promptHash string
 	if req.UseAgent {
-		agentItems, callID, versionID, hash, err := s.runProjectReviewAgent(ctx, project, items)
+		agentItems, callID, versionID, hash, err := s.runProjectReviewAgent(ctx, principal, project, items)
 		if err != nil {
 			s.failReviewRun(ctx, runID, "PROJECT_REVIEW_AGENT_FAILED", err.Error())
 			return RunProjectReviewResponse{}, err
@@ -185,7 +185,7 @@ func (s *Server) runProjectReviewCore(ctx context.Context, principal auth.Princi
 	}, nil
 }
 
-func (s *Server) runProjectReviewAgent(ctx context.Context, project Project, deterministic []reviewpkg.ReviewItemDraft) ([]reviewpkg.ReviewItemDraft, string, string, string, error) {
+func (s *Server) runProjectReviewAgent(ctx context.Context, principal auth.Principal, project Project, deterministic []reviewpkg.ReviewItemDraft) ([]reviewpkg.ReviewItemDraft, string, string, string, error) {
 	reviewContext, err := reviewpkg.BuildProjectReviewContext(ctx, s.db, project.ID)
 	if err != nil {
 		return nil, "", "", "", err
@@ -210,6 +210,11 @@ func (s *Server) runProjectReviewAgent(ctx context.Context, project Project, det
 	agentCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	resp, err := provider.NewGatewayClientFromEnv().GenerateText(agentCtx, provider.GatewayTextRequest{
+		GatewayBillingIdentity: provider.GatewayBillingIdentity{
+			RequestedByUserID:          principal.UserID,
+			BillingOperationPermission: authz.PermissionProjectRead,
+			BillingContextReason:       provider.BillingContextReasonManualProvider,
+		},
 		OrganizationID:    project.OrganizationID,
 		ProjectID:         project.ID,
 		ModelProfileKey:   project.ScriptModelProfileKey,
@@ -221,7 +226,16 @@ func (s *Server) runProjectReviewAgent(ctx context.Context, project Project, det
 			"prompt":         rendered.RenderedText,
 			"responseFormat": "json",
 		}),
-		Options: provider.GatewayTextOptions{TimeoutMS: 15000},
+		Options: provider.GatewayTextOptions{
+			TimeoutMS: 15000,
+			IdempotencyKey: gatewayProviderIdempotencyKey(
+				ctx,
+				provider.TaskTypeTextGenerate,
+				project.ID,
+				"project-review",
+				rendered.RenderedHash,
+			),
+		},
 	})
 	if err != nil {
 		return nil, "", rendered.PromptVersionID, rendered.RenderedHash, err

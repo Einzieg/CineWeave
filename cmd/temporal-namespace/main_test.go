@@ -20,11 +20,18 @@ type fakeNamespaceService struct {
 }
 
 type fakeSearchAttributeService struct {
-	custom map[string]enumspb.IndexedValueType
-	added  *operatorservice.AddSearchAttributesRequest
+	custom     map[string]enumspb.IndexedValueType
+	listErrors []error
+	listCalls  int
+	added      *operatorservice.AddSearchAttributesRequest
 }
 
 func (f *fakeSearchAttributeService) ListSearchAttributes(context.Context, *operatorservice.ListSearchAttributesRequest, ...grpc.CallOption) (*operatorservice.ListSearchAttributesResponse, error) {
+	call := f.listCalls
+	f.listCalls++
+	if call < len(f.listErrors) && f.listErrors[call] != nil {
+		return nil, f.listErrors[call]
+	}
 	return &operatorservice.ListSearchAttributesResponse{CustomAttributes: f.custom}, nil
 }
 
@@ -90,5 +97,46 @@ func TestEnsureSearchAttributesRejectsTypeDrift(t *testing.T) {
 	}}
 	if _, err := ensureSearchAttributes(context.Background(), service, "default", cineWeaveSearchAttributes); err == nil {
 		t.Fatal("search attribute type drift was accepted")
+	}
+}
+
+func TestEnsureSearchAttributesWaitsForNewNamespaceVisibility(t *testing.T) {
+	service := &fakeSearchAttributeService{
+		custom: map[string]enumspb.IndexedValueType{},
+		listErrors: []error{
+			serviceerror.NewNamespaceNotFound("default"),
+			serviceerror.NewNamespaceNotFound("default"),
+		},
+	}
+	added, err := ensureSearchAttributesWithRetry(
+		context.Background(),
+		service,
+		"default",
+		cineWeaveSearchAttributes,
+		time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("ensure search attributes: %v", err)
+	}
+	if service.listCalls != 3 || added != len(cineWeaveSearchAttributes) {
+		t.Fatalf("listCalls=%d added=%d", service.listCalls, added)
+	}
+}
+
+func TestEnsureSearchAttributesDoesNotRetryUnrelatedFailure(t *testing.T) {
+	service := &fakeSearchAttributeService{
+		listErrors: []error{errors.New("operator unavailable")},
+	}
+	if _, err := ensureSearchAttributesWithRetry(
+		context.Background(),
+		service,
+		"default",
+		cineWeaveSearchAttributes,
+		time.Millisecond,
+	); err == nil {
+		t.Fatal("unrelated list failure was hidden")
+	}
+	if service.listCalls != 1 {
+		t.Fatalf("listCalls=%d, want 1", service.listCalls)
 	}
 }

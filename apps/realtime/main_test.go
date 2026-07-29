@@ -17,6 +17,7 @@ import (
 )
 
 const realtimeTestProjectID = "11111111-1111-4111-8111-111111111111"
+const realtimeTestOrganizationID = "22222222-2222-4222-8222-222222222222"
 
 type fakeBearerParser struct {
 	principal auth.Principal
@@ -46,6 +47,57 @@ type fakeEventRepository struct {
 	bounds         streamBounds
 	events         []projectEvent
 	pageCalls      int
+}
+
+type fakeOrganizationAuthorizer struct {
+	err    error
+	called int
+}
+
+func (f *fakeOrganizationAuthorizer) Authorize(
+	_ context.Context,
+	_ auth.Principal,
+	permission string,
+	resource authz.Resource,
+) error {
+	f.called++
+	if permission != authz.PermissionOrganizationRead ||
+		resource.Type != authz.ResourceOrganization ||
+		resource.OrganizationID != realtimeTestOrganizationID {
+		return fmt.Errorf("unexpected organization authorization request")
+	}
+	return f.err
+}
+
+type fakeOrganizationEventRepository struct {
+	*fakeEventRepository
+	organizationBounds streamBounds
+	organizationEvents []projectEvent
+}
+
+func (f *fakeOrganizationEventRepository) OrganizationBounds(
+	context.Context,
+	string,
+) (streamBounds, error) {
+	return f.organizationBounds, nil
+}
+
+func (f *fakeOrganizationEventRepository) OrganizationEventsAfter(
+	_ context.Context,
+	_ string,
+	cursor int64,
+	limit int,
+) ([]projectEvent, error) {
+	items := make([]projectEvent, 0, limit)
+	for _, event := range f.organizationEvents {
+		if event.Position > cursor {
+			items = append(items, event)
+			if len(items) == limit {
+				break
+			}
+		}
+	}
+	return items, nil
 }
 
 func (f *fakeEventRepository) ProjectOrganization(context.Context, string) (string, error) {
@@ -124,6 +176,104 @@ func TestRealtimeRejectsMissingProjectPermission(t *testing.T) {
 	handler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "FORBIDDEN") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRealtimeStreamsCurrentOrganizationWhenProjectIsOmitted(t *testing.T) {
+	repository := &fakeOrganizationEventRepository{
+		fakeEventRepository: &fakeEventRepository{},
+		organizationBounds: streamBounds{
+			HighWatermark: 1,
+			RetainedFrom:  1,
+		},
+		organizationEvents: []projectEvent{
+			{
+				Position:      1,
+				EventID:       "event-1",
+				EventType:     "billing.balance.updated",
+				SchemaVersion: 1,
+				AggregateType: "billing_account",
+				AggregateID:   "33333333-3333-4333-8333-333333333333",
+				Payload: json.RawMessage(
+					`{"billingAccountId":"33333333-3333-4333-8333-333333333333","balanceSemanticsVersion":"v1"}`,
+				),
+				CreatedAt: time.Date(
+					2026,
+					7,
+					29,
+					12,
+					0,
+					0,
+					0,
+					time.UTC,
+				),
+			},
+		},
+	}
+	authorizer := &fakeOrganizationAuthorizer{}
+	handler := &realtimeHandler{
+		auth: fakeBearerParser{principal: auth.Principal{
+			UserID:         "user-a",
+			OrganizationID: realtimeTestOrganizationID,
+		}},
+		authorizer: authorizer,
+		events:     repository,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/realtime/events",
+		nil,
+	).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer token")
+	request.Header.Set("Last-Event-ID", "0")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if authorizer.called != 1 {
+		t.Fatalf("organization authorizer called %d times", authorizer.called)
+	}
+	if !strings.Contains(
+		response.Body.String(),
+		`"streamVersion":"organization-events.v1"`,
+	) || !strings.Contains(
+		response.Body.String(),
+		"event: billing.balance.updated",
+	) {
+		t.Fatalf("organization stream body=%s", response.Body.String())
+	}
+}
+
+func TestRealtimeRejectsMissingOrganizationPermission(t *testing.T) {
+	repository := &fakeOrganizationEventRepository{
+		fakeEventRepository: &fakeEventRepository{},
+	}
+	handler := &realtimeHandler{
+		auth: fakeBearerParser{principal: auth.Principal{
+			UserID:         "user-a",
+			OrganizationID: realtimeTestOrganizationID,
+		}},
+		authorizer: &fakeOrganizationAuthorizer{err: authz.ErrAccessDenied},
+		events:     repository,
+	}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/realtime/events",
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer token")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden ||
+		!strings.Contains(response.Body.String(), "FORBIDDEN") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

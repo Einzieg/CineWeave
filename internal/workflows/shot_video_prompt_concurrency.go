@@ -22,9 +22,13 @@ func generateShotVideoPromptsConcurrently(
 	}
 
 	limit := clampConcurrency(options.MaxConcurrency, DefaultShotVideoPromptConcurrency, MaxShotVideoPromptConcurrency)
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
 	selector := workflow.NewSelector(ctx)
 	nextIndex := 0
 	inFlight := 0
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	schedule := func(index int) {
 		shotID := options.ShotIDs[index]
 		future := workflow.ExecuteActivity(promptCtx, "PrepareShotVideoPrompt", PrepareShotVideoPromptInput{
@@ -45,6 +49,13 @@ func generateShotVideoPromptsConcurrently(
 			var output PrepareShotVideoPromptOutput
 			err := completed.Get(ctx, &output)
 			results[index] = shotVideoPromptResult{Outputs: []PrepareShotVideoPromptOutput{output}, Err: err}
+			if stopOnBalance && !stopScheduling {
+				if code, message, ok := billingInsufficientBalanceFailure(err); ok {
+					stopScheduling = true
+					stopCode = code
+					stopMessage = message
+				}
+			}
 			inFlight--
 		})
 	}
@@ -58,8 +69,15 @@ func generateShotVideoPromptsConcurrently(
 		if err := ctx.Err(); isWorkflowCancellationError(err) {
 			return nil, err
 		}
-		for nextIndex < len(options.ShotIDs) && inFlight < limit {
+		for !stopScheduling && nextIndex < len(options.ShotIDs) && inFlight < limit {
 			schedule(nextIndex)
+			nextIndex++
+		}
+	}
+	if stopScheduling {
+		code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+		for nextIndex < len(options.ShotIDs) {
+			results[nextIndex].Err = billingInsufficientBalanceError(code, message)
 			nextIndex++
 		}
 	}
@@ -101,6 +119,10 @@ func generateResumableShotVideoPromptPlansConcurrently(
 ) ([]shotVideoPromptResult, error) {
 	results := make([]shotVideoPromptResult, len(options.ShotIDs))
 	limit := clampConcurrency(options.MaxConcurrency, DefaultShotVideoPromptConcurrency, MaxShotVideoPromptConcurrency)
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	for start := 0; start < len(options.ShotIDs); start += limit {
 		end := start + limit
 		if end > len(options.ShotIDs) {
@@ -125,9 +147,23 @@ func generateResumableShotVideoPromptPlansConcurrently(
 			if isWorkflowCancellationError(completion.Err) {
 				cancelled = true
 			}
+			if stopOnBalance && !stopScheduling {
+				if code, message, ok := billingInsufficientBalanceFailure(completion.Err); ok {
+					stopScheduling = true
+					stopCode = code
+					stopMessage = message
+				}
+			}
 		}
 		if cancelled || isWorkflowCancellationError(ctx.Err()) {
 			return nil, temporal.NewCanceledError("batch video prompt planning was cancelled")
+		}
+		if stopScheduling {
+			code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+			for index := end; index < len(options.ShotIDs); index++ {
+				results[index].Err = billingInsufficientBalanceError(code, message)
+			}
+			break
 		}
 	}
 	return results, nil
@@ -140,6 +176,10 @@ func generateShotVideoSegmentPromptPlansConcurrently(
 	results []shotVideoPromptResult,
 ) ([]shotVideoPromptResult, error) {
 	limit := clampConcurrency(options.MaxConcurrency, DefaultShotVideoPromptConcurrency, MaxShotVideoPromptConcurrency)
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	for start := 0; start < len(options.ShotIDs); start += limit {
 		end := start + limit
 		if end > len(options.ShotIDs) {
@@ -170,12 +210,28 @@ func generateShotVideoSegmentPromptPlansConcurrently(
 			}
 			if completion.Err != nil {
 				results[completion.Index].Err = completion.Err
+				if stopOnBalance && !stopScheduling {
+					if code, message, ok := billingInsufficientBalanceFailure(completion.Err); ok {
+						stopScheduling = true
+						stopCode = code
+						stopMessage = message
+					}
+				}
 				continue
 			}
 			results[completion.Index].Outputs = append(results[completion.Index].Outputs, completion.Outputs...)
 		}
 		if cancelled || isWorkflowCancellationError(ctx.Err()) {
 			return nil, temporal.NewCanceledError("batch video prompt segment planning was cancelled")
+		}
+		if stopScheduling {
+			code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+			for index := end; index < len(options.ShotIDs); index++ {
+				if results[index].Err == nil {
+					results[index].Err = billingInsufficientBalanceError(code, message)
+				}
+			}
+			break
 		}
 	}
 	return results, nil
@@ -304,9 +360,13 @@ func materializeApprovedShotVideoPlansConcurrently(
 ) ([]error, error) {
 	results := make([]error, len(options.ShotIDs))
 	limit := clampConcurrency(options.MaxConcurrency, DefaultShotVideoPromptConcurrency, MaxShotVideoPromptConcurrency)
+	stopOnBalance := batchStopsOnInsufficientBalance(ctx)
 	selector := workflow.NewSelector(ctx)
 	nextIndex := 0
 	inFlight := 0
+	stopScheduling := false
+	stopCode := ""
+	stopMessage := ""
 	scheduleNext := func() bool {
 		for nextIndex < len(options.ShotIDs) && promptResults[nextIndex].Err != nil {
 			nextIndex++
@@ -327,6 +387,13 @@ func materializeApprovedShotVideoPlansConcurrently(
 		selector.AddFuture(future, func(completed workflow.Future) {
 			var prepared LoadPreparedShotVideoPlanOutput
 			results[index] = completed.Get(ctx, &prepared)
+			if stopOnBalance && !stopScheduling {
+				if code, message, ok := billingInsufficientBalanceFailure(results[index]); ok {
+					stopScheduling = true
+					stopCode = code
+					stopMessage = message
+				}
+			}
 			inFlight--
 		})
 		return true
@@ -338,7 +405,16 @@ func materializeApprovedShotVideoPlansConcurrently(
 		if err := ctx.Err(); isWorkflowCancellationError(err) {
 			return nil, err
 		}
-		for inFlight < limit && scheduleNext() {
+		for !stopScheduling && inFlight < limit && scheduleNext() {
+		}
+	}
+	if stopScheduling {
+		code, message := unstartedBillingInsufficientBalanceFailure(stopCode, stopMessage)
+		for nextIndex < len(options.ShotIDs) {
+			if promptResults[nextIndex].Err == nil {
+				results[nextIndex] = billingInsufficientBalanceError(code, message)
+			}
+			nextIndex++
 		}
 	}
 	return results, nil

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cineweave.local/schemas/core-lock.v1.json",
+  "title": "CineWeave Commercial Assembly Core Lock v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "coreRepository",
+    "coreCommit",
+    "editionContractSha256",
+    "ddlOwnerManifestSha256",
+    "overlaySlotsSha256",
+    "releaseManifestSchemaSha256",
+    "openAPIContractSha256",
+    "eventCatalogSha256",
+    "coreMigrationHead"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "cineweave.core-lock.v1"
+    },
+    "coreRepository": {
+      "type": "string",
+      "minLength": 1
+    },
+    "coreCommit": {
+      "$ref": "#/$defs/gitCommit"
+    },
+    "editionContractSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "ddlOwnerManifestSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "overlaySlotsSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "releaseManifestSchemaSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "openAPIContractSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "eventCatalogSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "coreMigrationHead": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "$defs": {
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
