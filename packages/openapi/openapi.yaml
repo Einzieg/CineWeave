@@ -10155,6 +10155,36 @@ paths:
           $ref: "#/components/responses/GatewayError"
         "422":
           $ref: "#/components/responses/GatewayError"
+  /internal/provider/v1/credential-imports/discover-models:
+    post:
+      operationId: internalProviderDiscoverManagedCredentialModels
+      summary: Discover and bind models for a system-managed provider credential
+      description: Internal API. Verifies the active managed import, calls the upstream model-discovery endpoint through Provider Gateway, and persists exact credential-to-model availability.
+      security:
+        - serviceTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiscoverManagedCredentialModelsRequest"
+      responses:
+        "200":
+          description: Managed credential model discovery and synchronization result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagedCredentialModelDiscoveryEnvelope"
+        "401":
+          $ref: "#/components/responses/GatewayError"
+        "404":
+          $ref: "#/components/responses/GatewayError"
+        "409":
+          $ref: "#/components/responses/GatewayError"
+        "422":
+          $ref: "#/components/responses/GatewayError"
+        "502":
+          $ref: "#/components/responses/GatewayError"
   /internal/provider/v1/credential-imports/revoke:
     post:
       operationId: internalProviderRevokeManagedCredential
@@ -22499,6 +22529,31 @@ components:
         providerCredentialId:
           type: string
           format: uuid
+    DiscoverManagedCredentialModelsRequest:
+      type: object
+      required:
+        - attemptId
+        - organizationId
+        - providerAccountId
+        - providerCredentialId
+        - discoveryIdempotencyKey
+      properties:
+        attemptId:
+          type: string
+          minLength: 1
+        organizationId:
+          type: string
+          format: uuid
+        providerAccountId:
+          type: string
+          format: uuid
+        providerCredentialId:
+          type: string
+          format: uuid
+        discoveryIdempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 240
     ManagedCredentialResult:
       type: object
       required:
@@ -22525,6 +22580,42 @@ components:
         revoked:
           type: boolean
           enum: [true]
+    ManagedCredentialModelDiscoveryResult:
+      type: object
+      required:
+        - status
+        - providerRequestId
+        - providerCallId
+        - credentialId
+        - credentialKey
+        - models
+        - unsupported
+        - sync
+      properties:
+        status:
+          type: string
+          enum: [succeeded]
+        providerRequestId:
+          type: string
+          format: uuid
+        providerCallId:
+          type: string
+          format: uuid
+        credentialId:
+          type: string
+          format: uuid
+        credentialKey:
+          type: string
+          minLength: 1
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiscoveredModel"
+        unsupported:
+          type: array
+          items: {}
+        sync:
+          $ref: "#/components/schemas/ModelDiscoverySync"
     GatewayDiscoverModelsRequest:
       type: object
       required: [organizationId, accountId]
@@ -23390,6 +23481,13 @@ components:
           properties:
             data:
               $ref: "#/components/schemas/ManagedCredentialRevocationResult"
+    ManagedCredentialModelDiscoveryEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ManagedCredentialModelDiscoveryResult"
     GatewayModelConstraintsEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

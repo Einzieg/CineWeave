@@ -51,6 +51,7 @@ func NewHandler(options Options) (http.Handler, error) {
 	mux.HandleFunc("/internal/provider/v1/credential-imports", handler.withServiceAuth(handler.importManagedCredential))
 	mux.HandleFunc("/internal/provider/v1/credential-imports/resolve", handler.withServiceAuth(handler.resolveManagedCredential))
 	mux.HandleFunc("/internal/provider/v1/credential-imports/activate", handler.withServiceAuth(handler.activateManagedCredential))
+	mux.HandleFunc("/internal/provider/v1/credential-imports/discover-models", handler.withServiceAuth(handler.discoverManagedCredentialModels))
 	mux.HandleFunc("/internal/provider/v1/credential-imports/revoke", handler.withServiceAuth(handler.revokeManagedCredential))
 	return httpx.WithRequestID(mux), nil
 }
@@ -195,6 +196,37 @@ func (h gatewayHandler) revokeManagedCredential(w http.ResponseWriter, r *http.R
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]bool{"revoked": true}, nil)
+}
+
+func (h gatewayHandler) discoverManagedCredentialModels(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		httpx.WriteError(
+			w,
+			r,
+			http.StatusMethodNotAllowed,
+			"METHOD_NOT_ALLOWED",
+			"method is not allowed",
+			nil,
+			false,
+		)
+		return
+	}
+	var req provider.DiscoverManagedCredentialModelsRequest
+	if !decodeGateway(w, r, &req) {
+		return
+	}
+	response, err := h.providers.DiscoverManagedCredentialModels(
+		r.Context(),
+		req,
+	)
+	if err != nil {
+		writeGatewayError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
 }
 
 func (h gatewayHandler) resolveModelConstraints(w http.ResponseWriter, r *http.Request) {

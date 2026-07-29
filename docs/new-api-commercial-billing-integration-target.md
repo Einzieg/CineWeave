@@ -515,7 +515,7 @@ Core 现有项目删除会硬删除 `projects`。Commercial migration 不能通�
 - [x] CE 可以完成一条文本、图片或视频核心生产链路。（同一 CE 新装门禁在 migration 75 空库上执行 `TestWorkflowGatewayIntegration` 文本分镜链路成功，Provider 使用零费用 mock，`paidProviderCalls=0`；门禁同时发现并修复 Temporal namespace 新建传播竞态、Web 外部字体构建依赖、API Release ID 漂移和 legacy storyboard 约束漂移。）
 - [x] CE 管理员可以配置自有 New API，但看不到平台钱包、充值或影子账户入口。
 - [x] 将 CE 环境变量改为 `enterprise` 不能出现任何商业功能。
-- [ ] Cloud/EE 构建同时记录 Core 和 Commercial Assembly 的不可变 SHA，并通过 allowlist Overlay 在临时 build tree 生成。（装配器现已记录两个 commit、clean 状态及 lock/allowlist/slot/脚本 hash；Release Manifest 门禁会读取真实 tar/zip 源码归档，逐项绑定这些证据并复核归档内 Overlay 内容。仍需实际私有 remote、干净不可变 commits 和正式候选归档，故本项保持未完成。）
+- [x] Cloud/EE 构建同时记录 Core 和 Commercial Assembly 的不可变 SHA，并通过 allowlist Overlay 在临时 build tree 生成。（公共 Core remote 与私有 `Einzieg/CineWeave-Commercial` remote 已建立；两个仓库均已形成并推送过干净不可变候选，装配器记录两个 commit、clean 状态及 lock/allowlist/slot/脚本 hash，Release Manifest 门禁读取真实 tar/zip 源码归档并复核归档内 Overlay 内容。）
 - [x] 商业 API、Web 和 Worker 对同一 Entitlement 得出一致结果。
 - [x] 无套餐权益、无 RBAC 权限和无部署许可证分别返回可区分错误。
 - [x] 商业许可证过期按操作矩阵阻止新付费 create，并允许读取、导出及已被上游接受任务的安全收尾。
@@ -2104,7 +2104,7 @@ Provider Gateway 应尽可能从 New API 响应头或响应体保存外部 reque
 - [ ] 完成版权归属、贡献历史和第三方许可证审计。（可重复的 Git/Go/Node/容器/二进制资产工程清单、hash 证据与 release fail-closed gate 已完成，见 `docs/community-license-readiness.md`；当前仍缺权利人/律师对历史授权链和第三方义务的正式结论。）
 - [ ] 由专业律师确认 AGPL 与商业双重许可文本、CLA 和商标政策。（已提供 `packages/edition/source-license-approval.schema.json` 绑定候选发行 inventory hash；不得用示例或环境变量替代受控法律批准。）
 - [ ] 固定 New API 镜像 digest/源码 commit、LICENSE/README hash、修改与交付方式，并形成 AGPL 合规或商业/OEM 许可书面结论。（当前生产镜像的 digest、官方 commit/tag、LICENSE/README/NOTICE hash 已由 `scripts/capture-new-api-upstream-evidence.py` 取证；仍需证明镜像是否修改、把 Compose 从 `latest` 固定到 digest，并取得书面法律结论。）
-- [ ] 创建 CE 公共 Core 与私有 Commercial Assembly 仓库、`core.lock`、allowlist Overlay 和临时装配流水线。（公共 `core.lock`/Overlay Schema、唯一 Web replace slot、fail-closed 检查器、临时装配器、强制鉴权的 API module slot 及 OpenAPI/Event/route-list 合并器已完成；仍需建立并绑定实际私有仓库 remote 后才能勾选。）
+- [x] 创建 CE 公共 Core 与私有 Commercial Assembly 仓库、`core.lock`、allowlist Overlay 和临时装配流水线。（公共 Core remote 与私有 `Einzieg/CineWeave-Commercial` remote 已建立并形成初始不可变候选；`core.lock`、Overlay Schema/allowlist、唯一 Web replace slot、fail-closed 检查器、临时装配器、强制鉴权的 API module slot 及 OpenAPI/Event/route-list 合并器均已落地。）
 - [x] 固定 `EditionProvider`、`EntitlementService`、`BillingRoutingAuthorizer`、`CommercialModuleRegistry`、Web `EditionEntry` 契约 v1，并锁定 RBAC `billing.spend` 与 sponsorship owner consent 的唯一组合公式。
 - [x] 固定 Edition Manifest、Feature Registry、授权错误、License 操作矩阵、可信时间/时钟回拨/吊销代次和 Billing Authority 约束。
 - [x] 建立 CE 独立构建、完整 Git history/归档/镜像/chunk/source map 泄漏扫描；执行策略、证据和泄漏响应见 `docs/community-release-security.md`。
@@ -2131,7 +2131,7 @@ Provider Gateway 应尽可能从 New API 响应头或响应体保存外部 reque
 - [x] 实现只读视图 adapter 和 schema version gate。（强制 `transaction_read_only=on`，校验 view schema、上游版本、生产 source schema hash 及必需列。）
 - [x] 实现统一错误。（Bridge 对外使用稳定 `BILLING_*` 错误码，New API adapter 的上游错误经过脱敏且区分 retryable、HTTP 和业务失败。）
 - [x] 实现 Billing Authority 隔离和外部 ID 复合键。（Bridge 运行时按精确 Authority ID 解析且不存在跨 Authority fallback；Commercial 表对用户、Token、订单、日志和订阅外部 ID 使用 Authority 复合唯一键，账户余额缓存也绑定 Authority 与 binding revision。）
-- [x] 实现多 BillingCredential、Gateway sealed inactive import/resolve/activate、Token provisioning saga、secret 丢失恢复、补偿和 draining 轮换。（Commercial repository、Bridge saga 与 Core migration 000071/Provider Gateway 内网接口已形成完整闭环；Gateway 404 解析、显式开户操作人、双侧幂等激活、replacement generation 和旧凭据 draining 均有回归，PostgreSQL 实际 Up/Down/Up 开户、凭据与余额集成测试通过。）
+- [x] 实现多 BillingCredential、Gateway sealed inactive import/resolve/activate、Token provisioning saga、secret 丢失恢复、补偿和 draining 轮换。（Commercial repository、Bridge saga 与 Core migration 000071/Provider Gateway 内网接口已形成完整闭环；双侧激活后由 Gateway 使用该精确凭据发现模型，并持久化 `provider_models`/capability/`provider_credential_models` 映射，套餐要求模型缺失时 fail-closed；Gateway 404 解析、显式开户操作人、幂等恢复、replacement generation 和旧凭据 draining 均有回归，PostgreSQL 实际 Up/Down/Up 开户、凭据、模型发现与余额集成测试通过。）
 - [x] 增加 Compose 和生产网络配置。（私有 `compose.commercial.yml`、固定基础镜像的 Commercial Go Dockerfile、secret-only 环境样例和网络边界文档已提供；静态 Compose 校验确认 API/Worker 不接入 New API 网络，Gateway 仅接入 AI 网络，Bridge 仅接入管理/只读数据网络且不暴露宿主端口。）
 
 完成标准：Bridge 能对测试账户执行开户、余额查询和多个不同 group/model scope Token 的确保；任一点崩溃都不会重复创建或遗留可路由 Token，明文 Token 不出现在 API、数据库或日志。
@@ -2151,7 +2151,7 @@ Provider Gateway 应尽可能从 New API 响应头或响应体保存外部 reque
 
 ### P3：Provider 计费身份贯穿
 
-- [x] 通过 Core migration 给 Provider Request/Call/Async Task 增加 opaque Billing Context。（Core `000073_provider_billing_context` 为 Workflow/Request 固化 context revision/hash，并让 Call/Async Task 继承 opaque context；Up/Down/Up、baseline 和不可变触发器回归通过。）
+- [x] 通过 Core migration 给 Provider Request/Call/Async Task 增加 opaque Billing Context。（Core `000073_provider_billing_context` 为 Workflow/Request 固化 context revision/hash，并让 Call/Async Task 继承 opaque context；前向迁移 `000076_provider_billing_context_trigger_table_guard` 按实际触发表分支访问动态记录字段，修复 Call/Async Task 普通状态更新的 PostgreSQL 运行时错误，同时保持 Billing Context 身份不可变；Up/Down/Up、baseline 和真实隔离回归通过。）
 - [x] 通过 Commercial sidecar 固化 BillingAccount、Authority、binding revision 和权益观察值。（私有 Billing Context 服务保存账户、Authority、项目绑定 revision、许可证/Entitlement/权限观察值和规范化 snapshot hash，Core 只持 opaque reference。）
 - [x] 所有 Gateway 请求携带计费身份。（付费 Gateway create 统一先经 Billing Identity resolver；durable Workflow 由 `workflowRunId` 冻结，直接 API/Commerce setup 显式携带 requester、operation permission、reason 和幂等键；静态架构测试阻止带 `projectId` 的付费请求遗漏 durable 或 direct identity。）
 - [x] 每个新的付费 create 重新校验 License、tenant entitlement、`billing.spend` 和 New API 当前状态。（Commercial Routing Authorizer 在每次 create 校验当前许可证、租户权益、Core RBAC、账户/Token 状态、余额和模型 scope；冻结观察值仅用于审计，不作为授权租约。）
@@ -2508,7 +2508,7 @@ cineweave_entitlement_denials_total
 - [x] Core/Commercial migration ledger 独立，Commercial migration 不修改 Core-owned DDL。
 - [x] Commercial retention/FK 机器门禁与实际数据库目录一致，未批准法务/安全政策不能进入组合 Release Manifest。
 - [x] CE 与商业最终 OpenAPI/Event Catalog 分别通过对应的路由一致性门禁。
-- [x] `pnpm run test`、无需外部授权的专项集成和 fixture/浏览器 E2E 全部通过。（Core 433 routes、migration head 75；CE 隔离空库全新安装、14 服务健康和零费用文本生产链路通过；Commercial 合并 454 routes/21 商业 routes/275 events；组合 Release Manifest 30 个负向用例覆盖缺失/部分证据及 commit、脚本、归档和 Overlay 漂移；商业 Go 全包、合同装配、试点脚本契约、迁移/数据保护及 Next.js standalone Playwright 3/3 均通过。）
+- [x] `pnpm run test`、无需外部授权的专项集成和 fixture/浏览器 E2E 全部通过。（Core 434 routes、migration head 76；CE 隔离空库全新安装、14 服务健康和零费用文本生产链路通过；Commercial 合并 456 routes/22 商业 routes/275 events；组合 Release Manifest 30 个负向用例覆盖缺失/部分证据及 commit、脚本、归档和 Overlay 漂移；商业 Go 全包、合同装配、试点脚本契约、托管凭据真实模型发现、迁移/数据保护及 Next.js standalone Playwright 3/3 均通过。）
 - [ ] 生产发布使用不可变 release，schema、seed、镜像和 Temporal Build ID 一致。
 - [ ] 真实充值、真实退款和真实 Provider smoke 分别获得授权，并记录金额、外部订单、事件 inbox 和调用证据。
 

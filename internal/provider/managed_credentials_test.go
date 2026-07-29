@@ -105,6 +105,14 @@ func TestGatewayClientManagedCredentialRoutes(t *testing.T) {
 			})
 		case "/internal/provider/v1/credential-imports/revoke":
 			writeGatewayClientTestEnvelope(t, w, map[string]bool{"revoked": true})
+		case "/internal/provider/v1/credential-imports/discover-models":
+			writeGatewayClientTestEnvelope(t, w, ManagedCredentialModelDiscoveryResult{
+				Status:        "succeeded",
+				CredentialID:  "credential",
+				CredentialKey: "default",
+				Models:        []DiscoveredModel{},
+				Unsupported:   []any{},
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -146,12 +154,19 @@ func TestGatewayClientManagedCredentialRoutes(t *testing.T) {
 	); err != nil {
 		t.Fatalf("revoke managed credential: %v", err)
 	}
+	if _, err := client.DiscoverManagedCredentialModels(
+		ctx,
+		DiscoverManagedCredentialModelsRequest{},
+	); err != nil {
+		t.Fatalf("discover managed credential models: %v", err)
+	}
 	want := []string{
 		"/internal/provider/v1/managed-accounts/ensure",
 		"/internal/provider/v1/credential-imports",
 		"/internal/provider/v1/credential-imports/resolve",
 		"/internal/provider/v1/credential-imports/activate",
 		"/internal/provider/v1/credential-imports/revoke",
+		"/internal/provider/v1/credential-imports/discover-models",
 	}
 	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("paths = %#v, want %#v", paths, want)

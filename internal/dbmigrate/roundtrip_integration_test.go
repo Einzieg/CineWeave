@@ -85,6 +85,7 @@ func TestEmptyDatabaseUpDownUpProducesStableSchema(t *testing.T) {
 	assertVersion36NullRenderPlanRollbackPreflight(t, ctx, runner, testConfig)
 	assertProjectDeletionHardDeletePath(t, ctx, testConfig)
 	assertWorkflowBillingContextBindOnce(t, ctx, testConfig)
+	assertProviderBillingContextTriggerTableGuard(t, ctx, testConfig)
 	first := normalizedSchemaSnapshot(t, ctx, testConfig)
 
 	if err := runner.Run(ctx, "reset", 0); err != nil {
@@ -181,6 +182,90 @@ func assertWorkflowBillingContextBindOnce(
 	}
 	if _, err := conn.Exec(ctx, `DELETE FROM workflow_runs WHERE id = $1`, workflowRunID); err != nil {
 		t.Fatalf("delete Billing Context workflow fixture: %v", err)
+	}
+}
+
+func assertProviderBillingContextTriggerTableGuard(
+	t *testing.T,
+	ctx context.Context,
+	config *pgx.ConnConfig,
+) {
+	t.Helper()
+	conn, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect Provider Billing Context trigger fixture database: %v", err)
+	}
+	defer conn.Close(context.Background())
+
+	callID := uuid.NewString()
+	taskID := uuid.NewString()
+	billingContextID := uuid.NewString()
+	if _, err := conn.Exec(ctx, `SET session_replication_role = replica`); err != nil {
+		t.Fatalf("disable Provider Billing Context fixture foreign key triggers: %v", err)
+	}
+	replicationRoleReset := false
+	defer func() {
+		if !replicationRoleReset {
+			_, _ = conn.Exec(context.Background(), `SET session_replication_role = origin`)
+		}
+	}()
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO provider_call_logs (
+			id,
+			organization_id,
+			provider_account_id,
+			task_type,
+			status,
+			billing_context_id
+		) VALUES ($1, $2, $3, 'text.generate', 'queued', $4)
+	`, callID, uuid.NewString(), uuid.NewString(), billingContextID); err != nil {
+		t.Fatalf("insert Provider Billing Context call fixture: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO provider_async_tasks (
+			id,
+			provider_call_id,
+			organization_id,
+			provider_account_id,
+			status,
+			billing_context_id
+		) VALUES ($1, $2, $3, $4, 'queued', $5)
+	`, taskID, callID, uuid.NewString(), uuid.NewString(), billingContextID); err != nil {
+		t.Fatalf("insert Provider Billing Context async task fixture: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SET session_replication_role = origin`); err != nil {
+		t.Fatalf("restore Provider Billing Context fixture foreign key triggers: %v", err)
+	}
+	replicationRoleReset = true
+
+	if _, err := conn.Exec(ctx, `
+		UPDATE provider_call_logs
+		SET status = 'running'
+		WHERE id = $1
+	`, callID); err != nil {
+		t.Fatalf("update provider call non-billing state: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		UPDATE provider_async_tasks
+		SET poll_count = poll_count + 1
+		WHERE id = $1
+	`, taskID); err != nil {
+		t.Fatalf("update provider async task non-billing state: %v", err)
+	}
+	for table, id := range map[string]string{
+		"provider_call_logs":   callID,
+		"provider_async_tasks": taskID,
+	} {
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`
+			UPDATE %s
+			SET billing_context_id = $2
+			WHERE id = $1
+		`, pgx.Identifier{table}.Sanitize()), id, uuid.NewString()); err == nil {
+			t.Fatalf("%s Billing Context identity mutation unexpectedly succeeded", table)
+		}
+	}
+	if _, err := conn.Exec(ctx, `DELETE FROM provider_call_logs WHERE id = $1`, callID); err != nil {
+		t.Fatalf("delete Provider Billing Context call fixture: %v", err)
 	}
 }
 

@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
-  "headVersion": 75,
-  "migrationCount": 75,
-  "bundleSha256": "3b1369664aa246d149e76c18abf168c22e21a2fe3a754982522aa69896e8005e",
+  "headVersion": 76,
+  "migrationCount": 76,
+  "bundleSha256": "085e51968947a47fcb7cb6c952b0cb610a97db605995dd39c12738b911ad32c9",
   "migrations": [
     {
       "version": 1,
@@ -378,6 +378,11 @@
       "version": 75,
       "name": "000075_storyboard_legacy_plan_identity.sql",
       "sha256": "c5b9a4fe71f2659f4c8f68532095961d6d96589888875b26850e6ea9292bc283"
+    },
+    {
+      "version": 76,
+      "name": "000076_provider_billing_context_trigger_table_guard.sql",
+      "sha256": "022daac5f49c9443acbc92d8aa5d012ca84948351d59754f00d20afa83694cbe"
     }
   ]
 }

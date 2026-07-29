@@ -3,7 +3,10 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -12,13 +15,36 @@ import (
 )
 
 func TestManagedProviderCredentialLifecycleAndTenantIsolation(t *testing.T) {
+	modelServer := httptest.NewServer(http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/v1/models" {
+				http.NotFound(writer, request)
+				return
+			}
+			if request.Header.Get("Authorization") !=
+				"Bearer managed-credential-test-secret-one" {
+				http.Error(writer, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(writer).Encode(map[string]any{
+				"data": []map[string]string{{
+					"id": "managed-text-model",
+				}},
+			}); err != nil {
+				t.Errorf("encode model response: %v", err)
+			}
+		},
+	))
+	defer modelServer.Close()
+
 	ctx, pool, vault := openProviderAdminTestDB(t)
 	organizationID, userID, modelID := seedGatewayIntegrationData(
 		t,
 		ctx,
 		pool,
 		vault,
-		"http://example.test",
+		modelServer.URL,
 	)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, organizationID)
@@ -40,7 +66,7 @@ func TestManagedProviderCredentialLifecycleAndTenantIsolation(t *testing.T) {
 		ManagementReference: "billing-authority:test:billing-account:" + uuid.NewString(),
 		Name:                "系统计费账户",
 		ConnectorKey:        connectorKey,
-		BaseURL:             "https://new-api.example.test/v1",
+		BaseURL:             modelServer.URL + "/v1",
 		AuthType:            "bearer",
 	}
 	managedAccount, err := service.EnsureManagedProviderAccount(ctx, accountRequest)
@@ -173,6 +199,46 @@ func TestManagedProviderCredentialLifecycleAndTenantIsolation(t *testing.T) {
 		firstActivation,
 	); err != nil || replayed != firstActiveResult {
 		t.Fatalf("replay first activation = %#v, err=%v", replayed, err)
+	}
+	discoveryRequest := DiscoverManagedCredentialModelsRequest{
+		AttemptID:               firstImportRequest.AttemptID,
+		OrganizationID:          organizationID,
+		ProviderAccountID:       managedAccount.ID,
+		ProviderCredentialID:    firstImport.ProviderCredentialID,
+		DiscoveryIdempotencyKey: "gateway-discover:" + firstImportRequest.AttemptID,
+	}
+	discovery, err := service.DiscoverManagedCredentialModels(
+		ctx,
+		discoveryRequest,
+	)
+	if err != nil {
+		t.Fatalf("discover managed credential models: %v", err)
+	}
+	if discovery.Status != "succeeded" ||
+		discovery.CredentialID != firstImport.ProviderCredentialID ||
+		len(discovery.Models) != 1 ||
+		discovery.Models[0].ModelKey != "managed-text-model" ||
+		discovery.Sync.CreatedCount != 1 {
+		t.Fatalf("managed credential discovery = %#v", discovery)
+	}
+	var mapped bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM provider_credential_models credential_model
+			JOIN provider_models model
+			  ON model.id = credential_model.provider_model_id
+			WHERE credential_model.provider_credential_id = $1
+			  AND credential_model.is_available
+			  AND model.provider_account_id = $2
+			  AND model.model_key = 'managed-text-model'
+			  AND model.status = 'active'
+		)
+	`, firstImport.ProviderCredentialID, managedAccount.ID).Scan(&mapped); err != nil {
+		t.Fatalf("load managed credential model mapping: %v", err)
+	}
+	if !mapped {
+		t.Fatal("managed credential discovery did not persist a routable model mapping")
 	}
 
 	secondImportRequest := firstImportRequest

@@ -72,6 +72,25 @@ type RevokeManagedCredentialRequest struct {
 	ProviderCredentialID     string `json:"providerCredentialId"`
 }
 
+type DiscoverManagedCredentialModelsRequest struct {
+	AttemptID               string `json:"attemptId"`
+	OrganizationID          string `json:"organizationId"`
+	ProviderAccountID       string `json:"providerAccountId"`
+	ProviderCredentialID    string `json:"providerCredentialId"`
+	DiscoveryIdempotencyKey string `json:"discoveryIdempotencyKey"`
+}
+
+type ManagedCredentialModelDiscoveryResult struct {
+	Status            string             `json:"status"`
+	ProviderRequestID string             `json:"providerRequestId"`
+	ProviderCallID    string             `json:"providerCallId"`
+	CredentialID      string             `json:"credentialId"`
+	CredentialKey     string             `json:"credentialKey"`
+	Models            []DiscoveredModel  `json:"models"`
+	Unsupported       []any              `json:"unsupported"`
+	Sync              ModelDiscoverySync `json:"sync"`
+}
+
 type ManagedCredentialResult struct {
 	State                       string `json:"state"`
 	ImportID                    string `json:"importId"`
@@ -559,6 +578,102 @@ func (s *Service) RevokeManagedCredential(
 	return tx.Commit(ctx)
 }
 
+func (s *Service) DiscoverManagedCredentialModels(
+	ctx context.Context,
+	request DiscoverManagedCredentialModelsRequest,
+) (ManagedCredentialModelDiscoveryResult, error) {
+	normalized, err := normalizeManagedCredentialModelDiscoveryRequest(request)
+	if err != nil {
+		return ManagedCredentialModelDiscoveryResult{}, err
+	}
+	if s == nil || s.db == nil || s.vault == nil {
+		return ManagedCredentialModelDiscoveryResult{}, errors.New(
+			"provider managed credential discovery dependencies are not initialized",
+		)
+	}
+
+	var credentialKey string
+	err = s.db.QueryRow(ctx, `
+		SELECT credential.credential_key
+		FROM provider_credential_imports import
+		JOIN provider_credentials credential
+		  ON credential.id = import.provider_credential_id
+		JOIN provider_managed_credentials managed_credential
+		  ON managed_credential.provider_credential_id = credential.id
+		JOIN provider_managed_accounts managed_account
+		  ON managed_account.provider_account_id = import.provider_account_id
+		JOIN provider_accounts account
+		  ON account.id = import.provider_account_id
+		WHERE import.attempt_id = $1
+		  AND import.organization_id = $2
+		  AND import.provider_account_id = $3
+		  AND import.provider_credential_id = $4
+		  AND import.status = 'active'
+		  AND credential.organization_id = $2
+		  AND credential.provider_account_id = $3
+		  AND credential.status = 'active'
+		  AND credential.is_active = true
+		  AND managed_credential.organization_id = $2
+		  AND managed_credential.provider_account_id = $3
+		  AND managed_credential.management_scope = 'system_managed'
+		  AND managed_account.organization_id = $2
+		  AND managed_account.management_scope = 'system_managed'
+		  AND account.organization_id = $2
+		  AND account.status = 'active'
+	`, normalized.AttemptID,
+		normalized.OrganizationID,
+		normalized.ProviderAccountID,
+		normalized.ProviderCredentialID,
+	).Scan(&credentialKey)
+	if err != nil {
+		return ManagedCredentialModelDiscoveryResult{}, err
+	}
+
+	discovery, err := s.DiscoverModelsViaGateway(ctx, GatewayDiscoverModelsRequest{
+		OrganizationID: normalized.OrganizationID,
+		AccountID:      normalized.ProviderAccountID,
+		CredentialID:   normalized.ProviderCredentialID,
+		TestType:       "managed_model_discovery",
+		IdempotencyKey: normalized.DiscoveryIdempotencyKey,
+		Retry:          true,
+	})
+	if err != nil {
+		return ManagedCredentialModelDiscoveryResult{}, err
+	}
+	if isProviderFailureStatus(discovery.Status) {
+		return ManagedCredentialModelDiscoveryResult{}, errorFromGatewayStandard(
+			discovery.Error,
+		)
+	}
+	if discovery.Status != "succeeded" {
+		return ManagedCredentialModelDiscoveryResult{}, fmt.Errorf(
+			"%w: managed credential model discovery is %s",
+			ErrConflict,
+			discovery.Status,
+		)
+	}
+	syncResult, err := s.syncDiscoveredModelsForCredentialWithSummary(
+		ctx,
+		normalized.OrganizationID,
+		normalized.ProviderAccountID,
+		normalized.ProviderCredentialID,
+		discovery.Models,
+	)
+	if err != nil {
+		return ManagedCredentialModelDiscoveryResult{}, err
+	}
+	return ManagedCredentialModelDiscoveryResult{
+		Status:            discovery.Status,
+		ProviderRequestID: discovery.ProviderRequestID,
+		ProviderCallID:    discovery.ProviderCallID,
+		CredentialID:      normalized.ProviderCredentialID,
+		CredentialKey:     credentialKey,
+		Models:            discovery.Models,
+		Unsupported:       discovery.Unsupported,
+		Sync:              syncResult,
+	}, nil
+}
+
 func (s *Service) GetTenantAccount(
 	ctx context.Context,
 	organizationID string,
@@ -605,6 +720,36 @@ func (s *Service) EnsureTenantProviderModel(
 		return pgx.ErrNoRows
 	}
 	return nil
+}
+
+func normalizeManagedCredentialModelDiscoveryRequest(
+	request DiscoverManagedCredentialModelsRequest,
+) (DiscoverManagedCredentialModelsRequest, error) {
+	request.AttemptID = strings.TrimSpace(request.AttemptID)
+	request.OrganizationID = strings.TrimSpace(request.OrganizationID)
+	request.ProviderAccountID = strings.TrimSpace(request.ProviderAccountID)
+	request.ProviderCredentialID = strings.TrimSpace(request.ProviderCredentialID)
+	request.DiscoveryIdempotencyKey = strings.TrimSpace(
+		request.DiscoveryIdempotencyKey,
+	)
+	if request.AttemptID == "" ||
+		request.OrganizationID == "" ||
+		request.ProviderAccountID == "" ||
+		request.ProviderCredentialID == "" ||
+		request.DiscoveryIdempotencyKey == "" {
+		return DiscoverManagedCredentialModelsRequest{}, fmt.Errorf(
+			"%w: attemptId, organizationId, providerAccountId, "+
+				"providerCredentialId, and discoveryIdempotencyKey are required",
+			ErrValidation,
+		)
+	}
+	if len([]rune(request.DiscoveryIdempotencyKey)) > 240 {
+		return DiscoverManagedCredentialModelsRequest{}, fmt.Errorf(
+			"%w: discoveryIdempotencyKey is too long",
+			ErrValidation,
+		)
+	}
+	return request, nil
 }
 
 func normalizeManagedProviderAccountRequest(

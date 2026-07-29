@@ -103,6 +103,22 @@ func (c *GatewayClient) RevokeManagedCredential(
 	)
 }
 
+func (c *GatewayClient) DiscoverManagedCredentialModels(
+	ctx context.Context,
+	req DiscoverManagedCredentialModelsRequest,
+) (ManagedCredentialModelDiscoveryResult, error) {
+	var response ManagedCredentialModelDiscoveryResult
+	if err := c.postJSON(
+		ctx,
+		"/internal/provider/v1/credential-imports/discover-models",
+		req,
+		&response,
+	); err != nil {
+		return ManagedCredentialModelDiscoveryResult{}, err
+	}
+	return response, nil
+}
+
 func (c *GatewayClient) ResolveModelConstraints(ctx context.Context, req GatewayModelConstraintsRequest) (GatewayModelConstraintsResponse, error) {
 	var response GatewayModelConstraintsResponse
 	if err := c.postJSON(ctx, "/internal/provider/models/constraints", req, &response); err != nil {
