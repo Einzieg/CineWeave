@@ -86,29 +86,61 @@ $coreLock = Get-Content -LiteralPath $coreLockPath -Raw -Encoding UTF8 | Convert
 $overlay = Get-Content -LiteralPath $overlayPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $temporaryParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $temporaryRoot = Join-Path $temporaryParent ("cineweave-commercial-assembly-" + [Guid]::NewGuid().ToString('N'))
-$archivePath = Join-Path $temporaryRoot 'core.tar'
+$coreArchivePath = Join-Path $temporaryRoot 'core.tar'
+$commercialArchivePath = Join-Path $temporaryRoot 'commercial.tar'
+$commercialArchiveRoot = Join-Path $temporaryRoot 'commercial'
 
 New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
 try {
   New-Item -ItemType Directory -Path $outputRoot | Out-Null
-  & git -C $coreRoot archive --format=tar --output=$archivePath $coreLock.coreCommit
+  & git `
+    -c core.autocrlf=false `
+    -c core.eol=lf `
+    -C $coreRoot `
+    archive `
+    --format=tar `
+    --output=$coreArchivePath `
+    $coreLock.coreCommit
   if ($LASTEXITCODE -ne 0) {
     throw "Core archive failed with exit code $LASTEXITCODE"
   }
-  & tar -xf $archivePath -C $outputRoot
+  & tar -xf $coreArchivePath -C $outputRoot
   if ($LASTEXITCODE -ne 0) {
     throw "Core archive extraction failed with exit code $LASTEXITCODE"
   }
+  & git `
+    -c core.autocrlf=false `
+    -c core.eol=lf `
+    -C $commercialRoot `
+    archive `
+    --format=tar `
+    --output=$commercialArchivePath `
+    $CommercialCommit
+  if ($LASTEXITCODE -ne 0) {
+    throw "Commercial archive failed with exit code $LASTEXITCODE"
+  }
+  New-Item -ItemType Directory -Path $commercialArchiveRoot | Out-Null
+  & tar -xf $commercialArchivePath -C $commercialArchiveRoot
+  if ($LASTEXITCODE -ne 0) {
+    throw "Commercial archive extraction failed with exit code $LASTEXITCODE"
+  }
+
+  $archivedCoreLockPath = Join-Path $commercialArchiveRoot $CoreLockRelativePath
+  $archivedOverlayPath = Join-Path $commercialArchiveRoot $OverlayAllowlistRelativePath
+  $coreLock = Get-Content -LiteralPath $archivedCoreLockPath -Raw -Encoding UTF8 |
+    ConvertFrom-Json
+  $overlay = Get-Content -LiteralPath $archivedOverlayPath -Raw -Encoding UTF8 |
+    ConvertFrom-Json
 
   $assembledFiles = [System.Collections.Generic.List[object]]::new()
   foreach ($mapping in $overlay.files) {
     $sourcePath = [IO.Path]::GetFullPath(
-      (Join-Path $commercialRoot ($mapping.source -replace '/', [IO.Path]::DirectorySeparatorChar))
+      (Join-Path $commercialArchiveRoot ($mapping.source -replace '/', [IO.Path]::DirectorySeparatorChar))
     )
     $destinationPath = [IO.Path]::GetFullPath(
       (Join-Path $outputRoot ($mapping.destination -replace '/', [IO.Path]::DirectorySeparatorChar))
     )
-    if (-not (Test-PathWithin -Candidate $sourcePath -Parent $commercialRoot)) {
+    if (-not (Test-PathWithin -Candidate $sourcePath -Parent $commercialArchiveRoot)) {
       throw "Overlay source escaped the Commercial repository: $($mapping.source)"
     }
     if (-not (Test-PathWithin -Candidate $destinationPath -Parent $outputRoot)) {
@@ -137,11 +169,15 @@ try {
     schemaVersion = 'cineweave.assembly-inputs.v1'
     coreCommit = $coreLock.coreCommit
     commercialAssemblyCommit = $CommercialCommit
-    coreLockSha256 = (Get-FileHash -LiteralPath $coreLockPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    overlayAllowlistSha256 = (Get-FileHash -LiteralPath $overlayPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    coreLockSha256 = (Get-FileHash -LiteralPath $archivedCoreLockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    overlayAllowlistSha256 = (Get-FileHash -LiteralPath $archivedOverlayPath -Algorithm SHA256).Hash.ToLowerInvariant()
     overlaySlotsSha256 = $coreLock.overlaySlotsSha256
     assemblyScriptPath = $assemblyScriptRelativePath
-    assemblyScriptSha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    assemblyScriptSha256 = (
+      Get-FileHash `
+        -LiteralPath (Join-Path $outputRoot $assemblyScriptRelativePath) `
+        -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
     cleanCoreTree = $true
     cleanCommercialTree = $true
     assembledAt = [DateTimeOffset]::UtcNow.ToString('O')

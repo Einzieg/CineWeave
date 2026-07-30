@@ -46,6 +46,35 @@ function Get-LowerSHA256 {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-GitBlobSHA256 {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Repository,
+    [Parameter(Mandatory = $true)]
+    [string]$Revision,
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  $digest = & python -c @'
+import hashlib
+import subprocess
+import sys
+
+repository, revision, path = sys.argv[1:]
+result = subprocess.run(
+    ["git", "-C", repository, "show", f"{revision}:{path}"],
+    check=True,
+    stdout=subprocess.PIPE,
+)
+print(hashlib.sha256(result.stdout).hexdigest())
+'@ $Repository $Revision ($Path.Replace('\', '/'))
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to hash Git blob $Revision`:$Path"
+  }
+  return ([string]$digest).Trim()
+}
+
 function Test-PathWithin {
   param(
     [Parameter(Mandatory = $true)]
@@ -106,16 +135,23 @@ try {
     -Path (Join-Path $commercialRoot 'overlay/selected-entry.ts') `
     -Content "export const selectedEditionEntry = 'commercial';`n"
 
+  Invoke-Git -Repository $commercialRoot -Arguments @('init', '--quiet')
+  Invoke-Git -Repository $commercialRoot -Arguments @('config', 'user.name', 'CineWeave Assembly Test')
+  Invoke-Git -Repository $commercialRoot -Arguments @('config', 'user.email', 'assembly-test@example.invalid')
+  Invoke-Git -Repository $commercialRoot -Arguments @('add', 'overlay')
+  Invoke-Git -Repository $commercialRoot -Arguments @('commit', '--quiet', '-m', 'fixture commercial sources')
+  $commercialSourcesCommit = (& git -C $commercialRoot rev-parse HEAD).Trim()
+
   $coreLock = [ordered]@{
     schemaVersion = 'cineweave.core-lock.v1'
     coreRepository = 'https://example.invalid/cineweave-core.git'
     coreCommit = $coreCommit
-    editionContractSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/edition/edition.v2.json'))
-    ddlOwnerManifestSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/edition/ddl-owners.v1.json'))
-    overlaySlotsSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/edition/overlay-slots.v1.json'))
-    releaseManifestSchemaSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/edition/release-manifest.schema.json'))
-    openAPIContractSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/openapi/openapi.yaml'))
-    eventCatalogSha256 = (Get-LowerSHA256 -Path (Join-Path $coreRoot 'packages/events/catalog.yaml'))
+    editionContractSha256 = (Get-GitBlobSHA256 -Repository $coreRoot -Revision $coreCommit -Path 'packages/edition/edition.v2.json')
+    ddlOwnerManifestSha256 = (Get-GitBlobSHA256 -Repository $coreRoot -Revision $coreCommit -Path 'packages/edition/ddl-owners.v1.json')
+    overlaySlotsSha256 = (Get-GitBlobSHA256 -Repository $coreRoot -Revision $coreCommit -Path 'packages/edition/overlay-slots.v1.json')
+    releaseManifestSchemaSha256 = (Get-GitBlobSHA256 -Repository $coreRoot -Revision $coreCommit -Path 'packages/edition/release-manifest.schema.json')
+    openAPIContractSha256 = (Get-GitBlobSHA256 -Repository $coreRoot -Revision $coreCommit -Path 'packages/openapi/openapi.yaml')
+    eventCatalogSha256 = (Get-GitBlobSHA256 -Repository $coreRoot -Revision $coreCommit -Path 'packages/events/catalog.yaml')
     coreMigrationHead = 1
   }
   $overlay = [ordered]@{
@@ -126,13 +162,13 @@ try {
         source = 'overlay/fixture.txt'
         destination = 'assembly/fixture.txt'
         operation = 'add'
-        sha256 = (Get-LowerSHA256 -Path (Join-Path $commercialRoot 'overlay/fixture.txt'))
+        sha256 = (Get-GitBlobSHA256 -Repository $commercialRoot -Revision $commercialSourcesCommit -Path 'overlay/fixture.txt')
       },
       [ordered]@{
         source = 'overlay/selected-entry.ts'
         destination = 'apps/web/src/edition/selected-entry.ts'
         operation = 'replace'
-        sha256 = (Get-LowerSHA256 -Path (Join-Path $commercialRoot 'overlay/selected-entry.ts'))
+        sha256 = (Get-GitBlobSHA256 -Repository $commercialRoot -Revision $commercialSourcesCommit -Path 'overlay/selected-entry.ts')
       }
     )
   }
@@ -143,11 +179,8 @@ try {
     -Path (Join-Path $commercialRoot 'overlay-allowlist.v1.json') `
     -Content (($overlay | ConvertTo-Json -Depth 6) + [Environment]::NewLine)
 
-  Invoke-Git -Repository $commercialRoot -Arguments @('init', '--quiet')
-  Invoke-Git -Repository $commercialRoot -Arguments @('config', 'user.name', 'CineWeave Assembly Test')
-  Invoke-Git -Repository $commercialRoot -Arguments @('config', 'user.email', 'assembly-test@example.invalid')
   Invoke-Git -Repository $commercialRoot -Arguments @('add', '--all')
-  Invoke-Git -Repository $commercialRoot -Arguments @('commit', '--quiet', '-m', 'fixture commercial overlay')
+  Invoke-Git -Repository $commercialRoot -Arguments @('commit', '--quiet', '-m', 'fixture commercial contract')
   $commercialCommit = (& git -C $commercialRoot rev-parse HEAD).Trim()
 
   & (Join-Path $repoRoot 'scripts/assemble-commercial-release.ps1') `
@@ -172,10 +205,10 @@ try {
     throw 'Assembly evidence does not bind both commits.'
   }
   if (
-    $evidence.coreLockSha256 -ne (Get-LowerSHA256 -Path (Join-Path $commercialRoot 'core.lock')) -or
-    $evidence.overlayAllowlistSha256 -ne (Get-LowerSHA256 -Path (Join-Path $commercialRoot 'overlay-allowlist.v1.json')) -or
+    $evidence.coreLockSha256 -ne (Get-GitBlobSHA256 -Repository $commercialRoot -Revision $commercialCommit -Path 'core.lock') -or
+    $evidence.overlayAllowlistSha256 -ne (Get-GitBlobSHA256 -Repository $commercialRoot -Revision $commercialCommit -Path 'overlay-allowlist.v1.json') -or
     $evidence.assemblyScriptPath -ne 'scripts/assemble-commercial-release.ps1' -or
-    $evidence.assemblyScriptSha256 -ne (Get-LowerSHA256 -Path (Join-Path $repoRoot 'scripts/assemble-commercial-release.ps1'))
+    $evidence.assemblyScriptSha256 -ne (Get-GitBlobSHA256 -Repository $coreRoot -Revision $coreCommit -Path 'scripts/assemble-commercial-release.ps1')
   ) {
     throw 'Assembly evidence does not bind the immutable input files.'
   }

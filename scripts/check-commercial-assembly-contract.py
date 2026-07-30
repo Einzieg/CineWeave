@@ -212,6 +212,29 @@ def git_output(repository: pathlib.Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
+def git_bytes(repository: pathlib.Path, *arguments: str) -> bytes:
+    result = subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        raise AssemblyContractError(
+            f"git {' '.join(arguments)} failed in {repository}: {stderr}"
+        )
+    return result.stdout
+
+
+def sha256_git_blob(
+    repository: pathlib.Path,
+    commit: str,
+    relative_path: str,
+) -> str:
+    content = git_bytes(repository, "show", f"{commit}:{relative_path}")
+    return hashlib.sha256(content).hexdigest()
+
+
 def require_clean_repository(repository: pathlib.Path, expected_commit: str, label: str) -> None:
     actual_commit = git_output(repository, "rev-parse", "HEAD")
     require(actual_commit == expected_commit, f"{label} HEAD does not match pinned commit")
@@ -244,7 +267,10 @@ def verify_core(
     for field, relative in CORE_HASH_PATHS.items():
         path = core_root / pathlib.PurePosixPath(relative)
         require(path.is_file() and not path.is_symlink(), f"Core contract file is missing: {relative}")
-        require(sha256_file(path) == lock[field], f"Core contract hash drifted: {relative}")
+        require(
+            sha256_git_blob(core_root, lock["coreCommit"], relative) == lock[field],
+            f"Core contract hash drifted: {relative}",
+        )
     require(
         core_migration_head(core_root) == lock["coreMigrationHead"],
         "Core migration head does not match core.lock",
@@ -268,7 +294,12 @@ def verify_overlay_files(
         require(source.is_file(), f"overlay source is missing or not a regular file: {item['source']}")
         require(not source.is_symlink(), f"overlay source must not be a symlink: {item['source']}")
         require(
-            sha256_file(source) == item["sha256"],
+            sha256_git_blob(
+                overlay_root,
+                commercial_commit,
+                item["source"],
+            )
+            == item["sha256"],
             f"overlay source hash drifted: {item['source']}",
         )
         if item["operation"] == "add":
