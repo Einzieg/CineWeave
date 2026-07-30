@@ -731,6 +731,16 @@ func exerciseCommerceDirectVideoProviderStub(
 	var providerRequestID, providerCallID, providerAsyncTaskID string
 	var outputArtifactID, outputMediaFileID string
 	outputStorageKey := "commerce/direct-video-output-" + suffix + ".mp4"
+	layoutWarning := provider.GatewayVideoOutputWarning{
+		Code: provider.GatewayVideoWarningCodeLayoutMismatch, Message: "provider returned video layout 1280x720, expected aspect ratio 9:16",
+		Category: "provider_capability", ExpectedAspectRatio: "9:16", ProviderSize: "1280x720",
+		Width: 1280, Height: 720,
+	}
+	artifactMetadata, err := json.Marshal(map[string]any{
+		"providerStub": true,
+		"warnings":     []provider.GatewayVideoOutputWarning{layoutWarning},
+	})
+	require.NoError(t, err)
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -829,12 +839,12 @@ func exerciseCommerceDirectVideoProviderStub(
 				)
 				VALUES (
 					$1, $2, $3, $4, 'commerce_direct_video', $5,
-					'video/mp4', $6, '{"providerStub":true}', $7
+					'video/mp4', $6, $7, $8
 				)
 				RETURNING id::text
 			`, organizationID, projectID, gatewayRequest.ProductionGenerationID,
 				gatewayRequest.WorkflowRunID, outputStorageKey, strings.Repeat("b", 64),
-				userID).Scan(&outputArtifactID))
+				artifactMetadata, userID).Scan(&outputArtifactID))
 			require.NoError(t, pool.QueryRow(ctx, `
 				INSERT INTO media_files(
 					organization_id, project_id, production_generation_id,
@@ -885,6 +895,7 @@ func exerciseCommerceDirectVideoProviderStub(
 						ArtifactID: outputArtifactID, MediaFileID: outputMediaFileID,
 						StorageKey: outputStorageKey, MimeType: "video/mp4",
 						DurationSeconds: &duration,
+						Warnings:        []provider.GatewayVideoOutputWarning{layoutWarning},
 					},
 				},
 			}))
@@ -967,6 +978,25 @@ func exerciseCommerceDirectVideoProviderStub(
 	require.Equal(t, providerCallID, persistedCallID)
 	require.Equal(t, providerAsyncTaskID, persistedTaskID)
 	require.Equal(t, 1, succeededEventCount)
+
+	getRequest := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/commerce/direct-videos/"+envelope.Data.ID,
+		nil,
+	)
+	getRequest.Header.Set("Authorization", "Bearer "+accessToken)
+	getRequest.Header.Set("X-Organization-Id", organizationID)
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, getRequest)
+	require.Equal(t, http.StatusOK, getResponse.Code, getResponse.Body.String())
+	var completedEnvelope struct {
+		Data commercepkg.DirectVideoJob `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(getResponse.Body.Bytes(), &completedEnvelope))
+	var persistedWarnings []provider.GatewayVideoOutputWarning
+	require.NoError(t, json.Unmarshal(completedEnvelope.Data.OutputWarnings, &persistedWarnings))
+	require.Len(t, persistedWarnings, 1)
+	require.Equal(t, provider.GatewayVideoWarningCodeLayoutMismatch, persistedWarnings[0].Code)
 }
 
 func exerciseCommerceScriptDerivationAPI(

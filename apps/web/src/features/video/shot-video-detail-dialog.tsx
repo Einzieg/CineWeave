@@ -2,7 +2,7 @@
 
 import NextImage from "next/image";
 import { useMemo, useRef, useState } from "react";
-import { CheckCircle2, Film, Link2Off, Loader2, Maximize2, RefreshCw, Save, ShieldAlert, Sparkles, Square, Video, X } from "lucide-react";
+import { CheckCircle2, Film, Link2Off, Loader2, Maximize2, RefreshCw, Save, ShieldAlert, Sparkles, Square, TriangleAlert, Video, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import { cssAspectRatio } from "@/lib/aspect-ratio";
 import { localizePlatformError } from "@/lib/error-localization";
 import { modalityLabel, shotReferenceRoleLabel, shotReferenceSemanticsLabel, statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
+import { providerVideoWarningMessage, videoArtifactWarnings } from "@/lib/provider-video-warnings";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { useProjectPollingFallback } from "@/lib/realtime/use-project-polling-fallback";
 import { retainUsableSignedMediaUrl } from "@/lib/signed-media-url";
@@ -129,6 +130,10 @@ export function ShotVideoDetailDialog({
   }, [draft.referenceKeys, draft.referenceMode, referenceOptions]);
   const videoRunning = detail?.shot.videoStatus === "queued" || detail?.shot.videoStatus === "running";
   const promptRunning = detail?.shot.videoPromptStatus === "queued" || detail?.shot.videoPromptStatus === "running";
+  const outputWarnings = useMemo(
+    () => videoArtifactWarnings(detail?.videoArtifact?.metadata),
+    [detail?.videoArtifact?.metadata],
+  );
   const currentVideoKey = detail?.shot.videoArtifactId || detail?.videoPreviewUrl || detail?.shot.videoPreviewUrl || "";
   const videoPreviewReady = !currentVideoKey || readyVideoKey === currentVideoKey;
   const autoHasReference = referenceOptions.some((option) => option.autoSelected);
@@ -326,6 +331,17 @@ export function ShotVideoDetailDialog({
                   视频提示词生成失败：{localizePlatformError(detail.shot.videoPromptErrorMessage, detail.shot.videoPromptErrorCode)}
                 </div>
               ) : null}
+
+              {outputWarnings.map((warning, index) => (
+                <div
+                  key={`${warning.code}:${index}`}
+                  role="status"
+                  className="mt-4 flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+                >
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                  <span>{providerVideoWarningMessage(warning)}</span>
+                </div>
+              ))}
 
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button onClick={() => generateMutation.mutate()} disabled={!canSubmit || videoRunning || promptRunning || generateMutation.isPending || saveMutation.isPending}>

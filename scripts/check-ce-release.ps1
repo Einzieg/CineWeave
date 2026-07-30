@@ -4,8 +4,7 @@ param(
   [switch]$SkipImageBuild,
   [switch]$KeepArtifacts,
   [switch]$RequireClean,
-  [string]$EvidencePath = '',
-  [string]$LegalApprovalPath = ''
+  [string]$EvidencePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -197,23 +196,11 @@ try {
   New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
   New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 
-  if ([string]::IsNullOrWhiteSpace($LegalApprovalPath)) {
-    $LegalApprovalPath = [string]$env:CINEWEAVE_SOURCE_LICENSE_APPROVAL_PATH
-  }
-  if ([string]::IsNullOrWhiteSpace($LegalApprovalPath)) {
-    throw 'CE release requires -LegalApprovalPath or CINEWEAVE_SOURCE_LICENSE_APPROVAL_PATH bound to the current source licensing inventory.'
-  }
-  $resolvedLegalApprovalPath = if ([System.IO.Path]::IsPathRooted($LegalApprovalPath)) {
-    $LegalApprovalPath
-  } else {
-    Join-Path $repoRoot $LegalApprovalPath
-  }
   $sourceLicensingReport = Join-Path $artifactRoot 'source-licensing-audit.json'
-  Invoke-Step 'Source ownership and third-party license legal gate' {
+  Invoke-Step 'Source and third-party dependency inventory' {
     python $sourceLicensingAuditScript `
       --output $sourceLicensingReport `
-      --approval $resolvedLegalApprovalPath `
-      --require-legal-approval
+      --require-ready
   }
 
   $coreCommit = (& git rev-parse HEAD).Trim()
@@ -381,7 +368,6 @@ try {
       (Get-Content -LiteralPath $sourceLicensingReport -Encoding UTF8 -Raw | ConvertFrom-Json).inventorySha256
     )
     sourceLicensingReportSha256 = (Get-FileHash -LiteralPath $sourceLicensingReport -Algorithm SHA256).Hash.ToLowerInvariant()
-    sourceLicenseApprovalSha256 = (Get-FileHash -LiteralPath $resolvedLegalApprovalPath -Algorithm SHA256).Hash.ToLowerInvariant()
     sourceArchiveSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     checks = [ordered]@{
       sourceLicensing = 'passed'

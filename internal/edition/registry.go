@@ -55,10 +55,9 @@ func defaultFeatureDescriptors() []FeatureDescriptor {
 		coreFeature(FeatureCoreWorkflow, "workflow create boundaries", "projects"),
 		coreFeature(FeatureCoreProviderGateway, "provider gateway routing", "provider-settings"),
 		coreFeature(FeatureCoreSelfHosting, "deployment composition root", "system-settings"),
-		commercialFeature(FeatureBillingShadowAccount, []string{"organization.read", "billing.manage"}, "billing account provisioning", "billing-center", true),
+		commercialFeature(FeatureBillingShadowAccount, []string{"organization.read", "billing.manage", "billing.audit"}, "billing account provisioning", "billing-center", true),
 		commercialFeature(FeatureBillingBalance, []string{"organization.read", "billing.read"}, "billing balance query", "billing-balance", false),
-		commercialFeature(FeatureBillingTopUp, []string{"billing.topup"}, "billing top-up order creation", "billing-top-up", false),
-		commercialFeature(FeatureBillingSubscription, []string{"billing.subscription.manage"}, "billing subscription mutation", "billing-subscription", false),
+		commercialFeature(FeatureBillingUsage, []string{"organization.read", "billing.read"}, "provider usage query", "billing-usage", false),
 		commercialFeature(
 			FeatureBillingOrganizationWallet,
 			[]string{
@@ -74,7 +73,6 @@ func defaultFeatureDescriptors() []FeatureDescriptor {
 			true,
 		),
 		commercialFeature(FeatureBillingReconciliation, []string{"billing.reconcile"}, "billing reconciliation command", "billing-reconciliation", false),
-		commercialFeature(FeatureBillingInvoice, []string{"billing.read"}, "billing invoice query", "billing-invoices", false),
 		commercialFeature(FeatureGovernanceSSO, []string{"admin.manage"}, "authentication composition root", "organization-security", false),
 		commercialFeature(FeatureGovernanceSCIM, []string{"admin.manage"}, "identity provisioning boundary", "organization-security", false),
 		commercialFeature(FeatureGovernanceAuditExport, []string{"billing.audit"}, "audit export command", "audit-export", false),

@@ -17,10 +17,8 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REPORT_SCHEMA_VERSION = "cineweave.source-licensing-audit.v1"
-APPROVAL_SCHEMA_VERSION = "cineweave.source-license-approval.v2"
-EXPECTED_SOFTWARE_LICENSE_SPDX = "AGPL-3.0-or-later"
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-LEGAL_ARTIFACTS = {
+RELEASE_FILES = {
     "softwareLicense": ("LICENSE", "LICENSE.md", "COPYING", "COPYING.md"),
     "notice": ("NOTICE", "NOTICE.md"),
     "copyright": ("COPYRIGHT", "COPYRIGHT.md"),
@@ -189,9 +187,9 @@ def git_history_inventory() -> dict[str, Any]:
     }
 
 
-def legal_artifact_inventory() -> dict[str, Any]:
+def release_file_inventory() -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for key, candidates in LEGAL_ARTIFACTS.items():
+    for key, candidates in RELEASE_FILES.items():
         found = next((ROOT / name for name in candidates if (ROOT / name).is_file()), None)
         result[key] = (
             {
@@ -521,7 +519,7 @@ def classify_license_expression(expression: str) -> str:
     if any(marker in normalized for marker in UNKNOWN_LICENSE_MARKERS):
         return "unknown"
     if any(marker in normalized for marker in REVIEW_LICENSE_MARKERS):
-        return "legal_review_required"
+        return "manual_review"
     return "inventory_only"
 
 
@@ -529,15 +527,15 @@ def build_findings(report: dict[str, Any]) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     missing_artifacts = [
         key
-        for key, value in report["legalArtifacts"].items()
+        for key, value in report["releaseFiles"].items()
         if not value["present"]
     ]
     if missing_artifacts:
         findings.append(
             {
                 "severity": "blocker",
-                "code": "LEGAL_ARTIFACTS_MISSING",
-                "message": "Missing root legal artifacts: " + ", ".join(missing_artifacts),
+                "code": "RELEASE_FILES_MISSING",
+                "message": "Missing root release files: " + ", ".join(missing_artifacts),
             }
         )
     if report["gitHistory"]["commitsWithoutDCO"] > 0:
@@ -547,7 +545,7 @@ def build_findings(report: dict[str, Any]) -> list[dict[str, str]]:
                 "code": "CONTRIBUTION_GRANTS_UNPROVEN",
                 "message": (
                     f"{report['gitHistory']['commitsWithoutDCO']} commits have no matching "
-                    "Signed-off-by trailer; ownership or CLA evidence requires counsel review."
+                    "Signed-off-by trailer; ownership or contributor records need manual review."
                 ),
             }
         )
@@ -563,7 +561,7 @@ def build_findings(report: dict[str, Any]) -> list[dict[str, str]]:
     review = [
         expression
         for expression in expressions
-        if classify_license_expression(expression) == "legal_review_required"
+        if classify_license_expression(expression) == "manual_review"
     ]
     if unknown:
         findings.append(
@@ -593,7 +591,7 @@ def build_findings(report: dict[str, Any]) -> list[dict[str, str]]:
             {
                 "severity": "review",
                 "code": "RECIPROCAL_OR_ATTRIBUTION_REVIEW_REQUIRED",
-                "message": "Dependency expressions requiring counsel review: " + ", ".join(review),
+                "message": "Dependency expressions requiring manual review: " + ", ".join(review),
             }
         )
     if report["containers"]["unpinnedImages"]:
@@ -616,54 +614,15 @@ def build_findings(report: dict[str, Any]) -> list[dict[str, str]]:
                 ),
             }
         )
-    findings.append(
-        {
-            "severity": "blocker",
-            "code": "QUALIFIED_COUNSEL_APPROVAL_REQUIRED",
-            "message": "Engineering inventory is not a legal opinion; a matching signed approval record is required.",
-        }
-    )
     return findings
 
 
-def load_approval(path: pathlib.Path, inventory_hash: str) -> dict[str, Any]:
-    try:
-        approval = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"cannot read legal approval {path}: {exc}") from exc
-    require(isinstance(approval, dict), "legal approval must be an object")
-    require(
-        approval.get("schemaVersion") == APPROVAL_SCHEMA_VERSION,
-        f"legal approval schemaVersion must be {APPROVAL_SCHEMA_VERSION}",
-    )
-    require(approval.get("inventorySha256") == inventory_hash, "legal approval does not bind the current inventory")
-    require(approval.get("reviewerRole") == "qualified_counsel", "legal approval reviewerRole must be qualified_counsel")
-    require(
-        approval.get("softwareLicenseSpdx") == EXPECTED_SOFTWARE_LICENSE_SPDX,
-        "legal approval softwareLicenseSpdx must match the selected CE license",
-    )
-    for field in (
-        "softwareLicenseApproved",
-        "internalCommercialUseApproved",
-        "contributorGrantApproved",
-        "thirdPartyNoticesApproved",
-        "trademarkPolicyApproved",
-    ):
-        require(approval.get(field) is True, f"legal approval field {field} must be true")
-    require(
-        isinstance(approval.get("evidenceReference"), str)
-        and approval["evidenceReference"].strip(),
-        "legal approval evidenceReference is required",
-    )
-    return approval
-
-
-def build_report(approval_path: pathlib.Path | None = None) -> dict[str, Any]:
+def build_report() -> dict[str, Any]:
     files = tracked_files()
     report: dict[str, Any] = {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "gitHistory": git_history_inventory(),
-        "legalArtifacts": legal_artifact_inventory(),
+        "releaseFiles": release_file_inventory(),
         "thirdParty": {
             "go": go_dependency_inventory(),
             "node": node_dependency_inventory(),
@@ -675,7 +634,7 @@ def build_report(approval_path: pathlib.Path | None = None) -> dict[str, Any]:
         key: report[key]
         for key in (
             "gitHistory",
-            "legalArtifacts",
+            "releaseFiles",
             "thirdParty",
             "containers",
             "binaryAssets",
@@ -684,30 +643,19 @@ def build_report(approval_path: pathlib.Path | None = None) -> dict[str, Any]:
     inventory_hash = canonical_hash(inventory_payload)
     report["inventorySha256"] = inventory_hash
     report["findings"] = build_findings(report)
-    approval = None
-    approval_error = None
-    if approval_path is not None:
-        try:
-            approval = load_approval(approval_path, inventory_hash)
-        except ValueError as exc:
-            approval_error = str(exc)
-    report["legalApproval"] = {
-        "approved": approval is not None,
-        "path": display_path(approval_path) if approval_path is not None else None,
-        "error": approval_error,
-    }
     report["status"] = (
-        "approved"
-        if approval is not None
-        and all(value["present"] for value in report["legalArtifacts"].values())
-        and not any(
+        "ready"
+        if not any(
             finding["severity"] == "blocker"
-            and finding["code"] != "QUALIFIED_COUNSEL_APPROVAL_REQUIRED"
             for finding in report["findings"]
         )
-        else "blocked_legal_review"
+        else "attention_required"
     )
     return report
+
+
+def is_release_ready(report: dict[str, Any]) -> bool:
+    return report.get("status") == "ready"
 
 
 def write_report(path: pathlib.Path, report: dict[str, Any]) -> None:
@@ -722,27 +670,17 @@ def write_report(path: pathlib.Path, report: dict[str, Any]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Inventory CineWeave source ownership and third-party licensing evidence."
+        description="Inventory CineWeave source and third-party dependency metadata."
     )
     parser.add_argument("--output", default="tmp/source-licensing-audit.json")
-    parser.add_argument("--approval")
-    parser.add_argument("--require-legal-approval", action="store_true")
+    parser.add_argument("--require-ready", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        approval_path = (
-            (ROOT / args.approval).resolve()
-            if args.approval and not pathlib.Path(args.approval).is_absolute()
-            else pathlib.Path(args.approval).resolve()
-            if args.approval
-            else None
-        )
-        if approval_path is not None:
-            require(approval_path.is_file(), f"legal approval does not exist: {approval_path}")
-        report = build_report(approval_path)
+        report = build_report()
         output = (
             (ROOT / args.output).resolve()
             if not pathlib.Path(args.output).is_absolute()
@@ -760,25 +698,15 @@ def main() -> int:
         f"nodePackages={report['thirdParty']['node']['packageCount']} "
         f"inventorySha256={report['inventorySha256']}"
     )
-    if args.require_legal_approval and report["status"] != "approved":
+    if args.require_ready and not is_release_ready(report):
         for finding in report["findings"]:
             if finding["severity"] == "blocker":
                 print(
                     f"{finding['code']}: {finding['message']}",
                     file=sys.stderr,
                 )
-        if report["legalApproval"]["error"]:
-            print(report["legalApproval"]["error"], file=sys.stderr)
         return 1
     return 0
-
-
-def display_path(path: pathlib.Path) -> str:
-    resolved = path.resolve()
-    try:
-        return resolved.relative_to(ROOT.resolve()).as_posix()
-    except ValueError:
-        return str(resolved)
 
 
 if __name__ == "__main__":

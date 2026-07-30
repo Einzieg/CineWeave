@@ -271,7 +271,6 @@ def capture(
             in {license_family, license_family + "-only", license_family + "-or-later"},
             "imageContentMatchesSourceArchive": "unverified",
             "modificationAssessment": "unverified",
-            "legalReviewRequired": True,
         },
     }
 

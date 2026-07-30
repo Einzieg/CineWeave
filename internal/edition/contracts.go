@@ -38,11 +38,9 @@ const (
 
 	FeatureBillingShadowAccount      FeatureKey = "billing.shadow_account"
 	FeatureBillingBalance            FeatureKey = "billing.balance"
-	FeatureBillingTopUp              FeatureKey = "billing.top_up"
-	FeatureBillingSubscription       FeatureKey = "billing.subscription"
+	FeatureBillingUsage              FeatureKey = "billing.usage"
 	FeatureBillingOrganizationWallet FeatureKey = "billing.organization_wallet"
 	FeatureBillingReconciliation     FeatureKey = "billing.reconciliation"
-	FeatureBillingInvoice            FeatureKey = "billing.invoice"
 	FeatureGovernanceSSO             FeatureKey = "governance.sso"
 	FeatureGovernanceSCIM            FeatureKey = "governance.scim"
 	FeatureGovernanceAuditExport     FeatureKey = "governance.audit_export"

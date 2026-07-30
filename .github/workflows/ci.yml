@@ -37,19 +37,89 @@ jobs:
       - name: Validate
         run: pnpm run test
 
+      - name: Community source and dependency inventory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Path tmp -Force | Out-Null
+          python scripts/audit-source-licensing.py --output tmp/source-licensing-audit-ci.json
+
       - name: Community source archive and independent build audit
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          ./scripts/check-ce-release.ps1 -RequireClean -SkipImageBuild -EvidencePath tmp/ce-release-audit-ci.json
+
+          $policyPath = (Resolve-Path -LiteralPath 'packages/edition/ce-release-policy.v1.json').Path
+          $auditScript = (Resolve-Path -LiteralPath 'scripts/ce_release_audit.py').Path
+          $auditRoot = Join-Path $env:RUNNER_TEMP "cineweave-ce-pr-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $sourceRoot = Join-Path $auditRoot 'source'
+          $archivePath = Join-Path $auditRoot 'cineweave-ce-source.zip'
+          New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
+
+          python $auditScript --policy $policyPath history --repo .
+          git archive --format=zip --output=$archivePath HEAD
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $sourceRoot
+          python $auditScript --policy $policyPath tree --root $sourceRoot --scope source-archive
+
+          Push-Location $sourceRoot
+          try {
+            $env:CINEWEAVE_EDITION = 'community'
+            $env:CINEWEAVE_COMMERCIAL_MODULE = ''
+            $env:GOFLAGS = ''
+            $env:NODE_OPTIONS = ''
+            $env:NEXT_PUBLIC_API_BASE_URL = ''
+            $env:NEXT_PUBLIC_REALTIME_URL = ''
+            $env:S3_PUBLIC_ENDPOINT = 'http://localhost:19290'
+            go test -tags community ./...
+            go build -tags community ./...
+            pnpm install --frozen-lockfile
+            pnpm --filter @cineweave/web build
+          } finally {
+            Pop-Location
+          }
+
+          $webArtifactRoot = Join-Path $sourceRoot 'apps/web/.next'
+          python $auditScript --policy $policyPath tree --root $webArtifactRoot --scope web-assets
+
+          $inventory = Get-Content -LiteralPath 'tmp/source-licensing-audit-ci.json' -Encoding UTF8 -Raw |
+            ConvertFrom-Json
+          $evidence = [ordered]@{
+            schemaVersion = 1
+            edition = 'community'
+            completedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+            coreCommit = (& git rev-parse HEAD).Trim()
+            sourceInventoryStatus = [string]$inventory.status
+            sourceInventorySha256 = [string]$inventory.inventorySha256
+            sourceInventoryReportSha256 = (
+              Get-FileHash -LiteralPath 'tmp/source-licensing-audit-ci.json' -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+            sourceArchiveSha256 = (
+              Get-FileHash -LiteralPath $archivePath -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+            checks = [ordered]@{
+              sourceInventory = 'reported'
+              reachableGitHistory = 'passed'
+              sourceArchive = 'passed'
+              independentGoBuild = 'passed'
+              independentWebBuild = 'passed'
+              webAssets = 'passed'
+            }
+          }
+          $evidence |
+            ConvertTo-Json -Depth 6 |
+            Set-Content -LiteralPath 'tmp/ce-technical-audit-ci.json' -Encoding UTF8
 
       - name: Upload Community audit evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: community-source-audit-${{ github.sha }}
-          path: tmp/ce-release-audit-ci.json
-          if-no-files-found: error
+          path: |
+            tmp/source-licensing-audit-ci.json
+            tmp/ce-technical-audit-ci.json
+          if-no-files-found: warn
 
       - name: Install Playwright Chromium
         run: pnpm --filter @cineweave/web exec playwright install --with-deps chromium

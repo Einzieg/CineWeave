@@ -34,15 +34,13 @@ func (c openAICompatibleClient) createVideoTask(ctx context.Context, account Acc
 	if err != nil {
 		return result, err
 	}
-	if layoutErr := validateOpenAICompatibleVideoCreateLayout(requestBody, result.NormalizedOutput); layoutErr != nil {
-		standard, _ := StandardErrorFromError(layoutErr)
-		result.NormalizedOutput = videoLayoutFailureOutput(
+	if warning := openAICompatibleVideoCreateLayoutWarning(requestBody, result.NormalizedOutput); warning != nil {
+		result.NormalizedOutput = videoLayoutWarningOutput(
 			result.NormalizedOutput,
-			standard,
+			warning,
 			videoMapString(requestBody, "size"),
 			videoStringField(result.NormalizedOutput, "size"),
 		)
-		return result, layoutErr
 	}
 	return result, nil
 }
@@ -396,7 +394,7 @@ func normalizeOpenAICompatibleVideoResponse(body []byte, requireTaskID, cancelle
 	return mustJSON(normalized), status, nil
 }
 
-func validateOpenAICompatibleVideoCreateLayout(requestBody map[string]any, normalized json.RawMessage) error {
+func openAICompatibleVideoCreateLayoutWarning(requestBody map[string]any, normalized json.RawMessage) *GatewayVideoOutputWarning {
 	requestedSize := videoMapString(requestBody, "size")
 	providerSize := videoStringField(normalized, "size")
 	requestedWidth, requestedHeight, requestedOK := parseVideoDimensions(requestedSize)
@@ -404,7 +402,7 @@ func validateOpenAICompatibleVideoCreateLayout(requestBody map[string]any, norma
 	if !requestedOK || !providerOK {
 		return nil
 	}
-	return validateVideoOutputLayout(
+	return detectVideoOutputLayoutWarning(
 		fmt.Sprintf("%d:%d", requestedWidth, requestedHeight),
 		providerWidth,
 		providerHeight,

@@ -4,13 +4,12 @@
 
 本门禁证明 Community Edition（CE）可以只使用公共 Core 源码构建，并阻止私有商业实现、商业迁移、内部发布签名材料、管理凭据和本地构建产物进入公共历史或发行物。
 
-它不替代以下门禁：
+它不替代以下操作控制：
 
-- `LICENSE`、`NOTICE`、商标、CLA、版权归属和第三方许可证的法律审查。
-- 公共仓库可见性、分支保护、制品签名和 Registry 发布审批。
+- 公共仓库可见性、分支保护、制品签名和 Registry 发布操作。
 - Internal Commercial Assembly 的独立装配与商业迁移审计。
 
-技术审计通过不等于已获准公开发布。
+技术审计通过只表示候选满足机器门禁，不会自动执行公开发布。
 
 ## 2. 门禁覆盖范围
 
@@ -105,7 +104,7 @@ pnpm run test:ce:fresh
 5. 在全新 migration 空库上执行零费用 `TestWorkflowGatewayIntegration` 文本生产链路，要求 Provider mock 成功且不产生真实计费调用。
 6. 无论成功或失败都删除该随机 Compose 项目、网络和卷；`-KeepStack` 仅用于显式诊断。
 
-该命令证明当前源状态的工程可安装性，不生成公共发行批准。正式 CE Release 仍必须使用干净不可变 commit、取得全部 public remote 引用，并通过第 4 节的完整历史、layer、SBOM、法律和发布审批门禁。
+该命令证明当前源状态的工程可安装性，不执行公开发布。正式 CE Release 仍必须使用干净不可变 commit、取得全部 public remote 引用，并通过第 4 节的完整历史、源码与依赖清单、layer 和 SBOM 门禁。
 
 ## 6. 规则变更
 

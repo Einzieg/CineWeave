@@ -10673,11 +10673,9 @@ components:
         - core.self_hosting
         - billing.shadow_account
         - billing.balance
-        - billing.top_up
-        - billing.subscription
+        - billing.usage
         - billing.organization_wallet
         - billing.reconciliation
-        - billing.invoice
         - governance.sso
         - governance.scim
         - governance.audit_export
@@ -22194,6 +22192,32 @@ components:
           minimum: 1
         options:
           $ref: "#/components/schemas/GatewayVideoOptions"
+    GatewayVideoOutputWarning:
+      type: object
+      required: [code, message, category]
+      properties:
+        code:
+          type: string
+          enum: [PROVIDER_VIDEO_LAYOUT_MISMATCH]
+        message:
+          type: string
+        category:
+          type: string
+          enum: [provider_capability]
+        expectedAspectRatio:
+          type: string
+        actualAspectRatio:
+          type: string
+        requestedSize:
+          type: string
+        providerSize:
+          type: string
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
     GatewayVideoMediaProbe:
       type: object
       required: [status, frameCountEstimated, videoStreamCount, audioStreamCount, hasAudio]
@@ -22243,6 +22267,10 @@ components:
           type: array
           items:
             type: string
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayVideoOutputWarning"
     GatewayVideoOutput:
       type: object
       properties:
@@ -22282,6 +22310,10 @@ components:
           type: integer
         mediaProbe:
           $ref: "#/components/schemas/GatewayVideoMediaProbe"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayVideoOutputWarning"
         raw:
           type: object
           additionalProperties: true
@@ -25738,6 +25770,7 @@ components:
         - createdAt
         - updatedAt
         - references
+        - outputWarnings
       properties:
         id: {type: string, format: uuid}
         organizationId: {type: string, format: uuid}
@@ -25804,6 +25837,10 @@ components:
         outputMediaFileId: {type: string, format: uuid, nullable: true}
         outputMimeType: {type: string, nullable: true}
         outputPreviewUrl: {type: string, format: uri}
+        outputWarnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayVideoOutputWarning"
         errorCode: {type: string, nullable: true}
         errorMessage: {type: string, nullable: true}
         createdBy: {type: string, format: uuid, nullable: true}

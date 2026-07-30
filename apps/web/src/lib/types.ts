@@ -191,11 +191,9 @@ export type EditionFeatureKey =
   | "core.self_hosting"
   | "billing.shadow_account"
   | "billing.balance"
-  | "billing.top_up"
-  | "billing.subscription"
+  | "billing.usage"
   | "billing.organization_wallet"
   | "billing.reconciliation"
-  | "billing.invoice"
   | "governance.sso"
   | "governance.scim"
   | "governance.audit_export"
@@ -1393,6 +1391,7 @@ export type CommerceDirectVideoJob = {
   outputMediaFileId?: string;
   outputMimeType?: string;
   outputPreviewUrl?: string;
+  outputWarnings: ProviderVideoOutputWarning[];
   errorCode?: string;
   errorMessage?: string;
   createdBy?: string;
@@ -4510,6 +4509,18 @@ export type ModelProfile = {
   updatedAt?: string;
 };
 
+export type ProviderVideoOutputWarning = {
+  code: string;
+  message?: string;
+  category?: string;
+  expectedAspectRatio?: string;
+  actualAspectRatio?: string;
+  requestedSize?: string;
+  providerSize?: string;
+  width?: number;
+  height?: number;
+};
+
 export type ProviderVideoMediaProbe = {
   status: "succeeded" | "failed" | "unavailable" | string;
   error?: string;
@@ -4526,6 +4537,7 @@ export type ProviderVideoMediaProbe = {
   hasAudio: boolean;
   videoCodec?: string;
   audioCodecs?: string[];
+  warnings?: ProviderVideoOutputWarning[];
 };
 
 export type ProviderCallLog = {

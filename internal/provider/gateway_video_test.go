@@ -204,7 +204,7 @@ func TestStoreGatewayVideoMediaRecordsRequestedProviderAndActualTiming(t *testin
 	}
 }
 
-func TestStoreGatewayVideoMediaRejectsWrongAspectBeforeStorage(t *testing.T) {
+func TestStoreGatewayVideoMediaStoresWrongAspectWithWarning(t *testing.T) {
 	service := NewService(nil, nil)
 	objectStorage := newMemoryObjectStorage()
 	service.SetStorage(objectStorage)
@@ -212,7 +212,7 @@ func TestStoreGatewayVideoMediaRejectsWrongAspectBeforeStorage(t *testing.T) {
 		return GatewayVideoMediaProbe{Width: 720, Height: 1280}, nil
 	})
 
-	_, err := service.storeGatewayVideoMedia(
+	stored, err := service.storeGatewayVideoMedia(
 		context.Background(),
 		"call-portrait",
 		"org-1",
@@ -223,13 +223,87 @@ func TestStoreGatewayVideoMediaRejectsWrongAspectBeforeStorage(t *testing.T) {
 		gatewayVideoMedia{Body: []byte("portrait video"), MimeType: "video/mp4"},
 		gatewayVideoInput{Resolution: "720p", AspectRatio: "16:9"},
 	)
-	standard, ok := StandardErrorFromError(err)
-	if !ok || standard.Code != CodeUpstreamOutputMismatch || !standard.Retryable {
-		t.Fatalf("layout mismatch error = %#v, %v", standard, err)
+	if err != nil {
+		t.Fatalf("store mismatched video: %v", err)
+	}
+	if stored == nil || len(stored.Output.Warnings) != 1 {
+		t.Fatalf("stored output warnings = %+v", stored)
+	}
+	warning := stored.Output.Warnings[0]
+	if warning.Code != GatewayVideoWarningCodeLayoutMismatch ||
+		warning.Category != "provider_capability" ||
+		warning.ExpectedAspectRatio != "16:9" ||
+		warning.ProviderSize != "720x1280" {
+		t.Fatalf("layout warning = %+v", warning)
+	}
+	if stored.Output.MediaProbe == nil || len(stored.Output.MediaProbe.Warnings) != 1 {
+		t.Fatalf("media probe warnings = %+v", stored.Output.MediaProbe)
 	}
 	objectStorage.mu.Lock()
 	defer objectStorage.mu.Unlock()
-	if len(objectStorage.objects) != 0 {
-		t.Fatalf("mismatched video must not be stored: %#v", objectStorage.objects)
+	if len(objectStorage.objects) != 1 {
+		t.Fatalf("mismatched video must be stored: %#v", objectStorage.objects)
+	}
+}
+
+func TestStoreGatewayVideoMediaUsesProbedLayoutAsAuthority(t *testing.T) {
+	service := NewService(nil, nil)
+	service.SetStorage(newMemoryObjectStorage())
+	service.SetVideoMediaProbe(func(context.Context, []byte, string) (GatewayVideoMediaProbe, error) {
+		return GatewayVideoMediaProbe{Width: 1280, Height: 720}, nil
+	})
+	preliminary := videoLayoutWarningOutput(
+		json.RawMessage(`{"status":"succeeded","videoUrl":"https://example.test/video.mp4"}`),
+		detectVideoOutputLayoutWarning("16:9", 720, 1280),
+		"1280x720",
+		"720x1280",
+	)
+
+	stored, err := service.storeGatewayVideoMedia(
+		context.Background(),
+		"call-landscape",
+		"org-1",
+		"project-1",
+		gatewayModelSelection{Model: Model{ID: "model-1"}},
+		"task-landscape",
+		manifestRunResult{NormalizedOutput: preliminary},
+		gatewayVideoMedia{Body: []byte("landscape video"), MimeType: "video/mp4"},
+		gatewayVideoInput{Resolution: "720p", AspectRatio: "16:9"},
+	)
+	if err != nil {
+		t.Fatalf("store matching video: %v", err)
+	}
+	if len(stored.Output.Warnings) != 0 || len(stored.Output.MediaProbe.Warnings) != 0 {
+		t.Fatalf("actual matching layout must clear preliminary warning: %+v", stored.Output)
+	}
+}
+
+func TestStoreGatewayVideoMediaKeepsProviderLayoutWarningWithoutProbe(t *testing.T) {
+	service := NewService(nil, nil)
+	service.SetStorage(newMemoryObjectStorage())
+	preliminary := videoLayoutWarningOutput(
+		json.RawMessage(`{"status":"succeeded","videoUrl":"https://example.test/video.mp4"}`),
+		detectVideoOutputLayoutWarning("9:16", 1280, 720),
+		"720x1280",
+		"1280x720",
+	)
+
+	stored, err := service.storeGatewayVideoMedia(
+		context.Background(),
+		"call-no-probe",
+		"org-1",
+		"project-1",
+		gatewayModelSelection{Model: Model{ID: "model-1"}},
+		"task-no-probe",
+		manifestRunResult{NormalizedOutput: preliminary},
+		gatewayVideoMedia{Body: []byte("provider-reported landscape video"), MimeType: "video/mp4"},
+		gatewayVideoInput{Resolution: "720p", AspectRatio: "9:16"},
+	)
+	if err != nil {
+		t.Fatalf("store provider-reported mismatch: %v", err)
+	}
+	if len(stored.Output.Warnings) != 1 ||
+		stored.Output.Warnings[0].Code != GatewayVideoWarningCodeLayoutMismatch {
+		t.Fatalf("provider warning without probe = %+v", stored.Output.Warnings)
 	}
 }

@@ -16,7 +16,6 @@
     "migrations",
     "seeds",
     "contracts",
-    "retention",
     "sourceLicensing",
     "artifacts",
     "upstreamNewAPI",
@@ -47,7 +46,7 @@
       ],
       "properties": {
         "scope": {
-          "const": "same_legal_entity_internal_operation"
+          "const": "internal_only"
         },
         "deploymentId": {
           "$ref": "#/$defs/immutableId"
@@ -128,11 +127,15 @@
       "additionalProperties": false,
       "required": [
         "ddlOwnerManifestSha256",
+        "coreForeignKeyActionManifestSha256",
         "core",
         "commercial"
       ],
       "properties": {
         "ddlOwnerManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "coreForeignKeyActionManifestSha256": {
           "$ref": "#/$defs/sha256"
         },
         "core": {
@@ -195,63 +198,12 @@
         }
       }
     },
-    "retention": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "policyVersion",
-        "policySha256",
-        "coreForeignKeyActionManifestSha256",
-        "approvalEvidenceSha256",
-        "legalReviewRecordId",
-        "securityReviewRecordId",
-        "evidenceReference",
-        "reviewedAt",
-        "approved"
-      ],
-      "properties": {
-        "policyVersion": {
-          "$ref": "#/$defs/version"
-        },
-        "policySha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "coreForeignKeyActionManifestSha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "approvalEvidenceSha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "legalReviewRecordId": {
-          "$ref": "#/$defs/immutableId"
-        },
-        "securityReviewRecordId": {
-          "$ref": "#/$defs/immutableId"
-        },
-        "evidenceReference": {
-          "type": "string",
-          "minLength": 1
-        },
-        "reviewedAt": {
-          "type": "string",
-          "format": "date"
-        },
-        "approved": {
-          "const": true
-        }
-      }
-    },
     "sourceLicensing": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "inventorySha256",
-        "reportSha256",
-        "approvalSha256",
-        "approvalRecordId",
-        "evidenceReference",
-        "softwareLicenseSpdx",
-        "approved"
+        "reportSha256"
       ],
       "properties": {
         "inventorySha256": {
@@ -259,23 +211,6 @@
         },
         "reportSha256": {
           "$ref": "#/$defs/sha256"
-        },
-        "approvalSha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "approvalRecordId": {
-          "$ref": "#/$defs/immutableId"
-        },
-        "evidenceReference": {
-          "type": "string",
-          "minLength": 1
-        },
-        "softwareLicenseSpdx": {
-          "type": "string",
-          "minLength": 1
-        },
-        "approved": {
-          "const": true
         }
       }
     },
@@ -340,19 +275,9 @@
         "evidenceSha256",
         "sourceCommit",
         "sourceTag",
-        "licenseSha256",
-        "readmeSha256",
-        "readmeLicenseSectionSha256",
-        "noticePresent",
-        "noticeSha256",
         "modified",
         "modificationAssessment",
-        "patchSha256",
-        "deliveryMode",
-        "legalBasis",
-        "sourceOfferLocation",
-        "attributionLocation",
-        "legalReview"
+        "patchSha256"
       ],
       "properties": {
         "registry": {
@@ -374,28 +299,6 @@
             "null"
           ]
         },
-        "licenseSha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "readmeSha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "readmeLicenseSectionSha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "noticePresent": {
-          "type": "boolean"
-        },
-        "noticeSha256": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/sha256"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "modified": {
           "type": "boolean"
         },
@@ -414,84 +317,9 @@
               "type": "null"
             }
           ]
-        },
-        "deliveryMode": {
-          "const": "internal_independent_service"
-        },
-        "legalBasis": {
-          "const": "agpl_compliance"
-        },
-        "sourceOfferLocation": {
-          "type": "string",
-          "minLength": 1
-        },
-        "attributionLocation": {
-          "type": "string",
-          "minLength": 1
-        },
-        "legalReview": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "approved",
-            "reviewer",
-            "reviewDate",
-            "recordId",
-            "reReviewTriggers"
-          ],
-          "properties": {
-            "approved": {
-              "const": true
-            },
-            "reviewer": {
-              "type": "string",
-              "minLength": 1
-            },
-            "reviewDate": {
-              "type": "string",
-              "format": "date"
-            },
-            "recordId": {
-              "$ref": "#/$defs/immutableId"
-            },
-            "reReviewTriggers": {
-              "type": "array",
-              "minItems": 1,
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
-            }
-          }
         }
       },
       "allOf": [
-        {
-          "if": {
-            "properties": {
-              "noticePresent": {
-                "const": true
-              }
-            },
-            "required": [
-              "noticePresent"
-            ]
-          },
-          "then": {
-            "properties": {
-              "noticeSha256": {
-                "$ref": "#/$defs/sha256"
-              }
-            }
-          },
-          "else": {
-            "properties": {
-              "noticeSha256": {
-                "type": "null"
-              }
-            }
-          }
-        },
         {
           "if": {
             "properties": {
@@ -505,21 +333,21 @@
           },
           "then": {
             "properties": {
-              "patchSha256": {
-                "$ref": "#/$defs/sha256"
-              },
               "modificationAssessment": {
                 "const": "modified_patch_bound"
+              },
+              "patchSha256": {
+                "$ref": "#/$defs/sha256"
               }
             }
           },
           "else": {
             "properties": {
-              "patchSha256": {
-                "type": "null"
-              },
               "modificationAssessment": {
                 "const": "unmodified_verified"
+              },
+              "patchSha256": {
+                "type": "null"
               }
             }
           }

@@ -101,6 +101,7 @@ def create_evidence_bundle(
     assembly_script_path = directory / "assemble-commercial-release.ps1"
     assembly_inputs_path = directory / "assembly-inputs.json"
     source_archive_path = directory / f"combined-source{archive_suffix}"
+    core_fk_actions_path = directory / "core-foreign-key-actions.v1.json"
     manifest_path = directory / "release-manifest.json"
 
     write_json(
@@ -138,6 +139,25 @@ def create_evidence_bundle(
         "files": [overlay_entry],
     }
     assembly_inputs_bytes = write_json(assembly_inputs_path, assembly_inputs)
+    write_json(
+        core_fk_actions_path,
+        {
+            "schemaVersion": "cineweave.core-foreign-key-actions.v1",
+            "commercialMigrationHead": document["migrations"]["commercial"]["head"],
+            "entries": [
+                {
+                    "schema": "cineweave_commercial",
+                    "table": "billing_accounts",
+                    "column": "organization_id",
+                    "referencedSchema": "public",
+                    "referencedTable": "organizations",
+                    "referencedColumn": "id",
+                    "onDelete": "SET NULL",
+                    "dataClass": "billing_subject",
+                }
+            ],
+        },
+    )
     write_archive(
         source_archive_path,
         {
@@ -156,6 +176,9 @@ def create_evidence_bundle(
             "cleanCommercialTree": True,
         }
     )
+    document["migrations"]["coreForeignKeyActionManifestSha256"] = sha256_file(
+        core_fk_actions_path
+    )
     write_json(manifest_path, document)
     evidence_args = [
         "--require-assembly-evidence",
@@ -169,6 +192,8 @@ def create_evidence_bundle(
         str(assembly_script_path),
         "--source-archive",
         str(source_archive_path),
+        "--core-fk-actions",
+        str(core_fk_actions_path),
     ]
     return {
         "document": document,
@@ -180,6 +205,7 @@ def create_evidence_bundle(
         "overlay": overlay_path,
         "assembly_script": assembly_script_path,
         "source_archive": source_archive_path,
+        "core_fk_actions": core_fk_actions_path,
         "overlay_entry": overlay_entry,
         "overlay_content": overlay_content,
         "args": evidence_args,
@@ -209,11 +235,8 @@ def main() -> int:
         "deployment-id-drift": lambda doc: doc["internalOperation"].__setitem__(
             "deploymentId", "distribution-different-001"
         ),
-        "legacy-new-api-delivery-mode": lambda doc: doc["upstreamNewAPI"].__setitem__(
-            "deliveryMode", "independent_service"
-        ),
-        "commercial-oem-legal-basis": lambda doc: doc["upstreamNewAPI"].__setitem__(
-            "legalBasis", "commercial_oem_license"
+        "external-operation-scope": lambda doc: doc["internalOperation"].__setitem__(
+            "scope", "external_distribution"
         ),
         "component-release-drift": lambda doc: doc["componentReleaseIds"].__setitem__(
             "api", "release-different-001"
@@ -237,32 +260,11 @@ def main() -> int:
         "modified-without-patch": lambda doc: doc["upstreamNewAPI"].__setitem__(
             "modified", True
         ),
-        "unreviewed-upstream": lambda doc: doc["upstreamNewAPI"]["legalReview"].__setitem__(
-            "approved", False
-        ),
         "unverified-upstream-image": lambda doc: doc["upstreamNewAPI"].__setitem__(
             "modificationAssessment", "unverified"
         ),
-        "notice-presence-drift": lambda doc: doc["upstreamNewAPI"].__setitem__(
-            "noticePresent", False
-        ),
-        "unreviewed-source-license": lambda doc: doc["sourceLicensing"].__setitem__(
-            "approved", False
-        ),
         "source-license-report-drift": lambda doc: doc["sourceLicensing"].__setitem__(
             "reportSha256", "0" * 64
-        ),
-        "wrong-community-license": lambda doc: doc["sourceLicensing"].__setitem__(
-            "softwareLicenseSpdx", "AGPL-3.0-only"
-        ),
-        "unreviewed-retention": lambda doc: doc["retention"].__setitem__(
-            "approved", False
-        ),
-        "retention-hash-alias": lambda doc: doc["retention"].__setitem__(
-            "approvalEvidenceSha256", doc["retention"]["policySha256"]
-        ),
-        "future-retention-review": lambda doc: doc["retention"].__setitem__(
-            "reviewedAt", "2026-07-30"
         ),
     }
 
@@ -358,6 +360,11 @@ def main() -> int:
         def source_archive_drift(bundle: dict[str, Any]) -> None:
             bundle["source_archive"].write_bytes(bundle["source_archive"].read_bytes() + b"drift")
 
+        def core_fk_actions_drift(bundle: dict[str, Any]) -> None:
+            bundle["core_fk_actions"].write_bytes(
+                bundle["core_fk_actions"].read_bytes() + b"\n"
+            )
+
         def assembly_inputs_schema_drift(bundle: dict[str, Any]) -> None:
             document = copy.deepcopy(bundle["assembly_inputs_document"])
             document["schemaVersion"] = "cineweave.assembly-inputs.v2"
@@ -420,6 +427,7 @@ def main() -> int:
             "assembly-overlay-allowlist-drift": overlay_allowlist_drift,
             "assembly-script-drift": assembly_script_drift,
             "assembly-source-archive-drift": source_archive_drift,
+            "assembly-core-fk-actions-drift": core_fk_actions_drift,
             "assembly-inputs-schema-drift": assembly_inputs_schema_drift,
             "assembly-embedded-evidence-drift": embedded_evidence_drift,
             "assembly-archived-overlay-drift": archived_overlay_drift,

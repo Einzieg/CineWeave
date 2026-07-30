@@ -82,10 +82,10 @@ func TestAuthorizeEditionAPIModuleBindsOperationAndBillingAccount(t *testing.T) 
 	principal := auth.Principal{UserID: "user-1", OrganizationID: "org-1"}
 	registration := editionpkg.APIModuleRegistration{
 		ModuleKey:           "billing-api",
-		FeatureKey:          editionpkg.FeatureBillingTopUp,
-		OperationID:         "createBillingTopUp",
+		FeatureKey:          editionpkg.FeatureBillingOrganizationWallet,
+		OperationID:         "updateProjectBillingAccount",
 		Operation:           editionpkg.CommercialOperationWrite,
-		RequiredPermissions: []string{"billing.topup"},
+		RequiredPermissions: []string{"billing.manage"},
 	}
 	var evaluated editionpkg.EntitlementRequest
 	var authorizedPermission string
@@ -116,7 +116,7 @@ func TestAuthorizeEditionAPIModuleBindsOperationAndBillingAccount(t *testing.T) 
 		evaluated.Subject.BillingAccountID != "billing-account-1" {
 		t.Fatalf("entitlement request = %+v", evaluated)
 	}
-	if authorizedPermission != "billing.topup" {
+	if authorizedPermission != "billing.manage" {
 		t.Fatalf("authorized permission = %q", authorizedPermission)
 	}
 }

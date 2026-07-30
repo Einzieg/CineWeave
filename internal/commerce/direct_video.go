@@ -197,6 +197,7 @@ type DirectVideoJob struct {
 	OutputStorageKey               *string                        `json:"outputStorageKey,omitempty"`
 	OutputMimeType                 *string                        `json:"outputMimeType,omitempty"`
 	OutputPreviewURL               string                         `json:"outputPreviewUrl,omitempty"`
+	OutputWarnings                 json.RawMessage                `json:"outputWarnings"`
 	ErrorCode                      *string                        `json:"errorCode,omitempty"`
 	ErrorMessage                   *string                        `json:"errorMessage,omitempty"`
 	CreatedBy                      *string                        `json:"createdBy,omitempty"`

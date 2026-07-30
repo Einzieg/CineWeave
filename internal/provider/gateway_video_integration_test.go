@@ -179,7 +179,7 @@ func TestGatewayVideoRuntimeIntegration(t *testing.T) {
 	assertSnapshotsDoNotLeakAPIKey(t, ctx, pool, result.ProviderCallID, result.TestRunID)
 }
 
-func TestGatewayVideoOutputMismatchFinalizesAsyncTask(t *testing.T) {
+func TestGatewayVideoOutputMismatchSucceedsWithStoredWarning(t *testing.T) {
 	if os.Getenv("CINEWEAVE_INTEGRATION_TEST") != "1" {
 		t.Skip("set CINEWEAVE_INTEGRATION_TEST=1 to run provider gateway video integration tests")
 	}
@@ -215,7 +215,7 @@ func TestGatewayVideoOutputMismatchFinalizesAsyncTask(t *testing.T) {
 		ProductionGenerationID: identity.GenerationID, VideoProductionBindingID: identity.BindingID,
 		VideoProductionBindingRevision: identity.BindingRevision,
 		Input: mustJSON(map[string]any{
-			"prompt": "Wrong layout terminalization", "duration": 5,
+			"prompt": "Wrong layout warning", "duration": 5,
 			"aspectRatio": "16:9", "resolution": "720p",
 		}),
 	})
@@ -240,10 +240,13 @@ func TestGatewayVideoOutputMismatchFinalizesAsyncTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second poll: %v", err)
 	}
-	if second.Status != "failed" || second.Error == nil || second.Error.Code != CodeUpstreamOutputMismatch || second.Error.Retryable {
+	if second.Status != "succeeded" || second.Error != nil || second.Output.ArtifactID == "" ||
+		len(second.Output.Warnings) != 1 ||
+		second.Output.Warnings[0].Code != GatewayVideoWarningCodeLayoutMismatch {
 		t.Fatalf("second poll = %+v", second)
 	}
-	var status, errorCode string
+	var status string
+	var errorCode *string
 	var pollCount int
 	var completed, finalized bool
 	if err := pool.QueryRow(ctx, `
@@ -253,10 +256,25 @@ func TestGatewayVideoOutputMismatchFinalizesAsyncTask(t *testing.T) {
 	`, created.ProviderAsyncTaskID).Scan(&status, &errorCode, &pollCount, &completed, &finalized); err != nil {
 		t.Fatalf("load terminal provider task: %v", err)
 	}
-	if status != "failed" || errorCode != CodeUpstreamOutputMismatch || pollCount != 2 || !completed || !finalized {
-		t.Fatalf("terminal provider task = status:%s code:%s polls:%d completed:%t finalized:%t", status, errorCode, pollCount, completed, finalized)
+	if status != "succeeded" || errorCode != nil || pollCount != 2 || !completed || !finalized {
+		t.Fatalf("terminal provider task = status:%s code:%v polls:%d completed:%t finalized:%t", status, errorCode, pollCount, completed, finalized)
 	}
-	assertGatewayVideoArtifactCount(t, ctx, pool, created.ProviderAsyncTaskID, 0)
+	assertGatewayVideoArtifactCount(t, ctx, pool, created.ProviderAsyncTaskID, 1)
+	var warnings json.RawMessage
+	if err := pool.QueryRow(ctx, `
+		SELECT metadata->'warnings'
+		FROM artifacts
+		WHERE id = $1
+	`, second.Output.ArtifactID).Scan(&warnings); err != nil {
+		t.Fatalf("load artifact warnings: %v", err)
+	}
+	var persisted []GatewayVideoOutputWarning
+	if err := json.Unmarshal(warnings, &persisted); err != nil {
+		t.Fatalf("decode artifact warnings: %v", err)
+	}
+	if len(persisted) != 1 || persisted[0].Code != GatewayVideoWarningCodeLayoutMismatch {
+		t.Fatalf("persisted warnings = %+v", persisted)
+	}
 }
 
 func TestGatewayVideoPollKeepsTaskCredentialAfterRotation(t *testing.T) {

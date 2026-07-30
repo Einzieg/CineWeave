@@ -1565,14 +1565,21 @@ func (s *Service) storeGatewayVideoMedia(ctx context.Context, callID, organizati
 		}
 	}
 	if probe.Status == "succeeded" {
+		result.NormalizedOutput = videoLayoutWarningOutput(result.NormalizedOutput, nil, "", "")
 		expectedAspectRatio := strings.TrimSpace(input.AspectRatio)
 		if expectedAspectRatio == "" {
 			if width, height, ok := parseVideoDimensions(input.Resolution); ok {
 				expectedAspectRatio = fmt.Sprintf("%d:%d", width, height)
 			}
 		}
-		if err := validateVideoOutputLayout(expectedAspectRatio, probe.Width, probe.Height); err != nil {
-			return nil, err
+		if warning := detectVideoOutputLayoutWarning(expectedAspectRatio, probe.Width, probe.Height); warning != nil {
+			result.NormalizedOutput = videoLayoutWarningOutput(
+				result.NormalizedOutput,
+				warning,
+				input.Resolution,
+				fmt.Sprintf("%dx%d", probe.Width, probe.Height),
+			)
+			probe.Warnings = append(probe.Warnings, *warning)
 		}
 	}
 	if err := s.assertProviderProjectWritable(ctx, organizationID, projectID); err != nil {
@@ -1629,6 +1636,7 @@ func (s *Service) storeGatewayVideoMedia(ctx context.Context, callID, organizati
 		Width:                    intPtrIfPositive(probe.Width),
 		Height:                   intPtrIfPositive(probe.Height),
 		MediaProbe:               &probe,
+		Warnings:                 videoOutputWarnings(result.NormalizedOutput),
 		Raw:                      result.NormalizedOutput,
 	}
 	return &gatewayStoredVideo{ArtifactID: artifactID, MediaFileID: mediaFileID, Output: output, Media: media}, nil
@@ -2064,6 +2072,7 @@ func insertGatewayVideoArtifact(ctx context.Context, tx pgx.Tx, selection gatewa
 		"durationSeconds":          stored.Output.DurationSeconds,
 		"durationSource":           stored.Output.DurationSource,
 		"mediaProbe":               stored.Output.MediaProbe,
+		"warnings":                 stored.Output.Warnings,
 		"aspectRatio":              input.AspectRatio,
 		"resolution":               input.Resolution,
 	})
@@ -2089,6 +2098,7 @@ func insertGatewayVideoMediaFile(ctx context.Context, tx pgx.Tx, organizationID,
 		"actualDurationSeconds":    stored.Output.ActualDurationSeconds,
 		"durationSource":           stored.Output.DurationSource,
 		"mediaProbe":               stored.Output.MediaProbe,
+		"warnings":                 stored.Output.Warnings,
 		"upstream":                 map[string]any{"responseType": "url"},
 	})
 	var probe GatewayVideoMediaProbe

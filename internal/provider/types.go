@@ -995,44 +995,58 @@ type GatewayVideoPollTaskRequest struct {
 	Options                        GatewayVideoOptions `json:"options"`
 }
 
+type GatewayVideoOutputWarning struct {
+	Code                string `json:"code"`
+	Message             string `json:"message"`
+	Category            string `json:"category"`
+	ExpectedAspectRatio string `json:"expectedAspectRatio,omitempty"`
+	ActualAspectRatio   string `json:"actualAspectRatio,omitempty"`
+	RequestedSize       string `json:"requestedSize,omitempty"`
+	ProviderSize        string `json:"providerSize,omitempty"`
+	Width               int    `json:"width,omitempty"`
+	Height              int    `json:"height,omitempty"`
+}
+
 type GatewayVideoMediaProbe struct {
-	Status               string   `json:"status"`
-	Error                string   `json:"error,omitempty"`
-	DurationSeconds      float64  `json:"durationSeconds,omitempty"`
-	Width                int      `json:"width,omitempty"`
-	Height               int      `json:"height,omitempty"`
-	FrameRateNumerator   int64    `json:"frameRateNumerator,omitempty"`
-	FrameRateDenominator int64    `json:"frameRateDenominator,omitempty"`
-	FrameRate            float64  `json:"frameRate,omitempty"`
-	FrameCount           int64    `json:"frameCount,omitempty"`
-	FrameCountEstimated  bool     `json:"frameCountEstimated"`
-	VideoStreamCount     int      `json:"videoStreamCount"`
-	AudioStreamCount     int      `json:"audioStreamCount"`
-	HasAudio             bool     `json:"hasAudio"`
-	VideoCodec           string   `json:"videoCodec,omitempty"`
-	AudioCodecs          []string `json:"audioCodecs,omitempty"`
-	AudioSampleRate      int      `json:"audioSampleRate,omitempty"`
-	AudioSampleCount     int64    `json:"audioSampleCount,omitempty"`
-	AudioSampleEstimated bool     `json:"audioSampleCountEstimated"`
-	AudioChannelCount    int      `json:"audioChannelCount,omitempty"`
+	Status               string                      `json:"status"`
+	Error                string                      `json:"error,omitempty"`
+	DurationSeconds      float64                     `json:"durationSeconds,omitempty"`
+	Width                int                         `json:"width,omitempty"`
+	Height               int                         `json:"height,omitempty"`
+	FrameRateNumerator   int64                       `json:"frameRateNumerator,omitempty"`
+	FrameRateDenominator int64                       `json:"frameRateDenominator,omitempty"`
+	FrameRate            float64                     `json:"frameRate,omitempty"`
+	FrameCount           int64                       `json:"frameCount,omitempty"`
+	FrameCountEstimated  bool                        `json:"frameCountEstimated"`
+	VideoStreamCount     int                         `json:"videoStreamCount"`
+	AudioStreamCount     int                         `json:"audioStreamCount"`
+	HasAudio             bool                        `json:"hasAudio"`
+	VideoCodec           string                      `json:"videoCodec,omitempty"`
+	AudioCodecs          []string                    `json:"audioCodecs,omitempty"`
+	AudioSampleRate      int                         `json:"audioSampleRate,omitempty"`
+	AudioSampleCount     int64                       `json:"audioSampleCount,omitempty"`
+	AudioSampleEstimated bool                        `json:"audioSampleCountEstimated"`
+	AudioChannelCount    int                         `json:"audioChannelCount,omitempty"`
+	Warnings             []GatewayVideoOutputWarning `json:"warnings,omitempty"`
 }
 
 type GatewayVideoOutput struct {
-	ArtifactID               string                  `json:"artifactId,omitempty"`
-	MediaFileID              string                  `json:"mediaFileId,omitempty"`
-	StorageKey               string                  `json:"storageKey,omitempty"`
-	URL                      string                  `json:"url,omitempty"`
-	MimeType                 string                  `json:"mimeType,omitempty"`
-	ByteSize                 *int64                  `json:"byteSize,omitempty"`
-	DurationSeconds          *float64                `json:"durationSeconds,omitempty"`
-	RequestedDurationSeconds *float64                `json:"requestedDurationSeconds,omitempty"`
-	ProviderDurationSeconds  *float64                `json:"providerDurationSeconds,omitempty"`
-	ActualDurationSeconds    *float64                `json:"actualDurationSeconds,omitempty"`
-	DurationSource           string                  `json:"durationSource,omitempty"`
-	Width                    *int                    `json:"width,omitempty"`
-	Height                   *int                    `json:"height,omitempty"`
-	MediaProbe               *GatewayVideoMediaProbe `json:"mediaProbe,omitempty"`
-	Raw                      json.RawMessage         `json:"raw,omitempty"`
+	ArtifactID               string                      `json:"artifactId,omitempty"`
+	MediaFileID              string                      `json:"mediaFileId,omitempty"`
+	StorageKey               string                      `json:"storageKey,omitempty"`
+	URL                      string                      `json:"url,omitempty"`
+	MimeType                 string                      `json:"mimeType,omitempty"`
+	ByteSize                 *int64                      `json:"byteSize,omitempty"`
+	DurationSeconds          *float64                    `json:"durationSeconds,omitempty"`
+	RequestedDurationSeconds *float64                    `json:"requestedDurationSeconds,omitempty"`
+	ProviderDurationSeconds  *float64                    `json:"providerDurationSeconds,omitempty"`
+	ActualDurationSeconds    *float64                    `json:"actualDurationSeconds,omitempty"`
+	DurationSource           string                      `json:"durationSource,omitempty"`
+	Width                    *int                        `json:"width,omitempty"`
+	Height                   *int                        `json:"height,omitempty"`
+	MediaProbe               *GatewayVideoMediaProbe     `json:"mediaProbe,omitempty"`
+	Warnings                 []GatewayVideoOutputWarning `json:"warnings,omitempty"`
+	Raw                      json.RawMessage             `json:"raw,omitempty"`
 }
 
 type GatewayVideoPollTaskResponse struct {

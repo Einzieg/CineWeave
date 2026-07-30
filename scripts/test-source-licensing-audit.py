@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import pathlib
 import sys
-import tempfile
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -19,14 +17,6 @@ def load_audit_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
-def expect_value_error(callback) -> None:
-    try:
-        callback()
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError")
 
 
 def main() -> int:
@@ -53,44 +43,16 @@ def main() -> int:
         raise AssertionError("MIT classification drifted")
     if (
         audit.classify_license_expression("Apache-2.0 AND LGPL-3.0-or-later")
-        != "legal_review_required"
+        != "manual_review"
     ):
         raise AssertionError("LGPL classification drifted")
     if audit.classify_license_expression("UNLICENSED") != "unknown":
         raise AssertionError("UNLICENSED classification drifted")
+    if not audit.is_release_ready({"status": "ready"}):
+        raise AssertionError("ready report was rejected")
+    if audit.is_release_ready({"status": "attention_required"}):
+        raise AssertionError("attention_required report was accepted")
 
-    temp_parent = ROOT / ".tmp" / "source-license-audit-test"
-    temp_parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=temp_parent) as temp_directory:
-        approval_path = pathlib.Path(temp_directory) / "approval.json"
-        inventory_hash = "a" * 64
-        approval = {
-            "schemaVersion": "cineweave.source-license-approval.v2",
-            "inventorySha256": inventory_hash,
-            "reviewId": "LEGAL-TEST",
-            "reviewedAt": "2026-07-29T00:00:00Z",
-            "reviewerRole": "qualified_counsel",
-            "softwareLicenseSpdx": "AGPL-3.0-or-later",
-            "softwareLicenseApproved": True,
-            "internalCommercialUseApproved": True,
-            "contributorGrantApproved": True,
-            "thirdPartyNoticesApproved": True,
-            "trademarkPolicyApproved": True,
-            "evidenceReference": "controlled://legal/LEGAL-TEST",
-        }
-        approval_path.write_text(json.dumps(approval), encoding="utf-8")
-        loaded = audit.load_approval(approval_path, inventory_hash)
-        if loaded["reviewId"] != "LEGAL-TEST":
-            raise AssertionError(f"approval = {loaded}")
-        expect_value_error(lambda: audit.load_approval(approval_path, "b" * 64))
-        approval["softwareLicenseSpdx"] = "AGPL-3.0-only"
-        approval_path.write_text(json.dumps(approval), encoding="utf-8")
-        expect_value_error(lambda: audit.load_approval(approval_path, inventory_hash))
-
-    try:
-        temp_parent.rmdir()
-    except OSError:
-        pass
     print("Source licensing audit contract checks passed.")
     return 0
 

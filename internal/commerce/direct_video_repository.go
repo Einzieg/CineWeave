@@ -779,9 +779,13 @@ const directVideoJobSelectSQL = `
 	       job.provider_async_task_id::text, job.external_task_id,
 	       job.output_artifact_id::text, job.output_media_file_id::text,
 	       job.output_storage_key, job.output_mime_type,
+	       COALESCE(output_artifact.metadata->'warnings', '[]'::jsonb),
 	       job.error_code, job.error_message, job.created_by::text,
 	       job.created_at, job.started_at, job.completed_at, job.cancelled_at, job.updated_at
 	FROM commerce_direct_video_jobs job
+	LEFT JOIN artifacts output_artifact
+	  ON output_artifact.id = job.output_artifact_id
+	 AND output_artifact.organization_id = job.organization_id
 `
 
 func scanDirectVideoJob(row interface{ Scan(...any) error }) (DirectVideoJob, error) {
@@ -804,6 +808,7 @@ func scanDirectVideoJob(row interface{ Scan(...any) error }) (DirectVideoJob, er
 		&item.Status, &item.AttemptGeneration, &workflowRunID, &nodeRunID,
 		&providerRequestID, &providerCallID, &providerTaskID, &externalTaskID,
 		&outputArtifactID, &outputMediaID, &outputStorageKey, &outputMimeType,
+		&item.OutputWarnings,
 		&errorCode, &errorMessage, &createdBy, &item.CreatedAt, &item.StartedAt,
 		&item.CompletedAt, &item.CancelledAt, &item.UpdatedAt,
 	)

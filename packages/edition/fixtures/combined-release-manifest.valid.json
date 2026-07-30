@@ -4,7 +4,7 @@
   "edition": "cloud",
   "distributionId": "distribution-example-001",
   "internalOperation": {
-    "scope": "same_legal_entity_internal_operation",
+    "scope": "internal_only",
     "deploymentId": "distribution-example-001",
     "operatorRecordId": "operator-record-example-001",
     "externalDistributionProhibited": true,
@@ -27,6 +27,7 @@
   },
   "migrations": {
     "ddlOwnerManifestSha256": "5ee446ec09ae1a83ccba5a1522f068bcc4332e8224796c4a3890b41c43b69932",
+    "coreForeignKeyActionManifestSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "core": {
       "streamId": "core",
       "head": 75,
@@ -55,25 +56,9 @@
     "mergedEventCatalogSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "webhookContractVersion": "new-api-webhook.v1"
   },
-  "retention": {
-    "policyVersion": "commercial-retention.v1",
-    "policySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "coreForeignKeyActionManifestSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "approvalEvidenceSha256": "abababababababababababababababababababababababababababababababab",
-    "legalReviewRecordId": "retention-legal-review-example-001",
-    "securityReviewRecordId": "retention-security-review-example-001",
-    "evidenceReference": "controlled://legal/retention-review-example-001",
-    "reviewedAt": "2026-07-28",
-    "approved": true
-  },
   "sourceLicensing": {
     "inventorySha256": "1212121212121212121212121212121212121212121212121212121212121212",
-    "reportSha256": "1313131313131313131313131313131313131313131313131313131313131313",
-    "approvalSha256": "1414141414141414141414141414141414141414141414141414141414141414",
-    "approvalRecordId": "source-license-review-example-001",
-    "evidenceReference": "controlled://legal/source-license-review-example-001",
-    "softwareLicenseSpdx": "AGPL-3.0-or-later",
-    "approved": true
+    "reportSha256": "1313131313131313131313131313131313131313131313131313131313131313"
   },
   "artifacts": {
     "webBuildId": "release-0123456789abcdef",
@@ -191,29 +176,9 @@
     "evidenceSha256": "1515151515151515151515151515151515151515151515151515151515151515",
     "sourceCommit": "3333333333333333333333333333333333333333",
     "sourceTag": "v0.8.8",
-    "licenseSha256": "2222222222222222222222222222222222222222222222222222222222222222",
-    "readmeSha256": "1616161616161616161616161616161616161616161616161616161616161616",
-    "readmeLicenseSectionSha256": "3333333333333333333333333333333333333333333333333333333333333333",
-    "noticePresent": true,
-    "noticeSha256": "4444444444444444444444444444444444444444444444444444444444444444",
     "modified": false,
     "modificationAssessment": "unmodified_verified",
-    "patchSha256": null,
-    "deliveryMode": "internal_independent_service",
-    "legalBasis": "agpl_compliance",
-    "sourceOfferLocation": "https://example.invalid/source-offer",
-    "attributionLocation": "https://example.invalid/third-party-notices",
-    "legalReview": {
-      "approved": true,
-      "reviewer": "example-legal-reviewer",
-      "reviewDate": "2026-07-29",
-      "recordId": "legal-review-example-001",
-      "reReviewTriggers": [
-        "New API source commit changes",
-        "delivery mode changes",
-        "license or README terms change"
-      ]
-    }
+    "patchSha256": null
   },
   "componentReleaseIds": {
     "api": "release-0123456789abcdef",

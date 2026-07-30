@@ -19,6 +19,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  TriangleAlert,
   Upload,
   Volume2,
 } from "lucide-react";
@@ -66,6 +67,7 @@ import {
 } from "@/lib/commerce-direct-video";
 import { userFacingErrorMessage } from "@/lib/error-localization";
 import { qk } from "@/lib/query/keys";
+import { providerVideoWarningMessage } from "@/lib/provider-video-warnings";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { projectHref } from "@/lib/routes";
 import { cn } from "@/lib/utils";
@@ -205,7 +207,12 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
       }
       terminalNotifications.current.set(job.id, job.status);
       if (job.status === "succeeded") {
-        toast.success("广告视频生成完成");
+        const warning = job.outputWarnings?.[0];
+        if (warning) {
+          toast.warning(providerVideoWarningMessage(warning));
+        } else {
+          toast.success("广告视频生成完成");
+        }
       } else if (job.status === "failed") {
         toast.error(job.errorMessage || "广告视频生成失败");
       } else if (job.status === "cancelled") {
@@ -660,6 +667,7 @@ function ScriptVideoRow({
 }) {
   const scriptChanged = Boolean(latestJob && latestJob.scriptUnitRevision !== unit.revision);
   const script = unit.currentSourceVersion?.content ?? unit.draftContent;
+  const outputWarnings = latestJob?.outputWarnings ?? [];
   return (
     <article
       id={`commerce-script-${unit.id}`}
@@ -692,6 +700,16 @@ function ScriptVideoRow({
         {latestJob?.status === "failed" ? (
           <p className="mt-3 text-sm text-destructive">{latestJob.errorMessage || "视频生成失败"}</p>
         ) : null}
+        {outputWarnings.map((warning, index) => (
+          <div
+            key={`${warning.code}:${index}`}
+            role="status"
+            className="mt-3 flex items-start gap-2 border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>{providerVideoWarningMessage(warning)}</span>
+          </div>
+        ))}
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" variant="outline" onClick={onEdit}>
             <Pencil className="size-3.5" />
@@ -1331,6 +1349,16 @@ function VideoPreviewDialog({
             {job ? `${job.requestedDurationSeconds} 秒 · ${job.resolution}` : ""}
           </DialogDescription>
         </DialogHeader>
+        {job?.outputWarnings?.map((warning, index) => (
+          <div
+            key={`${warning.code}:${index}`}
+            role="status"
+            className="flex items-start gap-2 border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>{providerVideoWarningMessage(warning)}</span>
+          </div>
+        ))}
         {job?.outputPreviewUrl ? (
           <div className="flex max-h-[76vh] min-h-80 items-center justify-center bg-black">
             <video

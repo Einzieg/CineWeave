@@ -261,7 +261,7 @@ func TestOpenAICompatibleVideoMapsStoryboardSheetReference(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatibleVideoCreateRejectsAcknowledgedLayoutMismatch(t *testing.T) {
+func TestOpenAICompatibleVideoCreateKeepsAcknowledgedLayoutMismatchAsWarning(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":     "task-portrait",
@@ -282,15 +282,25 @@ func TestOpenAICompatibleVideoCreateRejectsAcknowledgedLayoutMismatch(t *testing
 		json.RawMessage(`{"prompt":"slow camera push","aspectRatio":"16:9","resolution":"720p"}`),
 		nil,
 	)
-	standard, ok := StandardErrorFromError(err)
-	if !ok || standard.Code != CodeUpstreamOutputMismatch || !standard.Retryable {
-		t.Fatalf("layout mismatch error = %#v, %v", standard, err)
+	if err != nil {
+		t.Fatalf("create video task: %v", err)
 	}
-	if got := videoStringField(result.NormalizedOutput, "status"); got != "failed" {
+	if got := videoStringField(result.NormalizedOutput, "status"); got != "queued" {
 		t.Fatalf("normalized status = %q, output = %s", got, result.NormalizedOutput)
 	}
 	if got := videoStringField(result.NormalizedOutput, "requestedSize"); got != "1280x720" {
 		t.Fatalf("requestedSize = %q, output = %s", got, result.NormalizedOutput)
+	}
+	var output struct {
+		Warnings []GatewayVideoOutputWarning `json:"warnings"`
+	}
+	if err := json.Unmarshal(result.NormalizedOutput, &output); err != nil {
+		t.Fatalf("decode normalized output: %v", err)
+	}
+	if len(output.Warnings) != 1 ||
+		output.Warnings[0].Code != GatewayVideoWarningCodeLayoutMismatch ||
+		output.Warnings[0].ProviderSize != "720x1280" {
+		t.Fatalf("layout warnings = %+v", output.Warnings)
 	}
 }
 

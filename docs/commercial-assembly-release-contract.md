@@ -121,7 +121,7 @@ go run ./cmd/cineweave-ddl-owner-check <private-migration-directory>
 - 无法静态审计的动态 `EXECUTE`。
 - 迁移 SQL 对 Core 或 Commercial ledger 的修改。
 
-允许的跨边界行为是：Commercial 自有表或视图读取 Core 数据，以及 Commercial 表一侧显式引用 Core 主键。删除动作由私有 `contracts/core-foreign-key-actions.v1.json` 固定，并由 `scripts/check-commercial-retention.py` 对迁移后的 PostgreSQL 系统目录逐项核对：财务、授权、计费主体和调用证据只允许 `ON DELETE SET NULL`；仅 `billing_ui_preferences` 这类纯 UI 偏好允许 `ON DELETE CASCADE`。任何新增、缺失或动作漂移的跨边界外键都会阻断测试与发行。
+允许的跨边界行为是：Commercial 自有表或视图读取 Core 数据，以及 Commercial 表一侧显式引用 Core 主键。删除动作由私有 `contracts/core-foreign-key-actions.v1.json` 固定，并由 `scripts/check-core-fk-actions.py` 对迁移后的 PostgreSQL 系统目录逐项核对：财务、授权、计费主体和调用证据只允许 `ON DELETE SET NULL`；仅 `billing_ui_preferences` 这类纯 UI 偏好允许 `ON DELETE CASCADE`。任何新增、缺失或动作漂移的跨边界外键都会阻断测试与发行。
 
 ## 5. 部署顺序
 
@@ -159,6 +159,7 @@ python scripts/check-release-manifest.py `
   --overlay-allowlist <private-repository>/overlay-allowlist.v1.json `
   --assembly-script scripts/assemble-commercial-release.ps1 `
   --source-archive <combined-source.tar-or-zip> `
+  --core-fk-actions <private-repository>/contracts/core-foreign-key-actions.v1.json `
   --verify-local-core
 ```
 
@@ -184,13 +185,13 @@ Manifest 至少绑定：
 - 不可变 Core commit、Commercial Assembly commit、`core.lock`、Overlay allowlist 和装配脚本 hash。
 - 最终源码归档、Edition Manifest、内部运行范围（同一主体自营、禁止外部分发、不启用客户软件授权）、部署 ID 和 DDL owner manifest。
 - Core/Commercial migration head 和各自 ledger identity。
-- Core/Commercial seed、合并 OpenAPI/Event Catalog、webhook、retention policy、Core FK action manifest 及仓库外法务/安全批准证据。
+- Core/Commercial seed、合并 OpenAPI/Event Catalog、webhook 和 Core FK action manifest。
 - 完整服务镜像 tag/digest、Web build ID、四个 Temporal Worker Build ID、SBOM 和签名。
-- Community Core 权利/第三方许可证 inventory、受控律师批准记录和两者 hash。
-- New API 镜像 digest、源码 commit、LICENSE/README/NOTICE hash、修改补丁、内部独立服务运行方式、AGPL 合规依据和法律复核记录。
+- Community Core 源码与第三方依赖 inventory 及报告 hash。
+- New API 镜像 digest、源码 commit/tag、固定上游证据、修改状态和补丁 hash。
 - API、Web、Gateway、Worker、双 migrator、双 seed 和 Billing Bridge 的统一 `releaseId`。
 
-校验器拒绝可移动 ID、`enterprise` Edition、允许外部分发或客户软件授权、部署 ID 漂移、缺失或重复镜像、组件 Release ID 漂移、Worker Build ID 漂移、DDL owner hash 漂移、双 ledger 身份漂移、retention policy/FK manifest/批准证据 hash 复用或缺失、未来日期的 retention 批准、源码许可证报告/批准 hash 漂移、非 `AGPL-3.0-or-later` 的 CE 许可批准、New API 非内部独立服务/非 AGPL 合规模式、未验证修改状态、修改无 patch hash及未批准法律复核。
+校验器拒绝可移动 ID、`enterprise` Edition、允许外部分发或客户软件授权、部署 ID 漂移、缺失或重复镜像、组件 Release ID 漂移、Worker Build ID 漂移、DDL owner hash 漂移、Core FK action manifest hash 漂移、双 ledger 身份漂移、源码依赖报告 hash 漂移、New API 镜像/源码身份漂移、未验证修改状态及修改无 patch hash。
 
 仓库中的 `packages/edition/fixtures/combined-release-manifest.valid.json` 只用于契约回归，所有 commit、digest、内部运营记录和 URL 都是非生产示例，不能用于发布。
 

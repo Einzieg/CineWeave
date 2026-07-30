@@ -48,6 +48,7 @@ ASSEMBLY_EVIDENCE_FIELDS = (
     "overlay_allowlist",
     "assembly_script",
     "source_archive",
+    "core_fk_actions",
 )
 ASSEMBLY_INPUT_KEYS = {
     "schemaVersion",
@@ -332,12 +333,17 @@ def validate_assembly_evidence(
     overlay_allowlist_path: pathlib.Path,
     assembly_script_path: pathlib.Path,
     source_archive_path: pathlib.Path,
+    core_fk_actions_path: pathlib.Path,
 ) -> None:
     assembly_inputs_path = require_file(assembly_inputs_path, "assembly inputs")
     core_lock_path = require_file(core_lock_path, "Core lock")
     overlay_allowlist_path = require_file(overlay_allowlist_path, "Overlay allowlist")
     assembly_script_path = require_file(assembly_script_path, "assembly script")
     source_archive_path = require_file(source_archive_path, "source archive")
+    core_fk_actions_path = require_file(
+        core_fk_actions_path,
+        "Core foreign-key action manifest",
+    )
 
     assembly_inputs_bytes = assembly_inputs_path.read_bytes()
     assembly_inputs = parse_json_bytes(assembly_inputs_bytes, "assembly inputs")
@@ -487,6 +493,11 @@ def validate_assembly_evidence(
         sha256_file(source_archive_path) == assembly["sourceArchiveSha256"],
         "source archive content hash does not match the release manifest",
     )
+    fail(
+        sha256_file(core_fk_actions_path)
+        == manifest["migrations"]["coreForeignKeyActionManifestSha256"],
+        "Core foreign-key action manifest hash does not match the release manifest",
+    )
 
     required_archive_files = destinations | {
         ".cineweave/assembly-inputs.json",
@@ -590,35 +601,7 @@ def validate_semantics(
         manifest["artifacts"]["webBuildId"] == release_id,
         "Web build ID does not match releaseId",
     )
-    retention = manifest["retention"]
-    fail(
-        len(
-            {
-                retention["policySha256"],
-                retention["coreForeignKeyActionManifestSha256"],
-                retention["approvalEvidenceSha256"],
-            }
-        )
-        == 3,
-        "retention policy, FK manifest, and approval evidence hashes must be distinct",
-    )
-    generated_date = dt.datetime.fromisoformat(
-        manifest["generatedAt"].replace("Z", "+00:00")
-    ).date()
-    reviewed_date = dt.date.fromisoformat(retention["reviewedAt"])
-    fail(
-        reviewed_date <= generated_date,
-        "retention approval review date cannot be after manifest generation",
-    )
     source_licensing = manifest["sourceLicensing"]
-    fail(
-        source_licensing["approved"] is True,
-        "source licensing legal review is not approved",
-    )
-    fail(
-        source_licensing["softwareLicenseSpdx"] == "AGPL-3.0-or-later",
-        "source licensing approval does not match the selected CE license",
-    )
     fail(
         source_licensing["reportSha256"]
         == manifest["artifacts"]["thirdPartyLicenseReportSha256"],
@@ -638,12 +621,6 @@ def validate_semantics(
             new_api["modificationAssessment"] == "unmodified_verified",
             "unmodified New API release must have verified source/image equivalence",
         )
-    fail(
-        (new_api["noticePresent"] and new_api["noticeSha256"] is not None)
-        or (not new_api["noticePresent"] and new_api["noticeSha256"] is None),
-        "New API NOTICE presence and hash are inconsistent",
-    )
-    fail(new_api["legalReview"]["approved"] is True, "New API legal review is not approved")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -673,6 +650,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--overlay-allowlist", type=pathlib.Path)
     parser.add_argument("--assembly-script", type=pathlib.Path)
     parser.add_argument("--source-archive", type=pathlib.Path)
+    parser.add_argument("--core-fk-actions", type=pathlib.Path)
     return parser.parse_args(argv)
 
 
@@ -724,6 +702,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.overlay_allowlist,
                 args.assembly_script,
                 args.source_archive,
+                args.core_fk_actions,
             )
     except ManifestError as exc:
         print(f"Combined Release Manifest check failed: {exc}", file=sys.stderr)

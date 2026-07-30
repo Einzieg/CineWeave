@@ -139,6 +139,34 @@ func TestManifestRejectsCommercialModuleForUncompiledFeature(t *testing.T) {
 	}
 }
 
+func TestBillingFeaturesDeclareRoutePermissions(t *testing.T) {
+	tests := []struct {
+		feature    FeatureKey
+		permission string
+	}{
+		{feature: FeatureBillingUsage, permission: "organization.read"},
+		{feature: FeatureBillingShadowAccount, permission: "billing.audit"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.feature)+"/"+test.permission, func(t *testing.T) {
+			descriptor, ok := DefaultFeatureRegistry().Lookup(test.feature)
+			if !ok {
+				t.Fatalf("feature %q is missing", test.feature)
+			}
+			for _, permission := range descriptor.RequiredPermissions {
+				if permission == test.permission {
+					return
+				}
+			}
+			t.Fatalf(
+				"feature %q does not allow %q",
+				test.feature,
+				test.permission,
+			)
+		})
+	}
+}
+
 func testCommercialManifest() Manifest {
 	releaseID := "commercial-release"
 	return Manifest{
