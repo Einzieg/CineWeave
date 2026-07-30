@@ -36,5 +36,11 @@ func (s *Server) createSystemOrganization(w http.ResponseWriter, r *http.Request
 		s.writeError(w, r, err)
 		return
 	}
+	s.notifyOrganizationCreated(
+		r.Context(),
+		organization.Organization.ID,
+		organization.InitialOwner.ID,
+		organization.Organization.Name,
+	)
 	httpx.WriteJSON(w, r, http.StatusCreated, organization, nil)
 }

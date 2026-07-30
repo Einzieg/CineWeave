@@ -4337,6 +4337,18 @@ export type ProviderModel = {
   updatedAt?: string;
 };
 
+export type AvailableProviderModel = {
+  id: string;
+  modelKey: string;
+  displayName: string;
+  modality: string;
+  status: "active";
+  managementScope: "tenant_managed" | "system_managed";
+  capabilities?: ProviderModelCapability[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type ProviderCatalogSetupField = {
   key: string;
   label?: string;

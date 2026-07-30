@@ -11,6 +11,7 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/db"
+	editionpkg "github.com/Einzieg/cineweave/internal/edition"
 )
 
 func TestPublicRegistrationDisabledByDefault(t *testing.T) {
@@ -59,7 +60,14 @@ func TestSystemSetupFlow(t *testing.T) {
 	}
 
 	authService := auth.NewService(pool, "setup-test-secret", time.Hour, 24*time.Hour)
-	server := New(pool, authService, nil, nil, nil).Handler()
+	lifecycle := &recordingTenantLifecycle{}
+	runtime := editionpkg.MustCommunityRuntime()
+	runtime.TenantLifecycle = lifecycle
+	apiServer := New(pool, authService, nil, nil, nil)
+	if err := apiServer.SetEditionRuntime(runtime); err != nil {
+		t.Fatalf("set Edition runtime: %v", err)
+	}
+	server := apiServer.Handler()
 
 	var state SetupStateResponse
 	doAPISuccess(t, server, http.MethodGet, "/api/system/setup-state", "", "", nil, &state)
@@ -89,6 +97,15 @@ func TestSystemSetupFlow(t *testing.T) {
 	}
 	if !setup.User.SystemAdministrator {
 		t.Fatal("first setup user was not marked as a system administrator")
+	}
+	if len(lifecycle.organizations) != 1 ||
+		lifecycle.organizations[0].OrganizationID != setup.OrganizationID ||
+		lifecycle.organizations[0].OwnerUserID != setup.User.ID ||
+		lifecycle.organizations[0].DisplayName != "影织工作室" {
+		t.Fatalf(
+			"setup organization lifecycle events = %#v",
+			lifecycle.organizations,
+		)
 	}
 	var systemAdministrator bool
 	if err := pool.QueryRow(ctx, `SELECT is_system_admin FROM users WHERE id = $1`, setup.User.ID).Scan(&systemAdministrator); err != nil {
@@ -133,4 +150,23 @@ func TestSystemSetupFlow(t *testing.T) {
 	if !login.User.SystemAdministrator {
 		t.Fatal("login response did not preserve system administrator status")
 	}
+}
+
+type recordingTenantLifecycle struct {
+	organizations []editionpkg.OrganizationCreated
+	projects      []editionpkg.ProjectCreated
+}
+
+func (r *recordingTenantLifecycle) OrganizationCreated(
+	_ context.Context,
+	event editionpkg.OrganizationCreated,
+) {
+	r.organizations = append(r.organizations, event)
+}
+
+func (r *recordingTenantLifecycle) ProjectCreated(
+	_ context.Context,
+	event editionpkg.ProjectCreated,
+) {
+	r.projects = append(r.projects, event)
 }

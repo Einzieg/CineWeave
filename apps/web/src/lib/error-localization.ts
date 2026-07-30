@@ -182,6 +182,7 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
   SYSTEM_ORGANIZATION_VALIDATION_FAILED: "组织资料无效，请检查组织名称、默认工作区和初始所有者",
   SYSTEM_OWNER_NOT_FOUND: "未找到该用户名或邮箱对应的有效用户",
   PROVIDER_MODEL_ALREADY_EXISTS: "同一供应商账号下已存在该模型 ID，请编辑已有模型或使用其他 ID",
+  PROVIDER_MANAGEMENT_SYSTEM_MANAGED: "当前组织使用平台托管供应商，仅可管理业务模型配置",
   PROVIDER_MODEL_IN_USE: "该模型仍有运行中的请求或任务，请等待任务结束或取消后再删除",
   RESULT_EXPIRED: "供应商生成结果已过期，请重新生成",
   QUOTA_EXCEEDED: "供应商额度已用尽",

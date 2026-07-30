@@ -8664,6 +8664,23 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /api/provider-models/available:
+    get:
+      operationId: listAvailableProviderModels
+      summary: List active models available to organization business bindings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+      responses:
+        "200":
+          description: Available provider models without provider account or credential details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailableProviderModelListEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
   /api/provider-catalog:
     get:
       operationId: listProviderCatalog
@@ -20409,6 +20426,35 @@ components:
         updatedAt:
           type: string
           format: date-time
+    AvailableProviderModel:
+      type: object
+      required: [id, modelKey, displayName, modality, status, managementScope, capabilities, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        modelKey:
+          type: string
+        displayName:
+          type: string
+        modality:
+          type: string
+        status:
+          type: string
+          enum: [active]
+        managementScope:
+          type: string
+          enum: [tenant_managed, system_managed]
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderCapability"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     VideoCapabilityAttestation:
       type: object
       required: [id, organizationId, providerModelId, variantKey, capabilitySnapshotHash, verificationStatus, evidenceType, evidence, decision, reason, decidedAt, currentSnapshot, active, createdAt]
@@ -23373,6 +23419,18 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/ProviderModel"
+    AvailableProviderModelListEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/AvailableProviderModel"
     VideoCapabilityAttestationEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"

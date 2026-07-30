@@ -240,6 +240,29 @@ func TestManagedProviderCredentialLifecycleAndTenantIsolation(t *testing.T) {
 	if !mapped {
 		t.Fatal("managed credential discovery did not persist a routable model mapping")
 	}
+	availableModels, err := service.ListAvailableModels(ctx, organizationID)
+	if err != nil {
+		t.Fatalf("list available Provider models: %v", err)
+	}
+	if len(availableModels) != 2 {
+		t.Fatalf("available models = %#v, want tenant and managed models", availableModels)
+	}
+	availableByKey := make(map[string]AvailableModel, len(availableModels))
+	for _, model := range availableModels {
+		availableByKey[model.ModelKey] = model
+	}
+	if availableByKey["managed-text-model"].ManagementScope != "system_managed" {
+		t.Fatalf(
+			"managed model scope = %q",
+			availableByKey["managed-text-model"].ManagementScope,
+		)
+	}
+	if availableByKey["gpt-integration"].ManagementScope != "tenant_managed" {
+		t.Fatalf(
+			"tenant model scope = %q",
+			availableByKey["gpt-integration"].ManagementScope,
+		)
+	}
 
 	secondImportRequest := firstImportRequest
 	secondImportRequest.AttemptID = uuid.NewString()
@@ -309,5 +332,17 @@ func TestManagedProviderCredentialLifecycleAndTenantIsolation(t *testing.T) {
 	}
 	if revokedActive || revokedStatus != "revoked" {
 		t.Fatalf("revoked credential state = (%t,%s)", revokedActive, revokedStatus)
+	}
+	availableModels, err = service.ListAvailableModels(ctx, organizationID)
+	if err != nil {
+		t.Fatalf("list models after managed credential revocation: %v", err)
+	}
+	if len(availableModels) != 1 ||
+		availableModels[0].ModelKey != "gpt-integration" ||
+		availableModels[0].ManagementScope != "tenant_managed" {
+		t.Fatalf(
+			"available models after managed revocation = %#v",
+			availableModels,
+		)
 	}
 }

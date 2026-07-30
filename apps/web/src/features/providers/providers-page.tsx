@@ -7,6 +7,7 @@ import { qk } from "@/lib/query/keys";
 import { studioApi } from "@/lib/api-client";
 import { localizePlatformError } from "@/lib/error-localization";
 import type {
+  AvailableProviderModel,
   JsonRecord,
   JsonValue,
   ProviderAccount,
@@ -24,6 +25,7 @@ import type {
   ModelProfileBinding,
   UpdateModelProfileBindingRequest,
 } from "@/lib/types";
+import { editionEntry } from "@cineweave/edition-entry";
 import { AppShell, SectionTitle, Surface } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -322,6 +324,9 @@ function compareProviderCatalogEntries(a: ProviderCatalogEntry, b: ProviderCatal
 
 export function ProvidersPage() {
   const { session } = useStudioSession();
+  const organizationModelOnly =
+    editionEntry.navigation.length > 0 &&
+    !session.user?.systemAdministrator;
   const canReadProviders = sessionHasPermission(session, "provider.read");
   const canManageProviders = sessionHasPermission(session, "provider.manage");
   const [selectedCatalogKey, setSelectedCatalogKey] = useState<string | null>(null);
@@ -357,14 +362,14 @@ export function ProvidersPage() {
   const { data: catalogData } = useApiQuery({
     key: qk.providerCatalog(),
     queryFn: (session) => studioApi.listProviderCatalog(session),
-    enabled: canReadProviders,
+    enabled: canReadProviders && !organizationModelOnly,
   });
   const catalogEntries = useMemo(() => [...((catalogData?.items || []) as ProviderCatalogEntry[])].sort(compareProviderCatalogEntries), [catalogData?.items]);
 
   const { data: accountsData, isLoading: accountsLoading } = useApiQuery({
     key: qk.providerAccounts(),
     queryFn: (session) => studioApi.listProviderAccounts(session),
-    enabled: canReadProviders,
+    enabled: canReadProviders && !organizationModelOnly,
   });
   const accounts = useMemo(
     () => ((accountsData?.items || []) as ProviderAccount[]).filter((account) => account.status !== "disabled"),
@@ -375,7 +380,11 @@ export function ProvidersPage() {
   const { data: credentialsData, isLoading: credentialsLoading } = useApiQuery({
     key: qk.providerCredentials(credentialsAccountId || "none"),
     queryFn: (session) => studioApi.listProviderCredentials(session, credentialsAccountId!, "active").then((response) => response.items || []),
-    enabled: canReadProviders && credentialsDialogOpen && !!credentialsAccountId,
+    enabled:
+      canReadProviders &&
+      !organizationModelOnly &&
+      credentialsDialogOpen &&
+      !!credentialsAccountId,
   });
   const credentials = useMemo(() => (credentialsData || []) as ProviderCredential[], [credentialsData]);
 
@@ -406,7 +415,10 @@ export function ProvidersPage() {
   const { data: modelsData, isLoading: modelsLoading } = useApiQuery({
     key: qk.providerModels(selectedAccountId || "none"),
     queryFn: (session) => studioApi.listProviderModels(session, selectedAccountId!, "all").then((response) => response.items || []),
-    enabled: canReadProviders && !!selectedAccountId,
+    enabled:
+      canReadProviders &&
+      !organizationModelOnly &&
+      !!selectedAccountId,
   });
   const allModels = useMemo(() => (modelsData || []) as ProviderModel[], [modelsData]);
   const models = useMemo(
@@ -418,7 +430,11 @@ export function ProvidersPage() {
   const { data: videoCapabilityData, isLoading: videoCapabilityLoading } = useApiQuery({
     key: qk.providerModelVideoCapabilities(capabilityModel?.id || "none"),
     queryFn: (session) => studioApi.listProviderModelVideoCapabilities(session, capabilityModel!.id),
-    enabled: canReadProviders && capabilityDialogOpen && !!capabilityModel,
+    enabled:
+      canReadProviders &&
+      !organizationModelOnly &&
+      capabilityDialogOpen &&
+      !!capabilityModel,
   });
 
   const { data: allProviderModels = [], isLoading: allProviderModelsLoading } = useApiQuery({
@@ -438,13 +454,46 @@ export function ProvidersPage() {
       );
       return batches.flat() as ProviderModelWithAccount[];
     },
-    enabled: canReadProviders && accounts.length > 0,
+    enabled:
+      canReadProviders &&
+      !organizationModelOnly &&
+      accounts.length > 0,
   });
 
-  const activeProviderModels = useMemo(
-    () => allProviderModels.filter((model) => model.status !== "disabled"),
-    [allProviderModels],
+  const {
+    data: availableProviderModelsData,
+    isLoading: availableProviderModelsLoading,
+  } = useApiQuery({
+    key: qk.availableProviderModels(),
+    queryFn: (session) =>
+      studioApi
+        .listAvailableProviderModels(session)
+        .then((response) => response.items || []),
+    enabled: canReadProviders && organizationModelOnly,
+  });
+  const managedAvailableModels = useMemo(
+    () =>
+      ((availableProviderModelsData || []) as AvailableProviderModel[]).map(
+        (model) => ({
+          ...model,
+          providerAccountId: "",
+          accountId: "",
+          accountName: "",
+          providerLabel: "",
+        }),
+      ) as ProviderModelWithAccount[],
+    [availableProviderModelsData],
   );
+  const activeProviderModels = useMemo(
+    () =>
+      organizationModelOnly
+        ? managedAvailableModels
+        : allProviderModels.filter((model) => model.status !== "disabled"),
+    [allProviderModels, managedAvailableModels, organizationModelOnly],
+  );
+  const providerModelsLoading = organizationModelOnly
+    ? availableProviderModelsLoading
+    : allProviderModelsLoading;
   const modelById = useMemo(() => new Map(activeProviderModels.map((model) => [model.id, model])), [activeProviderModels]);
   const profileByKey = useMemo(() => new Map(profiles.map((profile) => [profile.profileKey, profile])), [profiles]);
 
@@ -1344,32 +1393,60 @@ export function ProvidersPage() {
 
   if (!canReadProviders) {
     return (
-      <AppShell active="providers" title="供应商中心" description="管理 AI 供应商账号与模型配置">
+      <AppShell
+        active="providers"
+        title={organizationModelOnly ? "模型管理" : "供应商中心"}
+        description={
+          organizationModelOnly
+            ? "配置业务链路使用的 AI 模型"
+            : "管理 AI 供应商账号与模型配置"
+        }
+      >
         <Surface className="p-8 text-center">
-          <p className="text-sm text-muted-foreground">当前账号没有查看供应商配置的权限</p>
+          <p className="text-sm text-muted-foreground">当前账号没有查看模型配置的权限</p>
         </Surface>
       </AppShell>
     );
   }
 
   return (
-    <AppShell active="providers" title="供应商中心" description="管理 AI 供应商账号与模型配置">
+    <AppShell
+      active="providers"
+      title={organizationModelOnly ? "模型管理" : "供应商中心"}
+      description={
+        organizationModelOnly
+          ? "配置业务链路使用的 AI 模型"
+          : "管理 AI 供应商账号与模型配置"
+      }
+    >
       <Surface>
-        <SectionTitle title="供应商管理" description="配置 AI 模型供应商、账号凭证和模型路由策略" />
+        <SectionTitle
+          title={organizationModelOnly ? "业务模型配置" : "供应商管理"}
+          description={
+            organizationModelOnly
+              ? "选择平台分配给当前组织的模型并配置路由优先级"
+              : "配置 AI 模型供应商、账号凭证和模型路由策略"
+          }
+        />
 
-        <Tabs defaultValue="accounts" className="p-4">
-          <TabsList>
-            <TabsTrigger value="accounts">
-              供应商账号
-              <Badge variant="secondary" className="ml-2">{accounts.length}</Badge>
-            </TabsTrigger>
-            <TabsTrigger value="profiles">
-              模型配置
-              <Badge variant="secondary" className="ml-2">{profiles.length}</Badge>
-            </TabsTrigger>
-          </TabsList>
+        <Tabs
+          defaultValue={organizationModelOnly ? "profiles" : "accounts"}
+          className="p-4"
+        >
+          {!organizationModelOnly ? (
+            <TabsList>
+              <TabsTrigger value="accounts">
+                供应商账号
+                <Badge variant="secondary" className="ml-2">{accounts.length}</Badge>
+              </TabsTrigger>
+              <TabsTrigger value="profiles">
+                模型配置
+                <Badge variant="secondary" className="ml-2">{profiles.length}</Badge>
+              </TabsTrigger>
+            </TabsList>
+          ) : null}
 
-          <TabsContent value="accounts" className="space-y-4">
+          {!organizationModelOnly ? <TabsContent value="accounts" className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">管理组织的供应商账号、访问密钥和可用模型</p>
               {canManageProviders ? (
@@ -1482,7 +1559,7 @@ export function ProvidersPage() {
                 </div>
               ))}
             </div>
-          </TabsContent>
+          </TabsContent> : null}
 
           <TabsContent value="profiles" className="space-y-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -1499,13 +1576,17 @@ export function ProvidersPage() {
               </div>
             </div>
 
-            {(profilesLoading || allProviderModelsLoading) && <Skeleton className="h-64" />}
+            {(profilesLoading || providerModelsLoading) && <Skeleton className="h-64" />}
 
-            {!profilesLoading && !allProviderModelsLoading && activeProviderModels.length === 0 && (
+            {!profilesLoading && !providerModelsLoading && activeProviderModels.length === 0 && (
               <div className="rounded-lg border border-dashed p-10 text-center">
                 <Zap className="mx-auto h-10 w-10 text-muted-foreground opacity-50" />
-                <p className="mt-3 text-sm text-muted-foreground">还没有可用供应商模型</p>
-                <p className="mt-1 text-xs text-muted-foreground">请先在“供应商账号”中添加供应商、发现模型或手动添加模型。</p>
+                <p className="mt-3 text-sm text-muted-foreground">当前组织账户还没有可用模型</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {organizationModelOnly
+                    ? "请联系系统管理员检查组织账户的模型分配。"
+                    : "请先在“供应商账号”中添加供应商、发现模型或手动添加模型。"}
+                </p>
               </div>
             )}
 
@@ -1621,7 +1702,8 @@ export function ProvidersPage() {
                             <SelectContent>
                               {compatibleModels.map((model) => (
                                 <SelectItem key={model.id} value={model.id}>
-                                  {model.displayName || model.modelKey} · {model.accountName}
+                                  {model.displayName || model.modelKey}
+                                  {model.accountName ? ` · ${model.accountName}` : ""}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -3044,11 +3126,11 @@ function BusinessBindingRow({
             <Badge variant={enabled ? "default" : "secondary"}>{enabled ? "启用" : "停用"}</Badge>
           </div>
           <div className="truncate font-mono text-xs text-muted-foreground">{model?.modelKey || binding.providerModelId}</div>
-          {model ? (
+          {model && (model.providerLabel || model.accountName) ? (
             <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
-              <span>{model.providerLabel}</span>
-              <span>·</span>
-              <span>{model.accountName}</span>
+              {model.providerLabel ? <span>{model.providerLabel}</span> : null}
+              {model.providerLabel && model.accountName ? <span>·</span> : null}
+              {model.accountName ? <span>{model.accountName}</span> : null}
             </div>
           ) : null}
         </div>

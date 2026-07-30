@@ -193,6 +193,18 @@ type Model struct {
 	UpdatedAt         time.Time    `json:"updatedAt"`
 }
 
+type AvailableModel struct {
+	ID              string       `json:"id"`
+	ModelKey        string       `json:"modelKey"`
+	DisplayName     string       `json:"displayName"`
+	Modality        string       `json:"modality"`
+	Status          string       `json:"status"`
+	ManagementScope string       `json:"managementScope"`
+	Capabilities    []Capability `json:"capabilities"`
+	CreatedAt       time.Time    `json:"createdAt"`
+	UpdatedAt       time.Time    `json:"updatedAt"`
+}
+
 type Capability struct {
 	ID                            string          `json:"id"`
 	ProviderModelID               string          `json:"providerModelId"`

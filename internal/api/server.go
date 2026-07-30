@@ -479,34 +479,35 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/media/unlink", s.withAuth(s.unlinkStoryboardShotMedia))
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/review", s.withAuth(s.reviewStoryboardShot))
 
-	mux.HandleFunc("GET /api/provider-catalog", s.withAuth(s.listProviderCatalog))
-	mux.HandleFunc("GET /api/provider-catalog/{providerKey}", s.withAuth(s.getProviderCatalogEntry))
-	mux.HandleFunc("POST /api/provider-catalog/{providerKey}/install", s.withAuth(s.withProviderConfigurationWriteGate(s.installProviderCatalogEntry)))
-	mux.HandleFunc("GET /api/providers/connectors", s.withAuth(s.listProviderConnectors))
-	mux.HandleFunc("POST /api/providers/connectors/import", s.withAuth(s.withProviderConfigurationWriteGate(s.importProviderConnector)))
-	mux.HandleFunc("GET /api/providers/accounts", s.withAuth(s.listProviderAccounts))
-	mux.HandleFunc("POST /api/providers/accounts", s.withAuth(s.withProviderConfigurationWriteGate(s.createProviderAccount)))
-	mux.HandleFunc("GET /api/providers/accounts/{accountId}", s.withAuth(s.getProviderAccount))
-	mux.HandleFunc("PATCH /api/providers/accounts/{accountId}", s.withAuth(s.withProviderConfigurationWriteGate(s.updateProviderAccount)))
-	mux.HandleFunc("DELETE /api/providers/accounts/{accountId}", s.withAuth(s.withProviderConfigurationWriteGate(s.deleteProviderAccount)))
-	mux.HandleFunc("GET /api/providers/accounts/{accountId}/credentials", s.withAuth(s.listProviderCredentials))
-	mux.HandleFunc("POST /api/providers/accounts/{accountId}/credentials", s.withAuth(s.withProviderConfigurationWriteGate(s.createProviderCredential)))
-	mux.HandleFunc("POST /api/providers/accounts/{accountId}/credentials/rotate", s.withAuth(s.withProviderConfigurationWriteGate(s.rotateProviderCredential)))
-	mux.HandleFunc("POST /api/providers/accounts/{accountId}/credentials/{credentialId}/rotate", s.withAuth(s.withProviderConfigurationWriteGate(s.rotateProviderCredentialByID)))
-	mux.HandleFunc("DELETE /api/providers/accounts/{accountId}/credentials/{credentialId}", s.withAuth(s.withProviderConfigurationWriteGate(s.revokeProviderCredential)))
-	mux.HandleFunc("POST /api/providers/accounts/{accountId}/credentials/{credentialId}/discover-models", s.withAuth(s.withProviderConfigurationWriteGate(s.discoverProviderCredentialModels)))
-	mux.HandleFunc("POST /api/providers/accounts/{accountId}/discover-models", s.withAuth(s.withProviderConfigurationWriteGate(s.discoverProviderModels)))
-	mux.HandleFunc("GET /api/providers/accounts/{accountId}/models", s.withAuth(s.listProviderModels))
-	mux.HandleFunc("POST /api/providers/accounts/{accountId}/models", s.withAuth(s.withProviderConfigurationWriteGate(s.createProviderModel)))
-	mux.HandleFunc("PATCH /api/providers/models/{modelId}", s.withAuth(s.withProviderConfigurationWriteGate(s.updateProviderModel)))
-	mux.HandleFunc("DELETE /api/providers/models/{modelId}", s.withAuth(s.withProviderConfigurationWriteGate(s.deleteProviderModel)))
-	mux.HandleFunc("POST /api/providers/models/{modelId}/test", s.withAuth(s.testProviderModel))
-	mux.HandleFunc("GET /api/providers/models/{modelId}/video-capability-attestations", s.withAuth(s.listProviderModelVideoCapabilityAttestations))
-	mux.HandleFunc("POST /api/providers/models/{modelId}/video-capability-attestations", s.withAuth(s.createProviderModelVideoCapabilityAttestation))
-	mux.HandleFunc("POST /api/providers/models/{modelId}/video-capability-attestations/{attestationId}/revoke", s.withAuth(s.revokeProviderModelVideoCapabilityAttestation))
-	mux.HandleFunc("POST /api/providers/models/{modelId}/video-capabilities/verify", s.withAuth(s.verifyProviderModelVideoCapabilities))
-	mux.HandleFunc("POST /api/providers/manifests/validate", s.withAuth(s.validateProviderManifest))
-	mux.HandleFunc("POST /api/providers/manifests/test-run", s.withAuth(s.runProviderManifestTest))
+	mux.HandleFunc("GET /api/provider-models/available", s.withAuth(s.listAvailableProviderModels))
+	mux.HandleFunc("GET /api/provider-catalog", s.withAuth(s.withProviderAdministration(s.listProviderCatalog)))
+	mux.HandleFunc("GET /api/provider-catalog/{providerKey}", s.withAuth(s.withProviderAdministration(s.getProviderCatalogEntry)))
+	mux.HandleFunc("POST /api/provider-catalog/{providerKey}/install", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.installProviderCatalogEntry))))
+	mux.HandleFunc("GET /api/providers/connectors", s.withAuth(s.withProviderAdministration(s.listProviderConnectors)))
+	mux.HandleFunc("POST /api/providers/connectors/import", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.importProviderConnector))))
+	mux.HandleFunc("GET /api/providers/accounts", s.withAuth(s.withProviderAdministration(s.listProviderAccounts)))
+	mux.HandleFunc("POST /api/providers/accounts", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.createProviderAccount))))
+	mux.HandleFunc("GET /api/providers/accounts/{accountId}", s.withAuth(s.withProviderAdministration(s.getProviderAccount)))
+	mux.HandleFunc("PATCH /api/providers/accounts/{accountId}", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.updateProviderAccount))))
+	mux.HandleFunc("DELETE /api/providers/accounts/{accountId}", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.deleteProviderAccount))))
+	mux.HandleFunc("GET /api/providers/accounts/{accountId}/credentials", s.withAuth(s.withProviderAdministration(s.listProviderCredentials)))
+	mux.HandleFunc("POST /api/providers/accounts/{accountId}/credentials", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.createProviderCredential))))
+	mux.HandleFunc("POST /api/providers/accounts/{accountId}/credentials/rotate", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.rotateProviderCredential))))
+	mux.HandleFunc("POST /api/providers/accounts/{accountId}/credentials/{credentialId}/rotate", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.rotateProviderCredentialByID))))
+	mux.HandleFunc("DELETE /api/providers/accounts/{accountId}/credentials/{credentialId}", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.revokeProviderCredential))))
+	mux.HandleFunc("POST /api/providers/accounts/{accountId}/credentials/{credentialId}/discover-models", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.discoverProviderCredentialModels))))
+	mux.HandleFunc("POST /api/providers/accounts/{accountId}/discover-models", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.discoverProviderModels))))
+	mux.HandleFunc("GET /api/providers/accounts/{accountId}/models", s.withAuth(s.withProviderAdministration(s.listProviderModels)))
+	mux.HandleFunc("POST /api/providers/accounts/{accountId}/models", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.createProviderModel))))
+	mux.HandleFunc("PATCH /api/providers/models/{modelId}", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.updateProviderModel))))
+	mux.HandleFunc("DELETE /api/providers/models/{modelId}", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.deleteProviderModel))))
+	mux.HandleFunc("POST /api/providers/models/{modelId}/test", s.withAuth(s.withProviderAdministration(s.testProviderModel)))
+	mux.HandleFunc("GET /api/providers/models/{modelId}/video-capability-attestations", s.withAuth(s.withProviderAdministration(s.listProviderModelVideoCapabilityAttestations)))
+	mux.HandleFunc("POST /api/providers/models/{modelId}/video-capability-attestations", s.withAuth(s.withProviderAdministration(s.createProviderModelVideoCapabilityAttestation)))
+	mux.HandleFunc("POST /api/providers/models/{modelId}/video-capability-attestations/{attestationId}/revoke", s.withAuth(s.withProviderAdministration(s.revokeProviderModelVideoCapabilityAttestation)))
+	mux.HandleFunc("POST /api/providers/models/{modelId}/video-capabilities/verify", s.withAuth(s.withProviderAdministration(s.verifyProviderModelVideoCapabilities)))
+	mux.HandleFunc("POST /api/providers/manifests/validate", s.withAuth(s.withProviderAdministration(s.validateProviderManifest)))
+	mux.HandleFunc("POST /api/providers/manifests/test-run", s.withAuth(s.withProviderAdministration(s.runProviderManifestTest)))
 	mux.HandleFunc("GET /api/model-profiles", s.withAuth(s.listModelProfiles))
 	mux.HandleFunc("POST /api/model-profiles", s.withAuth(s.withProviderConfigurationWriteGate(s.createModelProfile)))
 	mux.HandleFunc("PATCH /api/model-profiles/{profileId}", s.withAuth(s.withProviderConfigurationWriteGate(s.updateModelProfile)))
@@ -515,13 +516,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/model-profiles/{profileId}/bindings/{bindingId}", s.withAuth(s.withProviderConfigurationWriteGate(s.deleteModelProfileBinding)))
 	mux.HandleFunc("GET /api/provider-call-logs", s.withAuth(s.listProviderCallLogs))
 	mux.HandleFunc("GET /api/provider-usage/summary", s.withAuth(s.getProviderUsageSummary))
-	mux.HandleFunc("GET /api/provider-limit-policies", s.withAuth(s.listProviderLimitPolicies))
-	mux.HandleFunc("POST /api/provider-limit-policies", s.withAuth(s.withProviderConfigurationWriteGate(s.createProviderLimitPolicy)))
-	mux.HandleFunc("GET /api/provider-limit-policies/{policyId}", s.withAuth(s.getProviderLimitPolicy))
-	mux.HandleFunc("PATCH /api/provider-limit-policies/{policyId}", s.withAuth(s.withProviderConfigurationWriteGate(s.updateProviderLimitPolicy)))
-	mux.HandleFunc("DELETE /api/provider-limit-policies/{policyId}", s.withAuth(s.withProviderConfigurationWriteGate(s.deleteProviderLimitPolicy)))
-	mux.HandleFunc("GET /api/provider-circuit-states", s.withAuth(s.listProviderCircuitStates))
-	mux.HandleFunc("POST /api/provider-circuit-states/{stateId}/reset", s.withAuth(s.resetProviderCircuitState))
+	mux.HandleFunc("GET /api/provider-limit-policies", s.withAuth(s.withProviderAdministration(s.listProviderLimitPolicies)))
+	mux.HandleFunc("POST /api/provider-limit-policies", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.createProviderLimitPolicy))))
+	mux.HandleFunc("GET /api/provider-limit-policies/{policyId}", s.withAuth(s.withProviderAdministration(s.getProviderLimitPolicy)))
+	mux.HandleFunc("PATCH /api/provider-limit-policies/{policyId}", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.updateProviderLimitPolicy))))
+	mux.HandleFunc("DELETE /api/provider-limit-policies/{policyId}", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.deleteProviderLimitPolicy))))
+	mux.HandleFunc("GET /api/provider-circuit-states", s.withAuth(s.withProviderAdministration(s.listProviderCircuitStates)))
+	mux.HandleFunc("POST /api/provider-circuit-states/{stateId}/reset", s.withAuth(s.withProviderAdministration(s.resetProviderCircuitState)))
 	mux.HandleFunc("GET /api/prompt-templates", s.withAuth(s.listPromptTemplates))
 	mux.HandleFunc("POST /api/prompt-templates", s.withAuth(s.createPromptTemplate))
 	mux.HandleFunc("GET /api/prompt-templates/{templateId}", s.withAuth(s.getPromptTemplate))
@@ -568,6 +569,12 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.notifyOrganizationCreated(
+		r.Context(),
+		resp.OrganizationID,
+		resp.User.ID,
+		req.OrganizationName,
+	)
 	httpx.WriteJSON(w, r, http.StatusCreated, resp, nil)
 }
 
@@ -1131,6 +1138,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal
 		s.writeError(w, r, err)
 		return
 	}
+	s.notifyProjectCreated(
+		r.Context(),
+		orgID,
+		item.ID,
+		principal.UserID,
+	)
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
 }
 

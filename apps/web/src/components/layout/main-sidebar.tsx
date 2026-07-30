@@ -15,6 +15,9 @@ import { useStudioSession } from "@/lib/session";
 
 export function MainSidebar({ active }: { active: GlobalSection }) {
   const { session } = useStudioSession();
+  const organizationModelOnly =
+    editionEntry.navigation.length > 0 &&
+    !session.user?.systemAdministrator;
   const entitlements = useEditionEntitlements(editionEntry.navigation.length > 0);
   const visibleItems = globalNavItems.filter(
     (item) =>
@@ -36,6 +39,10 @@ export function MainSidebar({ active }: { active: GlobalSection }) {
         {visibleItems.map((item) => {
           const Icon = item.icon;
           const isActive = active === item.section;
+          const label =
+            organizationModelOnly && item.section === "providers"
+              ? "模型管理"
+              : item.label;
           return (
             <Tooltip key={item.section} delayDuration={0}>
               <TooltipTrigger asChild>
@@ -47,12 +54,12 @@ export function MainSidebar({ active }: { active: GlobalSection }) {
                       ? "bg-sidebar-accent text-sidebar-accent-foreground"
                       : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
                   )}
-                  aria-label={item.label}
+                  aria-label={label}
                 >
                   <Icon className="h-5 w-5" />
                 </Link>
               </TooltipTrigger>
-              <TooltipContent side="right">{item.label}</TooltipContent>
+              <TooltipContent side="right">{label}</TooltipContent>
             </Tooltip>
           );
         })}
@@ -63,6 +70,9 @@ export function MainSidebar({ active }: { active: GlobalSection }) {
 
 export function MobileGlobalNav({ active }: { active: GlobalSection }) {
   const { session } = useStudioSession();
+  const organizationModelOnly =
+    editionEntry.navigation.length > 0 &&
+    !session.user?.systemAdministrator;
   const entitlements = useEditionEntitlements(editionEntry.navigation.length > 0);
   const visibleItems = globalNavItems.filter(
     (item) =>
@@ -75,6 +85,10 @@ export function MobileGlobalNav({ active }: { active: GlobalSection }) {
       {visibleItems.map((item) => {
         const Icon = item.icon;
         const isActive = active === item.section;
+        const label =
+          organizationModelOnly && item.section === "providers"
+            ? "模型管理"
+            : item.label;
         return (
           <Link
             key={item.section}
@@ -87,7 +101,7 @@ export function MobileGlobalNav({ active }: { active: GlobalSection }) {
             )}
           >
             <Icon className="h-4 w-4" />
-            {item.label}
+            {label}
           </Link>
         );
       })}

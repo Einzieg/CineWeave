@@ -255,6 +255,23 @@ type APIPrincipal struct {
 	BillingAccountID string
 }
 
+type OrganizationCreated struct {
+	OrganizationID string
+	OwnerUserID    string
+	DisplayName    string
+}
+
+type ProjectCreated struct {
+	OrganizationID  string
+	ProjectID       string
+	CreatedByUserID string
+}
+
+type TenantLifecycle interface {
+	OrganizationCreated(context.Context, OrganizationCreated)
+	ProjectCreated(context.Context, ProjectCreated)
+}
+
 type APIModuleHandler func(http.ResponseWriter, *http.Request, APIPrincipal)
 
 type APIModuleRegistration struct {

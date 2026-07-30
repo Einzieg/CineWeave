@@ -97,7 +97,22 @@ func (s *Server) listAgentTools(w http.ResponseWriter, r *http.Request, principa
 		return
 	}
 	items := make([]agent.ToolDescriptor, 0)
+	providerAdministrationAllowed := true
+	providerAdministrationChecked := false
 	for _, tool := range registry.List() {
+		if isProviderAdministrationAgentTool(tool.Name) {
+			if !providerAdministrationChecked {
+				providerAdministrationChecked = true
+				providerAdministrationAllowed =
+					s.requireProviderAdministration(
+						r.Context(),
+						principal.UserID,
+					) == nil
+			}
+			if !providerAdministrationAllowed {
+				continue
+			}
+		}
 		if err := s.authorizeAgentToolPermissions(r.Context(), principal, project, tool); err != nil {
 			continue
 		}

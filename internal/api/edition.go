@@ -46,3 +46,35 @@ func (s *Server) currentEditionRuntime() *editionpkg.Runtime {
 	}
 	return s.editionRuntime
 }
+
+func (s *Server) notifyOrganizationCreated(
+	ctx context.Context,
+	organizationID string,
+	ownerUserID string,
+	displayName string,
+) {
+	s.currentEditionRuntime().TenantLifecycle.OrganizationCreated(
+		ctx,
+		editionpkg.OrganizationCreated{
+			OrganizationID: organizationID,
+			OwnerUserID:    ownerUserID,
+			DisplayName:    displayName,
+		},
+	)
+}
+
+func (s *Server) notifyProjectCreated(
+	ctx context.Context,
+	organizationID string,
+	projectID string,
+	createdByUserID string,
+) {
+	s.currentEditionRuntime().TenantLifecycle.ProjectCreated(
+		ctx,
+		editionpkg.ProjectCreated{
+			OrganizationID:  organizationID,
+			ProjectID:       projectID,
+			CreatedByUserID: createdByUserID,
+		},
+	)
+}

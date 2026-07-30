@@ -214,6 +214,12 @@ func (s *Server) createCommerceProjectDraft(
 		if status < 200 || status > 299 {
 			status = http.StatusOK
 		}
+		s.notifyProjectCreated(
+			r.Context(),
+			organizationID,
+			replay.ID,
+			principal.UserID,
+		)
 		httpx.WriteJSON(w, r, status, replay, map[string]any{"idempotentReplay": true})
 		return
 	}
@@ -328,6 +334,12 @@ func (s *Server) createCommerceProjectDraft(
 		s.writeError(w, r, err)
 		return
 	}
+	s.notifyProjectCreated(
+		r.Context(),
+		organizationID,
+		item.ID,
+		principal.UserID,
+	)
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
 }
 

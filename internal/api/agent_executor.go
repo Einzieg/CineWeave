@@ -551,6 +551,14 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 	if err := validateAgentRuntimeArguments(args); err != nil {
 		return agentToolError(step.ToolName, args, err)
 	}
+	if isProviderAdministrationAgentTool(step.ToolName) {
+		if err := s.requireProviderAdministration(
+			r.Context(),
+			principal.UserID,
+		); err != nil {
+			return agentToolError(step.ToolName, args, err)
+		}
+	}
 	if strings.HasPrefix(step.ToolName, "commerce.") {
 		return s.agentToolCommerce(r, principal, project, task, step, args)
 	}

@@ -56,6 +56,7 @@ export const qk = {
   providerCatalog: () => ["provider-catalog"] as const,
   providerModels: (accountId: string) => ["provider-models", accountId] as const,
   providerModelsAll: (accountIds: string) => ["provider-models", "all", accountIds] as const,
+  availableProviderModels: () => ["provider-models", "available"] as const,
   providerModelVideoCapabilities: (modelId: string) => ["provider-model", modelId, "video-capabilities"] as const,
   modelProfiles: () => ["model-profiles"] as const,
   promptTemplates: () => ["prompt-templates"] as const,

@@ -30,6 +30,7 @@ type Runtime struct {
 	Entitlements             EntitlementService
 	BillingRoutingAuthorizer BillingRoutingAuthorizer
 	CommercialModules        CommercialModuleRegistry
+	TenantLifecycle          TenantLifecycle
 	Features                 FeatureRegistry
 }
 
@@ -74,6 +75,7 @@ func NewCommunityRuntime(options CommunityOptions) (*Runtime, error) {
 		Entitlements:             communityEntitlementService{manifest: manifest, registry: registry, now: now},
 		BillingRoutingAuthorizer: communityBillingRoutingAuthorizer{},
 		CommercialModules:        emptyCommercialModuleRegistry{},
+		TenantLifecycle:          noopTenantLifecycle{},
 		Features:                 registry,
 	}
 	if err := runtime.Validate(context.Background()); err != nil {
@@ -91,7 +93,7 @@ func MustCommunityRuntime() *Runtime {
 }
 
 func (r *Runtime) Validate(ctx context.Context) error {
-	if r == nil || r.EditionProvider == nil || r.Entitlements == nil || r.BillingRoutingAuthorizer == nil || r.CommercialModules == nil || r.Features == nil {
+	if r == nil || r.EditionProvider == nil || r.Entitlements == nil || r.BillingRoutingAuthorizer == nil || r.CommercialModules == nil || r.TenantLifecycle == nil || r.Features == nil {
 		return fmt.Errorf("edition runtime is incomplete")
 	}
 	manifest, err := r.EditionProvider.Manifest(ctx)
@@ -248,6 +250,12 @@ func (communityBillingRoutingAuthorizer) Authorize(_ context.Context, request Bi
 }
 
 type emptyCommercialModuleRegistry struct{}
+
+type noopTenantLifecycle struct{}
+
+func (noopTenantLifecycle) OrganizationCreated(context.Context, OrganizationCreated) {}
+
+func (noopTenantLifecycle) ProjectCreated(context.Context, ProjectCreated) {}
 
 func (emptyCommercialModuleRegistry) APIModules(context.Context) ([]APIModuleRegistration, error) {
 	return []APIModuleRegistration{}, nil

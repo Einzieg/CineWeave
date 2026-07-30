@@ -123,6 +123,7 @@ import type {
   ProviderLimitPolicy,
   ProviderManifestTestRunResult,
   ProviderManifestValidationResult,
+  AvailableProviderModel,
   ProviderModel,
   ProviderModelDiscoveryResult,
   VideoCapabilityAttestation,
@@ -1820,6 +1821,8 @@ export const studioApi = {
       session,
       query: status ? { "filter[status]": status } : undefined,
     }),
+  listAvailableProviderModels: (session: StudioSession) =>
+    apiRequest<ListEnvelope<AvailableProviderModel>>("/api/provider-models/available", { session }),
   createProviderModel: (session: StudioSession, accountId: string, body: JsonRecord) =>
     apiRequest<ProviderModel>(`/api/providers/accounts/${accountId}/models`, { method: "POST", session, body }),
   updateProviderModel: (session: StudioSession, modelId: string, body: JsonRecord) =>

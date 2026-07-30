@@ -119,6 +119,12 @@ func (s *Server) systemSetup(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.notifyOrganizationCreated(
+		r.Context(),
+		resp.OrganizationID,
+		resp.User.ID,
+		req.OrganizationName,
+	)
 	httpx.WriteJSON(w, r, http.StatusCreated, resp, nil)
 }
 

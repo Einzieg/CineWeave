@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strconv"
@@ -8,11 +10,51 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
+	editionpkg "github.com/Einzieg/cineweave/internal/edition"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/provider"
 )
 
-const providerConfigurationFrozenCode = "PROVIDER_CONFIGURATION_FROZEN"
+const (
+	providerConfigurationFrozenCode     = "PROVIDER_CONFIGURATION_FROZEN"
+	providerManagementSystemManagedCode = "PROVIDER_MANAGEMENT_SYSTEM_MANAGED"
+)
+
+func (s *Server) requireProviderAdministration(
+	ctx context.Context,
+	userID string,
+) error {
+	status, err := s.currentEditionRuntime().SystemEdition(ctx)
+	if err != nil {
+		return err
+	}
+	if status.DeploymentEdition != editionpkg.EditionCloud {
+		return nil
+	}
+	if err := s.auth.RequireSystemAdministrator(ctx, userID); err != nil {
+		if errors.Is(err, auth.ErrSystemAdministratorRequired) {
+			return newAPIError(
+				http.StatusForbidden,
+				providerManagementSystemManagedCode,
+				"当前组织使用平台托管供应商，仅可管理业务模型配置",
+			)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Server) withProviderAdministration(
+	next func(http.ResponseWriter, *http.Request, auth.Principal),
+) func(http.ResponseWriter, *http.Request, auth.Principal) {
+	return func(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+		if err := s.requireProviderAdministration(r.Context(), principal.UserID); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		next(w, r, principal)
+	}
+}
 
 func (s *Server) withProviderConfigurationWriteGate(next func(http.ResponseWriter, *http.Request, auth.Principal)) func(http.ResponseWriter, *http.Request, auth.Principal) {
 	return func(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -35,6 +77,43 @@ func (s *Server) withProviderConfigurationWriteGate(next func(http.ResponseWrite
 func providerConfigurationFrozen() bool {
 	value := strings.TrimSpace(os.Getenv("CINEWEAVE_PROVIDER_CONFIGURATION_FROZEN"))
 	return strings.EqualFold(value, "true") || value == "1"
+}
+
+func isProviderAdministrationAgentTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "provider.test_model",
+		"provider.update_account",
+		"provider.update_model",
+		"provider.attest_video_capability",
+		"provider.verify_video_capability",
+		"provider.install_catalog_preset":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) listAvailableProviderModels(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal auth.Principal,
+) {
+	orgID := organizationID(r, principal)
+	if !s.authorize(
+		w,
+		r,
+		principal,
+		authz.PermissionProviderRead,
+		authz.Resource{OrganizationID: orgID},
+	) {
+		return
+	}
+	items, err := s.providers.ListAvailableModels(r.Context(), orgID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
 }
 
 func (s *Server) requireTenantProviderModel(

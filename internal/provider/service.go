@@ -611,6 +611,90 @@ func (s *Service) ListModels(ctx context.Context, organizationID, accountID, sta
 	return items, rows.Err()
 }
 
+func (s *Service) ListAvailableModels(ctx context.Context, organizationID string) ([]AvailableModel, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			m.id,
+			m.model_key,
+			m.display_name,
+			m.modality,
+			m.status,
+			CASE
+				WHEN managed.provider_account_id IS NULL THEN 'tenant_managed'
+				ELSE managed.management_scope
+			END AS management_scope,
+			m.created_at,
+			m.updated_at
+		FROM provider_models m
+		JOIN provider_accounts a ON a.id = m.provider_account_id
+		LEFT JOIN provider_managed_accounts managed
+		  ON managed.provider_account_id = a.id
+		WHERE a.organization_id = $1
+		  AND a.status = 'active'
+		  AND m.status = 'active'
+		  AND (
+			EXISTS (
+				SELECT 1
+				FROM provider_credential_models mapping
+				JOIN provider_credentials credential
+				  ON credential.id = mapping.provider_credential_id
+				WHERE mapping.provider_model_id = m.id
+				  AND mapping.is_available = true
+				  AND credential.organization_id = a.organization_id
+				  AND credential.provider_account_id = a.id
+				  AND credential.status = 'active'
+				  AND credential.is_active = true
+			)
+			OR (
+				NOT EXISTS (
+					SELECT 1
+					FROM provider_credential_models mapping
+					WHERE mapping.provider_model_id = m.id
+				)
+				AND EXISTS (
+					SELECT 1
+					FROM provider_credentials credential
+					WHERE credential.organization_id = a.organization_id
+					  AND credential.provider_account_id = a.id
+					  AND credential.status = 'active'
+					  AND credential.is_active = true
+				)
+			)
+		  )
+		ORDER BY m.modality, m.display_name, m.model_key, m.id
+	`, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]AvailableModel, 0)
+	for rows.Next() {
+		var item AvailableModel
+		if err := rows.Scan(
+			&item.ID,
+			&item.ModelKey,
+			&item.DisplayName,
+			&item.Modality,
+			&item.Status,
+			&item.ManagementScope,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if err := s.ensureDefaultCapabilityForModel(ctx, s.db, item.ID, item.Modality); err != nil {
+			return nil, err
+		}
+		item.Capabilities, err = s.listCapabilities(ctx, item.ID)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Service) CreateModel(ctx context.Context, organizationID, accountID string, req CreateModelRequest) (Model, error) {
 	if _, err := s.GetTenantAccount(ctx, organizationID, accountID); err != nil {
 		return Model{}, err
