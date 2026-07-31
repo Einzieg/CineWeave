@@ -76,6 +76,125 @@ func (s *Service) lookupModelCapabilityPreset(ctx context.Context, q modelCapabi
 	return modelCapabilityPreset{}, false, nil
 }
 
+func (s *Service) reconcileModelCapabilityPreset(ctx context.Context, model Model) (Model, error) {
+	if model.Status != "active" || strings.TrimSpace(model.ModelKey) == "" {
+		return model, nil
+	}
+	preset, matched, err := s.lookupModelCapabilityPreset(ctx, s.db, model.ModelKey)
+	if err != nil || !matched {
+		return model, err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Model{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var currentModelKey, currentDisplayName, currentModality, currentStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT model_key, display_name, modality, status
+		FROM provider_models
+		WHERE id = $1
+		FOR UPDATE
+	`, model.ID).Scan(&currentModelKey, &currentDisplayName, &currentModality, &currentStatus); err != nil {
+		return Model{}, err
+	}
+	if currentStatus != "active" || !strings.EqualFold(strings.TrimSpace(currentModelKey), strings.TrimSpace(model.ModelKey)) {
+		model.ModelKey = currentModelKey
+		model.DisplayName = currentDisplayName
+		model.Modality = currentModality
+		model.Status = currentStatus
+		return model, nil
+	}
+	model.DisplayName = currentDisplayName
+	model.Modality = currentModality
+	model.Status = currentStatus
+
+	rows, err := tx.Query(ctx, `
+		SELECT provider_options_schema
+		FROM provider_model_capabilities
+		WHERE provider_model_id = $1
+		FOR UPDATE
+	`, model.ID)
+	if err != nil {
+		return Model{}, err
+	}
+	hasCapabilities := false
+	replaceable := true
+	for rows.Next() {
+		hasCapabilities = true
+		var providerOptionsSchema []byte
+		if err := rows.Scan(&providerOptionsSchema); err != nil {
+			rows.Close()
+			return Model{}, err
+		}
+		if !capabilitySourceAllowsPreset(providerOptionsSchema) {
+			replaceable = false
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Model{}, err
+	}
+	rows.Close()
+	if !replaceable {
+		return model, nil
+	}
+
+	capability, err := normalizeCapabilityInput(preset.capabilityInput())
+	if err != nil {
+		return Model{}, err
+	}
+	displayName := model.DisplayName
+	if strings.TrimSpace(displayName) == "" || strings.EqualFold(strings.TrimSpace(displayName), strings.TrimSpace(model.ModelKey)) {
+		displayName = preset.DisplayName
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE provider_models
+		SET display_name = $2,
+		    modality = $3,
+		    updated_at = CASE
+		        WHEN display_name IS DISTINCT FROM $2 OR modality IS DISTINCT FROM $3 THEN now()
+		        ELSE updated_at
+		    END
+		WHERE id = $1
+		  AND status = 'active'
+	`, model.ID, displayName, preset.Modality); err != nil {
+		return Model{}, err
+	}
+	if !hasCapabilities {
+		if _, err := insertCapability(ctx, tx, model.ID, capability); err != nil {
+			return Model{}, err
+		}
+	} else if _, err := tx.Exec(ctx, `
+		UPDATE provider_model_capabilities
+		SET task_types = $2,
+		    input_limits = $3,
+		    output_limits = $4,
+		    quality_tiers = $5,
+		    provider_options_schema = $6,
+		    pricing_policy = $7
+		WHERE provider_model_id = $1
+	`, model.ID, capability.TaskTypes, capability.InputLimits, capability.OutputLimits, capability.QualityTiers, capability.ProviderOptionsSchema, capability.PricingPolicy); err != nil {
+		return Model{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Model{}, err
+	}
+	model.DisplayName = displayName
+	model.Modality = preset.Modality
+	return model, nil
+}
+
+func capabilitySourceAllowsPreset(providerOptionsSchema json.RawMessage) bool {
+	switch capabilityLanguageMetadataFromSchema(providerOptionsSchema).Source {
+	case CapabilitySourceOfficial, CapabilitySourceProvider, CapabilitySourceManual:
+		return false
+	default:
+		return true
+	}
+}
+
 func (preset modelCapabilityPreset) capabilityInput() CapabilityInput {
 	return CapabilityInput{
 		TaskTypes:             preset.TaskTypes,

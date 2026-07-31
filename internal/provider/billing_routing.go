@@ -291,3 +291,69 @@ func (s *Service) billingCredentialCandidates(
 	}
 	return candidates, nil
 }
+
+func (s *Service) listLogicalModelEquivalents(
+	ctx context.Context,
+	organizationID string,
+	model Model,
+) ([]Model, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT candidate.id::text
+		FROM provider_models candidate
+		JOIN provider_accounts account
+		  ON account.id = candidate.provider_account_id
+		WHERE account.organization_id = $1
+		  AND account.status = 'active'
+		  AND candidate.status = 'active'
+		  AND lower(btrim(candidate.model_key)) = lower(btrim($2))
+		ORDER BY (candidate.id = $3::uuid) DESC, candidate.id
+	`, organizationID, model.ModelKey, model.ID)
+	if err != nil {
+		return nil, err
+	}
+	modelIDs := make([]string, 0)
+	for rows.Next() {
+		var modelID string
+		if err := rows.Scan(&modelID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		modelIDs = append(modelIDs, modelID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	result := make([]Model, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		candidate, err := s.GetModel(ctx, organizationID, modelID)
+		if err != nil {
+			return nil, err
+		}
+		if candidate.Modality != model.Modality {
+			continue
+		}
+		result = append(result, candidate)
+	}
+	return result, nil
+}
+
+func billingRoutingCandidateUnavailable(err error) bool {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true
+	}
+	standard, ok := StandardErrorFromError(err)
+	if !ok {
+		return false
+	}
+	switch standard.Code {
+	case string(editionpkg.DenialBillingCredentialUnavailable),
+		string(editionpkg.DenialBillingModelForbidden),
+		string(editionpkg.DenialBillingRoutingCandidateMissing):
+		return true
+	default:
+		return false
+	}
+}

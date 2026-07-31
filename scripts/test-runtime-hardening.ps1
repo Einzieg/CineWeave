@@ -118,7 +118,7 @@ try {
   if ($ProviderManagedOnly) {
     Invoke-GoContainer -Integration -Arguments @(
       'go', 'test', '-count=1', './internal/provider',
-      '-run', '^TestManagedProviderCredentialLifecycleAndTenantIsolation$'
+      '-run', '^(TestManagedProviderCredentialLifecycleAndTenantIsolation|TestAvailableManagedModelsAreLogicalAndResolvePerBillingAccount)$'
     )
     Write-Host 'System-managed Provider account and sealed credential lifecycle tests passed.'
     return

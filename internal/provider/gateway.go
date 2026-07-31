@@ -812,11 +812,46 @@ func (s *Service) completeGatewaySelectionFromCandidateWithBilling(
 		candidate.ModelProfileBindingID,
 		candidate.ModelProfileKey,
 	)
+	if err == nil {
+		selection.RuntimeOptions = candidate.RuntimeOptions
+		return selection, nil
+	}
+	if identity.BillingContextID == "" || !billingRoutingCandidateUnavailable(err) {
+		return gatewayModelSelection{}, err
+	}
+	originalErr := err
+	equivalents, err := s.listLogicalModelEquivalents(ctx, organizationID, model)
 	if err != nil {
 		return gatewayModelSelection{}, err
 	}
-	selection.RuntimeOptions = candidate.RuntimeOptions
-	return selection, nil
+	for _, equivalent := range equivalents {
+		if equivalent.ID == model.ID {
+			continue
+		}
+		equivalentAccount, err := s.GetAccount(ctx, organizationID, equivalent.ProviderAccountID)
+		if err != nil {
+			return gatewayModelSelection{}, err
+		}
+		selection, err = s.completeGatewaySelectionWithBilling(
+			ctx,
+			organizationID,
+			projectID,
+			identity,
+			equivalentAccount,
+			equivalent,
+			candidate.ModelProfileID,
+			candidate.ModelProfileBindingID,
+			candidate.ModelProfileKey,
+		)
+		if err == nil {
+			selection.RuntimeOptions = candidate.RuntimeOptions
+			return selection, nil
+		}
+		if !billingRoutingCandidateUnavailable(err) {
+			return gatewayModelSelection{}, err
+		}
+	}
+	return gatewayModelSelection{}, originalErr
 }
 
 func (s *Service) completeGatewaySelection(ctx context.Context, organizationID string, account Account, model Model, profileID, bindingID, profileKey string) (gatewayModelSelection, error) {

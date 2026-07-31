@@ -409,8 +409,38 @@ func (s *Service) filterVideoPlanBillingCandidates(
 			candidate.Model,
 		); err == nil {
 			filtered = append(filtered, candidate)
-		} else if !videoPlanBillingCandidateUnavailable(err) {
+		} else if !billingRoutingCandidateUnavailable(err) {
 			return nil, err
+		} else if req.GatewayBillingIdentity.BillingContextID != "" {
+			equivalents, lookupErr := s.listLogicalModelEquivalents(ctx, req.OrganizationID, candidate.Model)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			for _, equivalent := range equivalents {
+				if equivalent.ID == candidate.Model.ID || excludedVideoPlanModel(req.ExcludeProviderModelIDs, equivalent.ID) {
+					continue
+				}
+				account, lookupErr := s.GetAccount(ctx, req.OrganizationID, equivalent.ProviderAccountID)
+				if lookupErr != nil {
+					return nil, lookupErr
+				}
+				if _, lookupErr = s.authorizeCredentialForModel(
+					ctx,
+					req.OrganizationID,
+					req.ProjectID,
+					req.GatewayBillingIdentity,
+					account,
+					equivalent,
+				); lookupErr == nil {
+					candidate.ProviderAccountID = account.ID
+					candidate.Account = account
+					candidate.Model = equivalent
+					filtered = append(filtered, candidate)
+					break
+				} else if !billingRoutingCandidateUnavailable(lookupErr) {
+					return nil, lookupErr
+				}
+			}
 		}
 	}
 	if len(filtered) == 0 {
@@ -423,22 +453,13 @@ func (s *Service) filterVideoPlanBillingCandidates(
 	return filtered, nil
 }
 
-func videoPlanBillingCandidateUnavailable(err error) bool {
-	if errors.Is(err, pgx.ErrNoRows) {
-		return true
+func excludedVideoPlanModel(excluded []string, modelID string) bool {
+	for _, excludedID := range excluded {
+		if strings.TrimSpace(excludedID) == modelID {
+			return true
+		}
 	}
-	standard, ok := StandardErrorFromError(err)
-	if !ok {
-		return false
-	}
-	switch standard.Code {
-	case string(editionpkg.DenialBillingCredentialUnavailable),
-		string(editionpkg.DenialBillingModelForbidden),
-		string(editionpkg.DenialBillingRoutingCandidateMissing):
-		return true
-	default:
-		return false
-	}
+	return false
 }
 
 func (s *Service) persistVideoRenderPlan(ctx context.Context, req GatewayVideoPlanRequest, selected matchedVideoPlanCandidate, fallbackCandidates json.RawMessage, planKey string, expiresAt time.Time) (GatewayVideoPlanResponse, error) {

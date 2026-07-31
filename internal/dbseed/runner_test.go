@@ -35,7 +35,7 @@ func TestEmbeddedResourceCoverage(t *testing.T) {
 		"role_permissions":                  154,
 		"provider_connectors":               2,
 		"provider_catalog_entries":          15,
-		"provider_model_capability_presets": 48,
+		"provider_model_capability_presets": 49,
 		"prompt_templates":                  236,
 		"prompt_versions":                   248,
 	}

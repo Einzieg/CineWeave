@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -598,6 +599,10 @@ func (s *Service) ListModels(ctx context.Context, organizationID, accountID, sta
 			return nil, err
 		}
 		if item.Status == "active" {
+			item, err = s.reconcileModelCapabilityPreset(ctx, item)
+			if err != nil {
+				return nil, err
+			}
 			if err := s.ensureDefaultCapabilityForModel(ctx, s.db, item.ID, item.Modality); err != nil {
 				return nil, err
 			}
@@ -668,7 +673,7 @@ func (s *Service) ListAvailableModels(ctx context.Context, organizationID string
 	}
 	defer rows.Close()
 
-	items := make([]AvailableModel, 0)
+	modelsByKey := make(map[string]AvailableModel)
 	for rows.Next() {
 		var item AvailableModel
 		if err := rows.Scan(
@@ -683,6 +688,18 @@ func (s *Service) ListAvailableModels(ctx context.Context, organizationID string
 		); err != nil {
 			return nil, err
 		}
+		reconciled, err := s.reconcileModelCapabilityPreset(ctx, Model{
+			ID:          item.ID,
+			ModelKey:    item.ModelKey,
+			DisplayName: item.DisplayName,
+			Modality:    item.Modality,
+			Status:      item.Status,
+		})
+		if err != nil {
+			return nil, err
+		}
+		item.DisplayName = reconciled.DisplayName
+		item.Modality = reconciled.Modality
 		if err := s.ensureDefaultCapabilityForModel(ctx, s.db, item.ID, item.Modality); err != nil {
 			return nil, err
 		}
@@ -690,9 +707,68 @@ func (s *Service) ListAvailableModels(ctx context.Context, organizationID string
 		if err != nil {
 			return nil, err
 		}
+		key := normalizeAvailableModelKey(item.ModelKey)
+		if current, exists := modelsByKey[key]; !exists || availableModelPreferred(item, current) {
+			modelsByKey[key] = item
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	items := make([]AvailableModel, 0, len(modelsByKey))
+	for _, item := range modelsByKey {
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Modality != items[j].Modality {
+			return items[i].Modality < items[j].Modality
+		}
+		if items[i].DisplayName != items[j].DisplayName {
+			return items[i].DisplayName < items[j].DisplayName
+		}
+		return normalizeAvailableModelKey(items[i].ModelKey) < normalizeAvailableModelKey(items[j].ModelKey)
+	})
+	return items, nil
+}
+
+func normalizeAvailableModelKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func availableModelPreferred(candidate, current AvailableModel) bool {
+	if candidate.ManagementScope != current.ManagementScope {
+		return candidate.ManagementScope == "system_managed"
+	}
+	candidateRank := availableModelCapabilityRank(candidate.Capabilities)
+	currentRank := availableModelCapabilityRank(current.Capabilities)
+	if candidateRank != currentRank {
+		return candidateRank > currentRank
+	}
+	return candidate.ID < current.ID
+}
+
+func availableModelCapabilityRank(capabilities []Capability) int {
+	rank := 0
+	for _, capability := range capabilities {
+		source := capabilityLanguageMetadataFromSchema(capability.ProviderOptionsSchema).Source
+		value := 1
+		switch source {
+		case CapabilitySourceOfficial:
+			value = 6
+		case CapabilitySourceProvider:
+			value = 5
+		case CapabilitySourceManual:
+			value = 4
+		case CapabilitySourcePreset:
+			value = 3
+		case CapabilitySourceDiscovered:
+			value = 2
+		}
+		if value > rank {
+			rank = value
+		}
+	}
+	return rank
 }
 
 func (s *Service) CreateModel(ctx context.Context, organizationID, accountID string, req CreateModelRequest) (Model, error) {
@@ -779,6 +855,10 @@ func (s *Service) GetModel(ctx context.Context, organizationID, modelID string) 
 		return Model{}, err
 	}
 	if item.Status == "active" {
+		item, err = s.reconcileModelCapabilityPreset(ctx, item)
+		if err != nil {
+			return Model{}, err
+		}
 		if err := s.ensureDefaultCapabilityForModel(ctx, s.db, item.ID, item.Modality); err != nil {
 			return Model{}, err
 		}
@@ -1425,9 +1505,11 @@ func (s *Service) syncDiscoveredModelsForCredentialWithSummary(ctx context.Conte
 		}
 		modality := normalizeDiscoveredModality(discovered.Modality)
 		capability := defaultCapabilityInput(modality)
+		presetMatched := false
 		if preset, ok, err := s.lookupModelCapabilityPreset(ctx, tx, modelKey); err != nil {
 			return ModelDiscoverySync{}, err
 		} else if ok {
+			presetMatched = true
 			if displayName == "" || strings.EqualFold(displayName, modelKey) {
 				displayName = preset.DisplayName
 			}
@@ -1476,17 +1558,35 @@ func (s *Service) syncDiscoveredModelsForCredentialWithSummary(ctx context.Conte
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE provider_model_capabilities c
-			SET task_types = CASE WHEN c.task_types IS NULL OR c.task_types IN ('[]'::jsonb, '{}'::jsonb) THEN $2 ELSE c.task_types END,
-			    input_limits = CASE WHEN c.input_limits IS NULL OR c.input_limits = '{}'::jsonb THEN $3 ELSE c.input_limits END,
-			    output_limits = CASE WHEN c.output_limits IS NULL OR c.output_limits = '{}'::jsonb THEN $4 ELSE c.output_limits END,
-			    quality_tiers = CASE WHEN c.quality_tiers IS NULL OR c.quality_tiers IN ('[]'::jsonb, '{}'::jsonb) THEN $5 ELSE c.quality_tiers END,
-			    provider_options_schema = CASE WHEN c.provider_options_schema IS NULL OR c.provider_options_schema = '{}'::jsonb THEN $6 ELSE c.provider_options_schema END,
-			    pricing_policy = CASE WHEN c.pricing_policy IS NULL OR c.pricing_policy = '{}'::jsonb THEN $7 ELSE c.pricing_policy END
+			SET task_types = CASE WHEN (
+			        $8::boolean
+			        AND COALESCE(c.provider_options_schema #>> '{xCapabilities,capabilitySource}', 'unknown') NOT IN ('official', 'provider', 'manual')
+			    ) OR c.task_types IS NULL OR c.task_types IN ('[]'::jsonb, '{}'::jsonb) THEN $2 ELSE c.task_types END,
+			    input_limits = CASE WHEN (
+			        $8::boolean
+			        AND COALESCE(c.provider_options_schema #>> '{xCapabilities,capabilitySource}', 'unknown') NOT IN ('official', 'provider', 'manual')
+			    ) OR c.input_limits IS NULL OR c.input_limits = '{}'::jsonb THEN $3 ELSE c.input_limits END,
+			    output_limits = CASE WHEN (
+			        $8::boolean
+			        AND COALESCE(c.provider_options_schema #>> '{xCapabilities,capabilitySource}', 'unknown') NOT IN ('official', 'provider', 'manual')
+			    ) OR c.output_limits IS NULL OR c.output_limits = '{}'::jsonb THEN $4 ELSE c.output_limits END,
+			    quality_tiers = CASE WHEN (
+			        $8::boolean
+			        AND COALESCE(c.provider_options_schema #>> '{xCapabilities,capabilitySource}', 'unknown') NOT IN ('official', 'provider', 'manual')
+			    ) OR c.quality_tiers IS NULL OR c.quality_tiers IN ('[]'::jsonb, '{}'::jsonb) THEN $5 ELSE c.quality_tiers END,
+			    provider_options_schema = CASE WHEN (
+			        $8::boolean
+			        AND COALESCE(c.provider_options_schema #>> '{xCapabilities,capabilitySource}', 'unknown') NOT IN ('official', 'provider', 'manual')
+			    ) OR c.provider_options_schema IS NULL OR c.provider_options_schema = '{}'::jsonb THEN $6 ELSE c.provider_options_schema END,
+			    pricing_policy = CASE WHEN (
+			        $8::boolean
+			        AND COALESCE(c.provider_options_schema #>> '{xCapabilities,capabilitySource}', 'unknown') NOT IN ('official', 'provider', 'manual')
+			    ) OR c.pricing_policy IS NULL OR c.pricing_policy = '{}'::jsonb THEN $7 ELSE c.pricing_policy END
 			FROM provider_models m
 			WHERE c.provider_model_id = m.id
 			  AND c.provider_model_id = $1
 			  AND m.status <> 'disabled'
-		`, modelID, capability.TaskTypes, capability.InputLimits, capability.OutputLimits, capability.QualityTiers, capability.ProviderOptionsSchema, capability.PricingPolicy); err != nil {
+		`, modelID, capability.TaskTypes, capability.InputLimits, capability.OutputLimits, capability.QualityTiers, capability.ProviderOptionsSchema, capability.PricingPolicy, presetMatched); err != nil {
 			return ModelDiscoverySync{}, err
 		}
 		if credentialID != "" {

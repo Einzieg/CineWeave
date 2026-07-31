@@ -210,7 +210,7 @@ func filterRoutingCandidatesByLanguage(candidates []RoutingCandidate, req Routin
 
 func (s *Service) ensureDefaultCapabilitiesForRoutingProfile(ctx context.Context, organizationID, profileKey string) error {
 	rows, err := s.db.Query(ctx, `
-		SELECT DISTINCT m.id, m.modality
+		SELECT DISTINCT m.id
 		FROM model_profiles p
 		JOIN model_profile_bindings b ON b.model_profile_id = p.id
 		JOIN provider_models m ON m.id = b.provider_model_id
@@ -227,13 +227,12 @@ func (s *Service) ensureDefaultCapabilitiesForRoutingProfile(ctx context.Context
 	defer rows.Close()
 
 	type modelRef struct {
-		id       string
-		modality string
+		id string
 	}
 	models := make([]modelRef, 0)
 	for rows.Next() {
 		var model modelRef
-		if err := rows.Scan(&model.id, &model.modality); err != nil {
+		if err := rows.Scan(&model.id); err != nil {
 			return err
 		}
 		models = append(models, model)
@@ -242,7 +241,7 @@ func (s *Service) ensureDefaultCapabilitiesForRoutingProfile(ctx context.Context
 		return err
 	}
 	for _, model := range models {
-		if err := s.ensureDefaultCapabilityForModel(ctx, s.db, model.id, model.modality); err != nil {
+		if _, err := s.GetModel(ctx, organizationID, model.id); err != nil {
 			return err
 		}
 	}

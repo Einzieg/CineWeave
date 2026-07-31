@@ -5,14 +5,38 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	editionpkg "github.com/Einzieg/cineweave/internal/edition"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type allowOneManagedCredentialAuthorizer struct {
+	credentialID string
+}
+
+func (authorizer allowOneManagedCredentialAuthorizer) Authorize(
+	_ context.Context,
+	request editionpkg.BillingRoutingRequest,
+) (editionpkg.BillingRoutingDecision, error) {
+	for _, candidate := range request.Candidates {
+		if candidate.CredentialID == authorizer.credentialID {
+			return editionpkg.BillingRoutingDecision{
+				AllowedCredentialIDs: []string{authorizer.credentialID},
+			}, nil
+		}
+	}
+	return editionpkg.BillingRoutingDecision{}, editionpkg.AuthorizationError{
+		Code:    editionpkg.DenialBillingRoutingCandidateMissing,
+		Message: "credential belongs to a different billing account",
+	}
+}
 
 func TestManagedProviderCredentialLifecycleAndTenantIsolation(t *testing.T) {
 	modelServer := httptest.NewServer(http.HandlerFunc(
@@ -345,4 +369,260 @@ func TestManagedProviderCredentialLifecycleAndTenantIsolation(t *testing.T) {
 			availableModels,
 		)
 	}
+}
+
+func TestAvailableManagedModelsAreLogicalAndResolvePerBillingAccount(t *testing.T) {
+	ctx, pool, vault := openProviderAdminTestDB(t)
+	organizationID, userID, tenantModelID := seedGatewayIntegrationData(
+		t,
+		ctx,
+		pool,
+		vault,
+		"http://example.test",
+	)
+	var connectorID string
+	if err := pool.QueryRow(ctx, `
+		SELECT account.connector_id::text
+		FROM provider_models model
+		JOIN provider_accounts account ON account.id = model.provider_account_id
+		WHERE model.id = $1
+	`, tenantModelID).Scan(&connectorID); err != nil {
+		t.Fatalf("load connector: %v", err)
+	}
+
+	fixtures := make([]managedModelFixture, 0, 3)
+	for index, hashCharacter := range []string{"a", "b", "c"} {
+		fixtures = append(fixtures, insertManagedAvailableModelFixture(
+			t,
+			ctx,
+			pool,
+			vault,
+			organizationID,
+			userID,
+			connectorID,
+			index,
+			hashCharacter,
+		))
+	}
+
+	service := NewService(pool, vault)
+	available, err := service.ListAvailableModels(ctx, organizationID)
+	if err != nil {
+		t.Fatalf("list available models: %v", err)
+	}
+	omniCount := 0
+	var logicalOmni AvailableModel
+	for _, model := range available {
+		if model.ModelKey != "omni-fast-no-water" {
+			continue
+		}
+		omniCount++
+		logicalOmni = model
+		if model.Modality != "video" {
+			t.Fatalf("logical omni modality = %q, want video", model.Modality)
+		}
+		if !availableModelSupportsTaskType(model, TaskTypeVideoCreateTask) {
+			t.Fatalf("logical omni capabilities = %#v, want video.create_task", model.Capabilities)
+		}
+	}
+	if omniCount != 1 {
+		t.Fatalf("logical omni model count = %d, want 1; models=%#v", omniCount, available)
+	}
+	variants, err := ExecutableVideoGenerationVariants(logicalOmni.Capabilities, Model{
+		ID:           logicalOmni.ID,
+		ModelKey:     logicalOmni.ModelKey,
+		Modality:     logicalOmni.Modality,
+		Status:       logicalOmni.Status,
+		Capabilities: logicalOmni.Capabilities,
+	})
+	if err != nil {
+		t.Fatalf("parse logical omni video variants: %v", err)
+	}
+	if len(variants) != 1 {
+		t.Fatalf("logical omni variants = %#v, want one executable variant", variants)
+	}
+	durations, err := ExecutableWholeSecondDurationsForVideoVariant(variants[0])
+	if err != nil {
+		t.Fatalf("load logical omni durations: %v", err)
+	}
+	if len(durations) != 1 || durations[0] != 10 {
+		t.Fatalf("logical omni durations = %#v, want [10]", durations)
+	}
+
+	var correctedRows int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM provider_models model
+		JOIN provider_accounts account
+		  ON account.id = model.provider_account_id
+		JOIN provider_model_capabilities capability
+		  ON capability.provider_model_id = model.id
+		WHERE account.organization_id = $1
+		  AND model.model_key = 'omni-fast-no-water'
+		  AND model.modality = 'video'
+		  AND capability.task_types ? 'video.create_task'
+		  AND capability.provider_options_schema #>> '{xCapabilities,capabilitySource}' = 'preset'
+	`, organizationID).Scan(&correctedRows); err != nil {
+		t.Fatalf("load corrected managed models: %v", err)
+	}
+	if correctedRows != 3 {
+		t.Fatalf("corrected managed model rows = %d, want 3", correctedRows)
+	}
+
+	service.SetBillingRoutingAuthorizer(allowOneManagedCredentialAuthorizer{
+		credentialID: fixtures[1].credentialID,
+	})
+	selection, err := service.completeGatewaySelectionFromCandidateWithBilling(
+		ctx,
+		organizationID,
+		uuid.NewString(),
+		GatewayBillingIdentity{BillingContextID: uuid.NewString()},
+		RoutingCandidate{
+			ModelProfileID:        uuid.NewString(),
+			ModelProfileBindingID: uuid.NewString(),
+			ModelProfileKey:       "video_generation_default",
+			ProviderModelID:       fixtures[0].modelID,
+			ProviderAccountID:     fixtures[0].accountID,
+			ModelKey:              "omni-fast-no-water",
+			Modality:              "video",
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolve logical model for billing account: %v", err)
+	}
+	if selection.Model.ID != fixtures[1].modelID ||
+		selection.Account.ID != fixtures[1].accountID ||
+		selection.CredentialID != fixtures[1].credentialID {
+		t.Fatalf(
+			"billing selection = model %s account %s credential %s, want %s/%s/%s",
+			selection.Model.ID,
+			selection.Account.ID,
+			selection.CredentialID,
+			fixtures[1].modelID,
+			fixtures[1].accountID,
+			fixtures[1].credentialID,
+		)
+	}
+	firstModel, err := service.GetModel(ctx, organizationID, fixtures[0].modelID)
+	if err != nil {
+		t.Fatalf("load first logical video model: %v", err)
+	}
+	firstAccount, err := service.GetAccount(ctx, organizationID, fixtures[0].accountID)
+	if err != nil {
+		t.Fatalf("load first logical video account: %v", err)
+	}
+	videoCandidates, err := service.filterVideoPlanBillingCandidates(
+		ctx,
+		GatewayVideoPlanRequest{
+			OrganizationID: organizationID,
+			ProjectID:      uuid.NewString(),
+			GatewayBillingIdentity: GatewayBillingIdentity{
+				BillingContextID: uuid.NewString(),
+			},
+		},
+		[]resolvedVideoPlanCandidate{{
+			ProviderAccountID: fixtures[0].accountID,
+			Account:           firstAccount,
+			Model:             firstModel,
+		}},
+	)
+	if err != nil {
+		t.Fatalf("resolve logical video plan model for billing account: %v", err)
+	}
+	if len(videoCandidates) != 1 || videoCandidates[0].Model.ID != fixtures[1].modelID {
+		t.Fatalf("video plan candidates = %#v, want model %s", videoCandidates, fixtures[1].modelID)
+	}
+}
+
+type managedModelFixture struct {
+	accountID    string
+	credentialID string
+	modelID      string
+}
+
+func insertManagedAvailableModelFixture(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	vault *Vault,
+	organizationID string,
+	userID string,
+	connectorID string,
+	index int,
+	hashCharacter string,
+) managedModelFixture {
+	t.Helper()
+	fixture := managedModelFixture{}
+	managementReference := "billing-authority:test:billing-account:" + uuid.NewString()
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO provider_accounts(
+			organization_id, connector_id, name, base_url, auth_type, status, config, created_by
+		)
+		VALUES ($1, $2, $3, 'http://example.test/v1', 'bearer', 'active', '{}', $4)
+		RETURNING id::text
+	`, organizationID, connectorID, fmt.Sprintf("Managed account %d", index), userID).Scan(&fixture.accountID); err != nil {
+		t.Fatalf("insert managed account %d: %v", index, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO provider_managed_accounts(
+			provider_account_id, organization_id, management_scope,
+			management_reference, ensure_request_hash
+		)
+		VALUES ($1, $2, 'system_managed', $3, $4)
+	`, fixture.accountID, organizationID, managementReference, strings.Repeat(hashCharacter, 64)); err != nil {
+		t.Fatalf("insert managed account metadata %d: %v", index, err)
+	}
+	encrypted, err := vault.EncryptJSON(map[string]any{"apiKey": fmt.Sprintf("managed-secret-%d", index)})
+	if err != nil {
+		t.Fatalf("encrypt managed credential %d: %v", index, err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO provider_credentials(
+			organization_id, provider_account_id, credential_key, credential_type,
+			secret_ref, encrypted_payload, masked_preview, status, is_active, created_by
+		)
+		VALUES ($1, $2, $3, 'api_key', 'local:aes-gcm:v1', $4, '***test', 'active', true, $5)
+		RETURNING id::text
+	`, organizationID, fixture.accountID, fmt.Sprintf("managed-%d", index), encrypted, userID).Scan(&fixture.credentialID); err != nil {
+		t.Fatalf("insert managed credential %d: %v", index, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO provider_managed_credentials(
+			provider_credential_id, organization_id, provider_account_id,
+			management_scope, management_reference
+		)
+		VALUES ($1, $2, $3, 'system_managed', $4)
+	`, fixture.credentialID, organizationID, fixture.accountID, "billing-credential:"+uuid.NewString()); err != nil {
+		t.Fatalf("insert managed credential metadata %d: %v", index, err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO provider_models(provider_account_id, model_key, display_name, modality, status)
+		VALUES ($1, 'omni-fast-no-water', 'omni-fast-no-water', 'text', 'active')
+		RETURNING id::text
+	`, fixture.accountID).Scan(&fixture.modelID); err != nil {
+		t.Fatalf("insert managed model %d: %v", index, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO provider_model_capabilities(
+			provider_model_id, task_types, input_limits, output_limits,
+			quality_tiers, provider_options_schema, pricing_policy
+		)
+		VALUES (
+			$1, '["text.generate","text.stream"]', '{}', '{}', '[]',
+			'{"xCapabilities":{"capabilitySource":"inferred","capabilityApprovalStatus":"inferred"}}',
+			'{}'
+		)
+	`, fixture.modelID); err != nil {
+		t.Fatalf("insert managed model capability %d: %v", index, err)
+	}
+	return fixture
+}
+
+func availableModelSupportsTaskType(model AvailableModel, taskType string) bool {
+	for _, capability := range model.Capabilities {
+		if containsNormalizedString(stringsFromRawJSON(capability.TaskTypes), taskType) {
+			return true
+		}
+	}
+	return false
 }
