@@ -26,6 +26,8 @@ import type {
   UpdateModelProfileBindingRequest,
 } from "@/lib/types";
 import { editionEntry } from "@cineweave/edition-entry";
+import { usesSystemManagedProviders } from "@/edition/provider-management";
+import { useEditionEntitlements } from "@/edition/use-entitlements";
 import { AppShell, SectionTitle, Surface } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -324,9 +326,11 @@ function compareProviderCatalogEntries(a: ProviderCatalogEntry, b: ProviderCatal
 
 export function ProvidersPage() {
   const { session } = useStudioSession();
-  const organizationModelOnly =
-    editionEntry.navigation.length > 0 &&
-    !session.user?.systemAdministrator;
+  const entitlements = useEditionEntitlements(editionEntry.navigation.length > 0);
+  const organizationModelOnly = usesSystemManagedProviders(
+    entitlements.data?.edition,
+    editionEntry.navigation.length > 0,
+  );
   const canReadProviders = sessionHasPermission(session, "provider.read");
   const canManageProviders = sessionHasPermission(session, "provider.manage");
   const [selectedCatalogKey, setSelectedCatalogKey] = useState<string | null>(null);
@@ -1564,7 +1568,11 @@ export function ProvidersPage() {
           <TabsContent value="profiles" className="space-y-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">把业务链路使用的默认模型槽位绑定到具体供应商模型。</p>
+                <p className="text-sm text-muted-foreground">
+                  {organizationModelOnly
+                    ? "把业务链路使用的默认模型槽位绑定到平台可用模型。"
+                    : "把业务链路使用的默认模型槽位绑定到具体供应商模型。"}
+                </p>
                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                   <Badge variant="outline">脚本 Agent</Badge>
                   <Badge variant="outline">图片生成</Badge>
@@ -1646,7 +1654,9 @@ export function ProvidersPage() {
                       <div className="space-y-2">
                         <div className="text-xs font-medium text-muted-foreground">当前绑定</div>
                         {bindings.length === 0 ? (
-                          <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">尚未绑定供应商模型</div>
+                          <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+                            {organizationModelOnly ? "尚未绑定模型" : "尚未绑定供应商模型"}
+                          </div>
                         ) : (
                           <div className="grid gap-2">
                             {bindings.map((binding) => (
@@ -1682,7 +1692,7 @@ export function ProvidersPage() {
                       {canManageProviders ? <div className="space-y-3 rounded-md border bg-muted/30 p-3">
                         <div className="text-xs font-medium text-muted-foreground">添加或更新绑定</div>
                         <div className="space-y-1.5">
-                          <Label>供应商模型</Label>
+                          <Label>{organizationModelOnly ? "模型" : "供应商模型"}</Label>
                           <Select
                             value={draft.modelId}
                             onValueChange={(value) => {

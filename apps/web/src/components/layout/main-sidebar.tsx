@@ -9,16 +9,18 @@ import {
   editionFeatureAllowed,
   useEditionEntitlements,
 } from "@/edition/use-entitlements";
+import { usesSystemManagedProviders } from "@/edition/provider-management";
 import { globalNavItems } from "@/lib/routes";
 import type { GlobalSection } from "@/lib/routes";
 import { useStudioSession } from "@/lib/session";
 
 export function MainSidebar({ active }: { active: GlobalSection }) {
   const { session } = useStudioSession();
-  const organizationModelOnly =
-    editionEntry.navigation.length > 0 &&
-    !session.user?.systemAdministrator;
   const entitlements = useEditionEntitlements(editionEntry.navigation.length > 0);
+  const organizationModelOnly = usesSystemManagedProviders(
+    entitlements.data?.edition,
+    editionEntry.navigation.length > 0,
+  );
   const visibleItems = globalNavItems.filter(
     (item) =>
       (!item.systemOnly || session.user?.systemAdministrator) &&
@@ -70,10 +72,11 @@ export function MainSidebar({ active }: { active: GlobalSection }) {
 
 export function MobileGlobalNav({ active }: { active: GlobalSection }) {
   const { session } = useStudioSession();
-  const organizationModelOnly =
-    editionEntry.navigation.length > 0 &&
-    !session.user?.systemAdministrator;
   const entitlements = useEditionEntitlements(editionEntry.navigation.length > 0);
+  const organizationModelOnly = usesSystemManagedProviders(
+    entitlements.data?.edition,
+    editionEntry.navigation.length > 0,
+  );
   const visibleItems = globalNavItems.filter(
     (item) =>
       (!item.systemOnly || session.user?.systemAdministrator) &&
