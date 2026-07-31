@@ -86,6 +86,7 @@ type ProviderModelWithAccount = ProviderModel & {
   accountId: string;
   accountName: string;
   providerLabel: string;
+  managementScope?: AvailableProviderModel["managementScope"];
 };
 
 type BusinessProfileSlot = {
@@ -495,6 +496,10 @@ export function ProvidersPage() {
         : allProviderModels.filter((model) => model.status !== "disabled"),
     [allProviderModels, managedAvailableModels, organizationModelOnly],
   );
+  const organizationGroupedModels = useMemo(
+    () => groupModelsByModality(activeProviderModels),
+    [activeProviderModels],
+  );
   const providerModelsLoading = organizationModelOnly
     ? availableProviderModelsLoading
     : allProviderModelsLoading;
@@ -746,15 +751,20 @@ export function ProvidersPage() {
 
   const saveModelMutation = useApiMutation({
     requiredPermission: "provider.manage",
-    mutationFn: (session, data: { accountId: string; modelId?: string; body: JsonRecord }) => {
+    mutationFn: (session, data: { accountId?: string; modelId?: string; body: JsonRecord }) => {
       if (data.modelId) {
-        return studioApi.updateProviderModel(session, data.modelId, data.body);
+        return organizationModelOnly
+          ? studioApi.updateAvailableProviderModel(session, data.modelId, data.body)
+          : studioApi.updateProviderModel(session, data.modelId, data.body);
       }
+      if (!data.accountId) throw new Error("请选择供应商账号");
       return studioApi.createProviderModel(session, data.accountId, data.body);
     },
     onSuccess: () => {
       toast.success(modelDialogMode === "edit" ? "模型已保存" : "模型已添加");
-      if (selectedAccountId) {
+      if (organizationModelOnly) {
+        invalidate([qk.availableProviderModels(), qk.modelProfiles()]);
+      } else if (selectedAccountId) {
         invalidate([qk.providerModels(selectedAccountId), qk.providerModelsAll(accountIdsKey || "none")]);
       }
       setModelDialogOpen(false);
@@ -1286,7 +1296,7 @@ export function ProvidersPage() {
 
   function handleSaveModel() {
     if (!requireProviderManage()) return;
-    if (!selectedAccountId) {
+    if (!organizationModelOnly && !selectedAccountId) {
       toast.error("请选择供应商账号");
       return;
     }
@@ -1295,7 +1305,8 @@ export function ProvidersPage() {
       toast.error("请填写模型 ID、名称和类型");
       return;
     }
-    const duplicateModel = allModels.find((model) => model.id !== editingModel?.id && model.modelKey === modelKey);
+    const duplicateCandidates = organizationModelOnly ? activeProviderModels : allModels;
+    const duplicateModel = duplicateCandidates.find((model) => model.id !== editingModel?.id && model.modelKey === modelKey);
     if (duplicateModel && (duplicateModel.status !== "disabled" || modelDialogMode === "edit")) {
       toast.error(`模型 ID“${modelKey}”已存在，请直接编辑已有模型`);
       return;
@@ -1310,15 +1321,21 @@ export function ProvidersPage() {
       return;
     }
     saveModelMutation.mutate({
-      accountId: selectedAccountId,
+      accountId: selectedAccountId || undefined,
       modelId: editingModel?.id,
-      body: {
-        modelKey,
-        displayName: modelForm.displayName.trim(),
-        modality: modelForm.modality,
-        status: modelForm.status,
-        capabilities: capability,
-      },
+      body: organizationModelOnly
+        ? {
+            displayName: modelForm.displayName.trim(),
+            modality: modelForm.modality,
+            capabilities: capability,
+          }
+        : {
+            modelKey,
+            displayName: modelForm.displayName.trim(),
+            modality: modelForm.modality,
+            status: modelForm.status,
+            capabilities: capability,
+          },
     });
   }
 
@@ -1425,7 +1442,7 @@ export function ProvidersPage() {
     >
       <Surface>
         <SectionTitle
-          title={organizationModelOnly ? "业务模型配置" : "供应商管理"}
+          title={organizationModelOnly ? "模型管理" : "供应商管理"}
           description={
             organizationModelOnly
               ? "选择平台分配给当前组织的模型并配置路由优先级"
@@ -1437,7 +1454,18 @@ export function ProvidersPage() {
           defaultValue={organizationModelOnly ? "profiles" : "accounts"}
           className="p-4"
         >
-          {!organizationModelOnly ? (
+          {organizationModelOnly ? (
+            <TabsList>
+              <TabsTrigger value="profiles">
+                业务模型配置
+                <Badge variant="secondary" className="ml-2">{profiles.length}</Badge>
+              </TabsTrigger>
+              <TabsTrigger value="models">
+                模型详细配置
+                <Badge variant="secondary" className="ml-2">{activeProviderModels.length}</Badge>
+              </TabsTrigger>
+            </TabsList>
+          ) : (
             <TabsList>
               <TabsTrigger value="accounts">
                 供应商账号
@@ -1448,7 +1476,7 @@ export function ProvidersPage() {
                 <Badge variant="secondary" className="ml-2">{profiles.length}</Badge>
               </TabsTrigger>
             </TabsList>
-          ) : null}
+          )}
 
           {!organizationModelOnly ? <TabsContent value="accounts" className="space-y-4">
             <div className="flex items-center justify-between gap-3">
@@ -1779,6 +1807,67 @@ export function ProvidersPage() {
               })}
             </div>
           </TabsContent>
+
+          {organizationModelOnly ? (
+            <TabsContent value="models" className="space-y-4">
+              <div className="flex justify-end text-xs text-muted-foreground">
+                可用模型 {activeProviderModels.length}
+              </div>
+
+              {providerModelsLoading ? <Skeleton className="h-48" /> : null}
+              {!providerModelsLoading && activeProviderModels.length === 0 ? (
+                <div className="rounded-lg border border-dashed p-10 text-center">
+                  <Sparkles className="mx-auto h-10 w-10 text-muted-foreground opacity-50" />
+                  <p className="mt-3 text-sm text-muted-foreground">当前组织账户还没有可用模型</p>
+                </div>
+              ) : null}
+
+              <div className="space-y-5">
+                {organizationGroupedModels.map((group) => (
+                  <section key={group.modality} className="space-y-2">
+                    <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                      <span>{modalityLabel(group.modality)}</span>
+                      <div className="h-px flex-1 bg-border" />
+                      <span>{group.models.length}</span>
+                    </div>
+                    <div className="grid gap-2 lg:grid-cols-2">
+                      {group.models.map((model) => (
+                        <div key={model.id} className="rounded-md border p-3" data-provider-model-id={model.id} data-testid="available-provider-model-card">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium">{model.displayName}</span>
+                                <Badge variant="outline">{modalityLabel(model.modality)}</Badge>
+                              </div>
+                              <div className="mt-1 truncate font-mono text-xs text-muted-foreground">{model.modelKey}</div>
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {modelTaskTypes(model).map((taskType) => (
+                                  <span key={taskType} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                    {taskTypeLabel(taskType)}
+                                  </span>
+                                ))}
+                                {modelCapabilityLabels(model).map((label) => (
+                                  <span key={label} className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                                    {label}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            {canManageProviders ? (
+                              <Button size="sm" variant="outline" onClick={() => openEditModelDialog(model)}>
+                                <Edit2 className="h-3.5 w-3.5" />
+                                编辑详细配置
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </TabsContent>
+          ) : null}
         </Tabs>
       </Surface>
 
@@ -2440,13 +2529,21 @@ export function ProvidersPage() {
         >
           <DialogHeader>
             <DialogTitle>{modelDialogMode === "edit" ? "编辑模型" : "添加模型"}</DialogTitle>
-            <DialogDescription>配置模型 ID、类型、任务能力和计费元数据</DialogDescription>
+            <DialogDescription>
+              {organizationModelOnly
+                ? "配置模型类型、任务能力和输入输出限制"
+                : "配置模型 ID、类型、任务能力和计费元数据"}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>模型 ID</Label>
-                <Input value={modelForm.modelKey} onChange={(event) => setModelForm({ ...modelForm, modelKey: event.target.value })} />
+                <Label>{organizationModelOnly ? "模型标识（平台维护）" : "模型 ID"}</Label>
+                <Input
+                  value={modelForm.modelKey}
+                  disabled={organizationModelOnly}
+                  onChange={(event) => setModelForm({ ...modelForm, modelKey: event.target.value })}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>显示名称</Label>
@@ -2484,6 +2581,7 @@ export function ProvidersPage() {
                 <Label>状态</Label>
                 <Select
                   value={modelForm.status}
+                  disabled={organizationModelOnly}
                   onValueChange={(value) => setModelForm({ ...modelForm, status: value })}
                   onOpenChange={trackPortaledControlOpen}
                 >
@@ -2519,7 +2617,10 @@ export function ProvidersPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setModelDialogOpen(false)}>取消</Button>
-            <Button onClick={handleSaveModel} disabled={saveModelMutation.isPending}>保存</Button>
+            <Button onClick={handleSaveModel} disabled={saveModelMutation.isPending}>
+              {saveModelMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              保存
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

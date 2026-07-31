@@ -29,3 +29,17 @@ test("provider navigation mode does not depend on system administrator identity"
     assert.doesNotMatch(source, /organizationModelOnly[\s\S]{0,160}systemAdministrator/);
   }
 });
+
+test("system-managed provider mode keeps organization-safe model details editing", () => {
+  const pageSource = readFileSync(
+    new URL("../features/providers/providers-page.tsx", import.meta.url),
+    "utf8",
+  );
+  const clientSource = readFileSync(new URL("api-client.ts", import.meta.url), "utf8");
+
+  assert.match(pageSource, /模型详细配置/);
+  assert.match(pageSource, /studioApi\.updateAvailableProviderModel/);
+  assert.match(pageSource, /模型标识（平台维护）/);
+  assert.match(clientSource, /updateAvailableProviderModel/);
+  assert.match(clientSource, /`\/api\/provider-models\/\$\{modelId\}`/);
+});

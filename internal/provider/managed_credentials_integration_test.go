@@ -287,6 +287,70 @@ func TestManagedProviderCredentialLifecycleAndTenantIsolation(t *testing.T) {
 			availableByKey["gpt-integration"].ManagementScope,
 		)
 	}
+	managedModel := availableByKey["managed-text-model"]
+	updatedDisplayName := "Managed Text Model (configured)"
+	updatedModality := "text"
+	updatedManagedModel, err := service.UpdateAvailableModel(
+		ctx,
+		organizationID,
+		managedModel.ID,
+		UpdateAvailableModelRequest{
+			DisplayName: &updatedDisplayName,
+			Modality:    &updatedModality,
+			Capabilities: &CapabilityInput{
+				TaskTypes:             json.RawMessage(`["text.generate","text.stream"]`),
+				InputLimits:           json.RawMessage(`{"maxInputTokens":8192}`),
+				OutputLimits:          json.RawMessage(`{"maxOutputTokens":2048}`),
+				QualityTiers:          json.RawMessage(`[]`),
+				ProviderOptionsSchema: json.RawMessage(`{"xCapabilities":{"supportsStreaming":true}}`),
+				PricingPolicy:         json.RawMessage(`{}`),
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("update available managed model: %v", err)
+	}
+	if updatedManagedModel.DisplayName != updatedDisplayName ||
+		updatedManagedModel.ModelKey != managedModel.ModelKey ||
+		updatedManagedModel.Status != "active" {
+		t.Fatalf("updated managed model = %#v", updatedManagedModel)
+	}
+	if len(updatedManagedModel.Capabilities) != 1 ||
+		updatedManagedModel.Capabilities[0].Source != "manual" ||
+		updatedManagedModel.Capabilities[0].ApprovalStatus != "approved" {
+		t.Fatalf("updated managed model capabilities = %#v", updatedManagedModel.Capabilities)
+	}
+	if _, err := service.UpdateModel(ctx, organizationID, managedModel.ID, UpdateModelRequest{
+		DisplayName: &updatedDisplayName,
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("tenant model update for managed model error = %v, want pgx.ErrNoRows", err)
+	}
+	if _, err := service.syncDiscoveredModelsForCredentialWithSummary(
+		ctx,
+		organizationID,
+		managedAccount.ID,
+		firstImport.ProviderCredentialID,
+		[]DiscoveredModel{{
+			ModelKey:    managedModel.ModelKey,
+			DisplayName: "Remote Managed Model",
+			Modality:    "image",
+		}},
+	); err != nil {
+		t.Fatalf("rediscover manually configured managed model: %v", err)
+	}
+	rediscoveredManagedModel, err := service.GetModel(ctx, organizationID, managedModel.ID)
+	if err != nil {
+		t.Fatalf("load rediscovered managed model: %v", err)
+	}
+	if rediscoveredManagedModel.DisplayName != updatedDisplayName || rediscoveredManagedModel.Modality != updatedModality {
+		t.Fatalf(
+			"rediscovered managed model metadata = (%q,%q), want manual (%q,%q)",
+			rediscoveredManagedModel.DisplayName,
+			rediscoveredManagedModel.Modality,
+			updatedDisplayName,
+			updatedModality,
+		)
+	}
 
 	secondImportRequest := firstImportRequest
 	secondImportRequest.AttemptID = uuid.NewString()
@@ -368,6 +432,14 @@ func TestManagedProviderCredentialLifecycleAndTenantIsolation(t *testing.T) {
 			"available models after managed revocation = %#v",
 			availableModels,
 		)
+	}
+	if _, err := service.UpdateAvailableModel(
+		ctx,
+		organizationID,
+		managedModel.ID,
+		UpdateAvailableModelRequest{DisplayName: &updatedDisplayName},
+	); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("update unavailable managed model error = %v, want pgx.ErrNoRows", err)
 	}
 }
 

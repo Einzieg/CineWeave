@@ -116,6 +116,38 @@ func (s *Server) listAvailableProviderModels(
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
 }
 
+func (s *Server) updateAvailableProviderModel(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal auth.Principal,
+) {
+	var req provider.UpdateAvailableModelRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	orgID := organizationID(r, principal)
+	if !s.authorize(
+		w,
+		r,
+		principal,
+		authz.PermissionProviderManage,
+		authz.Resource{OrganizationID: orgID},
+	) {
+		return
+	}
+	item, err := s.providers.UpdateAvailableModel(
+		r.Context(),
+		orgID,
+		r.PathValue("modelId"),
+		req,
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
 func (s *Server) requireTenantProviderModel(
 	w http.ResponseWriter,
 	r *http.Request,

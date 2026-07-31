@@ -722,6 +722,61 @@ func (s *Service) EnsureTenantProviderModel(
 	return nil
 }
 
+func (s *Service) EnsureAvailableProviderModel(
+	ctx context.Context,
+	organizationID string,
+	modelID string,
+) error {
+	var exists bool
+	if err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM provider_models model
+			JOIN provider_accounts account
+			  ON account.id = model.provider_account_id
+			WHERE account.organization_id = $1
+			  AND account.status = 'active'
+			  AND model.id = $2
+			  AND model.status = 'active'
+			  AND (
+				EXISTS (
+					SELECT 1
+					FROM provider_credential_models mapping
+					JOIN provider_credentials credential
+					  ON credential.id = mapping.provider_credential_id
+					WHERE mapping.provider_model_id = model.id
+					  AND mapping.is_available = true
+					  AND credential.organization_id = account.organization_id
+					  AND credential.provider_account_id = account.id
+					  AND credential.status = 'active'
+					  AND credential.is_active = true
+				)
+				OR (
+					NOT EXISTS (
+						SELECT 1
+						FROM provider_credential_models mapping
+						WHERE mapping.provider_model_id = model.id
+					)
+					AND EXISTS (
+						SELECT 1
+						FROM provider_credentials credential
+						WHERE credential.organization_id = account.organization_id
+						  AND credential.provider_account_id = account.id
+						  AND credential.status = 'active'
+						  AND credential.is_active = true
+					)
+				)
+			  )
+		)
+	`, organizationID, modelID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func normalizeManagedCredentialModelDiscoveryRequest(
 	request DiscoverManagedCredentialModelsRequest,
 ) (DiscoverManagedCredentialModelsRequest, error) {

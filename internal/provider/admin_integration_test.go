@@ -566,6 +566,9 @@ func TestProviderModelDiscoveryPreservesExplicitPresetMatchedCapabilities(t *tes
 	if err != nil {
 		t.Fatalf("get discovered model: %v", err)
 	}
+	if model.DisplayName != name {
+		t.Fatalf("manual display name after discovery = %q, want %q", model.DisplayName, name)
+	}
 	assertCustomVariant("discovery", model)
 }
 

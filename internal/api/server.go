@@ -480,6 +480,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/storyboard-shots/{shotId}/review", s.withAuth(s.reviewStoryboardShot))
 
 	mux.HandleFunc("GET /api/provider-models/available", s.withAuth(s.listAvailableProviderModels))
+	mux.HandleFunc("PATCH /api/provider-models/{modelId}", s.withAuth(s.withProviderConfigurationWriteGate(s.updateAvailableProviderModel)))
 	mux.HandleFunc("GET /api/provider-catalog", s.withAuth(s.withProviderAdministration(s.listProviderCatalog)))
 	mux.HandleFunc("GET /api/provider-catalog/{providerKey}", s.withAuth(s.withProviderAdministration(s.getProviderCatalogEntry)))
 	mux.HandleFunc("POST /api/provider-catalog/{providerKey}/install", s.withAuth(s.withProviderAdministration(s.withProviderConfigurationWriteGate(s.installProviderCatalogEntry))))

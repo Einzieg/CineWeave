@@ -1823,6 +1823,8 @@ export const studioApi = {
     }),
   listAvailableProviderModels: (session: StudioSession) =>
     apiRequest<ListEnvelope<AvailableProviderModel>>("/api/provider-models/available", { session }),
+  updateAvailableProviderModel: (session: StudioSession, modelId: string, body: JsonRecord) =>
+    apiRequest<ProviderModel>(`/api/provider-models/${modelId}`, { method: "PATCH", session, body }),
   createProviderModel: (session: StudioSession, accountId: string, body: JsonRecord) =>
     apiRequest<ProviderModel>(`/api/providers/accounts/${accountId}/models`, { method: "POST", session, body }),
   updateProviderModel: (session: StudioSession, modelId: string, body: JsonRecord) =>

@@ -874,6 +874,29 @@ func (s *Service) UpdateModel(ctx context.Context, organizationID, modelID strin
 	if err := s.EnsureTenantProviderModel(ctx, organizationID, modelID); err != nil {
 		return Model{}, err
 	}
+	return s.updateModel(ctx, organizationID, modelID, req)
+}
+
+func (s *Service) UpdateAvailableModel(
+	ctx context.Context,
+	organizationID string,
+	modelID string,
+	req UpdateAvailableModelRequest,
+) (Model, error) {
+	if req.DisplayName == nil && req.Modality == nil && req.Capabilities == nil {
+		return Model{}, fmt.Errorf("%w: at least one model configuration field is required", ErrValidation)
+	}
+	if err := s.EnsureAvailableProviderModel(ctx, organizationID, modelID); err != nil {
+		return Model{}, err
+	}
+	return s.updateModel(ctx, organizationID, modelID, UpdateModelRequest{
+		DisplayName:  req.DisplayName,
+		Modality:     req.Modality,
+		Capabilities: req.Capabilities,
+	})
+}
+
+func (s *Service) updateModel(ctx context.Context, organizationID, modelID string, req UpdateModelRequest) (Model, error) {
 	current, err := s.GetModel(ctx, organizationID, modelID)
 	if err != nil {
 		return Model{}, err
@@ -1528,11 +1551,23 @@ func (s *Service) syncDiscoveredModelsForCredentialWithSummary(ctx context.Conte
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (provider_account_id, model_key) DO UPDATE SET
 				display_name = CASE
-					WHEN provider_models.status <> 'disabled' THEN EXCLUDED.display_name
+					WHEN provider_models.status <> 'disabled'
+					  AND NOT EXISTS (
+						SELECT 1
+						FROM provider_model_capabilities capability
+						WHERE capability.provider_model_id = provider_models.id
+						  AND COALESCE(capability.provider_options_schema #>> '{xCapabilities,capabilitySource}', 'unknown') = 'manual'
+					  ) THEN EXCLUDED.display_name
 					ELSE provider_models.display_name
 				END,
 				modality = CASE
-					WHEN provider_models.status <> 'disabled' THEN EXCLUDED.modality
+					WHEN provider_models.status <> 'disabled'
+					  AND NOT EXISTS (
+						SELECT 1
+						FROM provider_model_capabilities capability
+						WHERE capability.provider_model_id = provider_models.id
+						  AND COALESCE(capability.provider_options_schema #>> '{xCapabilities,capabilitySource}', 'unknown') = 'manual'
+					  ) THEN EXCLUDED.modality
 					ELSE provider_models.modality
 				END,
 				status = CASE
@@ -1540,7 +1575,16 @@ func (s *Service) syncDiscoveredModelsForCredentialWithSummary(ctx context.Conte
 					WHEN provider_models.status IN ('deprecated', 'error') THEN 'active'
 					ELSE provider_models.status
 				END,
-				updated_at = CASE WHEN provider_models.status <> 'disabled' THEN now() ELSE provider_models.updated_at END
+				updated_at = CASE
+					WHEN provider_models.status <> 'disabled'
+					  AND NOT EXISTS (
+						SELECT 1
+						FROM provider_model_capabilities capability
+						WHERE capability.provider_model_id = provider_models.id
+						  AND COALESCE(capability.provider_options_schema #>> '{xCapabilities,capabilitySource}', 'unknown') = 'manual'
+					  ) THEN now()
+					ELSE provider_models.updated_at
+				END
 			RETURNING id
 		`, accountID, modelKey, displayName, modality, status).Scan(&modelID); err != nil {
 			return ModelDiscoverySync{}, err

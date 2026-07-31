@@ -254,6 +254,14 @@ type UpdateModelRequest struct {
 	Capabilities *CapabilityInput `json:"capabilities"`
 }
 
+// UpdateAvailableModelRequest exposes only organization-safe model metadata.
+// Provider identity, routing availability, and lifecycle remain platform-owned.
+type UpdateAvailableModelRequest struct {
+	DisplayName  *string          `json:"displayName"`
+	Modality     *string          `json:"modality"`
+	Capabilities *CapabilityInput `json:"capabilities"`
+}
+
 type VideoCapabilityAttestation struct {
 	ID                      string          `json:"id"`
 	OrganizationID          string          `json:"organizationId"`

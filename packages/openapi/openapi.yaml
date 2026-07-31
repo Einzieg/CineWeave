@@ -8681,6 +8681,37 @@ paths:
                 $ref: "#/components/schemas/AvailableProviderModelListEnvelope"
         "403":
           $ref: "#/components/responses/Error"
+  /api/provider-models/{modelId}:
+    patch:
+      operationId: updateAvailableProviderModel
+      summary: Update organization-safe configuration for an available model
+      description: Updates display metadata and structured capabilities without exposing or changing provider identity, credentials, model key, or lifecycle status.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationHeader"
+        - $ref: "#/components/parameters/ModelId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAvailableProviderModelRequest"
+      responses:
+        "200":
+          description: Updated provider model configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderModelEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /api/provider-catalog:
     get:
       operationId: listProviderCatalog
@@ -20617,6 +20648,19 @@ components:
           type: string
         status:
           type: string
+        capabilities:
+          $ref: "#/components/schemas/CapabilityInput"
+    UpdateAvailableProviderModelRequest:
+      type: object
+      description: Organization-safe model fields. Provider identity, model key, credentials, and lifecycle status are immutable through this request.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        displayName:
+          type: string
+        modality:
+          type: string
+          enum: [text, image, video, audio, multimodal]
         capabilities:
           $ref: "#/components/schemas/CapabilityInput"
     TestProviderModelRequest:
