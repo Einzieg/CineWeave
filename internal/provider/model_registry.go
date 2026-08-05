@@ -242,20 +242,42 @@ func normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimit
 	inputTypes := uniqueStrings(append(stringsFromJSONField(inputLimits, "inputTypes"), stringsFromAny(xCapabilities["supportedInputTypes"])...))
 	outputTypes := uniqueStrings(append(stringsFromJSONField(outputLimits, "outputTypes"), stringsFromAny(xCapabilities["supportedOutputTypes"])...))
 	referenceTypes := uniqueStrings(stringsFromAny(xCapabilities["referenceTypes"]))
+	supportsText := supportsCapabilityTaskFamily(taskTypeValues, "text")
+	supportsImage := supportsCapabilityTaskFamily(taskTypeValues, "image")
+	supportsAudio := supportsCapabilityTaskFamily(taskTypeValues, "audio")
+	supportsVideo := supportsCapabilityTaskFamily(taskTypeValues, "video")
+	requestModes := normalizeRequestModesForTaskTypes(stringsFromAny(xCapabilities["requestModes"]), supportsText, supportsImage, supportsVideo, supportsAudio)
+	if len(requestModes) == 0 {
+		requestModes = defaultRequestModes(taskTypeValues)
+	}
+	if len(requestModes) > 0 {
+		xCapabilities["requestModes"] = requestModes
+	} else {
+		delete(xCapabilities, "requestModes")
+	}
 
 	if _, ok := xCapabilities["supportsAsyncTask"].(bool); !ok {
 		xCapabilities["supportsAsyncTask"] = inferSupportsAsyncTask(taskTypes, xCapabilities)
 	}
-	if _, ok := xCapabilities["supportsStreaming"].(bool); !ok {
-		xCapabilities["supportsStreaming"] = containsNormalizedString(taskTypeValues, TaskTypeTextStream)
-	}
-	if truthyBool(xCapabilities["supportsStreaming"]) {
-		mode, _ := xCapabilities["streamTerminalMode"].(string)
-		switch strings.ToLower(strings.TrimSpace(mode)) {
-		case "done_marker", "finish_reason", "done_or_finish_reason":
-		default:
-			xCapabilities["streamTerminalMode"] = "done_or_finish_reason"
+	if supportsText {
+		supportsTextStream := containsNormalizedString(taskTypeValues, TaskTypeTextStream)
+		if !supportsTextStream {
+			xCapabilities["supportsStreaming"] = false
+			delete(xCapabilities, "streamTerminalMode")
+		} else if _, ok := xCapabilities["supportsStreaming"].(bool); !ok {
+			xCapabilities["supportsStreaming"] = true
 		}
+		if truthyBool(xCapabilities["supportsStreaming"]) {
+			mode, _ := xCapabilities["streamTerminalMode"].(string)
+			switch strings.ToLower(strings.TrimSpace(mode)) {
+			case "done_marker", "finish_reason", "done_or_finish_reason":
+			default:
+				xCapabilities["streamTerminalMode"] = "done_or_finish_reason"
+			}
+		}
+	} else {
+		delete(xCapabilities, "supportsStreaming")
+		delete(xCapabilities, "streamTerminalMode")
 	}
 	if _, ok := xCapabilities["supportsReasoning"].(bool); !ok {
 		xCapabilities["supportsReasoning"] = false
@@ -263,23 +285,38 @@ func normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimit
 	if _, ok := xCapabilities["supportsReasoningLevels"].(bool); !ok {
 		xCapabilities["supportsReasoningLevels"] = len(stringsFromAny(xCapabilities["reasoningLevels"])) > 0
 	}
+	reasoningLevels := uniqueStrings(stringsFromAny(xCapabilities["reasoningLevels"]))
+	if truthyBool(xCapabilities["supportsReasoningLevels"]) && len(reasoningLevels) > 0 {
+		xCapabilities["reasoningLevels"] = reasoningLevels
+		defaultLevel, _ := xCapabilities["defaultReasoningLevel"].(string)
+		if !containsNormalizedString(reasoningLevels, defaultLevel) {
+			xCapabilities["defaultReasoningLevel"] = preferredCapabilityOption(reasoningLevels)
+		}
+	}
 	if _, ok := xCapabilities["supportedInputTypes"]; !ok && len(inputTypes) > 0 {
 		xCapabilities["supportedInputTypes"] = inputTypes
 	}
 	if _, ok := xCapabilities["supportedOutputTypes"]; !ok && len(outputTypes) > 0 {
 		xCapabilities["supportedOutputTypes"] = outputTypes
 	}
-	if _, ok := xCapabilities["requestModes"]; !ok {
-		xCapabilities["requestModes"] = defaultRequestModes(taskTypeValues)
-	}
-	supportsText := containsNormalizedString(taskTypeValues, TaskTypeTextGenerate) || containsNormalizedString(taskTypeValues, TaskTypeTextStream)
-	supportsImage := containsNormalizedString(taskTypeValues, TaskTypeImageGenerate)
-	supportsAudio := containsNormalizedString(taskTypeValues, TaskTypeAudioTTS) || containsNormalizedString(taskTypeValues, TaskTypeAudioTranscribe)
-	supportsVideo := containsNormalizedString(taskTypeValues, TaskTypeVideoCreateTask) || containsNormalizedString(taskTypeValues, "video.text_to_video") || containsNormalizedString(taskTypeValues, "video.image_to_video")
 	if _, ok := xCapabilities["supportsMultimodalInput"].(bool); !ok {
 		xCapabilities["supportsMultimodalInput"] = supportsText && hasNonTextInput(inputTypes)
 	}
 	if supportsImage {
+		imageQualities := uniqueStrings(stringsFromAny(xCapabilities["quality"]))
+		if len(imageQualities) == 0 {
+			imageQualities = semanticImageQualityOptions(stringsFromRawJSON(qualityTiers))
+		}
+		if len(imageQualities) > 0 {
+			xCapabilities["quality"] = imageQualities
+			defaultQuality, _ := xCapabilities["defaultQuality"].(string)
+			if !containsNormalizedString(imageQualities, defaultQuality) {
+				xCapabilities["defaultQuality"] = preferredCapabilityOption(imageQualities)
+			}
+		} else {
+			delete(xCapabilities, "quality")
+			delete(xCapabilities, "defaultQuality")
+		}
 		if _, ok := xCapabilities["supportsReferences"].(bool); !ok {
 			xCapabilities["supportsReferences"] = containsNormalizedString(inputTypes, "image")
 		}
@@ -323,11 +360,23 @@ func normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimit
 			xCapabilities["responseFormats"] = values
 		}
 	}
+	if supportsImage {
+		if _, ok := xCapabilities["outputFormats"]; !ok {
+			if values := stringsFromJSONField(outputLimits, "outputFormats"); len(values) > 0 {
+				xCapabilities["outputFormats"] = values
+			}
+		}
+	}
 	if _, ok := xCapabilities["supportedResolutions"]; !ok {
-		if values := stringsFromRawJSON(qualityTiers); len(values) > 0 && (supportsImage || supportsVideo) {
+		values := stringsFromRawJSON(qualityTiers)
+		if supportsImage {
+			values = imageResolutionOptions(values)
+		}
+		if len(values) > 0 && (supportsImage || supportsVideo) {
 			xCapabilities["supportedResolutions"] = values
 		}
 	}
+	removeInactiveCapabilityFamilyFields(xCapabilities, supportsText, supportsImage, supportsVideo, supportsAudio)
 	raw, err := json.Marshal(schema)
 	if err != nil {
 		return providerOptionsSchema
@@ -542,6 +591,204 @@ func hasNonTextInput(values []string) bool {
 		}
 	}
 	return false
+}
+
+func supportsCapabilityTaskFamily(taskTypes []string, family string) bool {
+	prefix := strings.ToLower(strings.TrimSpace(family)) + "."
+	if prefix == "." {
+		return false
+	}
+	for _, taskType := range taskTypes {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(taskType)), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func preferredCapabilityOption(values []string) string {
+	for _, preferred := range []string{"auto", "medium", "standard", "low"} {
+		for _, value := range values {
+			if strings.EqualFold(strings.TrimSpace(value), preferred) {
+				return value
+			}
+		}
+	}
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func semanticImageQualityOptions(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "auto", "low", "medium", "high", "standard", "hd":
+			result = append(result, value)
+		}
+	}
+	return uniqueStrings(result)
+}
+
+func imageResolutionOptions(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := strings.ToUpper(strings.TrimSpace(value))
+		if normalized == "AUTO" || isPixelDimensions(normalized) || isResolutionTier(normalized) {
+			result = append(result, value)
+		}
+	}
+	return uniqueStrings(result)
+}
+
+func isPixelDimensions(value string) bool {
+	parts := strings.Split(value, "X")
+	return len(parts) == 2 && isDigits(parts[0]) && isDigits(parts[1])
+}
+
+func isResolutionTier(value string) bool {
+	if isDigits(value) {
+		return true
+	}
+	if len(value) < 2 {
+		return false
+	}
+	suffix := value[len(value)-1]
+	return (suffix == 'K' || suffix == 'P') && isDigits(value[:len(value)-1])
+}
+
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func removeInactiveCapabilityFamilyFields(xCapabilities map[string]any, supportsText, supportsImage, supportsVideo, supportsAudio bool) {
+	if !supportsText {
+		deleteCapabilityFields(xCapabilities,
+			"supportsReasoning",
+			"supportsReasoningLevels",
+			"reasoningLevels",
+			"defaultReasoningLevel",
+			"supportsMultimodalInput",
+		)
+	}
+	if !supportsImage {
+		deleteCapabilityFields(xCapabilities,
+			"supportsReferences",
+			"quality",
+			"defaultQuality",
+			"responseFormats",
+			"outputFormats",
+		)
+	}
+	if !supportsVideo {
+		deleteCapabilityFields(xCapabilities,
+			"videoGenerationVariants",
+			"supportsFirstFrame",
+			"supportsLastFrame",
+			"supportsVideoReference",
+			"maxReferenceVideos",
+		)
+	}
+	if !supportsAudio {
+		deleteCapabilityFields(xCapabilities,
+			"supportsTTS",
+			"supportsTranscription",
+			"audioVoices",
+			"audioLanguages",
+			"audioInputFormats",
+			"audioResponseFormats",
+			"audioRequestModes",
+			"maxTTSCharacters",
+			"maxAudioDurationSeconds",
+		)
+	}
+	if !supportsImage && !supportsVideo {
+		deleteCapabilityFields(xCapabilities,
+			"supportsReferenceImages",
+			"maxReferenceImages",
+			"referenceTypes",
+			"supportedAspectRatios",
+			"supportedResolutions",
+		)
+	}
+}
+
+func normalizeCapabilityLimitsForTaskTypes(taskTypes, inputLimits, outputLimits, qualityTiers json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage) {
+	taskTypeValues := stringsFromRawJSON(taskTypes)
+	supportsText := supportsCapabilityTaskFamily(taskTypeValues, "text")
+	supportsImage := supportsCapabilityTaskFamily(taskTypeValues, "image")
+	supportsAudio := supportsCapabilityTaskFamily(taskTypeValues, "audio")
+	supportsVideo := supportsCapabilityTaskFamily(taskTypeValues, "video")
+
+	input := jsonObjectFromRaw(inputLimits)
+	output := jsonObjectFromRaw(outputLimits)
+	if !supportsText {
+		delete(input, "maxTokens")
+		delete(output, "maxTokens")
+	}
+	if !supportsImage {
+		delete(output, "maxImages")
+		delete(output, "responseFormats")
+		delete(output, "outputFormats")
+	}
+	if !supportsVideo {
+		delete(input, "maxReferenceVideos")
+	}
+	if !supportsAudio {
+		delete(input, "maxTTSCharacters")
+		delete(input, "maxAudioDurationSeconds")
+		delete(input, "audioFormats")
+		delete(output, "audioFormats")
+	}
+	if !supportsImage && !supportsVideo {
+		delete(input, "maxReferenceImages")
+		qualityTiers = json.RawMessage(`[]`)
+	}
+	return mustJSON(input), mustJSON(output), qualityTiers
+}
+
+func jsonObjectFromRaw(raw json.RawMessage) map[string]any {
+	var values map[string]any
+	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+		return map[string]any{}
+	}
+	return values
+}
+
+func deleteCapabilityFields(values map[string]any, keys ...string) {
+	for _, key := range keys {
+		delete(values, key)
+	}
+}
+
+func normalizeRequestModesForTaskTypes(modes []string, supportsText, supportsImage, supportsVideo, supportsAudio bool) []string {
+	result := make([]string, 0, len(modes))
+	for _, mode := range uniqueStrings(modes) {
+		supported := true
+		switch strings.ToLower(strings.TrimSpace(mode)) {
+		case "images.generate", "images.edit":
+			supported = supportsImage
+		case "async_create", "async_poll", "poll", "cancel":
+			supported = supportsVideo
+		case "audio.speech", "audio.transcriptions":
+			supported = supportsAudio
+		default:
+			supported = supportsText || supportsImage || supportsVideo || supportsAudio
+		}
+		if supported {
+			result = append(result, mode)
+		}
+	}
+	return result
 }
 
 func uniqueStrings(values []string) []string {

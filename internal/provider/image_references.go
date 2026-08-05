@@ -23,13 +23,10 @@ type gatewayImageReferenceCapabilities struct {
 }
 
 func resolveGatewayImageQuality(requested string, capabilities []Capability) (string, error) {
-	requested = strings.ToLower(strings.TrimSpace(requested))
-	if requested == "" {
-		return "", nil
-	}
 	qualities := make([]string, 0, 4)
+	defaultQuality := ""
 	for _, capability := range capabilities {
-		qualities = append(qualities, stringsFromRawJSON(capability.QualityTiers)...)
+		qualities = append(qualities, semanticImageQualityOptions(stringsFromRawJSON(capability.QualityTiers))...)
 		for _, raw := range []json.RawMessage{capability.InputLimits, capability.ProviderOptionsSchema} {
 			var decoded map[string]any
 			if err := json.Unmarshal(raw, &decoded); err != nil || decoded == nil {
@@ -39,26 +36,38 @@ func resolveGatewayImageQuality(requested string, capabilities []Capability) (st
 				decoded = nested
 			}
 			qualities = append(qualities, stringsFromAny(decoded["quality"])...)
+			if defaultQuality == "" {
+				defaultQuality, _ = decoded["defaultQuality"].(string)
+				defaultQuality = strings.TrimSpace(defaultQuality)
+			}
 		}
 	}
 	qualities = uniqueStrings(qualities)
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		requested = defaultQuality
+	}
+	if requested == "" {
+		return "", nil
+	}
 	if len(qualities) == 0 {
 		return requested, nil
 	}
-	supported := make(map[string]bool, len(qualities))
+	supported := make(map[string]string, len(qualities))
 	for _, quality := range qualities {
-		supported[strings.ToLower(strings.TrimSpace(quality))] = true
+		supported[strings.ToLower(strings.TrimSpace(quality))] = quality
 	}
-	if supported[requested] {
-		return requested, nil
+	normalizedRequested := strings.ToLower(requested)
+	if canonical, ok := supported[normalizedRequested]; ok {
+		return canonical, nil
 	}
 	aliases := map[string][]string{
 		"standard": {"medium", "low", "auto"},
 		"hd":       {"high", "medium"},
 	}
-	for _, candidate := range aliases[requested] {
-		if supported[candidate] {
-			return candidate, nil
+	for _, candidate := range aliases[normalizedRequested] {
+		if canonical, ok := supported[candidate]; ok {
+			return canonical, nil
 		}
 	}
 	return "", &StandardErrorError{Standard: StandardError{

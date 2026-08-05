@@ -153,11 +153,43 @@ func TestNormalizeCapabilityInputAddsTextRuntimeCapabilities(t *testing.T) {
 	}
 }
 
+func TestNormalizeCapabilityInputAddsSelectableCapabilityDefaults(t *testing.T) {
+	capability, err := normalizeCapabilityInput(CapabilityInput{
+		TaskTypes:    json.RawMessage(`["text.generate","text.stream"]`),
+		InputLimits:  json.RawMessage(`{"inputTypes":["text","image","file"]}`),
+		QualityTiers: json.RawMessage(`[]`),
+		ProviderOptionsSchema: json.RawMessage(`{
+			"xCapabilities": {
+				"supportsReasoning": true,
+				"supportsReasoningLevels": true,
+				"reasoningLevels": ["low", "medium", "high"]
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("normalize capability: %v", err)
+	}
+	var schema map[string]map[string]any
+	if err := json.Unmarshal(capability.ProviderOptionsSchema, &schema); err != nil {
+		t.Fatalf("decode provider options: %v", err)
+	}
+	caps := schema["xCapabilities"]
+	if caps["defaultReasoningLevel"] != "medium" {
+		t.Fatalf("defaultReasoningLevel = %#v, want medium", caps["defaultReasoningLevel"])
+	}
+	if caps["supportsMultimodalInput"] != true {
+		t.Fatalf("supportsMultimodalInput = %#v, want true", caps["supportsMultimodalInput"])
+	}
+	if !containsString(stringsFromAny(caps["supportedInputTypes"]), "file") {
+		t.Fatalf("supportedInputTypes = %#v, want file", caps["supportedInputTypes"])
+	}
+}
+
 func TestNormalizeCapabilityInputAddsImageAndVideoLimits(t *testing.T) {
 	imageCapability, err := normalizeCapabilityInput(CapabilityInput{
 		TaskTypes:    json.RawMessage(`["image.generate"]`),
 		InputLimits:  json.RawMessage(`{"inputTypes":["text","image"]}`),
-		OutputLimits: json.RawMessage(`{"responseFormats":["url","b64_json"]}`),
+		OutputLimits: json.RawMessage(`{"responseFormats":["url","b64_json"],"outputFormats":["png","webp"]}`),
 		QualityTiers: json.RawMessage(`["1024x1024","1792x1024"]`),
 	})
 	if err != nil {
@@ -174,8 +206,29 @@ func TestNormalizeCapabilityInputAddsImageAndVideoLimits(t *testing.T) {
 	if !containsString(stringsFromAny(imageCaps["responseFormats"]), "b64_json") {
 		t.Fatalf("responseFormats = %#v, want b64_json", imageCaps["responseFormats"])
 	}
+	if !containsString(stringsFromAny(imageCaps["outputFormats"]), "webp") {
+		t.Fatalf("outputFormats = %#v, want webp", imageCaps["outputFormats"])
+	}
 	if !containsString(stringsFromAny(imageCaps["supportedResolutions"]), "1792x1024") {
 		t.Fatalf("supportedResolutions = %#v, want 1792x1024", imageCaps["supportedResolutions"])
+	}
+	if _, exists := imageCaps["defaultQuality"]; exists {
+		t.Fatalf("resolution-only tiers must not produce defaultQuality: %#v", imageCaps["defaultQuality"])
+	}
+
+	qualityCapability, err := normalizeCapabilityInput(CapabilityInput{
+		TaskTypes:    json.RawMessage(`["image.generate"]`),
+		QualityTiers: json.RawMessage(`["low","medium","high"]`),
+	})
+	if err != nil {
+		t.Fatalf("normalize image quality capability: %v", err)
+	}
+	var qualitySchema map[string]map[string]any
+	if err := json.Unmarshal(qualityCapability.ProviderOptionsSchema, &qualitySchema); err != nil {
+		t.Fatalf("decode image quality provider options: %v", err)
+	}
+	if qualitySchema["xCapabilities"]["defaultQuality"] != "medium" {
+		t.Fatalf("defaultQuality = %#v, want medium", qualitySchema["xCapabilities"]["defaultQuality"])
 	}
 
 	videoCapability, err := normalizeCapabilityInput(CapabilityInput{
@@ -202,5 +255,106 @@ func TestNormalizeCapabilityInputAddsImageAndVideoLimits(t *testing.T) {
 	}
 	if !containsString(stringsFromAny(videoCaps["requestModes"]), "cancel") {
 		t.Fatalf("requestModes = %#v, want cancel", videoCaps["requestModes"])
+	}
+}
+
+func TestNormalizeCapabilityInputPreservesVideoGenerateAlias(t *testing.T) {
+	capability, err := normalizeCapabilityInput(CapabilityInput{
+		TaskTypes:    json.RawMessage(`["video.generate"]`),
+		InputLimits:  json.RawMessage(`{"maxReferenceImages":2,"maxReferenceVideos":1}`),
+		QualityTiers: json.RawMessage(`["720p"]`),
+		ProviderOptionsSchema: json.RawMessage(`{
+			"xCapabilities": {
+				"requestModes": ["async_create"],
+				"supportsFirstFrame": true,
+				"videoGenerationVariants": [{"variantKey":"legacy"}]
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("normalize video.generate capability: %v", err)
+	}
+
+	var inputLimits map[string]any
+	if err := json.Unmarshal(capability.InputLimits, &inputLimits); err != nil {
+		t.Fatalf("decode input limits: %v", err)
+	}
+	if inputLimits["maxReferenceImages"] != float64(2) || inputLimits["maxReferenceVideos"] != float64(1) {
+		t.Fatalf("video reference limits were removed: %s", capability.InputLimits)
+	}
+	if !containsString(stringsFromRawJSON(capability.QualityTiers), "720p") {
+		t.Fatalf("video quality tiers were removed: %s", capability.QualityTiers)
+	}
+
+	var schema map[string]map[string]any
+	if err := json.Unmarshal(capability.ProviderOptionsSchema, &schema); err != nil {
+		t.Fatalf("decode provider options: %v", err)
+	}
+	videoCaps := schema["xCapabilities"]
+	if !containsString(stringsFromAny(videoCaps["requestModes"]), "async_create") {
+		t.Fatalf("video request modes were removed: %s", capability.ProviderOptionsSchema)
+	}
+	if videoCaps["supportsFirstFrame"] != true {
+		t.Fatalf("supportsFirstFrame was removed: %s", capability.ProviderOptionsSchema)
+	}
+	if variants, ok := videoCaps["videoGenerationVariants"].([]any); !ok || len(variants) != 1 {
+		t.Fatalf("video variants were removed: %s", capability.ProviderOptionsSchema)
+	}
+}
+
+func TestNormalizeCapabilityInputRemovesInactiveTaskFamilyFields(t *testing.T) {
+	capability, err := normalizeCapabilityInput(CapabilityInput{
+		TaskTypes:    json.RawMessage(`["text.generate"]`),
+		InputLimits:  json.RawMessage(`{"maxTokens":4096,"maxReferenceImages":4,"maxReferenceVideos":1}`),
+		OutputLimits: json.RawMessage(`{"maxTokens":1024,"maxImages":1,"responseFormats":["url"],"outputFormats":["png"]}`),
+		QualityTiers: json.RawMessage(`["high"]`),
+		ProviderOptionsSchema: json.RawMessage(`{
+			"xCapabilities": {
+				"quality": ["high"],
+				"defaultQuality": "high",
+				"supportsReferences": true,
+				"supportsStreaming": true,
+				"streamTerminalMode": "done_marker",
+				"requestModes": ["images.generate", "async_create", "audio.speech", "chat_completions"],
+				"videoGenerationVariants": [{"variantKey":"legacy"}],
+				"supportsTTS": true
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("normalize capability: %v", err)
+	}
+	var schema map[string]map[string]any
+	if err := json.Unmarshal(capability.ProviderOptionsSchema, &schema); err != nil {
+		t.Fatalf("decode provider options: %v", err)
+	}
+	for _, key := range []string{"quality", "defaultQuality", "supportsReferences", "videoGenerationVariants", "supportsTTS"} {
+		if _, exists := schema["xCapabilities"][key]; exists {
+			t.Fatalf("inactive capability field %s was retained in %s", key, capability.ProviderOptionsSchema)
+		}
+	}
+	requestModes := stringsFromAny(schema["xCapabilities"]["requestModes"])
+	if len(requestModes) != 1 || requestModes[0] != "chat_completions" {
+		t.Fatalf("requestModes = %#v, want only chat_completions", requestModes)
+	}
+	if schema["xCapabilities"]["supportsStreaming"] != false {
+		t.Fatalf("supportsStreaming = %#v, want false without text.stream task", schema["xCapabilities"]["supportsStreaming"])
+	}
+	if _, exists := schema["xCapabilities"]["streamTerminalMode"]; exists {
+		t.Fatalf("streamTerminalMode was retained without text.stream task in %s", capability.ProviderOptionsSchema)
+	}
+	var inputLimits map[string]any
+	if err := json.Unmarshal(capability.InputLimits, &inputLimits); err != nil {
+		t.Fatalf("decode input limits: %v", err)
+	}
+	if _, exists := inputLimits["maxReferenceImages"]; exists {
+		t.Fatalf("inactive image limits were retained in %s", capability.InputLimits)
+	}
+	var qualityTiers []string
+	if err := json.Unmarshal(capability.QualityTiers, &qualityTiers); err != nil {
+		t.Fatalf("decode quality tiers: %v", err)
+	}
+	if len(qualityTiers) != 0 {
+		t.Fatalf("inactive quality tiers were retained: %#v", qualityTiers)
 	}
 }

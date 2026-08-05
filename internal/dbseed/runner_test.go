@@ -46,6 +46,153 @@ func TestEmbeddedResourceCoverage(t *testing.T) {
 	}
 }
 
+func TestModelCapabilityPresetsExposeStructuredEditorDefaults(t *testing.T) {
+	resources, err := loadResources()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var found bool
+	for _, resource := range resources {
+		if resource.Data.ResourceKey != "model-capabilities" {
+			continue
+		}
+		found = true
+		if resource.Data.ResourceVersion != 4 {
+			t.Fatalf("model capabilities version = %d, want 4", resource.Data.ResourceVersion)
+		}
+		for _, table := range resource.Data.Tables {
+			if table.Name != "provider_model_capability_presets" {
+				continue
+			}
+			var rows []struct {
+				PresetKey             string          `json:"preset_key"`
+				TaskTypes             []string        `json:"task_types"`
+				InputLimits           json.RawMessage `json:"input_limits"`
+				QualityTiers          []string        `json:"quality_tiers"`
+				ProviderOptionsSchema json.RawMessage `json:"provider_options_schema"`
+			}
+			if err := json.Unmarshal(table.Rows, &rows); err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range rows {
+				var inputLimits struct {
+					InputTypes []string `json:"inputTypes"`
+				}
+				if err := json.Unmarshal(row.InputLimits, &inputLimits); err != nil {
+					t.Fatalf("%s input limits: %v", row.PresetKey, err)
+				}
+				var schema struct {
+					XCapabilities struct {
+						SupportedInputTypes     []string `json:"supportedInputTypes"`
+						SupportsMultimodalInput *bool    `json:"supportsMultimodalInput"`
+						SupportsReasoningLevels bool     `json:"supportsReasoningLevels"`
+						ReasoningLevels         []string `json:"reasoningLevels"`
+						DefaultReasoningLevel   string   `json:"defaultReasoningLevel"`
+						Quality                 []string `json:"quality"`
+						DefaultQuality          string   `json:"defaultQuality"`
+						SupportedResolutions    []string `json:"supportedResolutions"`
+					} `json:"xCapabilities"`
+				}
+				if err := json.Unmarshal(row.ProviderOptionsSchema, &schema); err != nil {
+					t.Fatalf("%s provider options: %v", row.PresetKey, err)
+				}
+				supportsText := containsSeedValue(row.TaskTypes, "text.generate") || containsSeedValue(row.TaskTypes, "text.stream")
+				if supportsText {
+					if len(inputLimits.InputTypes) == 0 || !sameSeedValues(inputLimits.InputTypes, schema.XCapabilities.SupportedInputTypes) {
+						t.Fatalf("%s text input types are not normalized", row.PresetKey)
+					}
+					wantMultimodal := false
+					for _, inputType := range inputLimits.InputTypes {
+						if !strings.EqualFold(inputType, "text") {
+							wantMultimodal = true
+						}
+					}
+					if schema.XCapabilities.SupportsMultimodalInput == nil || *schema.XCapabilities.SupportsMultimodalInput != wantMultimodal {
+						t.Fatalf("%s multimodal flag does not match input types", row.PresetKey)
+					}
+					if schema.XCapabilities.SupportsReasoningLevels &&
+						(!containsSeedValue(schema.XCapabilities.ReasoningLevels, schema.XCapabilities.DefaultReasoningLevel) || schema.XCapabilities.DefaultReasoningLevel == "") {
+						t.Fatalf("%s selectable reasoning levels have no valid default", row.PresetKey)
+					}
+				}
+				if containsSeedValue(row.TaskTypes, "image.generate") {
+					if len(schema.XCapabilities.Quality) > 0 &&
+						!containsSeedValue(schema.XCapabilities.Quality, schema.XCapabilities.DefaultQuality) {
+						t.Fatalf("%s declared image quality tiers have no valid default", row.PresetKey)
+					}
+					if len(schema.XCapabilities.Quality) == 0 && schema.XCapabilities.DefaultQuality != "" {
+						t.Fatalf("%s image default quality has no declared quality tiers", row.PresetKey)
+					}
+					for _, quality := range schema.XCapabilities.Quality {
+						if looksLikeSeedResolution(quality) {
+							t.Fatalf("%s image resolution %q is stored as a quality tier", row.PresetKey, quality)
+						}
+					}
+					for _, tier := range row.QualityTiers {
+						if looksLikeSeedResolution(tier) && !containsSeedValue(schema.XCapabilities.SupportedResolutions, tier) {
+							t.Fatalf("%s image resolution %q is missing from supportedResolutions", row.PresetKey, tier)
+						}
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("model-capabilities seed resource is missing")
+	}
+}
+
+func looksLikeSeedResolution(value string) bool {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if value == "AUTO" {
+		return false
+	}
+	if parts := strings.Split(value, "X"); len(parts) == 2 {
+		return seedDigits(parts[0]) && seedDigits(parts[1])
+	}
+	if seedDigits(value) {
+		return true
+	}
+	if len(value) > 1 && (strings.HasSuffix(value, "K") || strings.HasSuffix(value, "P")) {
+		return seedDigits(value[:len(value)-1])
+	}
+	return false
+}
+
+func seedDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func containsSeedValue(values []string, expected string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(expected)) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameSeedValues(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for _, value := range left {
+		if !containsSeedValue(right, value) {
+			return false
+		}
+	}
+	return true
+}
+
 func TestActiveStoryboardScenePlannerSeedUsesCurrentContract(t *testing.T) {
 	resources, err := loadResources()
 	if err != nil {

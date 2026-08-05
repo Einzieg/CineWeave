@@ -52,6 +52,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -59,6 +67,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2,
+  ChevronDown,
   Edit2,
   Key,
   Layers3,
@@ -185,7 +194,9 @@ type ModelForm = {
   imageAspectRatiosText: string;
   imageResolutionsText: string;
   imageQualityTiersText: string;
+  defaultImageQuality: string;
   imageResponseFormatsText: string;
+  imageOutputFormatsText: string;
   minDurationSeconds: string;
   maxDurationSeconds: string;
   durationsText: string;
@@ -230,7 +241,7 @@ const defaultTaskTypesByModality: Record<string, string[]> = {
   image: ["image.generate"],
   video: ["video.text_to_video", "video.image_to_video", "video.create_task", "video.poll_task", "video.cancel_task"],
   audio: ["audio.tts", "audio.transcribe"],
-  multimodal: ["text.generate", "text.stream", "image.generate", "video.create_task", "video.poll_task", "audio.tts", "audio.transcribe"],
+  multimodal: ["text.generate", "text.stream"],
 };
 
 const businessProfileSlots: BusinessProfileSlot[] = [
@@ -295,6 +306,121 @@ const modalityOptions = [
 const statusOptions = [
   { value: "active", label: "启用" },
   { value: "disabled", label: "停用" },
+];
+
+type CapabilityOption = { value: string; label: string };
+
+const taskTypeOptions: CapabilityOption[] = [
+  { value: "text.generate", label: "文本生成" },
+  { value: "text.stream", label: "文本流式生成" },
+  { value: "image.generate", label: "图片生成" },
+  { value: "video.text_to_video", label: "文生视频" },
+  { value: "video.image_to_video", label: "图生视频" },
+  { value: "video.generate", label: "视频生成" },
+  { value: "video.create_task", label: "创建视频任务" },
+  { value: "video.poll_task", label: "轮询视频任务" },
+  { value: "video.cancel_task", label: "取消视频任务" },
+  { value: "audio.tts", label: "语音合成" },
+  { value: "audio.transcribe", label: "语音识别" },
+];
+
+const inputTypeOptions: CapabilityOption[] = [
+  { value: "text", label: "文本" },
+  { value: "image", label: "图片" },
+  { value: "audio", label: "音频" },
+  { value: "video", label: "视频" },
+  { value: "file", label: "文件" },
+];
+
+const outputTypeOptions: CapabilityOption[] = [
+  { value: "text", label: "文本" },
+  { value: "image", label: "图片" },
+  { value: "audio", label: "音频" },
+  { value: "video", label: "视频" },
+  { value: "last_frame", label: "视频尾帧" },
+  { value: "json", label: "JSON" },
+  { value: "file", label: "文件" },
+];
+
+const reasoningLevelOptions: CapabilityOption[] = [
+  { value: "auto", label: "自动" },
+  { value: "none", label: "关闭思考" },
+  { value: "minimal", label: "极低" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  { value: "xhigh", label: "极高" },
+  { value: "max", label: "最高" },
+];
+
+const imageRequestModeOptions: CapabilityOption[] = [
+  { value: "images.generate", label: "图片生成接口" },
+  { value: "images.edit", label: "图片编辑接口" },
+  { value: "responses", label: "Responses 接口" },
+  { value: "chat_completions", label: "Chat Completions 接口" },
+  { value: "sync", label: "同步请求" },
+];
+
+const aspectRatioOptions: CapabilityOption[] = [
+  "auto", "1:1", "1:2", "2:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4",
+  "9:16", "16:9", "9:19.5", "19.5:9", "9:20", "20:9", "9:21", "21:9",
+  "1:3", "3:1", "1:4", "4:1", "1:8", "8:1",
+].map((value) => ({ value, label: value === "auto" ? "自动" : value }));
+
+const imageResolutionOptions: CapabilityOption[] = [
+  "auto", "512", "1K", "2K", "3K", "4K", "1024x1024", "1024x1536", "1536x1024",
+  "2048x1152", "2048x2048", "2160x3840", "3840x2160",
+].map((value) => ({ value, label: value === "auto" ? "自动" : value }));
+
+const imageQualityOptions: CapabilityOption[] = [
+  { value: "auto", label: "自动" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  { value: "standard", label: "标准" },
+  { value: "hd", label: "高清" },
+];
+
+const imageResponseFormatOptions: CapabilityOption[] = [
+  { value: "url", label: "图片 URL" },
+  { value: "b64_json", label: "Base64 JSON" },
+];
+
+const imageOutputFormatOptions: CapabilityOption[] = [
+  { value: "png", label: "PNG" },
+  { value: "jpeg", label: "JPEG" },
+  { value: "webp", label: "WebP" },
+];
+
+const videoReferenceModeOptions: CapabilityOption[] = [
+  { value: "none", label: "无参考" },
+  { value: "first_frame", label: "首帧" },
+  { value: "last_frame", label: "尾帧" },
+  { value: "first_last_frames", label: "首尾帧" },
+  { value: "semantic_references", label: "多模态参考" },
+  { value: "video_reference", label: "视频参考" },
+  { value: "video_extension", label: "视频延长" },
+  { value: "storyboard_sheet", label: "分镜板" },
+];
+
+const videoRequestModeOptions: CapabilityOption[] = [
+  { value: "async_create", label: "异步创建" },
+  { value: "poll", label: "轮询" },
+  { value: "cancel", label: "取消" },
+  { value: "sync", label: "同步请求" },
+];
+
+const videoResolutionOptions: CapabilityOption[] = ["480p", "720p", "1080p", "2K", "4K"]
+  .map((value) => ({ value, label: value }));
+
+const audioFormatOptions: CapabilityOption[] = ["mp3", "wav", "m4a", "webm", "aac", "flac", "opus", "pcm"]
+  .map((value) => ({ value, label: value.toUpperCase() }));
+
+const audioRequestModeOptions: CapabilityOption[] = [
+  { value: "audio.speech", label: "语音合成接口" },
+  { value: "audio.transcriptions", label: "语音识别接口" },
+  { value: "chat_completions", label: "Chat Completions 接口" },
+  { value: "responses", label: "Responses 接口" },
 ];
 
 const authTypeOptions = [
@@ -2523,7 +2649,7 @@ export function ProvidersPage() {
 
       <Dialog open={modelDialogOpen} onOpenChange={handleModelDialogOpenChange}>
         <DialogContent
-          className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl"
+          className="max-h-[calc(100vh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-6xl"
           onInteractOutside={preventDialogCloseFromPortaledControl}
           onPointerDownCapture={markDialogInnerPointerDown}
         >
@@ -2535,85 +2661,97 @@ export function ProvidersPage() {
                 : "配置模型 ID、类型、任务能力和计费元数据"}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>{organizationModelOnly ? "模型标识（平台维护）" : "模型 ID"}</Label>
-                <Input
-                  value={modelForm.modelKey}
-                  disabled={organizationModelOnly}
-                  onChange={(event) => setModelForm({ ...modelForm, modelKey: event.target.value })}
+          <div className="min-h-0 space-y-6 overflow-y-auto pr-1">
+            <section className="space-y-4">
+              <div>
+                <h3 className="font-medium">基本信息</h3>
+                <p className="text-xs text-muted-foreground">设置模型身份、类型和参与运行时的任务能力。</p>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-4">
+                <div className="space-y-1.5">
+                  <Label>{organizationModelOnly ? "模型标识（平台维护）" : "模型 ID"}</Label>
+                  <Input
+                    value={modelForm.modelKey}
+                    disabled={organizationModelOnly}
+                    onChange={(event) => setModelForm({ ...modelForm, modelKey: event.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>显示名称</Label>
+                  <Input value={modelForm.displayName} onChange={(event) => setModelForm({ ...modelForm, displayName: event.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>模型类型</Label>
+                  <Select
+                    value={modelForm.modality}
+                    onOpenChange={trackPortaledControlOpen}
+                    onValueChange={(value) => {
+                      const taskTypes = defaultTaskTypesByModality[value] || [];
+                      setModelForm({
+                        ...modelForm,
+                        modality: value,
+                        supportsAsyncTask: defaultSupportsAsyncTask(value),
+                        ...defaultCapabilityFormFields(value, taskTypes),
+                        taskTypesText: taskTypes.join("\n") || modelForm.taskTypesText,
+                      });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {modalityOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>状态</Label>
+                  <Select
+                    value={modelForm.status}
+                    disabled={organizationModelOnly}
+                    onValueChange={(value) => setModelForm({ ...modelForm, status: value })}
+                    onOpenChange={trackPortaledControlOpen}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {statusOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(240px,1fr)]">
+                <MultiSelectField
+                  label="任务类型"
+                  values={taskTypesFromText(modelForm.taskTypesText)}
+                  options={taskTypeOptionsForModality(modelForm.modality)}
+                  placeholder="选择模型支持的任务"
+                  onChange={(values) => setModelForm({ ...modelForm, taskTypesText: listText(values) })}
+                  onOpenChange={trackPortaledControlOpen}
                 />
+                <div className="flex min-h-10 items-center justify-between gap-3 rounded-md border px-3">
+                  <div>
+                    <Label htmlFor="provider-model-supports-async-task">支持异步任务</Label>
+                    <p className="text-xs text-muted-foreground">创建任务后通过轮询或回调获取结果</p>
+                  </div>
+                  <Switch
+                    id="provider-model-supports-async-task"
+                    checked={modelForm.supportsAsyncTask}
+                    onCheckedChange={(checked) => setModelForm({ ...modelForm, supportsAsyncTask: checked })}
+                  />
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label>显示名称</Label>
-                <Input value={modelForm.displayName} onChange={(event) => setModelForm({ ...modelForm, displayName: event.target.value })} />
-              </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>模型类型</Label>
-                <Select
-                  value={modelForm.modality}
-                  onOpenChange={trackPortaledControlOpen}
-                  onValueChange={(value) => {
-                    const taskTypes = defaultTaskTypesByModality[value] || [];
-                    setModelForm({
-                      ...modelForm,
-                      modality: value,
-                      supportsAsyncTask: defaultSupportsAsyncTask(value),
-                      ...defaultCapabilityFormFields(value, taskTypes),
-                      taskTypesText: taskTypes.join("\n") || modelForm.taskTypesText,
-                    });
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {modalityOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>状态</Label>
-                <Select
-                  value={modelForm.status}
-                  disabled={organizationModelOnly}
-                  onValueChange={(value) => setModelForm({ ...modelForm, status: value })}
-                  onOpenChange={trackPortaledControlOpen}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {statusOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>任务类型</Label>
-              <Textarea
-                className="min-h-24 font-mono text-xs"
-                spellCheck={false}
-                value={modelForm.taskTypesText}
-                onChange={(event) => setModelForm({ ...modelForm, taskTypesText: event.target.value })}
-              />
-            </div>
-            <div className="flex items-center justify-between gap-3 rounded-md border p-3">
-              <Label htmlFor="provider-model-supports-async-task">支持异步任务</Label>
-              <Switch
-                id="provider-model-supports-async-task"
-                checked={modelForm.supportsAsyncTask}
-                onCheckedChange={(checked) => setModelForm({ ...modelForm, supportsAsyncTask: checked })}
-              />
-            </div>
-            <ModelCapabilityFields modelForm={modelForm} setModelForm={setModelForm} />
+            </section>
+            <ModelCapabilityFields
+              modelForm={modelForm}
+              setModelForm={setModelForm}
+              onPortaledControlOpen={trackPortaledControlOpen}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setModelDialogOpen(false)}>取消</Button>
@@ -2766,16 +2904,30 @@ function formatProviderDate(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(date);
 }
 
-function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelForm; setModelForm: (value: ModelForm) => void }) {
+function ModelCapabilityFields({
+  modelForm,
+  setModelForm,
+  onPortaledControlOpen,
+}: {
+  modelForm: ModelForm;
+  setModelForm: (value: ModelForm) => void;
+  onPortaledControlOpen: (open: boolean) => void;
+}) {
   const update = (patch: Partial<ModelForm>) => setModelForm({ ...modelForm, ...patch });
-  const isText = modelForm.modality === "text" || modelForm.modality === "multimodal";
-  const isImage = modelForm.modality === "image" || modelForm.modality === "multimodal";
-  const isVideo = modelForm.modality === "video" || modelForm.modality === "multimodal";
-  const isAudio = modelForm.modality === "audio" || modelForm.modality === "multimodal";
+  const taskTypes = taskTypesFromText(modelForm.taskTypesText);
+  const isText = supportsCapabilityFamily(modelForm.modality, taskTypes, "text");
+  const isImage = supportsCapabilityFamily(modelForm.modality, taskTypes, "image");
+  const isVideo = supportsCapabilityFamily(modelForm.modality, taskTypes, "video");
+  const isAudio = supportsCapabilityFamily(modelForm.modality, taskTypes, "audio");
   const reasoningLevels = splitList(modelForm.reasoningLevelsText);
+  const imageQualities = splitList(modelForm.imageQualityTiersText);
   return (
-    <div className="space-y-4 rounded-lg border p-4">
-      <div className="space-y-3">
+    <div className="space-y-6 border-t pt-5">
+      <section className="space-y-4">
+        <div>
+          <h3 className="font-medium">通用能力</h3>
+          <p className="text-xs text-muted-foreground">配置能力来源、语言范围和 Prompt 输入限制。</p>
+        </div>
         <div className="grid gap-3 md:grid-cols-2">
           {isText ? (
             <>
@@ -2799,6 +2951,7 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
               { value: "unknown", label: "未知" },
             ]}
             onChange={(value) => update({ capabilitySource: value as ProviderCapabilitySource })}
+            onOpenChange={onPortaledControlOpen}
           />
           <LabeledSelect
             label="批准状态"
@@ -2810,34 +2963,64 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
               { value: "unknown", label: "未知" },
             ]}
             onChange={(value) => update({ capabilityApprovalStatus: value as ProviderCapabilityApprovalStatus })}
+            onOpenChange={onPortaledControlOpen}
           />
         </div>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        <LabeledInput label="Prompt 最大长度" value={modelForm.promptMaxLength} onChange={(value) => update({ promptMaxLength: value })} />
-        <div className="space-y-1.5">
-          <Label>Prompt 长度单位</Label>
-          <Select value={modelForm.promptLengthUnit} onValueChange={(value) => update({ promptLengthUnit: value })}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="characters">Unicode 字符</SelectItem>
-              <SelectItem value="utf8_bytes">UTF-8 字节</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="grid gap-3 md:grid-cols-2">
+          <LabeledInput label="Prompt 最大长度" value={modelForm.promptMaxLength} onChange={(value) => update({ promptMaxLength: value })} />
+          <div className="space-y-1.5">
+            <Label>Prompt 长度单位</Label>
+            <Select
+              value={modelForm.promptLengthUnit}
+              onValueChange={(value) => update({ promptLengthUnit: value })}
+              onOpenChange={onPortaledControlOpen}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="characters">Unicode 字符</SelectItem>
+                <SelectItem value="utf8_bytes">UTF-8 字节</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-      </div>
+      </section>
 
       {isText && (
-        <div className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
+        <section className="space-y-4 border-t pt-5">
+          <div>
+            <h3 className="font-medium">文本能力</h3>
+            <p className="text-xs text-muted-foreground">输入输出类型、多模态、流式输出和思考等级会直接参与路由与运行时参数选择。</p>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
             <LabeledInput label="最大输入 Token" value={modelForm.maxInputTokens} onChange={(value) => update({ maxInputTokens: value })} />
             <LabeledInput label="最大输出 Token" value={modelForm.maxOutputTokens} onChange={(value) => update({ maxOutputTokens: value })} />
-            <LabeledListInput label="支持输入类型" value={modelForm.supportedInputTypesText} onChange={(value) => update({ supportedInputTypesText: value })} />
-            <LabeledListInput label="支持输出类型" value={modelForm.supportedOutputTypesText} onChange={(value) => update({ supportedOutputTypesText: value })} />
+            <MultiSelectField
+              label="支持输入类型"
+              values={splitList(modelForm.supportedInputTypesText)}
+              options={inputTypeOptions}
+              placeholder="选择可接收的输入"
+              allowCustom
+              customPlaceholder="输入供应商输入类型"
+              onChange={(values) => update({
+                supportedInputTypesText: listText(values),
+                supportsMultimodalInput: values.some((value) => value !== "text"),
+              })}
+              onOpenChange={onPortaledControlOpen}
+            />
+            <MultiSelectField
+              label="支持输出类型"
+              values={splitList(modelForm.supportedOutputTypesText)}
+              options={outputTypeOptions}
+              placeholder="选择可生成的输出"
+              allowCustom
+              customPlaceholder="输入供应商输出类型"
+              onChange={(values) => update({ supportedOutputTypesText: listText(values) })}
+              onOpenChange={onPortaledControlOpen}
+            />
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-3">
             <SwitchField label="支持流式输出" checked={modelForm.supportsStreaming} onChange={(checked) => update({ supportsStreaming: checked })} />
             {modelForm.supportsStreaming && (
               <div className="space-y-1.5">
@@ -2845,6 +3028,7 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
                 <Select
                   value={modelForm.streamTerminalMode}
                   onValueChange={(value) => update({ streamTerminalMode: value as ModelForm["streamTerminalMode"] })}
+                  onOpenChange={onPortaledControlOpen}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -2874,14 +3058,26 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
                 reasoningLevelsText: checked && !modelForm.reasoningLevelsText.trim()
                   ? listText(["low", "medium", "high"])
                   : modelForm.reasoningLevelsText,
+                defaultReasoningLevel: checked
+                  ? modelForm.defaultReasoningLevel || "medium"
+                  : "",
               })}
             />
             {modelForm.supportsReasoningLevels && (
               <>
-                <LabeledListInput
+                <MultiSelectField
                   label="可用思考等级"
-                  value={modelForm.reasoningLevelsText}
-                  onChange={(value) => update({ reasoningLevelsText: value })}
+                  values={reasoningLevels}
+                  options={reasoningLevelOptions}
+                  placeholder="选择模型支持的思考等级"
+                  allowCustom
+                  customPlaceholder="输入供应商思考等级"
+                  onChange={(values) => update({
+                    reasoningLevelsText: listText(values),
+                    defaultReasoningLevel: matchingCapabilityValue(values, modelForm.defaultReasoningLevel)
+                      || preferredDefaultOption(values),
+                  })}
+                  onOpenChange={onPortaledControlOpen}
                 />
                 <div className="space-y-1.5">
                   <Label>默认思考等级</Label>
@@ -2890,6 +3086,7 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
                     onValueChange={(value) => update({
                       defaultReasoningLevel: value === "__select_default__" ? "" : value,
                     })}
+                    onOpenChange={onPortaledControlOpen}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="请选择默认等级" />
@@ -2905,63 +3102,137 @@ function ModelCapabilityFields({ modelForm, setModelForm }: { modelForm: ModelFo
                 </div>
               </>
             )}
-            <SwitchField label="支持多模态输入" checked={modelForm.supportsMultimodalInput} onChange={(checked) => update({ supportsMultimodalInput: checked })} />
+            <SwitchField
+              label="支持多模态输入"
+              checked={modelForm.supportsMultimodalInput}
+              onChange={(checked) => {
+                const inputTypes = splitList(modelForm.supportedInputTypesText);
+                update({
+                  supportsMultimodalInput: checked,
+                  supportedInputTypesText: listText(checked
+                    ? uniqueStrings(inputTypes.length > 1 ? inputTypes : [...inputTypes, "image"])
+                    : inputTypes.filter((value) => value === "text")),
+                });
+              }}
+            />
           </div>
-        </div>
+        </section>
       )}
 
       {isImage && (
-        <div className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
+        <section className="space-y-4 border-t pt-5">
+          <div>
+            <h3 className="font-medium">图片能力</h3>
+            <p className="text-xs text-muted-foreground">配置参考图、请求接口、画面规格和默认质量档位。</p>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-3">
             <LabeledInput label="参考图数量上限" value={modelForm.maxReferenceImages} onChange={(value) => update({ maxReferenceImages: value })} />
-            <LabeledListInput label="图片请求方式" value={modelForm.imageRequestModesText} onChange={(value) => update({ imageRequestModesText: value })} />
-            <LabeledListInput label="图片比例" value={modelForm.imageAspectRatiosText} onChange={(value) => update({ imageAspectRatiosText: value })} />
-            <LabeledListInput label="图片清晰度" value={modelForm.imageResolutionsText} onChange={(value) => update({ imageResolutionsText: value })} />
-            <LabeledListInput
-              label="图片质量档位"
-              value={modelForm.imageQualityTiersText}
-              onChange={(value) => update({ imageQualityTiersText: value })}
+            <MultiSelectField
+              label="图片请求方式"
+              values={splitList(modelForm.imageRequestModesText)}
+              options={imageRequestModeOptions}
+              allowCustom
+              customPlaceholder="输入供应商请求方式"
+              onChange={(values) => update({
+                imageRequestModesText: listText(values),
+                supportsImageEdit: values.includes("images.edit"),
+              })}
+              onOpenChange={onPortaledControlOpen}
             />
-            <LabeledListInput label="图片输出格式" value={modelForm.imageResponseFormatsText} onChange={(value) => update({ imageResponseFormatsText: value })} />
+            <MultiSelectField label="图片比例" values={splitList(modelForm.imageAspectRatiosText)} options={aspectRatioOptions} allowCustom customPlaceholder="输入自定义比例" onChange={(values) => update({ imageAspectRatiosText: listText(values) })} onOpenChange={onPortaledControlOpen} />
+            <MultiSelectField label="图片清晰度" values={splitList(modelForm.imageResolutionsText)} options={imageResolutionOptions} allowCustom customPlaceholder="输入自定义分辨率" onChange={(values) => update({ imageResolutionsText: listText(values) })} onOpenChange={onPortaledControlOpen} />
+            <MultiSelectField
+              label="图片质量档位"
+              values={imageQualities}
+              options={imageQualityOptions}
+              allowCustom
+              customPlaceholder="输入供应商质量档位"
+              onChange={(values) => update({
+                imageQualityTiersText: listText(values),
+                defaultImageQuality: matchingCapabilityValue(values, modelForm.defaultImageQuality)
+                  || preferredDefaultOption(values),
+              })}
+              onOpenChange={onPortaledControlOpen}
+            />
+            <div className="space-y-1.5">
+              <Label>默认图片质量</Label>
+              <Select
+                value={modelForm.defaultImageQuality || "__select_default__"}
+                onValueChange={(value) => update({ defaultImageQuality: value === "__select_default__" ? "" : value })}
+                onOpenChange={onPortaledControlOpen}
+              >
+                <SelectTrigger><SelectValue placeholder="选择默认质量" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__select_default__">选择默认质量</SelectItem>
+                  {imageQualities.map((quality) => (
+                    <SelectItem key={quality} value={quality}>{imageQualityLabel(quality)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">项目或任务没有单独指定时采用此档位。</p>
+            </div>
+            <MultiSelectField label="图片返回方式" values={splitList(modelForm.imageResponseFormatsText)} options={imageResponseFormatOptions} allowCustom customPlaceholder="输入供应商返回方式" onChange={(values) => update({ imageResponseFormatsText: listText(values) })} onOpenChange={onPortaledControlOpen} />
+            <MultiSelectField label="图片文件格式" values={splitList(modelForm.imageOutputFormatsText)} options={imageOutputFormatOptions} allowCustom customPlaceholder="输入图片文件格式" onChange={(values) => update({ imageOutputFormatsText: listText(values) })} onOpenChange={onPortaledControlOpen} />
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-2">
             <SwitchField label="支持参考图" checked={modelForm.supportsReferenceImages} onChange={(checked) => update({ supportsReferenceImages: checked })} />
-            <SwitchField label="支持图片编辑" checked={modelForm.supportsImageEdit} onChange={(checked) => update({ supportsImageEdit: checked })} />
+            <SwitchField
+              label="支持图片编辑"
+              checked={modelForm.supportsImageEdit}
+              onChange={(checked) => {
+                const requestModes = splitList(modelForm.imageRequestModesText);
+                update({
+                  supportsImageEdit: checked,
+                  imageRequestModesText: listText(checked
+                    ? uniqueStrings([...requestModes, "images.edit"])
+                    : requestModes.filter((value) => value !== "images.edit")),
+                });
+              }}
+            />
           </div>
-        </div>
+        </section>
       )}
 
       {isVideo && (
-        <div className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
+        <section className="space-y-4 border-t pt-5">
+          <div>
+            <h3 className="font-medium">视频能力</h3>
+            <p className="text-xs text-muted-foreground">按独立能力组合配置输入契约、时长、分辨率和原生音频。</p>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-3">
             <LabeledInput label="参考图数量上限" value={modelForm.maxReferenceImages} onChange={(value) => update({ maxReferenceImages: value })} />
             <LabeledInput label="参考视频数量上限" value={modelForm.maxReferenceVideos} onChange={(value) => update({ maxReferenceVideos: value })} />
-            <LabeledListInput label="视频输出格式" value={modelForm.videoOutputFormatsText} onChange={(value) => update({ videoOutputFormatsText: value })} />
+            <MultiSelectField label="视频输出格式" values={splitList(modelForm.videoOutputFormatsText)} options={outputTypeOptions} allowCustom customPlaceholder="输入视频输出格式" onChange={(values) => update({ videoOutputFormatsText: listText(values) })} onOpenChange={onPortaledControlOpen} />
           </div>
           <VideoVariantEditor
             variants={modelForm.videoVariants}
             taskTypes={taskTypesFromText(modelForm.taskTypesText)}
             onChange={(videoVariants) => update({ videoVariants })}
+            onPortaledControlOpen={onPortaledControlOpen}
           />
-        </div>
+        </section>
       )}
 
       {isAudio && (
-        <div className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
+        <section className="space-y-4 border-t pt-5">
+          <div>
+            <h3 className="font-medium">音频能力</h3>
+            <p className="text-xs text-muted-foreground">配置语音合成、识别、格式和请求接口。</p>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-3">
             <LabeledListInput label="可用声音" value={modelForm.audioVoicesText} onChange={(value) => update({ audioVoicesText: value })} />
             <LabeledListInput label="支持语言" value={modelForm.audioLanguagesText} onChange={(value) => update({ audioLanguagesText: value })} />
-            <LabeledListInput label="音频输入格式" value={modelForm.audioInputFormatsText} onChange={(value) => update({ audioInputFormatsText: value })} />
-            <LabeledListInput label="音频输出格式" value={modelForm.audioOutputFormatsText} onChange={(value) => update({ audioOutputFormatsText: value })} />
-            <LabeledListInput label="请求方式" value={modelForm.audioRequestModesText} onChange={(value) => update({ audioRequestModesText: value })} />
+            <MultiSelectField label="音频输入格式" values={splitList(modelForm.audioInputFormatsText)} options={audioFormatOptions} allowCustom customPlaceholder="输入音频输入格式" onChange={(values) => update({ audioInputFormatsText: listText(values) })} onOpenChange={onPortaledControlOpen} />
+            <MultiSelectField label="音频输出格式" values={splitList(modelForm.audioOutputFormatsText)} options={audioFormatOptions} allowCustom customPlaceholder="输入音频输出格式" onChange={(values) => update({ audioOutputFormatsText: listText(values) })} onOpenChange={onPortaledControlOpen} />
+            <MultiSelectField label="请求方式" values={splitList(modelForm.audioRequestModesText)} options={audioRequestModeOptions} allowCustom customPlaceholder="输入供应商请求方式" onChange={(values) => update({ audioRequestModesText: listText(values) })} onOpenChange={onPortaledControlOpen} />
             <LabeledInput label="单次合成文本上限" value={modelForm.maxTTSCharacters} onChange={(value) => update({ maxTTSCharacters: value })} />
             <LabeledInput label="单次识别音频上限（秒）" value={modelForm.maxAudioDurationSeconds} onChange={(value) => update({ maxAudioDurationSeconds: value })} />
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-2">
             <SwitchField label="支持语音合成" checked={modelForm.supportsTTS} onChange={(checked) => update({ supportsTTS: checked })} />
             <SwitchField label="支持语音识别" checked={modelForm.supportsTranscription} onChange={(checked) => update({ supportsTranscription: checked })} />
           </div>
-        </div>
+        </section>
       )}
     </div>
   );
@@ -2971,10 +3242,12 @@ function VideoVariantEditor({
   variants,
   taskTypes,
   onChange,
+  onPortaledControlOpen,
 }: {
   variants: VideoVariantForm[];
   taskTypes: string[];
   onChange: (variants: VideoVariantForm[]) => void;
+  onPortaledControlOpen: (open: boolean) => void;
 }) {
   const updateVariant = (index: number, patch: Partial<VideoVariantForm>) => {
     onChange(variants.map((variant, variantIndex) => (variantIndex === index ? { ...variant, ...patch } : variant)));
@@ -3012,11 +3285,49 @@ function VideoVariantEditor({
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
-            <LabeledListInput label="任务类型" value={variant.taskTypesText} onChange={(value) => updateVariant(index, { taskTypesText: value })} />
-            <LabeledListInput label="参考模式" value={variant.referenceModesText} onChange={(value) => updateVariant(index, { referenceModesText: value })} />
-            <LabeledListInput label="画面比例" value={variant.aspectRatiosText} onChange={(value) => updateVariant(index, { aspectRatiosText: value })} />
-            <LabeledListInput label="清晰度" value={variant.resolutionsText} onChange={(value) => updateVariant(index, { resolutionsText: value })} />
-            <LabeledListInput label="请求方式" value={variant.requestModesText} onChange={(value) => updateVariant(index, { requestModesText: value })} />
+            <MultiSelectField
+              label="任务类型"
+              values={splitList(variant.taskTypesText)}
+              options={taskTypeOptionsForModality("video")}
+              onChange={(values) => updateVariant(index, { taskTypesText: listText(values) })}
+              onOpenChange={onPortaledControlOpen}
+            />
+            <MultiSelectField
+              label="参考模式"
+              values={splitList(variant.referenceModesText)}
+              options={videoReferenceModeOptions}
+              allowCustom
+              customPlaceholder="输入视频参考模式"
+              onChange={(values) => updateVariant(index, { referenceModesText: listText(values) })}
+              onOpenChange={onPortaledControlOpen}
+            />
+            <MultiSelectField
+              label="画面比例"
+              values={splitList(variant.aspectRatiosText)}
+              options={aspectRatioOptions}
+              allowCustom
+              customPlaceholder="输入自定义比例"
+              onChange={(values) => updateVariant(index, { aspectRatiosText: listText(values) })}
+              onOpenChange={onPortaledControlOpen}
+            />
+            <MultiSelectField
+              label="清晰度"
+              values={splitList(variant.resolutionsText)}
+              options={videoResolutionOptions}
+              allowCustom
+              customPlaceholder="输入自定义分辨率"
+              onChange={(values) => updateVariant(index, { resolutionsText: listText(values) })}
+              onOpenChange={onPortaledControlOpen}
+            />
+            <MultiSelectField
+              label="请求方式"
+              values={splitList(variant.requestModesText)}
+              options={videoRequestModeOptions}
+              allowCustom
+              customPlaceholder="输入供应商请求方式"
+              onChange={(values) => updateVariant(index, { requestModesText: listText(values) })}
+              onOpenChange={onPortaledControlOpen}
+            />
             <LabeledListInput label="Prompt 语言" value={variant.promptLanguagesText} onChange={(value) => updateVariant(index, { promptLanguagesText: value })} />
           </div>
 
@@ -3031,6 +3342,7 @@ function VideoVariantEditor({
                 { value: "source_duration", label: "跟随源视频" },
               ]}
               onChange={(value) => updateVariant(index, { durationMode: value as VideoVariantForm["durationMode"] })}
+              onOpenChange={onPortaledControlOpen}
             />
             {variant.durationMode === "continuous_range" ? (
               <>
@@ -3050,6 +3362,7 @@ function VideoVariantEditor({
                 { value: "selectable", label: "可选帧率" },
               ]}
               onChange={(value) => updateVariant(index, { frameRateMode: value as VideoVariantForm["frameRateMode"] })}
+              onOpenChange={onPortaledControlOpen}
             />
             {variant.frameRateMode !== "unknown" ? (
               <LabeledListInput label="帧率" value={variant.frameRatesText} onChange={(value) => updateVariant(index, { frameRatesText: value })} />
@@ -3066,14 +3379,15 @@ function VideoVariantEditor({
                 { value: "false", label: "仅不请求音频" },
               ]}
               onChange={(value) => updateVariant(index, { nativeAudioRequested: value as VideoVariantForm["nativeAudioRequested"] })}
+              onOpenChange={onPortaledControlOpen}
             />
-            <CapabilityTruthSelect label="原生音频" value={variant.nativeAudioSupport} onChange={(value) => updateVariant(index, { nativeAudioSupport: value })} />
-            <CapabilityTruthSelect label="可关闭原生音频" value={variant.nativeAudioCanDisable} onChange={(value) => updateVariant(index, { nativeAudioCanDisable: value })} />
-            <CapabilityTruthSelect label="生成对白" value={variant.supportsDialogue} onChange={(value) => updateVariant(index, { supportsDialogue: value })} />
-            <CapabilityTruthSelect label="生成旁白" value={variant.supportsVoiceover} onChange={(value) => updateVariant(index, { supportsVoiceover: value })} />
-            <CapabilityTruthSelect label="生成环境声" value={variant.supportsAmbientSound} onChange={(value) => updateVariant(index, { supportsAmbientSound: value })} />
-            <CapabilityTruthSelect label="生成音乐" value={variant.supportsMusic} onChange={(value) => updateVariant(index, { supportsMusic: value })} />
-            <CapabilityTruthSelect label="口型同步" value={variant.supportsLipSync} onChange={(value) => updateVariant(index, { supportsLipSync: value })} />
+            <CapabilityTruthSelect label="原生音频" value={variant.nativeAudioSupport} onChange={(value) => updateVariant(index, { nativeAudioSupport: value })} onOpenChange={onPortaledControlOpen} />
+            <CapabilityTruthSelect label="可关闭原生音频" value={variant.nativeAudioCanDisable} onChange={(value) => updateVariant(index, { nativeAudioCanDisable: value })} onOpenChange={onPortaledControlOpen} />
+            <CapabilityTruthSelect label="生成对白" value={variant.supportsDialogue} onChange={(value) => updateVariant(index, { supportsDialogue: value })} onOpenChange={onPortaledControlOpen} />
+            <CapabilityTruthSelect label="生成旁白" value={variant.supportsVoiceover} onChange={(value) => updateVariant(index, { supportsVoiceover: value })} onOpenChange={onPortaledControlOpen} />
+            <CapabilityTruthSelect label="生成环境声" value={variant.supportsAmbientSound} onChange={(value) => updateVariant(index, { supportsAmbientSound: value })} onOpenChange={onPortaledControlOpen} />
+            <CapabilityTruthSelect label="生成音乐" value={variant.supportsMusic} onChange={(value) => updateVariant(index, { supportsMusic: value })} onOpenChange={onPortaledControlOpen} />
+            <CapabilityTruthSelect label="口型同步" value={variant.supportsLipSync} onChange={(value) => updateVariant(index, { supportsLipSync: value })} onOpenChange={onPortaledControlOpen} />
             <LabeledListInput label="对白语言" value={variant.dialogueLanguagesText} onChange={(value) => updateVariant(index, { dialogueLanguagesText: value })} />
           </div>
 
@@ -3096,7 +3410,161 @@ function VideoVariantEditor({
   );
 }
 
-function CapabilityTruthSelect({ label, value, onChange }: { label: string; value: CapabilityTruth; onChange: (value: CapabilityTruth) => void }) {
+function MultiSelectField({
+  label,
+  values,
+  options,
+  placeholder = "请选择",
+  allowCustom = false,
+  customPlaceholder = "输入自定义值",
+  onChange,
+  onOpenChange,
+}: {
+  label: string;
+  values: string[];
+  options: CapabilityOption[];
+  placeholder?: string;
+  allowCustom?: boolean;
+  customPlaceholder?: string;
+  onChange: (values: string[]) => void;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [customValue, setCustomValue] = useState("");
+  const optionValueByNormalizedValue = new Map(options.map((option) => [option.value.toLowerCase(), option.value]));
+  const normalizedValues = uniqueCapabilityValues(values, optionValueByNormalizedValue);
+  const knownValues = new Set(optionValueByNormalizedValue.keys());
+  const resolvedOptions = [
+    ...options,
+    ...normalizedValues
+      .filter((value) => !knownValues.has(value.toLowerCase()))
+      .map((value) => ({ value, label: capabilityValueLabel(value) })),
+  ];
+  const labelByValue = new Map(resolvedOptions.map((option) => [option.value, option.label]));
+  const toggleValue = (value: string, checked: boolean) => {
+    onChange(checked
+      ? uniqueStrings([...normalizedValues, value])
+      : normalizedValues.filter((item) => item !== value));
+  };
+  const addCustomValue = () => {
+    const candidate = customValue.trim();
+    if (!candidate) {
+      return;
+    }
+    const canonical = resolvedOptions.find((option) => option.value.toLowerCase() === candidate.toLowerCase())?.value || candidate;
+    toggleValue(canonical, true);
+    setCustomValue("");
+  };
+  const handleOpenChange = (open: boolean) => {
+    if (!open) {
+      setCustomValue("");
+    }
+    onOpenChange?.(open);
+  };
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <div className="rounded-md border bg-background">
+        <DropdownMenu modal={false} onOpenChange={handleOpenChange}>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="ghost" className="h-9 w-full justify-between rounded-md px-3 font-normal">
+              <span className={cn("truncate", normalizedValues.length === 0 && "text-muted-foreground")}>
+                {normalizedValues.length > 0 ? `已选择 ${normalizedValues.length} 项` : placeholder}
+              </span>
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            className="max-h-72 min-w-64"
+            onCloseAutoFocus={(event) => event.preventDefault()}
+          >
+            <DropdownMenuLabel>{label}</DropdownMenuLabel>
+            {resolvedOptions.map((option) => (
+              <DropdownMenuCheckboxItem
+                key={option.value}
+                checked={normalizedValues.includes(option.value)}
+                onCheckedChange={(checked) => toggleValue(option.value, checked === true)}
+                onSelect={(event) => event.preventDefault()}
+              >
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              </DropdownMenuCheckboxItem>
+            ))}
+            {allowCustom ? (
+              <>
+                <DropdownMenuSeparator />
+                <div
+                  className="flex items-center gap-2 p-2"
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape") {
+                      event.stopPropagation();
+                    }
+                  }}
+                >
+                  <Input
+                    value={customValue}
+                    placeholder={customPlaceholder}
+                    aria-label={`${label}自定义值`}
+                    onChange={(event) => setCustomValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addCustomValue();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="shrink-0"
+                    disabled={!customValue.trim()}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      addCustomValue();
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    添加
+                  </Button>
+                </div>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {normalizedValues.length > 0 ? (
+          <div className="flex flex-wrap gap-1 border-t p-2">
+            {normalizedValues.map((value) => (
+              <Badge key={value} variant="secondary" className="gap-1 pr-1">
+                {labelByValue.get(value) || capabilityValueLabel(value)}
+                <button
+                  type="button"
+                  className="rounded-sm p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                  aria-label={`移除${labelByValue.get(value) || value}`}
+                  title={`移除${labelByValue.get(value) || value}`}
+                  onClick={() => toggleValue(value, false)}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function CapabilityTruthSelect({
+  label,
+  value,
+  onChange,
+  onOpenChange,
+}: {
+  label: string;
+  value: CapabilityTruth;
+  onChange: (value: CapabilityTruth) => void;
+  onOpenChange?: (open: boolean) => void;
+}) {
   return (
     <LabeledSelect
       label={label}
@@ -3107,6 +3575,7 @@ function CapabilityTruthSelect({ label, value, onChange }: { label: string; valu
         { value: "false", label: "不支持" },
       ]}
       onChange={(next) => onChange(next as CapabilityTruth)}
+      onOpenChange={onOpenChange}
     />
   );
 }
@@ -3116,16 +3585,18 @@ function LabeledSelect({
   value,
   options,
   onChange,
+  onOpenChange,
 }: {
   label: string;
   value: string;
   options: Array<{ value: string; label: string }>;
   onChange: (value: string) => void;
+  onOpenChange?: (open: boolean) => void;
 }) {
   return (
     <div className="space-y-1.5">
       <Label>{label}</Label>
-      <Select value={value} onValueChange={onChange}>
+      <Select value={value} onValueChange={onChange} onOpenChange={onOpenChange}>
         <SelectTrigger><SelectValue /></SelectTrigger>
         <SelectContent>
           {options.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
@@ -3386,10 +3857,17 @@ function customModelDraft(modelKey: string, modality: string): ModelDraft {
 }
 
 function defaultCapabilityFormFields(modality: string, taskTypes: string[]) {
-  const isText = modality === "text" || modality === "multimodal";
-  const isImage = modality === "image" || modality === "multimodal";
-  const isVideo = modality === "video" || modality === "multimodal";
-  const isAudio = modality === "audio" || modality === "multimodal";
+  const isText = supportsCapabilityFamily(modality, taskTypes, "text");
+  const isImage = supportsCapabilityFamily(modality, taskTypes, "image");
+  const isVideo = supportsCapabilityFamily(modality, taskTypes, "video");
+  const isAudio = supportsCapabilityFamily(modality, taskTypes, "audio");
+  const supportedOutputTypes = uniqueStrings([
+    ...(isText ? ["text"] : []),
+    ...(isImage ? ["image"] : []),
+    ...(isVideo ? ["video"] : []),
+    ...(taskTypes.includes("audio.tts") ? ["audio"] : []),
+    ...(taskTypes.includes("audio.transcribe") ? ["text"] : []),
+  ]);
   return {
     supportsStreaming: taskTypes.includes("text.stream"),
     streamTerminalMode: "done_or_finish_reason" as const,
@@ -3407,7 +3885,7 @@ function defaultCapabilityFormFields(modality: string, taskTypes: string[]) {
     maxInputTokens: "",
     maxOutputTokens: "",
     supportedInputTypesText: listText(isText && modality === "multimodal" ? ["text", "image"] : ["text"]),
-    supportedOutputTypesText: listText(isVideo ? ["video"] : isImage ? ["image"] : ["text"]),
+    supportedOutputTypesText: listText(supportedOutputTypes),
     promptMaxLength: "",
     promptLengthUnit: "characters",
     supportsReferenceImages: false,
@@ -3416,8 +3894,10 @@ function defaultCapabilityFormFields(modality: string, taskTypes: string[]) {
     imageRequestModesText: listText(["images.generate"]),
     imageAspectRatiosText: listText(["1:1", "16:9", "9:16"]),
     imageResolutionsText: listText(["1024x1024"]),
-    imageQualityTiersText: listText(["standard", "hd"]),
+    imageQualityTiersText: "",
+    defaultImageQuality: "",
     imageResponseFormatsText: listText(["url", "b64_json"]),
+    imageOutputFormatsText: listText(["png", "jpeg", "webp"]),
     minDurationSeconds: "",
     maxDurationSeconds: "",
     durationsText: listText(["5", "10"]),
@@ -3498,10 +3978,18 @@ function capabilityFormFieldsFromValues(
   const responseFormats = arrayFromValue(xCapabilities.responseFormats).length
     ? arrayFromValue(xCapabilities.responseFormats)
     : arrayFromValue(outputLimits.responseFormats);
+  const imageOutputFormats = arrayFromValue(xCapabilities.outputFormats).length
+    ? arrayFromValue(xCapabilities.outputFormats)
+    : arrayFromValue(outputLimits.outputFormats);
   const supportedResolutions = arrayFromValue(xCapabilities.supportedResolutions);
-  const imageQualityTiers = arrayFromValue(xCapabilities.quality).filter((value) => value !== "auto").length
-    ? arrayFromValue(xCapabilities.quality).filter((value) => value !== "auto")
-    : arrayFromValue(qualityTiers);
+  const imageQualityTiers = arrayFromValue(xCapabilities.quality).length
+    ? arrayFromValue(xCapabilities.quality)
+    : arrayFromValue(qualityTiers).filter(isSemanticImageQuality);
+  const reasoningLevels = arrayFromValue(xCapabilities.reasoningLevels);
+  const defaultReasoningLevel = matchingCapabilityValue(reasoningLevels, textFromValue(xCapabilities.defaultReasoningLevel))
+    || preferredDefaultOption(reasoningLevels);
+  const defaultImageQuality = matchingCapabilityValue(imageQualityTiers, textFromValue(xCapabilities.defaultQuality))
+    || preferredDefaultOption(imageQualityTiers);
   const videoVariants = videoVariantFormsFromCapabilities(xCapabilities, taskTypes);
   return {
     ...defaults,
@@ -3509,8 +3997,8 @@ function capabilityFormFieldsFromValues(
     streamTerminalMode: streamTerminalModeFromValue(xCapabilities.streamTerminalMode),
     supportsReasoning: booleanFromValue(xCapabilities.supportsReasoning, defaults.supportsReasoning),
     supportsReasoningLevels: booleanFromValue(xCapabilities.supportsReasoningLevels, defaults.supportsReasoningLevels),
-    reasoningLevelsText: listText(arrayFromValue(xCapabilities.reasoningLevels)),
-    defaultReasoningLevel: textFromValue(xCapabilities.defaultReasoningLevel),
+    reasoningLevelsText: listText(reasoningLevels),
+    defaultReasoningLevel,
     supportsMultimodalInput: booleanFromValue(xCapabilities.supportsMultimodalInput, defaults.supportsMultimodalInput),
     supportedInputLanguagesText: listText(arrayFromValue(xCapabilities.supportedInputLanguages)),
     supportedOutputLanguagesText: listText(arrayFromValue(xCapabilities.supportedOutputLanguages)),
@@ -3533,10 +4021,10 @@ function capabilityFormFieldsFromValues(
     imageRequestModesText: listText(arrayFromValue(xCapabilities.requestModes).length ? arrayFromValue(xCapabilities.requestModes) : splitList(defaults.imageRequestModesText)),
     imageAspectRatiosText: listText(arrayFromValue(xCapabilities.supportedAspectRatios).length ? arrayFromValue(xCapabilities.supportedAspectRatios) : splitList(defaults.imageAspectRatiosText)),
     imageResolutionsText: listText(supportedResolutions.length ? supportedResolutions : splitList(defaults.imageResolutionsText)),
-    imageQualityTiersText: listText(
-      imageQualityTiers.length ? imageQualityTiers : splitList(defaults.imageQualityTiersText),
-    ),
+    imageQualityTiersText: listText(imageQualityTiers),
+    defaultImageQuality,
     imageResponseFormatsText: listText(responseFormats.length ? responseFormats : splitList(defaults.imageResponseFormatsText)),
+    imageOutputFormatsText: listText(imageOutputFormats.length ? imageOutputFormats : splitList(defaults.imageOutputFormatsText)),
     minDurationSeconds: textFromValue(xCapabilities.minDurationSeconds),
     maxDurationSeconds: textFromValue(xCapabilities.maxDurationSeconds),
     durationsText: listText(arrayFromValue(xCapabilities.durations).length ? arrayFromValue(xCapabilities.durations) : splitList(defaults.durationsText)),
@@ -3826,19 +4314,26 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
   const outputLimits = safeJsonRecord(modelForm.outputLimitsText);
   const providerOptionsSchema = safeJsonRecord(modelForm.providerOptionsSchemaText);
   const pricingPolicy = safeJsonRecord(modelForm.pricingPolicyText);
-  const qualityTiersFromState = safeJsonValue(modelForm.qualityTiersText);
-  if (!inputLimits || !outputLimits || !providerOptionsSchema || !pricingPolicy || qualityTiersFromState === undefined) {
+  if (!inputLimits || !outputLimits || !providerOptionsSchema || !pricingPolicy) {
     toast.error("模型能力配置无效");
     return null;
   }
 
   const xCapabilities = isPlainRecord(providerOptionsSchema.xCapabilities) ? { ...providerOptionsSchema.xCapabilities } : {};
+  const supportsText = supportsCapabilityFamily(modelForm.modality, taskTypes, "text");
+  const supportsImage = supportsCapabilityFamily(modelForm.modality, taskTypes, "image");
+  const supportsVideo = supportsCapabilityFamily(modelForm.modality, taskTypes, "video");
+  const supportsAudio = supportsCapabilityFamily(modelForm.modality, taskTypes, "audio");
   const supportedInputLanguages = splitList(modelForm.supportedInputLanguagesText);
   const supportedOutputLanguages = splitList(modelForm.supportedOutputLanguagesText);
   let supportedPromptLanguages = splitList(modelForm.supportedPromptLanguagesText);
   let supportedNativeAudioLanguages = splitList(modelForm.supportedNativeAudioLanguagesText);
   const supportedInputTypes = splitList(modelForm.supportedInputTypesText);
   const supportedOutputTypes = splitList(modelForm.supportedOutputTypesText);
+  const existingRequestModes = arrayFromValue(xCapabilities.requestModes);
+  let requestModes = supportsText
+    ? existingRequestModes.filter((mode) => !isFamilySpecificRequestMode(mode))
+    : [];
   const textInputTokens = parseOptionalNumber(modelForm.maxInputTokens, "最大输入 Token");
   const textOutputTokens = parseOptionalNumber(modelForm.maxOutputTokens, "最大输出 Token");
   const promptMaxLength = parseOptionalNumber(modelForm.promptMaxLength, "Prompt 最大长度");
@@ -3861,16 +4356,26 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
   if (supportedInputTypes.length > 0) {
     inputLimits.inputTypes = supportedInputTypes;
     xCapabilities.supportedInputTypes = supportedInputTypes;
+  } else {
+    delete inputLimits.inputTypes;
+    delete xCapabilities.supportedInputTypes;
   }
   if (supportedOutputTypes.length > 0) {
     outputLimits.outputTypes = supportedOutputTypes;
     xCapabilities.supportedOutputTypes = supportedOutputTypes;
+  } else {
+    delete outputLimits.outputTypes;
+    delete xCapabilities.supportedOutputTypes;
   }
   if (textInputTokens !== undefined) {
     inputLimits.maxTokens = textInputTokens;
+  } else {
+    delete inputLimits.maxTokens;
   }
   if (textOutputTokens !== undefined) {
     outputLimits.maxTokens = textOutputTokens;
+  } else {
+    delete outputLimits.maxTokens;
   }
   if (promptMaxLength !== undefined) {
     inputLimits.promptMaxLength = promptMaxLength;
@@ -3885,16 +4390,27 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
   }
 
   xCapabilities.supportsAsyncTask = modelForm.supportsAsyncTask;
-  xCapabilities.supportsStreaming = modelForm.supportsStreaming;
-  if (modelForm.supportsStreaming) {
-    xCapabilities.streamTerminalMode = modelForm.streamTerminalMode;
+  if (supportsText) {
+    const supportsStreaming = taskTypes.includes("text.stream") && modelForm.supportsStreaming;
+    xCapabilities.supportsStreaming = supportsStreaming;
+    if (supportsStreaming) {
+      xCapabilities.streamTerminalMode = modelForm.streamTerminalMode;
+    } else {
+      delete xCapabilities.streamTerminalMode;
+    }
   } else {
+    delete xCapabilities.supportsStreaming;
     delete xCapabilities.streamTerminalMode;
   }
-  xCapabilities.supportsReasoning = modelForm.supportsReasoning;
-  xCapabilities.supportsReasoningLevels = modelForm.supportsReasoningLevels;
   const reasoningLevels = splitList(modelForm.reasoningLevelsText);
-  if (modelForm.supportsReasoningLevels) {
+  if (supportsText) {
+    xCapabilities.supportsReasoning = modelForm.supportsReasoning;
+    xCapabilities.supportsReasoningLevels = modelForm.supportsReasoningLevels;
+  } else {
+    delete xCapabilities.supportsReasoning;
+    delete xCapabilities.supportsReasoningLevels;
+  }
+  if (supportsText && modelForm.supportsReasoningLevels) {
     if (reasoningLevels.length === 0) {
       toast.error("支持思考等级时必须填写至少一个可用等级");
       return null;
@@ -3912,54 +4428,93 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
     delete xCapabilities.reasoningLevels;
     delete xCapabilities.defaultReasoningLevel;
   }
-  xCapabilities.supportsMultimodalInput = modelForm.supportsMultimodalInput;
+  if (supportsText) {
+    xCapabilities.supportsMultimodalInput = modelForm.supportsMultimodalInput;
+  } else {
+    delete xCapabilities.supportsMultimodalInput;
+  }
   xCapabilities.supportedInputLanguages = supportedInputLanguages;
   xCapabilities.supportedOutputLanguages = supportedOutputLanguages;
   xCapabilities.capabilitySource = modelForm.capabilitySource;
   xCapabilities.capabilityApprovalStatus = modelForm.capabilityApprovalStatus;
 
-  let qualityTiers = Array.isArray(qualityTiersFromState) ? qualityTiersFromState : [];
-  if (modelForm.modality === "image" || modelForm.modality === "multimodal") {
-    const requestModes = splitList(modelForm.imageRequestModesText);
-    if (modelForm.supportsImageEdit && !requestModes.includes("images.edit")) {
-      requestModes.push("images.edit");
+  let qualityTiers: JsonValue = [];
+  if (supportsImage) {
+    const imageRequestModes = splitList(modelForm.imageRequestModesText);
+    if (modelForm.supportsImageEdit && !imageRequestModes.includes("images.edit")) {
+      imageRequestModes.push("images.edit");
     }
+    requestModes = uniqueStrings([...requestModes, ...imageRequestModes]);
     const imageAspectRatios = splitList(modelForm.imageAspectRatiosText);
     const imageResolutions = splitList(modelForm.imageResolutionsText);
     const imageQualityTiers = splitList(modelForm.imageQualityTiersText);
+    const defaultImageQuality = imageQualityTiers.find(
+      (quality) => quality.toLowerCase() === modelForm.defaultImageQuality.trim().toLowerCase(),
+    );
     const imageResponseFormats = splitList(modelForm.imageResponseFormatsText);
+    const imageOutputFormats = splitList(modelForm.imageOutputFormatsText);
     xCapabilities.supportsReferences = modelForm.supportsReferenceImages;
     xCapabilities.supportsReferenceImages = modelForm.supportsReferenceImages;
-    xCapabilities.requestModes = requestModes;
     if (maxReferenceImages !== undefined) {
       inputLimits.maxReferenceImages = maxReferenceImages;
       xCapabilities.maxReferenceImages = maxReferenceImages;
+    } else {
+      delete inputLimits.maxReferenceImages;
+      delete xCapabilities.maxReferenceImages;
     }
     if (imageAspectRatios.length > 0) {
       xCapabilities.supportedAspectRatios = imageAspectRatios;
+    } else {
+      delete xCapabilities.supportedAspectRatios;
     }
     if (imageResolutions.length > 0) {
       xCapabilities.supportedResolutions = imageResolutions;
+    } else {
+      delete xCapabilities.supportedResolutions;
     }
     if (imageQualityTiers.length > 0) {
-      const supportsAutoQuality = arrayFromValue(xCapabilities.quality).includes("auto");
-      xCapabilities.quality = supportsAutoQuality
-        ? uniqueStrings(["auto", ...imageQualityTiers])
-        : imageQualityTiers;
-      qualityTiers = imageQualityTiers;
+      if (!defaultImageQuality) {
+        toast.error("请选择一个已声明的默认图片质量档位");
+        return null;
+      }
+      xCapabilities.quality = imageQualityTiers;
+      xCapabilities.defaultQuality = defaultImageQuality;
+      qualityTiers = imageQualityTiers.filter((quality) => quality !== "auto");
+    } else {
+      delete xCapabilities.quality;
+      delete xCapabilities.defaultQuality;
     }
     if (imageResponseFormats.length > 0) {
       outputLimits.responseFormats = imageResponseFormats;
       xCapabilities.responseFormats = imageResponseFormats;
+    } else {
+      delete outputLimits.responseFormats;
+      delete xCapabilities.responseFormats;
     }
+    if (imageOutputFormats.length > 0) {
+      outputLimits.outputFormats = imageOutputFormats;
+      xCapabilities.outputFormats = imageOutputFormats;
+    } else {
+      delete outputLimits.outputFormats;
+      delete xCapabilities.outputFormats;
+    }
+  } else {
+    delete xCapabilities.supportsReferences;
+    delete xCapabilities.quality;
+    delete xCapabilities.defaultQuality;
+    delete xCapabilities.responseFormats;
+    delete xCapabilities.outputFormats;
+    delete outputLimits.responseFormats;
+    delete outputLimits.outputFormats;
   }
 
-  if (modelForm.modality === "video" || modelForm.modality === "multimodal") {
+  if (supportsVideo) {
     const videoVariants = buildVideoGenerationVariants(modelForm.videoVariants);
     if (!videoVariants) {
       return null;
     }
     const videoRequestModes = uniqueStrings(videoVariants.flatMap((variant) => variant.requestModes as string[]));
+    requestModes = uniqueStrings([...requestModes, ...videoRequestModes]);
     const videoAspectRatios = uniqueStrings(videoVariants.flatMap((variant) => variant.aspectRatios as string[]));
     const videoResolutions = uniqueStrings(videoVariants.flatMap((variant) => variant.resolutions as string[]));
     const videoOutputFormats = splitList(modelForm.videoOutputFormatsText);
@@ -3980,7 +4535,6 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
       }),
     ]);
     xCapabilities.videoGenerationVariants = videoVariants;
-    xCapabilities.requestModes = videoRequestModes;
     xCapabilities.supportsReferenceImages = referenceModes.includes("first_frame");
     xCapabilities.supportsFirstFrame = continuations.some((item) => item.supportsFirstFrame === true);
     xCapabilities.supportsLastFrame = continuations.some((item) => item.supportsLastFrame === true);
@@ -3991,30 +4545,48 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
     if (maxReferenceImages !== undefined) {
       inputLimits.maxReferenceImages = maxReferenceImages;
       xCapabilities.maxReferenceImages = maxReferenceImages;
+    } else if (!supportsImage) {
+      delete inputLimits.maxReferenceImages;
+      delete xCapabilities.maxReferenceImages;
     }
     if (maxReferenceVideos !== undefined) {
       inputLimits.maxReferenceVideos = maxReferenceVideos;
       xCapabilities.maxReferenceVideos = maxReferenceVideos;
+    } else {
+      delete inputLimits.maxReferenceVideos;
+      delete xCapabilities.maxReferenceVideos;
     }
     if (videoAspectRatios.length > 0) {
       xCapabilities.supportedAspectRatios = videoAspectRatios;
+    } else if (!supportsImage) {
+      delete xCapabilities.supportedAspectRatios;
     }
     if (videoResolutions.length > 0) {
       xCapabilities.supportedResolutions = videoResolutions;
       qualityTiers = videoResolutions;
+    } else if (!supportsImage) {
+      delete xCapabilities.supportedResolutions;
     }
     if (videoOutputFormats.length > 0) {
       outputLimits.outputTypes = videoOutputFormats;
       xCapabilities.supportedOutputTypes = videoOutputFormats;
     }
+  } else {
+    delete xCapabilities.videoGenerationVariants;
+    delete xCapabilities.supportsFirstFrame;
+    delete xCapabilities.supportsLastFrame;
+    delete xCapabilities.supportsVideoReference;
+    delete xCapabilities.maxReferenceVideos;
+    delete inputLimits.maxReferenceVideos;
   }
 
-  if (modelForm.modality === "audio" || modelForm.modality === "multimodal") {
+  if (supportsAudio) {
     const audioVoices = splitList(modelForm.audioVoicesText);
     const audioLanguages = splitList(modelForm.audioLanguagesText);
     const audioInputFormats = splitList(modelForm.audioInputFormatsText);
     const audioOutputFormats = splitList(modelForm.audioOutputFormatsText);
     const audioRequestModes = splitList(modelForm.audioRequestModesText);
+    requestModes = uniqueStrings([...requestModes, ...audioRequestModes]);
     xCapabilities.supportsTTS = modelForm.supportsTTS;
     xCapabilities.supportsTranscription = modelForm.supportsTranscription;
     xCapabilities.audioVoices = audioVoices;
@@ -4025,17 +4597,64 @@ function buildCapabilityFromModelForm(modelForm: ModelForm, taskTypes: string[])
     if (maxTTSCharacters !== undefined) {
       inputLimits.maxTTSCharacters = maxTTSCharacters;
       xCapabilities.maxTTSCharacters = maxTTSCharacters;
+    } else {
+      delete inputLimits.maxTTSCharacters;
+      delete xCapabilities.maxTTSCharacters;
     }
     if (maxAudioDurationSeconds !== undefined) {
       inputLimits.maxAudioDurationSeconds = maxAudioDurationSeconds;
       xCapabilities.maxAudioDurationSeconds = maxAudioDurationSeconds;
+    } else {
+      delete inputLimits.maxAudioDurationSeconds;
+      delete xCapabilities.maxAudioDurationSeconds;
     }
     if (audioInputFormats.length > 0) {
       inputLimits.audioFormats = audioInputFormats;
+    } else {
+      delete inputLimits.audioFormats;
     }
     if (audioOutputFormats.length > 0) {
       outputLimits.audioFormats = audioOutputFormats;
+    } else {
+      delete outputLimits.audioFormats;
     }
+  } else {
+    for (const key of [
+      "supportsTTS",
+      "supportsTranscription",
+      "audioVoices",
+      "audioLanguages",
+      "audioInputFormats",
+      "audioResponseFormats",
+      "audioRequestModes",
+      "maxTTSCharacters",
+      "maxAudioDurationSeconds",
+    ]) {
+      delete xCapabilities[key];
+    }
+    delete inputLimits.maxTTSCharacters;
+    delete inputLimits.maxAudioDurationSeconds;
+    delete inputLimits.audioFormats;
+    delete outputLimits.audioFormats;
+  }
+
+  if (!supportsImage && !supportsVideo) {
+    for (const key of [
+      "supportsReferenceImages",
+      "maxReferenceImages",
+      "referenceTypes",
+      "supportedAspectRatios",
+      "supportedResolutions",
+    ]) {
+      delete xCapabilities[key];
+    }
+    delete inputLimits.maxReferenceImages;
+  }
+
+  if (requestModes.length > 0) {
+    xCapabilities.requestModes = requestModes;
+  } else {
+    delete xCapabilities.requestModes;
   }
 
   xCapabilities.supportedPromptLanguages = supportedPromptLanguages;
@@ -4179,8 +4798,107 @@ function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
+function uniqueCapabilityValues(values: string[], knownValues: Map<string, string>) {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const rawValue of values) {
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const value = knownValues.get(trimmed.toLowerCase()) || trimmed;
+    const identity = value.toLowerCase();
+    if (seen.has(identity)) {
+      continue;
+    }
+    seen.add(identity);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
 function uniqueNumbers(values: number[]) {
   return Array.from(new Set(values)).sort((left, right) => left - right);
+}
+
+function taskTypeOptionsForModality(modality: string) {
+  if (modality === "multimodal") {
+    return taskTypeOptions;
+  }
+  const prefix = `${modality}.`;
+  return taskTypeOptions.filter((option) => option.value.startsWith(prefix));
+}
+
+function supportsCapabilityFamily(modality: string, taskTypes: string[], family: string) {
+  return modality === family || taskTypes.some((taskType) => taskType.startsWith(`${family}.`));
+}
+
+function preferredDefaultOption(values: string[]) {
+  for (const preferred of ["auto", "medium", "standard", "low"]) {
+    const match = values.find((value) => value.toLowerCase() === preferred);
+    if (match) {
+      return match;
+    }
+  }
+  return values[0] || "";
+}
+
+function matchingCapabilityValue(values: string[], expected: string) {
+  const normalizedExpected = expected.trim().toLowerCase();
+  if (!normalizedExpected) {
+    return "";
+  }
+  return values.find((value) => value.trim().toLowerCase() === normalizedExpected) || "";
+}
+
+function isSemanticImageQuality(value: JsonValue) {
+  return typeof value === "string" && ["auto", "low", "medium", "high", "standard", "hd"]
+    .includes(value.trim().toLowerCase());
+}
+
+function isFamilySpecificRequestMode(value: string) {
+  return [
+    "images.generate",
+    "images.edit",
+    "async_create",
+    "async_poll",
+    "poll",
+    "cancel",
+    "audio.speech",
+    "audio.transcriptions",
+  ].includes(value.trim().toLowerCase());
+}
+
+function imageQualityLabel(value: string) {
+  return ({
+    auto: "自动",
+    low: "低",
+    medium: "中",
+    high: "高",
+    standard: "标准",
+    hd: "高清",
+  } as Record<string, string>)[value.toLowerCase()] || value;
+}
+
+function capabilityValueLabel(value: string) {
+  const knownOption = [
+    ...taskTypeOptions,
+    ...inputTypeOptions,
+    ...outputTypeOptions,
+    ...reasoningLevelOptions,
+    ...imageRequestModeOptions,
+    ...aspectRatioOptions,
+    ...imageResolutionOptions,
+    ...imageQualityOptions,
+    ...imageResponseFormatOptions,
+    ...imageOutputFormatOptions,
+    ...videoReferenceModeOptions,
+    ...videoRequestModeOptions,
+    ...videoResolutionOptions,
+    ...audioFormatOptions,
+    ...audioRequestModeOptions,
+  ].find((option) => option.value === value);
+  return knownOption?.label || value;
 }
 
 function safeJsonRecord(text: string): JsonRecord | null {
@@ -4428,6 +5146,9 @@ function modelCapabilityLabels(model: ProviderModel) {
   if (xCapabilities.supportsMultimodalInput === true) {
     labels.push("多模态输入");
   }
+  if (Array.isArray(xCapabilities.supportedInputTypes) && xCapabilities.supportedInputTypes.length > 0) {
+    labels.push(`输入 ${xCapabilities.supportedInputTypes.map((value) => capabilityValueLabel(String(value))).join("/")}`);
+  }
   if (xCapabilities.supportsAsyncTask === true) {
     labels.push("异步任务");
   }
@@ -4439,6 +5160,9 @@ function modelCapabilityLabels(model: ProviderModel) {
   }
   if (xCapabilities.supportsReferences === true || xCapabilities.supportsReferenceImages === true) {
     labels.push("参考图");
+  }
+  if (typeof xCapabilities.defaultQuality === "string" && xCapabilities.defaultQuality.trim()) {
+    labels.push(`默认质量 ${imageQualityLabel(xCapabilities.defaultQuality)}`);
   }
   if (xCapabilities.supportsFirstFrame === true) {
     labels.push("首帧");

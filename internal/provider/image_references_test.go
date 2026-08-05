@@ -62,6 +62,36 @@ func TestResolveGatewayImageQualityMapsProjectQualityTiers(t *testing.T) {
 	}
 }
 
+func TestResolveGatewayImageQualityUsesConfiguredDefault(t *testing.T) {
+	capabilities := []Capability{{
+		QualityTiers: json.RawMessage(`["low","medium","high"]`),
+		ProviderOptionsSchema: json.RawMessage(`{
+			"xCapabilities": {
+				"quality": ["low", "medium", "high"],
+				"defaultQuality": "high"
+			}
+		}`),
+	}}
+	got, err := resolveGatewayImageQuality("", capabilities)
+	if err != nil {
+		t.Fatalf("resolve default quality: %v", err)
+	}
+	if got != "high" {
+		t.Fatalf("default quality = %q, want high", got)
+	}
+}
+
+func TestResolveGatewayImageQualityDoesNotTreatResolutionAsQuality(t *testing.T) {
+	capabilities := []Capability{{QualityTiers: json.RawMessage(`["512","1K","2K","4K"]`)}}
+	got, err := resolveGatewayImageQuality("standard", capabilities)
+	if err != nil {
+		t.Fatalf("resolve quality against resolution tiers: %v", err)
+	}
+	if got != "standard" {
+		t.Fatalf("quality = %q, want standard", got)
+	}
+}
+
 func TestResolveGatewayImageQualityRejectsUnsupportedTier(t *testing.T) {
 	_, err := resolveGatewayImageQuality("ultra", []Capability{{QualityTiers: json.RawMessage(`["low","medium","high"]`)}})
 	standard, ok := StandardErrorFromError(err)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Einzieg/cineweave/internal/db"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -178,6 +179,109 @@ func TestGatewayRoutingIntegration(t *testing.T) {
 		}
 		if !hasGatewayTextEvent(events, GatewayTextEventDelta) || !hasGatewayTextEvent(events, GatewayTextEventAttemptFailed) || !hasGatewayTextEvent(events, GatewayTextEventFailed) {
 			t.Fatalf("post-delta events = %+v", gatewayTextEventTypes(events))
+		}
+	})
+
+	t.Run("stream retries request timeout three times before succeeding", func(t *testing.T) {
+		var calls atomic.Int64
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			call := calls.Add(1)
+			if call <= gatewayTextMaxRetries {
+				w.WriteHeader(http.StatusRequestTimeout)
+				_, _ = w.Write([]byte(`{"error":{"code":"request_timeout","message":"request timed out"}}`))
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"retry succeeded\"}}]}\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		}))
+		defer upstream.Close()
+		orgID, _, modelID := seedGatewayIntegrationData(t, ctx, pool, vault, upstream.URL)
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID) })
+
+		service := NewService(pool, vault)
+		service.EnableGatewayRuntime()
+		resp, err := service.StreamTextEvents(ctx, GatewayTextRequest{
+			OrganizationID:  orgID,
+			ProviderModelID: modelID,
+			IdempotencyKey:  "stream-timeout-retry",
+			Input:           mustJSON(map[string]any{"messages": []map[string]string{{"role": "user", "content": "retry"}}}),
+		}, nil)
+		if err != nil {
+			t.Fatalf("StreamTextEvents: %v", err)
+		}
+		if resp.Status != "succeeded" || resp.Output.Text != "retry succeeded" {
+			t.Fatalf("stream response = %+v", resp)
+		}
+		if calls.Load() != gatewayTextMaxAttemptsPerSelection || len(resp.Attempts) != gatewayTextMaxAttemptsPerSelection {
+			t.Fatalf("upstream calls=%d attempts=%d, want %d", calls.Load(), len(resp.Attempts), gatewayTextMaxAttemptsPerSelection)
+		}
+		for i, attempt := range resp.Attempts {
+			wantStatus := "failed"
+			wantCode := CodeUpstreamTimeout
+			if i == gatewayTextMaxAttemptsPerSelection-1 {
+				wantStatus = "succeeded"
+				wantCode = ""
+			}
+			if attempt.ProviderModelID != modelID || attempt.Status != wantStatus {
+				t.Fatalf("attempt %d = %+v, want model=%s status=%s", i+1, attempt, modelID, wantStatus)
+			}
+			assertProviderCallStatus(t, ctx, pool, attempt.ProviderCallID, wantStatus, wantCode)
+		}
+	})
+
+	t.Run("cancelled retry wait preserves failed request result", func(t *testing.T) {
+		var calls atomic.Int64
+		firstResponse := make(chan struct{}, 1)
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.WriteHeader(http.StatusRequestTimeout)
+			_, _ = w.Write([]byte(`{"error":{"code":"request_timeout","message":"request timed out"}}`))
+			select {
+			case firstResponse <- struct{}{}:
+			default:
+			}
+		}))
+		defer upstream.Close()
+		orgID, _, modelID := seedGatewayIntegrationData(t, ctx, pool, vault, upstream.URL)
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id = $1`, orgID) })
+
+		requestCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			<-firstResponse
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+		}()
+
+		service := NewService(pool, vault)
+		service.EnableGatewayRuntime()
+		resp, err := service.GenerateText(requestCtx, GatewayTextRequest{
+			OrganizationID:  orgID,
+			ProviderModelID: modelID,
+			IdempotencyKey:  "cancelled-retry-wait",
+			Input:           mustJSON(map[string]any{"prompt": "retry"}),
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("GenerateText error = %v, want context.Canceled", err)
+		}
+		if resp.Status != "failed" || resp.Error == nil || resp.Error.Code != CodeUpstreamTimeout {
+			t.Fatalf("response = %+v, want failed timeout", resp)
+		}
+		if calls.Load() != 1 || len(resp.Attempts) != 1 {
+			t.Fatalf("upstream calls=%d attempts=%d, want 1/1", calls.Load(), len(resp.Attempts))
+		}
+
+		var requestStatus, errorCode string
+		if err := pool.QueryRow(context.Background(), `
+			SELECT status, error_code
+			FROM provider_requests
+			WHERE id = $1
+		`, resp.ProviderRequestID).Scan(&requestStatus, &errorCode); err != nil {
+			t.Fatalf("load provider request: %v", err)
+		}
+		if requestStatus != "failed" || errorCode != CodeUpstreamTimeout {
+			t.Fatalf("provider request status=%q error=%q, want failed/%s", requestStatus, errorCode, CodeUpstreamTimeout)
 		}
 	})
 

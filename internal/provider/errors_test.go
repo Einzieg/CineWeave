@@ -72,6 +72,30 @@ func TestNormalizeUpstreamErrorDoesNotExposeAuthenticationMessage(t *testing.T) 
 	}
 }
 
+func TestNormalizeUpstreamErrorClassifiesCompletionStreamDisconnect(t *testing.T) {
+	standard := NormalizeUpstreamError(&UpstreamError{
+		Status:  http.StatusBadGateway,
+		Message: "status_code=408, stream error: stream disconnected before completion: stream closed before response.completed",
+	})
+	if standard.Code != CodeUpstreamStreamTruncated || standard.Message != "provider stream ended before a completion marker" || !standard.Retryable {
+		t.Fatalf("standard = %#v, want retryable stream truncation", standard)
+	}
+	if standard.UpstreamStatus != http.StatusBadGateway {
+		t.Fatalf("upstream status = %d, want %d", standard.UpstreamStatus, http.StatusBadGateway)
+	}
+}
+
+func TestNormalizedProviderFailureClassifiesCompletionStreamDisconnect(t *testing.T) {
+	raw := errors.New("stream error: stream closed before message.completed")
+	status, code, message, upstreamStatus, upstreamCode := normalizedProviderFailure(raw)
+	if status != "failed" || code != CodeUpstreamStreamTruncated || message != "provider stream ended before a completion marker" {
+		t.Fatalf("normalized stream disconnect = status=%s code=%s message=%q", status, code, message)
+	}
+	if upstreamStatus != nil || upstreamCode != "" {
+		t.Fatalf("upstream status/code = %v/%q, want empty", upstreamStatus, upstreamCode)
+	}
+}
+
 func TestNormalizedProviderFailureClassifiesTransportEOF(t *testing.T) {
 	status, code, message, upstreamStatus, upstreamCode := normalizedProviderFailure(errors.New(`Post "https://example.test/v1/images/generations": EOF`))
 	if status != "failed" || code != CodeUpstreamInternalError || message != "provider connection was interrupted" {

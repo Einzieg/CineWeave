@@ -15,6 +15,7 @@ var defaultFallbackOn = []string{
 	CodeProviderConcurrencyLimited,
 	CodeProviderCircuitOpen,
 	CodeUpstreamTimeout,
+	CodeUpstreamStreamTruncated,
 	CodeUpstreamInternalError,
 	CodeUpstreamOutputMismatch,
 	"UPSTREAM_RATE_LIMITED",

@@ -2938,6 +2938,7 @@ func normalizeCapabilityInput(input CapabilityInput) (CapabilityInput, error) {
 	if err != nil {
 		return CapabilityInput{}, fmt.Errorf("%w: pricingPolicy must be valid JSON", ErrValidation)
 	}
+	inputLimits, outputLimits, qualityTiers = normalizeCapabilityLimitsForTaskTypes(taskTypes, inputLimits, outputLimits, qualityTiers)
 	providerOptionsSchema = normalizeProviderOptionsSchema(providerOptionsSchema, taskTypes, inputLimits, outputLimits, qualityTiers)
 	providerOptionsSchema, err = normalizeReasoningCapabilityDefaults(providerOptionsSchema)
 	if err != nil {
@@ -3361,6 +3362,9 @@ func normalizedProviderFailure(err error) (status string, code string, message s
 		return status, CodeUpstreamTimeout, "provider request timed out", nil, ""
 	}
 	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return status, CodeUpstreamStreamTruncated, "provider stream ended before a completion marker", nil, ""
+	}
+	if containsUpstreamCompletionStreamDisconnect(err.Error()) {
 		return status, CodeUpstreamStreamTruncated, "provider stream ended before a completion marker", nil, ""
 	}
 	if errors.Is(err, ErrValidation) {

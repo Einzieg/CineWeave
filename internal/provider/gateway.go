@@ -26,6 +26,26 @@ type gatewayModelSelection struct {
 	RuntimeOptions        ModelProfileBindingRuntimeOptions
 }
 
+const (
+	gatewayTextMaxRetries              = 3
+	gatewayTextMaxAttemptsPerSelection = gatewayTextMaxRetries + 1
+	gatewayTextRetryBaseDelay          = 250 * time.Millisecond
+	gatewayTextRetryMaximumBackoff     = time.Second
+	gatewayTextTerminalWriteTimeout    = 5 * time.Second
+)
+
+type gatewayTextRetryInterruptedError struct {
+	cause error
+}
+
+func (e *gatewayTextRetryInterruptedError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *gatewayTextRetryInterruptedError) Unwrap() error {
+	return e.cause
+}
+
 func (s *Service) GenerateText(ctx context.Context, req GatewayTextRequest) (GatewayTextResponse, error) {
 	return s.executeProviderTextRequest(ctx, req, false, nil)
 }
@@ -193,6 +213,31 @@ func (s *Service) executeProviderTextRequest(ctx context.Context, req GatewayTex
 
 	response, runErr := s.executeGatewayText(ctx, req, stream, emit, start.Request.ID, start.Request.AttemptGeneration)
 	if runErr != nil {
+		var retryInterrupted *gatewayTextRetryInterruptedError
+		if errors.As(runErr, &retryInterrupted) && response.Status == "failed" && response.Error != nil {
+			response.ProviderRequestID = start.Request.ID
+			response.SchemaVersion = GatewayTextStreamSchemaVersion
+			response.AttemptGeneration = start.Request.AttemptGeneration
+			response.requestDisposition = string(providerRequestExecute)
+
+			terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayTextTerminalWriteTimeout)
+			completeErr := s.completeProviderRequest(
+				terminalCtx,
+				start.Request.ID,
+				start.Request.AttemptGeneration,
+				response.Status,
+				response,
+				nil,
+				nil,
+				response.Error,
+			)
+			cancel()
+			if completeErr != nil {
+				_ = s.markProviderRequestUnknown(context.WithoutCancel(ctx), start.Request.ID, start.Request.AttemptGeneration, completeErr)
+				return GatewayTextResponse{}, completeErr
+			}
+			return response, retryInterrupted.cause
+		}
 		_, standardFailure := StandardErrorFromError(runErr)
 		if standardFailure ||
 			errors.Is(runErr, ErrValidation) ||
@@ -408,7 +453,21 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		if err != nil {
 			return GatewayTextResponse{}, err
 		}
-		response, _, err := s.executeGatewayTextAttempt(ctx, req, selection, stream, emit, taskType, executionMode, 1, 1, string(RoutingPriority), providerRequestID, attemptGeneration)
+		response, _, _, _, err := s.executeGatewayTextSelectionWithRetries(
+			ctx,
+			req,
+			selection,
+			stream,
+			emit,
+			taskType,
+			executionMode,
+			1,
+			gatewayTextMaxAttemptsPerSelection,
+			string(RoutingPriority),
+			providerRequestID,
+			attemptGeneration,
+			nil,
+		)
 		return response, err
 	}
 
@@ -426,10 +485,12 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		return GatewayTextResponse{}, err
 	}
 	strategy := candidates[0].FallbackStrategy
-	maxAttempts := fallbackMaxAttempts(strategy, len(candidates))
+	maxCandidateAttempts := fallbackMaxAttempts(strategy, len(candidates))
+	maxAttempts := maxCandidateAttempts * gatewayTextMaxAttemptsPerSelection
 	attempts := make([]GatewayAttempt, 0, maxAttempts)
+	nextAttemptSequence := 1
 	var final GatewayTextResponse
-	for i := 0; i < maxAttempts; i++ {
+	for i := 0; i < maxCandidateAttempts; i++ {
 		candidate := candidates[i]
 		selection, err := s.completeGatewaySelectionFromCandidateWithBilling(
 			ctx,
@@ -441,22 +502,26 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		if err != nil {
 			return GatewayTextResponse{}, err
 		}
-		sentDelta := false
-		attemptEmit := emit
-		if stream {
-			attemptEmit = func(event GatewayTextStreamEvent) error {
-				if event.Type == GatewayTextEventDelta && event.Delta != nil && strings.TrimSpace(event.Delta.Text) != "" {
-					sentDelta = true
-				}
-				return emitGatewayTextEvent(emit, event)
-			}
-		}
-		response, attempt, err := s.executeGatewayTextAttempt(ctx, req, selection, stream, attemptEmit, taskType, executionMode, i+1, maxAttempts, candidate.RoutingStrategy, providerRequestID, attemptGeneration)
+		response, updatedAttempts, updatedSequence, sentDelta, err := s.executeGatewayTextSelectionWithRetries(
+			ctx,
+			req,
+			selection,
+			stream,
+			emit,
+			taskType,
+			executionMode,
+			nextAttemptSequence,
+			maxAttempts,
+			candidate.RoutingStrategy,
+			providerRequestID,
+			attemptGeneration,
+			attempts,
+		)
 		if err != nil {
-			return GatewayTextResponse{}, err
+			return response, err
 		}
-		attempts = append(attempts, attempt)
-		response.Attempts = append([]GatewayAttempt(nil), attempts...)
+		attempts = updatedAttempts
+		nextAttemptSequence = updatedSequence
 		final = response
 		if response.Status == "succeeded" {
 			return response, nil
@@ -464,11 +529,111 @@ func (s *Service) executeGatewayText(ctx context.Context, req GatewayTextRequest
 		if stream && sentDelta {
 			return response, nil
 		}
-		if i+1 >= maxAttempts || !shouldFallback(gatewayErrorCode(response.Error), strategy) {
+		if i+1 >= maxCandidateAttempts || !shouldFallback(gatewayErrorCode(response.Error), strategy) {
 			return response, nil
 		}
 	}
 	return final, nil
+}
+
+func (s *Service) executeGatewayTextSelectionWithRetries(
+	ctx context.Context,
+	req GatewayTextRequest,
+	selection gatewayModelSelection,
+	stream bool,
+	emit func(GatewayTextStreamEvent) error,
+	taskType string,
+	executionMode string,
+	attemptSequence int,
+	maxAttempts int,
+	selectedBy string,
+	providerRequestID string,
+	attemptGeneration int,
+	attempts []GatewayAttempt,
+) (GatewayTextResponse, []GatewayAttempt, int, bool, error) {
+	var final GatewayTextResponse
+	for retry := 0; retry <= gatewayTextMaxRetries; retry++ {
+		sentDelta := false
+		attemptEmit := emit
+		if stream {
+			attemptEmit = func(event GatewayTextStreamEvent) error {
+				if event.Type == GatewayTextEventDelta && event.Delta != nil && event.Delta.Text != "" {
+					sentDelta = true
+				}
+				return emitGatewayTextEvent(emit, event)
+			}
+		}
+
+		response, attempt, err := s.executeGatewayTextAttempt(
+			ctx,
+			req,
+			selection,
+			stream,
+			attemptEmit,
+			taskType,
+			executionMode,
+			attemptSequence,
+			maxAttempts,
+			selectedBy,
+			providerRequestID,
+			attemptGeneration,
+		)
+		if err != nil {
+			return response, attempts, attemptSequence, sentDelta, err
+		}
+		attemptSequence++
+		attempts = append(attempts, attempt)
+		response.Attempts = append([]GatewayAttempt(nil), attempts...)
+		final = response
+
+		// Once a delta is visible, the gateway cannot retract it. Retrying would
+		// duplicate output or switch call identity in the middle of one stream.
+		if response.Status == "succeeded" || sentDelta || retry == gatewayTextMaxRetries || !shouldRetryGatewayTextAttempt(response.Error) {
+			return response, attempts, attemptSequence, sentDelta, nil
+		}
+		if err := waitGatewayTextRetry(ctx, retry+1); err != nil {
+			return response, attempts, attemptSequence, false, &gatewayTextRetryInterruptedError{cause: err}
+		}
+	}
+	return final, attempts, attemptSequence, false, nil
+}
+
+func shouldRetryGatewayTextAttempt(standard *StandardError) bool {
+	if standard == nil || !standard.Retryable {
+		return false
+	}
+	switch normalizeErrorCode(standard.Code) {
+	case CodeUpstreamTimeout, CodeUpstreamStreamTruncated:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitGatewayTextRetry(ctx context.Context, retry int) error {
+	delay := gatewayTextRetryDelay(retry)
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func gatewayTextRetryDelay(retry int) time.Duration {
+	if retry <= 0 {
+		return 0
+	}
+	delay := gatewayTextRetryBaseDelay * time.Duration(1<<(retry-1))
+	if delay > gatewayTextRetryMaximumBackoff {
+		return gatewayTextRetryMaximumBackoff
+	}
+	return delay
 }
 
 func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayTextRequest, selection gatewayModelSelection, stream bool, emit func(GatewayTextStreamEvent) error, taskType, executionMode string, attemptIndex, maxAttempts int, selectedBy, providerRequestID string, attemptGeneration int) (GatewayTextResponse, GatewayAttempt, error) {

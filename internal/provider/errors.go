@@ -214,6 +214,12 @@ func NormalizeUpstreamError(upstream *UpstreamError) StandardError {
 		err.Message = "provider returned an internal error"
 		err.Retryable = true
 	}
+	if containsUpstreamCompletionStreamDisconnect(upstream.Message, upstream.Body) {
+		err.Code = CodeUpstreamStreamTruncated
+		err.Message = "provider stream ended before a completion marker"
+		err.Retryable = true
+		return err
+	}
 
 	if strings.Contains(normalizedUpstreamCode, "quota") || strings.Contains(normalizedUpstreamCode, "insufficient") {
 		err.Code = CodeQuotaExceeded
@@ -233,6 +239,21 @@ func NormalizeUpstreamError(upstream *UpstreamError) StandardError {
 	}
 
 	return err
+}
+
+func containsUpstreamCompletionStreamDisconnect(values ...string) bool {
+	for _, value := range values {
+		normalized := strings.ToLower(strings.Join(strings.Fields(value), " "))
+		if normalized == "" {
+			continue
+		}
+		if strings.Contains(normalized, "stream disconnected before completion") ||
+			strings.Contains(normalized, "stream closed before completion") ||
+			(strings.Contains(normalized, "stream closed before") && strings.Contains(normalized, ".completed")) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsUpstreamContentRejectionSignal(code, message string) bool {

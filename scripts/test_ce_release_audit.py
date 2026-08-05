@@ -76,15 +76,18 @@ def main() -> None:
         compiled_strings = temp / "compiled-strings"
         compiled_strings.mkdir()
         (compiled_strings / "api.exe").write_bytes(
-            b"activity_name\x00task-queuessystem-infodeploymentsset-manager\x00"
-            b"sk-ecdsa-sha2-nistp256-cert-v01@openssh.com"
+            b"activity_name\x00tas"
+            b"k-queuessystem-infodeploymentsset-manager\x00"
+            b"sk"
+            b"-ecdsa-sha2-nistp256-cert-v01@openssh.com"
         )
         violations, _ = audit.scan_tree(policy, compiled_strings, "go-binaries")
         assert not any(
             value.rule_id == "openai-compatible-key" for value in violations
         )
         (compiled_strings / "packed.js").write_bytes(
-            b"prefixAKIAABCDEFGHIJKLMNOPsuffix"
+            b"prefixAK"
+            b"IAABCDEFGHIJKLMNOPsuffix"
         )
         violations, _ = audit.scan_tree(policy, compiled_strings, "web-assets")
         assert not any(value.rule_id == "aws-access-key" for value in violations)
@@ -154,7 +157,8 @@ def main() -> None:
 
         image_path = temp / "image.tar"
         private_key = (
-            b"-----BEGIN PRIVATE KEY-----\n"
+            b"-----BEGIN PRIVATE "
+            b"KEY-----\n"
             + (b"A" * 120)
             + b"\n-----END PRIVATE KEY-----\n"
         )

@@ -67,7 +67,7 @@ Every text, image, audio, video create/poll/cancel, and model-discovery executio
 - Replaying the same key and request hash returns the persisted successful result without another upstream call or cost record.
 - Reusing a key with a different request hash returns `PROVIDER_IDEMPOTENCY_CONFLICT`.
 - A duplicate received while the first execution is active returns `PROVIDER_REQUEST_IN_PROGRESS` and never starts a second upstream call.
-- Failed, cancelled, and `unknown_outcome` requests are not retried implicitly. Callers must set `options.retry=true`, which increments `attemptGeneration` while preserving the logical request ID.
+- A terminal failed, cancelled, or `unknown_outcome` logical request is not restarted implicitly. Callers must set `options.retry=true`, which increments `attemptGeneration` while preserving the logical request ID. This is separate from bounded transient upstream attempts performed while one logical request is still executing.
 - Gateway writes the `provider_call_logs` row with `running` before it calls the guard or upstream provider. Stale running requests and calls are reconciled to `unknown_outcome`; they are never relabeled as ordinary failures.
 - `cost_records.provider_call_id` is unique, so replay, process recovery, and duplicate terminal writes cannot charge the same provider call twice.
 
@@ -106,7 +106,8 @@ Routing and fallback are owned by Provider Gateway. API Server, Workers, and Act
 - `fallback_strategy` controls `enabled`, `maxAttempts`, `fallbackOn`, and `stopOn`. Empty strategy defaults to three attempts and fallback for guard/rate/timeout/internal failures.
 - `text.generate`, `text.stream`, `image.generate`, `audio.tts`, `audio.transcribe`, and `video.create_task` can route across profile candidates. `video.poll_task` and `video.cancel_task` are pinned to the `provider_async_tasks` model/account.
 - Every attempt writes `provider_call_logs`. Failed image/video-create candidates write logs only; artifacts, media files, async tasks, and cost records are created by the successful candidate.
-- Stream fallback is allowed only before the first delta is sent. Once content has been emitted, later stream errors are returned directly.
+- `text.generate` and `text.stream` retry the same selected model up to three additional times for HTTP `408` and streams that close before their required completion marker. Each retry has a new `attemptSequence`, call log, guard evaluation, and cost record; exhausted retries may then enter the configured model fallback policy.
+- Text stream retry and fallback are allowed only before the first non-empty delta is sent. Once content has been emitted, later stream errors are returned directly because the gateway cannot retract or safely duplicate visible output.
 - Gateway responses include `attempts` with provider call, model, account, binding, status, error, retryable flag, and latency.
 - `model_profile_bindings.runtime_options.reasoningLevel` stores the default reasoning level for that business-model binding. The value must match the selected model's `provider_options_schema.xCapabilities.reasoningLevels`; an empty value delegates to the provider default.
 - A text request may set `input.reasoningLevel` to override the binding default for that logical request. Gateway validates the effective value after each routing or fallback selection, maps it to OpenAI-compatible `reasoning_effort`, and persists the effective upstream request in `provider_call_logs.request_snapshot`.
