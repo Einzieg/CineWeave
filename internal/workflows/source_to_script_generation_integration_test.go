@@ -31,6 +31,88 @@ type sourceToScriptFixtureChapter struct {
 	baseContent  string
 }
 
+func TestSourceToScriptExplicitFirstChapterPublishesImmediatelyIntegration(t *testing.T) {
+	requireSourceToScriptIntegration(t)
+	ctx := context.Background()
+	pool := openNovelAdaptationTestDB(t, ctx)
+	t.Cleanup(pool.Close)
+
+	fixture := seedSourceToScriptGenerationFixture(t, ctx, pool, []sourceToScriptFixtureChapter{
+		{volumeIndex: 1, sectionIndex: 1, title: "第一节", content: "source one"},
+		{volumeIndex: 1, sectionIndex: 2, title: "第二节", content: "source two"},
+		{volumeIndex: 1, sectionIndex: 3, title: "第三节", content: "source three"},
+	})
+	plan := prepareSourceToScriptGenerationFixture(t, ctx, fixture, fixture.chapterIDs[:1])
+	if plan.EpisodeTotal != 1 || plan.SeriesEpisodeTotal != 3 || len(plan.Chapters) != 1 || plan.Chapters[0].ID != fixture.chapterIDs[0] {
+		t.Fatalf("single chapter plan = %+v", plan)
+	}
+	var targetCount, queuedCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM source_to_script_generation_items
+		WHERE generation_id = $1 AND is_target = true
+	`, plan.GenerationID).Scan(&targetCount); err != nil {
+		t.Fatalf("count target items: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM workflow_node_runs
+		WHERE workflow_run_id = $1 AND node_type = $2
+	`, fixture.workflowRunID, SourceToScriptEpisodeNodeType).Scan(&queuedCount); err != nil {
+		t.Fatalf("count queued episode nodes: %v", err)
+	}
+	if targetCount != 1 || queuedCount != 1 {
+		t.Fatalf("target/queued count = %d/%d, want 1/1", targetCount, queuedCount)
+	}
+
+	queued := loadQueuedSourceToScriptEpisode(t, ctx, pool, fixture.workflowRunID, plan.Chapters[0])
+	staged := stageSourceToScriptEpisodeSuccess(t, ctx, pool, fixture.activities, queued, plan, fixture.userID, "first episode content")
+	if staged.ScriptVersionID == "" || staged.ScriptVersionID == fixture.baseVersionID || staged.EpisodeID == "" {
+		t.Fatalf("immediate publication output = %+v", staged)
+	}
+	var versionStatus, currentVersionID, chapterID, content string
+	if err := pool.QueryRow(ctx, `SELECT status FROM script_versions WHERE id = $1`, staged.ScriptVersionID).Scan(&versionStatus); err != nil {
+		t.Fatalf("load working script version: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT current_version_id::text FROM scripts WHERE id = $1`, fixture.scriptID).Scan(&currentVersionID); err != nil {
+		t.Fatalf("load current script version: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT source_chapter_id::text, content
+		FROM script_episodes
+		WHERE id = $1 AND script_version_id = $2
+	`, staged.EpisodeID, staged.ScriptVersionID).Scan(&chapterID, &content); err != nil {
+		t.Fatalf("load immediately published episode: %v", err)
+	}
+	var generatedEventCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM event_outbox
+		WHERE project_id = $1 AND event_type = 'script.episode.generated'
+		  AND payload->>'scriptVersionId' = $2
+	`, fixture.projectID, staged.ScriptVersionID).Scan(&generatedEventCount); err != nil {
+		t.Fatalf("count realtime publication events: %v", err)
+	}
+	if versionStatus != "partial" || currentVersionID != fixture.baseVersionID ||
+		chapterID != fixture.chapterIDs[0] || content != "first episode content" || generatedEventCount != 1 {
+		t.Fatalf("immediate publication state = status=%s current=%s chapter=%s content=%q events=%d", versionStatus, currentVersionID, chapterID, content, generatedEventCount)
+	}
+
+	output, err := fixture.activities.FinalizeScriptFromSource(ctx, sourceToScriptFixtureInput(fixture), plan, SourceToScriptFinalization{
+		RequestedEpisodeCount: 1, CompletedEpisodeCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("FinalizeScriptFromSource: %v", err)
+	}
+	if output.ScriptVersionID != staged.ScriptVersionID || !output.Activated {
+		t.Fatalf("final output = %+v, want working version activation", output)
+	}
+	var versionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_versions WHERE script_id = $1`, fixture.scriptID).Scan(&versionCount); err != nil {
+		t.Fatalf("count script versions: %v", err)
+	}
+	if versionCount != 2 {
+		t.Fatalf("script version count = %d, want base plus one working/final version", versionCount)
+	}
+}
+
 func TestSourceToScriptMixedFailureKeepsFallbackEpisodeAndActivatesCompleteVersionIntegration(t *testing.T) {
 	requireSourceToScriptIntegration(t)
 	ctx := context.Background()
@@ -511,8 +593,18 @@ func assertSourceToScriptPublicationRejected(
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_versions WHERE script_id = $1`, fixture.scriptID).Scan(&versionCount); err != nil {
 		t.Fatalf("count script versions: %v", err)
 	}
-	if versionCount != 1 {
-		t.Fatalf("script version count = %d, want 1 after rejected publication", versionCount)
+	if versionCount != 2 {
+		t.Fatalf("script version count = %d, want base plus retained partial version after rejected activation", versionCount)
+	}
+	var currentVersionID, partialStatus string
+	if err := pool.QueryRow(ctx, `SELECT current_version_id::text FROM scripts WHERE id = $1`, fixture.scriptID).Scan(&currentVersionID); err != nil {
+		t.Fatalf("load current version after rejected activation: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM script_versions WHERE source_to_script_generation_id = $1`, plan.GenerationID).Scan(&partialStatus); err != nil {
+		t.Fatalf("load retained partial version: %v", err)
+	}
+	if currentVersionID != fixture.baseVersionID || partialStatus != "partial" {
+		t.Fatalf("rejected activation changed current version: current=%s base=%s partial=%s", currentVersionID, fixture.baseVersionID, partialStatus)
 	}
 	var generationStatus, errorCode string
 	if err := pool.QueryRow(ctx, `SELECT status, error_code FROM source_to_script_generations WHERE id = $1`, plan.GenerationID).Scan(&generationStatus, &errorCode); err != nil {

@@ -2092,6 +2092,7 @@ export type ScriptVersion = {
   sourceType?: string;
   promptVersionId?: string;
   promptHash?: string;
+  metadata?: Record<string, unknown>;
   createdAt?: string;
 };
 

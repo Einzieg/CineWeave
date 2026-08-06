@@ -12363,7 +12363,7 @@ components:
           enum: [plain_text, markdown]
         status:
           type: string
-          enum: [active, archived]
+          enum: [active, draft, partial, archived]
         sourceType:
           type: string
         promptVersionId:

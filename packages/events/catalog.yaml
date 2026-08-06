@@ -138,7 +138,7 @@ events:
   - {name: review.fix.applied, schemaVersion: 1, scopeType: project, aggregateType: review_fix, requiredPayloadFields: [], terminal: true}
   - {name: script.archived, schemaVersion: 1, scopeType: project, aggregateType: script, requiredPayloadFields: [], terminal: true}
   - {name: script.episode.generation.staged, schemaVersion: 1, scopeType: project, aggregateType: script_episode_generation_result, requiredPayloadFields: [attemptGeneration, generationId, manifestOrdinal, scriptId, sourceId, workflowRunId], terminal: true}
-  - {name: script.episode.generated, schemaVersion: 1, scopeType: project, aggregateType: script_episode, requiredPayloadFields: [], terminal: true}
+  - {name: script.episode.generated, schemaVersion: 1, scopeType: project, aggregateType: script_episode, requiredPayloadFields: [scriptId, scriptVersionId, sourceId, episodeIndex, workflowRunId], terminal: true}
   - {name: script.episode.updated, schemaVersion: 1, scopeType: project, aggregateType: script_episode, requiredPayloadFields: [], terminal: false}
   - {name: script.generated, schemaVersion: 1, scopeType: project, aggregateType: script, requiredPayloadFields: [], terminal: true}
   - {name: script.generation.prepared, schemaVersion: 1, scopeType: project, aggregateType: script, requiredPayloadFields: [], terminal: false}

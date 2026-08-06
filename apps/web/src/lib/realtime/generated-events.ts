@@ -412,7 +412,7 @@ export const projectEventDefinitions = {
   "provider.webhook.received": { schemaVersion: 1, scopeType: "project", aggregateType: "provider_async_task", requiredPayloadFields: [] as const, terminal: false },
   "review.fix.applied": { schemaVersion: 1, scopeType: "project", aggregateType: "review_fix", requiredPayloadFields: [] as const, terminal: true },
   "script.archived": { schemaVersion: 1, scopeType: "project", aggregateType: "script", requiredPayloadFields: [] as const, terminal: true },
-  "script.episode.generated": { schemaVersion: 1, scopeType: "project", aggregateType: "script_episode", requiredPayloadFields: [] as const, terminal: true },
+  "script.episode.generated": { schemaVersion: 1, scopeType: "project", aggregateType: "script_episode", requiredPayloadFields: ["episodeIndex","scriptId","scriptVersionId","sourceId","workflowRunId",] as const, terminal: true },
   "script.episode.generation.staged": { schemaVersion: 1, scopeType: "project", aggregateType: "script_episode_generation_result", requiredPayloadFields: ["attemptGeneration","generationId","manifestOrdinal","scriptId","sourceId","workflowRunId",] as const, terminal: true },
   "script.episode.updated": { schemaVersion: 1, scopeType: "project", aggregateType: "script_episode", requiredPayloadFields: [] as const, terminal: false },
   "script.generated": { schemaVersion: 1, scopeType: "project", aggregateType: "script", requiredPayloadFields: [] as const, terminal: true },

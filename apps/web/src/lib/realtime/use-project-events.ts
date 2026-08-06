@@ -10,6 +10,7 @@ import { qk } from "@/lib/query/keys";
 import { orgScopedKey } from "@/lib/query/use-api";
 import { useStudioSession } from "@/lib/session";
 import { useActivityStore } from "@/lib/stores/activity-store";
+import { useUiStore } from "@/lib/stores/ui-store";
 
 const configuredRealtimeBase = process.env.NEXT_PUBLIC_REALTIME_URL?.trim() ?? "";
 const knownProjectEvents = new Set<string>(projectEventNames);
@@ -25,6 +26,7 @@ export function useProjectEvents(projectId: string) {
   const accessToken = session.accessToken;
   const recordActivityEvent = useActivityStore((state) => state.recordEvent);
   const setConnectionStatus = useActivityStore((state) => state.setConnectionStatus);
+  const markGeneratedScript = useUiStore((state) => state.markGeneratedScript);
 
   useEffect(() => {
     if (!ready || !projectId || !accessToken.trim()) {
@@ -159,6 +161,13 @@ export function useProjectEvents(projectId: string) {
               latestRevisionByAggregate.set(aggregateKey, aggregateRevision);
             }
             recordActivityEvent(projectId, event.event, payload, event.id);
+            if (event.event === "script.episode.generated") {
+              const scriptId = stringPayload(payload, "scriptId");
+              const scriptVersionId = stringPayload(payload, "scriptVersionId");
+              if (scriptId && scriptVersionId) {
+                markGeneratedScript(projectId, scriptId, scriptVersionId);
+              }
+            }
             scheduleKeys(keysForProjectEvent(event.event, projectId, payload));
             if (Date.now() >= toastArmedAt) {
               const notice = toastForProjectEvent(event.event, payload);
@@ -193,7 +202,7 @@ export function useProjectEvents(projectId: string) {
         window.clearTimeout(flushTimer);
       }
     };
-  }, [accessToken, organizationId, projectId, queryClient, ready, recordActivityEvent, setConnectionStatus]);
+  }, [accessToken, markGeneratedScript, organizationId, projectId, queryClient, ready, recordActivityEvent, setConnectionStatus]);
 }
 
 function resolveRealtimeBase() {

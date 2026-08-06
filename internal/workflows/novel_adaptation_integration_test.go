@@ -429,15 +429,29 @@ func TestPrepareSourceToScriptAppendsSecondChapterToCurrentScriptIntegration(t *
 	}
 
 	output := stageSourceToScriptEpisodeSuccess(t, ctx, pool, activities, queued, plan, userID, "episode two")
-	if output.EpisodeIndex != 2 || output.ScriptID != scriptID || output.GenerationResultID == "" {
+	if output.EpisodeIndex != 2 || output.ScriptID != scriptID || output.ScriptVersionID == "" ||
+		output.ScriptVersionID == versionID || output.EpisodeID == "" || output.GenerationResultID == "" {
 		t.Fatalf("staged output = %+v", output)
 	}
-	var formalEpisodeCount int
+	var formalEpisodeCount, workingEpisodeCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_episodes WHERE script_id = $1`, scriptID).Scan(&formalEpisodeCount); err != nil {
 		t.Fatalf("count episodes before finalize: %v", err)
 	}
-	if formalEpisodeCount != 1 {
-		t.Fatalf("formal episode count before finalize = %d, want 1", formalEpisodeCount)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_episodes WHERE script_version_id = $1`, output.ScriptVersionID).Scan(&workingEpisodeCount); err != nil {
+		t.Fatalf("count working version episodes before finalize: %v", err)
+	}
+	if formalEpisodeCount != 3 || workingEpisodeCount != 2 {
+		t.Fatalf("episode counts before finalize = total %d working %d, want 3/2", formalEpisodeCount, workingEpisodeCount)
+	}
+	var workingStatus, generatedContent string
+	if err := pool.QueryRow(ctx, `SELECT status FROM script_versions WHERE id = $1`, output.ScriptVersionID).Scan(&workingStatus); err != nil {
+		t.Fatalf("load working version status: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT content FROM script_episodes WHERE id = $1`, output.EpisodeID).Scan(&generatedContent); err != nil {
+		t.Fatalf("load generated episode before finalize: %v", err)
+	}
+	if workingStatus != "partial" || generatedContent != "episode two" {
+		t.Fatalf("working publication before finalize = status %s content %q", workingStatus, generatedContent)
 	}
 	var originalEpisodeCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM script_episodes WHERE script_version_id = $1 AND id = $2`, versionID, firstEpisodeID).Scan(&originalEpisodeCount); err != nil {
