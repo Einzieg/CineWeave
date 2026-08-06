@@ -20,19 +20,23 @@ if ($parseErrors.Count -gt 0) {
 
 $source = Get-Content -LiteralPath $deployScript -Raw -Encoding UTF8
 $requiredFragments = @(
-  "[ValidateSet('Deploy', 'Smoke', 'Full')]",
-  "[string]`$Phase = 'Deploy'",
+  "[ValidateSet('Prepare', 'Deploy', 'Finalize', 'Full')]",
+  "[string]`$Phase = 'Prepare'",
   '[switch]$ConfirmMainEnvironmentMigration',
   '[switch]$RunPaidSmoke',
   '[switch]$ConfirmProviderSpend',
+  '[string]$PrepareEvidencePath',
+  'Assert-PrepareEvidenceLocation',
+  'Assert-PreparedImageIdentities',
+  'Assert-ReleasePrepareEvidence',
+  "'-RequireClean'",
   'CINEWEAVE_PROVIDER_CONFIGURATION_FROZEN',
   "'DrainCheck'",
   "'Snapshot'",
   "'Verify'",
   "'-PreflightOnly'",
   "'-ConfirmProviderSpend'",
-  "'-CheckProviderDrain'",
-  "'--profile', 'app', 'up', '-d', '--build'",
+  "'--profile', 'app', 'up', '-d', '--no-build'",
   'Wait-RequiredRuntimeServices',
   'Provider configuration writes remain frozen for manual recovery'
 )
@@ -45,13 +49,16 @@ foreach ($fragment in $requiredFragments) {
 if ($source -match "'release:check'\s*,\s*'--'") {
   throw 'Commerce release deployment must not pass npm-style -- through pnpm to PowerShell.'
 }
-if ($source -notmatch 'if \(\$runSmoke\) \{\s+Assert-SmokeConfiguration') {
+if ($source -match 'SkipReleaseCheck') {
+  throw 'Commerce release deployment must not allow bypassing the Prepare evidence checkpoint.'
+}
+if ($source -notmatch 'if \(\$runFinalize\) \{\s+Assert-SmokeConfiguration') {
   throw 'Commerce release deployment must not require a pre-existing Commerce smoke project during Deploy-only releases.'
 }
 
 $migrationGateTriggered = $false
 try {
-  & $deployScript
+  & $deployScript -Phase Deploy
 } catch {
   if ($_.Exception.Message -like '*ConfirmMainEnvironmentMigration*') {
     $migrationGateTriggered = $true
@@ -65,7 +72,7 @@ if (-not $migrationGateTriggered) {
 
 $spendGateTriggered = $false
 try {
-  & $deployScript -Phase Smoke -RunPaidSmoke
+  & $deployScript -Phase Finalize -RunPaidSmoke
 } catch {
   if ($_.Exception.Message -like '*ConfirmProviderSpend*') {
     $spendGateTriggered = $true

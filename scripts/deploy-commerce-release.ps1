@@ -1,11 +1,14 @@
 [CmdletBinding()]
 param(
-  [ValidateSet('Deploy', 'Smoke', 'Full')]
-  [string]$Phase = 'Deploy',
+  [ValidateSet('Prepare', 'Deploy', 'Finalize', 'Full')]
+  [string]$Phase = 'Prepare',
   [switch]$ConfirmMainEnvironmentMigration,
-  [switch]$SkipReleaseCheck,
   [switch]$RunPaidSmoke,
   [switch]$ConfirmProviderSpend,
+  [string]$ReleaseId = '',
+  [string]$PrepareEvidencePath = 'tmp/release-prepare-evidence.json',
+  [ValidateRange(1, 168)]
+  [int]$PrepareEvidenceMaxAgeHours = 24,
   [string]$ComposeFile = 'compose.yml',
   [string]$SnapshotPath = 'tmp/provider-protection-before-commerce-release.json',
   [string]$ApiBaseUrl = 'http://localhost:19288',
@@ -22,14 +25,15 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 Set-StrictMode -Version Latest
 
+$runPrepare = $Phase -in @('Prepare', 'Full')
 $runDeploy = $Phase -in @('Deploy', 'Full')
-$runSmoke = $Phase -in @('Smoke', 'Full')
+$runFinalize = $Phase -in @('Finalize', 'Full')
 
 if ($runDeploy -and -not $ConfirmMainEnvironmentMigration) {
   throw 'Main-environment migration is disabled by default. Re-run with -ConfirmMainEnvironmentMigration after an explicit deployment approval.'
 }
-if ($RunPaidSmoke -and -not $runSmoke) {
-  throw 'Paid Commerce smoke requires -Phase Smoke or -Phase Full.'
+if ($RunPaidSmoke -and -not $runFinalize) {
+  throw 'Paid Commerce smoke requires -Phase Finalize or -Phase Full.'
 }
 if ($RunPaidSmoke -and -not $ConfirmProviderSpend) {
   throw 'Paid Commerce smoke is disabled by default. Re-run with -RunPaidSmoke -ConfirmProviderSpend after explicit spend approval.'
@@ -40,10 +44,21 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = $utf8NoBom
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$resolvedComposeFile = (Resolve-Path -LiteralPath (Join-Path $repoRoot $ComposeFile)).Path
+$resolvedComposeFile = if ([IO.Path]::IsPathRooted($ComposeFile)) {
+  (Resolve-Path -LiteralPath $ComposeFile).Path
+} else {
+  (Resolve-Path -LiteralPath (Join-Path $repoRoot $ComposeFile)).Path
+}
 $providerGuardScript = Join-Path $repoRoot 'scripts/provider-data-guard.ps1'
 $releaseCheckScript = Join-Path $repoRoot 'scripts/release-check.ps1'
+$releaseEvidenceModule = Join-Path $repoRoot 'scripts/release-evidence.psm1'
 $smokeScript = Join-Path $repoRoot 'scripts/smoke-commerce-real-provider.ps1'
+Import-Module $releaseEvidenceModule -Force
+$resolvedPrepareEvidencePath = if ([IO.Path]::IsPathRooted($PrepareEvidencePath)) {
+  [IO.Path]::GetFullPath($PrepareEvidencePath)
+} else {
+  [IO.Path]::GetFullPath((Join-Path $repoRoot $PrepareEvidencePath))
+}
 $requiredSmokeVariables = @(
   'CINEWEAVE_SMOKE_ACCESS_TOKEN',
   'CINEWEAVE_SMOKE_ORGANIZATION_ID',
@@ -65,6 +80,13 @@ $requiredRuntimeServices = @(
   'api',
   'realtime',
   'web'
+)
+$requiredPrepareSteps = @(
+  'Repository validation',
+  'Web production build',
+  'Commerce browser E2E',
+  'Isolated migration roundtrip and baseline equivalence',
+  'Application image build'
 )
 
 function Invoke-NativeCommand {
@@ -97,6 +119,79 @@ function Invoke-Compose {
 
   $composeArguments = @('compose', '-f', $resolvedComposeFile) + $Arguments
   return Invoke-NativeCommand -FilePath 'docker' -ArgumentList $composeArguments -CaptureOutput:$CaptureOutput
+}
+
+function Get-CoreReleaseCommit {
+  $commit = (
+    Invoke-NativeCommand -FilePath 'git' -ArgumentList @('rev-parse', 'HEAD') -CaptureOutput |
+      ForEach-Object { [string]$_ }
+  ) -join ''
+  $commit = $commit.Trim()
+  if ([string]::IsNullOrWhiteSpace($commit)) {
+    throw 'Unable to resolve the Core release commit.'
+  }
+  return $commit
+}
+
+function Assert-CurrentReleaseIdentity {
+  param([Parameter(Mandatory = $true)][string]$ExpectedCoreCommit)
+
+  $actualCommit = Get-CoreReleaseCommit
+  if ($actualCommit -ne $ExpectedCoreCommit) {
+    throw "Core release commit changed after Prepare: $actualCommit; expected $ExpectedCoreCommit."
+  }
+  $status = @(
+    Invoke-NativeCommand -FilePath 'git' -ArgumentList @('status', '--porcelain') -CaptureOutput |
+      Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+  )
+  if ($status.Count -ne 0) {
+    throw 'Core release worktree changed after Prepare; refusing to deploy stale evidence.'
+  }
+}
+
+function Assert-PrepareEvidenceLocation {
+  $relativePath = [IO.Path]::GetRelativePath($repoRoot, $resolvedPrepareEvidencePath)
+  if ($relativePath -eq '..' -or $relativePath.StartsWith("..$([IO.Path]::DirectorySeparatorChar)")) {
+    return
+  }
+
+  $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+  $PSNativeCommandUseErrorActionPreference = $false
+  try {
+    & git check-ignore -q -- $relativePath
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+  }
+  if ($exitCode -gt 1) {
+    throw "Unable to validate the Prepare evidence path with git check-ignore (exit $exitCode)."
+  }
+  if ($exitCode -ne 0) {
+    throw 'Prepare evidence must be stored outside the repository or under a Git-ignored path.'
+  }
+}
+
+function Assert-PreparedImageIdentities {
+  param([Parameter(Mandatory = $true)][object]$Evidence)
+
+  foreach ($preparedImage in @($Evidence.artifacts.images)) {
+    $imageName = [string]$preparedImage.name
+    $expectedImageId = [string]$preparedImage.imageId
+    $actualImageId = (
+      Invoke-NativeCommand -FilePath 'docker' -ArgumentList @(
+        'image',
+        'inspect',
+        '--format',
+        '{{.Id}}',
+        $imageName
+      ) -CaptureOutput |
+        ForEach-Object { [string]$_ }
+    ) -join ''
+    $actualImageId = $actualImageId.Trim()
+    if ($actualImageId -ne $expectedImageId) {
+      throw "Prepared image $imageName changed after Prepare: $actualImageId; expected $expectedImageId."
+    }
+  }
 }
 
 function Invoke-ReleaseStep {
@@ -329,75 +424,106 @@ $releaseSucceeded = $false
 
 Push-Location $repoRoot
 try {
-  if ($runSmoke) {
-    Assert-SmokeConfiguration
+  $coreCommit = Get-CoreReleaseCommit
+  if ([string]::IsNullOrWhiteSpace($ReleaseId)) {
+    $ReleaseId = $coreCommit
   }
-  $originalApiFrozen = Get-ApiProviderConfigurationFrozen
-  $freezeStateRead = $true
+  Assert-PrepareEvidenceLocation
 
-  if ($runDeploy -and -not $SkipReleaseCheck) {
-    Invoke-ReleaseStep 'Release candidate validation' {
+  if ($runPrepare) {
+    Invoke-ReleaseStep 'Prepare immutable release candidate' {
       Invoke-NativeCommand -FilePath 'pwsh' -ArgumentList @(
         '-NoProfile',
         '-File',
         $releaseCheckScript,
-        '-CheckProviderDrain',
-        '-SkipImageBuild'
+        '-RequireClean',
+        '-ReleaseId',
+        $ReleaseId,
+        '-EvidencePath',
+        $resolvedPrepareEvidencePath,
+        '-ComposeFile',
+        $resolvedComposeFile
       )
     }
   }
 
-  Invoke-ReleaseStep 'Provider runtime drain check' {
-    Invoke-NativeCommand -FilePath 'pwsh' -ArgumentList @(
-      '-NoProfile',
-      '-File',
-      $providerGuardScript,
-      '-Mode',
-      'DrainCheck',
-      '-ComposeFile',
-      $resolvedComposeFile
-    )
-  }
-
-  if (-not $originalApiFrozen) {
-    Invoke-ReleaseStep 'Freeze Provider configuration writes' {
-      Set-ApiProviderConfigurationFrozen -Frozen $true
+  Invoke-ReleaseStep 'Validate Prepare checkpoint' {
+    Assert-CurrentReleaseIdentity -ExpectedCoreCommit $coreCommit
+    $prepareEvidence = Assert-ReleasePrepareEvidence `
+      -Path $resolvedPrepareEvidencePath `
+      -ExpectedCoreCommit $coreCommit `
+      -ExpectedReleaseId $ReleaseId `
+      -RequiredSteps $requiredPrepareSteps `
+      -MaxAgeHours $PrepareEvidenceMaxAgeHours
+    if ($runPrepare -or $runDeploy) {
+      Assert-PreparedImageIdentities -Evidence $prepareEvidence
     }
-    $apiFreezeChanged = $true
-  } else {
-    $env:CINEWEAVE_PROVIDER_CONFIGURATION_FROZEN = 'true'
   }
 
-  Invoke-ReleaseStep 'Recheck drained runtime under Provider freeze' {
-    Invoke-NativeCommand -FilePath 'pwsh' -ArgumentList @(
-      '-NoProfile',
-      '-File',
-      $providerGuardScript,
-      '-Mode',
-      'DrainCheck',
-      '-ComposeFile',
-      $resolvedComposeFile
-    )
+  if ($Phase -eq 'Prepare') {
+    Write-Host "`nCommerce release phase Prepare completed successfully."
+    Write-Host "Prepare evidence: $resolvedPrepareEvidencePath"
+    return
   }
 
-  Invoke-ReleaseStep 'Snapshot protected Provider configuration' {
-    Invoke-NativeCommand -FilePath 'pwsh' -ArgumentList @(
-      '-NoProfile',
-      '-File',
-      $providerGuardScript,
-      '-Mode',
-      'Snapshot',
-      '-SnapshotPath',
-      $SnapshotPath,
-      '-ComposeFile',
-      $resolvedComposeFile
-    )
+  if ($runFinalize) {
+    Assert-SmokeConfiguration
   }
 
   if ($runDeploy) {
+    $originalApiFrozen = Get-ApiProviderConfigurationFrozen
+    $freezeStateRead = $true
+
+    Invoke-ReleaseStep 'Provider runtime drain check' {
+      Invoke-NativeCommand -FilePath 'pwsh' -ArgumentList @(
+        '-NoProfile',
+        '-File',
+        $providerGuardScript,
+        '-Mode',
+        'DrainCheck',
+        '-ComposeFile',
+        $resolvedComposeFile
+      )
+    }
+
+    if (-not $originalApiFrozen) {
+      Invoke-ReleaseStep 'Freeze Provider configuration writes' {
+        Set-ApiProviderConfigurationFrozen -Frozen $true
+      }
+      $apiFreezeChanged = $true
+    } else {
+      $env:CINEWEAVE_PROVIDER_CONFIGURATION_FROZEN = 'true'
+    }
+
+    Invoke-ReleaseStep 'Recheck drained runtime under Provider freeze' {
+      Invoke-NativeCommand -FilePath 'pwsh' -ArgumentList @(
+        '-NoProfile',
+        '-File',
+        $providerGuardScript,
+        '-Mode',
+        'DrainCheck',
+        '-ComposeFile',
+        $resolvedComposeFile
+      )
+    }
+
+    Invoke-ReleaseStep 'Snapshot protected Provider configuration' {
+      Invoke-NativeCommand -FilePath 'pwsh' -ArgumentList @(
+        '-NoProfile',
+        '-File',
+        $providerGuardScript,
+        '-Mode',
+        'Snapshot',
+        '-SnapshotPath',
+        $SnapshotPath,
+        '-ComposeFile',
+        $resolvedComposeFile
+      )
+    }
+
     $migrationStarted = $true
-    Invoke-ReleaseStep 'Build and deploy the app profile' {
-      Invoke-Compose -Arguments @('--profile', 'app', 'up', '-d', '--build')
+    Invoke-ReleaseStep 'Deploy the prepared app profile' {
+      Invoke-Compose -Arguments @('--profile', 'app', 'up', '-d', '--no-build')
     }
 
     Invoke-ReleaseStep 'Verify Compose runtime health' {
@@ -436,7 +562,7 @@ try {
     )
   }
 
-  if ($runSmoke) {
+  if ($runFinalize) {
     Invoke-ReleaseStep 'Run zero-cost Commerce Provider preflight' {
       Invoke-NativeCommand -FilePath 'pwsh' -ArgumentList @(
         '-NoProfile',
@@ -499,6 +625,7 @@ try {
       Remove-Item Env:CINEWEAVE_PROVIDER_CONFIGURATION_FROZEN -ErrorAction SilentlyContinue
     }
     Pop-Location
+    Remove-Module release-evidence -ErrorAction SilentlyContinue
   }
 }
 

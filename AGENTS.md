@@ -37,7 +37,9 @@ This file is the project-level operating guide for coding agents working in this
 Use this deployment path unless the task is explicitly local-only:
 
 ```powershell
-docker compose -f compose.yml --profile app up -d --build
+$ErrorActionPreference = 'Stop'
+docker compose -f compose.yml --profile app build
+docker compose -f compose.yml --profile app up -d --no-build
 docker compose -f compose.yml --profile app ps
 ```
 
@@ -67,6 +69,16 @@ Treat a production update as one immutable release unit. Editing source, buildin
 
 The current server deployment lives under `/soft/CineWeave`. The public application and storage entry points are `cineweave.einzieg.site` and `cineweave-s3.einzieg.site`; do not modify or take over the main domain. Follow `docs/runtime-foundation-hardening-runbook.md` for the detailed release procedure.
 
+### Optimized release phases
+
+- [ ] Split routine Core Compose releases into `Prepare`, `Deploy`, and `Finalize`. `Prepare` runs tests, browser E2E, migration roundtrip, production builds, and app image builds while the old runtime is still serving. It must not freeze Provider/Commercial writes, migrate a database, replace a container, or call a paid Provider.
+- [ ] Run `pwsh -NoProfile -File scripts/deploy-commerce-release.ps1 -Phase Prepare -ReleaseId <immutable-id> -PrepareEvidencePath <ignored-or-external-path>` before opening the maintenance window. The evidence must bind the exact clean Core commit, Release ID, successful required steps, step timings, and every prepared CineWeave image ID.
+- [ ] Enter the maintenance window only after Prepare evidence passes. `Deploy` must revalidate the evidence age, commit, clean worktree, Release ID, and local image IDs, then use `docker compose ... up -d --no-build`. Never add a bypass flag, rebuild after write freeze, or silently reuse evidence from another commit or builder.
+- [ ] Run `Finalize` after the runtime switch to verify health, migration head, protection snapshots, and zero-cost smoke. Paid smoke still requires separate explicit authorization and `-RunPaidSmoke -ConfirmProviderSpend`.
+- [ ] `-Phase Full` is only the ordered Prepare -> Deploy -> Finalize composition. A failure in any phase stops later phases; a failed Deploy after migration starts keeps protected writes frozen for recovery.
+- [ ] Internal Commercial production is a dual-repository assembly, not the Core Compose helper. Commit and push Core first, refresh Commercial `core.lock` plus the allowlist Core identity/hashes, validate both clean commits, then assemble and build the combined immutable Release ID. Do not deploy Core-only Compose as a substitute for Commercial Assembly.
+- [ ] Keep the CI `validate` aggregate gate dependent on Core validation, Community audit, Commerce E2E, and Compose build jobs even when those jobs run in parallel. Parallelism must not weaken the existing required check.
+
 ### Release authorization and scope
 
 - [ ] Obtain explicit user authorization before migrating or rebuilding the main production environment. Authorization to call paid provider APIs does not automatically authorize a database migration or Compose rebuild, and vice versa.
@@ -84,6 +96,7 @@ The current server deployment lives under `/soft/CineWeave`. The public applicat
 - [ ] Confirm all changed public routes exist in both `packages/openapi/openapi.yaml` and the running API implementation.
 - [ ] Confirm migrations and seeds are embedded in the binaries/images being deployed, and that the expected schema head comes from the same release source.
 - [ ] Build every service affected by a shared contract. If a feature spans Web, API, migration, Provider Gateway, or Worker code, deploying only one of those services is prohibited.
+- [ ] For a deployable candidate, create successful Prepare evidence under `tmp/` or outside the repository. Evidence inside a tracked/unignored path is invalid. If a prepared image tag points at a different image ID before Deploy, discard the checkpoint and rerun Prepare.
 
 ### Production preflight and protection
 
@@ -94,10 +107,12 @@ The current server deployment lives under `/soft/CineWeave`. The public applicat
 - [ ] Freeze Provider configuration writes and run the current `scripts/provider-data-guard.ps1` DrainCheck/Snapshot flow when the release touches Provider, model, workflow, video, or migration behavior. Store the snapshot outside Git.
 - [ ] Create a non-empty PostgreSQL custom-format backup before applying migrations. Record its absolute server path, size, timestamp, schema version, and release ID.
 - [ ] Build all release images while the old containers are still serving. Do not switch traffic to a partially built release.
+- [ ] Record Prepare step timings and use them to optimize the next release. Do not shorten the maintenance window by skipping protection, migration verification, Worker routing, or browser/runtime acceptance.
 
 ### Migration and service rollout
 
 - [ ] Set `CINEWEAVE_ENV=production` and the immutable `CINEWEAVE_RELEASE_ID` for migration, seed, application, and Worker containers.
+- [ ] Do not run a source build after writers are frozen. Deploy only the images/digests already bound to the immutable candidate evidence; an image identity mismatch returns the release to Prepare.
 - [ ] For a backward-incompatible migration, stop or freeze every writer before migration. Do not allow old API/Worker containers to write against an incompatible new schema.
 - [ ] Run the release-specific `migrate` image, then migration `verify`. Run `seed apply` and `seed verify` when the release changes system templates, prompts, profiles, permissions, or other managed seed data.
 - [ ] Confirm the database reached the exact expected migration head. Never edit the migration ledger or database rows to make a failed release appear successful.
@@ -144,6 +159,7 @@ Every production deployment report must include:
 - services rebuilt and exact image tags/digests
 - Temporal Deployment current/ramping/previous Build IDs
 - tests, readiness checks, API smoke, and browser smoke performed
+- Prepare/Deploy/Finalize evidence paths and per-step timings
 - active workflow/provider task counts before and after
 - whether a real paid provider call was made
 - remaining risk and exact rollback target

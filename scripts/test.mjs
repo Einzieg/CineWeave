@@ -52,6 +52,8 @@ const commands = [
   ["pwsh", ["-NoProfile", "-File", "scripts/test-commerce-smoke-script.ps1"]],
   ["pwsh", ["-NoProfile", "-File", "scripts/test-commerce-deploy-script.ps1"]],
   ["pwsh", ["-NoProfile", "-File", "scripts/test-commercial-assembly-script.ps1"]],
+  ["pwsh", ["-NoProfile", "-File", "scripts/test-release-evidence.ps1"]],
+  ["pwsh", ["-NoProfile", "-File", "scripts/test-release-build-cache.ps1"]],
   ["pwsh", ["-NoProfile", "-File", "scripts/test-provider-data-guard.ps1"]],
   ["docker", ["compose", "-f", "compose.yml", "config", "--quiet"]],
 ];

@@ -4,17 +4,28 @@ param(
   [switch]$SkipImageBuild,
   [switch]$RunCommerceRealProviderSmoke,
   [switch]$CheckProviderDrain,
-  [switch]$RequireClean
+  [switch]$RequireClean,
+  [string]$ReleaseId = '',
+  [string]$EvidencePath = 'tmp/release-prepare-evidence.json',
+  [string]$ComposeFile = 'compose.yml'
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+Set-StrictMode -Version Latest
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$evidenceModule = Join-Path $repoRoot 'scripts/release-evidence.psm1'
+Import-Module $evidenceModule -Force
+$resolvedComposeFile = if ([IO.Path]::IsPathRooted($ComposeFile)) {
+  (Resolve-Path -LiteralPath $ComposeFile).Path
+} else {
+  (Resolve-Path -LiteralPath (Join-Path $repoRoot $ComposeFile)).Path
+}
 
 function Invoke-ReleaseStep {
   param(
@@ -24,7 +35,11 @@ function Invoke-ReleaseStep {
     [scriptblock]$Action
   )
   Write-Host "`n==> $Name"
-  & $Action
+  Invoke-ReleaseEvidenceStep `
+    -State $releaseEvidence `
+    -EvidencePath $resolvedEvidencePath `
+    -Name $Name `
+    -Action $Action
 }
 
 function Assert-GoVersion {
@@ -73,11 +88,78 @@ function Assert-NoTrackedSecrets {
   Write-Host 'Tracked secret scan passed.'
 }
 
+function Get-PreparedImageIdentities {
+  $imageNames = @(
+    & docker compose -f $resolvedComposeFile --profile app config --images |
+      ForEach-Object { ([string]$_).Trim() } |
+      Where-Object { $_ -like 'cineweave-*' } |
+      Sort-Object -Unique
+  )
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to resolve prepared Compose image names.'
+  }
+  if ($imageNames.Count -eq 0) {
+    throw 'No prepared CineWeave images were found in the app profile.'
+  }
+
+  $identities = foreach ($imageName in $imageNames) {
+    $imageId = (
+      & docker image inspect --format '{{.Id}}' $imageName |
+        ForEach-Object { [string]$_ }
+    ) -join ''
+    if ($LASTEXITCODE -ne 0) {
+      throw "Unable to inspect prepared image: $imageName"
+    }
+    $imageId = $imageId.Trim()
+    if ($imageId -notmatch '^sha256:[0-9a-f]{64}$') {
+      throw "Prepared image $imageName has an invalid image ID: $imageId"
+    }
+    [pscustomobject]@{
+      name = $imageName
+      imageId = $imageId
+    }
+  }
+  return @($identities)
+}
+
+$releaseFailure = $null
+$releaseEvidence = $null
+$resolvedEvidencePath = $null
 Push-Location $repoRoot
 try {
-  if ($RequireClean -and (git status --porcelain)) {
+  $coreCommit = (& git rev-parse HEAD).Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($coreCommit)) {
+    throw 'Unable to resolve the Core release commit.'
+  }
+  $repositoryStatus = @(git status --porcelain)
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to read the Core worktree status.'
+  }
+  $repositoryClean = $repositoryStatus.Count -eq 0
+  if ($RequireClean -and -not $repositoryClean) {
     throw 'Release worktree is not clean.'
   }
+  if ([string]::IsNullOrWhiteSpace($ReleaseId)) {
+    $ReleaseId = $coreCommit
+  }
+  $resolvedEvidencePath = if ([IO.Path]::IsPathRooted($EvidencePath)) {
+    [IO.Path]::GetFullPath($EvidencePath)
+  } else {
+    [IO.Path]::GetFullPath((Join-Path $repoRoot $EvidencePath))
+  }
+  $releaseEvidence = New-ReleaseEvidenceState `
+    -Phase 'prepare' `
+    -ReleaseId $ReleaseId `
+    -CoreCommit $coreCommit `
+    -RepositoryClean $repositoryClean `
+    -Options @{
+      migrationIntegration = -not $SkipMigrationIntegration
+      commerceBrowserE2E = -not $SkipCommerceBrowserE2E
+      imageBuild = -not $SkipImageBuild
+      providerDrain = [bool]$CheckProviderDrain
+      paidProviderSmoke = [bool]$RunCommerceRealProviderSmoke
+    }
+  Write-ReleaseEvidence -State $releaseEvidence -Path $resolvedEvidencePath
 
   Invoke-ReleaseStep 'Toolchain version' { Assert-GoVersion }
   Invoke-ReleaseStep 'Tracked secret scan' { Assert-NoTrackedSecrets }
@@ -86,7 +168,7 @@ try {
   Invoke-ReleaseStep 'Node dependency audit' { pnpm audit --audit-level moderate }
   Invoke-ReleaseStep 'Repository validation' { pnpm run test }
   Invoke-ReleaseStep 'Web production build' { pnpm --filter @cineweave/web build }
-  Invoke-ReleaseStep 'Compose validation' { docker compose -f compose.yml config --quiet }
+  Invoke-ReleaseStep 'Compose validation' { docker compose -f $resolvedComposeFile config --quiet }
 
   if (-not $SkipCommerceBrowserE2E) {
     Invoke-ReleaseStep 'Commerce browser E2E' {
@@ -101,7 +183,7 @@ try {
   }
   if ($CheckProviderDrain) {
     Invoke-ReleaseStep 'Provider runtime drain check' {
-      pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode DrainCheck
+      pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode DrainCheck -ComposeFile $resolvedComposeFile
     }
   }
   if ($RunCommerceRealProviderSmoke) {
@@ -111,11 +193,29 @@ try {
   }
   if (-not $SkipImageBuild) {
     Invoke-ReleaseStep 'Application image build' {
-      docker compose -f compose.yml --profile app build
+      docker compose -f $resolvedComposeFile --profile app build
+      $releaseEvidence.artifacts.images = @(Get-PreparedImageIdentities)
+      Write-ReleaseEvidence -State $releaseEvidence -Path $resolvedEvidencePath
     }
   }
 
+  Complete-ReleaseEvidence `
+    -State $releaseEvidence `
+    -EvidencePath $resolvedEvidencePath `
+    -Status 'passed'
   Write-Host "`nRelease checks passed."
+  Write-Host "Prepare evidence: $resolvedEvidencePath"
+} catch {
+  $releaseFailure = $_
+  if ($null -ne $releaseEvidence) {
+    Complete-ReleaseEvidence `
+      -State $releaseEvidence `
+      -EvidencePath $resolvedEvidencePath `
+      -Status 'failed' `
+      -ErrorRecord $releaseFailure
+  }
+  throw
 } finally {
   Pop-Location
+  Remove-Module release-evidence -ErrorAction SilentlyContinue
 }

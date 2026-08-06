@@ -7,7 +7,8 @@ on:
       - main
 
 jobs:
-  validate:
+  core_validate:
+    name: Core validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +37,34 @@ jobs:
 
       - name: Validate
         run: pnpm run test
+
+  community_audit:
+    name: Community audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python validation dependencies
+        run: python -m pip install --disable-pip-version-check pyyaml
 
       - name: Community source and dependency inventory
         shell: pwsh
@@ -121,11 +150,72 @@ jobs:
             tmp/ce-technical-audit-ci.json
           if-no-files-found: warn
 
+  commerce_e2e:
+    name: Commerce E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Install Playwright Chromium
         run: pnpm --filter @cineweave/web exec playwright install --with-deps chromium
 
       - name: Commerce browser E2E
         run: pnpm run test:commerce:e2e
 
+  compose_build:
+    name: Compose build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
       - name: Compose build
         run: docker compose -f compose.yml build api provider-gateway script-worker media-worker web
+
+  validate:
+    name: validate
+    if: always()
+    needs:
+      - core_validate
+      - community_audit
+      - commerce_e2e
+      - compose_build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every parallel CI job
+        shell: pwsh
+        env:
+          CORE_VALIDATE_RESULT: ${{ needs.core_validate.result }}
+          COMMUNITY_AUDIT_RESULT: ${{ needs.community_audit.result }}
+          COMMERCE_E2E_RESULT: ${{ needs.commerce_e2e.result }}
+          COMPOSE_BUILD_RESULT: ${{ needs.compose_build.result }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $results = [ordered]@{
+            coreValidate = $env:CORE_VALIDATE_RESULT
+            communityAudit = $env:COMMUNITY_AUDIT_RESULT
+            commerceE2E = $env:COMMERCE_E2E_RESULT
+            composeBuild = $env:COMPOSE_BUILD_RESULT
+          }
+          $failed = @($results.GetEnumerator() | Where-Object Value -ne 'success')
+          if ($failed.Count -ne 0) {
+            $summary = $failed | ForEach-Object { "$($_.Key)=$($_.Value)" }
+            throw "Parallel CI gate failed: $($summary -join ', ')"
+          }
+          Write-Host 'All parallel CI jobs passed.'

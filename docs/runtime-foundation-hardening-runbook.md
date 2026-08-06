@@ -88,9 +88,40 @@ if ([string]::IsNullOrWhiteSpace($env:CINEWEAVE_RELEASE_ID)) {
 
 确认部署环境已通过 Secret 管理注入数据库、S3、JWT、Provider Gateway 内部令牌和凭据加密主密钥。不要把这些值写入 Compose、Git 或命令历史。
 
-### 3.1 视频生产与 Provider 发布门
+### 3.1 Prepare、Deploy、Finalize
 
-涉及视频 Profile、Workflow、Provider contract 或 migration 的发布必须先进入维护窗口，停止新的视频生产与 Profile rebuild。然后冻结 Provider 管理写入、排空在途视频任务并保存保护快照：
+常规发布先在不影响运行环境的 Prepare 阶段完成安全检查、全仓测试、Web production build、Commerce E2E、隔离迁移往返和 app profile 镜像构建。成功结果写入包含 commit、Release ID、每步耗时和状态的 evidence：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+
+$releaseId = (git rev-parse HEAD).Trim()
+$evidencePath = 'tmp/release-prepare-evidence.json'
+pwsh -NoProfile -File scripts/deploy-commerce-release.ps1 `
+  -Phase Prepare `
+  -ReleaseId $releaseId `
+  -PrepareEvidencePath $evidencePath
+```
+
+Prepare 成功后才开启维护窗口。Deploy 会要求同一 Core commit、Release ID、干净工作树、逐镜像 `sha256` ID 和 24 小时内的完整成功 evidence，随后执行 drain、冻结、快照并通过 `--no-build` 切换已准备好的镜像：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+
+pwsh -NoProfile -File scripts/deploy-commerce-release.ps1 `
+  -Phase Deploy `
+  -ReleaseId $releaseId `
+  -PrepareEvidencePath $evidencePath `
+  -ConfirmMainEnvironmentMigration
+```
+
+部署后用 Finalize 复核现有运行态、migration head 和 Provider 快照，再执行零费用预检；只有显式增加 `-RunPaidSmoke -ConfirmProviderSpend` 才会调用真实计费供应商。`-Phase Full` 按三个阶段顺序执行。不得复制、手改或跨 commit 复用 evidence。
+
+Core 与 Commercial Dockerfile 使用 BuildKit Go module/build cache 和 pnpm store cache；这些缓存只缩短重建时间，不进入最终镜像，也不改变不可变 Release ID。CI 将全仓校验、Community archive 审计、Commerce E2E 和 Compose build 分成独立并行 job；任一 job 失败仍阻断候选发布。
+
+### 3.2 视频生产与 Provider 发布门
+
+涉及视频 Profile、Workflow、Provider contract 或 migration 的候选完成 Prepare 后，进入 Deploy 维护窗口，停止新的视频生产与 Profile rebuild。然后冻结 Provider 管理写入、排空在途视频任务并保存保护快照：
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -104,7 +135,7 @@ pwsh -NoProfile -File scripts/provider-data-guard.ps1 -Mode Snapshot `
   -SnapshotPath 'tmp/provider-protection-before-release.json'
 ```
 
-`DrainCheck` 必须返回 `activeWorkflowRuns=0`、`activeVideoTasks=0`、`activeVideoLeases=0`。保护快照对 9 张 Provider 配置表保存主键、行数和全行 hash，对 `provider_call_logs`、`cost_records`、`provider_async_tasks` 保存历史主键基线。快照不得提交到 Git。
+`DrainCheck` 必须返回所有受保护 workflow、Provider、Commerce、checkpoint 和 lease 活动计数为 0。保护快照精确覆盖 12 张 Provider 配置表，并按主键和行 hash 保护 8 张历史/证明表；允许追加历史记录，但不允许已有行丢失或变化。快照不得提交到 Git。
 
 若无法通过环境变量冻结 API，可停止 API 后执行 Snapshot/Verify；不得在可写 API 运行时忽略保护脚本的拒绝结果。
 
@@ -146,16 +177,19 @@ docker compose -f compose.yml exec -T postgres psql -U cineweave -d cineweave -v
 docker compose -f compose.yml exec -T postgres psql -U cineweave -d cineweave -v ON_ERROR_STOP=1 -c "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'projects' AND column_name = 'production_mode') AS legacy_column_exists;"
 ```
 
-当前目标是 migration v18、四个最新 v2 Profile 均为 `published + available`、`legacy_column_exists=false`。若任一条件不满足，保持维护窗口并停止发布。
+目标 migration version 必须等于当前源码 migration head，system-managed Profile/Seed 必须通过同一候选的 verify，`legacy_column_exists=false`。若任一条件不满足，保持维护窗口并停止发布。
 
 ## 5. Compose 部署
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 
-docker compose -f compose.yml --profile app up -d --build
+docker compose -f compose.yml --profile app build
+docker compose -f compose.yml --profile app up -d --no-build
 docker compose -f compose.yml --profile app ps
 ```
+
+常规路径由 Prepare 在维护窗口外完成第一条 build；进入 Deploy 后只执行 `up --no-build`。这里保留分步命令用于手工恢复和诊断，不得在 Provider 已冻结后才开始完整重建。
 
 `migrate`、`seed`、`temporal-schema`、`temporal-namespace` 和 `minio-create-bucket` 是 one-shot 服务，成功退出是正常状态。其余应用服务应为 `Up`，带 healthcheck 的服务应为 `healthy`。
 
@@ -197,7 +231,7 @@ docker compose -f compose.yml --profile app up -d --no-deps --force-recreate api
 Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:19288/readyz'
 ```
 
-Verify 要求 9 张配置表完全等值，3 张历史表部署前主键仍为部署后集合的子集。任何差异都必须保留现场并中止开放流量。
+Verify 要求 12 张配置表完全等值，8 张历史/证明表的部署前 ID 与行 hash 保持不变。任何差异都必须保留现场并中止开放流量。
 
 ## 6. Temporal Worker 发布
 
