@@ -895,6 +895,8 @@ func (a Activities) GenerateSourceScriptEpisode(ctx context.Context, input Gener
 			"baseScriptVersionId": generation.BaseScriptVersionID,
 			"episodeIndex":        input.EpisodeIndex,
 			"episodeTotal":        input.EpisodeTotal,
+			"batchIndex":          input.BatchIndex,
+			"batchTotal":          input.BatchTotal,
 			"modelProfileKey":     project.ScriptModelProfileKey,
 			"promptTemplateKey":   rendered.TemplateKey,
 			"promptVersionId":     rendered.PromptVersionID,

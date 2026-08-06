@@ -19,6 +19,7 @@ import { qk } from "@/lib/query/keys";
 import { useApiMutation, useInvalidateKeys } from "@/lib/query/use-api";
 import type { AgentApproval, AgentStep, AgentTask, JsonRecord, JsonValue } from "@/lib/types";
 import { projectHref } from "@/lib/routes";
+import { workflowEpisodeProgressLabel } from "@/lib/workflow-progress-label";
 import Link from "next/link";
 import type { Route } from "next";
 import {
@@ -653,6 +654,9 @@ type StepWorkflowProgress = {
   workflowRunId: string;
   workflowType: string;
   status: string;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
   totalNodes: number;
   completedNodes: number;
   activeNode?: {
@@ -664,6 +668,8 @@ type StepWorkflowProgress = {
     anchorRole: string;
     episodeIndex: number;
     episodeTotal: number;
+    batchIndex: number;
+    batchTotal: number;
     episodeTitle: string;
     partialText: string;
     receivedChars: number;
@@ -891,14 +897,27 @@ function WorkflowProgress({ progress }: { progress: StepWorkflowProgress }) {
   const node = progress.activeNode;
   const active = ["pending", "queued", "running", "cancelling"].includes(progress.status);
   const nodeStage = workflowNodeStageLabel(node?.nodeType || "", node?.nodeKey || "");
+  const episodeLabel = node
+    ? workflowEpisodeProgressLabel({
+        workflowType: progress.workflowType,
+        episodeIndex: node.episodeIndex,
+        episodeTotal: node.episodeTotal,
+        batchIndex: node.batchIndex,
+        batchTotal: node.batchTotal,
+        totalItems: progress.totalItems,
+      })
+    : "";
   return (
     <div className="mt-2 min-w-0 overflow-hidden rounded-md border border-primary/20 bg-primary/5 p-2">
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
         {active ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
         <span className="font-medium text-primary">后台任务</span>
         <Badge variant="outline">{stepStatusLabel(progress.status)}</Badge>
+        {progress.workflowType === "source_to_script" && progress.totalItems > 0 ? (
+          <Badge variant="outline">本次目标 {progress.totalItems} 集</Badge>
+        ) : null}
         {node?.shotNo ? <Badge variant="outline">第 {node.shotNo} 个分镜</Badge> : null}
-        {!node?.shotNo && node?.episodeTotal ? <Badge variant="outline">第 {node.episodeIndex}/{node.episodeTotal} 集</Badge> : null}
+        {!node?.shotNo && episodeLabel ? <Badge variant="outline">{episodeLabel}</Badge> : null}
         {node?.episodeTitle ? <Badge variant="outline" className="max-w-full truncate">{node.episodeTitle}</Badge> : null}
         {nodeStage ? <Badge variant="outline">{nodeStage}</Badge> : null}
         <Badge variant="outline">节点 {progress.completedNodes}/{progress.totalNodes}</Badge>
@@ -1382,6 +1401,9 @@ function stepWorkflowProgress(step: AgentStep): StepWorkflowProgress | null {
     workflowRunId: stringValue(progress.workflowRunId),
     workflowType: stringValue(progress.workflowType),
     status: stringValue(progress.status),
+    totalItems: numberValue(progress.totalItems),
+    completedItems: numberValue(progress.completedItems),
+    failedItems: numberValue(progress.failedItems),
     totalNodes: numberValue(progress.totalNodes),
     completedNodes: numberValue(progress.completedNodes),
     ...(activeNode
@@ -1395,6 +1417,8 @@ function stepWorkflowProgress(step: AgentStep): StepWorkflowProgress | null {
             anchorRole: stringValue(nodeInput?.anchorRole),
             episodeIndex: numberValue(nodeInput?.episodeIndex),
             episodeTotal: numberValue(nodeInput?.episodeTotal),
+            batchIndex: numberValue(nodeInput?.batchIndex),
+            batchTotal: numberValue(nodeInput?.batchTotal),
             episodeTitle: stringValue(nodeInput?.episodeTitle),
             partialText: stringValue(nodeOutput?.partialText),
             receivedChars: numberValue(nodeOutput?.receivedChars),

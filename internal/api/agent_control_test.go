@@ -271,7 +271,14 @@ func TestAgentTaskDetailIncludesLiveWorkflowEpisodeProgress(t *testing.T) {
 	defer seed.Close()
 
 	taskID := seed.insertAgentTask(t, "running")
-	workflowRunID := seed.insertWorkflowRunWithType(t, "script_to_storyboard", "running")
+	workflowRunID := seed.insertWorkflowRunWithType(t, "source_to_script", "running")
+	if _, err := seed.pool.Exec(seed.ctx, `
+		UPDATE workflow_runs
+		SET total_items = 1, completed_items = 0, failed_items = 0
+		WHERE id = $1
+	`, workflowRunID); err != nil {
+		t.Fatalf("set workflow item progress: %v", err)
+	}
 	seed.insertAgentStepWithOutput(t, taskID, 1, "workflow.start", "workflow", "succeeded", `{"status":"succeeded","data":{"workflowRunId":"`+workflowRunID+`"}}`)
 	if _, err := seed.pool.Exec(seed.ctx, `
 		INSERT INTO workflow_node_runs(
@@ -279,9 +286,9 @@ func TestAgentTaskDetailIncludesLiveWorkflowEpisodeProgress(t *testing.T) {
 			input, output, started_at
 		)
 		VALUES (
-			$1, $2, $3, 'generate_storyboard_from_script_episode-2', 'agent.storyboard_generate', 'running',
-			jsonb_build_object('episodeIndex', 2, 'episodeTotal', 10, 'episodeTitle', '第二集'),
-			jsonb_build_object('status', 'streaming', 'partialText', '正在生成第二集分镜', 'receivedChars', 10),
+			$1, $2, $3, 'generate_script_from_source_chapter-1', 'agent.script_generate_episode', 'running',
+			jsonb_build_object('episodeIndex', 1, 'episodeTotal', 199, 'batchIndex', 1, 'batchTotal', 1, 'episodeTitle', '第一集'),
+			jsonb_build_object('status', 'streaming', 'partialText', '正在生成第一集剧本', 'receivedChars', 10),
 			now()
 		)
 	`, seed.organizationID, seed.projectID, workflowRunID); err != nil {
@@ -299,10 +306,13 @@ func TestAgentTaskDetailIncludesLiveWorkflowEpisodeProgress(t *testing.T) {
 	activeNode, _ := progress["activeNode"].(map[string]any)
 	nodeInput, _ := activeNode["input"].(map[string]any)
 	nodeOutput, _ := activeNode["output"].(map[string]any)
-	if progress["status"] != "running" || nodeInput["episodeIndex"] != float64(2) || nodeInput["episodeTotal"] != float64(10) {
+	if progress["status"] != "running" || nodeInput["episodeIndex"] != float64(1) || nodeInput["episodeTotal"] != float64(199) || nodeInput["batchIndex"] != float64(1) || nodeInput["batchTotal"] != float64(1) {
 		t.Fatalf("workflow progress = %+v", progress)
 	}
-	if nodeOutput["partialText"] != "正在生成第二集分镜" {
+	if progress["totalItems"] != float64(1) || progress["completedItems"] != float64(0) || progress["failedItems"] != float64(0) {
+		t.Fatalf("workflow item progress = %+v", progress)
+	}
+	if nodeOutput["partialText"] != "正在生成第一集剧本" {
 		t.Fatalf("workflow node output = %+v", nodeOutput)
 	}
 }

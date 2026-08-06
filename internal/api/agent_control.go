@@ -2380,6 +2380,9 @@ func (s *Server) agentWorkflowProgress(ctx context.Context, projectID, workflowR
 	var (
 		workflowType     string
 		workflowStatus   string
+		totalItems       int
+		completedItems   int
+		failedItems      int
 		totalNodes       int
 		completedNodes   int
 		nodeID           sql.NullString
@@ -2395,6 +2398,9 @@ func (s *Server) agentWorkflowProgress(ctx context.Context, projectID, workflowR
 		SELECT
 			COALESCE(NULLIF(w.input->>'workflowType', ''), NULLIF(w.workflow_type, ''), ''),
 			w.status,
+			COALESCE(w.total_items, 0),
+			COALESCE(w.completed_items, 0),
+			COALESCE(w.failed_items, 0),
 			(SELECT count(*) FROM workflow_node_runs n WHERE n.workflow_run_id = w.id),
 			(SELECT count(*) FROM workflow_node_runs n WHERE n.workflow_run_id = w.id AND n.status IN ('succeeded', 'failed', 'cancelled')),
 			n.id::text,
@@ -2418,6 +2424,9 @@ func (s *Server) agentWorkflowProgress(ctx context.Context, projectID, workflowR
 	`, projectID, workflowRunID).Scan(
 		&workflowType,
 		&workflowStatus,
+		&totalItems,
+		&completedItems,
+		&failedItems,
 		&totalNodes,
 		&completedNodes,
 		&nodeID,
@@ -2436,6 +2445,9 @@ func (s *Server) agentWorkflowProgress(ctx context.Context, projectID, workflowR
 		"workflowRunId":  workflowRunID,
 		"workflowType":   workflowType,
 		"status":         workflowStatus,
+		"totalItems":     totalItems,
+		"completedItems": completedItems,
+		"failedItems":    failedItems,
 		"totalNodes":     totalNodes,
 		"completedNodes": completedNodes,
 	}
