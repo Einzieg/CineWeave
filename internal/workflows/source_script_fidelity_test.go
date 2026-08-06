@@ -42,6 +42,23 @@ func TestValidateNovelScriptFidelityDoesNotRequireNarrativeQuoteAsSpeech(t *test
 	}
 }
 
+func TestValidateNovelScriptFidelityIgnoresColonRichVisualDirections(t *testing.T) {
+	source := `方源望向青山与落日，轻声一笑：“青山落日，秋月春风。”`
+	script := `**画面**
+
+无声记忆叠化而来：前世地球中的岁月、华夏学子的身影与陌生天地。
+
+一瞬间，回溯的光影掠过：山巅的血色、燃烧的晚霞与飞散的岁月。
+
+**对白**
+
+方源：青山落日，秋月春风。`
+
+	if err := validateNovelScriptFidelity(source, script); err != nil {
+		t.Fatalf("visual directions should not be validated as speech: %v", err)
+	}
+}
+
 func TestValidateNovelScriptFidelityRejectsCopiedNovelNarration(t *testing.T) {
 	source := `夜雨敲窗，方源站在窗边。`
 	script := `**旁白**：夜雨敲窗，方源站在窗边。`

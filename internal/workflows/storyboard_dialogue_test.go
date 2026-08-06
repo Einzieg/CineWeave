@@ -77,6 +77,29 @@ func TestExtractScriptDialogueLinesSkipsColonTerminatedStageDirections(t *testin
 	}
 }
 
+func TestExtractScriptDialogueLinesKeepsVisualSectionsOutOfDialogue(t *testing.T) {
+	content := `## 场景三｜外景·山巅·落日
+
+**画面**
+
+无声记忆叠化而来：前世地球中的岁月、华夏学子的身影与陌生天地。
+
+一瞬间，回溯的光影掠过：山巅的血色、燃烧的晚霞与飞散的岁月。
+
+**对白**
+
+方源（轻声一笑）：青山落日，秋月春风。
+
+**声音**
+
+音效：爆炸轰鸣。`
+
+	lines := ExtractScriptDialogueLines(content)
+	if len(lines) != 1 || lines[0].Speaker != "方源（轻声一笑）" || lines[0].Text != "青山落日，秋月春风。" {
+		t.Fatalf("dialogue = %#v, want only the explicit dialogue section line", lines)
+	}
+}
+
 func TestExtractScriptDialogueLinesClassifiesParenthesizedInnerVoice(t *testing.T) {
 	lines := ExtractScriptDialogueLines(`**方源（心声）**：这一步不能后退。`)
 	if len(lines) != 1 || lines[0].Speaker != "方源" || lines[0].Delivery != "心声" || lines[0].Kind != "voiceover" {

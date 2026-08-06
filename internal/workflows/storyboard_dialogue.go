@@ -106,6 +106,7 @@ func ExtractScriptDialogueLines(content string) []StoryboardDialogueLine {
 	result := make([]StoryboardDialogueLine, 0)
 	pendingSpeaker := ""
 	pendingDelivery := ""
+	fieldMode := screenplayFieldModeUnknown
 
 	for _, rawLine := range lines {
 		line := strings.TrimSpace(strings.TrimSuffix(rawLine, "  "))
@@ -117,19 +118,25 @@ func ExtractScriptDialogueLines(content string) []StoryboardDialogueLine {
 		if strings.HasPrefix(line, "#") || line == "---" {
 			pendingSpeaker = ""
 			pendingDelivery = ""
+			fieldMode = screenplayFieldModeUnknown
 			continue
 		}
 		if speaker, delivery, inlineText, matched := parseBoldDialogueHeader(line); matched {
 			if isScreenplayFieldLabel(speaker) {
 				pendingSpeaker = ""
 				pendingDelivery = ""
-				if strings.EqualFold(strings.TrimSpace(speaker), "dialogue") && inlineText != "" {
+				fieldMode = screenplayFieldModeNonDialogue
+				if isScreenplayDialogueFieldLabel(speaker) {
+					fieldMode = screenplayFieldModeDialogue
+				}
+				if fieldMode == screenplayFieldModeDialogue && inlineText != "" {
 					if parsed, ok := parsePlainDialogueLine(inlineText); ok {
 						result = append(result, parsed)
 					}
 				}
 				continue
 			}
+			fieldMode = screenplayFieldModeDialogue
 			pendingSpeaker = speaker
 			pendingDelivery = delivery
 			if inlineText != "" {
@@ -144,12 +151,23 @@ func ExtractScriptDialogueLines(content string) []StoryboardDialogueLine {
 			}
 			continue
 		}
+		if fieldMode == screenplayFieldModeNonDialogue {
+			continue
+		}
 		if parsed, ok := parsePlainDialogueLine(line); ok {
 			result = append(result, parsed)
 		}
 	}
 	return result
 }
+
+type screenplayFieldMode uint8
+
+const (
+	screenplayFieldModeUnknown screenplayFieldMode = iota
+	screenplayFieldModeDialogue
+	screenplayFieldModeNonDialogue
+)
 
 func parseBoldDialogueHeader(line string) (string, string, string, bool) {
 	match := boldDialogueHeaderPattern.FindStringSubmatch(strings.TrimSpace(line))
@@ -328,16 +346,29 @@ func normalizeDialogueKind(kind, speaker string) string {
 }
 
 func isScreenplayFieldLabel(value string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	normalized = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(normalized, "**"), "**"))
-	normalized = strings.TrimSpace(strings.TrimRight(normalized, "：:"))
+	normalized := normalizeScreenplayFieldLabel(value)
 	_, found := map[string]struct{}{
-		"画面": {}, "动作": {}, "音效": {}, "环境": {}, "环境音": {}, "音乐": {}, "镜头": {}, "字幕": {}, "字幕提示": {},
+		"画面": {}, "动作": {}, "音效": {}, "声音": {}, "声效": {}, "环境": {}, "环境音": {}, "音乐": {}, "镜头": {}, "转场": {}, "字幕": {}, "字幕提示": {},
 		"画幅": {}, "风格": {}, "氛围": {}, "人物": {}, "主要人物": {}, "主要地点": {}, "场景": {},
-		"地点": {}, "时间": {}, "时间流逝": {}, "冲突": {}, "结果": {}, "情绪": {}, "备注": {}, "dialogue": {},
+		"地点": {}, "时间": {}, "时间流逝": {}, "冲突": {}, "结果": {}, "情绪": {}, "备注": {}, "对白": {}, "台词": {}, "dialogue": {},
 		"visual": {}, "action": {}, "sound": {}, "sfx": {}, "music": {}, "camera": {}, "location": {}, "time": {}, "characters": {},
 	}[normalized]
 	return found
+}
+
+func isScreenplayDialogueFieldLabel(value string) bool {
+	switch normalizeScreenplayFieldLabel(value) {
+	case "对白", "台词", "dialogue":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeScreenplayFieldLabel(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(normalized, "**"), "**"))
+	return strings.TrimSpace(strings.TrimRight(normalized, "：:"))
 }
 
 func isScreenplayDirectionLabel(value string) bool {
