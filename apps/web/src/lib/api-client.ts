@@ -18,6 +18,8 @@ import type {
   OrganizationMemberList,
   MemberPasswordReset,
   CanonicalAsset,
+  CodexControlKeySecretResponse,
+  CodexControlKeyStatus,
   CreateAssetBatchRequest,
   CreatedSystemOrganization,
   CreateSystemOrganizationMemberRequest,
@@ -96,6 +98,12 @@ import type {
   ParseScriptScenesResponse,
   Permission,
   Project,
+  ProjectControlCommand,
+  ProjectControlCommandEvent,
+  ProjectControlCommandSnapshot,
+  ProjectControlCommandStatus,
+  ProjectControlControllerType,
+  ProjectControlResult,
   ProjectDeletionImpact,
   ProjectDeletionRequest,
   CreateProjectDeletionRequest,
@@ -161,6 +169,7 @@ import type {
   ScriptTimingAnalysis,
   StudioSession,
   SystemEdition,
+  ProjectControlDiagnostics,
   SystemOrganizationList,
   Team,
   TeamImpact,
@@ -216,6 +225,14 @@ type CanonicalAssetListOptions = {
 type WorkflowRunListOptions = {
   status?: "active" | "terminal" | "all";
   view?: "activity";
+  limit?: number;
+  cursor?: string;
+};
+type ProjectControlCommandListOptions = {
+  statuses?: ProjectControlCommandStatus[];
+  controllerType?: ProjectControlControllerType;
+  view?: "activity";
+  createdAfter?: string;
   limit?: number;
   cursor?: string;
 };
@@ -302,6 +319,9 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
       true,
     );
   }
+  if (response.ok && response.status === 204) {
+    return undefined as TData;
+  }
   const envelope = (await response.json().catch(() => ({}))) as ApiEnvelope<TData>;
   if (!response.ok || envelope.error || envelope.data === undefined) {
     const errorCode = envelope.error?.code ?? "HTTP_ERROR";
@@ -321,8 +341,14 @@ export async function apiRequest<TData>(path: string, options: ApiRequestOptions
   return wrapBrowserCachedMediaUrls(envelope.data, options.session);
 }
 
+function projectControlData<TData>(result: ProjectControlResult): TData {
+  return (result.data ?? {}) as unknown as TData;
+}
+
 export const studioApi = {
   getSystemEdition: () => apiRequest<SystemEdition>("/api/system/edition"),
+  getSystemProjectControlDiagnostics: (session: StudioSession) =>
+    apiRequest<ProjectControlDiagnostics>("/api/system/project-control-diagnostics", { session }),
   getSetupState: () => apiRequest<SetupState>("/api/system/setup-state"),
   setupSystem: (body: JsonRecord) => apiRequest<AuthResponse>("/api/system/setup", { method: "POST", body }),
   login: (body: JsonRecord) => apiRequest<LoginResponse>("/api/auth/login", { method: "POST", body }),
@@ -354,6 +380,14 @@ export const studioApi = {
   }>("/api/auth/me", { session }),
   getMyEntitlements: (session: StudioSession) =>
     apiRequest<EntitlementSnapshot>("/api/me/entitlements", { session }),
+  getCodexControlKey: (session: StudioSession) =>
+    apiRequest<CodexControlKeyStatus>("/api/me/codex-control-key", { session }),
+  createCodexControlKey: (session: StudioSession) =>
+    apiRequest<CodexControlKeySecretResponse>("/api/me/codex-control-key", { method: "POST", session }),
+  rotateCodexControlKey: (session: StudioSession) =>
+    apiRequest<CodexControlKeySecretResponse>("/api/me/codex-control-key/rotate", { method: "POST", session }),
+  revokeCodexControlKey: (session: StudioSession) =>
+    apiRequest<void>("/api/me/codex-control-key", { method: "DELETE", session }),
   updateProfile: (session: StudioSession, body: { displayName?: string; avatarUrl?: string }) =>
     apiRequest<AuthResponse["user"]>("/api/auth/me", { method: "PATCH", session, body }),
   setInitialUsername: (session: StudioSession, username: string) =>
@@ -552,7 +586,9 @@ export const studioApi = {
       prohibitedClaims?: string[];
       metadata?: JsonRecord;
     },
-  ) => apiRequest<CommerceProductMutationResult>(`/api/projects/${projectId}/commerce/product/versions`, { method: "POST", session, body }),
+  ) => apiRequest<CommerceProductMutationResult>(`/api/projects/${projectId}/commerce/product/versions`, {
+    method: "POST", session, body, idempotencyKey: crypto.randomUUID(),
+  }),
   listCommerceProductVersions: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<CommerceProductVersion>>(`/api/projects/${projectId}/commerce/product/versions`, { session }),
   getCommerceProductVersion: (session: StudioSession, projectId: string, versionId: string) =>
@@ -604,18 +640,18 @@ export const studioApi = {
     referenceId: string,
     body: { expectedRevision: number; referenceRole?: string; ordinal?: number; setPrimary?: boolean },
   ) => apiRequest<CommerceProductReference>(`/api/projects/${projectId}/commerce/product/references/${referenceId}`, {
-    method: "PATCH", session, body,
+    method: "PATCH", session, body, idempotencyKey: crypto.randomUUID(),
   }),
   archiveCommerceProductReference: (session: StudioSession, projectId: string, referenceId: string, expectedRevision: number) =>
     apiRequest<CommerceProductReference>(`/api/projects/${projectId}/commerce/product/references/${referenceId}`, {
-      method: "DELETE", session, body: { expectedRevision },
+      method: "DELETE", session, body: { expectedRevision }, idempotencyKey: crypto.randomUUID(),
     }),
   getCommerceProductRebuildImpact: (
     session: StudioSession,
     projectId: string,
     body: { targetProductVersionId: string; targetReferenceIds: string[]; expectedProductRevision: number },
   ) => apiRequest<CommerceProductRebuildImpact>(`/api/projects/${projectId}/commerce/product/rebuild-impact`, {
-    method: "POST", session, body,
+    method: "POST", session, body, idempotencyKey: crypto.randomUUID(),
   }),
   createCommerceProductRebuild: (
     session: StudioSession,
@@ -644,7 +680,9 @@ export const studioApi = {
     session: StudioSession,
     projectId: string,
     body: UpdateCommerceScriptUnitDefaultsRequest,
-  ) => apiRequest<Project>(`/api/projects/${projectId}/commerce/script-unit-defaults`, { method: "PATCH", session, body }),
+  ) => apiRequest<Project>(`/api/projects/${projectId}/commerce/script-unit-defaults`, {
+    method: "PATCH", session, body, idempotencyKey: crypto.randomUUID(),
+  }),
   getCommerceUnitProductionStatus: (session: StudioSession, projectId: string, scriptUnitId: string) =>
     apiRequest<CommerceUnitProductionStatus>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/production-status`, { session }),
   getCommerceScriptUnit: (session: StudioSession, projectId: string, scriptUnitId: string) =>
@@ -662,7 +700,9 @@ export const studioApi = {
       targetPlatform?: string;
       sourceLanguageHint?: string;
     },
-  ) => apiRequest<CommerceScriptVersionMutation>(`/api/projects/${projectId}/commerce/script-units`, { method: "POST", session, body }),
+  ) => apiRequest<CommerceScriptVersionMutation>(`/api/projects/${projectId}/commerce/script-units`, {
+    method: "POST", session, body, idempotencyKey: crypto.randomUUID(),
+  }),
   updateCommerceScriptUnit: (
     session: StudioSession,
     projectId: string,
@@ -676,23 +716,27 @@ export const studioApi = {
       targetDurationSeconds?: number;
       targetPlatform?: string;
     },
-  ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}`, { method: "PATCH", session, body }),
+  ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}`, {
+    method: "PATCH", session, body, idempotencyKey: crypto.randomUUID(),
+  }),
   archiveCommerceScriptUnit: (session: StudioSession, projectId: string, scriptUnitId: string, expectedRevision: number) =>
     apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}`, {
-      method: "DELETE", session, body: { expectedRevision },
+      method: "DELETE", session, body: { expectedRevision }, idempotencyKey: crypto.randomUUID(),
     }),
   reorderCommerceScriptUnits: (
     session: StudioSession,
     projectId: string,
     body: { expectedScriptUnitsRevision: number; items: Array<{ scriptUnitId: string; sortOrder: number }> },
-  ) => apiRequest<{ scriptUnitsRevision: number }>(`/api/projects/${projectId}/commerce/script-units/reorder`, { method: "POST", session, body }),
+  ) => apiRequest<{ scriptUnitsRevision: number }>(`/api/projects/${projectId}/commerce/script-units/reorder`, {
+    method: "POST", session, body, idempotencyKey: crypto.randomUUID(),
+  }),
   duplicateCommerceScriptUnit: (
     session: StudioSession,
     projectId: string,
     scriptUnitId: string,
     expectedScriptUnitsRevision: number,
   ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/duplicate`, {
-    method: "POST", session, body: { expectedScriptUnitsRevision },
+    method: "POST", session, body: { expectedScriptUnitsRevision }, idempotencyKey: crypto.randomUUID(),
   }),
   createCommerceScriptLanguageVariant: (
     session: StudioSession,
@@ -700,7 +744,7 @@ export const studioApi = {
     scriptUnitId: string,
     body: { expectedScriptUnitsRevision: number; targetLanguage: string },
   ) => apiRequest<CommerceScriptUnit>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/language-variants`, {
-    method: "POST", session, body,
+    method: "POST", session, body, idempotencyKey: crypto.randomUUID(),
   }),
   prepareCommerceScriptUnit: (
     session: StudioSession,
@@ -733,7 +777,7 @@ export const studioApi = {
       targetStoryboardStrategy: "smart" | "single_take";
     },
   ) => apiRequest<CommerceScriptUnitRebuildImpact>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/rebuild-impact`, {
-    method: "POST", session, body,
+    method: "POST", session, body, idempotencyKey: crypto.randomUUID(),
   }),
   createCommerceScriptUnitRebuild: (
     session: StudioSession,
@@ -741,7 +785,7 @@ export const studioApi = {
     scriptUnitId: string,
     body: { impactToken: string; expectedRevision: number },
     idempotencyKey: string,
-  ) => apiRequest<WorkflowRun>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/rebuilds`, {
+  ) => apiRequest<ProjectControlResult>(`/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/rebuilds`, {
     method: "POST", session, body, idempotencyKey,
   }),
   listCommerceScriptVersions: (session: StudioSession, projectId: string, scriptUnitId: string) =>
@@ -814,7 +858,7 @@ export const studioApi = {
     expectedRevision: number,
   ) => apiRequest<CommerceScriptReferenceImage>(
     `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/references/${referenceId}`,
-    { method: "DELETE", session, body: { expectedRevision } },
+    { method: "DELETE", session, body: { expectedRevision }, idempotencyKey: crypto.randomUUID() },
   ),
   listCommerceDirectVideos: (
     session: StudioSession,
@@ -832,7 +876,7 @@ export const studioApi = {
     scriptUnitId: string,
     body: CreateCommerceDirectVideoRequest,
     idempotencyKey: string,
-  ) => apiRequest<CommerceDirectVideoJob>(
+  ) => apiRequest<ProjectControlResult>(
     `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/direct-videos`,
     { method: "POST", session, body, idempotencyKey },
   ),
@@ -842,7 +886,7 @@ export const studioApi = {
     scriptUnitId: string,
     body: CreateCommerceScriptDerivationRequest,
     idempotencyKey: string,
-  ) => apiRequest<CommerceScriptDerivationBatch>(
+  ) => apiRequest<ProjectControlResult>(
     `/api/projects/${projectId}/commerce/script-units/${scriptUnitId}/derivations`,
     { method: "POST", session, body, idempotencyKey },
   ),
@@ -872,7 +916,7 @@ export const studioApi = {
     projectId: string,
     batchId: string,
     includeLineage = true,
-  ) => apiRequest<CommerceScriptDerivationBatch>(
+  ) => apiRequest<ProjectControlResult>(
     `/api/projects/${projectId}/commerce/script-derivations/${batchId}`,
     { session, query: includeLineage ? { include: "lineage" } : undefined },
   ),
@@ -881,7 +925,7 @@ export const studioApi = {
     projectId: string,
     batchId: string,
     idempotencyKey: string,
-  ) => apiRequest<CommerceScriptDerivationBatch>(
+  ) => apiRequest<ProjectControlResult>(
     `/api/projects/${projectId}/commerce/script-derivations/${batchId}/retry-failed`,
     { method: "POST", session, body: {}, idempotencyKey },
   ),
@@ -900,9 +944,9 @@ export const studioApi = {
     projectId: string,
     jobId: string,
     reason?: string,
-  ) => apiRequest<CommerceDirectVideoJob>(
+  ) => apiRequest<ProjectControlResult>(
     `/api/projects/${projectId}/commerce/direct-videos/${jobId}/cancel`,
-    { method: "POST", session, body: { reason } },
+    { method: "POST", session, body: { reason }, idempotencyKey: crypto.randomUUID() },
   ),
   activateCommerceScriptVersion: (
     session: StudioSession,
@@ -1241,8 +1285,8 @@ export const studioApi = {
     `/api/projects/${projectId}/commerce/script-unit-batches/${coordinatorId}/cancel`,
     { method: "POST", session, body: { reason } },
   ),
-  updateProject: (session: StudioSession, projectId: string, body: UpdateProjectRequest) =>
-    apiRequest<Project>(`/api/projects/${projectId}`, { method: "PATCH", session, body }),
+  updateProject: (session: StudioSession, projectId: string, body: UpdateProjectRequest, idempotencyKey: string) =>
+    apiRequest<Project>(`/api/projects/${projectId}`, { method: "PATCH", session, body, idempotencyKey }),
   listVideoProductionProfiles: (session: StudioSession) =>
     apiRequest<ListEnvelope<VideoProductionProfileVersion>>("/api/video-production-profiles", { session }),
   getProjectVideoProductionProfile: (session: StudioSession, projectId: string) =>
@@ -1362,37 +1406,46 @@ export const studioApi = {
     apiRequest<RegenerateResponse>(`/api/projects/${projectId}/regenerate`, { method: "POST", session, body }),
   listTimelines: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<ProjectTimeline>>(`/api/projects/${projectId}/timelines`, { session }),
-  createTimeline: (session: StudioSession, projectId: string, body: JsonRecord) =>
-    apiRequest<ProjectTimeline>(`/api/projects/${projectId}/timelines`, { method: "POST", session, body }),
+  createTimeline: (session: StudioSession, projectId: string, body: JsonRecord, idempotencyKey: string) =>
+	apiRequest<ProjectTimeline>(`/api/projects/${projectId}/timelines`, { method: "POST", session, body, idempotencyKey }),
   getTimelineDetail: (session: StudioSession, projectId: string, timelineId: string) =>
     apiRequest<TimelineDetail>(`/api/projects/${projectId}/timelines/${timelineId}/detail`, { session, query: { previewExpiresSeconds: 900 } }),
-  updateTimeline: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord) =>
-    apiRequest<ProjectTimeline>(`/api/projects/${projectId}/timelines/${timelineId}`, { method: "PATCH", session, body }),
-  deleteTimeline: (session: StudioSession, projectId: string, timelineId: string) =>
-    apiRequest<{ deleted: boolean }>(`/api/projects/${projectId}/timelines/${timelineId}`, { method: "DELETE", session }),
-  createTimelineClip: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord) =>
-    apiRequest<TimelineClip>(`/api/projects/${projectId}/timelines/${timelineId}/clips`, { method: "POST", session, body }),
-  updateTimelineClip: (session: StudioSession, projectId: string, timelineId: string, clipId: string, body: JsonRecord) =>
-    apiRequest<TimelineClip>(`/api/projects/${projectId}/timelines/${timelineId}/clips/${clipId}`, { method: "PATCH", session, body }),
-  deleteTimelineClip: (session: StudioSession, projectId: string, timelineId: string, clipId: string) =>
-    apiRequest<{ deleted: boolean; clipId: string }>(`/api/projects/${projectId}/timelines/${timelineId}/clips/${clipId}`, { method: "DELETE", session }),
-  reorderTimelineClips: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord) =>
-    apiRequest<{ items: { clipId: string; clipIndex: number }[] }>(`/api/projects/${projectId}/timelines/${timelineId}/clips/reorder`, { method: "POST", session, body }),
+  updateTimeline: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord, idempotencyKey: string) =>
+	apiRequest<ProjectTimeline>(`/api/projects/${projectId}/timelines/${timelineId}`, { method: "PATCH", session, body, idempotencyKey }),
+  deleteTimeline: (session: StudioSession, projectId: string, timelineId: string, expectedRevision: number, idempotencyKey: string) =>
+	apiRequest<{ deleted: boolean; timelineId: string }>(`/api/projects/${projectId}/timelines/${timelineId}`, {
+	  method: "DELETE", session, body: { expectedRevision }, idempotencyKey,
+	}),
+  createTimelineClip: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord, idempotencyKey: string) =>
+	apiRequest<TimelineClip>(`/api/projects/${projectId}/timelines/${timelineId}/clips`, { method: "POST", session, body, idempotencyKey }),
+  updateTimelineClip: (session: StudioSession, projectId: string, timelineId: string, clipId: string, body: JsonRecord, idempotencyKey: string) =>
+	apiRequest<TimelineClip>(`/api/projects/${projectId}/timelines/${timelineId}/clips/${clipId}`, { method: "PATCH", session, body, idempotencyKey }),
+  deleteTimelineClip: (session: StudioSession, projectId: string, timelineId: string, clipId: string, expectedTimelineRevision: number, expectedRevision: number, idempotencyKey: string) =>
+	apiRequest<{ deleted: boolean; clipId: string; timelineRevision: number }>(`/api/projects/${projectId}/timelines/${timelineId}/clips/${clipId}`, {
+	  method: "DELETE", session, body: { expectedTimelineRevision, expectedRevision }, idempotencyKey,
+	}),
+  reorderTimelineClips: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord, idempotencyKey: string) =>
+	apiRequest<{ timelineId: string; timelineRevision: number; items: TimelineClip[] }>(`/api/projects/${projectId}/timelines/${timelineId}/clips/reorder`, {
+	  method: "POST", session, body, idempotencyKey,
+	}),
   composeTimeline: (session: StudioSession, projectId: string, timelineId: string, body: JsonRecord) =>
     apiRequest<ComposeTimelineResponse>(`/api/projects/${projectId}/timelines/${timelineId}/compose`, { method: "POST", session, body }),
   listFinalVideos: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<FinalVideoVersion>>(`/api/projects/${projectId}/final-videos`, { session }),
   getFinalVideo: (session: StudioSession, projectId: string, versionId: string) =>
     apiRequest<FinalVideoVersion>(`/api/projects/${projectId}/final-videos/${versionId}`, { session }),
-  activateFinalVideo: (session: StudioSession, projectId: string, versionId: string) =>
-    apiRequest<FinalVideoVersion>(`/api/projects/${projectId}/final-videos/${versionId}/activate`, { method: "POST", session, body: {} }),
+  activateFinalVideo: (session: StudioSession, projectId: string, versionId: string, expectedRevision: number, idempotencyKey: string) =>
+    apiRequest<FinalVideoVersion>(`/api/projects/${projectId}/final-videos/${versionId}/activate`, {
+      method: "POST", session, body: { expectedRevision }, idempotencyKey,
+    }),
   createFinalVideoDownloadUrl: (session: StudioSession, projectId: string, versionId: string, body: JsonRecord) =>
     apiRequest<DownloadUrlResponse>(`/api/projects/${projectId}/final-videos/${versionId}/download-url`, { method: "POST", session, body }),
-  deleteFinalVideo: (session: StudioSession, projectId: string, versionId: string, confirmActive = false) =>
+  deleteFinalVideo: (session: StudioSession, projectId: string, versionId: string, expectedRevision: number, confirmActive: boolean, idempotencyKey: string) =>
     apiRequest<{ deleted: boolean; versionId: string }>(`/api/projects/${projectId}/final-videos/${versionId}`, {
       method: "DELETE",
       session,
-      query: confirmActive ? { confirmActive: true } : undefined,
+      body: { expectedRevision, confirmActive },
+      idempotencyKey,
     }),
 
   listSources: (session: StudioSession, projectId: string, status?: ArchiveListStatus) =>
@@ -1402,21 +1455,27 @@ export const studioApi = {
     }),
   getSource: (session: StudioSession, projectId: string, sourceId: string) =>
     apiRequest<ProjectSource>(`/api/projects/${projectId}/sources/${sourceId}`, { session }),
-  createSource: (session: StudioSession, projectId: string, body: JsonRecord) =>
-    apiRequest<ImportProjectSourceResponse>(`/api/projects/${projectId}/sources`, { method: "POST", session, body }),
+  createSource: (session: StudioSession, projectId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<ImportProjectSourceResponse>(`/api/projects/${projectId}/sources`, {
+      method: "POST", session, body, idempotencyKey,
+    }),
   importSourceFile: (session: StudioSession, projectId: string, body: FormData) =>
     apiRequest<ImportProjectSourceResponse>(`/api/projects/${projectId}/sources/import`, { method: "POST", session, body }),
-  updateSource: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
-    apiRequest<ProjectSource>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "PATCH", session, body }),
+  updateSource: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<ProjectSource>(`/api/projects/${projectId}/sources/${sourceId}`, {
+      method: "PATCH", session, body, idempotencyKey,
+    }),
   getSourceImpact: (session: StudioSession, projectId: string, sourceId: string) =>
     apiRequest<OutputImpact>(`/api/projects/${projectId}/sources/${sourceId}/impact`, { session }),
-  deleteSource: (session: StudioSession, projectId: string, sourceId: string) =>
-    apiRequest<{ deleted: boolean; mode?: string }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE", session }),
+  deleteSource: (session: StudioSession, projectId: string, sourceId: string, expectedRevision: number, idempotencyKey: string) =>
+    apiRequest<{ deleted: boolean; mode?: string; sourceId: string; revision: number }>(`/api/projects/${projectId}/sources/${sourceId}`, {
+      method: "DELETE", session, body: { expectedRevision }, idempotencyKey,
+    }),
   listSourceChapters: (session: StudioSession, projectId: string, sourceId: string) =>
     apiRequest<ListEnvelope<NovelChapterSummary>>(`/api/projects/${projectId}/sources/${sourceId}/chapters`, { session }),
   getSourceChapter: (session: StudioSession, projectId: string, sourceId: string, chapterId: string) =>
     apiRequest<NovelChapter>(`/api/projects/${projectId}/sources/${sourceId}/chapters/${chapterId}`, { session }),
-  deleteSourceChapter: (session: StudioSession, projectId: string, sourceId: string, chapterId: string) =>
+  deleteSourceChapter: (session: StudioSession, projectId: string, sourceId: string, chapterId: string, expectedRevision: number, idempotencyKey: string) =>
     apiRequest<{
       deleted: boolean;
       mode: "delete_chapter";
@@ -1424,27 +1483,34 @@ export const studioApi = {
       chapterId: string;
       deletedChapterIndex: number;
       remainingChapterCount: number;
-    }>(`/api/projects/${projectId}/sources/${sourceId}/chapters/${chapterId}`, { method: "DELETE", session }),
+      sourceRevision: number;
+    }>(`/api/projects/${projectId}/sources/${sourceId}/chapters/${chapterId}`, {
+      method: "DELETE", session, body: { expectedRevision }, idempotencyKey,
+    }),
   extractNovelEvents: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/sources/${sourceId}/extract-events`, { method: "POST", session, body }),
   listSourceNovelEvents: (session: StudioSession, projectId: string, sourceId: string, query?: { chapterId?: string }) =>
     apiRequest<{ items: NovelEvent[]; links: NovelEventLink[] }>(`/api/projects/${projectId}/sources/${sourceId}/events`, { session, query }),
-  updateNovelEvent: (session: StudioSession, projectId: string, eventId: string, body: JsonRecord) =>
-    apiRequest<NovelEvent>(`/api/projects/${projectId}/novel-events/${eventId}`, { method: "PATCH", session, body }),
-  reviewNovelEvent: (session: StudioSession, projectId: string, eventId: string, body: JsonRecord) =>
-    apiRequest<ReviewResponse>(`/api/projects/${projectId}/novel-events/${eventId}/review`, { method: "POST", session, body }),
+  updateNovelEvent: (session: StudioSession, projectId: string, eventId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<NovelEvent>(`/api/projects/${projectId}/novel-events/${eventId}`, { method: "PATCH", session, body, idempotencyKey }),
+  reviewNovelEvent: (session: StudioSession, projectId: string, eventId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<ReviewResponse>(`/api/projects/${projectId}/novel-events/${eventId}/review`, { method: "POST", session, body, idempotencyKey }),
   listAdaptationPlans: (session: StudioSession, projectId: string, sourceId?: string) =>
     apiRequest<ListEnvelope<AdaptationPlan>>(`/api/projects/${projectId}/adaptation-plans`, { session, query: sourceId ? { sourceId } : undefined }),
   getAdaptationPlan: (session: StudioSession, projectId: string, planId: string) =>
     apiRequest<AdaptationPlan>(`/api/projects/${projectId}/adaptation-plans/${planId}`, { session }),
   generateAdaptationPlan: (session: StudioSession, projectId: string, sourceId: string, body: JsonRecord) =>
     apiRequest<AdaptationPlan>(`/api/projects/${projectId}/sources/${sourceId}/generate-adaptation-plan`, { method: "POST", session, body }),
-  updateAdaptationPlan: (session: StudioSession, projectId: string, planId: string, body: JsonRecord) =>
-    apiRequest<AdaptationPlan>(`/api/projects/${projectId}/adaptation-plans/${planId}`, { method: "PATCH", session, body }),
-  reviewAdaptationPlan: (session: StudioSession, projectId: string, planId: string, body: JsonRecord) =>
-    apiRequest<ReviewResponse>(`/api/projects/${projectId}/adaptation-plans/${planId}/review`, { method: "POST", session, body }),
-  activateAdaptationPlan: (session: StudioSession, projectId: string, planId: string) =>
-    apiRequest<AdaptationPlan>(`/api/projects/${projectId}/adaptation-plans/${planId}/activate`, { method: "POST", session, body: {} }),
+  createAdaptationPlan: (session: StudioSession, projectId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<AdaptationPlan>(`/api/projects/${projectId}/adaptation-plans`, { method: "POST", session, body, idempotencyKey }),
+  updateAdaptationPlan: (session: StudioSession, projectId: string, planId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<AdaptationPlan>(`/api/projects/${projectId}/adaptation-plans/${planId}`, { method: "PATCH", session, body, idempotencyKey }),
+  reviewAdaptationPlan: (session: StudioSession, projectId: string, planId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<ReviewResponse>(`/api/projects/${projectId}/adaptation-plans/${planId}/review`, { method: "POST", session, body, idempotencyKey }),
+  activateAdaptationPlan: (session: StudioSession, projectId: string, planId: string, expectedRevision: number, idempotencyKey: string) =>
+    apiRequest<AdaptationPlan>(`/api/projects/${projectId}/adaptation-plans/${planId}/activate`, {
+      method: "POST", session, body: { expectedRevision }, idempotencyKey,
+    }),
   generateScriptFromAdaptationPlan: (session: StudioSession, projectId: string, planId: string, body: JsonRecord) =>
     apiRequest<{ scriptId: string; versionId: string; adaptationPlanId: string; content: string; providerCallId?: string; modelId?: string }>(
       `/api/projects/${projectId}/adaptation-plans/${planId}/generate-script`,
@@ -1453,36 +1519,66 @@ export const studioApi = {
 
   listScripts: (session: StudioSession, projectId: string) => apiRequest<ListEnvelope<Script>>(`/api/projects/${projectId}/scripts`, { session }),
   getScript: (session: StudioSession, projectId: string, scriptId: string) => apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}`, { session }),
-  createScript: (session: StudioSession, projectId: string, body: JsonRecord) =>
-    apiRequest<Script>(`/api/projects/${projectId}/scripts`, { method: "POST", session, body }),
-  updateScript: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
-    apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}`, { method: "PATCH", session, body }),
+  createScript: (session: StudioSession, projectId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<Script>(`/api/projects/${projectId}/scripts`, { method: "POST", session, body, idempotencyKey }),
+  updateScript: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}`, { method: "PATCH", session, body, idempotencyKey }),
+  deleteScript: (session: StudioSession, projectId: string, scriptId: string, expectedRevision: number, idempotencyKey: string, reason = "") =>
+    apiRequest<{ deleted: boolean; mode: string; scriptId: string; revision: number; versionIds: string[]; versionCount: number }>(
+      `/api/projects/${projectId}/scripts/${scriptId}`,
+      { method: "DELETE", session, body: { expectedRevision, reason }, idempotencyKey },
+    ),
   listScriptVersions: (session: StudioSession, projectId: string, scriptId: string) =>
     apiRequest<ListEnvelope<ScriptVersion>>(`/api/projects/${projectId}/scripts/${scriptId}/versions`, { session }),
   listScriptEpisodes: (session: StudioSession, projectId: string, scriptId: string, versionId: string) =>
     apiRequest<ListEnvelope<ScriptEpisode>>(`/api/projects/${projectId}/scripts/${scriptId}/versions/${versionId}/episodes`, { session }),
-  createScriptVersion: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
-    apiRequest<ScriptVersion>(`/api/projects/${projectId}/scripts/${scriptId}/versions`, { method: "POST", session, body }),
-  activateScriptVersion: (session: StudioSession, projectId: string, scriptId: string, versionId: string) =>
-    apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}/activate-version`, { method: "POST", session, body: { versionId } }),
-  deleteScriptVersion: (session: StudioSession, projectId: string, scriptId: string, versionId: string) =>
-    apiRequest<{ deleted: boolean; mode?: string; versionId: string }>(`/api/projects/${projectId}/scripts/${scriptId}/versions/${versionId}`, { method: "DELETE", session }),
+  createScriptVersion: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<ScriptVersion>(`/api/projects/${projectId}/scripts/${scriptId}/versions`, { method: "POST", session, body, idempotencyKey }),
+  activateScriptVersion: (
+    session: StudioSession,
+    projectId: string,
+    scriptId: string,
+    versionId: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+  ) =>
+    apiRequest<Script>(`/api/projects/${projectId}/scripts/${scriptId}/activate-version`, {
+      method: "POST",
+      session,
+      body: { versionId, expectedRevision },
+      idempotencyKey,
+    }),
+  deleteScriptVersion: (
+    session: StudioSession,
+    projectId: string,
+    scriptId: string,
+    versionId: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+    reason = "",
+  ) =>
+    apiRequest<{ deleted: boolean; mode: string; scriptId: string; versionId: string; version: number; scriptRevision: number }>(
+      `/api/projects/${projectId}/scripts/${scriptId}/versions/${versionId}`,
+      { method: "DELETE", session, body: { expectedRevision, reason }, idempotencyKey },
+    ),
   parseScriptScenes: (session: StudioSession, projectId: string, scriptId: string, versionId: string, body: JsonRecord) =>
     apiRequest<ParseScriptScenesResponse>(`/api/projects/${projectId}/scripts/${scriptId}/versions/${versionId}/parse-scenes`, { method: "POST", session, body }),
   listScriptScenes: (session: StudioSession, projectId: string, scriptId: string, query?: Record<string, string | number | boolean | undefined | null>) =>
     apiRequest<ListEnvelope<ScriptScene>>(`/api/projects/${projectId}/scripts/${scriptId}/scenes`, { session, query }),
-  updateScriptEpisode: (session: StudioSession, projectId: string, episodeId: string, body: JsonRecord) =>
-    apiRequest<ScriptEpisode>(`/api/projects/${projectId}/script-episodes/${episodeId}`, { method: "PATCH", session, body }),
+  updateScriptEpisode: (session: StudioSession, projectId: string, episodeId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<ScriptEpisode>(`/api/projects/${projectId}/script-episodes/${episodeId}`, { method: "PATCH", session, body, idempotencyKey }),
   getEpisodeAudio: (session: StudioSession, projectId: string, episodeId: string) =>
     apiRequest<EpisodeAudio>(`/api/projects/${projectId}/script-episodes/${episodeId}/audio`, { session }),
   produceEpisodeAudio: (session: StudioSession, projectId: string, episodeId: string, body: JsonRecord = {}) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/script-episodes/${episodeId}/audio/produce`, { method: "POST", session, body }),
-  updateScriptScene: (session: StudioSession, projectId: string, sceneId: string, body: JsonRecord) =>
-    apiRequest<ScriptScene>(`/api/projects/${projectId}/script-scenes/${sceneId}`, { method: "PATCH", session, body }),
-  deleteScriptScene: (session: StudioSession, projectId: string, sceneId: string) =>
-    apiRequest<{ deleted: boolean; mode?: string; sceneId: string }>(`/api/projects/${projectId}/script-scenes/${sceneId}`, { method: "DELETE", session }),
-  reviewScriptScene: (session: StudioSession, projectId: string, sceneId: string, body: JsonRecord) =>
-    apiRequest<ReviewResponse>(`/api/projects/${projectId}/script-scenes/${sceneId}/review`, { method: "POST", session, body }),
+  updateScriptScene: (session: StudioSession, projectId: string, sceneId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<ScriptScene>(`/api/projects/${projectId}/script-scenes/${sceneId}`, { method: "PATCH", session, body, idempotencyKey }),
+  deleteScriptScene: (session: StudioSession, projectId: string, sceneId: string, expectedRevision: number, reason: string, idempotencyKey: string) =>
+    apiRequest<{ deleted: boolean; mode: "archive"; sceneId: string; revision: number }>(`/api/projects/${projectId}/script-scenes/${sceneId}`, {
+      method: "DELETE", session, body: { expectedRevision, reason }, idempotencyKey,
+    }),
+  reviewScriptScene: (session: StudioSession, projectId: string, sceneId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<ReviewResponse>(`/api/projects/${projectId}/script-scenes/${sceneId}/review`, { method: "POST", session, body, idempotencyKey }),
 
   listAgentSessions: (session: StudioSession, projectId: string) =>
     apiRequest<ListEnvelope<AgentSession>>(`/api/projects/${projectId}/agent/sessions`, { session }),
@@ -1580,15 +1676,25 @@ export const studioApi = {
       session,
       query: includePreviewUrl ? { includePreviewUrl: true, previewExpiresSeconds } : undefined,
     }),
-  updateCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
-    apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, { method: "PATCH", session, body }),
+  updateCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<CanonicalAsset>(`/api/projects/${projectId}/canonical-assets/${assetId}`, {
+      method: "PATCH", session, body, idempotencyKey,
+    }),
   getCanonicalAssetImpact: (session: StudioSession, projectId: string, assetId: string) =>
     apiRequest<OutputImpact>(`/api/projects/${projectId}/canonical-assets/${assetId}/impact`, { session }),
-  deleteCanonicalAsset: (session: StudioSession, projectId: string, assetId: string, expectedRevision: number) =>
-    apiRequest<{ deleted: boolean; mode?: string; assetId: string }>(`/api/projects/${projectId}/canonical-assets/${assetId}`, {
+  deleteCanonicalAsset: (
+    session: StudioSession,
+    projectId: string,
+    assetId: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+    reason?: string,
+  ) =>
+    apiRequest<{ deleted: boolean; mode?: string; assetId: string; revision: number }>(`/api/projects/${projectId}/canonical-assets/${assetId}`, {
       method: "DELETE",
       session,
-      body: { expectedRevision },
+      body: { expectedRevision, reason },
+      idempotencyKey,
     }),
   generateAssetCard: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
     apiRequest<GenerateAssetCardResponse>(`/api/projects/${projectId}/canonical-assets/${assetId}/generate-card`, { method: "POST", session, body }),
@@ -1599,15 +1705,37 @@ export const studioApi = {
     }),
   createAssetReferenceUploadUrl: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
     apiRequest<{ storageKey: string; uploadUrl: string; method: string; headers: Record<string, string | string[]>; expiresAt: string }>(`/api/projects/${projectId}/canonical-assets/${assetId}/references/upload-url`, { method: "POST", session, body }),
-  createAssetReference: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord) =>
-    apiRequest<AssetReference>(`/api/projects/${projectId}/canonical-assets/${assetId}/references`, { method: "POST", session, body }),
-  setPrimaryAssetReference: (session: StudioSession, projectId: string, assetId: string, referenceId: string) =>
-    apiRequest<{ assetId: string; reference: AssetReference }>(`/api/projects/${projectId}/canonical-assets/${assetId}/references/${referenceId}/set-primary`, { method: "POST", session, body: {} }),
-  deleteAssetReference: (session: StudioSession, projectId: string, assetId: string, referenceId: string) =>
-    apiRequest<{ deleted: boolean; mode: string; referenceId: string; artifactDeleted: boolean; mediaDeleted: boolean }>(
-      `/api/projects/${projectId}/canonical-assets/${assetId}/references/${referenceId}`,
-      { method: "DELETE", session },
-    ),
+  createAssetReference: (
+    session: StudioSession,
+    projectId: string,
+    assetId: string,
+    body: JsonRecord & { expectedRevision: number },
+    idempotencyKey: string,
+  ) => apiRequest<AssetReference>(`/api/projects/${projectId}/canonical-assets/${assetId}/references`, {
+    method: "POST", session, body, idempotencyKey,
+  }),
+  setPrimaryAssetReference: (
+    session: StudioSession,
+    projectId: string,
+    assetId: string,
+    referenceId: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+  ) => apiRequest<{ assetId: string; revision: number; reference: AssetReference }>(
+    `/api/projects/${projectId}/canonical-assets/${assetId}/references/${referenceId}/set-primary`,
+    { method: "POST", session, body: { expectedRevision }, idempotencyKey },
+  ),
+  deleteAssetReference: (
+    session: StudioSession,
+    projectId: string,
+    assetId: string,
+    referenceId: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+  ) => apiRequest<{ deleted: boolean; mode: string; assetId: string; referenceId: string; revision: number; artifactDeleted: boolean; mediaDeleted: boolean }>(
+		`/api/projects/${projectId}/canonical-assets/${assetId}/references/${referenceId}`,
+		{ method: "DELETE", session, body: { expectedRevision }, idempotencyKey },
+	),
   analyzeScriptAssets: (session: StudioSession, projectId: string, scriptId: string, body: JsonRecord) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/scripts/${scriptId}/analyze-assets`, { method: "POST", session, body }),
   generateAssetImage: (session: StudioSession, projectId: string, assetId: string, body: JsonRecord = {}) =>
@@ -1648,6 +1776,58 @@ export const studioApi = {
   createWorkflowRun: (session: StudioSession, body: JsonRecord) => apiRequest<WorkflowRun>("/api/workflow-runs", { method: "POST", session, body }),
   createAssetBatch: (session: StudioSession, projectId: string, body: CreateAssetBatchRequest) =>
     apiRequest<WorkflowRun>(`/api/projects/${projectId}/asset-batches`, { method: "POST", session, body }),
+  listProjectControlCommands: (
+    session: StudioSession,
+    projectId: string,
+    options: ProjectControlCommandListOptions = {},
+  ) => apiRequest<ProjectControlResult>("/api/project-control/commands", {
+    session,
+    query: {
+      "filter[projectId]": projectId,
+      "filter[status]": options.statuses?.join(","),
+      "filter[controllerType]": options.controllerType,
+      "filter[createdAfter]": options.createdAfter,
+      view: options.view,
+      limit: options.limit,
+      cursor: options.cursor,
+    },
+  }).then((result): ListEnvelope<ProjectControlCommand> => {
+    const data = projectControlData<{ items?: ProjectControlCommand[] }>(result);
+    return {
+      items: data.items ?? [],
+      hasMore: Boolean(result.nextCursor),
+      nextCursor: result.nextCursor,
+    };
+  }),
+  getProjectControlCommand: (session: StudioSession, commandId: string) =>
+    apiRequest<ProjectControlResult>(`/api/project-control/commands/${commandId}`, { session })
+      .then((result) => projectControlData<ProjectControlCommandSnapshot>(result)),
+  listProjectControlCommandEvents: (session: StudioSession, commandId: string, afterCursor = "", limit = 100) =>
+    apiRequest<ProjectControlResult>(`/api/project-control/commands/${commandId}/events`, {
+      session,
+      query: { afterCursor, limit },
+    }).then((result) => {
+      const data = projectControlData<{ events?: ProjectControlCommandEvent[] }>(result);
+      return { items: data.events ?? [], nextCursor: result.nextCursor };
+    }),
+  cancelProjectControlCommand: (
+    session: StudioSession,
+    commandId: string,
+    body: { expectedCommandRevision: number; idempotencyKey: string; reason?: string },
+  ) => apiRequest<ProjectControlResult>(`/api/project-control/commands/${commandId}/cancel`, {
+    method: "POST",
+    session,
+    body,
+  }).then((result) => projectControlData<{ command: ProjectControlCommand }>(result).command),
+  retryProjectControlCommand: (
+    session: StudioSession,
+    commandId: string,
+    body: { expectedCommandRevision: number; idempotencyKey: string },
+  ) => apiRequest<ProjectControlResult>(`/api/project-control/commands/${commandId}/retry`, {
+    method: "POST",
+    session,
+    body,
+  }).then((result) => projectControlData<{ command: ProjectControlCommand }>(result).command),
   listWorkflowRuns: (session: StudioSession, projectId?: string, options: WorkflowRunListOptions = {}) =>
     apiRequest<ListEnvelope<WorkflowRun>>("/api/workflow-runs", {
       session,
@@ -1777,12 +1957,18 @@ export const studioApi = {
       session,
       query: status ? { "filter[status]": status } : undefined,
     }),
-  createCharacterVoice: (session: StudioSession, projectId: string, body: JsonRecord) =>
-    apiRequest<CharacterVoiceProfile>(`/api/projects/${projectId}/character-voices`, { method: "POST", session, body }),
-  updateCharacterVoice: (session: StudioSession, projectId: string, voiceId: string, body: JsonRecord) =>
-    apiRequest<CharacterVoiceProfile>(`/api/projects/${projectId}/character-voices/${voiceId}`, { method: "PATCH", session, body }),
-  deleteCharacterVoice: (session: StudioSession, projectId: string, voiceId: string) =>
-    apiRequest<void>(`/api/projects/${projectId}/character-voices/${voiceId}`, { method: "DELETE", session }),
+  createCharacterVoice: (session: StudioSession, projectId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<CharacterVoiceProfile>(`/api/projects/${projectId}/character-voices`, {
+      method: "POST", session, body, idempotencyKey,
+    }),
+  updateCharacterVoice: (session: StudioSession, projectId: string, voiceId: string, body: JsonRecord, idempotencyKey: string) =>
+    apiRequest<CharacterVoiceProfile>(`/api/projects/${projectId}/character-voices/${voiceId}`, {
+      method: "PATCH", session, body, idempotencyKey,
+    }),
+  deleteCharacterVoice: (session: StudioSession, projectId: string, voiceId: string, expectedRevision: number, idempotencyKey: string) =>
+    apiRequest<void>(`/api/projects/${projectId}/character-voices/${voiceId}`, {
+      method: "DELETE", session, body: { expectedRevision }, idempotencyKey,
+    }),
   listProviderConnectors: (session: StudioSession) => apiRequest<ListEnvelope<ProviderConnector>>("/api/providers/connectors", { session }),
   importProviderConnector: (session: StudioSession, body: JsonRecord) =>
     apiRequest<ProviderConnector>("/api/providers/connectors/import", { method: "POST", session, body }),

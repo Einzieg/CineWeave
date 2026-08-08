@@ -9,8 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthPageShell } from "@/features/auth/components/auth-page-shell";
+import { CodexControlKeySecretDialog } from "@/features/settings/codex-control-key-secret-dialog";
 import { StudioApiError, studioApi } from "@/lib/api-client";
 import { sessionFromAuthResponse, useStudioSession } from "@/lib/session";
+import type { CodexControlKeySecret } from "@/lib/types";
 
 export function SetupPage() {
   const router = useRouter();
@@ -18,6 +20,7 @@ export function SetupPage() {
   const [loadingState, setLoadingState] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [controlKey, setControlKey] = useState<CodexControlKeySecret>();
   const [form, setForm] = useState({
     email: "",
     username: "",
@@ -74,7 +77,11 @@ export function SetupPage() {
         workspaceName: form.workspaceName,
       });
       setSession(sessionFromAuthResponse(response));
-      router.replace("/projects" as Route);
+      if (response.codexControlKey) {
+        setControlKey(response.codexControlKey);
+      } else {
+        router.replace("/projects" as Route);
+      }
     } catch (cause) {
       if (cause instanceof StudioApiError && cause.code === "SETUP_ALREADY_COMPLETED") {
         router.replace("/login" as Route);
@@ -98,7 +105,8 @@ export function SetupPage() {
   }
 
   return (
-    <AuthPageShell title="初始化影织" description="首次启动需要创建管理员账号，之后请使用该账号登录。">
+    <>
+      <AuthPageShell title="初始化影织" description="首次启动需要创建管理员账号，之后请使用该账号登录。">
       <form className="grid gap-4" onSubmit={submit}>
         <div className="grid gap-2">
           <Label htmlFor="email">管理员邮箱</Label>
@@ -185,6 +193,15 @@ export function SetupPage() {
           创建管理员并进入
         </Button>
       </form>
-    </AuthPageShell>
+      </AuthPageShell>
+      <CodexControlKeySecretDialog
+        secret={controlKey}
+        title="保存管理员的 Codex 项目控制密钥"
+        onClose={() => {
+          setControlKey(undefined);
+          router.replace("/projects" as Route);
+        }}
+      />
+    </>
   );
 }

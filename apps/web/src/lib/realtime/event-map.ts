@@ -23,6 +23,7 @@ type InvalidationHandler =
   | "export"
   | "final"
   | "project"
+  | "projectControl"
   | "projectDeletion"
   | "progress"
   | "provider"
@@ -148,11 +149,31 @@ export const projectEventInvalidation = {
   "derived_asset.item.started": "asset",
   "derived_asset.item.succeeded": "asset",
   "final_video.activated": "final",
+  "final_video.deleted": "final",
+  "timeline.created": "final",
+  "timeline.updated": "final",
+  "timeline.deleted": "final",
+  "timeline.clip.created": "final",
+  "timeline.clip.updated": "final",
+  "timeline.clip.deleted": "final",
+  "timeline.clip.reordered": "final",
   "media.compose.completed": "final",
   "media.compose.failed": "final",
   "novel.events.extracted": "content",
   "project.audio_configuration.invalidated": "project",
   "project.audio_settings.changed": "project",
+  "project.control.command.cancelled": "projectControl",
+  "project.control.command.created": "projectControl",
+  "project.control.command.failed": "projectControl",
+  "project.control.command.partial_succeeded": "projectControl",
+  "project.control.command.progress": "projectControl",
+  "project.control.command.reconciled": "projectControl",
+  "project.control.command.resumed": "projectControl",
+  "project.control.command.retry_created": "projectControl",
+  "project.control.command.running": "projectControl",
+  "project.control.command.succeeded": "projectControl",
+  "project.control.command.waiting_input": "projectControl",
+  "project.control.command.waiting_workflow": "projectControl",
   "project.deletion.business_data_started": "projectDeletion",
   "project.deletion.completed": "projectDeletion",
   "project.deletion.drain_timeout": "projectDeletion",
@@ -173,7 +194,10 @@ export const projectEventInvalidation = {
   "provider.model_capability.revoked": "provider",
   "provider.webhook.received": "provider",
   "review.fix.applied": "review",
+  "review.fix.dismissed": "review",
+  "review.item.status_changed": "review",
   "script.archived": "content",
+  "script.created": "content",
   "script.episode.generation.staged": "content",
   "script.episode.generated": "content",
   "script.episode.updated": "content",
@@ -184,13 +208,17 @@ export const projectEventInvalidation = {
   "script.scene.reviewed": "content",
   "script.scene.updated": "content",
   "script.scenes.parsed": "content",
+  "script.updated": "content",
   "script.version.activated": "content",
   "script.version.archived": "content",
+  "script.version.created": "content",
   "shot_asset_requirement.derived_image.generated": "asset",
   "shot_asset_requirement.skipped": "asset",
   "shot_asset_requirement.updated": "asset",
   "source.archived": "content",
+  "source.created": "content",
   "source.chapter.deleted": "content",
+  "source.chapter.updated": "content",
   "source.updated.downstream_stale": "content",
   "storyboard.audio.review.completed": "storyboard",
   "storyboard.audio.review.discarded": "storyboard",
@@ -226,6 +254,7 @@ export const projectEventInvalidation = {
   "storyboard.shot.segment_tail_anchor.extracted": "storyboard",
   "storyboard.shot.created": "storyboard",
   "storyboard.shot.deleted": "storyboard",
+  "storyboard.shot.reviewed": "storyboard",
   "storyboard.shot.image.completed": "storyboard",
   "storyboard.shot.image.failed": "storyboard",
   "storyboard.shot.image.started": "storyboard",
@@ -341,6 +370,7 @@ export function keysForProjectEvent(
   const commerceSetupSessionId = stringPayload(payload, "setupSessionId");
   const commerceSetupRunId = stringPayload(payload, "setupRunId");
   const projectDeletionRequestId = stringPayload(payload, "projectDeletionRequestId");
+  const projectControlCommandId = stringPayload(payload, "commandId");
   const keys: QueryKey[] = [];
 
   if (eventType.startsWith("commerce.shot.") || eventType.startsWith("commerce.production.")) {
@@ -417,6 +447,16 @@ export function keysForProjectEvent(
   }
 
   switch (handler) {
+    case "projectControl":
+      keys.push(
+        qk.projectControlCommands(projectId),
+        qk.projectControlCommands(),
+        ...(projectControlCommandId ? [
+          qk.projectControlCommand(projectControlCommandId),
+          qk.projectControlCommandEvents(projectControlCommandId),
+        ] : []),
+      );
+      break;
     case "commerceProduct":
       keys.push(
         qk.commerceProduct(projectId),

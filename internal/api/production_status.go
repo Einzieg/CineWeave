@@ -169,6 +169,7 @@ type ReviewResponse struct {
 	ReviewStatus string    `json:"reviewStatus"`
 	Note         *string   `json:"note,omitempty"`
 	UpdatedAt    time.Time `json:"updatedAt"`
+	Revision     int64     `json:"revision,omitempty"`
 }
 
 type productionWorkflowState struct {
@@ -273,8 +274,24 @@ func (s *Server) reviewStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	resp, ok := s.updateReviewStatus(w, r, "storyboard_shots", project.ID, r.PathValue("shotId"), principal.UserID)
-	if !ok {
+	var req storyboardReviewShotActionInput
+	if !decode(w, r, &req) {
+		return
+	}
+	req.ShotID = r.PathValue("shotId")
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	resp, err := s.reviewStoryboardShotActionTx(r.Context(), tx, project, principal.UserID, req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, resp, nil)
@@ -285,9 +302,27 @@ func (s *Server) reviewShotAssetRequirement(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	resp, ok := s.updateReviewStatus(w, r, "shot_asset_requirements", project.ID, r.PathValue("requirementId"), principal.UserID)
-	if !ok {
+	var req ReviewRequest
+	if !decode(w, r, &req) {
 		return
+	}
+	result, err := s.batchReviewShotAssetRequirementsCore(r.Context(), project, principal.UserID, "api_single_review", BatchReviewShotAssetRequirementsRequest{
+		RequirementIDs: []string{r.PathValue("requirementId")},
+		ReviewStatus:   req.ReviewStatus,
+		Note:           req.Note,
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if len(result.Items) != 1 {
+		s.writeError(w, r, newAPIError(http.StatusNotFound, "SHOT_ASSET_REQUIREMENT_NOT_FOUND", "镜头资产需求不存在"))
+		return
+	}
+	item := result.Items[0]
+	resp := ReviewResponse{
+		ID: item.RequirementID, ReviewStatus: item.ReviewStatus,
+		Note: stringPtrFromValue(strings.TrimSpace(req.Note)), UpdatedAt: item.UpdatedAt,
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, resp, nil)
 }

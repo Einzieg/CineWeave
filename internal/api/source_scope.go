@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 	"regexp"
@@ -129,12 +130,16 @@ func parseOrdinalFromPattern(pattern *regexp.Regexp, text string) int {
 }
 
 func (s *Server) resolveNovelChapterScope(r *http.Request, projectID, explicitSourceID, scopeText string) (string, []string, bool, error) {
+	return s.resolveNovelChapterScopeContext(r.Context(), projectID, explicitSourceID, scopeText)
+}
+
+func (s *Server) resolveNovelChapterScopeContext(ctx context.Context, projectID, explicitSourceID, scopeText string) (string, []string, bool, error) {
 	scope, ok := parseNovelChapterScope(scopeText)
 	if !ok {
 		return "", nil, false, nil
 	}
 	explicitSourceID = strings.TrimSpace(explicitSourceID)
-	rows, err := s.db.Query(r.Context(), `
+	rows, err := s.db.Query(ctx, `
 		SELECT c.id::text, c.source_id::text, ps.title, c.chapter_index,
 		       c.volume_index, c.section_index,
 		       COALESCE(c.volume_title, ''), COALESCE(c.chapter_title, ''),
@@ -225,12 +230,16 @@ func (s *Server) resolveNovelChapterScope(r *http.Request, projectID, explicitSo
 }
 
 func (s *Server) resolveNovelChapterRangeScope(r *http.Request, projectID, explicitSourceID, scopeText string) (string, []string, bool, error) {
+	return s.resolveNovelChapterRangeScopeContext(r.Context(), projectID, explicitSourceID, scopeText)
+}
+
+func (s *Server) resolveNovelChapterRangeScopeContext(ctx context.Context, projectID, explicitSourceID, scopeText string) (string, []string, bool, error) {
 	scope, ok := parseNovelChapterRangeScope(scopeText)
 	if !ok {
 		return "", nil, false, nil
 	}
 	explicitSourceID = strings.TrimSpace(explicitSourceID)
-	rows, err := s.db.Query(r.Context(), `
+	rows, err := s.db.Query(ctx, `
 		SELECT c.id::text, c.source_id::text, ps.title, c.chapter_index,
 		       c.volume_index, c.section_index,
 		       COALESCE(c.volume_title, ''), COALESCE(c.chapter_title, ''),

@@ -1,0 +1,6290 @@
+{
+  "schemaVersion": "cineweave.project-control-action-matrix.v1",
+  "matrixHash": "532efd911b4ccd93703370880bc5eec789d30ad54e433f52638b8819e8612a75",
+  "actions": [
+    {
+      "actionName": "adaptation.activate",
+      "actionVersion": 1,
+      "label": "激活改编计划",
+      "summary": "激活改编计划",
+      "agentToolNames": [
+        "adaptation.activate"
+      ],
+      "restOperationIds": [
+        "activateAdaptationPlan"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).activateAdaptationPlanActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "adaptation_plan.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "adaptation.create",
+      "actionVersion": 1,
+      "label": "创建改编计划",
+      "summary": "创建改编计划",
+      "agentToolNames": [
+        "adaptation.create"
+      ],
+      "restOperationIds": [
+        "createAdaptationPlan"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createAdaptationPlanActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "adaptation_plan.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "adaptation.generate_script",
+      "actionVersion": 1,
+      "label": "从改编计划生成剧本",
+      "summary": "从改编计划生成剧本",
+      "agentToolNames": [
+        "adaptation.generate_script"
+      ],
+      "restOperationIds": [
+        "generateScriptFromAdaptationPlan"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).generateScriptFromAdaptationPlanCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "adaptation.review",
+      "actionVersion": 1,
+      "label": "审核改编计划",
+      "summary": "审核改编计划",
+      "agentToolNames": [
+        "adaptation.review"
+      ],
+      "restOperationIds": [
+        "reviewAdaptationPlan"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reviewAdaptationPlanActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "adaptation_plan.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "adaptation.update",
+      "actionVersion": 1,
+      "label": "修改改编计划",
+      "summary": "修改改编计划",
+      "agentToolNames": [
+        "adaptation.update"
+      ],
+      "restOperationIds": [
+        "updateAdaptationPlan"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateAdaptationPlanActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "adaptation_plan.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "agent.ask_user",
+      "actionVersion": 1,
+      "label": "询问用户",
+      "summary": "询问用户",
+      "agentToolNames": [
+        "agent.ask_user"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).agentToolAskUser",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": false,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "artifact.get",
+      "actionVersion": 1,
+      "label": "读取成果",
+      "summary": "读取成果",
+      "agentToolNames": [
+        "artifact.get"
+      ],
+      "restOperationIds": [
+        "getArtifact"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).getProjectArtifactAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "artifact.list",
+      "actionVersion": 1,
+      "label": "成果列表",
+      "summary": "成果列表",
+      "agentToolNames": [
+        "artifact.list"
+      ],
+      "restOperationIds": [
+        "listArtifacts"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listProjectArtifactsAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "artifact.preview_url",
+      "actionVersion": 1,
+      "label": "成果预览",
+      "summary": "成果预览",
+      "agentToolNames": [
+        "artifact.preview_url"
+      ],
+      "restOperationIds": [
+        "createArtifactPreviewUrl"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createProjectArtifactPreviewAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.batch_generate_images",
+      "actionVersion": 1,
+      "label": "批量生成资产图片",
+      "summary": "批量生成资产图片",
+      "agentToolNames": [
+        "asset.batch_generate_images"
+      ],
+      "restOperationIds": [
+        "createAssetBatch",
+        "generateAssetImage",
+        "generateCanonicalAssetImage"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createAssetBatchRun",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.batch_generate_prompts",
+      "actionVersion": 1,
+      "label": "批量生成资产提示词",
+      "summary": "批量生成资产提示词",
+      "agentToolNames": [
+        "asset.batch_generate_prompts"
+      ],
+      "restOperationIds": [
+        "generateAssetCard"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createAssetBatchRun",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.delete",
+      "actionVersion": 1,
+      "label": "删除资产",
+      "summary": "删除资产",
+      "agentToolNames": [
+        "asset.delete"
+      ],
+      "restOperationIds": [
+        "deleteCanonicalAsset"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteCanonicalAssetActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.get",
+      "actionVersion": 1,
+      "label": "读取资产卡",
+      "summary": "读取资产卡",
+      "agentToolNames": [
+        "asset.get"
+      ],
+      "restOperationIds": [
+        "getCanonicalAsset"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).getCanonicalAssetAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.impact",
+      "actionVersion": 1,
+      "label": "资产归档影响",
+      "summary": "资产归档影响",
+      "agentToolNames": [
+        "asset.impact"
+      ],
+      "restOperationIds": [
+        "getCanonicalAssetImpact"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).getCanonicalAssetImpactAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.list",
+      "actionVersion": 1,
+      "label": "资产列表",
+      "summary": "资产列表",
+      "agentToolNames": [
+        "asset.list"
+      ],
+      "restOperationIds": [
+        "listCanonicalAssets"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listCanonicalAssetsAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.reference.create",
+      "actionVersion": 1,
+      "label": "添加资产参考图",
+      "summary": "添加资产参考图",
+      "agentToolNames": [
+        "asset.reference.create"
+      ],
+      "restOperationIds": [
+        "createAssetReference"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createAssetReferenceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.reference.delete",
+      "actionVersion": 1,
+      "label": "移除资产参考图",
+      "summary": "移除资产参考图",
+      "agentToolNames": [
+        "asset.reference.delete"
+      ],
+      "restOperationIds": [
+        "deleteAssetReference"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteAssetReferenceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.reference.list",
+      "actionVersion": 1,
+      "label": "资产参考图版本",
+      "summary": "资产参考图版本",
+      "agentToolNames": [
+        "asset.reference.list"
+      ],
+      "restOperationIds": [
+        "listAssetReferences"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listAssetReferencesAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.reference.set_primary",
+      "actionVersion": 1,
+      "label": "设为资产主图",
+      "summary": "设为资产主图",
+      "agentToolNames": [
+        "asset.reference.set_primary"
+      ],
+      "restOperationIds": [
+        "setPrimaryAssetReference"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).setPrimaryAssetReferenceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.revise_prompt",
+      "actionVersion": 1,
+      "label": "修订资产提示词",
+      "summary": "修订资产提示词",
+      "agentToolNames": [
+        "asset.revise_prompt"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reviseCanonicalAssetPromptCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "asset.update",
+      "actionVersion": 1,
+      "label": "更新资产",
+      "summary": "更新资产",
+      "agentToolNames": [
+        "asset.update"
+      ],
+      "restOperationIds": [
+        "updateCanonicalAsset"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateCanonicalAssetActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "character_voice.create",
+      "actionVersion": 1,
+      "label": "创建角色声音",
+      "summary": "创建角色声音",
+      "agentToolNames": [
+        "character_voice.create"
+      ],
+      "restOperationIds": [
+        "createCharacterVoice"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createCharacterVoiceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "character_voice.delete",
+      "actionVersion": 1,
+      "label": "删除角色声音",
+      "summary": "删除角色声音",
+      "agentToolNames": [
+        "character_voice.delete"
+      ],
+      "restOperationIds": [
+        "deleteCharacterVoice"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteCharacterVoiceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "character_voice.update",
+      "actionVersion": 1,
+      "label": "修改角色声音",
+      "summary": "修改角色声音",
+      "agentToolNames": [
+        "character_voice.update"
+      ],
+      "restOperationIds": [
+        "updateCharacterVoice"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateCharacterVoiceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.attachment.assign",
+      "actionVersion": 1,
+      "label": "绑定助手图片",
+      "summary": "绑定助手图片",
+      "agentToolNames": [
+        "commerce.attachment.assign"
+      ],
+      "restOperationIds": [
+        "assignAgentImageAttachment"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).assignCommerceAttachmentActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": false,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.get",
+      "actionVersion": 1,
+      "label": "读取商品配置",
+      "summary": "读取商品配置",
+      "agentToolNames": [
+        "commerce.product.get"
+      ],
+      "restOperationIds": [
+        "getCommerceProduct"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceProductGetReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.rebuild",
+      "actionVersion": 1,
+      "label": "确认商品换版",
+      "summary": "确认商品换版",
+      "agentToolNames": [
+        "commerce.product.rebuild"
+      ],
+      "restOperationIds": [
+        "createCommerceProductRebuild"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceProductRebuildActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.rebuild_impact",
+      "actionVersion": 1,
+      "label": "商品换版影响",
+      "summary": "商品换版影响",
+      "agentToolNames": [
+        "commerce.product.rebuild_impact"
+      ],
+      "restOperationIds": [
+        "getCommerceProductRebuildImpact"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).planCommerceProductRebuildActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.reference.archive",
+      "actionVersion": 1,
+      "label": "归档商品参考图",
+      "summary": "归档商品参考图",
+      "agentToolNames": [
+        "commerce.product.reference.archive"
+      ],
+      "restOperationIds": [
+        "archiveCommerceProductReference"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).archiveCommerceProductReferenceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.reference.set_primary",
+      "actionVersion": 1,
+      "label": "设为商品主图",
+      "summary": "设为商品主图",
+      "agentToolNames": [
+        "commerce.product.reference.set_primary"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).setPrimaryCommerceProductReferenceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.reference.update",
+      "actionVersion": 1,
+      "label": "修改商品参考图",
+      "summary": "修改商品参考图",
+      "agentToolNames": [
+        "commerce.product.reference.update"
+      ],
+      "restOperationIds": [
+        "updateCommerceProductReference"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateCommerceProductReferenceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.references.list",
+      "actionVersion": 1,
+      "label": "商品参考图",
+      "summary": "商品参考图",
+      "agentToolNames": [
+        "commerce.product.references.list"
+      ],
+      "restOperationIds": [
+        "listCommerceProductReferences"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceProductReferencesReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.update",
+      "actionVersion": 1,
+      "label": "修改商品配置",
+      "summary": "修改商品配置",
+      "agentToolNames": [
+        "commerce.product.update"
+      ],
+      "restOperationIds": [
+        "updateCommerceProduct"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateCommerceProductActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.version.create",
+      "actionVersion": 1,
+      "label": "创建商品版本",
+      "summary": "创建商品版本",
+      "agentToolNames": [
+        "commerce.product.version.create"
+      ],
+      "restOperationIds": [
+        "createCommerceProductVersion"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createCommerceProductVersionActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.product.versions.list",
+      "actionVersion": 1,
+      "label": "商品版本",
+      "summary": "商品版本",
+      "agentToolNames": [
+        "commerce.product.versions.list"
+      ],
+      "restOperationIds": [
+        "listCommerceProductVersions"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceProductVersionsReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.project.read_summary",
+      "actionVersion": 1,
+      "label": "带货项目摘要",
+      "summary": "带货项目摘要",
+      "agentToolNames": [
+        "commerce.project.read_summary"
+      ],
+      "restOperationIds": [
+        "getCommerceProjectProductionStatus"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceProjectSummaryReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.archive",
+      "actionVersion": 1,
+      "label": "归档广告脚本",
+      "summary": "归档广告脚本",
+      "agentToolNames": [
+        "commerce.script.archive"
+      ],
+      "restOperationIds": [
+        "archiveCommerceScriptUnit"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).archiveCommerceScriptUnitActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.create",
+      "actionVersion": 1,
+      "label": "新增广告脚本",
+      "summary": "新增广告脚本",
+      "agentToolNames": [
+        "commerce.script.create"
+      ],
+      "restOperationIds": [
+        "createCommerceScriptUnit"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createCommerceScriptUnitActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.create_language_variant",
+      "actionVersion": 1,
+      "label": "创建多语言脚本",
+      "summary": "创建多语言脚本",
+      "agentToolNames": [
+        "commerce.script.create_language_variant"
+      ],
+      "restOperationIds": [
+        "createCommerceScriptLanguageVariant"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).duplicateCommerceScriptUnitActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.defaults.update",
+      "actionVersion": 1,
+      "label": "修改广告脚本默认值",
+      "summary": "修改广告脚本默认值",
+      "agentToolNames": [
+        "commerce.script.defaults.update"
+      ],
+      "restOperationIds": [
+        "updateCommerceScriptUnitDefaults"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateCommerceScriptDefaultsActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.derivation.get",
+      "actionVersion": 1,
+      "label": "查看脚本裂变",
+      "summary": "查看脚本裂变",
+      "agentToolNames": [
+        "commerce.script.derivation.get"
+      ],
+      "restOperationIds": [
+        "getCommerceScriptDerivation"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceScriptDerivationGetReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.derive.batch",
+      "actionVersion": 1,
+      "label": "创建脚本裂变",
+      "summary": "创建脚本裂变",
+      "agentToolNames": [
+        "commerce.script.derive.batch"
+      ],
+      "restOperationIds": [
+        "createCommerceScriptDerivation"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceScriptDerivationBatchAsyncAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write",
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.derive.cancel",
+      "actionVersion": 1,
+      "label": "取消脚本裂变",
+      "summary": "取消脚本裂变",
+      "agentToolNames": [
+        "commerce.script.derive.cancel"
+      ],
+      "restOperationIds": [
+        "cancelCommerceScriptDerivation"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceScriptDerivationCancelAsyncAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.cancel"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.derive.preview",
+      "actionVersion": 1,
+      "label": "预览脚本裂变",
+      "summary": "预览脚本裂变",
+      "agentToolNames": [
+        "commerce.script.derive.preview"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceScriptDerivationPreviewAsyncAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.derive.retry_failed",
+      "actionVersion": 1,
+      "label": "重试失败变体",
+      "summary": "重试失败变体",
+      "agentToolNames": [
+        "commerce.script.derive.retry_failed"
+      ],
+      "restOperationIds": [
+        "retryCommerceScriptDerivation"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceScriptDerivationRetryAsyncAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write",
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.duplicate",
+      "actionVersion": 1,
+      "label": "复制广告脚本",
+      "summary": "复制广告脚本",
+      "agentToolNames": [
+        "commerce.script.duplicate"
+      ],
+      "restOperationIds": [
+        "duplicateCommerceScriptUnit"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).duplicateCommerceScriptUnitActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.get",
+      "actionVersion": 1,
+      "label": "读取广告脚本",
+      "summary": "读取广告脚本",
+      "agentToolNames": [
+        "commerce.script.get"
+      ],
+      "restOperationIds": [
+        "getCommerceScriptUnit"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceScriptGetReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.list",
+      "actionVersion": 1,
+      "label": "列出广告脚本",
+      "summary": "列出广告脚本",
+      "agentToolNames": [
+        "commerce.script.list"
+      ],
+      "restOperationIds": [
+        "listCommerceScriptUnits"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceScriptListReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.rebuild",
+      "actionVersion": 1,
+      "label": "确认广告脚本换代",
+      "summary": "确认广告脚本换代",
+      "agentToolNames": [
+        "commerce.script.rebuild"
+      ],
+      "restOperationIds": [
+        "createCommerceScriptUnitRebuild"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceScriptRebuildAsyncAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.rebuild_impact",
+      "actionVersion": 1,
+      "label": "广告脚本换代影响",
+      "summary": "广告脚本换代影响",
+      "agentToolNames": [
+        "commerce.script.rebuild_impact"
+      ],
+      "restOperationIds": [
+        "getCommerceScriptUnitRebuildImpact"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).planCommerceScriptRebuildActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.reference.archive",
+      "actionVersion": 1,
+      "label": "移除广告脚本参考图",
+      "summary": "移除广告脚本参考图",
+      "agentToolNames": [
+        "commerce.script.reference.archive"
+      ],
+      "restOperationIds": [
+        "archiveCommerceScriptReference"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).archiveCommerceScriptReferenceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.reorder",
+      "actionVersion": 1,
+      "label": "调整广告脚本顺序",
+      "summary": "调整广告脚本顺序",
+      "agentToolNames": [
+        "commerce.script.reorder"
+      ],
+      "restOperationIds": [
+        "reorderCommerceScriptUnits"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reorderCommerceScriptUnitsActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.revise",
+      "actionVersion": 1,
+      "label": "按要求改写广告脚本",
+      "summary": "按要求改写广告脚本",
+      "agentToolNames": [
+        "commerce.script.revise"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceScriptReviseAsyncAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.script.update",
+      "actionVersion": 1,
+      "label": "修改广告脚本",
+      "summary": "修改广告脚本",
+      "agentToolNames": [
+        "commerce.script.update"
+      ],
+      "restOperationIds": [
+        "updateCommerceScriptUnit"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateCommerceScriptUnitActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.video.cancel",
+      "actionVersion": 1,
+      "label": "取消视频任务",
+      "summary": "取消视频任务",
+      "agentToolNames": [
+        "commerce.video.cancel"
+      ],
+      "restOperationIds": [
+        "cancelCommerceDirectVideo"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceDirectVideoCancelAsyncAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.cancel"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.video.generate",
+      "actionVersion": 1,
+      "label": "生成带货视频",
+      "summary": "生成带货视频",
+      "agentToolNames": [
+        "commerce.video.generate"
+      ],
+      "restOperationIds": [
+        "createCommerceDirectVideo"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceDirectVideoGenerateAsyncAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.video.get",
+      "actionVersion": 1,
+      "label": "查看视频任务",
+      "summary": "查看视频任务",
+      "agentToolNames": [
+        "commerce.video.get"
+      ],
+      "restOperationIds": [
+        "getCommerceDirectVideo"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceVideoGetReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.video.list",
+      "actionVersion": 1,
+      "label": "视频任务列表",
+      "summary": "视频任务列表",
+      "agentToolNames": [
+        "commerce.video.list"
+      ],
+      "restOperationIds": [
+        "listCommerceDirectVideos"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceVideoListReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "commerce.video.options",
+      "actionVersion": 1,
+      "label": "视频生成选项",
+      "summary": "视频生成选项",
+      "agentToolNames": [
+        "commerce.video.options"
+      ],
+      "restOperationIds": [
+        "getCommerceDirectVideoOptions"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeCommerceVideoOptionsReadAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "content.describe",
+      "actionVersion": 1,
+      "label": "内容信息",
+      "summary": "读取长文本内容的长度、版本、格式和 SHA-256",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).contentDescribe",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "content.read",
+      "actionVersion": 1,
+      "label": "分块读取内容",
+      "summary": "按 UTF-8 边界分页读取原文、章节、剧本分集或带货脚本",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).contentRead",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "content.write.abort",
+      "actionVersion": 1,
+      "label": "放弃暂存内容",
+      "summary": "幂等终止未提交的内容暂存上传",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).contentWriteAbort",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "content.write.begin",
+      "actionVersion": 1,
+      "label": "开始暂存内容",
+      "summary": "校验目标 revision 并创建私有长文本暂存上传",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).contentWriteBegin",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "content.write.chunk",
+      "actionVersion": 1,
+      "label": "写入内容分块",
+      "summary": "按 chunk index 和 SHA-256 幂等写入私有暂存区",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).contentWriteChunk",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "content.write.commit",
+      "actionVersion": 1,
+      "label": "提交暂存内容",
+      "summary": "校验完整内容 hash 和 revision 后原子更新 canonical 内容",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).contentWriteCommit",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "control.command.cancel",
+      "actionVersion": 1,
+      "label": "取消命令",
+      "summary": "请求取消命令及其仍在活动的子工作流",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "cancelProjectControlCommand"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).commandCancel",
+      "implementationKind": "native_project_control",
+      "scope": "system",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "control.command.events",
+      "actionVersion": 1,
+      "label": "命令事件",
+      "summary": "按事件游标读取命令增量动态",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "listProjectControlCommandEvents"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).commandEvents",
+      "implementationKind": "native_project_control",
+      "scope": "system",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "control.command.get",
+      "actionVersion": 1,
+      "label": "命令详情",
+      "summary": "读取命令、item、工作流和待确认问题",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "getProjectControlCommand"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).commandGet",
+      "implementationKind": "native_project_control",
+      "scope": "system",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "control.command.list",
+      "actionVersion": 1,
+      "label": "命令列表",
+      "summary": "分页查找活动命令和最近命令",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "listProjectControlCommands"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).commandList",
+      "implementationKind": "native_project_control",
+      "scope": "system",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "control.command.resolve",
+      "actionVersion": 1,
+      "label": "回答命令问题",
+      "summary": "回答待确认问题并恢复命令执行",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "resolveProjectControlCommand"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).commandResolve",
+      "implementationKind": "native_project_control",
+      "scope": "system",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "control.command.retry",
+      "actionVersion": 1,
+      "label": "重试失败项",
+      "summary": "按冻结失败项创建独立重试命令",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "retryProjectControlCommand"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).commandRetry",
+      "implementationKind": "native_project_control",
+      "scope": "system",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "control.command.wait",
+      "actionVersion": 1,
+      "label": "等待命令",
+      "summary": "短等待命令状态或新增事件，最长 45 秒",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "waitProjectControlCommand"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).commandWait",
+      "implementationKind": "native_project_control",
+      "scope": "system",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "export.create",
+      "actionVersion": 1,
+      "label": "创建项目导出",
+      "summary": "创建项目导出",
+      "agentToolNames": [
+        "export.create"
+      ],
+      "restOperationIds": [
+        "createProjectExport"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createProjectExportCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "export.download_url",
+      "actionVersion": 1,
+      "label": "导出下载链接",
+      "summary": "导出下载链接",
+      "agentToolNames": [
+        "export.download_url"
+      ],
+      "restOperationIds": [
+        "createProjectExportDownloadUrl"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createProjectExportDownloadURLAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "final_video.activate",
+      "actionVersion": 1,
+      "label": "激活成片",
+      "summary": "激活成片",
+      "agentToolNames": [
+        "final_video.activate"
+      ],
+      "restOperationIds": [
+        "activateFinalVideo"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).activateFinalVideoActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "final_video.delete",
+      "actionVersion": 1,
+      "label": "删除成片版本",
+      "summary": "删除成片版本",
+      "agentToolNames": [
+        "final_video.delete"
+      ],
+      "restOperationIds": [
+        "deleteFinalVideo"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteFinalVideoActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "final_video.download_url",
+      "actionVersion": 1,
+      "label": "成片下载链接",
+      "summary": "成片下载链接",
+      "agentToolNames": [
+        "final_video.download_url"
+      ],
+      "restOperationIds": [
+        "createFinalVideoDownloadUrl"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createFinalVideoDownloadURLAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "identity.me",
+      "actionVersion": 1,
+      "label": "当前用户",
+      "summary": "读取当前用户、控制密钥元数据和可访问组织",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).identityMe",
+      "implementationKind": "native_project_control",
+      "scope": "system",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "novel_event.review",
+      "actionVersion": 1,
+      "label": "审核小说事件",
+      "summary": "审核小说事件",
+      "agentToolNames": [
+        "novel_event.review"
+      ],
+      "restOperationIds": [
+        "reviewNovelEvent"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reviewNovelEventActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "novel_event.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "novel_event.update",
+      "actionVersion": 1,
+      "label": "修改小说事件",
+      "summary": "修改小说事件",
+      "agentToolNames": [
+        "novel_event.update"
+      ],
+      "restOperationIds": [
+        "updateNovelEvent"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateNovelEventActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "novel_event.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "organization.list",
+      "actionVersion": 1,
+      "label": "组织列表",
+      "summary": "分页列出当前用户可访问的组织",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).organizationList",
+      "implementationKind": "native_project_control",
+      "scope": "system",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.capabilities",
+      "actionVersion": 1,
+      "label": "项目能力",
+      "summary": "按当前用户权限和项目类型列出可执行动作",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).projectCapabilities",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.clear_production_content",
+      "actionVersion": 1,
+      "label": "清空生产内容",
+      "summary": "清空生产内容",
+      "agentToolNames": [
+        "project.clear_production_content"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).clearProjectProductionContentActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.delete"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.context",
+      "actionVersion": 1,
+      "label": "项目上下文",
+      "summary": "读取项目、生产状态和最近工作流上下文",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).projectContext",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.delete",
+      "actionVersion": 1,
+      "label": "删除项目",
+      "summary": "删除项目",
+      "agentToolNames": [
+        "project.delete"
+      ],
+      "restOperationIds": [
+        "createProjectDeletionRequest"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createProjectDeletionRequestCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.delete"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.delete.retry",
+      "actionVersion": 1,
+      "label": "重试项目删除",
+      "summary": "重试项目删除",
+      "agentToolNames": [
+        "project.delete.retry"
+      ],
+      "restOperationIds": [
+        "retryProjectDeletionRequest"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).retryProjectDeletionRequestCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.delete"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.deletion_impact",
+      "actionVersion": 1,
+      "label": "项目删除影响",
+      "summary": "项目删除影响",
+      "agentToolNames": [
+        "project.deletion_impact"
+      ],
+      "restOperationIds": [
+        "getProjectDeletionImpact"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).projectDeletionImpact",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.delete"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.get",
+      "actionVersion": 1,
+      "label": "项目详情",
+      "summary": "读取项目基本信息和当前生产绑定",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "getProject"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).projectGet",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.list",
+      "actionVersion": 1,
+      "label": "项目列表",
+      "summary": "分页列出组织或工作区内可访问的项目",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "listProjects"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).projectList",
+      "implementationKind": "native_project_control",
+      "scope": "organization",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.production_rebuild",
+      "actionVersion": 1,
+      "label": "确认生产配置换代",
+      "summary": "确认生产配置换代",
+      "agentToolNames": [
+        "project.production_rebuild"
+      ],
+      "restOperationIds": [
+        "createProjectVideoProductionRebuild"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createProjectVideoProductionRebuildCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.video_production.rebuild"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.production_rebuild.retry_failed",
+      "actionVersion": 1,
+      "label": "重试换代失败分集",
+      "summary": "重试换代失败分集",
+      "agentToolNames": [
+        "project.production_rebuild.retry_failed"
+      ],
+      "restOperationIds": [
+        "retryFailedProjectVideoProductionRebuildItems"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).retryProjectVideoProductionRebuildCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.video_production.rebuild"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.production_rebuild_impact",
+      "actionVersion": 1,
+      "label": "生产配置换代影响",
+      "summary": "生产配置换代影响",
+      "agentToolNames": [
+        "project.production_rebuild_impact"
+      ],
+      "restOperationIds": [
+        "getProjectVideoProductionRebuildImpact"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).projectVideoProductionRebuildImpactAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.video_production.rebuild"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.production_status",
+      "actionVersion": 1,
+      "label": "生产状态",
+      "summary": "读取项目当前生产阶段和完成度",
+      "agentToolNames": [],
+      "restOperationIds": [
+        "getProductionStatus"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).projectProductionStatus",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.read_summary",
+      "actionVersion": 1,
+      "label": "项目摘要",
+      "summary": "项目摘要",
+      "agentToolNames": [
+        "project.read_summary"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).readProjectSummaryAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.task_activity",
+      "actionVersion": 1,
+      "label": "任务活动",
+      "summary": "分页读取项目控制命令和最近工作流",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).projectTaskActivity",
+      "implementationKind": "native_project_control",
+      "scope": "project",
+      "permissions": [
+        "project.read",
+        "workflow.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "project.update",
+      "actionVersion": 1,
+      "label": "修改项目",
+      "summary": "修改项目",
+      "agentToolNames": [
+        "project.update"
+      ],
+      "restOperationIds": [
+        "updateProject"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateProjectActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "prompt.activate_version",
+      "actionVersion": 1,
+      "label": "激活提示词版本",
+      "summary": "激活提示词版本",
+      "agentToolNames": [
+        "prompt.activate_version"
+      ],
+      "restOperationIds": [
+        "activatePromptVersion"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).activatePromptVersionActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "prompt.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "prompt.create_version",
+      "actionVersion": 1,
+      "label": "创建提示词版本",
+      "summary": "创建提示词版本",
+      "agentToolNames": [
+        "prompt.create_version"
+      ],
+      "restOperationIds": [
+        "createPromptVersion"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createPromptVersionActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "prompt.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "prompt.render_test",
+      "actionVersion": 1,
+      "label": "提示词渲染测试",
+      "summary": "提示词渲染测试",
+      "agentToolNames": [
+        "prompt.render_test"
+      ],
+      "restOperationIds": [
+        "renderPromptTest"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).renderPromptAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "prompt.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "provider.attest_video_capability",
+      "actionVersion": 1,
+      "label": "审批视频模型能力",
+      "summary": "审批视频模型能力",
+      "agentToolNames": [
+        "provider.attest_video_capability"
+      ],
+      "restOperationIds": [
+        "createProviderModelVideoCapabilityAttestation"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/provider.Service.CreateVideoCapabilityAttestation",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "provider.install_catalog_preset",
+      "actionVersion": 1,
+      "label": "安装渠道预设",
+      "summary": "安装渠道预设",
+      "agentToolNames": [
+        "provider.install_catalog_preset"
+      ],
+      "restOperationIds": [
+        "installProviderCatalogEntry"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/provider.Service.InstallCatalogEntry",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "provider.list_status",
+      "actionVersion": 1,
+      "label": "供应商状态",
+      "summary": "供应商状态",
+      "agentToolNames": [
+        "provider.list_status"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).readProviderStatusAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "provider.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "provider.test_model",
+      "actionVersion": 1,
+      "label": "测试模型",
+      "summary": "测试模型",
+      "agentToolNames": [
+        "provider.test_model"
+      ],
+      "restOperationIds": [
+        "testProviderModel"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/provider.Service.RecordProviderModelTest",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "provider.update_account",
+      "actionVersion": 1,
+      "label": "更新供应商",
+      "summary": "更新供应商",
+      "agentToolNames": [
+        "provider.update_account"
+      ],
+      "restOperationIds": [
+        "updateProviderAccount"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/provider.Service.UpdateAccount",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "provider.update_model",
+      "actionVersion": 1,
+      "label": "更新模型",
+      "summary": "更新模型",
+      "agentToolNames": [
+        "provider.update_model"
+      ],
+      "restOperationIds": [
+        "updateProviderModel"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/provider.Service.UpdateModel",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "provider.verify_video_capability",
+      "actionVersion": 1,
+      "label": "验证视频模型能力",
+      "summary": "验证视频模型能力",
+      "agentToolNames": [
+        "provider.verify_video_capability"
+      ],
+      "restOperationIds": [
+        "verifyProviderModelVideoCapabilities"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/provider.Service.VerifyVideoCapability",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "review.apply_fix",
+      "actionVersion": 1,
+      "label": "应用修复",
+      "summary": "应用修复",
+      "agentToolNames": [
+        "review.apply_fix"
+      ],
+      "restOperationIds": [
+        "applyProjectReviewFix"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).applyReviewFixActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "review.dismiss_fix",
+      "actionVersion": 1,
+      "label": "忽略修复",
+      "summary": "忽略修复",
+      "agentToolNames": [
+        "review.dismiss_fix"
+      ],
+      "restOperationIds": [
+        "dismissProjectReviewFix"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).dismissReviewFixActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "review.generate_fix",
+      "actionVersion": 1,
+      "label": "生成修复建议",
+      "summary": "生成修复建议",
+      "agentToolNames": [
+        "review.generate_fix"
+      ],
+      "restOperationIds": [
+        "generateProjectReviewFix"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).generateReviewFixCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "review.ignore_item",
+      "actionVersion": 1,
+      "label": "忽略审阅项",
+      "summary": "忽略审阅项",
+      "agentToolNames": [
+        "review.ignore_item"
+      ],
+      "restOperationIds": [
+        "ignoreProjectReviewItem"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateReviewItemStatusActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "review.list_items",
+      "actionVersion": 1,
+      "label": "审阅问题",
+      "summary": "审阅问题",
+      "agentToolNames": [
+        "review.list_items"
+      ],
+      "restOperationIds": [
+        "listProjectReviewItems"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listReviewItemsAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "review.reopen_item",
+      "actionVersion": 1,
+      "label": "重新打开审阅项",
+      "summary": "重新打开审阅项",
+      "agentToolNames": [
+        "review.reopen_item"
+      ],
+      "restOperationIds": [
+        "reopenProjectReviewItem"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateReviewItemStatusActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "review.resolve_item",
+      "actionVersion": 1,
+      "label": "解决审阅项",
+      "summary": "解决审阅项",
+      "agentToolNames": [
+        "review.resolve_item"
+      ],
+      "restOperationIds": [
+        "resolveProjectReviewItem"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateReviewItemStatusActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "review.run",
+      "actionVersion": 1,
+      "label": "运行审阅",
+      "summary": "运行审阅",
+      "agentToolNames": [
+        "review.run"
+      ],
+      "restOperationIds": [
+        "runProjectReview"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).runProjectReviewCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.activate_version",
+      "actionVersion": 1,
+      "label": "激活剧本版本",
+      "summary": "激活剧本版本",
+      "agentToolNames": [
+        "script.activate_version"
+      ],
+      "restOperationIds": [
+        "activateScriptVersion"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).activateScriptVersionActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.archive_version",
+      "actionVersion": 1,
+      "label": "归档剧本版本",
+      "summary": "归档剧本版本",
+      "agentToolNames": [
+        "script.archive_version"
+      ],
+      "restOperationIds": [
+        "deleteScriptVersion"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).archiveScriptVersionActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.create",
+      "actionVersion": 1,
+      "label": "创建剧本",
+      "summary": "创建剧本",
+      "agentToolNames": [
+        "script.create"
+      ],
+      "restOperationIds": [
+        "createScript"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createScriptActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.create_version",
+      "actionVersion": 1,
+      "label": "创建剧本版本",
+      "summary": "创建剧本版本",
+      "agentToolNames": [
+        "script.create_version"
+      ],
+      "restOperationIds": [
+        "createScriptVersion"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createScriptVersionActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.delete",
+      "actionVersion": 1,
+      "label": "删除剧本",
+      "summary": "删除剧本",
+      "agentToolNames": [
+        "script.delete"
+      ],
+      "restOperationIds": [
+        "deleteScript"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteScriptActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.generate_from_source",
+      "actionVersion": 1,
+      "label": "生成剧本",
+      "summary": "生成剧本",
+      "agentToolNames": [
+        "script.generate_from_source"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).generateScriptFromSourceCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.get",
+      "actionVersion": 1,
+      "label": "读取剧本",
+      "summary": "读取剧本",
+      "agentToolNames": [
+        "script.get"
+      ],
+      "restOperationIds": [
+        "getScript"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).getScriptAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.list",
+      "actionVersion": 1,
+      "label": "剧本列表",
+      "summary": "剧本列表",
+      "agentToolNames": [
+        "script.list"
+      ],
+      "restOperationIds": [
+        "listScripts"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listScriptsAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.rewrite",
+      "actionVersion": 1,
+      "label": "改写剧本",
+      "summary": "改写剧本",
+      "agentToolNames": [
+        "script.rewrite"
+      ],
+      "restOperationIds": [
+        "rewriteScriptFromAgent"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).rewriteScriptCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.rewrite_preview",
+      "actionVersion": 1,
+      "label": "剧本改写预览",
+      "summary": "剧本改写预览",
+      "agentToolNames": [
+        "script.rewrite_preview"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).rewriteScriptPreviewCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.update",
+      "actionVersion": 1,
+      "label": "修改剧本信息",
+      "summary": "修改剧本信息",
+      "agentToolNames": [
+        "script.update"
+      ],
+      "restOperationIds": [
+        "updateScript"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateScriptActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script.update_episode",
+      "actionVersion": 1,
+      "label": "覆盖剧本分集",
+      "summary": "覆盖剧本分集",
+      "agentToolNames": [
+        "script.update_episode"
+      ],
+      "restOperationIds": [
+        "updateScriptEpisode"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateScriptEpisodeActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script_scene.delete",
+      "actionVersion": 1,
+      "label": "删除剧本场景",
+      "summary": "删除剧本场景",
+      "agentToolNames": [
+        "script_scene.delete"
+      ],
+      "restOperationIds": [
+        "deleteScriptScene"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteScriptSceneActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script_scene.review",
+      "actionVersion": 1,
+      "label": "审核剧本场景",
+      "summary": "审核剧本场景",
+      "agentToolNames": [
+        "script_scene.review"
+      ],
+      "restOperationIds": [
+        "reviewScriptScene"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reviewScriptSceneActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "script_scene.update",
+      "actionVersion": 1,
+      "label": "修改剧本场景",
+      "summary": "修改剧本场景",
+      "agentToolNames": [
+        "script_scene.update"
+      ],
+      "restOperationIds": [
+        "updateScriptScene"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateScriptSceneActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.cancel_running_videos",
+      "actionVersion": 1,
+      "label": "取消镜头视频",
+      "summary": "取消镜头视频",
+      "agentToolNames": [
+        "shot.cancel_running_videos"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).runShotProductionActionCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.cancel"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.generate_image_prompts",
+      "actionVersion": 1,
+      "label": "生成图片提示词",
+      "summary": "生成图片提示词",
+      "agentToolNames": [
+        "shot.generate_image_prompts"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).runShotProductionActionCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.generate_missing_images",
+      "actionVersion": 1,
+      "label": "生成缺失图片",
+      "summary": "生成缺失图片",
+      "agentToolNames": [
+        "shot.generate_missing_images"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).runShotProductionActionCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.generate_missing_videos",
+      "actionVersion": 1,
+      "label": "生成缺失视频",
+      "summary": "生成缺失视频",
+      "agentToolNames": [
+        "shot.generate_missing_videos"
+      ],
+      "restOperationIds": [
+        "generateShotVideosBatch"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).runShotProductionActionCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.generate_video_prompts",
+      "actionVersion": 1,
+      "label": "生成视频提示词",
+      "summary": "生成视频提示词",
+      "agentToolNames": [
+        "shot.generate_video_prompts"
+      ],
+      "restOperationIds": [
+        "generateVideoPromptsBatch"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).runShotProductionActionCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.render_plan.create",
+      "actionVersion": 1,
+      "label": "创建视频执行计划",
+      "summary": "创建视频执行计划",
+      "agentToolNames": [
+        "shot.render_plan.create"
+      ],
+      "restOperationIds": [
+        "createStoryboardShotRenderPlan"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createStoryboardShotRenderPlanCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.render_plan.review_audio",
+      "actionVersion": 1,
+      "label": "运行原生音频审阅",
+      "summary": "运行原生音频审阅",
+      "agentToolNames": [
+        "shot.render_plan.review_audio"
+      ],
+      "restOperationIds": [
+        "reviewStoryboardShotRenderPlanAudio"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).startNativeAudioReviewCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.render_plan.verify_audio",
+      "actionVersion": 1,
+      "label": "核验镜头音频",
+      "summary": "核验镜头音频",
+      "agentToolNames": [
+        "shot.render_plan.verify_audio"
+      ],
+      "restOperationIds": [
+        "verifyStoryboardShotRenderPlanAudio"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).verifyStoryboardShotRenderPlanAudioActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.status",
+      "actionVersion": 1,
+      "label": "镜头状态",
+      "summary": "镜头状态",
+      "agentToolNames": [
+        "shot.status"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).readShotStatusAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.video_prompt.approve",
+      "actionVersion": 1,
+      "label": "批准视频提示词",
+      "summary": "批准视频提示词",
+      "agentToolNames": [
+        "shot.video_prompt.approve"
+      ],
+      "restOperationIds": [
+        "approveVideoPromptPlan"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reviewVideoPromptPlanActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.video_prompt.create_revision",
+      "actionVersion": 1,
+      "label": "编辑视频提示词",
+      "summary": "编辑视频提示词",
+      "agentToolNames": [
+        "shot.video_prompt.create_revision"
+      ],
+      "restOperationIds": [
+        "createManualVideoPromptPlanRevision"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createManualVideoPromptPlanRevisionActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot.video_prompt.reject",
+      "actionVersion": 1,
+      "label": "拒绝视频提示词",
+      "summary": "拒绝视频提示词",
+      "agentToolNames": [
+        "shot.video_prompt.reject"
+      ],
+      "restOperationIds": [
+        "rejectVideoPromptPlan"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reviewVideoPromptPlanActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot_asset.generate_derived_image",
+      "actionVersion": 1,
+      "label": "生成镜头衍生资产图",
+      "summary": "生成镜头衍生资产图",
+      "agentToolNames": [
+        "shot_asset.generate_derived_image"
+      ],
+      "restOperationIds": [
+        "generateDerivedAssetImage"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createDerivedAssetImageAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot_asset.list_requirements",
+      "actionVersion": 1,
+      "label": "镜头资产需求",
+      "summary": "镜头资产需求",
+      "agentToolNames": [
+        "shot_asset.list_requirements"
+      ],
+      "restOperationIds": [
+        "listShotAssetRequirements"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listShotAssetRequirementsAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot_asset.review_requirements",
+      "actionVersion": 1,
+      "label": "审核镜头资产需求",
+      "summary": "审核镜头资产需求",
+      "agentToolNames": [
+        "shot_asset.review_requirements"
+      ],
+      "restOperationIds": [
+        "batchReviewShotAssetRequirements",
+        "reviewShotAssetRequirement"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).batchReviewShotAssetRequirementsActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot_asset.skip_requirement",
+      "actionVersion": 1,
+      "label": "跳过镜头资产需求",
+      "summary": "跳过镜头资产需求",
+      "agentToolNames": [
+        "shot_asset.skip_requirement"
+      ],
+      "restOperationIds": [
+        "skipShotAssetRequirement"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).skipShotAssetRequirementActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "shot_asset.update_requirement",
+      "actionVersion": 1,
+      "label": "修正镜头资产需求",
+      "summary": "修正镜头资产需求",
+      "agentToolNames": [
+        "shot_asset.update_requirement"
+      ],
+      "restOperationIds": [
+        "updateShotAssetRequirement"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateShotAssetRequirementActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "source.create",
+      "actionVersion": 1,
+      "label": "创建项目内容",
+      "summary": "创建项目内容",
+      "agentToolNames": [
+        "source.create"
+      ],
+      "restOperationIds": [
+        "createProjectSource"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createProjectSourceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "source.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "source.delete",
+      "actionVersion": 1,
+      "label": "删除原文",
+      "summary": "删除原文",
+      "agentToolNames": [
+        "source.delete"
+      ],
+      "restOperationIds": [
+        "deleteProjectSource"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteProjectSourceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "source.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "source.delete_chapter",
+      "actionVersion": 1,
+      "label": "删除原文章节",
+      "summary": "删除原文章节",
+      "agentToolNames": [
+        "source.delete_chapter"
+      ],
+      "restOperationIds": [
+        "deleteSourceChapter"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteSourceChapterActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "source.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "source.list",
+      "actionVersion": 1,
+      "label": "原文列表",
+      "summary": "原文列表",
+      "agentToolNames": [
+        "source.list"
+      ],
+      "restOperationIds": [
+        "listProjectSources"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listProjectSourcesAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "source.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "source.list_chapters",
+      "actionVersion": 1,
+      "label": "分集章节",
+      "summary": "分集章节",
+      "agentToolNames": [
+        "source.list_chapters"
+      ],
+      "restOperationIds": [
+        "listSourceChapters"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listSourceChaptersAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "source.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "source.update",
+      "actionVersion": 1,
+      "label": "覆盖原文",
+      "summary": "覆盖原文",
+      "agentToolNames": [
+        "source.update"
+      ],
+      "restOperationIds": [
+        "updateProjectSource"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateProjectSourceActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "source.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.activate_plan",
+      "actionVersion": 1,
+      "label": "激活分镜方案",
+      "summary": "激活分镜方案",
+      "agentToolNames": [
+        "storyboard.activate_plan"
+      ],
+      "restOperationIds": [
+        "activateStoryboardPlan"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).activateStoryboardPlanActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.approve_anchor",
+      "actionVersion": 1,
+      "label": "批准镜头锚点",
+      "summary": "批准镜头锚点",
+      "agentToolNames": [
+        "storyboard.approve_anchor"
+      ],
+      "restOperationIds": [
+        "approveStoryboardShotAnchor"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reviewStoryboardShotAnchorActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.create_shot",
+      "actionVersion": 1,
+      "label": "新增分镜镜头",
+      "summary": "新增分镜镜头",
+      "agentToolNames": [
+        "storyboard.create_shot"
+      ],
+      "restOperationIds": [
+        "createStoryboardShot"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createStoryboardShotActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.delete_shot",
+      "actionVersion": 1,
+      "label": "删除分镜镜头",
+      "summary": "删除分镜镜头",
+      "agentToolNames": [
+        "storyboard.delete_shot"
+      ],
+      "restOperationIds": [
+        "deleteStoryboardShot"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteStoryboardShotActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.generate_anchor",
+      "actionVersion": 1,
+      "label": "生成镜头锚点图",
+      "summary": "生成镜头锚点图",
+      "agentToolNames": [
+        "storyboard.generate_anchor"
+      ],
+      "restOperationIds": [
+        "generateStoryboardShotAnchor"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).generateStoryboardShotAnchorCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.list",
+      "actionVersion": 1,
+      "label": "分镜列表",
+      "summary": "分镜列表",
+      "agentToolNames": [
+        "storyboard.list"
+      ],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listStoryboardShotsAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.merge_shots",
+      "actionVersion": 1,
+      "label": "合并分镜镜头",
+      "summary": "合并分镜镜头",
+      "agentToolNames": [
+        "storyboard.merge_shots"
+      ],
+      "restOperationIds": [
+        "mergeStoryboardShots"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).mergeStoryboardShotsActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.reject_anchor",
+      "actionVersion": 1,
+      "label": "拒绝镜头锚点",
+      "summary": "拒绝镜头锚点",
+      "agentToolNames": [
+        "storyboard.reject_anchor"
+      ],
+      "restOperationIds": [
+        "rejectStoryboardShotAnchor"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reviewStoryboardShotAnchorActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.reorder",
+      "actionVersion": 1,
+      "label": "重排分镜",
+      "summary": "重排分镜",
+      "agentToolNames": [
+        "storyboard.reorder"
+      ],
+      "restOperationIds": [
+        "reorderStoryboardShots"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reorderStoryboardShotsActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.replan_shot_state",
+      "actionVersion": 1,
+      "label": "重算镜头状态",
+      "summary": "重算镜头状态",
+      "agentToolNames": [
+        "storyboard.replan_shot_state"
+      ],
+      "restOperationIds": [
+        "replanStoryboardShotState"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).replanStoryboardShotStateCore",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.review_shot",
+      "actionVersion": 1,
+      "label": "审核镜头",
+      "summary": "审核镜头",
+      "agentToolNames": [
+        "storyboard.review_shot"
+      ],
+      "restOperationIds": [
+        "reviewStoryboardShot"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reviewStoryboardShotActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.split_shot",
+      "actionVersion": 1,
+      "label": "拆分分镜镜头",
+      "summary": "拆分分镜镜头",
+      "agentToolNames": [
+        "storyboard.split_shot"
+      ],
+      "restOperationIds": [
+        "splitStoryboardShot"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).splitStoryboardShotActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.unlink_media",
+      "actionVersion": 1,
+      "label": "解除镜头媒体",
+      "summary": "解除镜头媒体",
+      "agentToolNames": [
+        "storyboard.unlink_media"
+      ],
+      "restOperationIds": [
+        "unlinkStoryboardShotMedia"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).unlinkStoryboardShotMediaActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "storyboard.update_shot",
+      "actionVersion": 1,
+      "label": "更新分镜",
+      "summary": "更新分镜",
+      "agentToolNames": [
+        "storyboard.update_shot"
+      ],
+      "restOperationIds": [
+        "updateStoryboardShot",
+        "updateStoryboardShotTiming",
+        "updateStoryboardShotTransition"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateStoryboardShotAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "timeline.clip.create",
+      "actionVersion": 1,
+      "label": "新增时间线片段",
+      "summary": "新增时间线片段",
+      "agentToolNames": [
+        "timeline.clip.create"
+      ],
+      "restOperationIds": [
+        "createTimelineClip"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createTimelineClipActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "timeline.clip.delete",
+      "actionVersion": 1,
+      "label": "删除时间线片段",
+      "summary": "删除时间线片段",
+      "agentToolNames": [
+        "timeline.clip.delete"
+      ],
+      "restOperationIds": [
+        "deleteTimelineClip"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteTimelineClipActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "timeline.clip.reorder",
+      "actionVersion": 1,
+      "label": "重排时间线片段",
+      "summary": "重排时间线片段",
+      "agentToolNames": [
+        "timeline.clip.reorder"
+      ],
+      "restOperationIds": [
+        "reorderTimelineClips"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).reorderTimelineClipsActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "timeline.compose",
+      "actionVersion": 1,
+      "label": "合成时间线",
+      "summary": "合成时间线",
+      "agentToolNames": [
+        "timeline.compose"
+      ],
+      "restOperationIds": [
+        "composeTimeline"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).composeTimelineAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "timeline.create",
+      "actionVersion": 1,
+      "label": "创建时间线",
+      "summary": "创建时间线",
+      "agentToolNames": [
+        "timeline.create"
+      ],
+      "restOperationIds": [
+        "createProjectTimeline"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).createTimelineActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "timeline.delete",
+      "actionVersion": 1,
+      "label": "删除时间线",
+      "summary": "删除时间线",
+      "agentToolNames": [
+        "timeline.delete"
+      ],
+      "restOperationIds": [
+        "deleteProjectTimeline"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).deleteTimelineActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "timeline.update",
+      "actionVersion": 1,
+      "label": "修改时间线",
+      "summary": "修改时间线",
+      "agentToolNames": [
+        "timeline.update"
+      ],
+      "restOperationIds": [
+        "updateProjectTimeline"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateTimelineActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "timeline.update_clip",
+      "actionVersion": 1,
+      "label": "更新时间线片段",
+      "summary": "更新时间线片段",
+      "agentToolNames": [
+        "timeline.update_clip"
+      ],
+      "restOperationIds": [
+        "updateTimelineClip"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).updateTimelineClipActionTx",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "workflow.cancel",
+      "actionVersion": 1,
+      "label": "取消任务",
+      "summary": "取消任务",
+      "agentToolNames": [
+        "workflow.cancel"
+      ],
+      "restOperationIds": [
+        "cancelWorkflowRun"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).cancelWorkflowRunItem",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.cancel"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "workflow.read_nodes",
+      "actionVersion": 1,
+      "label": "任务节点",
+      "summary": "任务节点",
+      "agentToolNames": [
+        "workflow.read_nodes"
+      ],
+      "restOperationIds": [
+        "listWorkflowNodeRuns"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listWorkflowNodesAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "workflow.read_runs",
+      "actionVersion": 1,
+      "label": "任务列表",
+      "summary": "任务列表",
+      "agentToolNames": [
+        "workflow.read_runs"
+      ],
+      "restOperationIds": [
+        "listWorkflowRuns"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listProjectWorkflowRunsAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "workflow.read_shots",
+      "actionVersion": 1,
+      "label": "任务镜头",
+      "summary": "任务镜头",
+      "agentToolNames": [
+        "workflow.read_shots"
+      ],
+      "restOperationIds": [
+        "listWorkflowRunShots"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).listWorkflowShotsAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "workflow.start",
+      "actionVersion": 1,
+      "label": "启动任务",
+      "summary": "启动任务",
+      "agentToolNames": [
+        "workflow.start"
+      ],
+      "restOperationIds": [
+        "analyzeScriptAssets",
+        "analyzeScriptEpisodeTiming",
+        "createWorkflowRun",
+        "extractNovelEvents",
+        "generateAdaptationPlan",
+        "generateScriptStoryboard",
+        "parseScriptScenes",
+        "produceScriptEpisodeAudio",
+        "runProductionAction",
+        "runShotProductionAction"
+      ],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*Server).executeWorkflowStartAsyncAction",
+      "implementationKind": "shared_domain",
+      "scope": "project",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary",
+      "exportToMcp": true,
+      "exportToAgent": true,
+      "exportToManual": true,
+      "migrationStatus": "migrated"
+    },
+    {
+      "actionName": "workspace.list",
+      "actionVersion": 1,
+      "label": "工作区列表",
+      "summary": "分页列出组织内可访问的工作区",
+      "agentToolNames": [],
+      "restOperationIds": [],
+      "commercialActionNames": [],
+      "implementationEntry": "internal/api.(*projectControlExecutor).workspaceList",
+      "implementationKind": "native_project_control",
+      "scope": "organization",
+      "permissions": [
+        "workspace.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only",
+      "exportToMcp": true,
+      "exportToAgent": false,
+      "exportToManual": false,
+      "migrationStatus": "migrated"
+    }
+  ],
+  "operationExclusions": [
+    {
+      "registry": "core_openapi",
+      "operationId": "abandonCommerceSetupSession",
+      "reason": "带货项目初始化会话的页面生命周期接口，不是可复用项目领域动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "activateCommerceFinalVideo",
+      "reason": "旧带货分镜时间线成片接口不属于当前脚本直生成视频流程；当前视频任务产物由 direct video 动作读取。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "activateCommerceScriptLocalization",
+      "reason": "旧本地化版本激活接口已由自动语言识别和独立多语言脚本动作替代。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "activateCommerceScriptVersion",
+      "reason": "带货脚本当前产品直接编辑当前正文，不向用户暴露旧脚本版本切换管线。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "activateCommerceStoryboardPlan",
+      "reason": "旧带货分镜方案接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "approveAgentStep",
+      "reason": "站内助手审批传输接口由助手会话管理，不导出为 Codex 项目动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "archiveCommerceStoryboardShot",
+      "reason": "旧带货分镜镜头接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "bindProjectManual",
+      "reason": "项目手册属于生产配置快照；该设置页路由只返回换代提示，实际修改通过生产配置影响分析与换代动作完成。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "cancelAgentTask",
+      "reason": "站内助手任务生命周期由助手入口管理，Codex 使用持久命令取消。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "cancelCommerceProductionRun",
+      "reason": "旧带货分镜生产协调器接口不属于当前直生成视频产品流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "cancelCommerceScriptUnitBatch",
+      "reason": "页面批次协调器的内部控制接口，不作为单独用户意图导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "clearCompletedWorkflowActivity",
+      "reason": "任务抽屉个人显示偏好接口，不修改项目领域数据或生产结果。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "completeAgentImageAttachment",
+      "reason": "助手附件上传传输步骤，由受控媒体动作内部编排而非直接导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "completeCommerceProductReferenceUpload",
+      "reason": "商品图片上传传输步骤，由受控参考图动作内部编排而非直接导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "completeCommerceScriptReferenceUpload",
+      "reason": "脚本参考图上传传输步骤，由受控参考图动作内部编排而非直接导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "completeCommerceSetupSession",
+      "reason": "带货项目初始化会话的页面生命周期接口，不是可复用项目领域动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "composeCommerceFinalVideo",
+      "reason": "旧带货分镜时间线成片接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "confirmCommerceScriptLanguage",
+      "reason": "旧语言冻结确认接口已不属于当前自动识别语言的直生成流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "confirmCommerceSetupLanguage",
+      "reason": "旧初始化语言确认接口已不属于当前自动识别语言的直生成流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAgentImageAttachmentUploadUrl",
+      "reason": "助手附件签名上传传输接口，由受控媒体动作内部编排。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAgentTask",
+      "reason": "站内助手任务创建接口保留给站内会话，Codex 直接创建持久命令。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAsset",
+      "reason": "旧 managed assets 表接口不属于核心资产主流程；Codex 使用 canonical asset 和镜头资产需求动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAssetReferenceUploadUrl",
+      "reason": "资产参考图签名上传传输接口，由受控媒体动作内部编排。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAssetUploadUrl",
+      "reason": "旧媒体资产签名上传传输接口，不作为独立项目控制意图。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAssetVariant",
+      "reason": "旧 managed asset variant 接口不属于核心资产主流程，历史图片版本由 canonical asset references 表达。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceProduct",
+      "reason": "每个带货项目的商品根记录由项目初始化状态机唯一创建。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceProductReferenceUploadUrl",
+      "reason": "商品图片签名上传传输接口，由受控参考图动作内部编排。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceScriptLocalization",
+      "reason": "旧本地化记录接口已由自动语言识别和独立多语言脚本动作替代。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceScriptReferenceUploadUrl",
+      "reason": "脚本参考图签名上传传输接口，由受控参考图动作内部编排。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceScriptUnitBatch",
+      "reason": "页面批次协调器的内部创建接口，高层批量意图由独立命令 items 表达。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceScriptVersion",
+      "reason": "带货脚本当前产品直接编辑当前正文，不向用户暴露旧脚本版本创建管线。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceStoryboardPlan",
+      "reason": "旧带货分镜方案接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createProjectAgentSession",
+      "reason": "站内助手会话接口不属于 Codex 项目领域动作，现有助手继续独立保留。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createScriptAgentMessage",
+      "reason": "旧剧本助手消息传输接口不作为 Codex 项目控制动作导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createScriptAgentSession",
+      "reason": "旧剧本助手会话传输接口不作为 Codex 项目控制动作导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "deleteAsset",
+      "reason": "旧 managed assets 表接口不属于核心资产主流程；Codex 使用 canonical asset 归档动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "generateCommerceReferenceImageBatch",
+      "reason": "旧带货分镜参考图生产接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "generateCommerceShotVideoBatch",
+      "reason": "旧带货逐镜头视频生产接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "generateCommerceVideoPromptBatch",
+      "reason": "旧带货分镜提示词生产接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "generateScriptFromAgent",
+      "reason": "旧剧本助手专用生成接口由共享剧本动作和站内助手适配器替代。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "importProjectSourceFile",
+      "reason": "multipart 文件传输接口不作为 MCP 领域动作；Codex 使用长内容暂存和 source.create 完成等价入库。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "organizeCommerceScriptUnit",
+      "reason": "带货脚本内部准备状态机步骤，不作为最终用户可直接调用动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "prepareCommerceScriptUnit",
+      "reason": "带货脚本内部准备状态机步骤，不作为最终用户可直接调用动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "prepareCommerceTimeline",
+      "reason": "旧带货分镜时间线接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "previewCommerceStoryboardPlan",
+      "reason": "旧带货分镜方案预览接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "reconcileRuntimeOperation",
+      "reason": "运行操作对账接口仅供平台恢复器使用，不接受用户控制意图。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "regenerateCreativeObject",
+      "reason": "内部通用创意对象再生成入口缺少稳定领域类型，不直接暴露给 Codex。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "rejectAgentStep",
+      "reason": "站内助手审批传输接口由助手会话管理，不导出为 Codex 项目动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "reorderCommerceStoryboardShots",
+      "reason": "旧带货分镜镜头接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "resolveCommerceScriptLanguage",
+      "reason": "语言解析是脚本读取和生成动作的内部步骤，不要求用户单独确认。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "restartCommerceSetupSession",
+      "reason": "带货项目初始化会话的页面生命周期接口，不是可复用项目领域动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "resumeAgentTask",
+      "reason": "站内助手任务生命周期由助手入口管理，Codex 使用命令问题恢复。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "retryCommerceScriptUnitBatch",
+      "reason": "页面批次协调器的内部重试接口，高层命令按失败 item 重试。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "retryFailedCommerceProductionRun",
+      "reason": "旧带货分镜生产协调器接口不属于当前直生成视频产品流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "reviewCanonicalAsset",
+      "reason": "该接口审核旧 managed assets 表；核心资产主流程使用 canonical asset 状态和项目审阅动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "updateAsset",
+      "reason": "旧 managed assets 表接口不属于核心资产主流程；Codex 使用 asset.update 修改 canonical asset。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "updateCommerceStoryboardShot",
+      "reason": "旧带货分镜镜头接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "updateCommerceTimeline",
+      "reason": "旧带货分镜时间线接口不属于当前脚本直生成视频流程。"
+    }
+  ]
+}

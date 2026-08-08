@@ -73,13 +73,19 @@ type reviewFixDraft struct {
 }
 
 type generateReviewFixRequest struct {
-	Mode        string `json:"mode"`
-	Instruction string `json:"instruction"`
+	Mode                    string `json:"mode"`
+	Instruction             string `json:"instruction"`
+	ProjectControlCommandID string `json:"-"`
 }
 
 type applyReviewFixRequest struct {
-	ResolveReviewItem   bool `json:"resolveReviewItem"`
-	TriggerRegeneration bool `json:"triggerRegeneration"`
+	ResolveReviewItem   *bool `json:"resolveReviewItem"`
+	TriggerRegeneration bool  `json:"triggerRegeneration"`
+}
+
+type applyReviewFixOptions struct {
+	ResolveReviewItem   bool
+	TriggerRegeneration bool
 }
 
 func (s *Server) generateReviewFix(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -100,6 +106,20 @@ func (s *Server) generateReviewFix(w http.ResponseWriter, r *http.Request, princ
 }
 
 func (s *Server) generateReviewFixCore(ctx context.Context, principal auth.Principal, project Project, itemID string, req generateReviewFixRequest) (ReviewFix, error) {
+	commandID := strings.TrimSpace(req.ProjectControlCommandID)
+	if commandID != "" {
+		fix, err := scanReviewFix(s.db.QueryRow(ctx, `
+			SELECT `+reviewFixColumns()+`
+			FROM review_fixes
+			WHERE project_id = $1 AND project_control_command_id = $2
+		`, project.ID, commandID))
+		if err == nil {
+			return fix, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return ReviewFix{}, err
+		}
+	}
 	item, err := s.reviewItemForFixCore(ctx, project.ID, itemID)
 	if err != nil {
 		return ReviewFix{}, err
@@ -146,14 +166,14 @@ func (s *Server) generateReviewFixCore(ctx context.Context, principal auth.Princ
 		INSERT INTO review_fixes(
 			organization_id, project_id, review_item_id, target_entity_type, target_entity_id, status, fix_type,
 			title, explanation, before_snapshot, patch, after_preview, regenerate_request,
-			prompt_version_id, prompt_hash, provider_call_id, created_by
+			prompt_version_id, prompt_hash, provider_call_id, created_by, project_control_command_id
 		)
 		VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, 'draft', $6, $7, $8, $9, $10, $11, $12,
-		        NULLIF($13, '')::uuid, NULLIF($14, ''), NULLIF($15, '')::uuid, $16)
+		        NULLIF($13, '')::uuid, NULLIF($14, ''), NULLIF($15, '')::uuid, $16, NULLIF($17, '')::uuid)
 		RETURNING `+reviewFixReturningSQL(), project.OrganizationID, project.ID, item.ID, target.EntityType, target.EntityID, normalizeReviewFixType(draft.FixType),
 		defaultAPIString(draft.Title, "修复建议"), defaultAPIString(draft.Explanation, "请确认后应用该修复建议。"),
 		mustRawJSON(target.Snapshot), mustRawJSON(draft.Patch), mustRawJSON(afterPreview), rawNullableObject(draft.RegenerateRequest),
-		draft.PromptVersionID, draft.PromptHash, draft.ProviderCallID, principal.UserID))
+		draft.PromptVersionID, draft.PromptHash, draft.ProviderCallID, principal.UserID, commandID))
 	if err != nil {
 		return ReviewFix{}, err
 	}
@@ -237,13 +257,39 @@ func (s *Server) applyReviewFix(w http.ResponseWriter, r *http.Request, principa
 }
 
 func (s *Server) applyReviewFixCore(ctx context.Context, principal auth.Principal, project Project, fixID string, req applyReviewFixRequest) (ApplyReviewFixResponse, json.RawMessage, error) {
-	fix, err := scanReviewFix(s.db.QueryRow(ctx, `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return ApplyReviewFixResponse{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	resolveReviewItem := true
+	if req.ResolveReviewItem != nil {
+		resolveReviewItem = *req.ResolveReviewItem
+	}
+	response, regenerateRequest, err := s.applyReviewFixActionTx(ctx, tx, principal, project, fixID, applyReviewFixOptions{
+		ResolveReviewItem: resolveReviewItem, TriggerRegeneration: req.TriggerRegeneration,
+	})
+	if err != nil {
+		return ApplyReviewFixResponse{}, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ApplyReviewFixResponse{}, nil, err
+	}
+	return response, regenerateRequest, nil
+}
+
+func (s *Server) applyReviewFixActionTx(ctx context.Context, tx pgx.Tx, principal auth.Principal, project Project, fixID string, req applyReviewFixOptions) (ApplyReviewFixResponse, json.RawMessage, error) {
+	fix, err := scanReviewFix(tx.QueryRow(ctx, `
 		SELECT `+reviewFixColumns()+`
 		FROM review_fixes
 		WHERE project_id = $1 AND id = $2
+		FOR UPDATE
 	`, project.ID, fixID))
 	if err != nil {
 		return ApplyReviewFixResponse{}, nil, err
+	}
+	if fix.Status == "applied" {
+		return ApplyReviewFixResponse{FixID: fix.ID, Status: "applied"}, fix.RegenerateRequest, nil
 	}
 	if fix.Status != "draft" {
 		return ApplyReviewFixResponse{}, nil, newAPIError(http.StatusConflict, "REVIEW_FIX_NOT_DRAFT", "review fix is not a draft")
@@ -251,7 +297,7 @@ func (s *Server) applyReviewFixCore(ctx context.Context, principal auth.Principa
 	if fix.TargetEntityID == nil || !reviewpkg.SupportedFixTarget(fix.TargetEntityType) {
 		return ApplyReviewFixResponse{}, nil, newAPIError(http.StatusUnprocessableEntity, "REVIEW_FIX_UNSUPPORTED", "current review fix cannot be applied automatically")
 	}
-	current, err := reviewpkg.LoadReviewFixTarget(ctx, s.db, project.ID, fix.TargetEntityType, *fix.TargetEntityID)
+	current, err := reviewpkg.LoadReviewFixTarget(ctx, tx, project.ID, fix.TargetEntityType, *fix.TargetEntityID)
 	if err != nil {
 		return ApplyReviewFixResponse{}, nil, err
 	}
@@ -266,11 +312,6 @@ func (s *Server) applyReviewFixCore(ctx context.Context, principal auth.Principa
 		}
 	}
 	after := reviewpkg.ApplyReviewPatchPreview(current.Snapshot, patch)
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return ApplyReviewFixResponse{}, nil, err
-	}
-	defer tx.Rollback(ctx)
 	if fix.FixType != "note" {
 		if err := s.applyReviewPatchToTarget(ctx, tx, project, fix.TargetEntityType, *fix.TargetEntityID, after, principal.UserID); err != nil {
 			return ApplyReviewFixResponse{}, nil, err
@@ -303,9 +344,6 @@ func (s *Server) applyReviewFixCore(ctx context.Context, principal auth.Principa
 	})); err != nil {
 		return ApplyReviewFixResponse{}, nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ApplyReviewFixResponse{}, nil, err
-	}
 	return ApplyReviewFixResponse{
 		FixID:            fix.ID,
 		Status:           "applied",
@@ -327,16 +365,48 @@ func (s *Server) dismissReviewFix(w http.ResponseWriter, r *http.Request, princi
 }
 
 func (s *Server) dismissReviewFixCore(ctx context.Context, project Project, fixID string) (DismissReviewFixResponse, error) {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE review_fixes
-		SET status = 'dismissed'
-		WHERE project_id = $1 AND id = $2 AND status = 'draft'
-	`, project.ID, fixID)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return DismissReviewFixResponse{}, err
 	}
-	if tag.RowsAffected() == 0 {
+	defer tx.Rollback(ctx)
+	response, err := s.dismissReviewFixActionTx(ctx, tx, project, fixID)
+	if err != nil {
+		return DismissReviewFixResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return DismissReviewFixResponse{}, err
+	}
+	return response, nil
+}
+
+func (s *Server) dismissReviewFixActionTx(ctx context.Context, tx pgx.Tx, project Project, fixID string) (DismissReviewFixResponse, error) {
+	var status string
+	if err := tx.QueryRow(ctx, `
+		SELECT status
+		FROM review_fixes
+		WHERE project_id = $1 AND id = $2
+		FOR UPDATE
+	`, project.ID, fixID).Scan(&status); err != nil {
+		return DismissReviewFixResponse{}, err
+	}
+	if status == "dismissed" {
+		return DismissReviewFixResponse{FixID: fixID, Status: status}, nil
+	}
+	if status != "draft" {
 		return DismissReviewFixResponse{}, newAPIError(http.StatusConflict, "REVIEW_FIX_NOT_DRAFT", "review fix is not a draft")
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE review_fixes
+		SET status = 'dismissed'
+		WHERE project_id = $1 AND id = $2 AND status = 'draft'
+	`, project.ID, fixID); err != nil {
+		return DismissReviewFixResponse{}, err
+	}
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "review.fix.dismissed", "review_fix", fixID, mustRawJSON(map[string]any{
+		"reviewFixId": fixID,
+	})); err != nil {
+		return DismissReviewFixResponse{}, err
 	}
 	return DismissReviewFixResponse{FixID: fixID, Status: "dismissed"}, nil
 }

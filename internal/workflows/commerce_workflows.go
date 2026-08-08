@@ -113,10 +113,11 @@ type CommerceSetupLanguageConfirmationSignal struct {
 }
 
 type CommerceScriptUnitPreparationInput struct {
-	Identity          commerce.ScriptUnitPreparationIdentity `json:"identity"`
-	WorkflowRunID     string                                 `json:"workflowRunId"`
-	CreatedBy         string                                 `json:"createdBy"`
-	AttemptGeneration int                                    `json:"attemptGeneration"`
+	Identity                commerce.ScriptUnitPreparationIdentity `json:"identity"`
+	WorkflowRunID           string                                 `json:"workflowRunId"`
+	CreatedBy               string                                 `json:"createdBy"`
+	AttemptGeneration       int                                    `json:"attemptGeneration"`
+	ProjectControlCommandID string                                 `json:"projectControlCommandId,omitempty"`
 }
 
 type CommerceStoryboardPlanningInput struct {

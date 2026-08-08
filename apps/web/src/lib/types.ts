@@ -29,6 +29,36 @@ export type AuthUser = {
   systemAdministrator?: boolean;
 };
 
+export type CodexControlKeyMetadata = {
+  id: string;
+  name: string;
+  prefix: string;
+  status: "active" | "requires_rotation" | "revoked";
+  createdAt: string;
+  lastUsedAt?: string;
+  rotatedAt?: string;
+  revokedAt?: string;
+  canRotate: boolean;
+  canRevoke: boolean;
+  requiresSetup: boolean;
+};
+
+export type CodexControlKeySecret = {
+  id: string;
+  prefix: string;
+  secret: string;
+  createdAt: string;
+};
+
+export type CodexControlKeyStatus = {
+  key?: CodexControlKeyMetadata;
+  requiresSetup: boolean;
+};
+
+export type CodexControlKeySecretResponse = {
+  codexControlKey: CodexControlKeySecret;
+};
+
 export type OrganizationChoice = {
   id: string;
   name: string;
@@ -63,6 +93,7 @@ export type OrganizationMember = {
   removedAt?: string;
   teams: MemberTeamSummary[];
   roles: MemberRoleSummary[];
+  codexControlKey?: CodexControlKeySecret;
 };
 
 export type MemberPasswordReset = {
@@ -156,6 +187,7 @@ export type AuthResponse = {
   organizationId: string;
   workspaceId?: string;
   user: AuthUser;
+  codexControlKey?: CodexControlKeySecret;
 };
 
 export type LoginResponse =
@@ -217,6 +249,38 @@ export type SystemEdition = {
   compiledModules: EditionCompiledModule[];
   operationalMode: EditionOperationalMode;
   restrictionReason?: EditionRestrictionReason;
+};
+
+export type ProjectControlAuthenticationFailureAggregate = {
+  reason: string;
+  count: number;
+  firstFailureAt: string;
+  lastFailureAt: string;
+};
+
+export type ProjectControlRuntimeCommandCount = {
+  status: string;
+  controller: "embedded_agent" | "codex_mcp" | "manual";
+  count: number;
+};
+
+export type ProjectControlDiagnostics = {
+  mcp: {
+    enabled: boolean;
+    toolCatalogHash: string;
+    recentAuthenticationFailures: ProjectControlAuthenticationFailureAggregate[];
+  };
+  actionMatrixHash: string;
+  releaseId: string;
+  runtime: {
+    commandCounts: ProjectControlRuntimeCommandCount[];
+    activeCommands: number;
+    waitingCommands: number;
+    expiredLeases: number;
+    overdueReconciliations: number;
+    oldestReconcileLagSeconds: number;
+    unlinkedDeterministicWorkflows: number;
+  };
 };
 
 export type EntitlementDenialCode =
@@ -1919,7 +1983,7 @@ export type CommerceTimelineDetail = {
 export type UpdateProjectRequest = {
   name?: string;
   description?: string;
-  expectedRevision?: number;
+  expectedRevision: number;
 };
 
 export type ProjectManualBinding = {
@@ -1951,6 +2015,9 @@ export type ProjectSource = {
   storageKey?: string;
   status: string;
   metadata?: JsonRecord;
+  revision: number;
+  contentRevision: number;
+  contentHash: string;
   chapterCount?: number;
   firstVolumeIndex?: number;
   chapters?: NovelChapter[];
@@ -2022,6 +2089,7 @@ export type NovelEvent = {
   metadata?: JsonRecord;
   createdAt?: string;
   updatedAt?: string;
+  revision: number;
 };
 
 export type NovelEventLink = {
@@ -2053,6 +2121,7 @@ export type AdaptationPlan = {
   metadata?: JsonRecord;
   createdAt?: string;
   updatedAt?: string;
+  revision: number;
 };
 
 export type CreatedScriptSummary = {
@@ -2110,6 +2179,8 @@ export type ScriptEpisode = {
   episodeTitle: string;
   content: string;
   contentFormat: string;
+  revision: number;
+  contentHash: string;
   promptVersionId?: string;
   promptHash?: string;
   providerCallId?: string;
@@ -2139,6 +2210,7 @@ export type CharacterVoiceProfile = {
   isDefault: boolean;
   status: string;
   metadata: JsonRecord;
+  revision: number;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
@@ -2247,6 +2319,7 @@ export type Script = {
   sourceId?: string;
   title: string;
   status: string;
+  revision: number;
   isCurrent: boolean;
   currentVersionId?: string;
   currentVersion?: ScriptVersion;
@@ -2576,6 +2649,7 @@ export type AgentStep = {
   verifierOutput: JsonRecord;
   errorCode?: string;
   errorMessage?: string;
+  projectControlCommandId?: string;
   createdAt: string;
   updatedAt: string;
   startedAt?: string;
@@ -2756,6 +2830,7 @@ export type ShotAssetRequirementReviewItem = {
   status: string;
   previousReviewStatus: string;
   reviewStatus: string;
+  revision: number;
   eligible: boolean;
   issues: ShotAssetRequirementReviewIssue[];
   warnings: ShotAssetRequirementReviewIssue[];
@@ -3022,8 +3097,143 @@ export type StoryboardShotTransition = {
   updatedAt: string;
 };
 
+export type ProjectControlCommandStatus =
+  | "queued"
+  | "running"
+  | "waiting_workflow"
+  | "waiting_input"
+  | "succeeded"
+  | "partial_succeeded"
+  | "failed"
+  | "cancelled";
+
+export type ProjectControlControllerType = "embedded_agent" | "codex_mcp" | "manual";
+export type ProjectControlActivityVisibility = "primary" | "nested" | "audit_only";
+
+export type ProjectControlCommand = {
+  id: string;
+  organizationId: string;
+  workspaceId?: string;
+  projectId?: string;
+  actorUserId: string;
+  controllerType: ProjectControlControllerType;
+  controlKeyId?: string;
+  agentTaskId?: string;
+  agentStepId?: string;
+  actionName: string;
+  actionLabel?: string;
+  workflowRunIds?: string[];
+  actionVersion: number;
+  executionMode: "sync" | "async_command" | "workflow";
+  activityVisibility: ProjectControlActivityVisibility;
+  input?: JsonRecord;
+  inputHash?: string;
+  idempotencyKey?: string;
+  status: ProjectControlCommandStatus;
+  output?: JsonRecord;
+  errorCode?: string;
+  errorMessage?: string;
+  parentCommandId?: string;
+  retryOfCommandId?: string;
+  cancellationRequestedAt?: string;
+  cancellationRequestedByUserId?: string;
+  cancellationReason?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  revision: number;
+};
+
+export type ProjectControlCommandItem = {
+  id: string;
+  commandId: string;
+  itemKey: string;
+  stableOrdinal?: number;
+  targetType: string;
+  targetId?: string;
+  targetRevision?: number;
+  input?: JsonRecord;
+  inputHash: string;
+  status: string;
+  retryable: boolean;
+  output?: JsonRecord;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type ProjectControlWorkflowLink = {
+  id?: string;
+  commandItemId?: string;
+  workflowRunId?: string;
+  temporalWorkflowId: string;
+  temporalRunId?: string;
+  relationType: string;
+};
+
+export type ProjectControlCommandPrompt = {
+  id: string;
+  commandId: string;
+  promptKind: string;
+  prompt: string;
+  options?: JsonValue;
+  status: string;
+  expectedCommandRevision: number;
+  candidateRevisions?: JsonValue;
+  expiresAt: string;
+  answer?: JsonValue;
+  answeredByUserId?: string;
+  createdAt: string;
+  answeredAt?: string;
+};
+
+export type ProjectControlCommandEvent = {
+  sequence: number;
+  commandId: string;
+  eventType: string;
+  payload?: JsonRecord;
+  createdAt: string;
+};
+
+export type ProjectControlCommandSnapshot = {
+  command: ProjectControlCommand;
+  items: ProjectControlCommandItem[];
+  childCommands: ProjectControlCommand[];
+  workflows: ProjectControlWorkflowLink[];
+  workflowRuns: WorkflowRun[];
+  pendingPrompt?: ProjectControlCommandPrompt;
+};
+
+export type ProjectControlResult = {
+  schemaVersion: "project-control.v1";
+  commandId?: string;
+  status: string;
+  summary: string;
+  data?: JsonRecord;
+  workflowRunIds: string[];
+  nextCursor?: string;
+  retryable: boolean;
+  error?: {
+    code: string;
+    userMessage: string;
+    retryable: boolean;
+    details?: JsonRecord;
+  };
+  nextActions: Array<{
+    label: string;
+    reason?: string;
+    action?: string;
+    arguments?: JsonRecord;
+  }>;
+};
+
 export type WorkflowActivityClearResult = {
   clearedCount: number;
+  workflowClearedCount?: number;
+  commandClearedCount?: number;
   clearedThrough: string;
 };
 
@@ -3825,6 +4035,7 @@ export type DerivedAssetBatchCommandResult = {
 export type ReviewResponse = {
   id: string;
   reviewStatus: string;
+  revision?: number;
   note?: string;
   updatedAt: string;
 };
@@ -3959,6 +4170,7 @@ export type ProjectTimeline = {
   id: string;
   organizationId: string;
   projectId: string;
+	revision: number;
   workflowRunId?: string | null;
   title: string;
   status: string;
@@ -3980,6 +4192,8 @@ export type TimelineClip = {
   organizationId: string;
   projectId: string;
   timelineId: string;
+	revision: number;
+	timelineRevision: number;
   storyboardShotId?: string | null;
   videoArtifactId?: string | null;
   videoMediaFileId?: string | null;
@@ -4019,6 +4233,7 @@ export type FinalVideoVersion = {
   timelineId: string;
   workflowRunId?: string | null;
   version: number;
+  revision: number;
   title: string;
   status: string;
   nativeAudioStatus: string;

@@ -16,6 +16,18 @@ func TestMetricsHandlerExposesRuntimeMetrics(t *testing.T) {
 	RecordProviderIdempotency("test_dedupe_hit")
 	RecordProviderMediaDownload("test_image", 17, 2)
 	RecordWorkflowStart("test_started", time.Millisecond)
+	RecordMCPAuthentication("test_succeeded")
+	RecordMCPRequest("test_tools_list", "test_succeeded", time.Millisecond)
+	RecordMCPTool("test.project.get", "codex_mcp", "test_succeeded", time.Millisecond)
+	RecordProjectControlDispatch("test.workflow.start", "handled", true, 2, time.Millisecond)
+	RecordProjectControlReconcile("handled", time.Millisecond)
+	RecordProjectControlWait("timeout", time.Millisecond)
+	RecordProjectControlConflict("test_revision_conflict")
+	SetProjectControlRuntime(ProjectControlRuntimeSnapshot{
+		CommandCounts: []ProjectControlCommandCount{{Status: "running", Controller: "codex_mcp", Count: 2}},
+		ExpiredLeases: 1, OverdueReconciliations: 3,
+		OldestReconcileLagSeconds: 4, UnlinkedDeterministicWorkflows: 5,
+	})
 
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
@@ -29,6 +41,17 @@ func TestMetricsHandlerExposesRuntimeMetrics(t *testing.T) {
 		`cineweave_provider_media_download_bytes_total{kind="test_image"} 17`,
 		`cineweave_provider_media_redirects_total{kind="test_image"} 2`,
 		`cineweave_workflow_start_attempts_total{result="test_started"} 1`,
+		`cineweave_mcp_authentication_total{result="test_succeeded"} 1`,
+		`cineweave_mcp_requests_total{operation="test_tools_list",result="test_succeeded"} 1`,
+		`cineweave_mcp_tool_calls_total{action="test.project.get",controller="codex_mcp",result="test_succeeded"} 1`,
+		`cineweave_project_control_dispatch_claims_total{action="test.workflow.start",reclaimed="true",result="handled"} 1`,
+		`cineweave_project_control_reconciliations_total{result="handled"} 1`,
+		`cineweave_project_control_command_wait_total{result="timeout"} 1`,
+		`cineweave_project_control_conflicts_total{kind="test_revision_conflict"} 1`,
+		`cineweave_project_control_commands{controller="codex_mcp",status="running"} 2`,
+		`cineweave_project_control_expired_leases 1`,
+		`cineweave_project_control_overdue_reconciliations 3`,
+		`cineweave_project_control_unlinked_deterministic_workflows 5`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("metrics output missing %q", expected)

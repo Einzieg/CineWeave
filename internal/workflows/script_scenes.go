@@ -109,6 +109,7 @@ type ScriptSceneRecord struct {
 	Content         string          `json:"content"`
 	ContentFormat   string          `json:"contentFormat"`
 	ReviewStatus    string          `json:"reviewStatus"`
+	Revision        int64           `json:"revision"`
 	ManualOverride  bool            `json:"manualOverride"`
 	StaleState      string          `json:"staleState"`
 	Metadata        json.RawMessage `json:"metadata,omitempty"`
@@ -777,6 +778,7 @@ func ScriptSceneColumns() string {
 		content,
 		content_format,
 		review_status,
+		revision,
 		COALESCE(manual_override, false),
 		COALESCE(stale_state, 'fresh'),
 		metadata,
@@ -819,6 +821,7 @@ func ScanScriptSceneRecord(row interface{ Scan(...any) error }) (ScriptSceneReco
 		&item.Content,
 		&item.ContentFormat,
 		&item.ReviewStatus,
+		&item.Revision,
 		&item.ManualOverride,
 		&item.StaleState,
 		&metadata,

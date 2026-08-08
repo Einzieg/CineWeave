@@ -20,5 +20,12 @@
     "/readyz": "get",
     "/api/realtime/events": "get"
   },
+  "protocolTransports": [
+    {
+      "method": "post",
+      "path": "/mcp",
+      "protocol": "mcp-streamable-http-2026-07-28"
+    }
+  ],
   "allowMissingOpenAPI": []
 }

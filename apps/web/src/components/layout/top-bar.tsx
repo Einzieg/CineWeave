@@ -19,9 +19,11 @@ import { useSessionDetails } from "@/lib/session-details";
 import { useUiStore } from "@/lib/stores/ui-store";
 import { useAgentDrawerStore } from "@/lib/stores/agent-drawer-store";
 import { isActiveWorkflowStatus } from "@/lib/workflow-status";
-import type { StudioSession } from "@/lib/types";
+import type { ProjectControlCommandStatus, StudioSession } from "@/lib/types";
 
-const activeWorkflowListShape = { status: "active", limit: 100 } as const;
+const activeWorkflowListShape = { status: "active", view: "activity", limit: 100 } as const;
+const activeProjectControlStatuses: ProjectControlCommandStatus[] = ["queued", "running", "waiting_workflow", "waiting_input"];
+const activeProjectControlListShape = { statuses: activeProjectControlStatuses, view: "activity", limit: 50 } as const;
 
 export function TopBar({
   title,
@@ -45,16 +47,25 @@ export function TopBar({
   const toggleAgent = useAgentDrawerStore((state) => state.toggle);
   const projectId = activeProjectId || session.currentProjectId;
   const pollingFallback = useProjectPollingFallback(projectId);
-  const { data: workflowRuns = [], isFetched: workflowRunsReady } = useApiQuery({
+  const { data: workflowRunPage, isFetched: workflowRunsReady } = useApiQuery({
     key: qk.workflowRuns(projectId || "none", activeWorkflowListShape),
-    queryFn: (apiSession) => studioApi.listWorkflowRuns(apiSession, projectId, activeWorkflowListShape).then((response) => response.items),
+    queryFn: (apiSession) => studioApi.listWorkflowRuns(apiSession, projectId, activeWorkflowListShape),
     enabled: !hideProjectActions && !!projectId,
     refetchInterval: (query) =>
-      pollingFallback && query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
+      pollingFallback && query.state.data?.items.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
   });
+  const { data: projectControlCommandPage } = useApiQuery({
+    key: qk.projectControlCommands(projectId || "none", activeProjectControlListShape),
+    queryFn: (apiSession) => studioApi.listProjectControlCommands(apiSession, projectId || "", activeProjectControlListShape),
+    enabled: !hideProjectActions && !!projectId,
+    refetchInterval: (query) => pollingFallback && (query.state.data?.items.length ?? 0) > 0 ? 5000 : false,
+  });
+  const workflowRuns = workflowRunPage?.items ?? [];
   useWorkflowTerminalRefresh(projectId || "", workflowRuns, workflowRunsReady);
-  const activeWorkflowCount = workflowRuns.filter((run) => isActiveWorkflowStatus(run.status)).length;
-  const activeActivityCount = activeWorkflowCount;
+  const activeCommands = projectControlCommandPage?.items ?? [];
+  const linkedWorkflowRunIds = new Set(activeCommands.flatMap((command) => command.workflowRunIds ?? []));
+  const activeWorkflowCount = workflowRuns.filter((run) => isActiveWorkflowStatus(run.status) && !linkedWorkflowRunIds.has(run.id)).length;
+  const activeActivityCount = activeCommands.length + activeWorkflowCount;
   const entitlements = useEditionEntitlements(editionEntry.topBarItems.length > 0);
   const topBarItems = editionEntry.topBarItems.filter((item) =>
     editionFeatureAllowed(entitlements.data, item.featureKey),

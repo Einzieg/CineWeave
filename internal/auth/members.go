@@ -44,6 +44,7 @@ type OrganizationMember struct {
 	RemovedAt                *time.Time          `json:"removedAt,omitempty"`
 	Teams                    []MemberTeamSummary `json:"teams"`
 	Roles                    []MemberRoleSummary `json:"roles"`
+	CodexControlKey          *ControlKeySecret   `json:"codexControlKey,omitempty"`
 }
 
 type MemberList struct {

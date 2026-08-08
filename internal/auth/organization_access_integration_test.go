@@ -134,6 +134,12 @@ func TestOrganizationInvitationAndMemberLifecycle(t *testing.T) {
 	if newUser.OrganizationID != owner.OrganizationID {
 		t.Fatalf("registered target organization = %s, want %s", newUser.OrganizationID, owner.OrganizationID)
 	}
+	if newUser.CodexControlKey == nil || newUser.CodexControlKey.Secret == "" {
+		t.Fatal("invitation registration did not return its one-time Codex control key")
+	}
+	if controlPrincipal, _, controlErr := service.AuthenticateControlKey(ctx, newUser.CodexControlKey.Secret); controlErr != nil || controlPrincipal.UserID != newUser.User.ID {
+		t.Fatalf("authenticate invitation-created control key: userMatch=%t err=%v", controlPrincipal.UserID == newUser.User.ID, controlErr)
+	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, newUser.User.ID)
 	})
@@ -214,6 +220,9 @@ func TestOrganizationInvitationAndMemberLifecycle(t *testing.T) {
 	}
 	if targetSession.OrganizationID != owner.OrganizationID {
 		t.Fatalf("accepted target organization = %s, want %s", targetSession.OrganizationID, owner.OrganizationID)
+	}
+	if targetSession.CodexControlKey != nil {
+		t.Fatal("accepting an invitation as an existing user unexpectedly returned a Codex control key")
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO project_members(project_id, user_id, status)

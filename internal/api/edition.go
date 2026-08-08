@@ -13,7 +13,16 @@ func (s *Server) SetEditionRuntime(runtime *editionpkg.Runtime) error {
 	if err := runtime.Validate(context.Background()); err != nil {
 		return err
 	}
+	previousRuntime := s.editionRuntime
+	previousProjectControl := s.projectControl
 	s.editionRuntime = runtime
+	projectControl, err := newProjectControlExecutor(s)
+	if err != nil {
+		s.editionRuntime = previousRuntime
+		s.projectControl = previousProjectControl
+		return err
+	}
+	s.projectControl = projectControl
 	return nil
 }
 

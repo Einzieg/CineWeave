@@ -42,11 +42,12 @@ const (
 )
 
 type CommerceScriptDerivationBatchInput struct {
-	OrganizationID string `json:"organizationId"`
-	ProjectID      string `json:"projectId"`
-	BatchID        string `json:"batchId"`
-	WorkflowRunID  string `json:"workflowRunId"`
-	MaxConcurrency int    `json:"maxConcurrency"`
+	OrganizationID          string `json:"organizationId"`
+	ProjectID               string `json:"projectId"`
+	BatchID                 string `json:"batchId"`
+	WorkflowRunID           string `json:"workflowRunId"`
+	MaxConcurrency          int    `json:"maxConcurrency"`
+	ProjectControlCommandID string `json:"projectControlCommandId,omitempty"`
 }
 
 type CommerceScriptDerivationItemInput struct {

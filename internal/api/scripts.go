@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/production"
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/jackc/pgx/v5"
@@ -24,6 +26,7 @@ type Script struct {
 	SourceID         *string        `json:"sourceId,omitempty"`
 	Title            string         `json:"title"`
 	Status           string         `json:"status"`
+	Revision         int64          `json:"revision"`
 	IsCurrent        bool           `json:"isCurrent"`
 	CurrentVersionID *string        `json:"currentVersionId,omitempty"`
 	CreatedBy        *string        `json:"createdBy,omitempty"`
@@ -77,25 +80,32 @@ func (s *Server) listScripts(w http.ResponseWriter, r *http.Request, principal a
 	if !ok {
 		return
 	}
-	rows, err := s.db.Query(r.Context(), scriptSelectSQL(`
-		WHERE s.project_id = $1 AND COALESCE(s.status, 'active') <> 'archived'
-		ORDER BY CASE WHEN s.id = p.active_script_id THEN 0 ELSE 1 END, s.created_at DESC
-	`), project.ID)
+	items, err := s.listScriptsContext(r.Context(), project.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) listScriptsContext(ctx context.Context, projectID string) ([]Script, error) {
+	rows, err := s.db.Query(ctx, scriptSelectSQL(`
+		WHERE s.project_id = $1 AND COALESCE(s.status, 'active') <> 'archived'
+		ORDER BY CASE WHEN s.id = p.active_script_id THEN 0 ELSE 1 END, s.created_at DESC
+	`), projectID)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 	items := make([]Script, 0)
 	for rows.Next() {
 		item, err := scanScript(rows)
 		if err != nil {
-			s.writeError(w, r, err)
-			return
+			return nil, err
 		}
 		items = append(items, item)
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	return items, rows.Err()
 }
 
 func (s *Server) createScript(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -104,80 +114,43 @@ func (s *Server) createScript(w http.ResponseWriter, r *http.Request, principal 
 		return
 	}
 	var req struct {
-		SourceID      *string         `json:"sourceId"`
-		Title         string          `json:"title"`
-		Content       string          `json:"content"`
-		ContentFormat string          `json:"contentFormat"`
-		SourceType    *string         `json:"sourceType"`
-		Metadata      json.RawMessage `json:"metadata"`
+		IdempotencyKey string          `json:"idempotencyKey"`
+		SourceID       *string         `json:"sourceId"`
+		Title          string          `json:"title"`
+		Content        string          `json:"content"`
+		ContentFormat  string          `json:"contentFormat"`
+		SourceType     *string         `json:"sourceType"`
+		Metadata       json.RawMessage `json:"metadata"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "title is required", nil, false)
-		return
-	}
-	if req.SourceID != nil && strings.TrimSpace(*req.SourceID) != "" {
-		if _, err := s.projectSource(r, project.ID, strings.TrimSpace(*req.SourceID)); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	contentFormat := strings.TrimSpace(req.ContentFormat)
-	if contentFormat == "" {
-		contentFormat = "markdown"
-	}
-	if !validScriptContentFormat(contentFormat) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "contentFormat is invalid", nil, false)
-		return
-	}
-	metadata, ok := jsonObjectOrDefault(w, r, req.Metadata)
-	if !ok {
-		return
-	}
-	tx, err := s.db.Begin(r.Context())
+	actionInput := mustRawJSON(scriptCreateActionInput{
+		SourceID: req.SourceID, Title: req.Title, Content: req.Content,
+		ContentFormat: req.ContentFormat, SourceType: req.SourceType, Metadata: req.Metadata,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "script.create", actionInput, idempotencyKey(r, req.IdempotencyKey),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err := scanScript(tx.QueryRow(r.Context(), scriptInsertSQL(), project.OrganizationID, project.ID, req.SourceID, title, "draft", principal.UserID))
+	scriptID := stringValueFromAny(result.Data["scriptId"])
+	item, err := s.script(r, project.ID, scriptID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	content := strings.TrimSpace(req.Content)
-	if content != "" {
-		version, err := insertScriptVersionTx(r, tx, project, item.ID, 1, content, contentFormat, req.SourceType, "", "", metadata, principal.UserID)
+	if item.CurrentVersionID != nil {
+		version, err := s.scriptVersion(r, project.ID, item.ID, *item.CurrentVersionID)
 		if err != nil {
 			s.writeError(w, r, err)
 			return
 		}
-		if _, err := insertScriptEpisodesTx(r, tx, project, item.ID, version.ID, principal.UserID, []scriptEpisodeDraft{
-			defaultScriptEpisodeDraft(req.SourceID, "第 1 集", content, contentFormat, "", "", "", metadata),
-		}); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if _, err := tx.Exec(r.Context(), `UPDATE scripts SET current_version_id = $2, status = 'active' WHERE id = $1`, item.ID, version.ID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if _, err := tx.Exec(r.Context(), `UPDATE projects SET active_script_id = $2 WHERE id = $1`, project.ID, item.ID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		item.CurrentVersionID = &version.ID
-		item.Status = "active"
-		item.IsCurrent = true
 		item.CurrentVersion = &version
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
 }
 
@@ -207,60 +180,75 @@ func (s *Server) updateScript(w http.ResponseWriter, r *http.Request, principal 
 	if !ok {
 		return
 	}
-	current, err := s.script(r, project.ID, r.PathValue("scriptId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req struct {
-		SourceID *string `json:"sourceId"`
-		Title    *string `json:"title"`
-		Status   *string `json:"status"`
+		ExpectedRevision int64   `json:"expectedRevision"`
+		IdempotencyKey   string  `json:"idempotencyKey"`
+		SourceID         *string `json:"sourceId"`
+		Title            *string `json:"title"`
+		Status           *string `json:"status"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	title := current.Title
+	patch := map[string]any{}
 	if req.Title != nil {
-		title = strings.TrimSpace(*req.Title)
+		patch["title"] = *req.Title
 	}
-	status := current.Status
 	if req.Status != nil {
-		status = strings.TrimSpace(*req.Status)
+		patch["status"] = *req.Status
 	}
-	if title == "" || !validScriptStatus(status) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "script fields are invalid", nil, false)
-		return
+	if req.SourceID != nil {
+		patch["sourceId"] = *req.SourceID
 	}
-	if req.SourceID != nil && strings.TrimSpace(*req.SourceID) != "" {
-		if _, err := s.projectSource(r, project.ID, strings.TrimSpace(*req.SourceID)); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	item, err := scanScript(s.db.QueryRow(r.Context(), scriptSelectSQL(`
-		WHERE s.id = $1 AND s.project_id = $2
-	`), current.ID, project.ID))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	err = s.db.QueryRow(r.Context(), `
-		UPDATE scripts
-		SET title = $3,
-		    source_id = COALESCE($4, source_id),
-		    status = $5
-		WHERE id = $1 AND project_id = $2
-		RETURNING id, organization_id, project_id, source_id, title, status, current_version_id, created_by, created_at, updated_at
-	`, current.ID, project.ID, title, req.SourceID, status).Scan(
-		&item.ID, &item.OrganizationID, &item.ProjectID, &item.SourceID, &item.Title, &item.Status,
-		&item.CurrentVersionID, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+	actionInput := mustRawJSON(map[string]any{
+		"scriptId": r.PathValue("scriptId"), "expectedRevision": req.ExpectedRevision, "patch": patch,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "script.update", actionInput, idempotencyKey(r, req.IdempotencyKey),
 	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	encoded, err := json.Marshal(result.Data["script"])
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var item Script
+	if err := json.Unmarshal(encoded, &item); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) deleteScript(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionScriptWrite)
+	if !ok {
+		return
+	}
+	var req struct {
+		ExpectedRevision int64  `json:"expectedRevision"`
+		IdempotencyKey   string `json:"idempotencyKey"`
+		Reason           string `json:"reason"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	actionInput := mustRawJSON(map[string]any{
+		"scriptId": r.PathValue("scriptId"), "expectedRevision": req.ExpectedRevision, "reason": req.Reason,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "script.delete", actionInput, idempotencyKey(r, req.IdempotencyKey),
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, result.Data, nil)
 }
 
 func (s *Server) listScriptVersions(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -301,70 +289,51 @@ func (s *Server) createScriptVersion(w http.ResponseWriter, r *http.Request, pri
 	if !ok {
 		return
 	}
-	script, err := s.script(r, project.ID, r.PathValue("scriptId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req struct {
-		Content       string          `json:"content"`
-		ContentFormat string          `json:"contentFormat"`
-		SourceType    *string         `json:"sourceType"`
-		Metadata      json.RawMessage `json:"metadata"`
-		Activate      bool            `json:"activate"`
+		ExpectedRevision int64           `json:"expectedRevision"`
+		IdempotencyKey   string          `json:"idempotencyKey"`
+		Content          string          `json:"content"`
+		ContentFormat    string          `json:"contentFormat"`
+		SourceType       *string         `json:"sourceType"`
+		Metadata         json.RawMessage `json:"metadata"`
+		Activate         bool            `json:"activate"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	content := strings.TrimSpace(req.Content)
-	if content == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "content is required", nil, false)
+	actionInput := mustRawJSON(scriptCreateVersionActionInput{
+		ScriptID: r.PathValue("scriptId"), ExpectedRevision: req.ExpectedRevision,
+		Content: req.Content, ContentFormat: req.ContentFormat, SourceType: req.SourceType,
+		Metadata: req.Metadata, Activate: req.Activate,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "script.create_version", actionInput, idempotencyKey(r, req.IdempotencyKey),
+	)
+	if err != nil {
+		s.writeError(w, r, err)
 		return
 	}
-	contentFormat := strings.TrimSpace(req.ContentFormat)
-	if contentFormat == "" {
-		contentFormat = "markdown"
-	}
-	if !validScriptContentFormat(contentFormat) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "contentFormat is invalid", nil, false)
-		return
-	}
-	metadata, ok := jsonObjectOrDefault(w, r, req.Metadata)
+	versionData, ok := result.Data["version"]
 	if !ok {
+		s.writeError(w, r, fmt.Errorf("script.create_version result is missing version"))
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	encoded, err := json.Marshal(versionData)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	nextVersion, err := nextScriptVersion(r, tx, script.ID)
+	var summary scriptVersionActionSummary
+	if err := json.Unmarshal(encoded, &summary); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	version, err := s.scriptVersion(r, project.ID, r.PathValue("scriptId"), summary.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	version, err := insertScriptVersionTx(r, tx, project, script.ID, nextVersion, content, contentFormat, req.SourceType, "", "", metadata, principal.UserID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, version.ID, principal.UserID, []scriptEpisodeDraft{
-		defaultScriptEpisodeDraft(script.SourceID, "第 1 集", content, contentFormat, "", "", "", metadata),
-	}); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if req.Activate {
-		if _, err := activateScriptVersionTx(r, tx, project, script, version); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusCreated, version, nil)
 }
 
@@ -373,56 +342,38 @@ func (s *Server) activateScriptVersion(w http.ResponseWriter, r *http.Request, p
 	if !ok {
 		return
 	}
-	script, err := s.script(r, project.ID, r.PathValue("scriptId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req struct {
-		VersionID string `json:"versionId"`
+		VersionID        string `json:"versionId"`
+		ExpectedRevision int64  `json:"expectedRevision"`
+		IdempotencyKey   string `json:"idempotencyKey"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	versionID := strings.TrimSpace(req.VersionID)
-	if versionID == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "versionId is required", nil, false)
-		return
-	}
-	version, err := s.scriptVersion(r, project.ID, script.ID, versionID)
+	actionInput := mustRawJSON(scriptActivateVersionActionInput{
+		ScriptID: r.PathValue("scriptId"), VersionID: req.VersionID, ExpectedRevision: req.ExpectedRevision,
+	})
+	command, _, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "script.activate_version", actionInput, idempotencyKey(r, req.IdempotencyKey),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	item, err := s.script(r, project.ID, r.PathValue("scriptId"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	previousVersionID, err := activateScriptVersionTx(r, tx, project, script, version)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
+	if item.CurrentVersionID != nil {
+		version, err := s.scriptVersion(r, project.ID, item.ID, *item.CurrentVersionID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		item.CurrentVersion = &version
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "script.version.activated", "script_version", version.ID, mustRawJSON(map[string]any{
-		"scriptId":          script.ID,
-		"scriptVersionId":   version.ID,
-		"previousVersionId": previousVersionID,
-	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	item, err := s.script(r, project.ID, script.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	item.CurrentVersion = &version
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -431,68 +382,27 @@ func (s *Server) deleteScriptVersion(w http.ResponseWriter, r *http.Request, pri
 	if !ok {
 		return
 	}
-	script, err := s.script(r, project.ID, r.PathValue("scriptId"))
+	var req struct {
+		ExpectedRevision int64  `json:"expectedRevision"`
+		IdempotencyKey   string `json:"idempotencyKey"`
+		Reason           string `json:"reason"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	actionInput := mustRawJSON(scriptArchiveVersionActionInput{
+		ScriptID: r.PathValue("scriptId"), VersionID: r.PathValue("versionId"),
+		ExpectedRevision: req.ExpectedRevision, Reason: req.Reason,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "script.archive_version", actionInput, idempotencyKey(r, req.IdempotencyKey),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	version, err := s.scriptVersion(r, project.ID, script.ID, r.PathValue("versionId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if script.CurrentVersionID != nil && *script.CurrentVersionID == version.ID {
-		httpx.WriteError(w, r, http.StatusConflict, "CURRENT_SCRIPT_VERSION", "current script version cannot be archived", nil, false)
-		return
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	if err := markScriptVersionDownstreamStale(r, tx, project.ID, version.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE script_scenes
-		SET deleted_at = now(), stale_state = 'needs_regeneration', updated_at = now()
-		WHERE project_id = $1 AND script_version_id = $2 AND deleted_at IS NULL
-	`, project.ID, version.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	tag, err := tx.Exec(r.Context(), `
-		UPDATE script_versions
-		SET status = 'archived'
-		WHERE project_id = $1 AND script_id = $2 AND id = $3 AND COALESCE(status, 'active') <> 'archived'
-	`, project.ID, script.ID, version.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		httpx.WriteError(w, r, http.StatusNotFound, "NOT_FOUND", "script version not found", nil, false)
-		return
-	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "script.version.archived", "script_version", version.ID, mustRawJSON(map[string]any{
-		"scriptId":        script.ID,
-		"scriptVersionId": version.ID,
-		"version":         version.Version,
-	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"deleted": true, "mode": "archive", "versionId": version.ID}, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, result.Data, nil)
 }
 
 func (s *Server) createScriptAgentSession(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -913,113 +823,33 @@ func (s *Server) rewriteScriptFromAgent(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	var req struct {
-		ScriptID    string  `json:"scriptId"`
-		VersionID   string  `json:"versionId"`
-		Instruction string  `json:"instruction"`
-		SessionID   *string `json:"sessionId"`
-		Activate    bool    `json:"activate"`
-	}
+	var req scriptRewriteActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	script, err := s.script(r, project.ID, strings.TrimSpace(req.ScriptID))
+	result, err := s.rewriteScriptCore(r.Context(), principal, project, projectcontrol.Command{}, req)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	versionID := strings.TrimSpace(req.VersionID)
-	if versionID == "" && script.CurrentVersionID != nil {
-		versionID = *script.CurrentVersionID
-	}
-	current, err := s.scriptVersion(r, project.ID, script.ID, versionID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	content, runID, rendered, gatewayResp, err := s.runScriptAgentPrompt(r, principal, project, req.SessionID, "rewrite_script", "script_agent_rewrite", map[string]any{
-		"project": projectPromptVariables(project),
-		"script":  map[string]any{"id": script.ID, "versionId": current.ID, "content": current.Content},
-		"input":   map[string]any{"instruction": strings.TrimSpace(req.Instruction)},
-	})
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	nextVersion, err := nextScriptVersion(r, tx, script.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	newVersion, err := insertScriptVersionTx(r, tx, project, script.ID, nextVersion, content, current.ContentFormat, stringPtrFromValue("agent_rewrite"), rendered.PromptVersionID, rendered.RenderedHash, json.RawMessage(`{}`), principal.UserID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, newVersion.ID, principal.UserID, []scriptEpisodeDraft{
-		defaultScriptEpisodeDraft(script.SourceID, "第 1 集", content, current.ContentFormat, rendered.PromptVersionID, rendered.RenderedHash, gatewayResp.ProviderCallID, mustRawJSON(map[string]any{
-			"agentRunId":        runID,
-			"source":            "script_agent_rewrite",
-			"previousVersionId": current.ID,
-		})),
-	}); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	previousVersionID := ""
-	if req.Activate {
-		previousVersionID, err = activateScriptVersionTx(r, tx, project, script, newVersion)
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "script.version.activated", "script_version", newVersion.ID, mustRawJSON(map[string]any{
-			"scriptId":          script.ID,
-			"versionId":         newVersion.ID,
-			"previousVersionId": nullableMetadataValue(previousVersionID),
-			"source":            "script_agent",
-			"agentRunId":        runID,
-		})); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE agent_runs
-		SET status = 'succeeded', output = $2, provider_call_id = NULLIF($3, '')::uuid,
-		    prompt_version_id = $4, prompt_hash = $5, completed_at = now()
-		WHERE id = $1
-	`, runID, mustMarshal(map[string]any{"scriptId": script.ID, "versionId": newVersion.ID, "content": content}), gatewayResp.ProviderCallID, rendered.PromptVersionID, rendered.RenderedHash); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"scriptId":          script.ID,
-		"versionId":         newVersion.ID,
-		"content":           content,
-		"agentRunId":        runID,
-		"activated":         req.Activate,
-		"previousVersionId": nullableMetadataValue(previousVersionID),
+		"scriptId": result.ScriptID, "versionId": result.VersionID, "content": result.Content,
+		"contentFormat": result.ContentFormat, "agentRunId": result.AgentRunID,
+		"providerCallId": result.ProviderCallID, "modelId": result.ModelID,
+		"promptVersionId": result.PromptVersionID, "promptHash": result.PromptHash,
+		"activated": result.Activated, "previousVersionId": nullableMetadataValue(result.PreviousVersionID),
 	}, nil)
 }
 
 type scriptAgentPromptOptions struct {
-	AgentType      string
-	TaskID         string
-	StepID         string
-	IdempotencyKey string
-	Stream         bool
-	OnProgress     func(scriptAgentStreamProgress) error
+	AgentType               string
+	TaskID                  string
+	StepID                  string
+	IdempotencyKey          string
+	ProjectControlCommandID string
+	BillingPermission       string
+	Stream                  bool
+	OnProgress              func(scriptAgentStreamProgress) error
 }
 
 type scriptAgentStreamProgress struct {
@@ -1053,7 +883,54 @@ func (s *Server) runScriptAgentPromptWithOptions(r *http.Request, principal auth
 		return "", "", promptsvc.RenderedPrompt{}, provider.GatewayTextResponse{}, err
 	}
 	var runID string
-	if err := s.db.QueryRow(r.Context(), `
+	commandID := strings.TrimSpace(options.ProjectControlCommandID)
+	if commandID != "" {
+		record, exists, recordErr := s.projectControlScriptAgentRun(r.Context(), project.ID, commandID, taskType)
+		if recordErr != nil {
+			return "", "", promptsvc.RenderedPrompt{}, provider.GatewayTextResponse{}, recordErr
+		}
+		if exists && record.Status == "succeeded" && strings.TrimSpace(record.Output.Content) != "" {
+			rendered.PromptVersionID = firstNonEmpty(record.Output.PromptVersionID, rendered.PromptVersionID)
+			rendered.RenderedHash = firstNonEmpty(record.Output.PromptHash, rendered.RenderedHash)
+			resp := gatewayTextResponseFromScriptAgentRun(record)
+			if options.OnProgress != nil {
+				if progressErr := options.OnProgress(scriptAgentStreamProgress{
+					RunID: record.ID, Text: record.Output.Content,
+					ProviderCallID: resp.ProviderCallID, ModelID: resp.ModelID, Done: true,
+				}); progressErr != nil {
+					return "", record.ID, rendered, provider.GatewayTextResponse{}, progressErr
+				}
+			}
+			return record.Output.Content, record.ID, rendered, resp, nil
+		}
+		if exists {
+			runID = record.ID
+			if _, err := s.db.Exec(r.Context(), `
+				UPDATE agent_runs
+				SET session_id = NULLIF($2, '')::uuid, agent_type = $3, status = 'running',
+				    input = $4, output = '{}'::jsonb, prompt_version_id = $5, prompt_hash = $6,
+				    task_id = NULLIF($7, '')::uuid, step_id = NULLIF($8, '')::uuid,
+				    created_by = $9, error_code = NULL, error_message = NULL,
+				    started_at = now(), completed_at = NULL
+				WHERE id = $1
+			`, runID, optionalStringValue(sessionID), agentType, mustMarshal(variables), rendered.PromptVersionID, rendered.RenderedHash, options.TaskID, options.StepID, principal.UserID); err != nil {
+				return "", "", promptsvc.RenderedPrompt{}, provider.GatewayTextResponse{}, err
+			}
+		} else if err := s.db.QueryRow(r.Context(), `
+			INSERT INTO agent_runs(
+				organization_id, project_id, session_id, agent_type, task_type, status,
+				input, prompt_version_id, prompt_hash, task_id, step_id, created_by, started_at,
+				project_control_command_id
+			)
+			VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, 'running', $6, $7, $8,
+			        NULLIF($9, '')::uuid, NULLIF($10, '')::uuid, $11, now(), $12)
+			RETURNING id
+		`, project.OrganizationID, project.ID, optionalStringValue(sessionID), agentType, taskType,
+			mustMarshal(variables), rendered.PromptVersionID, rendered.RenderedHash,
+			options.TaskID, options.StepID, principal.UserID, commandID).Scan(&runID); err != nil {
+			return "", "", promptsvc.RenderedPrompt{}, provider.GatewayTextResponse{}, err
+		}
+	} else if err := s.db.QueryRow(r.Context(), `
 		INSERT INTO agent_runs(
 			organization_id, project_id, session_id, agent_type, task_type, status,
 			input, prompt_version_id, prompt_hash, task_id, step_id, created_by, started_at
@@ -1068,10 +945,11 @@ func (s *Server) runScriptAgentPromptWithOptions(r *http.Request, principal auth
 	if idempotencyKey == "" {
 		idempotencyKey = "script-agent-run:" + runID
 	}
+	billingPermission := firstNonEmpty(options.BillingPermission, authz.PermissionScriptWrite)
 	gatewayReq := provider.GatewayTextRequest{
 		GatewayBillingIdentity: gatewayBillingIdentityFromContext(
 			r.Context(),
-			authz.PermissionScriptWrite,
+			billingPermission,
 			provider.BillingContextReasonAgentAction,
 		),
 		OrganizationID:    project.OrganizationID,
@@ -1137,13 +1015,21 @@ func (s *Server) runScriptAgentPromptWithOptions(r *http.Request, principal auth
 }
 
 func (s *Server) script(r *http.Request, projectID, scriptID string) (Script, error) {
-	return scanScript(s.db.QueryRow(r.Context(), scriptSelectSQL(`
+	return s.scriptContext(r.Context(), projectID, scriptID)
+}
+
+func (s *Server) scriptContext(ctx context.Context, projectID, scriptID string) (Script, error) {
+	return scanScript(s.db.QueryRow(ctx, scriptSelectSQL(`
 		WHERE s.project_id = $1 AND s.id = $2
 	`), projectID, scriptID))
 }
 
 func (s *Server) scriptVersion(r *http.Request, projectID, scriptID, versionID string) (ScriptVersion, error) {
-	return scanScriptVersion(s.db.QueryRow(r.Context(), `
+	return s.scriptVersionContext(r.Context(), projectID, scriptID, versionID)
+}
+
+func (s *Server) scriptVersionContext(ctx context.Context, projectID, scriptID, versionID string) (ScriptVersion, error) {
+	return scanScriptVersion(s.db.QueryRow(ctx, `
 		SELECT id, organization_id, project_id, script_id, version, content, content_format, COALESCE(status, 'active'),
 		       source_type, prompt_version_id, prompt_hash, metadata, created_by, created_at
 		FROM script_versions
@@ -1154,7 +1040,7 @@ func (s *Server) scriptVersion(r *http.Request, projectID, scriptID, versionID s
 func scriptSelectSQL(where string) string {
 	return `
 		SELECT s.id, s.organization_id, s.project_id, s.source_id, s.title,
-		       COALESCE(s.status, 'draft'), s.id = p.active_script_id,
+		       COALESCE(s.status, 'draft'), s.revision, s.id = p.active_script_id,
 		       s.current_version_id, s.created_by, s.created_at, s.updated_at
 		FROM scripts s
 		JOIN projects p ON p.id = s.project_id
@@ -1165,7 +1051,7 @@ func scriptInsertSQL() string {
 	return `
 		INSERT INTO scripts(organization_id, project_id, source_id, title, status, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, organization_id, project_id, source_id, title, status, false,
+		RETURNING id, organization_id, project_id, source_id, title, status, revision, false,
 		          current_version_id, created_by, created_at, updated_at
 	`
 }
@@ -1188,8 +1074,8 @@ func nextScriptVersion(r *http.Request, tx pgx.Tx, scriptID string) (int, error)
 	return next, err
 }
 
-func markScriptVersionDownstreamStale(r *http.Request, tx pgx.Tx, projectID, versionID string) error {
-	return production.MarkScriptVersionDownstreamStale(r.Context(), tx, projectID, versionID)
+func markScriptVersionDownstreamStale(ctx context.Context, tx pgx.Tx, projectID, versionID string) error {
+	return production.MarkScriptVersionDownstreamStale(ctx, tx, projectID, versionID)
 }
 
 func activateScriptVersionTx(r *http.Request, tx pgx.Tx, project Project, script Script, version ScriptVersion) (string, error) {
@@ -1204,7 +1090,7 @@ func activateScriptVersionTx(r *http.Request, tx pgx.Tx, project Project, script
 		return "", err
 	}
 	if previousVersionID != "" && previousVersionID != version.ID {
-		if err := markScriptVersionDownstreamStale(r, tx, project.ID, previousVersionID); err != nil {
+		if err := markScriptVersionDownstreamStale(r.Context(), tx, project.ID, previousVersionID); err != nil {
 			return "", err
 		}
 		if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
@@ -1224,6 +1110,7 @@ func scanScript(row rowScan) (Script, error) {
 		&sourceID,
 		&item.Title,
 		&item.Status,
+		&item.Revision,
 		&item.IsCurrent,
 		&currentVersionID,
 		&createdBy,

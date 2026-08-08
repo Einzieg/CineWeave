@@ -302,21 +302,14 @@ func (s *Server) activateStoryboardPlan(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	planID := strings.TrimSpace(r.PathValue("planId"))
-	var episodeID string
-	if err := s.db.QueryRow(r.Context(), `SELECT script_episode_id::text FROM storyboard_plans WHERE project_id = $1 AND id = $2`, project.ID, planID).Scan(&episodeID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := storyboardpkg.ActivateStoryboardPlanTx(r.Context(), tx, storyboardpkg.ActivateStoryboardPlanRequest{
-		ProjectID: project.ID, ScriptEpisodeID: episodeID, StoryboardPlanID: planID, ActorID: principal.UserID,
-	}); err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "STORYBOARD_PLAN_INVALID", err.Error(), nil, false)
+	if _, err := s.activateStoryboardPlanActionTx(r.Context(), tx, project, principal.UserID, planID); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -336,41 +329,20 @@ func (s *Server) splitStoryboardShot(w http.ResponseWriter, r *http.Request, pri
 	if !ok {
 		return
 	}
-	var req struct {
-		SplitTick  *int64 `json:"splitTick,omitempty"`
-		SplitFrame *int64 `json:"splitFrame,omitempty"`
-		RightTitle string `json:"rightTitle,omitempty"`
-	}
+	var req storyboardSplitShotActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	if (req.SplitTick == nil) == (req.SplitFrame == nil) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "provide exactly one of splitTick or splitFrame", nil, false)
-		return
-	}
-	splitTick := int64(0)
-	if req.SplitTick != nil {
-		splitTick = *req.SplitTick
-	} else {
-		frameTick, err := s.storyboardShotFrameTick(r.Context(), project.ID, r.PathValue("shotId"))
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		splitTick = *req.SplitFrame * frameTick
-	}
+	req.ShotID = r.PathValue("shotId")
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	defer tx.Rollback(r.Context())
-	result, err := storyboardpkg.SplitStoryboardShotTx(r.Context(), tx, storyboardpkg.SplitStoryboardShotRequest{
-		ProjectID: project.ID, ShotID: r.PathValue("shotId"), SplitTick: splitTick,
-		ActorID: principal.UserID, RightTitle: req.RightTitle,
-	})
+	result, err := s.splitStoryboardShotActionTx(r.Context(), tx, project, principal.UserID, req)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "STORYBOARD_EDIT_INVALID", err.Error(), nil, false)
+		s.writeError(w, r, err)
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -385,14 +357,7 @@ func (s *Server) mergeStoryboardShots(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	var req struct {
-		ShotIDs []string `json:"shotIds"`
-		Title   string   `json:"title,omitempty"`
-		Visual  string   `json:"visual,omitempty"`
-		Camera  string   `json:"camera,omitempty"`
-		Motion  string   `json:"motion,omitempty"`
-		Mood    string   `json:"mood,omitempty"`
-	}
+	var req storyboardMergeShotsActionInput
 	if !decode(w, r, &req) {
 		return
 	}
@@ -402,12 +367,9 @@ func (s *Server) mergeStoryboardShots(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	defer tx.Rollback(r.Context())
-	result, err := storyboardpkg.MergeStoryboardShotsTx(r.Context(), tx, storyboardpkg.MergeStoryboardShotsRequest{
-		ProjectID: project.ID, ShotIDs: req.ShotIDs, ActorID: principal.UserID,
-		Title: req.Title, Visual: req.Visual, Camera: req.Camera, Motion: req.Motion, Mood: req.Mood,
-	})
+	result, err := s.mergeStoryboardShotsActionTx(r.Context(), tx, project, principal.UserID, req)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "STORYBOARD_EDIT_INVALID", err.Error(), nil, false)
+		s.writeError(w, r, err)
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -486,9 +448,13 @@ func (s *Server) storyboardShotFrameTick(ctx context.Context, projectID, shotID 
 }
 
 func (s *Server) storyboardShotStartAndFrameTick(ctx context.Context, projectID, shotID string) (int64, int64, error) {
+	return s.storyboardShotStartAndFrameTickWithDB(ctx, s.db, projectID, shotID)
+}
+
+func (s *Server) storyboardShotStartAndFrameTickWithDB(ctx context.Context, db snapshotQuerier, projectID, shotID string) (int64, int64, error) {
 	var startTick, timebase int64
 	var fpsNumerator, fpsDenominator int
-	if err := s.db.QueryRow(ctx, `
+	if err := db.QueryRow(ctx, `
 		SELECT shot.start_tick, analysis.timeline_timebase, analysis.fps_numerator, analysis.fps_denominator
 		FROM storyboard_shots shot
 		JOIN storyboard_plans plan ON plan.id = shot.storyboard_plan_id

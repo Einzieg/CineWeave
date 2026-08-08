@@ -13,8 +13,8 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/production"
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 	"github.com/Einzieg/cineweave/internal/videoproduction"
-	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -35,11 +35,20 @@ type generateShotVisualAnchorRequest struct {
 }
 
 type reviewVideoPromptPlanRequest struct {
+	PromptPlanID     string `json:"promptPlanId,omitempty"`
 	ExpectedRevision int    `json:"expectedRevision"`
 	Reason           string `json:"reason"`
 }
 
+type videoPromptPlanReviewResult struct {
+	ID               string `json:"id"`
+	StoryboardShotID string `json:"storyboardShotId"`
+	Revision         int    `json:"revision"`
+	Status           string `json:"status"`
+}
+
 type createManualVideoPromptPlanRevisionRequest struct {
+	ShotID           string `json:"shotId,omitempty"`
 	ExpectedRevision int    `json:"expectedRevision"`
 	RenderedPrompt   string `json:"renderedPrompt"`
 	Reason           string `json:"reason"`
@@ -215,41 +224,14 @@ func (s *Server) replanStoryboardShotState(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	shot, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
+	result, err := s.replanStoryboardShotStateCore(r.Context(), principal, project, r.PathValue("shotId"), "")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	var scriptID, episodeID string
-	if err := s.db.QueryRow(r.Context(), `
-		SELECT script.id::text, episode.id::text
-		FROM storyboard_shots shot
-		JOIN storyboard_plans plan ON plan.id = shot.storyboard_plan_id
-		JOIN script_episodes episode ON episode.id = plan.script_episode_id
-		JOIN script_versions version ON version.id = episode.script_version_id
-		JOIN scripts script ON script.id = version.script_id
-		WHERE shot.project_id = $1 AND shot.id = $2
-	`, project.ID, shot.ID).Scan(&scriptID, &episodeID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	run, ok := s.startProjectWorkflow(w, r, principal, project, "script_to_storyboard", map[string]any{
-		"scriptId":              scriptID,
-		"scriptEpisodeIds":      []string{episodeID},
-		"pacingProfile":         "standard",
-		"audioStrategy":         project.AudioStrategy,
-		"audioRequirement":      project.AudioRequirement,
-		"plannerBatchMaxShots":  12,
-		"maxSceneConcurrency":   3,
-		"force":                 true,
-		"generateDerivedAssets": false,
-	}, workflows.ScriptToStoryboardWorkflow)
-	if !ok {
-		return
-	}
 	httpx.WriteJSON(w, r, http.StatusAccepted, RegenerateResponse{
-		TargetType: "shot_state", TargetID: shot.ID, WorkflowRunID: run.ID,
-		Status: run.Status, WorkflowType: "script_to_storyboard",
+		TargetType: "shot_state", TargetID: r.PathValue("shotId"), WorkflowRunID: result.Run.ID,
+		Status: result.Run.Status, WorkflowType: "script_to_storyboard",
 	}, nil)
 }
 
@@ -258,56 +240,20 @@ func (s *Server) generateStoryboardShotAnchor(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	shot, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req generateShotVisualAnchorRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	profileKey := videoproduction.ProfileSingleFrameI2V
-	if project.VideoProductionBinding != nil && strings.TrimSpace(project.VideoProductionBinding.ProfileKey) != "" {
-		profileKey = project.VideoProductionBinding.ProfileKey
-	}
-	anchorRole := strings.TrimSpace(req.AnchorRole)
-	if anchorRole == "" {
-		anchorRole = videoproduction.AnchorRolePlannedFirstFrame
-	}
-	strategy, err := videoproduction.ProfileStrategyFor(profileKey)
-	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
-	}
-	anchorAllowed := false
-	for _, requirement := range strategy.Anchors().Requirements() {
-		if requirement.Role == anchorRole {
-			anchorAllowed = true
-			break
-		}
-	}
-	if !anchorAllowed {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, videoproduction.CodeProfileIncompatible, "当前视频生产方案不支持该视觉锚点", map[string]any{"anchorRole": anchorRole, "profileKey": profileKey}, false)
-		return
-	}
-	run, ok := s.startProjectWorkflow(w, r, principal, project, "regenerate_shot_image", map[string]any{
-		"targetId":    shot.ID,
-		"anchorRole":  anchorRole,
-		"force":       true,
-		"aspectRatio": firstNonEmpty(project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
-	}, workflows.RegenerateShotImageWorkflow)
-	if !ok {
-		return
-	}
-	anchorID, err := s.markShotAnchorGenerating(r.Context(), project, shot.ID, anchorRole, profileKey, run.ID, principal.UserID)
+	result, err := s.generateStoryboardShotAnchorCore(r.Context(), principal, project, storyboardGenerateAnchorActionInput{
+		ShotID: r.PathValue("shotId"), AnchorRole: req.AnchorRole,
+	}, "")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusAccepted, map[string]any{
-		"anchorId": anchorID, "workflowRunId": run.ID, "status": run.Status,
-		"workflowType": "regenerate_shot_image", "anchorRole": anchorRole,
+		"anchorId": result.AnchorID, "workflowRunId": result.Run.ID, "status": result.Run.Status,
+		"workflowType": "regenerate_shot_image", "anchorRole": firstNonEmpty(req.AnchorRole, videoproduction.AnchorRolePlannedFirstFrame),
 	}, nil)
 }
 
@@ -324,17 +270,8 @@ func (s *Server) reviewStoryboardShotAnchor(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	shot, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req reviewShotVisualAnchorRequest
 	if !decode(w, r, &req) {
-		return
-	}
-	if req.ExpectedRevision <= 0 || (decision == "rejected" && strings.TrimSpace(req.Reason) == "") {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedRevision is required and rejection requires a reason", nil, false)
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -343,8 +280,39 @@ func (s *Server) reviewStoryboardShotAnchor(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer tx.Rollback(r.Context())
+	item, err := s.reviewStoryboardShotAnchorActionTx(
+		r.Context(), tx, project, principal.UserID, r.PathValue("shotId"), r.PathValue("anchorId"), decision, req,
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if item.StorageKey != nil {
+		item.PreviewURL = s.previewURLForStorageKeyRequest(r.Context(), *item.StorageKey)
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) reviewStoryboardShotAnchorActionTx(ctx context.Context, tx pgx.Tx, project Project, actorID, shotID, anchorID, decision string, req reviewShotVisualAnchorRequest) (ShotVisualAnchorDetail, error) {
+	shotID = strings.TrimSpace(shotID)
+	anchorID = strings.TrimSpace(anchorID)
+	decision = strings.TrimSpace(decision)
+	if shotID == "" || anchorID == "" || req.ExpectedRevision <= 0 || (decision == "rejected" && strings.TrimSpace(req.Reason) == "") || (decision != "approved" && decision != "rejected") {
+		return ShotVisualAnchorDetail{}, controlValidationError("shotId、anchorId、expectedRevision 为必填项，拒绝时必须填写原因")
+	}
+	shot, err := scanStoryboardShot(tx.QueryRow(ctx, storyboardShotSelectSQL(`
+		WHERE s.project_id = $1 AND s.id = $2 AND s.deleted_at IS NULL
+		FOR UPDATE OF s
+	`), project.ID, shotID))
+	if err != nil {
+		return ShotVisualAnchorDetail{}, err
+	}
 	var item ShotVisualAnchorDetail
-	if err := tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		SELECT id::text, production_generation_id::text, storyboard_shot_id::text,
 		       shot_state_version_id::text, anchor_role, revision, status, review_status,
 		       artifact_id::text, media_file_id::text, storage_key, prompt,
@@ -353,37 +321,37 @@ func (s *Server) reviewStoryboardShotAnchor(w http.ResponseWriter, r *http.Reque
 		FROM shot_visual_anchors
 		WHERE project_id = $1 AND storyboard_shot_id = $2 AND id = $3
 		FOR UPDATE
-	`, project.ID, shot.ID, r.PathValue("anchorId")).Scan(
+	`, project.ID, shot.ID, anchorID).Scan(
 		&item.ID, &item.ProductionGenerationID, &item.StoryboardShotID,
 		&item.ShotStateVersionID, &item.AnchorRole, &item.Revision, &item.Status,
 		&item.ReviewStatus, &item.ArtifactID, &item.MediaFileID, &item.StorageKey,
 		&item.Prompt, &item.PromptVersionID, &item.PromptHash, &item.ProviderCallID,
 		&item.ModelID, &item.ReferencePackID, &item.Metadata, &item.CreatedAt, &item.UpdatedAt,
 	); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotVisualAnchorDetail{}, err
 	}
 	if item.Revision != req.ExpectedRevision {
-		httpx.WriteError(w, r, http.StatusConflict, "REVISION_CONFLICT", "锚点已被其他操作修改，请刷新后重试", map[string]any{"currentRevision": item.Revision}, false)
-		return
+		apiErr := newAPIError(http.StatusConflict, "REVISION_CONFLICT", "锚点已被其他操作修改，请刷新后重试")
+		apiErr.Details = map[string]any{"currentRevision": item.Revision}
+		return ShotVisualAnchorDetail{}, apiErr
 	}
 	if item.Status != "ready" {
-		httpx.WriteError(w, r, http.StatusConflict, "ANCHOR_NOT_READY", "锚点尚未生成完成，不能审核", map[string]any{"status": item.Status}, false)
-		return
+		apiErr := newAPIError(http.StatusConflict, "ANCHOR_NOT_READY", "锚点尚未生成完成，不能审核")
+		apiErr.Details = map[string]any{"status": item.Status}
+		return ShotVisualAnchorDetail{}, apiErr
 	}
 	if decision == "approved" {
-		if _, err := tx.Exec(r.Context(), `
+		if _, err := tx.Exec(ctx, `
 			UPDATE shot_visual_anchors
 			SET status = 'stale', review_status = 'needs_edit', reference_pack_id = NULL,
 			    metadata = metadata || jsonb_build_object('supersededAt', now(), 'supersededByAnchorId', $3::text)
 			WHERE project_id = $1 AND storyboard_shot_id = $2 AND anchor_role = $4
 			  AND id <> $3 AND status = 'ready' AND review_status = 'approved'
 		`, project.ID, shot.ID, item.ID, item.AnchorRole); err != nil {
-			s.writeError(w, r, err)
-			return
+			return ShotVisualAnchorDetail{}, err
 		}
 	}
-	if _, err := tx.Exec(r.Context(), `
+	if _, err := tx.Exec(ctx, `
 		UPDATE shot_visual_anchors
 		SET review_status = $2,
 		    metadata = metadata || jsonb_build_object(
@@ -391,37 +359,26 @@ func (s *Server) reviewStoryboardShotAnchor(w http.ResponseWriter, r *http.Reque
 		      'reviewDecision', $2::text, 'reviewReason', $4::text
 		    )
 		WHERE id = $1
-	`, item.ID, decision, principal.UserID, strings.TrimSpace(req.Reason)); err != nil {
-		s.writeError(w, r, err)
-		return
+	`, item.ID, decision, actorID, strings.TrimSpace(req.Reason)); err != nil {
+		return ShotVisualAnchorDetail{}, err
 	}
-	if err := invalidateShotProductionContractsTx(r.Context(), tx, project.ID, shot.ID, false, "visual_anchor_review_changed"); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := invalidateShotProductionContractsTx(ctx, tx, project.ID, shot.ID, false, "visual_anchor_review_changed"); err != nil {
+		return ShotVisualAnchorDetail{}, err
 	}
-	identity, err := loadShotProductionEventIdentityTx(r.Context(), tx, project.ID, shot.ID)
+	identity, err := loadShotProductionEventIdentityTx(ctx, tx, project.ID, shot.ID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotVisualAnchorDetail{}, err
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shot.anchor.reviewed", "shot_visual_anchor", item.ID, mustMarshal(map[string]any{
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "storyboard.shot.anchor.reviewed", "shot_visual_anchor", item.ID, mustMarshal(map[string]any{
 		"bindingId": identity.VideoProductionBindingID, "bindingRevision": identity.VideoProductionBindingRevision,
 		"productionGenerationId": identity.ProductionGenerationID, "episodeId": identity.ScriptEpisodeID,
 		"storyboardShotId": shot.ID, "workflowRunId": identity.WorkflowRunID,
 		"anchorId": item.ID, "revision": item.Revision, "decision": decision,
 	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotVisualAnchorDetail{}, err
 	}
 	item.ReviewStatus = decision
-	if item.StorageKey != nil {
-		item.PreviewURL = s.previewURLForStorageKeyRequest(r.Context(), *item.StorageKey)
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+	return item, nil
 }
 
 func (s *Server) approveVideoPromptPlan(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -442,22 +399,58 @@ func (s *Server) createManualVideoPromptPlanRevision(w http.ResponseWriter, r *h
 	if !decode(w, r, &req) {
 		return
 	}
+	req.ShotID = shot.ID
 	prompt := strings.TrimSpace(req.RenderedPrompt)
 	if req.ExpectedRevision <= 0 || prompt == "" {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedRevision and renderedPrompt are required", nil, false)
 		return
 	}
-	promptDigest := sha256.Sum256([]byte(prompt))
-	promptHash := hex.EncodeToString(promptDigest[:])
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	defer tx.Rollback(r.Context())
+	result, err := s.createManualVideoPromptPlanRevisionActionTx(r.Context(), tx, project, principal.UserID, req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	items, err := s.videoPromptPlans(r, project.ID, shot.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	for index := range items {
+		if items[index].ID == result.ID {
+			httpx.WriteJSON(w, r, http.StatusCreated, items[index], nil)
+			return
+		}
+	}
+	s.writeError(w, r, pgx.ErrNoRows)
+}
+
+func (s *Server) createManualVideoPromptPlanRevisionActionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	project Project,
+	actorID string,
+	req createManualVideoPromptPlanRevisionRequest,
+) (videoPromptPlanReviewResult, error) {
+	req.ShotID = strings.TrimSpace(req.ShotID)
+	prompt := strings.TrimSpace(req.RenderedPrompt)
+	if req.ShotID == "" || req.ExpectedRevision <= 0 || prompt == "" {
+		return videoPromptPlanReviewResult{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotId, expectedRevision and renderedPrompt are required")
+	}
+	promptDigest := sha256.Sum256([]byte(prompt))
+	promptHash := hex.EncodeToString(promptDigest[:])
 	var sourceID, sourceStatus, contextStatus, referenceStatus string
 	var sourceRevision int
-	if err := tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		SELECT plan.id::text, plan.revision, plan.status,
 		       context.status,
 		       COALESCE(reference.status, '')
@@ -471,31 +464,27 @@ func (s *Server) createManualVideoPromptPlanRevision(w http.ResponseWriter, r *h
 		ORDER BY CASE WHEN plan.status = 'approved' THEN 0 ELSE 1 END, plan.revision DESC
 		LIMIT 1
 		FOR UPDATE OF plan
-	`, project.ID, shot.ID).Scan(&sourceID, &sourceRevision, &sourceStatus, &contextStatus, &referenceStatus); err != nil {
-		s.writeError(w, r, err)
-		return
+	`, project.ID, req.ShotID).Scan(&sourceID, &sourceRevision, &sourceStatus, &contextStatus, &referenceStatus); err != nil {
+		return videoPromptPlanReviewResult{}, err
 	}
 	if sourceRevision != req.ExpectedRevision {
-		httpx.WriteError(w, r, http.StatusConflict, "REVISION_CONFLICT", "视频提示词计划已被其他操作修改，请刷新后重试", map[string]any{"currentRevision": sourceRevision}, false)
-		return
+		return videoPromptPlanReviewResult{}, apiError{Status: http.StatusConflict, Code: "REVISION_CONFLICT", Message: "视频提示词计划已被其他操作修改，请刷新后重试", Details: map[string]any{"currentRevision": sourceRevision}}
 	}
 	if sourceStatus != "approved" || contextStatus != "active" || referenceStatus != "active" {
-		httpx.WriteError(w, r, http.StatusConflict, "PROMPT_PLAN_STALE", "当前提示词上下文或引用已过期，请先重新生成视频提示词", map[string]any{
+		return videoPromptPlanReviewResult{}, apiError{Status: http.StatusConflict, Code: "PROMPT_PLAN_STALE", Message: "当前提示词上下文或引用已过期，请先重新生成视频提示词", Details: map[string]any{
 			"promptPlanStatus": sourceStatus, "contextStatus": contextStatus, "referencePackStatus": referenceStatus,
-		}, false)
-		return
+		}}
 	}
-	if _, err := tx.Exec(r.Context(), `
+	if _, err := tx.Exec(ctx, `
 		UPDATE video_prompt_plans
 		SET status = 'stale', stale_at = now(),
 		    metadata = metadata || jsonb_build_object('staleReason', 'manual_revision', 'staleAt', now())
 		WHERE id = $1
 	`, sourceID); err != nil {
-		s.writeError(w, r, err)
-		return
+		return videoPromptPlanReviewResult{}, err
 	}
 	var newPlanID string
-	if err := tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO video_prompt_plans(
 			organization_id, project_id, production_generation_id,
 			video_production_binding_id, video_production_binding_revision,
@@ -528,11 +517,10 @@ func (s *Server) createManualVideoPromptPlanRevision(w http.ResponseWriter, r *h
 		       NULLIF($4::text, '')::uuid, now(), now()
 		FROM video_prompt_plans WHERE id = $1
 		RETURNING id::text
-	`, sourceID, prompt, promptHash, principal.UserID, strings.TrimSpace(req.Reason)).Scan(&newPlanID); err != nil {
-		s.writeError(w, r, err)
-		return
+	`, sourceID, prompt, promptHash, actorID, strings.TrimSpace(req.Reason)).Scan(&newPlanID); err != nil {
+		return videoPromptPlanReviewResult{}, err
 	}
-	if _, err := tx.Exec(r.Context(), `
+	if _, err := tx.Exec(ctx, `
 		UPDATE storyboard_shots
 		SET video_prompt = $2, video_prompt_status = 'succeeded',
 		    video_prompt_error_code = NULL, video_prompt_error_message = NULL,
@@ -544,38 +532,41 @@ func (s *Server) createManualVideoPromptPlanRevision(w http.ResponseWriter, r *h
 		    ),
 		    updated_at = now()
 		WHERE project_id = $1 AND id = $6
-	`, project.ID, prompt, newPlanID, sourceRevision+1, principal.UserID, shot.ID); err != nil {
-		s.writeError(w, r, err)
-		return
+	`, project.ID, prompt, newPlanID, sourceRevision+1, actorID, req.ShotID); err != nil {
+		return videoPromptPlanReviewResult{}, err
 	}
-	if err := invalidateShotRenderPlansTx(r.Context(), tx, project.ID, shot.ID, "video_prompt_manual_revision"); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := invalidateShotRenderPlansTx(ctx, tx, project.ID, req.ShotID, "video_prompt_manual_revision"); err != nil {
+		return videoPromptPlanReviewResult{}, err
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shot.video_prompt.reviewed", "storyboard_shot", shot.ID, mustMarshal(map[string]any{
-		"storyboardShotId": shot.ID, "videoPromptPlanId": newPlanID,
-		"revision": sourceRevision + 1, "decision": "approved", "reviewedBy": principal.UserID,
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "storyboard.shot.video_prompt.reviewed", "storyboard_shot", req.ShotID, mustMarshal(map[string]any{
+		"storyboardShotId": req.ShotID, "videoPromptPlanId": newPlanID,
+		"revision": sourceRevision + 1, "decision": "approved", "reviewedBy": actorID,
 		"source": "manual_revision",
 	})); err != nil {
-		s.writeError(w, r, err)
-		return
+		return videoPromptPlanReviewResult{}, err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+	return videoPromptPlanReviewResult{ID: newPlanID, StoryboardShotID: req.ShotID, Revision: sourceRevision + 1, Status: "approved"}, nil
+}
+
+func (s *Server) executeShotVideoPromptCreateRevisionSyncAction(
+	ctx context.Context,
+	tx pgx.Tx,
+	principal auth.Principal,
+	project Project,
+	_ projectcontrol.Command,
+	raw json.RawMessage,
+) (agentToolResult, error) {
+	var input createManualVideoPromptPlanRevisionRequest
+	if err := decodeWorkflowActionInput(raw, &input); err != nil {
+		return agentToolResult{}, err
 	}
-	items, err := s.videoPromptPlans(r, project.ID, shot.ID)
+	result, err := s.createManualVideoPromptPlanRevisionActionTx(ctx, tx, project, principal.UserID, input)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return agentToolResult{}, err
 	}
-	for index := range items {
-		if items[index].ID == newPlanID {
-			httpx.WriteJSON(w, r, http.StatusCreated, items[index], nil)
-			return
-		}
-	}
-	s.writeError(w, r, pgx.ErrNoRows)
+	return agentToolOK("shot.video_prompt.create_revision", workflowActionArguments(raw), "已创建并批准人工视频提示词版本。", map[string]any{
+		"videoPromptPlan": result,
+	}), nil
 }
 
 func (s *Server) rejectVideoPromptPlan(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -591,48 +582,69 @@ func (s *Server) reviewVideoPromptPlan(w http.ResponseWriter, r *http.Request, p
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.ExpectedRevision <= 0 || (decision == "rejected" && strings.TrimSpace(req.Reason) == "") {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedRevision is required and rejection requires a reason", nil, false)
-		return
-	}
+	req.PromptPlanID = r.PathValue("promptPlanId")
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	defer tx.Rollback(r.Context())
+	result, err := s.reviewVideoPromptPlanActionTx(r.Context(), tx, project, principal.UserID, decision, req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, result, nil)
+}
+
+func (s *Server) reviewVideoPromptPlanActionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	project Project,
+	actorID string,
+	decision string,
+	req reviewVideoPromptPlanRequest,
+) (videoPromptPlanReviewResult, error) {
+	req.PromptPlanID = strings.TrimSpace(req.PromptPlanID)
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.PromptPlanID == "" || req.ExpectedRevision <= 0 || (decision == "rejected" && req.Reason == "") {
+		return videoPromptPlanReviewResult{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "promptPlanId and expectedRevision are required and rejection requires a reason")
+	}
+	if decision != "approved" && decision != "rejected" {
+		return videoPromptPlanReviewResult{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "decision is invalid")
+	}
 	var planID, shotID, status string
 	var revision int
-	if err := tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		SELECT id::text, storyboard_shot_id::text, revision, status
 		FROM video_prompt_plans
 		WHERE project_id = $1 AND id = $2
 		FOR UPDATE
-	`, project.ID, r.PathValue("promptPlanId")).Scan(&planID, &shotID, &revision, &status); err != nil {
-		s.writeError(w, r, err)
-		return
+	`, project.ID, req.PromptPlanID).Scan(&planID, &shotID, &revision, &status); err != nil {
+		return videoPromptPlanReviewResult{}, err
 	}
 	if revision != req.ExpectedRevision {
-		httpx.WriteError(w, r, http.StatusConflict, "REVISION_CONFLICT", "视频提示词计划已被其他操作修改，请刷新后重试", map[string]any{"currentRevision": revision}, false)
-		return
+		return videoPromptPlanReviewResult{}, apiError{Status: http.StatusConflict, Code: "REVISION_CONFLICT", Message: "视频提示词计划已被其他操作修改，请刷新后重试", Details: map[string]any{"currentRevision": revision}}
 	}
 	if status == "stale" || status == "archived" {
-		httpx.WriteError(w, r, http.StatusConflict, "PROMPT_PLAN_STALE", "过期或归档的视频提示词计划不能审核", map[string]any{"status": status}, false)
-		return
+		return videoPromptPlanReviewResult{}, apiError{Status: http.StatusConflict, Code: "PROMPT_PLAN_STALE", Message: "过期或归档的视频提示词计划不能审核", Details: map[string]any{"status": status}}
 	}
 	if decision == "approved" && status != "approved" {
-		if _, err := tx.Exec(r.Context(), `
+		if _, err := tx.Exec(ctx, `
 			UPDATE video_prompt_plans
 			SET status = 'stale', stale_at = now(),
 			    metadata = metadata || jsonb_build_object('staleReason', 'replaced_by_manual_approval', 'replacementPromptPlanId', $3::text)
 			WHERE project_id = $1 AND storyboard_shot_id = $2 AND id <> $3 AND status = 'approved'
 		`, project.ID, shotID, planID); err != nil {
-			s.writeError(w, r, err)
-			return
+			return videoPromptPlanReviewResult{}, err
 		}
 	}
 	if status != decision {
-		if _, err := tx.Exec(r.Context(), `
+		if _, err := tx.Exec(ctx, `
 			UPDATE video_prompt_plans
 			SET status = $2,
 			    reviewed_at = now(),
@@ -642,27 +654,38 @@ func (s *Server) reviewVideoPromptPlan(w http.ResponseWriter, r *http.Request, p
 			      'manualReviewerId', $4::text, 'manualReviewedAt', now()
 			    )
 			WHERE id = $1
-		`, planID, decision, strings.TrimSpace(req.Reason), principal.UserID); err != nil {
-			s.writeError(w, r, err)
-			return
+		`, planID, decision, req.Reason, actorID); err != nil {
+			return videoPromptPlanReviewResult{}, err
 		}
 	}
-	if err := invalidateShotRenderPlansTx(r.Context(), tx, project.ID, shotID, "video_prompt_review_changed"); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := invalidateShotRenderPlansTx(ctx, tx, project.ID, shotID, "video_prompt_review_changed"); err != nil {
+		return videoPromptPlanReviewResult{}, err
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shot.video_prompt.reviewed", "storyboard_shot", shotID, mustMarshal(map[string]any{
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "storyboard.shot.video_prompt.reviewed", "storyboard_shot", shotID, mustMarshal(map[string]any{
 		"storyboardShotId": shotID, "videoPromptPlanId": planID, "revision": revision,
-		"decision": decision, "reviewedBy": principal.UserID,
+		"decision": decision, "reviewedBy": actorID,
 	})); err != nil {
-		s.writeError(w, r, err)
-		return
+		return videoPromptPlanReviewResult{}, err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+	return videoPromptPlanReviewResult{ID: planID, StoryboardShotID: shotID, Revision: revision, Status: decision}, nil
+}
+
+func (s *Server) executeShotVideoPromptReviewSyncAction(decision string) projectControlSyncAction {
+	return func(ctx context.Context, tx pgx.Tx, principal auth.Principal, project Project, _ projectcontrol.Command, raw json.RawMessage) (agentToolResult, error) {
+		var input reviewVideoPromptPlanRequest
+		if err := decodeWorkflowActionInput(raw, &input); err != nil {
+			return agentToolResult{}, err
+		}
+		result, err := s.reviewVideoPromptPlanActionTx(ctx, tx, project, principal.UserID, decision, input)
+		if err != nil {
+			return agentToolResult{}, err
+		}
+		name := "shot.video_prompt.approve"
+		if decision == "rejected" {
+			name = "shot.video_prompt.reject"
+		}
+		return agentToolOK(name, workflowActionArguments(raw), "已完成视频提示词审核。", map[string]any{"videoPromptPlan": result}), nil
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"id": planID, "storyboardShotId": shotID, "revision": revision, "status": decision}, nil)
 }
 
 func loadApprovedShotStateTx(ctx context.Context, tx pgx.Tx, shotID, role string) (*videoproduction.ShotState, error) {
@@ -764,6 +787,17 @@ func (s *Server) markShotAnchorGenerating(ctx context.Context, project Project, 
 		return "", err
 	}
 	defer tx.Rollback(ctx)
+	anchorID, err := s.markShotAnchorGeneratingTx(ctx, tx, project, shotID, anchorRole, profileKey, workflowRunID, userID)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return anchorID, nil
+}
+
+func (s *Server) markShotAnchorGeneratingTx(ctx context.Context, tx pgx.Tx, project Project, shotID, anchorRole, profileKey, workflowRunID, userID string) (string, error) {
 	identity, err := loadShotProductionEventIdentityTx(ctx, tx, project.ID, shotID)
 	if err != nil {
 		return "", err
@@ -853,9 +887,6 @@ func (s *Server) markShotAnchorGenerating(ctx context.Context, project Project, 
 		"storyboardShotId": shotID, "workflowRunId": workflowRunID,
 		"anchorId": anchorID, "anchorRole": anchorRole, "revision": revision,
 	})); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
 	return anchorID, nil

@@ -106,6 +106,7 @@ func (s *Service) CreateSystemOrganizationMember(
 
 	var user UserResponse
 	accountCreated := false
+	var controlKey *ControlKeySecret
 	if normalized.AttachExisting {
 		err = tx.QueryRow(ctx, `
 			SELECT id, email, COALESCE(username, ''), COALESCE(display_name, ''), COALESCE(avatar_url, ''), is_system_admin
@@ -144,6 +145,11 @@ func (s *Service) CreateSystemOrganizationMember(
 			return OrganizationMember{}, systemMemberIdentityError(err)
 		}
 		accountCreated = true
+		createdKey, createKeyErr := createControlKeyTx(ctx, tx, user.ID, false)
+		if createKeyErr != nil {
+			return OrganizationMember{}, createKeyErr
+		}
+		controlKey = &createdKey
 	}
 
 	membershipRestored := false
@@ -222,7 +228,12 @@ func (s *Service) CreateSystemOrganizationMember(
 	if err := tx.Commit(ctx); err != nil {
 		return OrganizationMember{}, err
 	}
-	return s.GetOrganizationMember(ctx, organizationID, user.ID)
+	member, err := s.GetOrganizationMember(ctx, organizationID, user.ID)
+	if err != nil {
+		return OrganizationMember{}, err
+	}
+	member.CodexControlKey = controlKey
+	return member, nil
 }
 
 func (s *Service) UpdateSystemOrganizationMember(

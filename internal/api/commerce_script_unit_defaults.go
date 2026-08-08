@@ -70,87 +70,25 @@ func (s *Server) updateCommerceScriptUnitDefaults(w http.ResponseWriter, r *http
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.ExpectedRevision <= 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedRevision 必须为正整数", nil, false)
-		return
-	}
-	defaults, err := normalizedCommerceScriptUnitDefaults(commercepkg.ScriptUnitDefaults{
-		TargetDurationSeconds: req.TargetDurationSeconds,
-		TargetPlatform:        req.TargetPlatform,
-		LanguageMode:          req.LanguageMode,
-		TargetLanguage:        req.TargetLanguage,
-	})
+	raw, err := json.Marshal(req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	options, err := s.loadCommerceProjectOptions(r.Context(), project.OrganizationID, true)
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.script.defaults.update", raw,
+		strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := validateCommerceScriptUnitDefaults(options, project, defaults); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-
-	tx, err := s.db.Begin(r.Context())
+	updated, err := decodeAgentToolData[Project](result.Data)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	locked, err := scanProject(tx.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1 FOR UPDATE OF p`), project.ID))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if locked.Revision != req.ExpectedRevision {
-		s.writeError(w, r, projectRevisionConflict(locked, req.ExpectedRevision))
-		return
-	}
-	settings, err := mergeCommerceScriptUnitDefaults(locked.Settings, defaults)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	command, err := tx.Exec(r.Context(), `
-		UPDATE projects
-		SET settings = $2, revision = revision + 1, updated_at = now()
-		WHERE id = $1 AND revision = $3
-	`, locked.ID, settings, locked.Revision)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if command.RowsAffected() != 1 {
-		s.writeError(w, r, projectRevisionConflict(locked, locked.Revision))
-		return
-	}
-	updated, err := scanProject(tx.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1`), locked.ID))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, locked.OrganizationID, locked.ID,
-		"commerce.project.defaults.updated", "project", locked.ID, mustRawJSON(map[string]any{
-			"revision":              updated.Revision,
-			"targetDurationSeconds": defaults.TargetDurationSeconds,
-			"targetPlatform":        defaults.TargetPlatform,
-			"languageMode":          defaults.LanguageMode,
-			"targetLanguage":        defaults.TargetLanguage,
-		})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := s.attachVideoProductionContext(r.Context(), tx, &updated); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, updated, nil)
 }
 

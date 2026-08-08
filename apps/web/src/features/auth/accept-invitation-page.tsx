@@ -9,9 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthPageShell } from "@/features/auth/components/auth-page-shell";
+import { CodexControlKeySecretDialog } from "@/features/settings/codex-control-key-secret-dialog";
 import { StudioApiError, studioApi } from "@/lib/api-client";
 import { sessionFromAuthResponse, useStudioSession } from "@/lib/session";
-import type { AuthResponse, OrganizationChoice, OrganizationInvitation, StudioSession } from "@/lib/types";
+import type { AuthResponse, CodexControlKeySecret, OrganizationChoice, OrganizationInvitation, StudioSession } from "@/lib/types";
 
 export function AcceptInvitationPage() {
   const router = useRouter();
@@ -28,6 +29,8 @@ export function AcceptInvitationPage() {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [registrationPassword, setRegistrationPassword] = useState("");
+  const [controlKey, setControlKey] = useState<CodexControlKeySecret>();
+  const [postAcceptanceRoute, setPostAcceptanceRoute] = useState<Route>("/projects" as Route);
   const [organizationSelection, setOrganizationSelection] = useState<{
     token: string;
     organizations: OrganizationChoice[];
@@ -66,7 +69,13 @@ export function AcceptInvitationPage() {
 
   function finish(response: AuthResponse) {
     setSession(sessionFromAuthResponse(response));
-    router.replace((response.user.username ? "/projects" : "/set-username") as Route);
+    const destination = (response.user.username ? "/projects" : "/set-username") as Route;
+    if (response.codexControlKey) {
+      setPostAcceptanceRoute(destination);
+      setControlKey(response.codexControlKey);
+      return;
+    }
+    router.replace(destination);
   }
 
   async function acceptCurrentAccount() {
@@ -156,7 +165,8 @@ export function AcceptInvitationPage() {
   }
 
   return (
-    <AuthPageShell title={`加入${invitation.organizationName}`} description={`受邀账号：${invitation.email}`}>
+    <>
+      <AuthPageShell title={`加入${invitation.organizationName}`} description={`受邀账号：${invitation.email}`}>
       <div className="mb-5 flex items-center gap-3 rounded-lg border bg-muted/35 px-4 py-3">
         <span className="grid h-9 w-9 place-items-center rounded-md bg-primary/10 text-primary">
           <Building2 className="h-4 w-4" />
@@ -228,7 +238,16 @@ export function AcceptInvitationPage() {
           </Button>
         </form>
       )}
-    </AuthPageShell>
+      </AuthPageShell>
+      <CodexControlKeySecretDialog
+        secret={controlKey}
+        title="保存新账号的 Codex 项目控制密钥"
+        onClose={() => {
+          setControlKey(undefined);
+          router.replace(postAcceptanceRoute);
+        }}
+      />
+    </>
   );
 }
 

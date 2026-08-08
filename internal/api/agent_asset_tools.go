@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/production"
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 	"github.com/Einzieg/cineweave/internal/provider"
 )
 
@@ -18,88 +20,122 @@ type assetPromptRevisionDraft struct {
 	NegativePrompt    string `json:"negativePrompt"`
 }
 
+type assetPromptRevisionActionInput struct {
+	AssetID     string   `json:"assetId"`
+	AssetName   string   `json:"assetName"`
+	Instruction string   `json:"instruction"`
+	Fields      []string `json:"fields"`
+}
+
+type assetPromptRevisionActionResult struct {
+	AssetID          string         `json:"assetId"`
+	AssetName        string         `json:"assetName"`
+	Before           map[string]any `json:"before"`
+	After            map[string]any `json:"after"`
+	ChangedFields    []string       `json:"changedFields"`
+	ProviderCallID   string         `json:"providerCallId,omitempty"`
+	ModelID          string         `json:"modelId,omitempty"`
+	CommandID        string         `json:"projectControlCommandId,omitempty"`
+	AgentTaskID      string         `json:"agentTaskId,omitempty"`
+	AgentStepID      string         `json:"agentStepId,omitempty"`
+	IdempotencyKey   string         `json:"idempotencyKey,omitempty"`
+	IdempotentReplay bool           `json:"idempotentReplay"`
+}
+
 func (s *Server) agentToolGetCanonicalAsset(r *http.Request, project Project, args map[string]any) agentToolResult {
-	asset, err := s.agentCanonicalAssetByReference(r, project.ID, args)
+	includePreviewURL, _ := agentBoolArg(args, "includePreviewUrl")
+	input := assetGetActionInput{
+		AssetID:           agentReferenceStringArg(args, "assetId"),
+		AssetName:         agentStringArg(args, "assetName"),
+		IncludePreviewURL: includePreviewURL,
+	}
+	asset, err := s.getCanonicalAssetAction(r.Context(), project, input)
 	if err != nil {
 		return agentToolError("asset.get", args, err)
 	}
-	return agentToolOK("asset.get", args, "已读取完整资产卡。", map[string]any{
-		"asset": agentCanonicalAssetSnapshot(asset),
-	})
+	return assetGetAgentResult(args, asset)
 }
 
-func (s *Server) agentToolReviseCanonicalAssetPrompt(
-	r *http.Request,
+func (s *Server) executeAssetRevisePromptAsyncAction(
+	ctx context.Context,
 	principal auth.Principal,
 	project Project,
-	task AgentTask,
-	step AgentStep,
-	args map[string]any,
-) agentToolResult {
-	asset, err := s.agentCanonicalAssetByReference(r, project.ID, args)
+	command projectcontrol.Command,
+	raw json.RawMessage,
+) (agentToolResult, error) {
+	var input assetPromptRevisionActionInput
+	if err := decodeWorkflowActionInput(raw, &input); err != nil {
+		return agentToolResult{}, err
+	}
+	result, err := s.reviseCanonicalAssetPromptCore(ctx, principal, project, command, input)
 	if err != nil {
-		return agentToolError("asset.revise_prompt", args, err)
+		return agentToolResult{}, err
+	}
+	return agentToolOK("asset.revise_prompt", workflowActionArguments(raw), "已按要求修订资产提示词，并标记相关下游内容需要重新生成。", map[string]any{
+		"assetId": result.AssetID, "assetName": result.AssetName,
+		"before": result.Before, "after": result.After, "changedFields": result.ChangedFields,
+		"providerCallId": result.ProviderCallID, "modelId": result.ModelID,
+		"projectControlCommandId": result.CommandID,
+		"agentTaskId":             result.AgentTaskID, "agentStepId": result.AgentStepID,
+		"idempotencyKey": result.IdempotencyKey, "idempotentReplay": result.IdempotentReplay,
+	}), nil
+}
+
+func (s *Server) reviseCanonicalAssetPromptCore(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	command projectcontrol.Command,
+	input assetPromptRevisionActionInput,
+) (assetPromptRevisionActionResult, error) {
+	asset, err := s.resolveCanonicalAssetReferenceContext(
+		ctx, project.ID, strings.TrimSpace(input.AssetID), strings.TrimSpace(input.AssetName),
+	)
+	if err != nil {
+		return assetPromptRevisionActionResult{}, err
 	}
 	if asset.Status == "archived" {
-		return agentToolError("asset.revise_prompt", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "canonical asset is archived"))
+		return assetPromptRevisionActionResult{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "已归档资产不能修订提示词")
 	}
-	instruction := strings.TrimSpace(agentStringArg(args, "instruction"))
+	if replay, ok := assetPromptRevisionReplay(asset, command.ID); ok {
+		return replay, nil
+	}
+	instruction := strings.TrimSpace(input.Instruction)
 	if instruction == "" {
-		return agentToolError("asset.revise_prompt", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "instruction is required"))
+		return assetPromptRevisionActionResult{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "instruction 不能为空")
 	}
-	fields, selectedFields, err := normalizeAssetPromptRevisionFields(agentStringSliceArg(args, "fields"))
+	fields, selectedFields, err := normalizeAssetPromptRevisionFields(input.Fields)
 	if err != nil {
-		return agentToolError("asset.revise_prompt", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error()))
+		return assetPromptRevisionActionResult{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error())
 	}
 	before := assetPromptSnapshot(asset)
-	if already, err := s.agentPatchTargetHasStep(r.Context(), project.ID, "canonical_asset", asset.ID, step.ID); err != nil {
-		return agentToolError("asset.revise_prompt", args, err)
-	} else if already {
-		return agentToolOK("asset.revise_prompt", args, "当前 Agent 步骤已完成资产提示词修订，未重复调用模型。", map[string]any{
-			"assetId":        asset.ID,
-			"assetName":      asset.Name,
-			"before":         before,
-			"after":          before,
-			"changedFields":  []string{},
-			"idempotent":     true,
-			"agentTaskId":    task.ID,
-			"agentStepId":    step.ID,
-			"idempotencyKey": agentStepIdempotencyKey(task, step),
-		})
-	}
+	r := requestWithContext(ctx)
 	scenes, err := s.assetScenePromptContext(r, project.ID, asset.ID)
 	if err != nil {
-		return agentToolError("asset.revise_prompt", args, err)
+		return assetPromptRevisionActionResult{}, err
 	}
 	rendered, gatewayResp, err := s.runTextGatewayPrompt(r, project, "asset_prompt_revision", map[string]any{
 		"project": projectPromptVariables(project),
 		"asset": map[string]any{
-			"id":                asset.ID,
-			"assetType":         asset.AssetType,
-			"name":              asset.Name,
-			"description":       asset.Description,
-			"profile":           rawObject(asset.Profile),
+			"id": asset.ID, "assetType": asset.AssetType, "name": asset.Name,
+			"description": asset.Description, "profile": rawObject(asset.Profile),
 			"basePrompt":        stringValue(asset.BasePrompt),
 			"consistencyPrompt": stringValue(asset.ConsistencyPrompt),
 			"negativePrompt":    stringValue(asset.NegativePrompt),
 		},
-		"input": map[string]any{
-			"instruction": instruction,
-			"fields":      fields,
-		},
+		"input":  map[string]any{"instruction": instruction, "fields": fields},
 		"scenes": scenes,
 	}, true, authz.PermissionAssetWrite, provider.BillingContextReasonAgentAction)
 	if err != nil {
-		return agentToolError("asset.revise_prompt", args, err)
+		return assetPromptRevisionActionResult{}, err
 	}
 	revision, err := normalizeAssetPromptRevision(gatewayResp.Output.Text)
 	if err != nil {
-		return agentToolError("asset.revise_prompt", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error()))
+		return assetPromptRevisionActionResult{}, newAPIError(http.StatusBadGateway, "PROVIDER_OUTPUT_INVALID", err.Error())
 	}
 	after := map[string]any{
-		"basePrompt":        stringValue(asset.BasePrompt),
-		"consistencyPrompt": stringValue(asset.ConsistencyPrompt),
-		"negativePrompt":    stringValue(asset.NegativePrompt),
+		"basePrompt": stringValue(asset.BasePrompt), "consistencyPrompt": stringValue(asset.ConsistencyPrompt),
+		"negativePrompt": stringValue(asset.NegativePrompt),
 	}
 	if selectedFields["basePrompt"] {
 		after["basePrompt"] = revision.BasePrompt
@@ -115,22 +151,41 @@ func (s *Server) agentToolReviseCanonicalAssetPrompt(
 	if canonicalAssetPromptFieldsReady(stringValueFromAny(after["basePrompt"]), stringValueFromAny(after["consistencyPrompt"])) {
 		status = "prompt_ready"
 	}
-	metadata := mergeAgentStepMetadata(map[string]any{
-		"providerCallId":      gatewayResp.ProviderCallID,
-		"modelId":             gatewayResp.ModelID,
-		"promptTemplateKey":   rendered.TemplateKey,
-		"promptVersionId":     rendered.PromptVersionID,
-		"promptHash":          rendered.RenderedHash,
-		"promptSource":        rendered.Source,
-		"revisionInstruction": instruction,
-		"revisionFields":      fields,
-	}, task, step, "asset.revise_prompt")
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		return agentToolError("asset.revise_prompt", args, err)
+	result := assetPromptRevisionActionResult{
+		AssetID: asset.ID, AssetName: asset.Name, Before: before, After: after,
+		ChangedFields: changedFields, ProviderCallID: gatewayResp.ProviderCallID, ModelID: gatewayResp.ModelID,
+		CommandID: command.ID, AgentTaskID: command.AgentTaskID, AgentStepID: command.AgentStepID,
+		IdempotencyKey: command.IdempotencyKey,
 	}
-	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `
+	effect := map[string]any{
+		"commandId": command.ID, "actionName": "asset.revise_prompt",
+		"assetId": result.AssetID, "assetName": result.AssetName,
+		"before": result.Before, "after": result.After, "changedFields": result.ChangedFields,
+		"providerCallId": result.ProviderCallID, "modelId": result.ModelID,
+		"agentTaskId": result.AgentTaskID, "agentStepId": result.AgentStepID,
+		"idempotencyKey": result.IdempotencyKey,
+	}
+	metadata := map[string]any{
+		"providerCallId": gatewayResp.ProviderCallID, "modelId": gatewayResp.ModelID,
+		"promptTemplateKey": rendered.TemplateKey, "promptVersionId": rendered.PromptVersionID,
+		"promptHash": rendered.RenderedHash, "promptSource": rendered.Source,
+		"revisionInstruction": instruction, "revisionFields": fields,
+		"projectControlCommandId": command.ID, "controllerType": command.ControllerType,
+		"projectControlEffect": effect,
+	}
+	if command.AgentTaskID != "" {
+		metadata["agentTaskId"] = command.AgentTaskID
+	}
+	if command.AgentStepID != "" {
+		metadata["agentStepId"] = command.AgentStepID
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return assetPromptRevisionActionResult{}, err
+	}
+	defer tx.Rollback(ctx)
+	update, err := tx.Exec(ctx, `
 		UPDATE canonical_assets
 		SET base_prompt = NULLIF($3, ''),
 		    consistency_prompt = NULLIF($4, ''),
@@ -139,130 +194,74 @@ func (s *Server) agentToolReviseCanonicalAssetPrompt(
 		    review_status = 'pending',
 		    manual_override = true,
 		    stale_state = CASE WHEN $7 THEN 'needs_regeneration' ELSE stale_state END,
+		    prompt_revision = prompt_revision + CASE WHEN $7 THEN 1 ELSE 0 END,
 		    metadata = COALESCE(metadata, '{}'::jsonb) || $8::jsonb,
 		    edited_by = $9,
 		    edited_at = now(),
 		    updated_at = now()
-		WHERE project_id = $1 AND id = $2
+		WHERE project_id = $1 AND id = $2 AND revision = $10
 	`, project.ID, asset.ID, stringValueFromAny(after["basePrompt"]), stringValueFromAny(after["consistencyPrompt"]),
-		stringValueFromAny(after["negativePrompt"]), status, len(changedFields) > 0, mustMarshal(metadata), principal.UserID); err != nil {
-		return agentToolError("asset.revise_prompt", args, err)
+		stringValueFromAny(after["negativePrompt"]), status, len(changedFields) > 0, mustMarshal(metadata), principal.UserID, asset.Revision)
+	if err != nil {
+		return assetPromptRevisionActionResult{}, err
+	}
+	if update.RowsAffected() != 1 {
+		var currentRevision int64
+		if err := tx.QueryRow(ctx, `SELECT revision FROM canonical_assets WHERE project_id = $1 AND id = $2`, project.ID, asset.ID).Scan(&currentRevision); err != nil {
+			return assetPromptRevisionActionResult{}, err
+		}
+		return assetPromptRevisionActionResult{}, revisionConflictError("ASSET_REVISION_CONFLICT", "资产已被其他操作修改", asset.Revision, currentRevision)
 	}
 	if len(changedFields) > 0 {
-		if err := production.MarkAssetDownstreamStale(r.Context(), tx, project.ID, asset.ID); err != nil {
-			return agentToolError("asset.revise_prompt", args, err)
+		if err := production.MarkAssetDownstreamStale(ctx, tx, project.ID, asset.ID); err != nil {
+			return assetPromptRevisionActionResult{}, err
 		}
-		if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
-			return agentToolError("asset.revise_prompt", args, err)
+		if err := production.MarkFinalVideoStale(ctx, tx, project.ID, ""); err != nil {
+			return assetPromptRevisionActionResult{}, err
 		}
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "agent.asset.prompt_revised", "canonical_asset", asset.ID, mustRawJSON(map[string]any{
-		"assetId":        asset.ID,
-		"assetName":      asset.Name,
-		"changedFields":  changedFields,
-		"providerCallId": gatewayResp.ProviderCallID,
-		"agentTaskId":    task.ID,
-		"agentStepId":    step.ID,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "agent.asset.prompt_revised", "canonical_asset", asset.ID, mustRawJSON(map[string]any{
+		"assetId": asset.ID, "assetName": asset.Name, "changedFields": changedFields,
+		"providerCallId": gatewayResp.ProviderCallID, "projectControlCommandId": command.ID,
+		"controllerType": command.ControllerType, "agentTaskId": command.AgentTaskID, "agentStepId": command.AgentStepID,
+		"idempotencyKey": command.IdempotencyKey,
 	})); err != nil {
-		return agentToolError("asset.revise_prompt", args, err)
+		return assetPromptRevisionActionResult{}, err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		return agentToolError("asset.revise_prompt", args, err)
+	if err := tx.Commit(ctx); err != nil {
+		return assetPromptRevisionActionResult{}, err
 	}
-	return agentToolOK("asset.revise_prompt", args, "已按用户要求修订资产提示词，并标记相关下游内容需要重新生成。", map[string]any{
-		"assetId":        asset.ID,
-		"assetName":      asset.Name,
-		"before":         before,
-		"after":          after,
-		"changedFields":  changedFields,
-		"providerCallId": gatewayResp.ProviderCallID,
-		"modelId":        gatewayResp.ModelID,
-		"agentTaskId":    task.ID,
-		"agentStepId":    step.ID,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})
+	return result, nil
 }
 
-func (s *Server) agentCanonicalAssetByReference(r *http.Request, projectID string, args map[string]any) (CanonicalAsset, error) {
-	if assetID := agentReferenceStringArg(args, "assetId"); assetID != "" {
-		return s.canonicalAsset(r, projectID, assetID)
+func assetPromptRevisionReplay(asset CanonicalAsset, commandID string) (assetPromptRevisionActionResult, bool) {
+	if strings.TrimSpace(commandID) == "" {
+		return assetPromptRevisionActionResult{}, false
 	}
-	assetName := strings.TrimSpace(agentStringArg(args, "assetName"))
-	if assetName == "" {
-		return CanonicalAsset{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "assetId or assetName is required")
+	effect := agentMapArg(rawObject(asset.Metadata), "projectControlEffect")
+	if stringValueFromAny(effect["commandId"]) != commandID || stringValueFromAny(effect["actionName"]) != "asset.revise_prompt" {
+		return assetPromptRevisionActionResult{}, false
 	}
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id::text
-		FROM canonical_assets
-		WHERE project_id = $1
-		  AND lower(name) = lower($2)
-		  AND COALESCE(status, 'draft') <> 'archived'
-		ORDER BY updated_at DESC, created_at DESC
-		LIMIT 2
-	`, projectID, assetName)
-	if err != nil {
-		return CanonicalAsset{}, err
-	}
-	defer rows.Close()
-	ids := make([]string, 0, 2)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return CanonicalAsset{}, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return CanonicalAsset{}, err
-	}
-	if len(ids) == 0 {
-		return CanonicalAsset{}, newAPIError(http.StatusNotFound, "ASSET_NOT_FOUND", "asset was not found by name")
-	}
-	if len(ids) > 1 {
-		return CanonicalAsset{}, newAPIError(http.StatusUnprocessableEntity, "AMBIGUOUS_ASSET_NAME", "multiple assets have this name; use assetId")
-	}
-	return s.canonicalAsset(r, projectID, ids[0])
-}
-
-func agentCanonicalAssetSnapshot(asset CanonicalAsset) map[string]any {
-	return map[string]any{
-		"id":                   asset.ID,
-		"assetType":            asset.AssetType,
-		"name":                 asset.Name,
-		"description":          asset.Description,
-		"profile":              rawObject(asset.Profile),
-		"basePrompt":           stringValue(asset.BasePrompt),
-		"consistencyPrompt":    stringValue(asset.ConsistencyPrompt),
-		"negativePrompt":       stringValue(asset.NegativePrompt),
-		"visualTraits":         rawObject(asset.VisualTraits),
-		"lockReference":        asset.LockReference,
-		"status":               asset.Status,
-		"reviewStatus":         asset.ReviewStatus,
-		"staleState":           asset.StaleState,
-		"manualOverride":       asset.ManualOverride,
-		"promptReady":          canonicalAssetPromptReady(asset),
-		"sceneCount":           asset.SceneCount,
-		"referenceCount":       asset.ReferenceCount,
-		"shotRequirementCount": asset.ShotRequirementCount,
-		"updatedAt":            asset.UpdatedAt,
-	}
+	return assetPromptRevisionActionResult{
+		AssetID: asset.ID, AssetName: asset.Name,
+		Before: agentMapArg(effect, "before"), After: agentMapArg(effect, "after"),
+		ChangedFields:  agentStringSliceArg(effect, "changedFields"),
+		ProviderCallID: stringValueFromAny(effect["providerCallId"]), ModelID: stringValueFromAny(effect["modelId"]),
+		CommandID: commandID, AgentTaskID: stringValueFromAny(effect["agentTaskId"]),
+		AgentStepID: stringValueFromAny(effect["agentStepId"]), IdempotencyKey: stringValueFromAny(effect["idempotencyKey"]),
+		IdempotentReplay: true,
+	}, true
 }
 
 func assetPromptSnapshot(asset CanonicalAsset) map[string]any {
 	return map[string]any{
-		"basePrompt":        stringValue(asset.BasePrompt),
-		"consistencyPrompt": stringValue(asset.ConsistencyPrompt),
-		"negativePrompt":    stringValue(asset.NegativePrompt),
+		"basePrompt": stringValue(asset.BasePrompt), "consistencyPrompt": stringValue(asset.ConsistencyPrompt),
+		"negativePrompt": stringValue(asset.NegativePrompt),
 	}
 }
 
 func normalizeAssetPromptRevisionFields(values []string) ([]string, map[string]bool, error) {
-	allowed := map[string]bool{
-		"basePrompt":        true,
-		"consistencyPrompt": true,
-		"negativePrompt":    true,
-	}
+	allowed := map[string]bool{"basePrompt": true, "consistencyPrompt": true, "negativePrompt": true}
 	if len(values) == 0 {
 		values = []string{"basePrompt", "consistencyPrompt", "negativePrompt"}
 	}

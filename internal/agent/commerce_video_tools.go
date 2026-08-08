@@ -15,6 +15,29 @@ func CommerceVideoTools() []AgentTool {
 	preserveSchema := arraySchema("必须保持不变的内容。", enumSchema("保持项。", []string{
 		"product_facts", "selling_points", "prohibited_claims", "language", "cta", "approximate_duration",
 	}))
+	productVersionMutationSchema := objectSchemaRequired(map[string]any{
+		"expectedRevision":  integerSchema("当前商品 revision。", 0, 1000000000),
+		"name":              stringSchema("商品名称。"),
+		"brand":             stringSchema("商品品牌。"),
+		"sellingPoints":     arraySchema("核心卖点。", stringSchema("卖点。")),
+		"immutableFeatures": freeformObjectSchema("不可改变的商品外观和事实特征。"),
+		"prohibitedClaims":  arraySchema("禁止使用的宣传说法。", stringSchema("禁止说法。")),
+		"metadata":          freeformObjectSchema("商品版本附加信息。"),
+	}, "name")
+	productRebuildImpactSchema := objectSchemaRequired(map[string]any{
+		"targetProductVersionId":  stringSchema("目标商品版本 ID。"),
+		"targetReferenceIds":      arraySchema("目标活动商品参考图 ID。", stringSchema("商品参考图 ID。")),
+		"expectedProductRevision": integerSchema("当前商品 revision。", 1, 1000000000),
+	}, "targetProductVersionId", "targetReferenceIds", "expectedProductRevision")
+	productReferenceSchema := objectSchemaRequired(map[string]any{
+		"referenceId":      stringSchema("商品参考图 ID。"),
+		"expectedRevision": integerSchema("当前参考图 revision。", 1, 1000000000),
+	}, "referenceId", "expectedRevision")
+	scriptUnitSelectionSchema := objectSchemaRequired(map[string]any{
+		"scriptUnitId":                scriptUnitID,
+		"stableOrdinal":               stableOrdinal,
+		"expectedScriptUnitsRevision": scriptUnitsRevision,
+	}, "expectedScriptUnitsRevision")
 	scriptReviseTool := writeTool(
 		"commerce.script.revise",
 		"按要求改写广告脚本",
@@ -33,27 +56,53 @@ func CommerceVideoTools() []AgentTool {
 		true,
 	)
 	scriptReviseTool.Effects.MaySpendProvider = true
+	attachmentAssignTool := writeTool("commerce.attachment.assign", "绑定助手图片", "把用户附加的图片绑定为商品公共参考图或指定广告脚本的自定义参考图。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+		"attachmentId":                stringSchema("任务约束中真实存在的助手图片附件 ID。"),
+		"scope":                       enumSchema("绑定用途。", []string{"product_common", "script_custom"}),
+		"scriptUnitId":                scriptUnitID,
+		"stableOrdinal":               stableOrdinal,
+		"expectedScriptUnitsRevision": scriptUnitsRevision,
+		"referenceRole": enumSchema("商品参考图角色。", []string{
+			"primary", "front", "back", "detail", "usage", "logo", "other",
+		}),
+		"setPrimary": booleanSchema("是否设为商品主图。"),
+	}, "attachmentId", "scope"), true)
+	exportAttachmentToMCP := false
+	attachmentAssignTool.ExportToMCP = &exportAttachmentToMCP
 	return []AgentTool{
 		readTool("commerce.project.read_summary", "带货项目摘要", "读取商品、活动参考图、广告脚本、脚本裂变批次和直生成视频任务摘要。", authz.PermissionProjectRead, emptyObjectSchema()),
 		readTool("commerce.product.get", "读取商品配置", "读取当前商品事实、版本和修订号。", authz.PermissionAssetRead, emptyObjectSchema()),
+		readTool("commerce.product.versions.list", "商品版本", "读取不可变商品事实版本历史。", authz.PermissionAssetRead, emptyObjectSchema()),
+		writeTool("commerce.product.version.create", "创建商品版本", "根据明确商品事实创建新的不可变商品版本，不自动切换现有生产代。", authz.PermissionAssetWrite, productVersionMutationSchema, true),
+		writeTool("commerce.product.rebuild_impact", "商品换版影响", "计算并暂存切换商品版本和参考图集合对现有广告脚本生产代的影响。", authz.PermissionAssetWrite, productRebuildImpactSchema, false),
+		destructiveTool("commerce.product.rebuild", "确认商品换版", "使用短期影响令牌切换商品版本和参考图集合，并归档受影响生产代。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+			"impactToken":             stringSchema("商品换版影响令牌。"),
+			"expectedProductRevision": integerSchema("当前商品 revision。", 1, 1000000000),
+		}, "impactToken", "expectedProductRevision")),
 		readTool("commerce.product.references.list", "商品参考图", "读取活动商品参考图、主图和修订号。", authz.PermissionAssetRead, objectSchema(map[string]any{
 			"status": enumSchema("状态筛选。", []string{"active", "archived", "all"}),
 		}, false)),
-		writeTool("commerce.attachment.assign", "绑定助手图片", "把用户附加的图片绑定为商品公共参考图或指定广告脚本的自定义参考图。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
-			"attachmentId":                stringSchema("任务约束中真实存在的助手图片附件 ID。"),
-			"scope":                       enumSchema("绑定用途。", []string{"product_common", "script_custom"}),
-			"scriptUnitId":                scriptUnitID,
-			"stableOrdinal":               stableOrdinal,
-			"expectedScriptUnitsRevision": scriptUnitsRevision,
-			"referenceRole": enumSchema("商品参考图角色。", []string{
+		destructiveTool("commerce.product.reference.archive", "归档商品参考图", "归档商品参考图但保留既有生产快照中的不可变引用。", authz.PermissionAssetWrite, productReferenceSchema),
+		writeTool("commerce.product.reference.set_primary", "设为商品主图", "把指定活动商品参考图设为主图。", authz.PermissionAssetWrite, productReferenceSchema, true),
+		writeTool("commerce.product.reference.update", "修改商品参考图", "修改商品参考图角色、排序或主图状态。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+			"referenceId":      stringSchema("商品参考图 ID。"),
+			"expectedRevision": integerSchema("当前参考图 revision。", 1, 1000000000),
+			"referenceRole": enumSchema("参考图角色。", []string{
 				"primary", "front", "back", "detail", "usage", "logo", "other",
 			}),
+			"ordinal":    integerSchema("参考图顺序。", 0, 1000000),
 			"setPrimary": booleanSchema("是否设为商品主图。"),
-		}, "attachmentId", "scope"), true),
-		writeTool("commerce.product.update", "修改商品配置", "修改当前商品事实，并遵守商品 revision 并发控制。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
-			"expectedRevision": integerSchema("当前商品 revision。", 1, 1000000000),
-			"patch":            freeformObjectSchema("商品字段补丁。"),
-		}, "expectedRevision", "patch"), true),
+		}, "referenceId", "expectedRevision"), true),
+		attachmentAssignTool,
+		writeTool("commerce.product.update", "修改商品配置", "基于当前商品事实创建新的不可变版本，并遵守商品 revision 并发控制。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+			"expectedRevision":  integerSchema("当前商品 revision。", 1, 1000000000),
+			"name":              stringSchema("商品名称。"),
+			"brand":             stringSchema("商品品牌。"),
+			"sellingPoints":     arraySchema("核心卖点。", stringSchema("卖点。")),
+			"immutableFeatures": freeformObjectSchema("不可改变的商品外观和事实特征。"),
+			"prohibitedClaims":  arraySchema("禁止使用的宣传说法。", stringSchema("禁止说法。")),
+			"metadata":          freeformObjectSchema("商品版本附加信息。"),
+		}, "expectedRevision"), true),
 		readTool("commerce.script.list", "列出广告脚本", "按稳定排序列出活动广告脚本和当前正文摘要。", authz.PermissionScriptRead, objectSchema(map[string]any{
 			"status": enumSchema("状态筛选。", []string{"active", "archived", "all"}),
 			"cursor": stringSchema("分页游标。"),
@@ -74,13 +123,65 @@ func CommerceVideoTools() []AgentTool {
 			"targetDurationSeconds":       integerSchema("目标视频秒数。", 1, 3600),
 			"targetPlatform":              stringSchema("目标平台。"),
 		}, "expectedScriptUnitsRevision", "title", "content", "languageMode", "targetDurationSeconds", "targetPlatform"), true),
-		writeTool("commerce.script.update", "修改广告脚本", "使用用户提供的完整替换正文或精确字段补丁更新广告脚本；自然语言改写应使用 commerce.script.revise。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
+		writeTool("commerce.script.defaults.update", "修改广告脚本默认值", "修改项目中新建广告脚本使用的时长、平台和语言默认值。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
+			"expectedRevision":      integerSchema("当前默认配置 revision。", 1, 1000000000),
+			"targetDurationSeconds": integerSchema("默认目标秒数。", 1, 3600),
+			"targetPlatform":        stringSchema("默认目标平台。"),
+			"languageMode":          enumSchema("语言模式。", []string{"auto", "explicit"}),
+			"targetLanguage":        stringSchema("显式语言的 BCP-47 标记。"),
+		}, "expectedRevision", "targetDurationSeconds", "targetPlatform", "languageMode"), true),
+		writeTool("commerce.script.duplicate", "复制广告脚本", "复制指定广告脚本为独立可编辑脚本，不覆盖源脚本。", authz.PermissionScriptWrite, scriptUnitSelectionSchema, true),
+		writeTool("commerce.script.create_language_variant", "创建多语言脚本", "基于指定广告脚本创建独立的 BCP-47 目标语言版本。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
+			"scriptUnitId":                scriptUnitID,
+			"stableOrdinal":               stableOrdinal,
+			"expectedScriptUnitsRevision": scriptUnitsRevision,
+			"targetLanguage":              stringSchema("目标语言 BCP-47 标记。"),
+		}, "expectedScriptUnitsRevision", "targetLanguage"), true),
+		writeTool("commerce.script.reorder", "调整广告脚本顺序", "使用脚本集合 revision 原子更新全部活动广告脚本排序。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
+			"expectedScriptUnitsRevision": scriptUnitsRevision,
+			"items": arraySchema("新的完整排序。", objectSchemaRequired(map[string]any{
+				"scriptUnitId": stringSchema("广告脚本 ID。"),
+				"sortOrder":    integerSchema("从 1 开始的排序值。", 1, 1000000),
+			}, "scriptUnitId", "sortOrder")),
+		}, "expectedScriptUnitsRevision", "items"), true),
+		draftTool("commerce.script.rebuild_impact", "广告脚本换代影响", "计算并暂存切换脚本版本、语言、时长、平台或生成方式的影响，返回短期令牌。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
 			"scriptUnitId":                scriptUnitID,
 			"stableOrdinal":               stableOrdinal,
 			"expectedScriptUnitsRevision": scriptUnitsRevision,
 			"expectedRevision":            integerSchema("当前脚本 revision。", 1, 1000000000),
-			"patch":                       freeformObjectSchema("脚本字段补丁。"),
-		}, "expectedRevision", "patch"), true),
+			"targetSourceScriptVersionId": stringSchema("目标脚本版本 ID。"),
+			"targetLanguageMode":          enumSchema("语言模式。", []string{"auto", "explicit"}),
+			"targetLanguage":              stringSchema("显式目标语言 BCP-47 标记。"),
+			"targetDurationSeconds":       integerSchema("目标秒数。", 1, 3600),
+			"targetPlatform":              stringSchema("目标平台。"),
+			"targetStoryboardStrategy":    enumSchema("生成策略。", []string{"smart", "single_take"}),
+		}, "expectedScriptUnitsRevision", "expectedRevision", "targetSourceScriptVersionId", "targetLanguageMode", "targetDurationSeconds", "targetPlatform", "targetStoryboardStrategy"), false),
+		childWorkflowTool("commerce.script.rebuild", "确认广告脚本换代", "使用影响令牌原子创建新的广告脚本生产代，旧生产代在新代就绪前保持可用。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
+			"scriptUnitId":                scriptUnitID,
+			"stableOrdinal":               stableOrdinal,
+			"expectedScriptUnitsRevision": scriptUnitsRevision,
+			"expectedRevision":            integerSchema("当前脚本 revision。", 1, 1000000000),
+			"impactToken":                 stringSchema("影响分析返回的令牌。"),
+		}, "expectedScriptUnitsRevision", "expectedRevision", "impactToken")),
+		destructiveTool("commerce.script.reference.archive", "移除广告脚本参考图", "归档广告脚本自定义参考图，不影响商品公共参考图。", authz.PermissionAssetWrite, objectSchemaRequired(map[string]any{
+			"scriptUnitId":                scriptUnitID,
+			"stableOrdinal":               stableOrdinal,
+			"expectedScriptUnitsRevision": scriptUnitsRevision,
+			"referenceId":                 stringSchema("脚本参考图 ID。"),
+			"expectedRevision":            integerSchema("当前参考图 revision。", 1, 1000000000),
+		}, "expectedScriptUnitsRevision", "referenceId", "expectedRevision")),
+		writeTool("commerce.script.update", "修改广告脚本", "使用用户提供的完整替换正文或精确字段更新广告脚本；自然语言改写应使用 commerce.script.revise。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
+			"scriptUnitId":                scriptUnitID,
+			"stableOrdinal":               stableOrdinal,
+			"expectedScriptUnitsRevision": scriptUnitsRevision,
+			"expectedRevision":            integerSchema("当前脚本 revision。", 1, 1000000000),
+			"title":                       stringSchema("脚本标题。"),
+			"draftContent":                stringSchema("完整替换正文。"),
+			"languageMode":                enumSchema("语言模式。", []string{"auto", "explicit"}),
+			"explicitTargetLanguage":      stringSchema("显式目标语言 BCP-47 标记。"),
+			"targetDurationSeconds":       integerSchema("目标视频秒数。", 1, 3600),
+			"targetPlatform":              stringSchema("目标平台。"),
+		}, "expectedRevision"), true),
 		destructiveTool("commerce.script.archive", "归档广告脚本", "归档广告脚本，保留历史生产溯源。", authz.PermissionScriptWrite, objectSchemaRequired(map[string]any{
 			"scriptUnitId":                scriptUnitID,
 			"stableOrdinal":               stableOrdinal,

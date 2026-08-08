@@ -208,9 +208,9 @@ func assertAPIErrorCode(t *testing.T, handler http.Handler, method, path, token,
 	}
 }
 
-func doAPISuccess[T any](t *testing.T, handler http.Handler, method, path, token, orgID string, body any, target *T) {
+func doAPISuccess[T any](t *testing.T, handler http.Handler, method, path, token, orgID string, body any, target *T, headerSets ...map[string]string) {
 	t.Helper()
-	recorder := doAPIRequest(t, handler, method, path, token, orgID, body)
+	recorder := doAPIRequest(t, handler, method, path, token, orgID, body, headerSets...)
 	if recorder.Code < 200 || recorder.Code >= 300 {
 		t.Fatalf("%s %s status = %d body=%s", method, path, recorder.Code, recorder.Body.String())
 	}
@@ -223,7 +223,7 @@ func doAPISuccess[T any](t *testing.T, handler http.Handler, method, path, token
 	*target = envelope.Data
 }
 
-func doAPIRequest(t *testing.T, handler http.Handler, method, path, token, orgID string, body any) *httptest.ResponseRecorder {
+func doAPIRequest(t *testing.T, handler http.Handler, method, path, token, orgID string, body any, headerSets ...map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	var requestBody *bytes.Reader
 	if body == nil {
@@ -241,6 +241,11 @@ func doAPIRequest(t *testing.T, handler http.Handler, method, path, token, orgID
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Organization-Id", orgID)
+	for _, headers := range headerSets {
+		for name, value := range headers {
+			req.Header.Set(name, value)
+		}
+	}
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	return recorder

@@ -1,6 +1,9 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,5 +49,57 @@ func TestSourceTitleSortRankSupportsChineseVolumeTitles(t *testing.T) {
 		if got := sourceTitleSortRank(title); got != want {
 			t.Fatalf("sourceTitleSortRank(%q) = %d, want %d", title, got, want)
 		}
+	}
+}
+
+func TestSourceActionPageCursorRoundTrip(t *testing.T) {
+	encoded, err := encodeProjectControlOffsetCursor(37)
+	if err != nil {
+		t.Fatalf("encode source cursor: %v", err)
+	}
+	offset, err := decodeProjectControlOffsetCursor(encoded)
+	if err != nil {
+		t.Fatalf("decode source cursor: %v", err)
+	}
+	if offset != 37 {
+		t.Fatalf("offset = %d, want 37", offset)
+	}
+	if _, err := decodeProjectControlOffsetCursor("not-a-cursor"); err == nil {
+		t.Fatal("invalid source cursor was accepted")
+	}
+}
+
+func TestSourceListAgentResultIncludesRevisionAndCursor(t *testing.T) {
+	page := sourceListActionPage{
+		Items: []sourceActionSummary{{
+			ID: "source-1", Title: "第一卷", SourceType: "novel",
+			Revision: 7, ContentRevision: 3, ContentHash: "hash",
+		}},
+		Limit: 20, NextCursor: "cursor-2",
+	}
+	result := sourceListAgentResult(map[string]any{"limit": 20}, page)
+	if result.Status != "succeeded" || result.Data["nextCursor"] != "cursor-2" {
+		t.Fatalf("result = %+v", result)
+	}
+	items, ok := result.Data["items"].([]sourceActionSummary)
+	if !ok || len(items) != 1 || items[0].Revision != 7 || items[0].ContentRevision != 3 {
+		t.Fatalf("items = %#v", result.Data["items"])
+	}
+}
+
+func TestDecodeSourceCreateActionRequiresStagingForLargeContent(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"sourceType": "novel", "title": "长篇", "content": strings.Repeat("a", sourceCreateMaximumInlineBytes+1),
+	})
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+	_, err = decodeSourceCreateActionInput(payload)
+	if err == nil {
+		t.Fatal("oversized source.create content was accepted")
+	}
+	var appErr apiError
+	if !errors.As(err, &appErr) || appErr.Code != "CONTENT_STAGING_REQUIRED" {
+		t.Fatalf("error = %v", err)
 	}
 }

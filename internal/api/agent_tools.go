@@ -1,19 +1,16 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/provider"
-	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -64,8 +61,8 @@ func buildScriptAgentToolPrompt(project Project, messages []AgentMessage) string
 	builder.WriteString(fmt.Sprintf("- 视频比例：%s\n", project.VideoRatio))
 	builder.WriteString("\n可用工具：\n")
 	builder.WriteString("- get_project_status：读取生产状态、阶段进度和下一步动作。\n")
-	builder.WriteString("- list_sources：按阅读顺序列出原文/剧本来源摘要，返回 firstVolumeIndex。参数：limit。\n")
-	builder.WriteString("- list_source_chapters：列出小说分集/章节摘要，返回 volumeIndex 和 sectionIndex。参数：sourceId, limit, offset。\n")
+	builder.WriteString("- list_sources：按阅读顺序分页列出原文/剧本来源摘要，返回稳定 ID、revision 和 nextCursor。参数：status, limit, cursor。\n")
+	builder.WriteString("- list_source_chapters：列出指定小说来源的分集/章节摘要，返回 sourceRevision、volumeIndex、sectionIndex 和 nextCursor。必须提供 sourceId；参数：sourceId, limit, cursor。\n")
 	builder.WriteString("- list_events：列出事件摘要。参数：sourceId, chapterId, limit。\n")
 	builder.WriteString("- list_scripts：列出剧本摘要。参数：limit。\n")
 	builder.WriteString("- list_assets：列出资产摘要。参数：limit。\n")
@@ -286,123 +283,43 @@ func (s *Server) agentToolProjectStatus(r *http.Request, principal auth.Principa
 	if err := s.authorizer.Authorize(r.Context(), principal, authz.PermissionProjectRead, authz.Resource{ProjectID: project.ID}); err != nil {
 		return agentToolError("get_project_status", args, err)
 	}
-	status, err := s.productionStatus(r, project)
+	status, err := s.readProjectSummaryAction(r.Context(), project)
 	if err != nil {
 		return agentToolError("get_project_status", args, err)
 	}
-	gapSummary, err := s.agentProjectGapSummary(r.Context(), project, status)
-	if err != nil {
-		return agentToolError("get_project_status", args, err)
-	}
-	summary := gapSummary.Summary
-	if strings.TrimSpace(summary) == "" {
-		summary = fmt.Sprintf("当前阶段 %s，状态 %s，进度 %d%%。", status.Overall.Stage, status.Overall.Status, status.Overall.Progress)
-	}
-	return agentToolOK("get_project_status", args, summary, map[string]any{
-		"productionStatus":  status,
-		"projectGapSummary": gapSummary,
-	})
+	result := projectSummaryAgentResult(args, status)
+	result.Name = "get_project_status"
+	return result
 }
 
 func (s *Server) agentToolListSources(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
 	if err := s.authorizer.Authorize(r.Context(), principal, authz.PermissionSourceRead, authz.Resource{ProjectID: project.ID}); err != nil {
 		return agentToolError("list_sources", args, err)
 	}
-	limit := agentIntArg(args, "limit", 20, 1, 100)
-	sources, err := s.projectSourceList(r, project.ID, "active")
+	page, err := s.listProjectSourcesAction(r.Context(), project, sourceListActionInput{
+		Limit:  agentIntArg(args, "limit", 20, 1, sourceActionMaximumPageSize),
+		Cursor: agentStringArg(args, "cursor"),
+		Status: agentStringArg(args, "status"),
+	})
 	if err != nil {
 		return agentToolError("list_sources", args, err)
 	}
-	if len(sources) > limit {
-		sources = sources[:limit]
-	}
-	items := make([]map[string]any, 0)
-	for _, source := range sources {
-		item := map[string]any{
-			"id":            source.ID,
-			"sourceType":    source.SourceType,
-			"title":         source.Title,
-			"contentFormat": source.ContentFormat,
-			"status":        source.Status,
-			"chapterCount":  source.ChapterCount,
-			"createdAt":     source.CreatedAt,
-			"updatedAt":     source.UpdatedAt,
-		}
-		if source.FirstVolumeIndex > 0 {
-			item["firstVolumeIndex"] = source.FirstVolumeIndex
-		}
-		items = append(items, item)
-	}
-	return agentToolOK("list_sources", args, fmt.Sprintf("找到 %d 个原文/来源。", len(items)), map[string]any{"items": items})
+	return sourceListAgentResult(args, page)
 }
 
 func (s *Server) agentToolListSourceChapters(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
 	if err := s.authorizer.Authorize(r.Context(), principal, authz.PermissionSourceRead, authz.Resource{ProjectID: project.ID}); err != nil {
 		return agentToolError("list_source_chapters", args, err)
 	}
-	sourceID := agentReferenceStringArg(args, "sourceId")
-	if sourceID == "" {
-		resolved, err := s.activeProductionSourceID(r, project.ID, "")
-		if err != nil {
-			return agentToolError("list_source_chapters", args, err)
-		}
-		sourceID = resolved
-	}
-	if sourceID == "" {
-		return agentToolError("list_source_chapters", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceId is required when the project has no source"))
-	}
-	source, err := s.projectSource(r, project.ID, sourceID)
-	if err != nil {
-		return agentToolError("list_source_chapters", args, err)
-	}
-	if source.SourceType != "novel" {
-		return agentToolError("list_source_chapters", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "sourceType must be novel"))
-	}
-	limit := agentIntArg(args, "limit", 50, 1, 200)
-	offset := agentIntArg(args, "offset", 0, 0, 100000)
-	rows, err := s.db.Query(r.Context(), `
-		WITH event_counts AS (
-			SELECT chapter_id,
-			       count(*) AS event_count,
-			       count(*) FILTER (WHERE review_status = 'approved') AS approved_event_count,
-			       count(*) FILTER (WHERE review_status <> 'approved') AS pending_event_review_count
-			FROM novel_events
-			WHERE project_id = $1
-			GROUP BY chapter_id
-		)
-		SELECT c.id, c.source_id, c.chapter_index, c.volume_index, c.section_index, c.volume_title, c.chapter_title,
-		       char_length(c.content), c.event_state, c.event_summary, c.error_message,
-		       c.created_at, c.updated_at,
-		       COALESCE(ec.event_count, 0),
-		       COALESCE(ec.approved_event_count, 0),
-		       COALESCE(ec.pending_event_review_count, 0)
-		FROM novel_chapters c
-		LEFT JOIN event_counts ec ON ec.chapter_id = c.id
-		WHERE c.project_id = $1 AND c.source_id = $2
-		ORDER BY COALESCE(c.volume_index, 0) ASC, COALESCE(c.section_index, c.chapter_index) ASC, c.chapter_index ASC
-		LIMIT $3 OFFSET $4
-	`, project.ID, sourceID, limit, offset)
-	if err != nil {
-		return agentToolError("list_source_chapters", args, err)
-	}
-	defer rows.Close()
-	items := make([]NovelChapterSummary, 0)
-	for rows.Next() {
-		item, err := scanNovelChapterSummary(rows)
-		if err != nil {
-			return agentToolError("list_source_chapters", args, err)
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return agentToolError("list_source_chapters", args, err)
-	}
-	return agentToolOK("list_source_chapters", args, fmt.Sprintf("来源《%s》返回 %d 个分集/章节。", source.Title, len(items)), map[string]any{
-		"sourceId": sourceID,
-		"items":    items,
-		"limit":    limit,
-		"offset":   offset,
+	page, err := s.listSourceChaptersAction(r.Context(), project, sourceListChaptersActionInput{
+		SourceID: agentReferenceStringArg(args, "sourceId"),
+		Limit:    agentIntArg(args, "limit", 20, 1, sourceActionMaximumPageSize),
+		Cursor:   agentStringArg(args, "cursor"),
 	})
+	if err != nil {
+		return agentToolError("list_source_chapters", args, err)
+	}
+	return sourceListChaptersAgentResult(args, page)
 }
 
 func (s *Server) agentToolListEvents(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
@@ -457,147 +374,72 @@ func (s *Server) agentToolListScripts(r *http.Request, principal auth.Principal,
 	if err := s.authorizer.Authorize(r.Context(), principal, authz.PermissionScriptRead, authz.Resource{ProjectID: project.ID}); err != nil {
 		return agentToolError("list_scripts", args, err)
 	}
-	limit := agentIntArg(args, "limit", 20, 1, 100)
-	rows, err := s.db.Query(r.Context(), `
-		SELECT s.id::text, s.title, s.status, s.current_version_id::text,
-		       COALESCE(sv.version, 0), COALESCE(char_length(sv.content), 0),
-		       s.id = p.active_script_id, s.created_at, s.updated_at
-		FROM scripts s
-		JOIN projects p ON p.id = s.project_id
-		LEFT JOIN script_versions sv ON sv.id = s.current_version_id
-		WHERE s.project_id = $1 AND COALESCE(s.status, 'active') <> 'archived'
-		ORDER BY CASE WHEN s.id = p.active_script_id THEN 0 ELSE 1 END,
-		         CASE WHEN s.status = 'active' THEN 0 ELSE 1 END,
-		         s.updated_at DESC, s.created_at DESC
-		LIMIT $2
-	`, project.ID, limit)
+	page, err := s.listScriptsAction(r.Context(), project, scriptListActionInput{
+		Status: agentStringArg(args, "status"),
+		Limit:  agentIntArg(args, "limit", 20, 1, scriptActionMaximumPageSize),
+		Cursor: agentStringArg(args, "cursor"),
+	})
 	if err != nil {
 		return agentToolError("list_scripts", args, err)
 	}
-	defer rows.Close()
-	items := make([]map[string]any, 0)
-	for rows.Next() {
-		var id, title, status string
-		var versionID sql.NullString
-		var version, contentLength int
-		var isCurrent bool
-		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &title, &status, &versionID, &version, &contentLength, &isCurrent, &createdAt, &updatedAt); err != nil {
-			return agentToolError("list_scripts", args, err)
-		}
-		items = append(items, map[string]any{
-			"id":               id,
-			"title":            title,
-			"status":           status,
-			"currentVersionId": stringPtrFromNull(versionID),
-			"version":          version,
-			"contentLength":    contentLength,
-			"isCurrent":        isCurrent,
-			"createdAt":        createdAt,
-			"updatedAt":        updatedAt,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return agentToolError("list_scripts", args, err)
-	}
-	return agentToolOK("list_scripts", args, fmt.Sprintf("找到 %d 个剧本。", len(items)), map[string]any{"items": items})
+	return scriptListAgentResult(args, page)
 }
 
 func (s *Server) agentToolListAssets(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
 	if err := s.authorizer.Authorize(r.Context(), principal, authz.PermissionAssetRead, authz.Resource{ProjectID: project.ID}); err != nil {
 		return agentToolError("list_assets", args, err)
 	}
-	limit := agentIntArg(args, "limit", 30, 1, 100)
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id::text, asset_type, name, description, status, review_status, stale_state, updated_at
-		FROM canonical_assets
-		WHERE project_id = $1
-		ORDER BY updated_at DESC, created_at DESC
-		LIMIT $2
-	`, project.ID, limit)
+	input := assetListActionInput{
+		AssetType:    agentStringArg(args, "assetType"),
+		Status:       agentStringArg(args, "status"),
+		ReviewStatus: agentStringArg(args, "reviewStatus"),
+		StaleState:   agentStringArg(args, "staleState"),
+		Limit:        agentIntArg(args, "limit", 30, 1, assetActionMaximumPageSize),
+		Cursor:       agentStringArg(args, "cursor"),
+	}
+	if value, exists := args["promptReady"].(bool); exists {
+		input.PromptReady = &value
+	}
+	page, err := s.listCanonicalAssetsAction(r.Context(), project, input)
 	if err != nil {
 		return agentToolError("list_assets", args, err)
 	}
-	defer rows.Close()
-	items := make([]map[string]any, 0)
-	for rows.Next() {
-		var id, assetType, name, description, status, reviewStatus, staleState string
-		var updatedAt time.Time
-		if err := rows.Scan(&id, &assetType, &name, &description, &status, &reviewStatus, &staleState, &updatedAt); err != nil {
-			return agentToolError("list_assets", args, err)
-		}
-		items = append(items, map[string]any{
-			"id":           id,
-			"assetType":    assetType,
-			"name":         name,
-			"description":  description,
-			"status":       status,
-			"reviewStatus": reviewStatus,
-			"staleState":   staleState,
-			"updatedAt":    updatedAt,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return agentToolError("list_assets", args, err)
-	}
-	return agentToolOK("list_assets", args, fmt.Sprintf("找到 %d 个资产。", len(items)), map[string]any{"items": items})
+	return assetListAgentResult(args, page)
 }
 
 func (s *Server) agentToolListStoryboardShots(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
 	if err := s.authorizer.Authorize(r.Context(), principal, authz.PermissionProjectRead, authz.Resource{ProjectID: project.ID}); err != nil {
 		return agentToolError("list_storyboard_shots", args, err)
 	}
-	limit := agentIntArg(args, "limit", 50, 1, 200)
-	rows, err := s.db.Query(r.Context(), storyboardShotSelectSQL(`
-		WHERE s.project_id = $1
-		  AND s.deleted_at IS NULL
-		ORDER BY s.shot_index ASC
-		LIMIT $2
-	`), project.ID, limit)
+	page, err := s.listStoryboardShotsAction(r.Context(), project, storyboardListActionInput{
+		ScriptEpisodeID: agentReferenceStringArg(args, "scriptEpisodeId"),
+		WorkflowRunID:   agentReferenceStringArg(args, "workflowRunId"),
+		Limit:           agentIntArg(args, "limit", 50, 1, projectOperationalReadMaximumPageSize),
+		Cursor:          agentStringArg(args, "cursor"),
+	})
 	if err != nil {
 		return agentToolError("list_storyboard_shots", args, err)
 	}
-	defer rows.Close()
-	items := make([]StoryboardShot, 0)
-	for rows.Next() {
-		item, err := scanStoryboardShot(rows)
-		if err != nil {
-			return agentToolError("list_storyboard_shots", args, err)
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return agentToolError("list_storyboard_shots", args, err)
-	}
-	return agentToolOK("list_storyboard_shots", args, fmt.Sprintf("找到 %d 个分镜镜头。", len(items)), map[string]any{"items": items})
+	result := storyboardListAgentResult(args, page)
+	result.Name = "list_storyboard_shots"
+	return result
 }
 
 func (s *Server) agentToolListWorkflowRuns(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
 	if err := s.authorizer.Authorize(r.Context(), principal, authz.PermissionWorkflowRead, authz.Resource{ProjectID: project.ID}); err != nil {
 		return agentToolError("list_workflow_runs", args, err)
 	}
-	limit := agentIntArg(args, "limit", 20, 1, 100)
-	rows, err := s.db.Query(r.Context(), workflowRunSelectSQL(`
-		WHERE project_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2
-	`), project.ID, limit)
+	page, err := s.listProjectWorkflowRunsAction(r.Context(), project, workflowRunListActionInput{
+		Status: agentStringArg(args, "status"),
+		Limit:  agentIntArg(args, "limit", 20, 1, 100),
+		Cursor: agentStringArg(args, "cursor"),
+	})
 	if err != nil {
 		return agentToolError("list_workflow_runs", args, err)
 	}
-	defer rows.Close()
-	items := make([]WorkflowRun, 0)
-	for rows.Next() {
-		item, err := scanWorkflowRun(rows)
-		if err != nil {
-			return agentToolError("list_workflow_runs", args, err)
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return agentToolError("list_workflow_runs", args, err)
-	}
-	return agentToolOK("list_workflow_runs", args, fmt.Sprintf("找到 %d 个最近工作流。", len(items)), map[string]any{"items": items})
+	result := workflowRunListAgentResult(args, page)
+	result.Name = "list_workflow_runs"
+	return result
 }
 
 func (s *Server) agentToolStartProductionAction(r *http.Request, principal auth.Principal, project Project, userMessage AgentMessage, args map[string]any) agentToolResult {
@@ -677,26 +519,16 @@ func (s *Server) agentToolCancelWorkflow(r *http.Request, principal auth.Princip
 	if err != nil {
 		return agentToolError("cancel_workflow", args, err)
 	}
-	if isTerminalWorkflowStatus(item.Status) {
-		return agentToolOK("cancel_workflow", args, fmt.Sprintf("工作流 %s 已是终态 %s。", item.ID, item.Status), map[string]any{"workflowRun": item})
-	}
 	reason := agentStringArg(args, "reason")
 	if reason == "" {
-		reason = "AI assistant requested cancellation"
+		reason = "项目助手请求取消工作流"
 	}
-	if err := workflows.MarkWorkflowCancelling(r.Context(), s.db, item.ID, reason); err != nil {
-		return agentToolError("cancel_workflow", args, err)
-	}
-	if s.temporal != nil {
-		if err := s.temporal.CancelWorkflow(r.Context(), item.TemporalWorkflowID, ""); err != nil {
-			_ = s.insertWorkflowCancelWarning(r.Context(), item, reason, err)
-		}
-	}
-	updated, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
-		WHERE id = $1
-	`), item.ID))
+	updated, err := s.cancelWorkflowRunItem(r.Context(), item, reason)
 	if err != nil {
 		return agentToolError("cancel_workflow", args, err)
+	}
+	if isTerminalWorkflowStatus(item.Status) {
+		return agentToolOK("cancel_workflow", args, fmt.Sprintf("工作流 %s 已是终态 %s。", updated.ID, updated.Status), map[string]any{"workflowRun": updated})
 	}
 	return agentToolOK("cancel_workflow", args, fmt.Sprintf("已请求取消工作流 %s。", updated.ID), map[string]any{"workflowRun": updated})
 }
@@ -1181,6 +1013,11 @@ func agentBoolArg(args map[string]any, key string) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+func agentBoolArgValue(args map[string]any, key string) bool {
+	value, _ := agentBoolArg(args, key)
+	return value
 }
 
 func scriptAgentToolResultsSummary(results []agentToolResult) []map[string]any {

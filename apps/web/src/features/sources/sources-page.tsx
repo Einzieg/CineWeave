@@ -134,13 +134,14 @@ export function SourcesPage({
     key: qk.scripts(projectId),
     queryFn: (session) => studioApi.listScripts(session, projectId).then(r => r.items || []),
   });
-  const { data: workflowRuns = [] } = useApiQuery({
+  const { data: workflowRunPage } = useApiQuery({
     key: qk.workflowRuns(projectId, { status: "active", limit: 100 }),
-    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "active", limit: 100 }).then((response) => response.items || []),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "active", limit: 100 }),
     enabled: visibleTab === "scripts",
     refetchInterval: (query) =>
-      pollingFallback && query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
+      pollingFallback && query.state.data?.items.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
   });
+  const workflowRuns = useMemo(() => workflowRunPage?.items ?? [], [workflowRunPage]);
 
   const { data: chapters = [], isLoading: chaptersLoading } = useApiQuery({
     key: qk.sourceChapters(projectId, effectiveSourceId),
@@ -342,8 +343,8 @@ export function SourcesPage({
   });
 
   const updatePlanMutation = useApiMutation({
-    mutationFn: (session, data: { planId: string; body: JsonRecord }) =>
-      studioApi.updateAdaptationPlan(session, projectId, data.planId, data.body),
+    mutationFn: (session, data: { planId: string; body: JsonRecord; idempotencyKey: string }) =>
+      studioApi.updateAdaptationPlan(session, projectId, data.planId, data.body, data.idempotencyKey),
     onSuccess: (plan) => {
       toast.success("改编计划已保存");
       setSelectedPlanId(plan.id);
@@ -361,7 +362,8 @@ export function SourcesPage({
   });
 
   const activatePlanMutation = useApiMutation({
-    mutationFn: (session, planId: string) => studioApi.activateAdaptationPlan(session, projectId, planId),
+    mutationFn: (session, data: { planId: string; expectedRevision: number; idempotencyKey: string }) =>
+      studioApi.activateAdaptationPlan(session, projectId, data.planId, data.expectedRevision, data.idempotencyKey),
     onSuccess: (plan) => {
       toast.success("改编计划已激活");
       setSelectedPlanId(plan.id);
@@ -421,8 +423,8 @@ export function SourcesPage({
   });
 
   const updateScriptEpisodeMutation = useApiMutation({
-    mutationFn: (session, data: { episodeId: string; body: JsonRecord }) =>
-      studioApi.updateScriptEpisode(session, projectId, data.episodeId, data.body),
+	mutationFn: (session, data: { episodeId: string; body: JsonRecord; idempotencyKey: string }) =>
+	  studioApi.updateScriptEpisode(session, projectId, data.episodeId, data.body, data.idempotencyKey),
     onSuccess: (episode) => {
       toast.success("分集已保存");
       setSelectedScriptEpisodeId(episode.id);
@@ -459,14 +461,19 @@ export function SourcesPage({
       if (!importContent.trim()) {
         throw new Error("请填写正文或选择文件");
       }
-      return studioApi.createSource(session, projectId, {
-        sourceType: importSourceType,
-        title,
-        content: importContent,
-        contentFormat: "plain_text",
-        splitChapters,
-        createScript,
-      });
+      return studioApi.createSource(
+        session,
+        projectId,
+        {
+          sourceType: importSourceType,
+          title,
+          content: importContent,
+          contentFormat: "plain_text",
+          splitChapters,
+          createScript,
+        },
+        `source-create-${projectId}-${crypto.randomUUID()}`,
+      );
     },
     onSuccess: (response) => {
       toast.success("内容已添加");
@@ -497,8 +504,8 @@ export function SourcesPage({
   });
 
   const updateSourceMutation = useApiMutation({
-    mutationFn: (session, data: { sourceId: string; body: JsonRecord }) =>
-      studioApi.updateSource(session, projectId, data.sourceId, data.body),
+    mutationFn: (session, data: { sourceId: string; body: JsonRecord; idempotencyKey: string }) =>
+      studioApi.updateSource(session, projectId, data.sourceId, data.body, data.idempotencyKey),
     onSuccess: (source) => {
       toast.success("原文已保存");
       setSelectedSourceId(source.id);
@@ -518,10 +525,16 @@ export function SourcesPage({
   });
 
   const deleteSourceMutation = useApiMutation({
-    mutationFn: (session, sourceId: string) => studioApi.deleteSource(session, projectId, sourceId),
-    onSuccess: (_result, sourceId) => {
+    mutationFn: (session, source: ProjectSource) => studioApi.deleteSource(
+      session,
+      projectId,
+      source.id,
+      source.revision,
+      `source-delete-${source.id}-${source.revision}-${crypto.randomUUID()}`,
+    ),
+    onSuccess: (_result, source) => {
       toast.success("原文已归档");
-      if (selectedSourceId === sourceId) {
+      if (selectedSourceId === source.id) {
         setSelectedSourceId(null);
         setSelectedChapterId(null);
         setSelectedChapterIds([]);
@@ -529,8 +542,8 @@ export function SourcesPage({
       setSourceToDelete(null);
       invalidate([
         qk.sources(projectId),
-        qk.sourceImpact(projectId, sourceId),
-        qk.sourceEvents(projectId, sourceId),
+        qk.sourceImpact(projectId, source.id),
+        qk.sourceEvents(projectId, source.id),
         qk.scripts(projectId),
         qk.productionStatus(projectId),
         qk.project(projectId),
@@ -562,7 +575,9 @@ export function SourcesPage({
     }
     updateSourceMutation.mutate({
       sourceId: editingSource.id,
+      idempotencyKey: `source-update-${editingSource.id}-${crypto.randomUUID()}`,
       body: {
+        expectedRevision: editingSource.revision,
         title: sourceEditForm.title.trim(),
         sourceType: sourceEditForm.sourceType,
         contentFormat: sourceEditForm.contentFormat,
@@ -629,6 +644,7 @@ export function SourcesPage({
     updatePlanMutation.mutate({
       planId: selectedPlan.id,
       body: {
+        expectedRevision: selectedPlan.revision,
         title,
         status: planEditForm.status || "draft",
         targetFormat: planEditForm.targetFormat || "short_video",
@@ -636,6 +652,7 @@ export function SourcesPage({
         maxShots: positiveIntegerFromText(planEditForm.maxShots),
         content: planEditForm.content,
       },
+      idempotencyKey: `adaptation-plan-update-${selectedPlan.id}-${selectedPlan.revision}-${crypto.randomUUID()}`,
     });
   };
 
@@ -644,7 +661,11 @@ export function SourcesPage({
       toast.error("请先选择改编计划");
       return;
     }
-    activatePlanMutation.mutate(selectedPlan.id);
+    activatePlanMutation.mutate({
+      planId: selectedPlan.id,
+      expectedRevision: selectedPlan.revision,
+      idempotencyKey: `adaptation-plan-activate-${selectedPlan.id}-${selectedPlan.revision}-${crypto.randomUUID()}`,
+    });
   };
 
   const handleGenerateScriptFromSelectedPlan = () => {
@@ -690,15 +711,17 @@ export function SourcesPage({
       toast.error("请填写分集内容");
       return;
     }
-    updateScriptEpisodeMutation.mutate({
-      episodeId: selectedScriptEpisode.id,
-      body: {
-        episodeTitle: title,
-        content: scriptEpisodeEditForm.content,
-        contentFormat: scriptEpisodeEditForm.contentFormat || "markdown",
-        reviewStatus: scriptEpisodeEditForm.reviewStatus || "pending",
-      },
-    });
+	updateScriptEpisodeMutation.mutate({
+	  episodeId: selectedScriptEpisode.id,
+	  body: {
+		expectedRevision: selectedScriptEpisode.revision,
+		episodeTitle: title,
+		content: scriptEpisodeEditForm.content,
+		contentFormat: scriptEpisodeEditForm.contentFormat || "markdown",
+		reviewStatus: scriptEpisodeEditForm.reviewStatus || "pending",
+	  },
+	  idempotencyKey: `script-episode-update-${selectedScriptEpisode.id}-${selectedScriptEpisode.revision}-${crypto.randomUUID()}`,
+	});
   };
 
   const handleUseAgent = () => {
@@ -952,7 +975,7 @@ export function SourcesPage({
                 <Button
                   variant="destructive"
                   disabled={deleteSourceMutation.isPending || !sourceToDelete}
-                  onClick={() => sourceToDelete && deleteSourceMutation.mutate(sourceToDelete.id)}
+                  onClick={() => sourceToDelete && deleteSourceMutation.mutate(sourceToDelete)}
                   type="button"
                 >
                   归档

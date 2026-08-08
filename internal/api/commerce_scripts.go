@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,19 +20,36 @@ func (s *Server) listCommerceScriptUnits(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	items, err := s.commerceCatalog.ListScriptUnits(r.Context(), s.db, project.OrganizationID, project.ID,
-		r.URL.Query().Get("filter[status]"), r.URL.Query().Get("cursor"), limit)
+	items, err := s.listCommerceScriptUnitsCore(r.Context(), project,
+		r.URL.Query().Get("filter[status]"), r.URL.Query().Get("cursor"), limit,
+		commerceIncludeRequested(r.URL.Query().Get("include"), "productionSummary"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if commerceIncludeRequested(r.URL.Query().Get("include"), "productionSummary") {
-		if err := s.attachCommerceProductionSummaries(r.Context(), project, items.Items); err != nil {
-			s.writeError(w, r, err)
-			return
+	httpx.WriteJSON(w, r, http.StatusOK, items, nil)
+}
+
+func (s *Server) listCommerceScriptUnitsCore(
+	ctx context.Context,
+	project Project,
+	status string,
+	cursor string,
+	limit int,
+	includeProductionSummary bool,
+) (commercepkg.ScriptUnitList, error) {
+	items, err := s.commerceCatalog.ListScriptUnits(
+		ctx, s.db, project.OrganizationID, project.ID, status, cursor, limit,
+	)
+	if err != nil {
+		return commercepkg.ScriptUnitList{}, err
+	}
+	if includeProductionSummary {
+		if err := s.attachCommerceProductionSummaries(ctx, project, items.Items); err != nil {
+			return commercepkg.ScriptUnitList{}, err
 		}
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, items, nil)
+	return items, nil
 }
 
 func commerceIncludeRequested(value, target string) bool {
@@ -74,36 +92,25 @@ func (s *Server) createCommerceScriptUnit(w http.ResponseWriter, r *http.Request
 	if !decode(w, r, &req) {
 		return
 	}
-	if err := s.validateCommerceScriptContentForCurrentVideoModel(r.Context(), project, req.Content); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	tx, err := s.db.Begin(r.Context())
+	raw, err := json.Marshal(req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err := s.commerceCatalog.CreateScriptUnit(r.Context(), tx, project.OrganizationID, project.ID, principal.UserID,
-		req.ExpectedScriptUnitsRevision, commercepkg.CreateScriptUnitInput{
-			Title: req.Title, Content: req.Content, LanguageMode: req.LanguageMode,
-			ExplicitTargetLanguage: req.ExplicitTargetLanguage, TargetDurationSeconds: req.TargetDurationSeconds,
-			TargetPlatform: req.TargetPlatform, SourceLanguageHint: req.SourceLanguageHint,
-		})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.script.create", raw,
+		strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := appendCommerceScriptMutationEvents(
-		r.Context(), tx, project.OrganizationID, project.ID, item, "commerce.script_unit.created",
-	); err != nil {
+	item, err := decodeAgentToolData[commercepkg.ScriptVersionMutation](result.Data)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
 }
 
@@ -124,38 +131,32 @@ func (s *Server) updateCommerceScriptUnit(w http.ResponseWriter, r *http.Request
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.DraftContent != nil {
-		if err := s.validateCommerceScriptContentForCurrentVideoModel(r.Context(), project, *req.DraftContent); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	tx, err := s.db.Begin(r.Context())
+	raw, err := json.Marshal(map[string]any{
+		"scriptUnitId":     strings.TrimSpace(r.PathValue("scriptUnitId")),
+		"expectedRevision": req.ExpectedRevision, "title": req.Title,
+		"draftContent": req.DraftContent, "languageMode": req.LanguageMode,
+		"explicitTargetLanguage": req.ExplicitTargetLanguage,
+		"targetDurationSeconds":  req.TargetDurationSeconds,
+		"targetPlatform":         req.TargetPlatform,
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err := s.commerceCatalog.UpdateScriptUnit(r.Context(), tx, project.OrganizationID, project.ID,
-		r.PathValue("scriptUnitId"), principal.UserID, req.ExpectedRevision, commercepkg.UpdateScriptUnitInput{
-			Title: req.Title, DraftContent: req.DraftContent, LanguageMode: req.LanguageMode,
-			ExplicitTargetLanguage: req.ExplicitTargetLanguage, TargetDurationSeconds: req.TargetDurationSeconds,
-			TargetPlatform: req.TargetPlatform,
-		})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.script.update", raw,
+		strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := appendCommerceScriptUnitEvent(
-		r.Context(), tx, project.OrganizationID, project.ID, "commerce.script_unit.updated", item,
-	); err != nil {
+	item, err := decodeAgentToolData[commercepkg.ScriptUnit](result.Data)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -170,27 +171,28 @@ func (s *Server) archiveCommerceScriptUnit(w http.ResponseWriter, r *http.Reques
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	raw, err := json.Marshal(map[string]any{
+		"scriptUnitId":     strings.TrimSpace(r.PathValue("scriptUnitId")),
+		"expectedRevision": req.ExpectedRevision,
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err := s.commerceCatalog.ArchiveScriptUnit(r.Context(), tx, project.OrganizationID, project.ID, r.PathValue("scriptUnitId"), req.ExpectedRevision)
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.script.archive", raw,
+		strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := appendCommerceScriptUnitEvent(
-		r.Context(), tx, project.OrganizationID, project.ID, "commerce.script_unit.archived", item,
-	); err != nil {
+	item, err := decodeAgentToolData[commercepkg.ScriptUnit](result.Data)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -206,38 +208,31 @@ func (s *Server) reorderCommerceScriptUnits(w http.ResponseWriter, r *http.Reque
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	raw, err := json.Marshal(req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	revision, err := s.commerceCatalog.ReorderScriptUnits(r.Context(), tx, project.OrganizationID, project.ID, req.ExpectedScriptUnitsRevision, req.Items)
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.script.reorder", raw,
+		strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	scriptUnitIDs := make([]string, 0, len(req.Items))
-	for _, item := range req.Items {
-		scriptUnitIDs = append(scriptUnitIDs, item.ScriptUnitID)
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID,
-		"commerce.script_unit.reordered", "project", project.ID, mustRawJSON(map[string]any{
-			"commerceScriptUnitIds": scriptUnitIDs,
-			"scriptUnitsRevision":   revision,
-		})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"scriptUnitsRevision": revision}, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, result.Data, nil)
 }
 
 func (s *Server) duplicateCommerceScriptUnit(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	s.createCommerceScriptUnitDerivation(w, r, principal, nil)
+	var req struct {
+		ExpectedScriptUnitsRevision int64 `json:"expectedScriptUnitsRevision"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	s.createCommerceScriptUnitDerivationDecoded(w, r, principal, req.ExpectedScriptUnitsRevision, nil)
 }
 
 func (s *Server) createCommerceScriptLanguageVariant(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -266,28 +261,34 @@ func (s *Server) createCommerceScriptUnitDerivationDecoded(w http.ResponseWriter
 	if !ok {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	actionName := "commerce.script.duplicate"
+	input := map[string]any{
+		"scriptUnitId":                strings.TrimSpace(r.PathValue("scriptUnitId")),
+		"expectedScriptUnitsRevision": expectedRevision,
+	}
+	if language != nil {
+		actionName = "commerce.script.create_language_variant"
+		input["targetLanguage"] = *language
+	}
+	raw, err := json.Marshal(input)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err := s.commerceCatalog.DuplicateScriptUnit(r.Context(), tx, project.OrganizationID, project.ID,
-		r.PathValue("scriptUnitId"), principal.UserID, expectedRevision, language)
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, actionName, raw,
+		strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := appendCommerceScriptMutationEvents(
-		r.Context(), tx, project.OrganizationID, project.ID, item, "commerce.script_unit.created",
-	); err != nil {
+	item, err := decodeAgentToolData[commercepkg.ScriptVersionMutation](result.Data)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
 }
 

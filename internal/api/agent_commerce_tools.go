@@ -141,12 +141,24 @@ func (s *Server) agentToolCommerce(
 		return s.agentToolCommerceScriptRevise(r, principal, project, task, step, args)
 	case "commerce.script.create":
 		return invoke(http.MethodPost, "/script-units", nil, nil, args, s.createCommerceScriptUnit)
+	case "commerce.script.defaults.update":
+		return invoke(http.MethodPatch, "/script-unit-defaults", nil, nil, args, s.updateCommerceScriptUnitDefaults)
 	case "commerce.script.update":
 		body := agentCommercePatchBody(args)
 		return invoke(http.MethodPatch, "/script-units/"+url.PathEscape(scriptUnitID), map[string]string{"scriptUnitId": scriptUnitID}, nil, body, s.updateCommerceScriptUnit)
 	case "commerce.script.archive":
 		return invoke(http.MethodDelete, "/script-units/"+url.PathEscape(scriptUnitID), map[string]string{"scriptUnitId": scriptUnitID}, nil,
 			agentCommerceSelectArgs(args, "expectedRevision"), s.archiveCommerceScriptUnit)
+	case "commerce.script.rebuild_impact":
+		return invoke(http.MethodPost, "/script-units/"+url.PathEscape(scriptUnitID)+"/rebuild-impact", map[string]string{"scriptUnitId": scriptUnitID}, nil,
+			agentCommerceSelectArgs(args, "expectedRevision", "targetSourceScriptVersionId", "targetLanguageMode", "targetLanguage", "targetDurationSeconds", "targetPlatform", "targetStoryboardStrategy"), s.getCommerceScriptUnitRebuildImpact)
+	case "commerce.script.rebuild":
+		return invoke(http.MethodPost, "/script-units/"+url.PathEscape(scriptUnitID)+"/rebuilds", map[string]string{"scriptUnitId": scriptUnitID}, nil,
+			agentCommerceSelectArgs(args, "expectedRevision", "impactToken"), s.createCommerceScriptUnitRebuild)
+	case "commerce.script.reference.archive":
+		referenceID := agentReferenceStringArg(args, "referenceId")
+		return invoke(http.MethodDelete, "/script-units/"+url.PathEscape(scriptUnitID)+"/references/"+url.PathEscape(referenceID), map[string]string{"scriptUnitId": scriptUnitID, "referenceId": referenceID}, nil,
+			map[string]any{}, s.archiveCommerceScriptReference)
 	case "commerce.script.derive.preview":
 		return s.agentToolCommerceScriptDerivationPreview(r, project, task, step, args)
 	case "commerce.script.derive.batch":
@@ -212,7 +224,7 @@ func (s *Server) agentToolCommerce(
 		return invoke(http.MethodPost, "/direct-videos/"+url.PathEscape(jobID)+"/cancel",
 			map[string]string{"jobId": jobID}, nil,
 			agentCommerceSelectArgs(args, "reason"), s.cancelCommerceDirectVideo)
-	case "commerce.product.version.list":
+	case "commerce.product.version.list", "commerce.product.versions.list":
 		return invoke(http.MethodGet, "/product/versions", nil, nil, nil, s.listCommerceProductVersions)
 	case "commerce.product.version.create":
 		return invoke(http.MethodPost, "/product/versions", nil, nil, args, s.createCommerceProductVersion)
@@ -250,13 +262,13 @@ func (s *Server) agentToolCommerce(
 		return invoke(http.MethodGet, "/script-units/"+url.PathEscape(scriptUnitID), map[string]string{"scriptUnitId": scriptUnitID}, nil, nil, s.getCommerceScriptUnit)
 	case "commerce.script_unit.create":
 		return invoke(http.MethodPost, "/script-units", nil, nil, args, s.createCommerceScriptUnit)
-	case "commerce.script_unit.duplicate":
+	case "commerce.script_unit.duplicate", "commerce.script.duplicate":
 		return invoke(http.MethodPost, "/script-units/"+url.PathEscape(scriptUnitID)+"/duplicate", map[string]string{"scriptUnitId": scriptUnitID}, nil,
 			agentCommerceSelectArgs(args, "expectedScriptUnitsRevision"), s.duplicateCommerceScriptUnit)
-	case "commerce.script_unit.create_language_variant":
+	case "commerce.script_unit.create_language_variant", "commerce.script.create_language_variant":
 		return invoke(http.MethodPost, "/script-units/"+url.PathEscape(scriptUnitID)+"/language-variants", map[string]string{"scriptUnitId": scriptUnitID}, nil,
 			agentCommerceSelectArgs(args, "expectedScriptUnitsRevision", "targetLanguage"), s.createCommerceScriptLanguageVariant)
-	case "commerce.script_unit.reorder":
+	case "commerce.script_unit.reorder", "commerce.script.reorder":
 		return invoke(http.MethodPost, "/script-units/reorder", nil, nil, args, s.reorderCommerceScriptUnits)
 	case "commerce.script_unit.archive":
 		return invoke(http.MethodDelete, "/script-units/"+url.PathEscape(scriptUnitID), map[string]string{"scriptUnitId": scriptUnitID}, nil,
@@ -985,11 +997,11 @@ func (s *Server) invokeAgentCommerceHandler(
 	}
 	var envelope httpx.Envelope
 	if err := json.Unmarshal(recorder.body.Bytes(), &envelope); err != nil {
-		return agentToolError(step.ToolName, args, newAPIError(http.StatusInternalServerError, "AGENT_COMMERCE_HANDLER_INVALID_RESPONSE", "带货视频操作返回了无效响应"))
+		return agentToolError(step.ToolName, args, newAPIError(http.StatusInternalServerError, "PROJECT_ACTION_HANDLER_INVALID_RESPONSE", "项目操作返回了无效响应"))
 	}
 	if recorder.status < 200 || recorder.status >= 300 || envelope.Error != nil {
 		if envelope.Error == nil {
-			return agentToolError(step.ToolName, args, newAPIError(recorder.status, "AGENT_COMMERCE_HANDLER_FAILED", "带货视频操作失败"))
+			return agentToolError(step.ToolName, args, newAPIError(recorder.status, "PROJECT_ACTION_HANDLER_FAILED", "项目操作失败"))
 		}
 		result := agentToolResult{
 			Name:         step.ToolName,
@@ -1005,7 +1017,7 @@ func (s *Server) invokeAgentCommerceHandler(
 		return result
 	}
 	data := agentCommerceResultData(envelope.Data, envelope.Meta)
-	return agentToolOK(step.ToolName, args, "带货视频操作已完成", data)
+	return agentToolOK(step.ToolName, args, "项目操作已完成", data)
 }
 
 func agentCommerceSelectArgs(args map[string]any, keys ...string) map[string]any {
@@ -1185,7 +1197,9 @@ func (s *Server) agentCommerceStepDryRunOutput(r *http.Request, project Project,
 func commerceAgentToolRequiresScriptUnit(toolName string) bool {
 	switch toolName {
 	case "commerce.script.get", "commerce.script.revise", "commerce.script.update", "commerce.script.archive",
-		"commerce.script.derive.preview", "commerce.script.derive.batch",
+		"commerce.script.derive.preview", "commerce.script.derive.batch", "commerce.script.duplicate",
+		"commerce.script.create_language_variant", "commerce.script.rebuild_impact", "commerce.script.rebuild",
+		"commerce.script.reference.archive",
 		"commerce.video.options", "commerce.video.generate":
 		return true
 	}

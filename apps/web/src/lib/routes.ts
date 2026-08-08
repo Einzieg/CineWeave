@@ -1,4 +1,5 @@
 import {
+  Activity,
   Boxes,
   FileCode2,
   FolderKanban,
@@ -21,6 +22,7 @@ const coreGlobalNavItems = [
   { label: "提示词中心", href: "/prompts", icon: FileCode2, section: "prompts", systemOnly: false },
   { label: "组织与权限", href: "/access", icon: ShieldCheck, section: "access", systemOnly: false },
   { label: "系统组织", href: "/system/organizations", icon: Landmark, section: "system-organizations", systemOnly: true },
+  { label: "控制诊断", href: "/system/project-control", icon: Activity, section: "system-project-control", systemOnly: true },
   { label: "设置", href: "/settings", icon: Settings2, section: "settings", systemOnly: false },
 ] as const;
 

@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
-  "headVersion": 76,
-  "migrationCount": 76,
-  "bundleSha256": "085e51968947a47fcb7cb6c952b0cb610a97db605995dd39c12738b911ad32c9",
+  "headVersion": 77,
+  "migrationCount": 77,
+  "bundleSha256": "ee7da31ad1ddc6f9222bb3d96004204a8525f683ea76d194877ff89e6b2df35a",
   "migrations": [
     {
       "version": 1,
@@ -383,6 +383,11 @@
       "version": 76,
       "name": "000076_provider_billing_context_trigger_table_guard.sql",
       "sha256": "022daac5f49c9443acbc92d8aa5d012ca84948351d59754f00d20afa83694cbe"
+    },
+    {
+      "version": 77,
+      "name": "000077_project_control_runtime.sql",
+      "sha256": "65f09a608f200478308c8c87f2bacd8b0793618a35765f8d295f2467a6f0897c"
     }
   ]
 }

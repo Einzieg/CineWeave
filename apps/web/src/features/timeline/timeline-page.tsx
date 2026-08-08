@@ -48,7 +48,7 @@ export function TimelinePage({
       studioApi.createTimeline(session, projectId, {
         title: "默认时间线",
         fromStoryboardShots: true,
-      }),
+      }, crypto.randomUUID()),
     onSuccess: (timeline) => {
       toast.success("时间线已创建");
       setSelectedTimelineId(timeline.id);
@@ -67,7 +67,13 @@ export function TimelinePage({
   });
 
   const activateMutation = useApiMutation({
-    mutationFn: (session, versionId: string) => studioApi.activateFinalVideo(session, projectId, versionId),
+    mutationFn: (session, version: FinalVideoVersion) => studioApi.activateFinalVideo(
+      session,
+      projectId,
+      version.id,
+      version.revision,
+      `final-video-activate-${version.id}-${version.revision}-${crypto.randomUUID()}`,
+    ),
     onSuccess: () => {
       toast.success("成片版本已激活");
       invalidate([qk.finalVideos(projectId), qk.productionStatus(projectId), qk.timelineDetail(projectId, effectiveTimelineId)]);
@@ -150,7 +156,7 @@ export function TimelinePage({
                 key={version.id}
                 version={version}
                 active={version.status === "active" || version.id === initialFinalVideoId}
-                onActivate={() => activateMutation.mutate(version.id)}
+                onActivate={() => activateMutation.mutate(version)}
                 busy={activateMutation.isPending}
               />
             ))}

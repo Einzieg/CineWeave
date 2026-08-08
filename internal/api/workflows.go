@@ -318,6 +318,25 @@ func (s *Server) listWorkflowRuns(w http.ResponseWriter, r *http.Request, princi
 		cursorCreatedAt = &cursor.CreatedAt
 		cursorID = &cursor.ID
 	}
+	if projectID != "" {
+		project, err := projectByIDForControl(r.Context(), s, projectID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		page, err := s.listProjectWorkflowRunsAction(r.Context(), project, workflowRunListActionInput{
+			Status: statusFilter, Limit: limit, Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")),
+			ActivityView: activityView, ActorUserID: principal.UserID,
+		})
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+			"items": page.Items, "hasMore": page.NextCursor != "", "nextCursor": page.NextCursor,
+		}, nil)
+		return
+	}
 
 	rows, err := s.db.Query(r.Context(), workflowRunSelectSQL(`
 		WHERE organization_id = $1
@@ -396,7 +415,7 @@ func (s *Server) clearCompletedWorkflowActivity(w http.ResponseWriter, r *http.R
 		s.writeError(w, r, err)
 		return
 	}
-	var clearedCount int
+	var workflowClearedCount int
 	if err := tx.QueryRow(r.Context(), `
 		SELECT count(*)
 		FROM workflow_runs
@@ -411,7 +430,28 @@ func (s *Server) clearCompletedWorkflowActivity(w http.ResponseWriter, r *http.R
 		        AND project_id = $2
 		        AND user_id = $3
 		  ), '-infinity'::timestamptz)
-	`, project.OrganizationID, project.ID, principal.UserID, clearedThrough).Scan(&clearedCount); err != nil {
+	`, project.OrganizationID, project.ID, principal.UserID, clearedThrough).Scan(&workflowClearedCount); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var commandClearedCount int
+	if err := tx.QueryRow(r.Context(), `
+		SELECT count(*)
+		FROM project_control_commands
+		WHERE organization_id = $1
+		  AND project_id = $2
+		  AND actor_user_id = $3
+		  AND activity_visibility = 'primary'
+		  AND status IN ('succeeded', 'partial_succeeded', 'failed', 'cancelled')
+		  AND COALESCE(completed_at, updated_at) <= $4
+		  AND COALESCE(completed_at, updated_at) > COALESCE((
+		      SELECT cleared_terminal_through
+		      FROM workflow_activity_views
+		      WHERE organization_id = $1
+		        AND project_id = $2
+		        AND user_id = $3
+		  ), '-infinity'::timestamptz)
+	`, project.OrganizationID, project.ID, principal.UserID, clearedThrough).Scan(&commandClearedCount); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -436,8 +476,10 @@ func (s *Server) clearCompletedWorkflowActivity(w http.ResponseWriter, r *http.R
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"clearedCount":   clearedCount,
-		"clearedThrough": clearedThrough,
+		"clearedCount":         workflowClearedCount + commandClearedCount,
+		"workflowClearedCount": workflowClearedCount,
+		"commandClearedCount":  commandClearedCount,
+		"clearedThrough":       clearedThrough,
 	}, nil)
 }
 
@@ -571,27 +613,23 @@ func (s *Server) listWorkflowNodeRuns(w http.ResponseWriter, r *http.Request, pr
 	if !s.authorize(w, r, principal, authz.PermissionWorkflowRead, authz.Resource{ProjectID: run.ProjectID}) {
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, workflow_run_id, node_key, node_type, status, input, output, retry_count, error_code, error_message, started_at, completed_at, created_at, revision, updated_at
-		FROM workflow_node_runs
-		WHERE workflow_run_id = $1
-		ORDER BY created_at ASC
-	`, run.ID)
+	project, err := projectByIDForControl(r.Context(), s, run.ProjectID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer rows.Close()
-	items := make([]WorkflowNodeRun, 0)
-	for rows.Next() {
-		var item WorkflowNodeRun
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.ProjectID, &item.WorkflowRunID, &item.NodeKey, &item.NodeType, &item.Status, &item.Input, &item.Output, &item.RetryCount, &item.ErrorCode, &item.ErrorMessage, &item.StartedAt, &item.CompletedAt, &item.CreatedAt, &item.Revision, &item.UpdatedAt); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		items = append(items, item)
+	page, err := s.listWorkflowNodesAction(r.Context(), project, workflowRunChildrenActionInput{
+		WorkflowRunID: run.ID,
+		Limit:         queryInt(r, "limit", 200),
+		Cursor:        strings.TrimSpace(r.URL.Query().Get("cursor")),
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"items": page.Items, "hasMore": page.NextCursor != "", "nextCursor": page.NextCursor,
+	}, nil)
 }
 
 func isTerminalWorkflowStatus(status string) bool {
@@ -650,6 +688,24 @@ func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request, principal
 	previewExpires := previewURLExpiryFromRequest(r)
 	if includePreviewURL && s.storage == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
+		return
+	}
+	if projectID != "" {
+		project, err := s.project(r, projectID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		page, err := s.listProjectArtifactsAction(r.Context(), project, artifactListActionInput{
+			Type:  firstNonEmpty(strings.TrimSpace(r.URL.Query().Get("filter[type]")), strings.TrimSpace(r.URL.Query().Get("type"))),
+			Limit: 100, Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")), Preview: includePreviewURL,
+			Expires: int(previewExpires / time.Second),
+		})
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": page.Items}, map[string]any{"nextCursor": page.NextCursor})
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `

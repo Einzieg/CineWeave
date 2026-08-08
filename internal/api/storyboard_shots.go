@@ -11,8 +11,6 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
-	"github.com/Einzieg/cineweave/internal/production"
-	storyboardtiming "github.com/Einzieg/cineweave/internal/storyboard"
 	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
@@ -218,38 +216,25 @@ func (s *Server) listWorkflowRunShots(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	includePreviewURL := strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true")
-	previewExpires := previewURLExpiryFromRequest(r)
-	if includePreviewURL && s.storage == nil {
-		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
-		return
-	}
-	rows, err := s.db.Query(r.Context(), `
-		`+storyboardShotSelectSQL(`
-		WHERE s.workflow_run_id = $1
-		  AND s.deleted_at IS NULL
-		ORDER BY s.episode_index ASC NULLS LAST, s.episode_shot_index ASC NULLS LAST, s.shot_index ASC
-	`), run.ID)
+	project, err := projectByIDForControl(r.Context(), s, run.ProjectID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer rows.Close()
-	items := make([]StoryboardShot, 0)
-	for rows.Next() {
-		item, err := scanStoryboardShot(rows)
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if includePreviewURL {
-			if err := s.attachShotPreviewURLs(r, &item, previewExpires); err != nil {
-				s.writeError(w, r, err)
-				return
-			}
-		}
-		items = append(items, item)
+	page, err := s.listWorkflowShotsAction(r.Context(), project, workflowRunChildrenActionInput{
+		WorkflowRunID:     run.ID,
+		Limit:             queryInt(r, "limit", 200),
+		Cursor:            strings.TrimSpace(r.URL.Query().Get("cursor")),
+		IncludePreviewURL: includePreviewURL,
+		PreviewExpires:    int(previewURLExpiryFromRequest(r).Seconds()),
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"items": page.Items, "hasMore": page.NextCursor != "", "nextCursor": page.NextCursor,
+	}, nil)
 }
 
 func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -257,30 +242,8 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	var req struct {
-		WorkflowRunID        string `json:"workflowRunId"`
-		ScriptSceneID        string `json:"scriptSceneId"`
-		ShotNo               *int   `json:"shotNo"`
-		ShotIndex            *int   `json:"shotIndex"`
-		StartTick            *int64 `json:"startTick"`
-		EndTick              *int64 `json:"endTick"`
-		PlannedDurationTicks *int64 `json:"plannedDurationTicks"`
-		Visual               string `json:"visual"`
-		Camera               string `json:"camera"`
-		Motion               string `json:"motion"`
-		Mood                 string `json:"mood"`
-		ImagePrompt          string `json:"imagePrompt"`
-		VideoPrompt          string `json:"videoPrompt"`
-	}
+	var req storyboardCreateShotActionInput
 	if !decode(w, r, &req) {
-		return
-	}
-	if req.ShotIndex != nil && *req.ShotIndex < 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotIndex must be greater than or equal to zero", nil, false)
-		return
-	}
-	if req.ShotNo != nil && *req.ShotNo <= 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotNo must be greater than zero", nil, false)
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -289,118 +252,8 @@ func (s *Server) createStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	defer tx.Rollback(r.Context())
-	productionContext, err := lockActiveVideoProductionContext(r.Context(), tx, project.ID)
+	item, err := s.createStoryboardShotActionTx(r.Context(), tx, project, principal.UserID, req)
 	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
-	}
-	productionConfiguration, err := videoproduction.DecodeProductionConfiguration(productionContext.Binding.ProfileSnapshot)
-	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
-	}
-	workflowRunID, err := storyboardWorkflowRunForCreateTx(
-		r.Context(), tx, project.OrganizationID, project.ID, productionContext,
-		strings.TrimSpace(req.WorkflowRunID), principal.UserID,
-	)
-	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
-	}
-	if strings.TrimSpace(req.ScriptSceneID) != "" {
-		if _, err := workflows.ScanScriptSceneRecord(tx.QueryRow(r.Context(), workflows.ScriptSceneSelectSQL(`
-			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
-		`), project.ID, strings.TrimSpace(req.ScriptSceneID))); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	shotIndex, shotNo, err := nextStoryboardShotPositionTx(
-		r.Context(), tx, project.ID, productionContext.Generation.ID, workflowRunID,
-		req.ShotIndex, req.ShotNo,
-	)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	timebase := storyboardtiming.Timebase{
-		TicksPerSecond: productionConfiguration.TimelineTimebase,
-		FPSNumerator:   int64(productionConfiguration.FPSNumerator),
-		FPSDenominator: int64(productionConfiguration.FPSDenominator),
-	}
-	if err := timebase.Validate(); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	startTick := int64(0)
-	if req.StartTick != nil {
-		startTick = *req.StartTick
-	} else if err := tx.QueryRow(r.Context(), `
-		SELECT COALESCE(MAX(end_tick), 0)
-		FROM storyboard_shots
-		WHERE project_id = $1 AND production_generation_id = $2
-		  AND workflow_run_id = $3 AND deleted_at IS NULL
-	`, project.ID, productionContext.Generation.ID, workflowRunID).Scan(&startTick); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	durationTicks := timebase.SecondsToFrameTicksCeil(defaultStoryboardShotDurationSeconds)
-	if req.PlannedDurationTicks != nil {
-		durationTicks = *req.PlannedDurationTicks
-	}
-	endTick := startTick + durationTicks
-	if req.EndTick != nil {
-		endTick = *req.EndTick
-		durationTicks = endTick - startTick
-	}
-	if startTick < 0 || durationTicks <= 0 || !timebase.IsFrameAligned(startTick) || !timebase.IsFrameAligned(endTick) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shot timing must be positive and aligned to the project frame rate", nil, false)
-		return
-	}
-	var shotID string
-	if err := tx.QueryRow(r.Context(), `
-		INSERT INTO storyboard_shots(
-			organization_id, project_id, workflow_run_id, script_scene_id, shot_index, shot_no,
-			start_tick, end_tick, duration_min_ticks, duration_max_ticks, duration_source, duration_locked,
-			visual, camera, motion, mood, image_prompt, video_prompt,
-			status, review_status, manual_override, stale_state, edited_by, edited_at, metadata,
-			production_generation_id
-		)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6,
-		        $7, $8, $9, $9, 'manual_locked', true,
-		        NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''),
-		        NULLIF($14, ''), NULLIF($15, ''), 'pending', 'pending', true, 'needs_regeneration', $16, now(),
-		        jsonb_build_object('timingEditedAt', now(), 'timelineTimebase', $17::bigint, 'fpsNumerator', $18::integer, 'fpsDenominator', $19::integer),
-		        $20)
-		RETURNING id::text
-	`, project.OrganizationID, project.ID, workflowRunID, strings.TrimSpace(req.ScriptSceneID), shotIndex, shotNo, startTick, endTick, durationTicks,
-		strings.TrimSpace(req.Visual), strings.TrimSpace(req.Camera), strings.TrimSpace(req.Motion), strings.TrimSpace(req.Mood),
-		strings.TrimSpace(req.ImagePrompt), strings.TrimSpace(req.VideoPrompt), principal.UserID,
-		productionConfiguration.TimelineTimebase, productionConfiguration.FPSNumerator,
-		productionConfiguration.FPSDenominator, productionContext.Generation.ID).Scan(&shotID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	item, err := scanStoryboardShot(tx.QueryRow(r.Context(), storyboardShotSelectSQL(`
-		WHERE s.project_id = $1 AND s.id = $2 AND s.deleted_at IS NULL
-	`), project.ID, shotID))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, workflowRunID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shot.created", "storyboard_shot", item.ID, mustRawJSON(map[string]any{
-		"shotId":                 item.ID,
-		"workflowRunId":          workflowRunID,
-		"scriptSceneId":          item.ScriptSceneID,
-		"shotNo":                 item.ShotNo,
-		"productionGenerationId": productionContext.Generation.ID,
-		"bindingId":              productionContext.Binding.ID,
-		"bindingRevision":        productionContext.Binding.Revision,
-	})); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -416,60 +269,14 @@ func (s *Server) deleteStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	current, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if current.StoryboardPlanID != nil {
-		httpx.WriteError(w, r, http.StatusConflict, "STORYBOARD_PLAN_REVISION_REQUIRED", "storyboard plan shots cannot be deleted in place; create a plan revision instead", map[string]any{
-			"storyboardPlanId": *current.StoryboardPlanID,
-			"shotId":           current.ID,
-		}, false)
-		return
-	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	defer tx.Rollback(r.Context())
-	tag, err := tx.Exec(r.Context(), `
-		UPDATE storyboard_shots
-		SET deleted_at = now(), updated_at = now()
-		WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
-	`, project.ID, current.ID)
+	current, err := s.deleteStoryboardShotActionTx(r.Context(), tx, project, r.PathValue("shotId"))
 	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		s.writeError(w, r, pgx.ErrNoRows)
-		return
-	}
-	if err := reflowStoryboardShotTicksTx(r.Context(), tx, project.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE storyboard_plans
-		SET active = false,
-		    status = CASE WHEN status = 'ready' THEN 'archived' ELSE status END,
-		    stale_state = 'upstream_changed',
-		    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('shotDeletedAt', now())
-		WHERE project_id = $1 AND active = true
-	`, project.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, current.WorkflowRunID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shot.deleted", "storyboard_shot", current.ID, mustRawJSON(map[string]any{
-		"shotId":        current.ID,
-		"workflowRunId": current.WorkflowRunID,
-	})); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -485,19 +292,8 @@ func (s *Server) reorderStoryboardShots(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	var req struct {
-		Items []struct {
-			ShotID           string `json:"shotId"`
-			ShotIndex        int    `json:"shotIndex"`
-			ShotNo           int    `json:"shotNo"`
-			EpisodeShotIndex *int   `json:"episodeShotIndex,omitempty"`
-		} `json:"items"`
-	}
+	var req storyboardReorderActionInput
 	if !decode(w, r, &req) {
-		return
-	}
-	if len(req.Items) == 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "items are required", nil, false)
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -506,86 +302,8 @@ func (s *Server) reorderStoryboardShots(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	defer tx.Rollback(r.Context())
-	workflowRunIDs := map[string]bool{}
-	for _, item := range req.Items {
-		shotID := strings.TrimSpace(item.ShotID)
-		if shotID == "" || item.ShotIndex < 0 || item.ShotNo <= 0 || (item.EpisodeShotIndex != nil && *item.EpisodeShotIndex < 0) {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotId, non-negative shotIndex, and positive shotNo are required", nil, false)
-			return
-		}
-		var storyboardPlanID *string
-		if err := tx.QueryRow(r.Context(), `
-			SELECT storyboard_plan_id::text
-			FROM storyboard_shots
-			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
-		`, project.ID, shotID).Scan(&storyboardPlanID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if storyboardPlanID != nil {
-			httpx.WriteError(w, r, http.StatusConflict, "STORYBOARD_PLAN_REVISION_REQUIRED", "storyboard plan shots cannot be reordered in place; use split, merge, or timing revision endpoints", map[string]any{
-				"storyboardPlanId": *storyboardPlanID,
-				"shotId":           shotID,
-			}, false)
-			return
-		}
-	}
-	for index, item := range req.Items {
-		shotID := strings.TrimSpace(item.ShotID)
-		var workflowRunID string
-		if err := tx.QueryRow(r.Context(), `
-			UPDATE storyboard_shots
-			SET shot_index = $3,
-			    manual_override = true,
-			    stale_state = 'needs_regeneration',
-			    updated_at = now()
-			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
-			RETURNING COALESCE(workflow_run_id::text, '')
-		`, project.ID, shotID, -(index + 1)).Scan(&workflowRunID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if strings.TrimSpace(workflowRunID) != "" {
-			workflowRunIDs[workflowRunID] = true
-		}
-	}
-	for _, item := range req.Items {
-		if _, err := tx.Exec(r.Context(), `
-			UPDATE storyboard_shots
-			SET shot_index = $3,
-			    shot_no = $4,
-			    episode_shot_index = COALESCE($5, episode_shot_index),
-			    updated_at = now()
-			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
-		`, project.ID, strings.TrimSpace(item.ShotID), item.ShotIndex, item.ShotNo, item.EpisodeShotIndex); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if err := reflowStoryboardShotTicksTx(r.Context(), tx, project.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE storyboard_plans
-		SET active = false,
-		    status = CASE WHEN status = 'ready' THEN 'archived' ELSE status END,
-		    stale_state = 'upstream_changed',
-		    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('shotsReorderedAt', now())
-		WHERE project_id = $1 AND active = true
-	`, project.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	for workflowRunID := range workflowRunIDs {
-		if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, workflowRunID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shots.reordered", "project", project.ID, mustRawJSON(map[string]any{
-		"items": req.Items,
-	})); err != nil {
+	items, err := s.reorderStoryboardShotsActionTx(r.Context(), tx, project, req)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -593,7 +311,7 @@ func (s *Server) reorderStoryboardShots(w http.ResponseWriter, r *http.Request, 
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": req.Items}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
 }
 
 func reflowStoryboardShotTicksTx(ctx context.Context, tx pgx.Tx, projectID string) error {

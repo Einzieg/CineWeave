@@ -346,6 +346,35 @@ func TestEnrichProjectEventPayloadIncludesCatalogIdentity(t *testing.T) {
 	}
 }
 
+func TestEnrichProjectEventPayloadProjectsAgentActivityDetails(t *testing.T) {
+	event := projectEvent{
+		Position: 43, EventID: "event-43", EventType: "agent.step.completed", SchemaVersion: 1,
+		AggregateType: "agent_step", AggregateID: "step-1",
+		Payload:   json.RawMessage(`{"agentTaskId":"task-1","agentStepId":"step-1","status":"succeeded","summary":"完成","data":{"content":"` + strings.Repeat("x", 1_500_000) + `"},"trace":{"content":"large"}}`),
+		CreatedAt: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC),
+	}
+	projected := enrichEventPayload(event)
+	if len(projected) >= 8_192 {
+		t.Fatalf("realtime agent event is too large: %d bytes", len(projected))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(projected, &payload); err != nil {
+		t.Fatalf("decode projected payload: %v", err)
+	}
+	if payload["agentTaskId"] != "task-1" || payload["agentStepId"] != "step-1" || payload["status"] != "succeeded" {
+		t.Fatalf("agent activity identity = %#v", payload)
+	}
+	if payload["detailsAvailable"] != true {
+		t.Fatalf("detailsAvailable = %#v", payload["detailsAvailable"])
+	}
+	if _, ok := payload["data"]; ok {
+		t.Fatal("canonical agent step data leaked into realtime payload")
+	}
+	if _, ok := payload["trace"]; ok {
+		t.Fatal("agent trace leaked into realtime payload")
+	}
+}
+
 func TestRealtimeSetsProxySafeSSEHeaders(t *testing.T) {
 	repository := &fakeEventRepository{
 		organizationID: "organization-a",

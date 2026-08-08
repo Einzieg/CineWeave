@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
-	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/jackc/pgx/v5"
@@ -297,107 +297,27 @@ func (s *Server) assignAgentImageAttachment(
 	if !decode(w, r, &req) {
 		return
 	}
-	req.Scope = strings.TrimSpace(req.Scope)
-	req.ScriptUnitID = strings.TrimSpace(req.ScriptUnitID)
-	if req.Scope != "product_common" && req.Scope != "script_custom" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "图片用途必须是商品公共参考图或指定脚本自定义参考图", nil, false)
+	raw, err := json.Marshal(map[string]any{
+		"attachmentId":  strings.TrimSpace(r.PathValue("attachmentId")),
+		"scope":         strings.TrimSpace(req.Scope),
+		"scriptUnitId":  strings.TrimSpace(req.ScriptUnitID),
+		"referenceRole": strings.TrimSpace(req.ReferenceRole),
+		"setPrimary":    req.SetPrimary,
+	})
+	if err != nil {
+		s.writeError(w, r, err)
 		return
 	}
-	if req.Scope == "script_custom" && req.ScriptUnitID == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "绑定脚本自定义参考图时必须指定广告脚本", nil, false)
-		return
-	}
-	attachment, err := loadAgentImageAttachment(
-		r.Context(), s.db, project.OrganizationID, project.ID,
-		strings.TrimSpace(r.PathValue("attachmentId")), false,
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.attachment.assign", raw,
+		strings.TrimSpace(r.Header.Get("Idempotency-Key")),
 	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if attachment.Status != "completed" {
-		httpx.WriteError(w, r, http.StatusConflict, "AGENT_IMAGE_ATTACHMENT_NOT_READY", "助手图片尚未完成入库", nil, false)
-		return
-	}
-	source, err := commercepkg.LoadExistingImageReference(
-		r.Context(), s.db, project.OrganizationID, project.ID,
-		attachment.ArtifactID, attachment.MediaFileID, attachment.FileName,
-	)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	product, err := s.commerceCatalog.GetProduct(
-		r.Context(), s.db, project.OrganizationID, project.ID,
-	)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	response := map[string]any{
-		"attachmentId": attachment.ID,
-		"scope":        req.Scope,
-	}
-	if req.Scope == "product_common" {
-		item, duplicate, bindErr := s.commerceCatalog.BindExistingProductReference(
-			r.Context(), tx, project.OrganizationID, project.ID, product.ID,
-			source, req.ReferenceRole, req.SetPrimary, principal.UserID,
-		)
-		if bindErr != nil {
-			s.writeError(w, r, bindErr)
-			return
-		}
-		if !duplicate {
-			if err := appendCommerceProductReferenceEvent(
-				r.Context(), tx, project.OrganizationID, project.ID,
-				"commerce.product.reference.added", item,
-			); err != nil {
-				s.writeError(w, r, err)
-				return
-			}
-		}
-		response["productReference"] = item
-		response["productReferenceId"] = item.ID
-		response["duplicate"] = duplicate
-	} else {
-		item, duplicate, bindErr := s.commerceDirect.BindExistingScriptReference(
-			r.Context(), tx, project.OrganizationID, project.ID, product.ID,
-			req.ScriptUnitID, source, principal.UserID,
-		)
-		if bindErr != nil {
-			s.writeError(w, r, bindErr)
-			return
-		}
-		if !duplicate {
-			if err := insertAPIEvent(
-				r.Context(), tx, project.OrganizationID, project.ID,
-				"commerce.script_reference.added", "commerce_script_reference_image", item.ID,
-				mustRawJSON(map[string]any{
-					"commerceScriptUnitId": item.ScriptUnitID,
-					"scriptReferenceId":    item.ID,
-					"revision":             item.Revision,
-				}),
-			); err != nil {
-				s.writeError(w, r, err)
-				return
-			}
-		}
-		response["scriptReference"] = item
-		response["scriptReferenceId"] = item.ID
-		response["commerceScriptUnitId"] = item.ScriptUnitID
-		response["duplicate"] = duplicate
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, response, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, result.Data, nil)
 }
 
 func (s *Server) attachAgentImagePreview(r *http.Request, attachment *AgentImageAttachment) {
@@ -714,6 +634,19 @@ func (s *Server) recordAgentTaskImageAttachmentUsage(
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := recordAgentTaskImageAttachmentUsageTx(ctx, tx, taskID, attachmentID, usage); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func recordAgentTaskImageAttachmentUsageTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	taskID string,
+	attachmentID string,
+	usage string,
+) error {
 	tag, err := tx.Exec(ctx, `
 		UPDATE agent_task_image_attachments
 		SET usage = $3
@@ -759,7 +692,7 @@ func (s *Server) recordAgentTaskImageAttachmentUsage(
 			Message: "助手任务不存在",
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 type agentAttachmentQuerier interface {

@@ -100,10 +100,6 @@ func (s *Server) getProjectDeletionImpact(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) createProjectDeletionRequest(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	if s.temporal == nil {
-		s.writeError(w, r, newAPIError(http.StatusServiceUnavailable, "TEMPORAL_UNAVAILABLE", "工作流服务暂不可用"))
-		return
-	}
 	var body createProjectDeletionRequestBody
 	if !decode(w, r, &body) {
 		return
@@ -122,61 +118,72 @@ func (s *Server) createProjectDeletionRequest(w http.ResponseWriter, r *http.Req
 	if !s.authorize(w, r, principal, authz.PermissionProjectDelete, authz.Resource{ProjectID: project.ID}) {
 		return
 	}
-	if strings.TrimSpace(body.ProjectName) != project.Name {
-		s.writeError(w, r, newAPIError(http.StatusUnprocessableEntity, "PROJECT_NAME_CONFIRMATION_MISMATCH", "请输入完整项目名称以确认删除"))
+	request, _, err := s.createProjectDeletionRequestCore(r.Context(), principal, project, body, idempotencyKey)
+	if err != nil {
+		s.writeError(w, r, err)
 		return
+	}
+	httpx.WriteJSON(w, r, http.StatusAccepted, request, nil)
+}
+
+func (s *Server) createProjectDeletionRequestCore(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	body createProjectDeletionRequestBody,
+	idempotencyKey string,
+) (ProjectDeletionRequest, bool, error) {
+	if s.temporal == nil {
+		return ProjectDeletionRequest{}, false, newAPIError(http.StatusServiceUnavailable, "TEMPORAL_UNAVAILABLE", "工作流服务暂不可用")
+	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return ProjectDeletionRequest{}, false, newAPIError(http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_REQUIRED", "必须提供 Idempotency-Key")
+	}
+	if strings.TrimSpace(body.ProjectName) != project.Name {
+		return ProjectDeletionRequest{}, false, newAPIError(http.StatusUnprocessableEntity, "PROJECT_NAME_CONFIRMATION_MISMATCH", "请输入完整项目名称以确认删除")
 	}
 	if body.ExpectedProjectRevision <= 0 || strings.TrimSpace(body.ImpactHash) == "" {
-		s.writeError(w, r, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedProjectRevision 和 impactHash 不能为空"))
-		return
+		return ProjectDeletionRequest{}, false, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedProjectRevision 和 impactHash 不能为空")
 	}
 
-	tx, err := s.db.Begin(r.Context())
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, false, err
 	}
-	defer tx.Rollback(r.Context())
-	locked, err := scanProject(tx.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1 FOR UPDATE OF p`), projectID))
+	defer tx.Rollback(ctx)
+	locked, err := scanProject(tx.QueryRow(ctx, projectSelectSQL(`WHERE p.id = $1 FOR UPDATE OF p`), project.ID))
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, false, err
 	}
 	if locked.LifecycleStatus == "deleting" {
-		existing, found, findErr := projectDeletionRequestByProjectTx(r.Context(), tx, projectID)
+		existing, found, findErr := projectDeletionRequestByProjectTx(ctx, tx, project.ID)
 		if findErr != nil {
-			s.writeError(w, r, findErr)
-			return
+			return ProjectDeletionRequest{}, false, findErr
 		}
 		if found && existing.IdempotencyKey == idempotencyKey {
-			if err := tx.Commit(r.Context()); err != nil {
-				s.writeError(w, r, err)
-				return
+			if err := tx.Commit(ctx); err != nil {
+				return ProjectDeletionRequest{}, false, err
 			}
-			httpx.WriteJSON(w, r, http.StatusAccepted, existing, nil)
-			return
+			return existing, true, nil
 		}
 		conflict := newAPIError(http.StatusConflict, codeProjectDeletionAlreadyRunning, "项目已有删除任务正在执行")
 		if found {
 			conflict.Details = map[string]any{"requestId": existing.ID, "status": existing.Status}
 		}
-		s.writeError(w, r, conflict)
-		return
+		return ProjectDeletionRequest{}, false, conflict
 	}
 	if locked.Revision != body.ExpectedProjectRevision {
-		s.writeError(w, r, projectRevisionConflict(locked, body.ExpectedProjectRevision))
-		return
+		return ProjectDeletionRequest{}, false, projectRevisionConflict(locked, body.ExpectedProjectRevision)
 	}
-	impact, err := s.projectDeletionImpact(r.Context(), tx, locked)
+	impact, err := s.projectDeletionImpact(ctx, tx, locked)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, false, err
 	}
 	if impact.ImpactHash != strings.TrimSpace(body.ImpactHash) {
 		conflict := newAPIError(http.StatusConflict, "PROJECT_DELETION_IMPACT_STALE", "项目删除影响已变化，请重新确认")
 		conflict.Details = map[string]any{"currentImpact": impact}
-		s.writeError(w, r, conflict)
-		return
+		return ProjectDeletionRequest{}, false, conflict
 	}
 	requestID := uuid.NewString()
 	temporalWorkflowID := "project-deletion-" + requestID
@@ -184,10 +191,9 @@ func (s *Server) createProjectDeletionRequest(w http.ResponseWriter, r *http.Req
 	drainDeadline := time.Now().UTC().Add(projectDeletionDrainDuration())
 	impactSnapshot, err := json.Marshal(impact)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, false, err
 	}
-	command, err := tx.Exec(r.Context(), `
+	command, err := tx.Exec(ctx, `
 		UPDATE projects
 		SET lifecycle_status = 'deleting',
 		    deletion_revision = $2,
@@ -198,17 +204,15 @@ func (s *Server) createProjectDeletionRequest(w http.ResponseWriter, r *http.Req
 		WHERE id = $1
 		  AND lifecycle_status = 'active'
 		  AND revision = $3
-	`, projectID, deletionRevision, locked.Revision)
+	`, project.ID, deletionRevision, locked.Revision)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, false, err
 	}
 	if command.RowsAffected() != 1 {
-		s.writeError(w, r, newAPIError(http.StatusConflict, codeProjectDeletionBlocked, "项目状态已变化，请重新确认删除"))
-		return
+		return ProjectDeletionRequest{}, false, newAPIError(http.StatusConflict, codeProjectDeletionBlocked, "项目状态已变化，请重新确认删除")
 	}
 	var request ProjectDeletionRequest
-	if err := tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO project_deletion_requests(
 			id, organization_id, workspace_id, project_id, project_name,
 			project_revision, deletion_revision, status, impact_snapshot, impact_hash,
@@ -224,8 +228,7 @@ func (s *Server) createProjectDeletionRequest(w http.ResponseWriter, r *http.Req
 		locked.Revision, deletionRevision, impactSnapshot, impact.ImpactHash,
 		temporalWorkflowID, idempotencyKey, principal.UserID, drainDeadline,
 	).Scan(projectDeletionRequestScanTargets(&request)...); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, false, err
 	}
 	input := workflows.ProjectDeletionInput{
 		OrganizationID:   locked.OrganizationID,
@@ -235,12 +238,11 @@ func (s *Server) createProjectDeletionRequest(w http.ResponseWriter, r *http.Req
 		DeletionRevision: deletionRevision,
 		RequestedBy:      principal.UserID,
 	}
-	if err := s.enqueueProjectDeletionStartTx(r.Context(), tx, request, input); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := s.enqueueProjectDeletionStartTx(ctx, tx, request, input); err != nil {
+		return ProjectDeletionRequest{}, false, err
 	}
 	if err := events.AppendTx(
-		r.Context(),
+		ctx,
 		tx,
 		locked.OrganizationID,
 		"",
@@ -254,14 +256,12 @@ func (s *Server) createProjectDeletionRequest(w http.ResponseWriter, r *http.Req
 			"status":                   request.Status,
 		}),
 	); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, false, err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := tx.Commit(ctx); err != nil {
+		return ProjectDeletionRequest{}, false, err
 	}
-	httpx.WriteJSON(w, r, http.StatusAccepted, request, nil)
+	return request, false, nil
 }
 
 func (s *Server) getProjectDeletionRequest(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -277,10 +277,6 @@ func (s *Server) getProjectDeletionRequest(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) retryProjectDeletionRequest(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	if s.temporal == nil {
-		s.writeError(w, r, newAPIError(http.StatusServiceUnavailable, "TEMPORAL_UNAVAILABLE", "工作流服务暂不可用"))
-		return
-	}
 	projectID := r.PathValue("projectId")
 	requestID := r.PathValue("requestId")
 	request, err := s.projectDeletionRequest(r.Context(), projectID, requestID)
@@ -291,44 +287,57 @@ func (s *Server) retryProjectDeletionRequest(w http.ResponseWriter, r *http.Requ
 	if !s.canReadProjectDeletionRequest(w, r, principal, request) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	request, err = s.retryProjectDeletionRequestCore(r.Context(), projectID, requestID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	if err := tx.QueryRow(r.Context(), `
+	httpx.WriteJSON(w, r, http.StatusAccepted, request, nil)
+}
+
+func (s *Server) retryProjectDeletionRequestCore(ctx context.Context, projectID, requestID string) (ProjectDeletionRequest, error) {
+	if s.temporal == nil {
+		return ProjectDeletionRequest{}, newAPIError(http.StatusServiceUnavailable, "TEMPORAL_UNAVAILABLE", "工作流服务暂不可用")
+	}
+	projectID = strings.TrimSpace(projectID)
+	requestID = strings.TrimSpace(requestID)
+	if projectID == "" || requestID == "" {
+		return ProjectDeletionRequest{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "projectId and requestId are required")
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return ProjectDeletionRequest{}, err
+	}
+	defer tx.Rollback(ctx)
+	var request ProjectDeletionRequest
+	if err := tx.QueryRow(ctx, `
 		SELECT `+projectDeletionRequestColumns+`
 		FROM project_deletion_requests
 		WHERE id = $1 AND project_id = $2
 		FOR UPDATE
 	`, requestID, projectID).Scan(projectDeletionRequestScanTargets(&request)...); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, err
 	}
 	if request.Status != "failed_retryable" {
 		conflict := newAPIError(http.StatusConflict, "PROJECT_DELETION_RETRY_NOT_ALLOWED", "当前删除任务不能重试")
 		conflict.Details = map[string]any{"status": request.Status}
-		s.writeError(w, r, conflict)
-		return
+		return ProjectDeletionRequest{}, conflict
 	}
 	var lifecycle string
 	var deletionRevision int64
-	if err := tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		SELECT lifecycle_status, deletion_revision
 		FROM projects
 		WHERE id = $1 AND organization_id = $2
 		FOR UPDATE
 	`, projectID, request.OrganizationID).Scan(&lifecycle, &deletionRevision); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, err
 	}
 	if lifecycle != "deleting" || deletionRevision != request.DeletionRevision {
-		s.writeError(w, r, newAPIError(http.StatusConflict, codeProjectDeletionBlocked, "项目删除身份已变化，不能重试"))
-		return
+		return ProjectDeletionRequest{}, newAPIError(http.StatusConflict, codeProjectDeletionBlocked, "项目删除身份已变化，不能重试")
 	}
 	drainDeadline := time.Now().UTC().Add(projectDeletionDrainDuration())
-	if _, err := tx.Exec(r.Context(), `
+	if _, err := tx.Exec(ctx, `
 		UPDATE project_deletion_requests
 		SET status = 'requested',
 		    retry_count = retry_count + 1,
@@ -340,10 +349,9 @@ func (s *Server) retryProjectDeletionRequest(w http.ResponseWriter, r *http.Requ
 		    updated_at = now()
 		WHERE id = $1
 	`, requestID, drainDeadline); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, err
 	}
-	if _, err := tx.Exec(r.Context(), `
+	if _, err := tx.Exec(ctx, `
 		UPDATE workflow_start_outbox
 		SET status = 'pending',
 		    attempt_count = 0,
@@ -357,19 +365,17 @@ func (s *Server) retryProjectDeletionRequest(w http.ResponseWriter, r *http.Requ
 		    updated_at = now()
 		WHERE project_deletion_request_id = $1
 	`, requestID); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, err
 	}
-	if err := tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		SELECT `+projectDeletionRequestColumns+`
 		FROM project_deletion_requests
 		WHERE id = $1
 	`, requestID).Scan(projectDeletionRequestScanTargets(&request)...); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, err
 	}
 	if err := events.AppendTx(
-		r.Context(),
+		ctx,
 		tx,
 		request.OrganizationID,
 		"",
@@ -384,14 +390,12 @@ func (s *Server) retryProjectDeletionRequest(w http.ResponseWriter, r *http.Requ
 			"retryCount":               request.RetryCount,
 		}),
 	); err != nil {
-		s.writeError(w, r, err)
-		return
+		return ProjectDeletionRequest{}, err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := tx.Commit(ctx); err != nil {
+		return ProjectDeletionRequest{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusAccepted, request, nil)
+	return request, nil
 }
 
 func (s *Server) canReadProjectDeletionRequest(

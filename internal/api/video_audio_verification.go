@@ -2,55 +2,83 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 	"github.com/jackc/pgx/v5"
 )
+
+type verifyStoryboardShotRenderPlanAudioRequest struct {
+	ShotID   string `json:"shotId,omitempty"`
+	Decision string `json:"decision"`
+	Notes    string `json:"notes"`
+}
 
 func (s *Server) verifyStoryboardShotRenderPlanAudio(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccessAny(w, r, principal, r.PathValue("projectId"), []string{authz.PermissionStoryboardGenerate, authz.PermissionProjectWrite})
 	if !ok {
 		return
 	}
-	shot, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	var req struct {
-		Decision string `json:"decision"`
-		Notes    string `json:"notes"`
-	}
+	var req verifyStoryboardShotRenderPlanAudioRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
-	if req.Decision != "approve" && req.Decision != "reject" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "decision must be approve or reject", nil, false)
-		return
-	}
+	req.ShotID = r.PathValue("shotId")
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	defer tx.Rollback(r.Context())
+	planID, err := s.verifyStoryboardShotRenderPlanAudioActionTx(r.Context(), tx, project, principal.UserID, req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	detail, err := s.videoRenderPlanDetail(r.Context(), project.ID, req.ShotID, planID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, detail, nil)
+}
+
+func (s *Server) verifyStoryboardShotRenderPlanAudioActionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	project Project,
+	actorID string,
+	req verifyStoryboardShotRenderPlanAudioRequest,
+) (string, error) {
+	req.ShotID = strings.TrimSpace(req.ShotID)
+	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
+	req.Notes = strings.TrimSpace(req.Notes)
+	if req.ShotID == "" {
+		return "", newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotId is required")
+	}
+	if req.Decision != "approve" && req.Decision != "reject" {
+		return "", newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "decision must be approve or reject")
+	}
 	var planID, requirement, workflowRunID string
-	if err := tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(ctx, `
 		SELECT id::text, audio_requirement, COALESCE(workflow_run_id::text, '')
 		FROM video_render_plans
 		WHERE project_id = $1 AND storyboard_shot_id = $2 AND active = true
 		FOR UPDATE
-	`, project.ID, shot.ID).Scan(&planID, &requirement, &workflowRunID); err != nil {
-		s.writeError(w, r, err)
-		return
+	`, project.ID, req.ShotID).Scan(&planID, &requirement, &workflowRunID); err != nil {
+		return "", err
 	}
 	if req.Decision == "approve" {
-		if _, err := tx.Exec(r.Context(), `
+		if _, err := tx.Exec(ctx, `
 			UPDATE video_render_segments
 			SET audio_verification_status = CASE
 			      WHEN NOT native_audio_requested THEN 'not_requested'
@@ -68,47 +96,54 @@ func (s *Server) verifyStoryboardShotRenderPlanAudio(w http.ResponseWriter, r *h
 			    audio_verified_at = CASE WHEN COALESCE(native_audio_detected, false) THEN now() ELSE NULL END,
 			    audio_verification_notes = NULLIF($5, ''), updated_at = now()
 			WHERE video_render_plan_id = $1 AND storyboard_shot_id = $2 AND status = 'succeeded'
-		`, planID, shot.ID, requirement, principal.UserID, strings.TrimSpace(req.Notes)); err != nil {
-			s.writeError(w, r, err)
-			return
+		`, planID, req.ShotID, requirement, actorID, req.Notes); err != nil {
+			return "", err
 		}
 	} else {
-		if _, err := tx.Exec(r.Context(), `
+		if _, err := tx.Exec(ctx, `
 			UPDATE video_render_segments
 			SET audio_verification_status = CASE WHEN native_audio_requested THEN 'needs_audio_retry' ELSE 'not_requested' END,
 			    production_readiness = CASE WHEN native_audio_requested THEN 'blocked' ELSE 'ready' END,
 			    audio_verified_by = NULL, audio_verified_at = NULL,
 			    audio_verification_notes = NULLIF($3, ''), updated_at = now()
 			WHERE video_render_plan_id = $1 AND storyboard_shot_id = $2 AND status = 'succeeded'
-		`, planID, shot.ID, strings.TrimSpace(req.Notes)); err != nil {
-			s.writeError(w, r, err)
-			return
+		`, planID, req.ShotID, req.Notes); err != nil {
+			return "", err
 		}
 	}
-	if err := refreshRenderPlanAudioStateTx(r.Context(), tx, planID, shot.ID, principal.UserID, strings.TrimSpace(req.Notes)); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := refreshRenderPlanAudioStateTx(ctx, tx, planID, req.ShotID, actorID, req.Notes); err != nil {
+		return "", err
 	}
-	if err := refreshFinalVideoReadinessForShotTx(r.Context(), tx, shot.ID); err != nil {
-		s.writeError(w, r, err)
-		return
+	if err := refreshFinalVideoReadinessForShotTx(ctx, tx, req.ShotID); err != nil {
+		return "", err
 	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.audio.verification.completed", "video_render_plan", planID, mustRawJSON(map[string]any{
-		"planId": planID, "shotId": shot.ID, "workflowRunId": workflowRunID, "decision": req.Decision, "notes": strings.TrimSpace(req.Notes), "verifiedBy": principal.UserID,
+	if err := insertAPIEvent(ctx, tx, project.OrganizationID, project.ID, "storyboard.audio.verification.completed", "video_render_plan", planID, mustRawJSON(map[string]any{
+		"planId": planID, "shotId": req.ShotID, "workflowRunId": workflowRunID, "decision": req.Decision, "notes": req.Notes, "verifiedBy": actorID,
 	})); err != nil {
-		s.writeError(w, r, err)
-		return
+		return "", err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+	return planID, nil
+}
+
+func (s *Server) executeShotRenderPlanVerifyAudioSyncAction(
+	ctx context.Context,
+	tx pgx.Tx,
+	principal auth.Principal,
+	project Project,
+	_ projectcontrol.Command,
+	raw json.RawMessage,
+) (agentToolResult, error) {
+	var input verifyStoryboardShotRenderPlanAudioRequest
+	if err := decodeWorkflowActionInput(raw, &input); err != nil {
+		return agentToolResult{}, err
 	}
-	detail, err := s.videoRenderPlanDetail(r.Context(), project.ID, shot.ID, planID)
+	planID, err := s.verifyStoryboardShotRenderPlanAudioActionTx(ctx, tx, project, principal.UserID, input)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return agentToolResult{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, detail, nil)
+	return agentToolOK("shot.render_plan.verify_audio", workflowActionArguments(raw), "已完成镜头音频核验。", map[string]any{
+		"shotId": input.ShotID, "videoRenderPlanId": planID, "decision": strings.ToLower(strings.TrimSpace(input.Decision)),
+	}), nil
 }
 
 func refreshRenderPlanAudioStateTx(ctx context.Context, tx pgx.Tx, planID, shotID, verifiedBy, notes string) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -77,6 +78,7 @@ type runProjectReviewRequest struct {
 	ReviewType                 string `json:"reviewType"`
 	UseAgent                   bool   `json:"useAgent"`
 	IncludeDeterministicChecks *bool  `json:"includeDeterministicChecks"`
+	ProjectControlCommandID    string `json:"-"`
 }
 
 func (s *Server) runProjectReview(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -113,13 +115,50 @@ func (s *Server) runProjectReviewCore(ctx context.Context, principal auth.Princi
 		"useAgent":                   req.UseAgent,
 		"includeDeterministicChecks": includeDeterministic,
 	}
+	commandID := strings.TrimSpace(req.ProjectControlCommandID)
+	if commandID != "" {
+		input["projectControlCommandId"] = commandID
+	}
 	var runID string
-	if err := s.db.QueryRow(ctx, `
-		INSERT INTO review_runs(organization_id, project_id, review_type, status, input, output, created_by)
-		VALUES ($1, $2, $3, 'running', $4, '{}', $5)
-		RETURNING id::text
-	`, project.OrganizationID, project.ID, reviewType, mustMarshal(input), principal.UserID).Scan(&runID); err != nil {
-		return RunProjectReviewResponse{}, err
+	if commandID != "" {
+		var status string
+		var summary, output json.RawMessage
+		err := s.db.QueryRow(ctx, `
+			SELECT id::text, status, summary, output
+			FROM review_runs
+			WHERE project_id = $1 AND project_control_command_id = $2
+		`, project.ID, commandID).Scan(&runID, &status, &summary, &output)
+		if err == nil {
+			if status == "succeeded" {
+				var completed struct {
+					ItemCount int `json:"itemCount"`
+				}
+				_ = json.Unmarshal(output, &completed)
+				return RunProjectReviewResponse{ReviewRunID: runID, Status: status, Summary: summary, ItemCount: completed.ItemCount}, nil
+			}
+			if _, err := s.db.Exec(ctx, `
+				UPDATE review_runs
+				SET status = 'running', error_code = NULL, error_message = NULL,
+				    started_at = COALESCE(started_at, now()), completed_at = NULL
+				WHERE id = $1
+			`, runID); err != nil {
+				return RunProjectReviewResponse{}, err
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return RunProjectReviewResponse{}, err
+		}
+	}
+	if runID == "" {
+		if err := s.db.QueryRow(ctx, `
+			INSERT INTO review_runs(
+				organization_id, project_id, review_type, status, input, output, created_by,
+				project_control_command_id
+			)
+			VALUES ($1, $2, $3, 'running', $4, '{}', $5, NULLIF($6, '')::uuid)
+			RETURNING id::text
+		`, project.OrganizationID, project.ID, reviewType, mustMarshal(input), principal.UserID, commandID).Scan(&runID); err != nil {
+			return RunProjectReviewResponse{}, err
+		}
 	}
 	items := []reviewpkg.ReviewItemDraft{}
 	if includeDeterministic {
@@ -305,44 +344,25 @@ func (s *Server) listReviewItems(w http.ResponseWriter, r *http.Request, princip
 		return
 	}
 	query := r.URL.Query()
-	args := []any{project.ID}
-	conditions := []string{"project_id = $1"}
-	for _, filter := range []struct {
-		name   string
-		column string
-	}{
-		{"status", "status"},
-		{"severity", "severity"},
-		{"category", "category"},
-		{"entityType", "entity_type"},
-	} {
-		value := strings.TrimSpace(query.Get(filter.name))
-		if value == "" {
-			continue
-		}
-		args = append(args, value)
-		conditions = append(conditions, filter.column+" = $"+itoa(len(args)))
+	status := strings.TrimSpace(query.Get("status"))
+	if status == "" {
+		status = "all"
 	}
-	rows, err := s.db.Query(r.Context(), reviewItemSelectSQL("WHERE "+strings.Join(conditions, " AND ")+" ORDER BY created_at DESC LIMIT 200"), args...)
+	page, err := s.listReviewItemsAction(r.Context(), project, reviewItemListActionInput{
+		Status:     status,
+		Severity:   strings.TrimSpace(query.Get("severity")),
+		Category:   strings.TrimSpace(query.Get("category")),
+		EntityType: strings.TrimSpace(query.Get("entityType")),
+		Limit:      queryInt(r, "limit", 200),
+		Cursor:     strings.TrimSpace(query.Get("cursor")),
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer rows.Close()
-	items := make([]ReviewItem, 0)
-	for rows.Next() {
-		item, err := scanReviewItem(rows)
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"items": page.Items, "hasMore": page.NextCursor != "", "nextCursor": page.NextCursor,
+	}, nil)
 }
 
 func (s *Server) getReviewItem(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -381,40 +401,20 @@ func (s *Server) updateReviewItemStatus(w http.ResponseWriter, r *http.Request, 
 	if !decode(w, r, &req) {
 		return
 	}
-	if status == "open" {
-		if _, err := s.db.Exec(r.Context(), `
-			UPDATE review_items
-			SET status = 'open', resolved_by = NULL, resolved_at = NULL, resolution_note = NULL
-			WHERE project_id = $1 AND id = $2
-		`, project.ID, r.PathValue("itemId")); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		item, err := scanReviewItem(s.db.QueryRow(r.Context(), reviewItemSelectSQL(`WHERE project_id = $1 AND id = $2`), project.ID, r.PathValue("itemId")))
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		httpx.WriteJSON(w, r, http.StatusOK, item, nil)
-		return
-	}
-	item, err := scanReviewItem(s.db.QueryRow(r.Context(), reviewItemSelectSQL(`
-		WHERE project_id = $1 AND id = $2
-	`), project.ID, r.PathValue("itemId")))
+	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if _, err := s.db.Exec(r.Context(), `
-		UPDATE review_items
-		SET status = $3, resolved_by = $4, resolved_at = now(), resolution_note = NULLIF($5, '')
-		WHERE project_id = $1 AND id = $2
-	`, project.ID, item.ID, status, principal.UserID, strings.TrimSpace(req.Note)); err != nil {
+	defer tx.Rollback(r.Context())
+	updated, err := s.updateReviewItemStatusActionTx(r.Context(), tx, principal, project, reviewItemStatusActionInput{
+		ItemID: r.PathValue("itemId"), Status: status, Note: req.Note,
+	})
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	updated, err := scanReviewItem(s.db.QueryRow(r.Context(), reviewItemSelectSQL(`WHERE project_id = $1 AND id = $2`), project.ID, item.ID))
-	if err != nil {
+	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}

@@ -43,36 +43,18 @@ func (s *Server) createArtifactPreviewURL(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if s.storage == nil {
-		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
-		return
-	}
 	var req struct {
 		ExpiresSeconds int `json:"expiresSeconds"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	if artifact.StorageKey == nil || strings.TrimSpace(*artifact.StorageKey) == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "ARTIFACT_HAS_NO_STORAGE_OBJECT", "artifact has no storage object", nil, false)
-		return
-	}
-	if !artifactCanPreview(artifact) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "UNSUPPORTED_PREVIEW_TYPE", "artifact mime type cannot be previewed", nil, false)
-		return
-	}
-	presigned, err := s.storage.PresignGetObject(r.Context(), *artifact.StorageKey, previewURLExpiry(req.ExpiresSeconds))
+	preview, err := s.presignArtifactPreview(r.Context(), artifact, req.ExpiresSeconds)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"artifactId": artifact.ID,
-		"storageKey": presigned.StorageKey,
-		"url":        presigned.URL,
-		"method":     presigned.Method,
-		"expiresAt":  presigned.ExpiresAt,
-	}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, preview, nil)
 }
 
 func (s *Server) getMediaFile(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -148,11 +130,7 @@ func (s *Server) authorizeObjectAccess(w http.ResponseWriter, r *http.Request, p
 }
 
 func (s *Server) artifact(r *http.Request, artifactID string) (Artifact, error) {
-	return scanArtifact(s.db.QueryRow(r.Context(), `
-		SELECT id, organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, model_id, metadata, created_at
-		FROM artifacts
-		WHERE id = $1
-	`, artifactID))
+	return s.artifactByID(r.Context(), artifactID)
 }
 
 func (s *Server) mediaFile(r *http.Request, mediaFileID string) (MediaFile, error) {

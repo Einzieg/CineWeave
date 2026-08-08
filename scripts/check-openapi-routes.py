@@ -34,6 +34,7 @@ class RouteSourceManifest:
     sources: tuple[RouteSource, ...]
     implicit_methods: dict[str, str]
     allow_missing_openapi: frozenset[tuple[str, str]]
+    protocol_transports: frozenset[tuple[str, str]]
 
 
 def workspace_path(value: str, *, label: str) -> pathlib.Path:
@@ -119,10 +120,34 @@ def load_route_source_manifest(path: pathlib.Path) -> RouteSourceManifest:
             raise ValueError(f"allowMissingOpenAPI item {index} is invalid")
         allowlist.add((method, route_path))
 
+    raw_protocol_transports = document.get("protocolTransports", [])
+    if not isinstance(raw_protocol_transports, list):
+        raise ValueError("protocolTransports must be an array")
+    protocol_transports: set[tuple[str, str]] = set()
+    for index, item in enumerate(raw_protocol_transports):
+        if not isinstance(item, dict):
+            raise ValueError(f"protocolTransports item {index} must be an object")
+        method = str(item.get("method", "")).lower()
+        route_path = item.get("path")
+        protocol = item.get("protocol")
+        if (
+            method not in HTTP_METHODS
+            or not isinstance(route_path, str)
+            or not route_path.startswith("/")
+            or not isinstance(protocol, str)
+            or not protocol.strip()
+        ):
+            raise ValueError(f"protocolTransports item {index} is invalid")
+        route = (method, route_path)
+        if route in protocol_transports:
+            raise ValueError(f"protocol transport is duplicated: {method.upper()} {route_path}")
+        protocol_transports.add(route)
+
     return RouteSourceManifest(
         sources=tuple(sources),
         implicit_methods=normalized_implicit_methods,
         allow_missing_openapi=frozenset(allowlist),
+        protocol_transports=frozenset(protocol_transports),
     )
 
 
@@ -144,6 +169,14 @@ def actual_routes(manifest: RouteSourceManifest) -> set[tuple[str, str]]:
                 normalized_method = manifest.implicit_methods.get(
                     route_path, source.default_implicit_method or ""
                 )
+                if not normalized_method:
+                    transport_methods = {
+                        method
+                        for method, transport_path in manifest.protocol_transports
+                        if transport_path == route_path
+                    }
+                    if len(transport_methods) == 1:
+                        normalized_method = next(iter(transport_methods))
                 if not normalized_method:
                     raise ValueError(
                         f"route {route_path} in {source.path} has no method and no implicitMethods entry"
@@ -221,7 +254,11 @@ def check_routes(
     manifest = load_route_source_manifest(route_source_manifest_path)
     actual = actual_routes(manifest)
     documented = openapi_routes(contract_path)
-    missing = sorted((actual - documented) - manifest.allow_missing_openapi)
+    missing = sorted(
+        (actual - documented)
+        - manifest.allow_missing_openapi
+        - manifest.protocol_transports
+    )
     stale = sorted(documented - actual)
     return missing, stale, len(documented)
 

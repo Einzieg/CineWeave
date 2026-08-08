@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Einzieg/cineweave/internal/auth"
+	"github.com/Einzieg/cineweave/internal/controlmcp"
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/google/uuid"
@@ -660,6 +663,7 @@ func TestUpdateCanonicalAssetManualPromptsMarksCardReady(t *testing.T) {
 	}
 	var updated CanonicalAsset
 	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID, seed.ownerToken, seed.organizationID, map[string]any{
+		"idempotencyKey":    "asset-manual-prompt-ready",
 		"basePrompt":        "four-view oil lamp design",
 		"consistencyPrompt": "preserve shape, material, and scale",
 		"negativePrompt":    "people, hands, text",
@@ -683,11 +687,13 @@ func TestUpdateCanonicalAssetRevisionConflictReturnsCurrentRevision(t *testing.T
 	}
 	var updated CanonicalAsset
 	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID, seed.ownerToken, seed.organizationID, map[string]any{
+		"idempotencyKey":   "asset-revision-first-update",
 		"description":      "updated by another operation",
 		"expectedRevision": revision,
 	}, &updated)
 
 	recorder := doAPIRequest(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID, seed.ownerToken, seed.organizationID, map[string]any{
+		"idempotencyKey":   "asset-revision-stale-update",
 		"name":             "stale update",
 		"expectedRevision": revision,
 	})
@@ -713,6 +719,58 @@ func TestUpdateCanonicalAssetRevisionConflictReturnsCurrentRevision(t *testing.T
 	}
 	if got := int64(currentRevision); got != updated.Revision {
 		t.Fatalf("current revision = %d, want %d", got, updated.Revision)
+	}
+	var manualController, manualStatus string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT controller_type, status
+		FROM project_control_commands
+		WHERE project_id = $1 AND action_name = 'asset.update' AND idempotency_key = $2
+	`, seed.projectID, "asset-revision-first-update").Scan(&manualController, &manualStatus); err != nil {
+		t.Fatalf("read manual asset command: %v", err)
+	}
+	if manualController != "manual" || manualStatus != "succeeded" {
+		t.Fatalf("manual asset command = %s/%s", manualController, manualStatus)
+	}
+
+	codexIdentity := controlmcp.Identity{
+		Principal:      auth.Principal{UserID: seed.ownerUserID, OrganizationID: seed.organizationID},
+		ControllerType: projectcontrol.ControllerCodexMCP,
+	}
+	staleRaw, err := json.Marshal(map[string]any{
+		"projectId": seed.projectID, "idempotencyKey": "asset-codex-stale",
+		"assetId": assetID, "expectedRevision": revision,
+		"patch": map[string]any{"name": "stale Codex update"},
+	})
+	if err != nil {
+		t.Fatalf("marshal stale Codex asset update: %v", err)
+	}
+	stale, err := seed.apiServer.projectControl.Execute(seed.ctx, codexIdentity, "asset.update", staleRaw)
+	if err != nil {
+		t.Fatalf("execute stale Codex asset update: %v", err)
+	}
+	if stale.Error == nil || stale.Error.Code != "ASSET_REVISION_CONFLICT" {
+		t.Fatalf("stale Codex asset update = %+v", stale)
+	}
+	fresh := executeProjectControlTestAction(t, seed, codexIdentity, "asset.update", map[string]any{
+		"projectId": seed.projectID, "idempotencyKey": "asset-codex-fresh",
+		"assetId": assetID, "expectedRevision": updated.Revision,
+		"patch": map[string]any{"name": "Codex updated asset"},
+	})
+	var freshData struct {
+		Asset CanonicalAsset `json:"asset"`
+	}
+	if err := json.Unmarshal(fresh.Data, &freshData); err != nil {
+		t.Fatalf("decode fresh Codex asset update: %v", err)
+	}
+	if freshData.Asset.Name != "Codex updated asset" || freshData.Asset.Revision <= updated.Revision {
+		t.Fatalf("fresh Codex asset update = %+v", freshData.Asset)
+	}
+	var codexController string
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT controller_type FROM project_control_commands WHERE id = $1`, fresh.CommandID).Scan(&codexController); err != nil {
+		t.Fatalf("read Codex asset command: %v", err)
+	}
+	if codexController != "codex_mcp" {
+		t.Fatalf("Codex asset controller = %s", codexController)
 	}
 }
 
@@ -833,13 +891,29 @@ func TestArchiveCanonicalAssetHidesFromDefaultListAndKeepsLinks(t *testing.T) {
 	}
 
 	var deleted struct {
-		Deleted bool   `json:"deleted"`
-		Mode    string `json:"mode"`
-		AssetID string `json:"assetId"`
+		Deleted  bool   `json:"deleted"`
+		Mode     string `json:"mode"`
+		AssetID  string `json:"assetId"`
+		Revision int64  `json:"revision"`
 	}
-	doAPISuccess(t, server, http.MethodDelete, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID, seed.ownerToken, seed.organizationID, nil, &deleted)
-	if !deleted.Deleted || deleted.Mode != "archive" || deleted.AssetID != assetID {
+	doAPISuccess(t, server, http.MethodDelete, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID, seed.ownerToken, seed.organizationID, map[string]any{
+		"expectedRevision": 1,
+		"idempotencyKey":   "asset-archive-manual",
+		"reason":           "no longer needed",
+	}, &deleted)
+	if !deleted.Deleted || deleted.Mode != "archive" || deleted.AssetID != assetID || deleted.Revision != 2 {
 		t.Fatalf("deleted = %+v", deleted)
+	}
+	var commandController, commandStatus string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT controller_type, status
+		FROM project_control_commands
+		WHERE project_id = $1 AND action_name = 'asset.delete' AND idempotency_key = $2
+	`, seed.projectID, "asset-archive-manual").Scan(&commandController, &commandStatus); err != nil {
+		t.Fatalf("read manual asset delete command: %v", err)
+	}
+	if commandController != "manual" || commandStatus != "succeeded" {
+		t.Fatalf("manual asset delete command = %s/%s", commandController, commandStatus)
 	}
 
 	var defaultList struct {

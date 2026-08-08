@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -361,50 +362,55 @@ func (s *Server) getCommerceProduct(w http.ResponseWriter, r *http.Request, prin
 }
 
 func (s *Server) createCommerceProductVersion(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
-	var req struct {
-		ExpectedRevision  *int64          `json:"expectedRevision"`
-		Name              string          `json:"name"`
-		Brand             string          `json:"brand"`
-		SellingPoints     json.RawMessage `json:"sellingPoints"`
-		ImmutableFeatures json.RawMessage `json:"immutableFeatures"`
-		ProhibitedClaims  json.RawMessage `json:"prohibitedClaims"`
-		Metadata          json.RawMessage `json:"metadata"`
-	}
+	var req commerceProductVersionActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	command, actionResult, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.product.version.create", mustRawJSON(req),
+		idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	result, err := s.commerceCatalog.CreateProductVersion(r.Context(), tx, project.OrganizationID, project.ID, principal.UserID, req.ExpectedRevision, commercepkg.ProductVersionInput{
-		Name: req.Name, Brand: req.Brand, SellingPoints: req.SellingPoints,
-		ImmutableFeatures: req.ImmutableFeatures, ProhibitedClaims: req.ProhibitedClaims,
-		Metadata: req.Metadata,
-	})
+	result, err := decodeAgentToolData[commercepkg.ProductMutationResult](actionResult.Data)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := appendCommerceProductMutationEvents(r.Context(), tx, project.OrganizationID, project.ID, result); err != nil {
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusCreated, result, nil)
+}
+
+func (s *Server) updateCommerceProduct(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
+	if !ok {
+		return
+	}
+	var req commerceProductUpdateActionInput
+	if !decode(w, r, &req) {
+		return
+	}
+	command, actionResult, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.product.update", mustRawJSON(req),
+		idempotencyKey(r, ""),
+	)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	result, err := decodeAgentToolData[commercepkg.ProductMutationResult](actionResult.Data)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	status := http.StatusCreated
-	if r.Method == http.MethodPatch {
-		status = http.StatusOK
-	}
-	httpx.WriteJSON(w, r, status, result, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, result, nil)
 }
 
 func (s *Server) listCommerceProductVersions(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -438,24 +444,32 @@ func (s *Server) listCommerceProductReferences(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	items, err := s.commerceCatalog.ListProductReferences(r.Context(), s.db, project.OrganizationID, project.ID, r.URL.Query().Get("filter[status]"))
+	items, err := s.listCommerceProductReferencesCore(r.Context(), project, r.URL.Query().Get("filter[status]"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) listCommerceProductReferencesCore(ctx context.Context, project Project, status string) ([]commercepkg.ProductReference, error) {
+	items, err := s.commerceCatalog.ListProductReferences(ctx, s.db, project.OrganizationID, project.ID, status)
+	if err != nil {
+		return nil, err
 	}
 	for index := range items {
 		if s.storage == nil {
 			break
 		}
 		var storageKey string
-		if err := s.db.QueryRow(r.Context(), `SELECT storage_key FROM artifacts WHERE id = $1 AND project_id = $2`, items[index].ArtifactID, project.ID).Scan(&storageKey); err != nil {
+		if err := s.db.QueryRow(ctx, `SELECT storage_key FROM artifacts WHERE id = $1 AND project_id = $2`, items[index].ArtifactID, project.ID).Scan(&storageKey); err != nil {
 			continue
 		}
-		if preview, err := s.storage.PresignGetObject(r.Context(), storageKey, 15*time.Minute); err == nil {
+		if preview, err := s.storage.PresignGetObject(ctx, storageKey, 15*time.Minute); err == nil {
 			items[index].PreviewURL = preview.URL
 		}
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	return items, nil
 }
 
 func (s *Server) createCommerceProductReferenceUploadURL(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -686,111 +700,83 @@ func (s *Server) updateCommerceProductReference(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	var req struct {
-		ExpectedRevision int64  `json:"expectedRevision"`
-		ReferenceRole    string `json:"referenceRole"`
-		Ordinal          *int   `json:"ordinal"`
-		SetPrimary       *bool  `json:"setPrimary"`
-	}
+	var req commerceProductReferenceActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	req.ReferenceID = r.PathValue("referenceId")
+	command, actionResult, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.product.reference.update", mustRawJSON(req),
+		idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err := s.commerceCatalog.UpdateProductReference(r.Context(), tx, project.OrganizationID, project.ID,
-		r.PathValue("referenceId"), req.ExpectedRevision, req.ReferenceRole, req.Ordinal, req.SetPrimary)
+	item, err := decodeAgentToolData[commercepkg.ProductReference](actionResult.Data)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := appendCommerceProductReferenceEvent(
-		r.Context(), tx, project.OrganizationID, project.ID,
-		"commerce.product.reference.updated", item,
-	); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
 func (s *Server) archiveCommerceProductReference(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetDelete)
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
-	var req struct {
-		ExpectedRevision int64 `json:"expectedRevision"`
-	}
+	var req commerceProductReferenceActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	req.ReferenceID = r.PathValue("referenceId")
+	command, actionResult, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.product.reference.archive", mustRawJSON(req),
+		idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err := s.commerceCatalog.ArchiveProductReference(r.Context(), tx, project.OrganizationID, project.ID, r.PathValue("referenceId"), req.ExpectedRevision)
+	item, err := decodeAgentToolData[commercepkg.ProductReference](actionResult.Data)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := appendCommerceProductReferenceEvent(
-		r.Context(), tx, project.OrganizationID, project.ID,
-		"commerce.product.reference.archived", item,
-	); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
 func (s *Server) getCommerceProductRebuildImpact(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
-	var req struct {
-		TargetProductVersionID  string   `json:"targetProductVersionId"`
-		TargetReferenceIDs      []string `json:"targetReferenceIds"`
-		ExpectedProductRevision int64    `json:"expectedProductRevision"`
-	}
+	var req commerceProductRebuildImpactActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	command, actionResult, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.product.rebuild_impact", mustRawJSON(req),
+		idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	impact, err := s.commerceCatalog.PlanProductRebuild(r.Context(), tx, project.OrganizationID, project.ID,
-		strings.TrimSpace(req.TargetProductVersionID), req.TargetReferenceIDs, req.ExpectedProductRevision, principal.UserID)
+	impact, err := decodeAgentToolData[commercepkg.ProductRebuildImpact](actionResult.Data)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, impact, nil)
 }
 
 func (s *Server) createCommerceProductRebuild(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionWorkflowRun)
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
@@ -799,73 +785,23 @@ func (s *Server) createCommerceProductRebuild(w http.ResponseWriter, r *http.Req
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_REQUIRED", "商品换版需要请求标识", nil, false)
 		return
 	}
-	var req struct {
-		ImpactToken             string `json:"impactToken"`
-		ExpectedProductRevision int64  `json:"expectedProductRevision"`
-	}
+	var req commerceProductRebuildActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	command, actionResult, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.product.rebuild", mustRawJSON(req), idempotencyKey,
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	result, err := s.commerceCatalog.ExecuteProductRebuild(r.Context(), tx, project.OrganizationID, project.ID,
-		strings.TrimSpace(req.ImpactToken), req.ExpectedProductRevision, idempotencyKey, principal.UserID)
+	result, err := decodeAgentToolData[commercepkg.ProductRebuildResult](actionResult.Data)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if !result.IdempotentReplay {
-		product, loadErr := s.commerceCatalog.GetProduct(r.Context(), tx, project.OrganizationID, project.ID)
-		if loadErr != nil {
-			s.writeError(w, r, loadErr)
-			return
-		}
-		version, loadErr := s.commerceCatalog.GetProductVersion(
-			r.Context(), tx, project.OrganizationID, project.ID, result.ProductVersionID,
-		)
-		if loadErr != nil {
-			s.writeError(w, r, loadErr)
-			return
-		}
-		pack, loadErr := s.commerceCatalog.GetProductReferencePack(
-			r.Context(), tx, project.OrganizationID, project.ID, result.ReferencePackID,
-		)
-		if loadErr != nil {
-			s.writeError(w, r, loadErr)
-			return
-		}
-		versionPayload := mustRawJSON(map[string]any{
-			"productId": product.ID, "productVersionId": version.ID, "version": version.Version,
-		})
-		if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID,
-			"commerce.product.version.activated", "commerce_product_version", version.ID, versionPayload); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID,
-			"commerce.product.updated", "commerce_product", product.ID, mustRawJSON(map[string]any{
-				"productId": product.ID, "productVersionId": version.ID, "revision": product.Revision,
-				"activated": true, "requiresRebuild": false,
-			})); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID,
-			"commerce.reference_pack.created", "commerce_product_reference_pack", pack.ID, mustRawJSON(map[string]any{
-				"productVersionId": pack.ProductVersionID, "referencePackId": pack.ID, "status": pack.Status,
-			})); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusAccepted, result, nil)
 }
 

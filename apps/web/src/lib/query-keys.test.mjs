@@ -74,3 +74,28 @@ test("workflow run list keys isolate activity pages while preserving the invalid
   assert.notDeepEqual(active, firstTerminalPage);
   assert.notDeepEqual(firstTerminalPage, nextTerminalPage);
 });
+
+test("project control command keys isolate activity pages while preserving the invalidation root", () => {
+  const root = qk.projectControlCommands("project-1");
+  const active = qk.projectControlCommands("project-1", {
+    statuses: ["queued", "running", "waiting_workflow", "waiting_input"],
+    view: "activity",
+    limit: 50,
+  });
+  const terminal = qk.projectControlCommands("project-1", {
+    statuses: ["succeeded", "partial_succeeded", "failed", "cancelled"],
+    view: "activity",
+    limit: 20,
+  });
+  const nextTerminal = qk.projectControlCommands("project-1", {
+    statuses: ["succeeded", "partial_succeeded", "failed", "cancelled"],
+    view: "activity",
+    limit: 20,
+    cursor: "cursor-2",
+  });
+
+  assert.deepEqual(active.slice(0, root.length), root);
+  assert.deepEqual(terminal.slice(0, root.length), root);
+  assert.notDeepEqual(active, terminal);
+  assert.notDeepEqual(terminal, nextTerminal);
+});

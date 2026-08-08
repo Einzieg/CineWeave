@@ -62,6 +62,12 @@ type createProjectVideoProductionRebuildRequest struct {
 	ImpactToken             string `json:"impactToken"`
 }
 
+type projectVideoProductionRebuildActionResult struct {
+	Rebuild          projectVideoProductionRebuild `json:"rebuild"`
+	WorkflowRunID    string                        `json:"workflowRunId"`
+	IdempotentReplay bool                          `json:"idempotentReplay"`
+}
+
 type projectVideoProductionRebuildItem struct {
 	ID                       string          `json:"id"`
 	RebuildID                string          `json:"rebuildId"`
@@ -95,32 +101,12 @@ func (s *Server) getProjectVideoProductionRebuildImpact(w http.ResponseWriter, r
 	if !decode(w, r, &req) {
 		return
 	}
-	req.TargetProfileKey = strings.TrimSpace(req.TargetProfileKey)
-	if req.TargetProfileKey == "" {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeProfileNotFound, "targetProfileKey 不能为空", false))
-		return
-	}
-	target, err := videoproduction.ResolveProfileVersion(r.Context(), s.db, req.TargetProfileKey, req.TargetProfileVersion, true)
+	result, err := s.projectVideoProductionRebuildImpactAction(r.Context(), s.db, project, req)
 	if err != nil {
 		s.writeVideoProductionError(w, r, err)
 		return
 	}
-	targetConfiguration, err := s.resolveTargetProductionConfiguration(r.Context(), s.db, project.OrganizationID, project.ID, req.TargetConfiguration)
-	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
-	}
-	compatibility, err := s.loadVideoProductionCompatibility(r.Context(), s.db, projectWithProductionConfiguration(project, targetConfiguration), target)
-	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
-	}
-	impact, err := videoproduction.BuildRebuildImpact(r.Context(), s.db, project.ID, target, targetConfiguration)
-	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"impact": impact, "compatibility": compatibility}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, result, nil)
 }
 
 func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -136,32 +122,46 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 	if !decode(w, r, &req) {
 		return
 	}
-	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	result, err := s.createProjectVideoProductionRebuildCore(
+		r.Context(), principal, project, req, strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+	)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusAccepted, result.Rebuild, map[string]any{"operationId": result.WorkflowRunID})
+}
+
+func (s *Server) createProjectVideoProductionRebuildCore(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	req createProjectVideoProductionRebuildRequest,
+	idempotencyKey string,
+) (projectVideoProductionRebuildActionResult, error) {
+	r := requestWithContext(ctx)
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	req.TargetProfileKey = strings.TrimSpace(req.TargetProfileKey)
 	if idempotencyKey == "" || len(idempotencyKey) > 200 || req.ExpectedProjectRevision <= 0 || strings.TrimSpace(req.TargetProfileKey) == "" || strings.TrimSpace(req.ImpactToken) == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "重建请求缺少有效的 Idempotency-Key、项目 revision、目标方案或影响令牌", nil, false)
-		return
+		return projectVideoProductionRebuildActionResult{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "重建请求缺少有效的 Idempotency-Key、项目 revision、目标方案或影响令牌")
 	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	defer tx.Rollback(r.Context())
 	if existing, found, err := findVideoProductionRebuildByIdempotencyKey(r.Context(), tx, project.ID, idempotencyKey); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	} else if found {
 		if existing.ExpectedProjectRevision != req.ExpectedProjectRevision || existing.ImpactToken != req.ImpactToken {
-			s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeRebuildConflict, "Idempotency-Key 已用于不同的重建请求", false))
-			return
+			return projectVideoProductionRebuildActionResult{}, videoproduction.NewError(videoproduction.CodeRebuildConflict, "Idempotency-Key 已用于不同的重建请求", false)
 		}
 		if err := tx.Commit(r.Context()); err != nil {
-			s.writeError(w, r, err)
-			return
+			return projectVideoProductionRebuildActionResult{}, err
 		}
-		httpx.WriteJSON(w, r, http.StatusAccepted, existing, map[string]any{"operationId": existing.ID})
-		return
+		return projectVideoProductionRebuildActionResult{
+			Rebuild: existing, WorkflowRunID: stringValue(existing.WorkflowRunID), IdempotentReplay: true,
+		}, nil
 	}
 	var currentRevision int64
 	var locked bool
@@ -174,55 +174,44 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 		WHERE id = $1
 		FOR UPDATE
 	`, project.ID).Scan(&currentRevision, &locked, &sourceVideoProductionState, &activeRebuildID); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if locked || activeRebuildID.Valid {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeRebuildConflict, "项目已有视频生产方案重建正在执行", true))
-		return
+		return projectVideoProductionRebuildActionResult{}, videoproduction.NewError(videoproduction.CodeRebuildConflict, "项目已有视频生产方案重建正在执行", true)
 	}
 	if currentRevision != req.ExpectedProjectRevision {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeRebuildImpactStale, "项目已变化，请重新确认重建影响", false))
-		return
+		return projectVideoProductionRebuildActionResult{}, videoproduction.NewError(videoproduction.CodeRebuildImpactStale, "项目已变化，请重新确认重建影响", false)
 	}
 	target, err := videoproduction.ResolveProfileVersion(r.Context(), tx, req.TargetProfileKey, req.TargetProfileVersion, true)
 	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	targetConfiguration, err := s.resolveTargetProductionConfiguration(r.Context(), tx, project.OrganizationID, project.ID, req.TargetConfiguration)
 	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	impact, err := videoproduction.BuildRebuildImpact(r.Context(), tx, project.ID, target, targetConfiguration)
 	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if err := videoproduction.VerifyRebuildImpact(impact, req.ExpectedProjectRevision, req.ImpactToken); err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	compatibility, err := s.loadVideoProductionCompatibility(r.Context(), tx, projectWithProductionConfiguration(project, targetConfiguration), target)
 	if err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if !compatibility.Compatible {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeProfileIncompatible, "当前业务视频模型与目标生产方案不兼容", false))
-		return
+		return projectVideoProductionRebuildActionResult{}, videoproduction.NewError(videoproduction.CodeProfileIncompatible, "当前业务视频模型与目标生产方案不兼容", false)
 	}
 	rebuildID := uuid.NewString()
 	impactSnapshot, err := json.Marshal(impact)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	targetConfigurationJSON, err := json.Marshal(impact.TargetConfiguration)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	var sourceCommerceBindingID *string
 	var sourceCommerceConfigurationHash *string
@@ -243,8 +232,7 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 			&bindingID,
 			&configurationHash,
 		); err != nil {
-			s.writeError(w, r, err)
-			return
+			return projectVideoProductionRebuildActionResult{}, err
 		}
 		sourceCommerceBindingID = &bindingID
 		sourceCommerceConfigurationHash = &configurationHash
@@ -268,8 +256,7 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 		target.ID, impact.Reason, targetConfigurationJSON, impact.TargetConfigurationHash,
 		impactSnapshot, impact.ImpactToken, impact.ExpectedProjectRevision,
 		len(impact.Episodes), impact.Counts.RetainedAssets, idempotencyKey, principal.UserID); err != nil {
-		s.writeVideoProductionRebuildDatabaseError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, normalizeVideoProductionRebuildDatabaseError(err)
 	}
 	for _, episode := range impact.Episodes {
 		if _, err := tx.Exec(r.Context(), `
@@ -280,8 +267,7 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 		`, rebuildID, project.ID, episode.ScriptEpisodeID, episode.EpisodeOrdinal,
 			episode.ScriptEpisodeRevision, episode.ScriptEpisodeHash, episode.SourceStoryboardPlanID); err != nil {
-			s.writeError(w, r, err)
-			return
+			return projectVideoProductionRebuildActionResult{}, err
 		}
 	}
 	command, err := tx.Exec(r.Context(), `
@@ -294,12 +280,10 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 		  AND active_video_production_rebuild_id IS NULL
 	`, project.ID, req.ExpectedProjectRevision, rebuildID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if command.RowsAffected() != 1 {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeRebuildImpactStale, "项目已变化，请重新确认重建影响", false))
-		return
+		return projectVideoProductionRebuildActionResult{}, videoproduction.NewError(videoproduction.CodeRebuildImpactStale, "项目已变化，请重新确认重建影响", false)
 	}
 	workflowInput := workflows.ProjectVideoProductionRebuildInput{
 		OrganizationID: project.OrganizationID,
@@ -315,14 +299,12 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 			return workflowInput
 		}, nil)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE project_video_production_rebuilds SET workflow_run_id = $2 WHERE id = $1
 	`, rebuildID, run.ID); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if _, err := tx.Exec(r.Context(), `
 		INSERT INTO project_video_production_rebuild_attempts(
@@ -330,8 +312,7 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 			retry_failed_only, status, created_by
 		) VALUES ($1, $3, 1, $2, $4, false, 'queued', $5)
 	`, rebuildID, run.ID, project.ID, idempotencyKey, principal.UserID); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if err := events.AppendTx(r.Context(), tx, project.OrganizationID, project.ID,
 		"video.production.rebuild.requested", "video_production_rebuild", rebuildID,
@@ -348,19 +329,16 @@ func (s *Server) createProjectVideoProductionRebuild(w http.ResponseWriter, r *h
 			"episodeCount":            len(impact.Episodes),
 		}),
 	); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	item, err := s.projectVideoProductionRebuild(r.Context(), project.ID, rebuildID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusAccepted, item, map[string]any{"operationId": run.ID})
+	return projectVideoProductionRebuildActionResult{Rebuild: item, WorkflowRunID: run.ID}, nil
 }
 
 func (s *Server) getProjectVideoProductionRebuild(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -438,40 +416,57 @@ func (s *Server) retryFailedProjectVideoProductionRebuildItems(w http.ResponseWr
 	if !s.authorize(w, r, principal, authz.PermissionProjectVideoProductionRebuild, authz.Resource{ProjectID: project.ID}) {
 		return
 	}
-	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if idempotencyKey == "" || len(idempotencyKey) > 200 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "Idempotency-Key 不能为空且不能超过 200 个字符", nil, false)
+	result, err := s.retryProjectVideoProductionRebuildCore(
+		r.Context(), principal, project, r.PathValue("rebuildId"), strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+	)
+	if err != nil {
+		s.writeVideoProductionError(w, r, err)
 		return
 	}
-	rebuildID := r.PathValue("rebuildId")
+	httpx.WriteJSON(w, r, http.StatusAccepted, result.Rebuild, map[string]any{"operationId": result.WorkflowRunID})
+}
+
+func (s *Server) retryProjectVideoProductionRebuildCore(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	rebuildID string,
+	idempotencyKey string,
+) (projectVideoProductionRebuildActionResult, error) {
+	r := requestWithContext(ctx)
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	rebuildID = strings.TrimSpace(rebuildID)
+	if idempotencyKey == "" || len(idempotencyKey) > 200 {
+		return projectVideoProductionRebuildActionResult{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "Idempotency-Key 不能为空且不能超过 200 个字符")
+	}
+	if rebuildID == "" {
+		return projectVideoProductionRebuildActionResult{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "rebuildId 不能为空")
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	defer tx.Rollback(r.Context())
 	var existingRunID string
 	err = tx.QueryRow(r.Context(), `
 		SELECT workflow_run_id::text
 		FROM project_video_production_rebuild_attempts
-		WHERE rebuild_id = $1 AND idempotency_key = $2
-	`, rebuildID, idempotencyKey).Scan(&existingRunID)
+		WHERE rebuild_id = $1 AND project_id = $2 AND idempotency_key = $3
+	`, rebuildID, project.ID, idempotencyKey).Scan(&existingRunID)
 	if err == nil {
 		if err := tx.Commit(r.Context()); err != nil {
-			s.writeError(w, r, err)
-			return
+			return projectVideoProductionRebuildActionResult{}, err
 		}
 		item, loadErr := s.projectVideoProductionRebuild(r.Context(), project.ID, rebuildID)
 		if loadErr != nil {
-			s.writeError(w, r, loadErr)
-			return
+			return projectVideoProductionRebuildActionResult{}, loadErr
 		}
-		httpx.WriteJSON(w, r, http.StatusAccepted, item, map[string]any{"operationId": existingRunID})
-		return
+		return projectVideoProductionRebuildActionResult{
+			Rebuild: item, WorkflowRunID: existingRunID, IdempotentReplay: true,
+		}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	var status string
 	var targetGenerationID, targetBindingID sql.NullString
@@ -508,8 +503,7 @@ func (s *Server) retryFailedProjectVideoProductionRebuildItems(w http.ResponseWr
 		&targetGenerationStatus, &targetGenerationBindingID, &targetBindingStatus,
 		&failedItems, &staleItems, &attemptNo,
 	); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	validTargetIdentity := targetGenerationID.Valid && targetBindingID.Valid &&
 		activeGenerationID.Valid && activeGenerationID.String == targetGenerationID.String &&
@@ -518,16 +512,14 @@ func (s *Server) retryFailedProjectVideoProductionRebuildItems(w http.ResponseWr
 		targetBindingStatus.String == "active"
 	validOwner := activeRebuildID.Valid && activeRebuildID.String == rebuildID
 	if staleItems > 0 {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(
+		return projectVideoProductionRebuildActionResult{}, videoproduction.NewError(
 			videoproduction.CodeRebuildImpactStale,
 			"重建分集内容已变化，请重新确认视频生产配置影响",
 			false,
-		))
-		return
+		)
 	}
 	if !validTargetIdentity || !validOwner || failedItems == 0 || (status != "partial_succeeded" && status != "storyboard_required" && status != "failed") {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeRebuildConflict, "当前重建没有可重试的失败分集", false))
-		return
+		return projectVideoProductionRebuildActionResult{}, videoproduction.NewError(videoproduction.CodeRebuildConflict, "当前重建没有可重试的失败分集", false)
 	}
 	command, err := tx.Exec(r.Context(), `
 		UPDATE projects
@@ -540,20 +532,17 @@ func (s *Server) retryFailedProjectVideoProductionRebuildItems(w http.ResponseWr
 		  AND active_video_production_rebuild_id = $2
 	`, project.ID, rebuildID, targetGenerationID.String)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if command.RowsAffected() != 1 {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeRebuildConflict, "当前重建已被新的生产代替代", false))
-		return
+		return projectVideoProductionRebuildActionResult{}, videoproduction.NewError(videoproduction.CodeRebuildConflict, "当前重建已被新的生产代替代", false)
 	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE project_video_production_rebuilds
 		SET status = 'approved', completed_at = NULL, failure_code = NULL, failure_message = NULL
 		WHERE id = $1 AND project_id = $2 AND target_generation_id = $3
 	`, rebuildID, project.ID, targetGenerationID.String); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	workflowInput := workflows.ProjectVideoProductionRebuildInput{
 		OrganizationID: project.OrganizationID,
@@ -569,16 +558,14 @@ func (s *Server) retryFailedProjectVideoProductionRebuildItems(w http.ResponseWr
 		return workflowInput
 	}, nil)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE project_video_production_rebuilds
 		SET workflow_run_id = $2
 		WHERE id = $1 AND project_id = $3 AND status = 'approved'
 	`, rebuildID, run.ID, project.ID); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if _, err := tx.Exec(r.Context(), `
 		INSERT INTO project_video_production_rebuild_attempts(
@@ -586,13 +573,11 @@ func (s *Server) retryFailedProjectVideoProductionRebuildItems(w http.ResponseWr
 			retry_failed_only, status, created_by
 		) VALUES ($1, $3, $4, $2, $5, true, 'queued', $6)
 	`, rebuildID, run.ID, project.ID, attemptNo, idempotencyKey, principal.UserID); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	activeContext, err := videoproduction.LoadActiveContext(r.Context(), tx, project.ID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if err := events.AppendTx(r.Context(), tx, project.OrganizationID, project.ID,
 		"video.production.rebuild.requested", "video_production_rebuild", rebuildID,
@@ -607,19 +592,16 @@ func (s *Server) retryFailedProjectVideoProductionRebuildItems(w http.ResponseWr
 			"failedItemCount":        failedItems,
 		}),
 	); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
 	item, err := s.projectVideoProductionRebuild(r.Context(), project.ID, rebuildID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return projectVideoProductionRebuildActionResult{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusAccepted, item, map[string]any{"operationId": run.ID})
+	return projectVideoProductionRebuildActionResult{Rebuild: item, WorkflowRunID: run.ID}, nil
 }
 
 func findVideoProductionRebuildByIdempotencyKey(ctx context.Context, tx pgx.Tx, projectID, key string) (projectVideoProductionRebuild, bool, error) {
@@ -709,11 +691,10 @@ func scanProjectVideoProductionRebuildItem(row pgx.Row) (projectVideoProductionR
 	return item, err
 }
 
-func (s *Server) writeVideoProductionRebuildDatabaseError(w http.ResponseWriter, r *http.Request, err error) {
+func normalizeVideoProductionRebuildDatabaseError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && (pgErr.ConstraintName == "project_video_production_rebuilds_one_active" || pgErr.ConstraintName == "project_video_production_rebuilds_project_id_idempotency_key_key") {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeRebuildConflict, "项目已有视频生产方案重建正在执行", true))
-		return
+		return videoproduction.NewError(videoproduction.CodeRebuildConflict, "项目已有视频生产方案重建正在执行", true)
 	}
-	s.writeError(w, r, err)
+	return err
 }

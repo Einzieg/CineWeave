@@ -64,7 +64,7 @@ export function CommerceProjectSettingsPage({ projectId, project }: { projectId:
       name: name.trim(),
       description: description.trim(),
       expectedRevision: project.revision,
-    }),
+    }, `project-update-${project.id}-${project.revision}-${crypto.randomUUID()}`),
     onSuccess: (updated) => {
       queryClient.setQueryData(orgScopedKey(session.organizationId, qk.project(projectId)), updated);
       setName(updated.name);

@@ -8,10 +8,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
 
 export function WorkflowsPage({ projectId }: { projectId: string }) {
-  const { data: workflows = [], isLoading } = useApiQuery({
+  const { data: workflowRunPage, isLoading } = useApiQuery({
     key: qk.workflowRuns(projectId, { status: "all", limit: 20 }),
-    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "all", limit: 20 }).then(r => r.items),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "all", limit: 20 }),
   });
+  const workflows = workflowRunPage?.items ?? [];
 
   return (
     <Surface>

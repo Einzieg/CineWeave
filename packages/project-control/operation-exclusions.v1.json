@@ -1,0 +1,295 @@
+{
+  "schemaVersion": "cineweave.project-control-operation-exclusions.v1",
+  "exclusions": [
+    {
+      "registry": "core_openapi",
+      "operationId": "abandonCommerceSetupSession",
+      "reason": "带货项目初始化会话的页面生命周期接口，不是可复用项目领域动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "bindProjectManual",
+      "reason": "项目手册属于生产配置快照；该设置页路由只返回换代提示，实际修改通过生产配置影响分析与换代动作完成。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "approveAgentStep",
+      "reason": "站内助手审批传输接口由助手会话管理，不导出为 Codex 项目动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "cancelAgentTask",
+      "reason": "站内助手任务生命周期由助手入口管理，Codex 使用持久命令取消。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "cancelCommerceProductionRun",
+      "reason": "旧带货分镜生产协调器接口不属于当前直生成视频产品流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "cancelCommerceScriptUnitBatch",
+      "reason": "页面批次协调器的内部控制接口，不作为单独用户意图导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "clearCompletedWorkflowActivity",
+      "reason": "任务抽屉个人显示偏好接口，不修改项目领域数据或生产结果。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "completeAgentImageAttachment",
+      "reason": "助手附件上传传输步骤，由受控媒体动作内部编排而非直接导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "completeCommerceProductReferenceUpload",
+      "reason": "商品图片上传传输步骤，由受控参考图动作内部编排而非直接导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "completeCommerceScriptReferenceUpload",
+      "reason": "脚本参考图上传传输步骤，由受控参考图动作内部编排而非直接导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "completeCommerceSetupSession",
+      "reason": "带货项目初始化会话的页面生命周期接口，不是可复用项目领域动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "confirmCommerceScriptLanguage",
+      "reason": "旧语言冻结确认接口已不属于当前自动识别语言的直生成流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "confirmCommerceSetupLanguage",
+      "reason": "旧初始化语言确认接口已不属于当前自动识别语言的直生成流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAgentImageAttachmentUploadUrl",
+      "reason": "助手附件签名上传传输接口，由受控媒体动作内部编排。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAgentTask",
+      "reason": "站内助手任务创建接口保留给站内会话，Codex 直接创建持久命令。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAssetReferenceUploadUrl",
+      "reason": "资产参考图签名上传传输接口，由受控媒体动作内部编排。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAssetUploadUrl",
+      "reason": "旧媒体资产签名上传传输接口，不作为独立项目控制意图。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceProduct",
+      "reason": "每个带货项目的商品根记录由项目初始化状态机唯一创建。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceProductReferenceUploadUrl",
+      "reason": "商品图片签名上传传输接口，由受控参考图动作内部编排。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceScriptReferenceUploadUrl",
+      "reason": "脚本参考图签名上传传输接口，由受控参考图动作内部编排。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceScriptUnitBatch",
+      "reason": "页面批次协调器的内部创建接口，高层批量意图由独立命令 items 表达。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createProjectAgentSession",
+      "reason": "站内助手会话接口不属于 Codex 项目领域动作，现有助手继续独立保留。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createScriptAgentMessage",
+      "reason": "旧剧本助手消息传输接口不作为 Codex 项目控制动作导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createScriptAgentSession",
+      "reason": "旧剧本助手会话传输接口不作为 Codex 项目控制动作导出。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "generateCommerceReferenceImageBatch",
+      "reason": "旧带货分镜参考图生产接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "generateCommerceShotVideoBatch",
+      "reason": "旧带货逐镜头视频生产接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "generateCommerceVideoPromptBatch",
+      "reason": "旧带货分镜提示词生产接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "generateScriptFromAgent",
+      "reason": "旧剧本助手专用生成接口由共享剧本动作和站内助手适配器替代。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "organizeCommerceScriptUnit",
+      "reason": "带货脚本内部准备状态机步骤，不作为最终用户可直接调用动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "prepareCommerceScriptUnit",
+      "reason": "带货脚本内部准备状态机步骤，不作为最终用户可直接调用动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "reconcileRuntimeOperation",
+      "reason": "运行操作对账接口仅供平台恢复器使用，不接受用户控制意图。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "regenerateCreativeObject",
+      "reason": "内部通用创意对象再生成入口缺少稳定领域类型，不直接暴露给 Codex。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "rejectAgentStep",
+      "reason": "站内助手审批传输接口由助手会话管理，不导出为 Codex 项目动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "resolveCommerceScriptLanguage",
+      "reason": "语言解析是脚本读取和生成动作的内部步骤，不要求用户单独确认。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "restartCommerceSetupSession",
+      "reason": "带货项目初始化会话的页面生命周期接口，不是可复用项目领域动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "resumeAgentTask",
+      "reason": "站内助手任务生命周期由助手入口管理，Codex 使用命令问题恢复。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "retryCommerceScriptUnitBatch",
+      "reason": "页面批次协调器的内部重试接口，高层命令按失败 item 重试。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "retryFailedCommerceProductionRun",
+      "reason": "旧带货分镜生产协调器接口不属于当前直生成视频产品流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "activateCommerceFinalVideo",
+      "reason": "旧带货分镜时间线成片接口不属于当前脚本直生成视频流程；当前视频任务产物由 direct video 动作读取。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "activateCommerceScriptLocalization",
+      "reason": "旧本地化版本激活接口已由自动语言识别和独立多语言脚本动作替代。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "activateCommerceScriptVersion",
+      "reason": "带货脚本当前产品直接编辑当前正文，不向用户暴露旧脚本版本切换管线。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "activateCommerceStoryboardPlan",
+      "reason": "旧带货分镜方案接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "archiveCommerceStoryboardShot",
+      "reason": "旧带货分镜镜头接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "composeCommerceFinalVideo",
+      "reason": "旧带货分镜时间线成片接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAsset",
+      "reason": "旧 managed assets 表接口不属于核心资产主流程；Codex 使用 canonical asset 和镜头资产需求动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createAssetVariant",
+      "reason": "旧 managed asset variant 接口不属于核心资产主流程，历史图片版本由 canonical asset references 表达。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceScriptLocalization",
+      "reason": "旧本地化记录接口已由自动语言识别和独立多语言脚本动作替代。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceScriptVersion",
+      "reason": "带货脚本当前产品直接编辑当前正文，不向用户暴露旧脚本版本创建管线。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "createCommerceStoryboardPlan",
+      "reason": "旧带货分镜方案接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "deleteAsset",
+      "reason": "旧 managed assets 表接口不属于核心资产主流程；Codex 使用 canonical asset 归档动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "importProjectSourceFile",
+      "reason": "multipart 文件传输接口不作为 MCP 领域动作；Codex 使用长内容暂存和 source.create 完成等价入库。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "prepareCommerceTimeline",
+      "reason": "旧带货分镜时间线接口不属于当前脚本直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "previewCommerceStoryboardPlan",
+      "reason": "旧带货分镜方案预览接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "reorderCommerceStoryboardShots",
+      "reason": "旧带货分镜镜头接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "reviewCanonicalAsset",
+      "reason": "该接口审核旧 managed assets 表；核心资产主流程使用 canonical asset 状态和项目审阅动作。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "updateAsset",
+      "reason": "旧 managed assets 表接口不属于核心资产主流程；Codex 使用 asset.update 修改 canonical asset。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "updateCommerceStoryboardShot",
+      "reason": "旧带货分镜镜头接口不属于当前脚本加参考图直生成视频流程。"
+    },
+    {
+      "registry": "core_openapi",
+      "operationId": "updateCommerceTimeline",
+      "reason": "旧带货分镜时间线接口不属于当前脚本直生成视频流程。"
+    }
+  ]
+}

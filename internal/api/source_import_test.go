@@ -225,9 +225,10 @@ func TestBriefImportCreatesSourceOnly(t *testing.T) {
 
 	var imported ImportProjectSourceResponse
 	doAPISuccess(t, server, http.MethodPost, "/api/projects/"+seed.projectID+"/sources", seed.ownerToken, seed.organizationID, map[string]any{
-		"sourceType": "brief",
-		"title":      "创意文案",
-		"content":    "一个关于海边旧灯塔的悬疑短片。",
+		"sourceType":     "brief",
+		"title":          "创意文案",
+		"content":        "一个关于海边旧灯塔的悬疑短片。",
+		"idempotencyKey": "test-create-brief-source",
 	}, &imported)
 	if imported.Source.SourceType != "brief" || imported.Source.Status != "processed" {
 		t.Fatalf("source = %+v", imported.Source)
@@ -244,6 +245,17 @@ func TestBriefImportCreatesSourceOnly(t *testing.T) {
 	}
 	if chapterCount != 0 || scriptCount != 0 {
 		t.Fatalf("chapter/script count = %d/%d, want 0/0", chapterCount, scriptCount)
+	}
+	var controllerType, commandStatus string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT controller_type, status
+		FROM project_control_commands
+		WHERE project_id = $1 AND action_name = 'source.create' AND idempotency_key = $2
+	`, seed.projectID, "test-create-brief-source").Scan(&controllerType, &commandStatus); err != nil {
+		t.Fatalf("read source.create command: %v", err)
+	}
+	if controllerType != "manual" || commandStatus != "succeeded" {
+		t.Fatalf("source.create command = %s/%s", controllerType, commandStatus)
 	}
 }
 

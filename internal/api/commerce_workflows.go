@@ -109,7 +109,7 @@ func (s *Server) organizeCommerceScriptUnit(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) getCommerceScriptUnitRebuildImpact(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionWorkflowRun)
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionScriptWrite)
 	if !ok {
 		return
 	}
@@ -117,34 +117,40 @@ func (s *Server) getCommerceScriptUnitRebuildImpact(w http.ResponseWriter, r *ht
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	raw, err := json.Marshal(map[string]any{
+		"scriptUnitId":                strings.TrimSpace(r.PathValue("scriptUnitId")),
+		"expectedRevision":            req.ExpectedRevision,
+		"targetSourceScriptVersionId": req.TargetSourceScriptVersionID,
+		"targetLanguageMode":          req.TargetLanguageMode,
+		"targetLanguage":              req.TargetLanguage,
+		"targetDurationSeconds":       req.TargetDurationSeconds,
+		"targetPlatform":              req.TargetPlatform,
+		"targetStoryboardStrategy":    req.TargetStoryboardStrategy,
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	impact, err := s.commerceCatalog.PlanScriptUnitRebuild(
-		r.Context(), tx, project.OrganizationID, project.ID,
-		r.PathValue("scriptUnitId"), req, principal.UserID,
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.script.rebuild_impact", raw,
+		strings.TrimSpace(r.Header.Get("Idempotency-Key")),
 	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	impact, err := decodeAgentToolData[commerce.ScriptUnitRebuildImpact](result.Data)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, impact, nil)
 }
 
 func (s *Server) createCommerceScriptUnitRebuild(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionWorkflowRun)
 	if !ok {
-		return
-	}
-	if s.temporal == nil {
-		s.writeError(w, r, apiError{Status: http.StatusServiceUnavailable, Code: "TEMPORAL_UNAVAILABLE", Message: "Temporal 服务不可用", Retryable: true})
 		return
 	}
 	var req struct {
@@ -155,56 +161,20 @@ func (s *Server) createCommerceScriptUnitRebuild(w http.ResponseWriter, r *http.
 		return
 	}
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if idempotencyKey == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_REQUIRED", "脚本换代需要请求标识", nil, false)
-		return
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	execution, err := s.commerceCatalog.ApproveScriptUnitRebuild(
-		r.Context(), tx, project.OrganizationID, project.ID, r.PathValue("scriptUnitId"),
-		strings.TrimSpace(req.ImpactToken), req.ExpectedRevision, idempotencyKey,
+	result, err := s.executeManualAsyncAction(
+		r.Context(), principal, project, "commerce.script.rebuild",
+		map[string]any{
+			"scriptUnitId":     strings.TrimSpace(r.PathValue("scriptUnitId")),
+			"impactToken":      strings.TrimSpace(req.ImpactToken),
+			"expectedRevision": req.ExpectedRevision,
+		},
+		idempotencyKey,
 	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if execution.IdempotentReplay {
-		run, loadErr := scanWorkflowRun(tx.QueryRow(r.Context(), workflowRunSelectSQL(`WHERE id = $1`), execution.WorkflowRunID))
-		if loadErr != nil {
-			s.writeError(w, r, loadErr)
-			return
-		}
-		if err := tx.Commit(r.Context()); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		httpx.WriteJSON(w, r, http.StatusAccepted, run, map[string]any{
-			"rebuildId": execution.RebuildID, "idempotentReplay": true,
-		})
-		return
-	}
-	run, err := s.enqueueCommercePreparationRunTx(r.Context(), tx, principal, project, execution.PreparationIdentity)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := s.commerceCatalog.AttachScriptUnitRebuildWorkflow(r.Context(), tx, execution.RebuildID, run.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusAccepted, run, map[string]any{
-		"rebuildId":               execution.RebuildID,
-		"targetConfigurationHash": execution.TargetConfigurationHash,
-	})
+	s.writeManualAsyncActionResult(w, r, result)
 }
 
 func (s *Server) prepareCommerceScriptUnit(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -247,7 +217,7 @@ func (s *Server) prepareCommerceScriptUnit(w http.ResponseWriter, r *http.Reques
 		httpx.WriteJSON(w, r, http.StatusAccepted, existing, nil)
 		return
 	}
-	run, err := s.enqueueCommercePreparationRunTx(r.Context(), tx, principal, project, identity)
+	run, err := s.enqueueCommercePreparationRunTx(r.Context(), tx, principal, project, identity, "")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -326,10 +296,12 @@ func (s *Server) enqueueCommercePreparationRunTx(
 	principal auth.Principal,
 	project Project,
 	identity commerce.ScriptUnitPreparationIdentity,
+	projectControlCommandID string,
 ) (WorkflowRun, error) {
 	runID := uuid.NewString()
 	input := workflows.CommerceScriptUnitPreparationInput{
 		Identity: identity, WorkflowRunID: runID, CreatedBy: principal.UserID, AttemptGeneration: 1,
+		ProjectControlCommandID: strings.TrimSpace(projectControlCommandID),
 	}
 	raw, _, err := marshalWorkflowStartInput(input)
 	if err != nil {

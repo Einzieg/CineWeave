@@ -142,7 +142,7 @@ export function VideoPage({ projectId }: { projectId: string }) {
         timeline = await studioApi.createTimeline(session, projectId, {
           title: "主时间线",
           fromStoryboardShots: true,
-        });
+        }, crypto.randomUUID());
       }
       return studioApi.composeTimeline(session, projectId, timeline.id, {
         title: timeline.title,
@@ -158,7 +158,13 @@ export function VideoPage({ projectId }: { projectId: string }) {
   });
 
   const activateFinalMutation = useApiMutation({
-    mutationFn: (session, versionId: string) => studioApi.activateFinalVideo(session, projectId, versionId),
+    mutationFn: (session, version: FinalVideoVersion) => studioApi.activateFinalVideo(
+      session,
+      projectId,
+      version.id,
+      version.revision,
+      `final-video-activate-${version.id}-${version.revision}-${crypto.randomUUID()}`,
+    ),
     onSuccess: () => {
       toast.success("当前成片已切换");
       refreshVideoQueries(projectId, invalidate);
@@ -175,7 +181,14 @@ export function VideoPage({ projectId }: { projectId: string }) {
   });
 
   const deleteFinalMutation = useApiMutation({
-    mutationFn: (session, version: FinalVideoVersion) => studioApi.deleteFinalVideo(session, projectId, version.id, version.status === "active"),
+    mutationFn: (session, version: FinalVideoVersion) => studioApi.deleteFinalVideo(
+      session,
+      projectId,
+      version.id,
+      version.revision,
+      version.status === "active",
+      `final-video-delete-${version.id}-${version.revision}-${crypto.randomUUID()}`,
+    ),
     onSuccess: () => {
       toast.success("成片版本已删除");
       setFinalVideoToDelete(null);
@@ -363,7 +376,7 @@ export function VideoPage({ projectId }: { projectId: string }) {
                 activatePending={activateFinalMutation.isPending}
                 downloadPending={downloadFinalMutation.isPending}
                 deletePending={deleteFinalMutation.isPending}
-                onActivate={() => activateFinalMutation.mutate(version.id)}
+                onActivate={() => activateFinalMutation.mutate(version)}
                 onDownload={() => downloadFinalMutation.mutate(version.id)}
                 onDelete={() => setFinalVideoToDelete(version)}
               />

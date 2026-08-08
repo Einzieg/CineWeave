@@ -17,7 +17,7 @@ import { statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
 import { useApiMutation, useApiQuery, useInvalidateKeys } from "@/lib/query/use-api";
 import { workflowLabel } from "@/lib/routes";
-import { useActivityStore, type ActivityRealtimeEvent, type ActivityRealtimeStatus } from "@/lib/stores/activity-store";
+import { useActivityStore, type ActivityRealtimeStatus } from "@/lib/stores/activity-store";
 import { useUiStore } from "@/lib/stores/ui-store";
 import { isActiveWorkflowStatus } from "@/lib/workflow-status";
 import {
@@ -25,20 +25,31 @@ import {
   shotPromptActivityProgress,
   ShotPromptActivityList,
 } from "./shot-prompt-activity";
+import {
+  isActiveProjectControlCommand,
+  ProjectControlCommandDetail,
+  ProjectControlCommandListButton,
+} from "./project-control-command-activity";
 import type {
   DerivedAssetBatchProjection,
   DerivedAssetRequestItemProjection,
   EpisodeVideoProductionItem,
   ListEnvelope,
+  ProjectControlCommand,
+  ProjectControlCommandStatus,
   WorkflowNodeRun,
   WorkflowRun,
   WorkflowVideoProductionActivity,
 } from "@/lib/types";
 
-const emptyEvents: ActivityRealtimeEvent[] = [];
 const emptyWorkflowRuns: WorkflowRun[] = [];
+const emptyProjectControlCommands: ProjectControlCommand[] = [];
 const activeWorkflowListShape = { status: "active", view: "activity", limit: 100 } as const;
 const terminalWorkflowListShape = { status: "terminal", view: "activity", limit: 20 } as const;
+const activeProjectControlStatuses: ProjectControlCommandStatus[] = ["queued", "running", "waiting_workflow", "waiting_input"];
+const terminalProjectControlStatuses: ProjectControlCommandStatus[] = ["succeeded", "partial_succeeded", "failed", "cancelled"];
+const activeProjectControlListShape = { statuses: activeProjectControlStatuses, view: "activity", limit: 50 } as const;
+const terminalProjectControlListShape = { statuses: terminalProjectControlStatuses, view: "activity", limit: 20 } as const;
 const nodeLabels: Record<string, string> = {
   extract_novel_events: "小说事件提取 Agent",
   generate_adaptation_plan: "改编计划 Agent",
@@ -67,7 +78,11 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     firstPageKey: string;
     pages: ListEnvelope<WorkflowRun>[];
   }>({ projectId: "", firstPageKey: "", pages: [] });
-  const liveEvents = useActivityStore((state) => state.eventsByProject[projectId] ?? emptyEvents);
+  const [additionalTerminalCommandPageState, setAdditionalTerminalCommandPageState] = useState<{
+    projectId: string;
+    firstPageKey: string;
+    pages: ListEnvelope<ProjectControlCommand>[];
+  }>({ projectId: "", firstPageKey: "", pages: [] });
   const connectionStatus = useActivityStore((state) => state.connectionByProject[projectId] ?? "idle");
   const selectedActivityId = selectedActivity.projectId === projectId ? selectedActivity.id : "";
   const setSelectedActivityId = (id: string) => setSelectedActivity({ projectId, id });
@@ -101,7 +116,58 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, terminalWorkflowListShape),
     enabled: activityOpen,
   });
-  const activeWorkflowRuns = activeWorkflowPage?.items ?? emptyWorkflowRuns;
+
+  const {
+    data: activeCommandPage,
+    isLoading: activeCommandsLoading,
+    isFetching: activeCommandsFetching,
+    refetch: refetchActiveCommands,
+  } = useApiQuery({
+    key: qk.projectControlCommands(projectId, activeProjectControlListShape),
+    queryFn: (session) => studioApi.listProjectControlCommands(session, projectId, activeProjectControlListShape),
+    enabled: activityOpen,
+    refetchInterval: (query) =>
+      activityOpen && connectionStatus !== "connected" && query.state.data?.items.some(isActiveProjectControlCommand) ? 5000 : false,
+  });
+  const {
+    data: terminalCommandPage,
+    isLoading: terminalCommandsLoading,
+    isFetching: terminalCommandsFetching,
+    refetch: refetchTerminalCommands,
+  } = useApiQuery({
+    key: qk.projectControlCommands(projectId, terminalProjectControlListShape),
+    queryFn: (session) => studioApi.listProjectControlCommands(session, projectId, terminalProjectControlListShape),
+    enabled: activityOpen,
+  });
+  const activeCommands = activeCommandPage?.items ?? emptyProjectControlCommands;
+  const firstTerminalCommandPageKey = `${terminalCommandPage?.items[0]?.id ?? "empty"}:${terminalCommandPage?.nextCursor ?? "end"}`;
+  const additionalTerminalCommandPages = useMemo(
+    () =>
+      additionalTerminalCommandPageState.projectId === projectId
+      && additionalTerminalCommandPageState.firstPageKey === firstTerminalCommandPageKey
+        ? additionalTerminalCommandPageState.pages
+        : [],
+    [additionalTerminalCommandPageState, firstTerminalCommandPageKey, projectId],
+  );
+  const terminalCommands = useMemo(
+    () => [
+      ...(terminalCommandPage?.items ?? emptyProjectControlCommands),
+      ...additionalTerminalCommandPages.flatMap((page) => page.items),
+    ],
+    [additionalTerminalCommandPages, terminalCommandPage?.items],
+  );
+  const projectControlCommands = useMemo(
+    () => [...activeCommands, ...terminalCommands],
+    [activeCommands, terminalCommands],
+  );
+  const linkedWorkflowRunIds = useMemo(
+    () => new Set(projectControlCommands.flatMap((command) => command.workflowRunIds ?? [])),
+    [projectControlCommands],
+  );
+  const activeWorkflowRuns = useMemo(
+    () => (activeWorkflowPage?.items ?? emptyWorkflowRuns).filter((run) => !linkedWorkflowRunIds.has(run.id)),
+    [activeWorkflowPage?.items, linkedWorkflowRunIds],
+  );
   const firstTerminalPageKey = `${terminalWorkflowPage?.items[0]?.id ?? "empty"}:${terminalWorkflowPage?.nextCursor ?? "end"}`;
   const additionalTerminalPages = useMemo(
     () =>
@@ -115,30 +181,61 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     () => [
       ...(terminalWorkflowPage?.items ?? emptyWorkflowRuns),
       ...additionalTerminalPages.flatMap((page) => page.items),
-    ],
-    [additionalTerminalPages, terminalWorkflowPage?.items],
+    ].filter((run) => !linkedWorkflowRunIds.has(run.id)),
+    [additionalTerminalPages, linkedWorkflowRunIds, terminalWorkflowPage?.items],
   );
   const workflowRuns = useMemo(
     () => [...activeWorkflowRuns, ...terminalWorkflowRuns],
     [activeWorkflowRuns, terminalWorkflowRuns],
   );
-  const activeWorkflowCount = activeWorkflowRuns.length;
+  const activityEntries = useMemo(() => {
+    const entries = [
+      ...projectControlCommands.map((command) => ({ kind: "command" as const, command })),
+      ...workflowRuns.map((run) => ({ kind: "workflow" as const, run })),
+    ];
+    return entries.sort((left, right) => {
+      const leftActive = left.kind === "command" ? isActiveProjectControlCommand(left.command) : isActiveWorkflow(left.run);
+      const rightActive = right.kind === "command" ? isActiveProjectControlCommand(right.command) : isActiveWorkflow(right.run);
+      if (leftActive !== rightActive) return leftActive ? -1 : 1;
+      const leftCreatedAt = left.kind === "command" ? left.command.createdAt : left.run.createdAt;
+      const rightCreatedAt = right.kind === "command" ? right.command.createdAt : right.run.createdAt;
+      return Date.parse(rightCreatedAt ?? "") - Date.parse(leftCreatedAt ?? "");
+    });
+  }, [projectControlCommands, workflowRuns]);
+  const activeActivityCount = activeCommands.length + activeWorkflowRuns.length;
   const lastTerminalPage = additionalTerminalPages.at(-1) ?? terminalWorkflowPage;
   const terminalNextCursor = lastTerminalPage?.nextCursor ?? "";
   const terminalHasMore = lastTerminalPage?.hasMore === true && terminalNextCursor !== "";
-  const workflowRunsLoading = activeWorkflowRunsLoading || terminalWorkflowRunsLoading;
-  const workflowRunsFetching = activeWorkflowRunsFetching || terminalWorkflowRunsFetching;
+  const lastTerminalCommandPage = additionalTerminalCommandPages.at(-1) ?? terminalCommandPage;
+  const terminalCommandNextCursor = lastTerminalCommandPage?.nextCursor ?? "";
+  const terminalCommandHasMore = lastTerminalCommandPage?.hasMore === true && terminalCommandNextCursor !== "";
+  const activityListLoading = activeWorkflowRunsLoading || terminalWorkflowRunsLoading || activeCommandsLoading || terminalCommandsLoading;
+  const activityListFetching = activeWorkflowRunsFetching || terminalWorkflowRunsFetching || activeCommandsFetching || terminalCommandsFetching;
 
+  const selectedCommand = useMemo(() => {
+    if (selectedActivityId.startsWith("command:")) {
+      const commandId = selectedActivityId.slice("command:".length);
+      return projectControlCommands.find((command) => command.id === commandId)
+        ?? projectControlCommands.find(isActiveProjectControlCommand)
+        ?? projectControlCommands[0];
+    }
+    if (selectedActivityId.startsWith("workflow:")) return undefined;
+    return projectControlCommands.find(isActiveProjectControlCommand)
+      ?? (workflowRuns.some(isActiveWorkflow) ? undefined : projectControlCommands[0]);
+  }, [projectControlCommands, selectedActivityId, workflowRuns]);
   const selectedRun = useMemo(
     () => {
+      if (selectedCommand) return undefined;
       if (selectedActivityId.startsWith("workflow:")) {
         const runId = selectedActivityId.slice("workflow:".length);
         return workflowRuns.find((run) => run.id === runId) ?? workflowRuns.find(isActiveWorkflow) ?? workflowRuns[0];
       }
       return workflowRuns.find(isActiveWorkflow) ?? workflowRuns[0];
     },
-    [selectedActivityId, workflowRuns],
+    [selectedActivityId, selectedCommand, workflowRuns],
   );
+  const selectedCommandId = selectedCommand?.id ?? "";
+  const selectedCommandActive = selectedCommand ? isActiveProjectControlCommand(selectedCommand) : false;
   const selectedWorkflowRunId = selectedRun?.id ?? "";
   const selectedRunActive = selectedRun ? isActiveWorkflow(selectedRun) : false;
   const selectedVideoBatchWorkflow = selectedRun ? isVideoBatchWorkflow(selectedRun) : false;
@@ -151,6 +248,28 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     .filter((value) => value > 0);
   const sourceToScriptMissingItems = numberValue(selectedRunOutput.missingItems);
   const sourceToScriptActivated = selectedRunOutput.activated === true;
+
+  const {
+    data: selectedCommandSnapshot,
+    isLoading: selectedCommandLoading,
+    isFetching: selectedCommandFetching,
+    refetch: refetchSelectedCommand,
+  } = useApiQuery({
+    key: qk.projectControlCommand(selectedCommandId || "none"),
+    queryFn: (session) => studioApi.getProjectControlCommand(session, selectedCommandId),
+    enabled: activityOpen && !!selectedCommandId,
+    refetchInterval: activityOpen && connectionStatus !== "connected" && selectedCommandActive ? 3000 : false,
+  });
+  const {
+    data: selectedCommandEvents,
+    isFetching: selectedCommandEventsFetching,
+    refetch: refetchSelectedCommandEvents,
+  } = useApiQuery({
+    key: qk.projectControlCommandEvents(selectedCommandId || "none"),
+    queryFn: (session) => studioApi.listProjectControlCommandEvents(session, selectedCommandId, "", 100),
+    enabled: activityOpen && !!selectedCommandId,
+    refetchInterval: activityOpen && connectionStatus !== "connected" && selectedCommandActive ? 3000 : false,
+  });
 
   const {
     data: workflowNodes = [],
@@ -188,12 +307,6 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     refetchInterval: activityOpen && connectionStatus !== "connected" && selectedRunActive ? 3000 : false,
   });
 
-  const selectedLiveEvents = useMemo(() => {
-    if (!selectedWorkflowRunId) {
-      return liveEvents.slice(-30);
-    }
-    return liveEvents.filter((event) => stringValue(event.payload.workflowRunId) === selectedWorkflowRunId).slice(-40);
-  }, [liveEvents, selectedWorkflowRunId]);
   const visibleWorkflowNodes = useMemo(
     () => (selectedRun && isItemizedWorkflow(selectedRun) ? workflowNodes : sequentialVisibleNodes(workflowNodes)),
     [selectedRun, workflowNodes],
@@ -211,6 +324,43 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
       invalidate([qk.workflowRuns(projectId), qk.workflowNodes(run.id), qk.productionStatus(projectId), qk.shotProductionPrefix(projectId)]);
     },
     onError: (error) => toast.error("取消失败：" + error.message),
+  });
+
+  const cancelCommandMutation = useApiMutation({
+    mutationFn: (session, command: ProjectControlCommand) => studioApi.cancelProjectControlCommand(session, command.id, {
+      expectedCommandRevision: command.revision,
+      idempotencyKey: activityIdempotencyKey("cancel", command.id),
+      reason: "用户在任务活动面板取消",
+    }),
+    onSuccess: (command) => {
+      toast.success("任务取消请求已提交");
+      invalidate([
+        qk.projectControlCommands(projectId),
+        qk.projectControlCommand(command.id),
+        qk.projectControlCommandEvents(command.id),
+        qk.workflowRuns(projectId),
+        qk.productionStatus(projectId),
+      ]);
+    },
+    onError: (error) => toast.error("取消失败：" + error.message),
+  });
+
+  const retryCommandMutation = useApiMutation({
+    mutationFn: (session, command: ProjectControlCommand) => studioApi.retryProjectControlCommand(session, command.id, {
+      expectedCommandRevision: command.revision,
+      idempotencyKey: activityIdempotencyKey("retry", command.id),
+    }),
+    onSuccess: (command) => {
+      toast.success("已创建失败项重试任务");
+      setSelectedActivityId(`command:${command.id}`);
+      invalidate([
+        qk.projectControlCommands(projectId),
+        qk.projectControlCommand(command.id),
+        qk.workflowRuns(projectId),
+        qk.productionStatus(projectId),
+      ]);
+    },
+    onError: (error) => toast.error("重试失败：" + error.message),
   });
 
   const retryFailedItemsMutation = useApiMutation({
@@ -261,12 +411,31 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
     onError: (error) => toast.error("加载更多任务失败：" + error.message),
   });
 
+  const loadMoreTerminalCommandsMutation = useApiMutation({
+    mutationFn: (session, cursor: string) => studioApi.listProjectControlCommands(session, projectId, {
+      ...terminalProjectControlListShape,
+      cursor,
+    }),
+    onSuccess: (page) => {
+      setAdditionalTerminalCommandPageState((current) => ({
+        projectId,
+        firstPageKey: firstTerminalCommandPageKey,
+        pages: [
+          ...(current.projectId === projectId && current.firstPageKey === firstTerminalCommandPageKey ? current.pages : []),
+          page,
+        ],
+      }));
+    },
+    onError: (error) => toast.error("加载更多任务失败：" + error.message),
+  });
+
   const clearCompletedMutation = useApiMutation({
     mutationFn: (session) => studioApi.clearCompletedWorkflowActivity(session, projectId),
     onSuccess: (result) => {
       setSelectedActivityId("");
       setAdditionalTerminalPageState({ projectId, firstPageKey: firstTerminalPageKey, pages: [] });
-      invalidate([qk.workflowRuns(projectId)]);
+      setAdditionalTerminalCommandPageState({ projectId, firstPageKey: firstTerminalCommandPageKey, pages: [] });
+      invalidate([qk.workflowRuns(projectId), qk.projectControlCommands(projectId)]);
       toast.success(result.clearedCount > 0 ? `已清空 ${result.clearedCount} 条已结束任务` : "没有需要清空的已结束任务");
     },
     onError: (error) => toast.error("清空失败：" + error.message),
@@ -302,8 +471,15 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
 
   const refreshSelected = () => {
     setAdditionalTerminalPageState({ projectId, firstPageKey: firstTerminalPageKey, pages: [] });
+    setAdditionalTerminalCommandPageState({ projectId, firstPageKey: firstTerminalCommandPageKey, pages: [] });
     void refetchActiveWorkflowRuns();
     void refetchTerminalWorkflowRuns();
+    void refetchActiveCommands();
+    void refetchTerminalCommands();
+    if (selectedCommandId) {
+      void refetchSelectedCommand();
+      void refetchSelectedCommandEvents();
+    }
     if (selectedWorkflowRunId) {
       void refetchWorkflowNodes();
       if (selectedVideoBatchWorkflow) {
@@ -330,8 +506,8 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
               </SheetTitle>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <ConnectionBadge status={connectionStatus} />
-                <span>活动任务 {activeWorkflowCount}</span>
-                {(workflowRunsFetching || workflowNodesFetching || videoProductionActivityFetching || derivedAssetBatchFetching) && <span>同步中</span>}
+                <span>活动任务 {activeActivityCount}</span>
+                {(activityListFetching || selectedCommandFetching || selectedCommandEventsFetching || workflowNodesFetching || videoProductionActivityFetching || derivedAssetBatchFetching) && <span>同步中</span>}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -339,7 +515,7 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                 variant="outline"
                 size="sm"
                 onClick={() => clearCompletedMutation.mutate()}
-                disabled={clearCompletedMutation.isPending || terminalWorkflowRuns.length === 0}
+                disabled={clearCompletedMutation.isPending || (terminalWorkflowRuns.length === 0 && terminalCommands.length === 0)}
               >
                 {clearCompletedMutation.isPending
                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -358,39 +534,59 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
           <aside className="min-h-0 border-b lg:border-b-0 lg:border-r">
             <ScrollArea className="h-full">
               <div className="grid gap-2 p-4">
-                {workflowRunsLoading ? (
+                {activityListLoading ? (
                   <>
                     <Skeleton className="h-24" />
                     <Skeleton className="h-24" />
                     <Skeleton className="h-24" />
                   </>
-                ) : workflowRuns.length === 0 ? (
+                ) : activityEntries.length === 0 ? (
                   <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">暂无任务记录</div>
                 ) : (
                   <>
-                    {workflowRuns.map((run) => (
+                    {activityEntries.map((entry) => entry.kind === "command" ? (
+                      <ProjectControlCommandListButton
+                        key={`command:${entry.command.id}`}
+                        command={entry.command}
+                        selected={selectedCommand?.id === entry.command.id}
+                        onSelect={() => setSelectedActivityId(`command:${entry.command.id}`)}
+                      />
+                    ) : (
                       <button
-                        key={run.id}
+                        key={`workflow:${entry.run.id}`}
                         type="button"
-                        onClick={() => setSelectedActivityId(`workflow:${run.id}`)}
+                        onClick={() => setSelectedActivityId(`workflow:${entry.run.id}`)}
                         className={cn(
                           "grid gap-2 rounded-lg border p-3 text-left transition hover:bg-muted/50",
-                          selectedRun?.id === run.id && "border-primary bg-muted/60",
+                          selectedRun?.id === entry.run.id && "border-primary bg-muted/60",
                         )}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex min-w-0 items-start gap-2">
-                            <WorkflowRunStatusIcon status={run.status} />
+                            <WorkflowRunStatusIcon status={entry.run.status} />
                             <div className="min-w-0">
-                              <div className="truncate text-sm font-medium">{workflowLabel(workflowTypeFromRun(run))}</div>
-                              <div className="mt-1 text-xs text-muted-foreground">{formatDate(run.createdAt)}</div>
+                              <div className="truncate text-sm font-medium">{workflowLabel(workflowTypeFromRun(entry.run))}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">{formatDate(entry.run.createdAt)}</div>
                             </div>
                           </div>
-                          <StatusBadge status={run.status} />
+                          <StatusBadge status={entry.run.status} />
                         </div>
-                        <div className="line-clamp-2 text-xs text-muted-foreground">{workflowInputSummary(run)}</div>
+                        <div className="line-clamp-2 text-xs text-muted-foreground">{workflowInputSummary(entry.run)}</div>
                       </button>
                     ))}
+                    {terminalCommandHasMore ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => loadMoreTerminalCommandsMutation.mutate(terminalCommandNextCursor)}
+                        disabled={loadMoreTerminalCommandsMutation.isPending}
+                      >
+                        {loadMoreTerminalCommandsMutation.isPending
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <RefreshCcw className="h-3.5 w-3.5" />}
+                        加载更多命令
+                      </Button>
+                    ) : null}
                     {terminalHasMore ? (
                       <Button
                         variant="ghost"
@@ -401,7 +597,7 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                         {loadMoreTerminalMutation.isPending
                           ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           : <RefreshCcw className="h-3.5 w-3.5" />}
-                        加载更多
+                        加载更多旧任务
                       </Button>
                     ) : null}
                   </>
@@ -411,9 +607,22 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
           </aside>
 
           <main className="min-h-0">
-            {!selectedRun ? (
+            {selectedCommand ? (
+              <ScrollArea className="h-full">
+                <ProjectControlCommandDetail
+                  snapshot={selectedCommandSnapshot}
+                  events={selectedCommandEvents?.items ?? []}
+                  loading={selectedCommandLoading}
+                  active={selectedCommandActive}
+                  cancelling={cancelCommandMutation.isPending}
+                  retrying={retryCommandMutation.isPending}
+                  onCancel={() => selectedCommandSnapshot && cancelCommandMutation.mutate(selectedCommandSnapshot.command)}
+                  onRetry={() => selectedCommandSnapshot && retryCommandMutation.mutate(selectedCommandSnapshot.command)}
+                />
+              </ScrollArea>
+            ) : !selectedRun ? (
               <div className="flex h-full items-center justify-center p-8 text-sm text-muted-foreground">选择任务后查看实时动态</div>
-            ) : selectedRun ? (
+            ) : (
               <ScrollArea className="h-full">
                 <div className="grid gap-5 p-5">
                   <section className="rounded-lg border p-4">
@@ -596,25 +805,9 @@ export function ActivityDrawer({ projectId }: { projectId: string }) {
                       </div>
                     )}
                   </section>
-
-                  <section className="grid gap-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <h4 className="text-sm font-semibold">实时事件</h4>
-                      <Badge variant="outline">{selectedLiveEvents.length} 条</Badge>
-                    </div>
-                    {selectedLiveEvents.length === 0 ? (
-                      <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">暂无实时事件</div>
-                    ) : (
-                      <div className="grid gap-2">
-                        {selectedLiveEvents.slice().reverse().map((event) => (
-                          <RealtimeEventRow key={event.id} event={event} />
-                        ))}
-                      </div>
-                    )}
-                  </section>
                 </div>
               </ScrollArea>
-            ) : null}
+            )}
           </main>
         </div>
       </SheetContent>
@@ -909,28 +1102,6 @@ function NodeRunCard({ node }: { node: WorkflowNodeRun }) {
   );
 }
 
-function RealtimeEventRow({ event }: { event: ActivityRealtimeEvent }) {
-  const output = recordValue(event.payload.output);
-  return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-lg border p-3">
-      <EventIcon eventType={event.eventType} />
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-sm font-medium">{activityEventLabel(event)}</div>
-          <span className="text-xs text-muted-foreground">{formatDate(event.receivedAt)}</span>
-        </div>
-        <details className="mt-1">
-          <summary className="cursor-pointer text-xs text-muted-foreground">事件详情</summary>
-          <div className="mt-1 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{event.eventType}</div>
-        </details>
-        {hasMeaningfulValue(output) ? (
-          <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-muted p-2 text-xs leading-relaxed">{jsonPreview(output)}</pre>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 function ConnectionBadge({ status }: { status: ActivityRealtimeStatus }) {
   const connected = status === "connected";
   const reconnecting = status === "reconnecting";
@@ -1000,19 +1171,6 @@ function sequentialVisibleNodes(nodes: WorkflowNodeRun[]) {
 function isTerminalNodeStatus(status: string) {
   const normalized = status.toLowerCase();
   return normalized === "succeeded" || normalized === "completed" || normalized === "failed" || normalized === "cancelled";
-}
-
-function EventIcon({ eventType }: { eventType: string }) {
-  if (eventType.endsWith(".failed")) {
-    return <AlertCircle className="mt-0.5 h-4 w-4 text-status-danger" />;
-  }
-  if (eventType.endsWith(".completed") || eventType.endsWith(".succeeded") || eventType.endsWith(".reviewed") || eventType.endsWith(".cancelled")) {
-    return <CheckCircle2 className="mt-0.5 h-4 w-4 text-status-success" />;
-  }
-  if (eventType.endsWith(".started") || eventType.endsWith(".progress")) {
-    return <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-status-running" />;
-  }
-  return <Clock3 className="mt-0.5 h-4 w-4 text-muted-foreground" />;
 }
 
 function isActiveWorkflow(run: WorkflowRun) {
@@ -1178,72 +1336,6 @@ function nodeLabel(nodeKey: string, nodeType: string, input?: unknown) {
   return nodeLabels[nodeKey] ?? nodeLabels[nodeType.replaceAll(".", "_")] ?? nodeLabels[nodeType] ?? "任务节点";
 }
 
-function activityEventLabel(event: ActivityRealtimeEvent) {
-  const nodeKey = stringValue(event.payload.nodeKey);
-  const workflowType = stringValue(event.payload.workflowType);
-  switch (event.eventType) {
-    case "workflow.run.queued":
-      return `${workflowLabel(workflowType || "任务")}已排队`;
-    case "workflow.node.started":
-      return `${nodeLabel(nodeKey, "")}开始执行`;
-    case "workflow.node.progress":
-      return `${nodeLabel(nodeKey, "")}更新进度`;
-    case "workflow.node.completed":
-      return `${nodeLabel(nodeKey, "")}已完成`;
-    case "workflow.node.failed":
-      return `${nodeLabel(nodeKey, "")}失败`;
-    case "workflow.run.completed":
-      return `${workflowLabel(workflowType || "任务")}已完成`;
-    case "workflow.run.partial_succeeded":
-      return `${workflowLabel(workflowType || "任务")}部分完成`;
-    case "workflow.run.failed":
-      return `${workflowLabel(workflowType || "任务")}失败`;
-    case "workflow.run.cancelled":
-      return `${workflowLabel(workflowType || "任务")}已取消`;
-    case "workflow.run.cancelling":
-      return "任务取消中";
-    case "storyboard.shot.render_plan.created":
-      return "视频执行计划已生成";
-    case "storyboard.segment.queued":
-      return "视频片段已排队";
-    case "storyboard.segment.running":
-      return "视频片段生成中";
-    case "storyboard.segment.succeeded":
-      return "视频片段已生成";
-    case "storyboard.segment.failed":
-      return "视频片段生成失败";
-    case "storyboard.segment.media.processed":
-      return "视频片段媒体已处理";
-    case "storyboard.segment.prompt.running":
-      return "视频片段提示词生成中";
-    case "storyboard.segment.prompt.reviewed":
-      return "视频片段提示词已审核";
-    case "storyboard.audio.verification.completed":
-      return "原生音轨审核已更新";
-    case "video.production.batch.started":
-      return "镜头视频批次开始执行";
-    case "video.production.batch.partial_succeeded":
-      return "镜头视频批次部分完成";
-    case "video.production.batch.failed":
-      return "镜头视频批次失败";
-    case "video.production.item.started":
-      return "镜头视频开始生成";
-    case "video.production.item.completed":
-      return "镜头视频已生成并入库";
-    case "video.production.item.failed":
-      return "镜头视频生成失败";
-    case "video.production.item.cancelled":
-      return "镜头视频生成已取消";
-    case "video.production.checkpoint.committed":
-      return "分集视频检查点已提交";
-    default:
-      return "任务更新";
-  }
-  if (nodeKey.startsWith("generate_derived_asset_")) {
-    return "生成镜头衍生资产";
-  }
-}
-
 function nodeOutputSummary(output: unknown) {
   const record = recordValue(output);
   const parts = [
@@ -1327,6 +1419,10 @@ function formatDate(value?: string) {
     return value;
   }
   return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function activityIdempotencyKey(action: "cancel" | "retry", commandId: string) {
+  return `activity:${action}:${commandId}`;
 }
 
 function truncate(value: string, maxLength: number) {

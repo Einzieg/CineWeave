@@ -12,6 +12,9 @@ import (
 	"github.com/Einzieg/cineweave/internal/agent"
 	"github.com/Einzieg/cineweave/internal/auth"
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
+	"github.com/Einzieg/cineweave/internal/controlmcp"
+	projectevents "github.com/Einzieg/cineweave/internal/events"
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	reviewpkg "github.com/Einzieg/cineweave/internal/review"
@@ -151,6 +154,12 @@ func (s *Server) executeAgentTaskReadySteps(r *http.Request, principal auth.Prin
 		}
 		if result.Status == "failed" {
 			return s.finishAgentTaskState(r.Context(), project.ID, task.ID, "failed", firstNonEmpty(result.ErrorCode, "AGENT_STEP_FAILED"), result.ErrorMessage)
+		}
+		if result.Status == "running" {
+			if _, err := s.persistAgentRuntimeSnapshot(r.Context(), project, task.ID); err != nil {
+				return AgentTask{}, err
+			}
+			return s.finishAgentTaskState(r.Context(), project.ID, task.ID, "running", "", "")
 		}
 		if _, err := s.persistAgentRuntimeSnapshot(r.Context(), project, task.ID); err != nil {
 			return AgentTask{}, err
@@ -443,6 +452,9 @@ func (s *Server) executeAgentStep(r *http.Request, principal auth.Principal, pro
 		result := unavailableAgentToolResult(project, step.ToolName)
 		return result, s.storeAgentStepResult(r.Context(), project, task.ID, step.ID, result)
 	}
+	if step.ProjectControlCommandID != nil && strings.TrimSpace(*step.ProjectControlCommandID) != "" {
+		return s.observeAgentStepProjectControlCommand(r.Context(), project, task, step, tool)
+	}
 	if err := s.authorizeAgentToolPermissions(r.Context(), principal, project, tool); err != nil {
 		result := agentToolError(step.ToolName, map[string]any{}, err)
 		result.Label = tool.Label
@@ -463,6 +475,9 @@ func (s *Server) executeAgentStep(r *http.Request, principal auth.Principal, pro
 			Data:         map[string]any{"stateGate": stateGate},
 		}
 		return result, s.storeAgentStepResult(r.Context(), project, task.ID, step.ID, result)
+	}
+	if descriptor, exists := s.projectControlDescriptorForAgentTool(tool); exists && !descriptor.ReadOnly {
+		return s.enqueueAgentStepProjectControlCommand(r.Context(), principal, project, task, step, tool, descriptor)
 	}
 	if _, err := s.db.Exec(r.Context(), `
 		UPDATE agent_steps
@@ -526,6 +541,164 @@ func (s *Server) executeAgentStep(r *http.Request, principal auth.Principal, pro
 	return result, nil
 }
 
+func (s *Server) projectControlDescriptorForAgentTool(tool agent.AgentTool) (projectcontrol.Descriptor, bool) {
+	if s == nil || s.projectControl == nil || s.projectControl.registry == nil {
+		return projectcontrol.Descriptor{}, false
+	}
+	descriptor, exists := s.projectControl.registry.Get(tool.Name)
+	return descriptor, exists
+}
+
+func (s *Server) enqueueAgentStepProjectControlCommand(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	task AgentTask,
+	step AgentStep,
+	tool agent.AgentTool,
+	descriptor projectcontrol.Descriptor,
+) (agentToolResult, error) {
+	if descriptor.ExecutionMode == projectcontrol.ExecutionModeSync {
+		command, result, replayed, err := s.projectControl.executeBoundedSyncAction(
+			ctx, principal, project, descriptor, projectcontrol.ControllerEmbeddedAgent,
+			"", task.ID, step.ID, step.Input, agentStepIdempotencyKey(task, step),
+		)
+		if err != nil {
+			return agentToolResult{}, err
+		}
+		if result.Data == nil {
+			result.Data = map[string]any{}
+		}
+		result.Data["projectControlCommandId"] = command.ID
+		result.Data["commandStatus"] = command.Status
+		result.Data["idempotentReplay"] = replayed
+		if err := s.storeAgentStepResult(ctx, project, task.ID, step.ID, result); err != nil {
+			return agentToolResult{}, err
+		}
+		return result, nil
+	}
+	command, replayed, err := s.projectControl.repository.Create(ctx, projectcontrol.CreateCommand{
+		OrganizationID: project.OrganizationID,
+		WorkspaceID:    project.WorkspaceID,
+		ProjectID:      project.ID,
+		ActorUserID:    principal.UserID,
+		ControllerType: projectcontrol.ControllerEmbeddedAgent,
+		AgentTaskID:    task.ID,
+		AgentStepID:    step.ID,
+		Descriptor:     descriptor,
+		Input:          step.Input,
+		IdempotencyKey: agentStepIdempotencyKey(task, step),
+	})
+	if err != nil {
+		return agentToolResult{}, err
+	}
+	step.ProjectControlCommandID = &command.ID
+	if command.Terminal() {
+		return s.observeAgentStepProjectControlCommand(ctx, project, task, step, tool)
+	}
+	result := agentToolResult{
+		Name:    tool.Name,
+		Label:   tool.Label,
+		Status:  "running",
+		Summary: "已提交到项目控制运行时，正在等待后台执行。",
+		Data: map[string]any{
+			"projectControlCommandId": command.ID,
+			"commandStatus":           command.Status,
+			"idempotentReplay":        replayed,
+		},
+	}
+	if _, err := s.db.Exec(ctx, `
+		UPDATE agent_steps
+		SET status = 'running', output = $3, error_code = NULL, error_message = NULL,
+		    started_at = COALESCE(started_at, now()), completed_at = NULL
+		WHERE id = $1 AND task_id = $2 AND project_control_command_id = $4
+	`, step.ID, task.ID, mustMarshal(result), command.ID); err != nil {
+		return agentToolResult{}, err
+	}
+	s.insertAgentStepEvent(ctx, project, task.ID, step.ID, "agent.step.started", map[string]any{
+		"tool": tool.Name, "stepIndex": step.StepIndex, "risk": step.Risk,
+		"projectControlCommandId": command.ID, "idempotentReplay": replayed,
+	})
+	return result, nil
+}
+
+func (s *Server) observeAgentStepProjectControlCommand(
+	ctx context.Context,
+	project Project,
+	task AgentTask,
+	step AgentStep,
+	tool agent.AgentTool,
+) (agentToolResult, error) {
+	commandID := strings.TrimSpace(stringValue(step.ProjectControlCommandID))
+	if commandID == "" {
+		return agentToolResult{}, fmt.Errorf("Agent step project-control command ID is missing")
+	}
+	command, err := s.projectControl.repository.Get(ctx, commandID)
+	if err != nil {
+		return agentToolResult{}, err
+	}
+	if command.AgentTaskID != task.ID || command.AgentStepID != step.ID || command.ProjectID != project.ID {
+		return agentToolResult{}, fmt.Errorf("project-control command %s does not belong to Agent step", command.ID)
+	}
+	if !command.Terminal() {
+		return agentToolResult{
+			Name: tool.Name, Label: tool.Label, Status: "running",
+			Summary: "项目控制命令仍在执行。",
+			Data: map[string]any{
+				"projectControlCommandId": command.ID,
+				"commandStatus":           command.Status,
+			},
+		}, nil
+	}
+	if command.Status == projectcontrol.CommandSucceeded {
+		var result agentToolResult
+		if len(command.Output) > 0 && json.Unmarshal(command.Output, &result) == nil && result.Name != "" {
+			if err := s.storeAgentStepResult(ctx, project, task.ID, step.ID, result); err != nil {
+				return agentToolResult{}, err
+			}
+			return result, nil
+		}
+		result = agentToolResult{
+			Name: tool.Name, Label: tool.Label, Status: "succeeded",
+			Summary: "项目控制命令已完成。",
+			Data:    map[string]any{"projectControlCommandId": command.ID, "commandOutput": rawObject(command.Output)},
+		}
+		if err := s.storeAgentStepResult(ctx, project, task.ID, step.ID, result); err != nil {
+			return agentToolResult{}, err
+		}
+		return result, nil
+	}
+	if command.Status == projectcontrol.CommandPartialSucceeded {
+		result := agentToolResult{
+			Name: tool.Name, Label: tool.Label, Status: "succeeded",
+			Summary: "项目控制命令部分完成，可在任务活动中重试失败单元。",
+			Data: map[string]any{
+				"projectControlCommandId": command.ID, "commandStatus": command.Status,
+				"commandOutput": rawObject(command.Output),
+			},
+		}
+		if err := s.storeAgentStepResult(ctx, project, task.ID, step.ID, result); err != nil {
+			return agentToolResult{}, err
+		}
+		return result, nil
+	}
+	code := firstNonEmpty(command.ErrorCode, "PROJECT_CONTROL_COMMAND_FAILED")
+	message := firstNonEmpty(command.ErrorMessage, "项目控制命令执行失败")
+	if command.Status == projectcontrol.CommandCancelled {
+		code = "PROJECT_CONTROL_COMMAND_CANCELLED"
+		message = "项目控制命令已取消"
+	}
+	result := agentToolResult{
+		Name: tool.Name, Label: tool.Label, Status: "failed", Summary: message,
+		ErrorCode: code, ErrorMessage: message,
+		Data: map[string]any{"projectControlCommandId": command.ID, "commandStatus": command.Status},
+	}
+	if err := s.storeAgentStepResult(ctx, project, task.ID, step.ID, result); err != nil {
+		return agentToolResult{}, err
+	}
+	return result, nil
+}
+
 func unavailableAgentToolResult(project Project, toolName string) agentToolResult {
 	result := agentToolResult{
 		Name:         toolName,
@@ -543,7 +716,11 @@ func unavailableAgentToolResult(project Project, toolName string) agentToolResul
 	return result
 }
 
-func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, tool agent.AgentTool) agentToolResult {
+// executeProjectAction is the single action invoker shared by the embedded
+// assistant and project-control reads. Writes are deliberately rejected here:
+// executeAgentStep must first persist a command and the shared runtime owns the
+// mutation. Agent task/step values are execution provenance only.
+func (s *Server) executeProjectAction(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, tool agent.AgentTool) agentToolResult {
 	args, err := agentStepArgs(step.Input)
 	if err != nil {
 		return agentToolError(step.ToolName, nil, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "step input must be a JSON object"))
@@ -551,148 +728,11 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 	if err := validateAgentRuntimeArguments(args); err != nil {
 		return agentToolError(step.ToolName, args, err)
 	}
-	if isProviderAdministrationAgentTool(step.ToolName) {
-		if err := s.requireProviderAdministration(
-			r.Context(),
-			principal.UserID,
-		); err != nil {
-			return agentToolError(step.ToolName, args, err)
-		}
-	}
-	if strings.HasPrefix(step.ToolName, "commerce.") {
-		return s.agentToolCommerce(r, principal, project, task, step, args)
-	}
-	switch step.ToolName {
-	case agentAskUserToolName:
+	if step.ToolName == agentAskUserToolName {
 		return s.agentToolAskUser(r, project, task, step, args)
-	case "project.read_summary":
-		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolProjectStatus(r, principal, project, args))
-	case "project.clear_production_content":
-		return s.agentToolClearProjectProductionContent(r, principal, project, task, step, args)
-	case "source.list":
-		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListSources(r, principal, project, args))
-	case "source.list_chapters":
-		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListSourceChapters(r, principal, project, args))
-	case "script.list":
-		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListScripts(r, principal, project, args))
-	case "script.get":
-		return s.agentToolGetScript(r, project, args)
-	case "asset.list":
-		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListAssets(r, principal, project, args))
-	case "asset.get":
-		return s.agentToolGetCanonicalAsset(r, project, args)
-	case "shot_asset.list_requirements":
-		return s.agentToolListShotAssetRequirements(r, principal, project, args)
-	case "storyboard.list":
-		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListStoryboardShots(r, principal, project, args))
-	case "workflow.read_runs":
-		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolListWorkflowRuns(r, principal, project, args))
-	case "workflow.read_nodes":
-		return s.agentToolListWorkflowNodes(r, project, args)
-	case "workflow.read_shots":
-		return s.agentToolListWorkflowShots(r, project, args)
-	case "review.list_items":
-		return s.agentToolListReviewItems(r, project, args)
-	case "review.run":
-		return s.agentToolRunReview(r, principal, project, args)
-	case "review.generate_fix":
-		return s.agentToolGenerateReviewFix(r, principal, project, args)
-	case "review.apply_fix":
-		return s.agentToolApplyReviewFix(r, principal, project, task, step, args)
-	case "review.dismiss_fix":
-		return s.agentToolDismissReviewFix(r, project, task, step, args)
-	case "prompt.render_test":
-		return s.agentToolRenderPromptTest(r, project, args)
-	case "script.rewrite_preview":
-		return s.agentToolRewriteScriptPreview(r, principal, project, task, step, args)
-	case "source.update":
-		return s.agentToolUpdateSource(r, principal, project, args)
-	case "source.delete":
-		return s.agentToolDeleteSource(r, principal, project, task, step, args)
-	case "source.delete_chapter":
-		return s.agentToolDeleteSourceChapter(r, principal, project, task, step, args)
-	case "script.update_episode":
-		return s.agentToolUpdateScriptEpisode(r, principal, project, args)
-	case "script.generate_from_source":
-		return s.agentToolGenerateScriptFromSource(r, principal, project, task, step, args)
-	case "script.rewrite":
-		return s.agentToolRewriteScript(r, principal, project, task, step, args)
-	case "script.create_version":
-		return s.agentToolCreateScriptVersion(r, principal, project, task, step, args)
-	case "script.activate_version":
-		return s.agentToolActivateScriptVersion(r, project, task, step, args)
-	case "script.delete":
-		return s.agentToolDeleteScript(r, principal, project, task, step, args)
-	case "asset.update":
-		return s.agentToolUpdateReviewPatchTarget(r, principal, project, task, step, args, "asset.update", "canonical_asset", "assetId")
-	case "asset.revise_prompt":
-		return s.agentToolReviseCanonicalAssetPrompt(r, principal, project, task, step, args)
-	case "asset.batch_generate_prompts":
-		return s.agentToolStartAssetBatch(r, principal, project, task, step, args, workflows.AssetBatchOperationGeneratePrompts)
-	case "asset.batch_generate_images":
-		return s.agentToolStartAssetBatch(r, principal, project, task, step, args, workflows.AssetBatchOperationGenerateImages)
-	case "shot_asset.review_requirements":
-		return s.agentToolReviewShotAssetRequirements(r, principal, project, args)
-	case "shot_asset.update_requirement":
-		return s.agentToolUpdateShotAssetRequirement(r, principal, project, args)
-	case "shot_asset.skip_requirement":
-		return s.agentToolSkipShotAssetRequirement(r, principal, project, args)
-	case "asset.delete":
-		return s.agentToolDeleteCanonicalAsset(r, principal, project, args)
-	case "storyboard.update_shot":
-		return s.agentToolUpdateReviewPatchTarget(r, principal, project, task, step, args, "storyboard.update_shot", "storyboard_shot", "shotId")
-	case "storyboard.reorder":
-		return s.agentToolReorderStoryboard(r, project, task, step, args)
-	case "timeline.update_clip":
-		return s.agentToolUpdateReviewPatchTarget(r, principal, project, task, step, args, "timeline.update_clip", "timeline_clip", "clipId")
-	case "final_video.activate":
-		return s.agentToolActivateFinalVideo(r, project, task, step, args)
-	case "prompt.create_version":
-		return s.agentToolCreatePromptVersion(r, principal, project, task, step, args)
-	case "prompt.activate_version":
-		return s.agentToolActivatePromptVersion(r, project, task, step, args)
-	case "provider.test_model":
-		return s.agentToolTestProviderModel(r, principal, project, task, step, args)
-	case "provider.update_account":
-		return s.agentToolUpdateProviderAccount(r, project, args)
-	case "provider.update_model":
-		return s.agentToolUpdateProviderModel(r, project, args)
-	case "provider.attest_video_capability":
-		return s.agentToolAttestVideoCapability(r, principal, project, args)
-	case "provider.verify_video_capability":
-		return s.agentToolVerifyVideoCapability(r, principal, project, args)
-	case "provider.install_catalog_preset":
-		return s.agentToolInstallProviderCatalogPreset(r, principal, project, args)
-	case "artifact.list":
-		return s.agentToolListArtifacts(r, project, args)
-	case "artifact.preview_url":
-		return s.agentToolArtifactPreviewURL(r, project, args)
-	case "provider.list_status":
-		return s.agentToolProviderStatus(r, project, args)
-	case "workflow.start":
-		return s.agentToolStartWorkflow(r, principal, project, task, step, args)
-	case "workflow.cancel":
-		return normalizeProjectAgentResult(step.ToolName, tool.Label, s.agentToolCancelWorkflow(r, principal, project, args))
-	case "shot.status":
-		return s.agentToolShotStatus(r, project, args)
-	case "shot.generate_image_prompts":
-		return s.agentToolRunShotProduction(r, principal, project, task, step, "generate_image_prompts", args)
-	case "shot.generate_video_prompts":
-		return s.agentToolRunShotProduction(r, principal, project, task, step, "generate_video_prompts", args)
-	case "shot.generate_missing_images":
-		return s.agentToolRunShotProduction(r, principal, project, task, step, "generate_missing_images", args)
-	case "shot.generate_missing_videos":
-		return s.agentToolRunShotProduction(r, principal, project, task, step, "generate_missing_videos", args)
-	case "shot.cancel_running_videos":
-		return s.agentToolRunShotProduction(r, principal, project, task, step, "cancel_running_videos", args)
-	case "timeline.compose":
-		args["workflowType"] = "compose_timeline"
-		args["input"] = agentMapArg(args, "input")
-		if timelineID := agentReferenceStringArg(args, "timelineId"); timelineID != "" {
-			agentMapArg(args, "input")["timelineId"] = timelineID
-		}
-		return s.agentToolStartWorkflow(r, principal, project, task, step, args)
-	default:
+	}
+	descriptor, exists := s.projectControlDescriptorForAgentTool(tool)
+	if !exists {
 		return agentToolResult{
 			Name:         step.ToolName,
 			Label:        tool.Label,
@@ -702,6 +742,38 @@ func (s *Server) executeProjectAgentTool(r *http.Request, principal auth.Princip
 			ErrorCode:    "AGENT_TOOL_NOT_IMPLEMENTED",
 			ErrorMessage: "agent tool executor is not implemented",
 		}
+	}
+	if !descriptor.ReadOnly {
+		return agentToolResult{
+			Name: step.ToolName, Label: tool.Label, Status: "failed",
+			Summary:      "写操作必须通过持久项目控制命令执行。",
+			ErrorCode:    "PROJECT_CONTROL_COMMAND_REQUIRED",
+			ErrorMessage: "write action must execute through a durable project-control command",
+		}
+	}
+	externalInput := make(map[string]any, len(args)+1)
+	for key, value := range args {
+		externalInput[key] = value
+	}
+	externalInput["projectId"] = project.ID
+	result, err := s.projectControl.Execute(r.Context(), controlmcp.Identity{
+		Principal: principal, ControllerType: projectcontrol.ControllerEmbeddedAgent,
+	}, step.ToolName, mustRawJSON(externalInput))
+	if err != nil {
+		return agentToolError(step.ToolName, args, err)
+	}
+	if result.Error != nil {
+		return agentToolResult{
+			Name: step.ToolName, Label: tool.Label, Status: "failed",
+			Summary: result.Error.UserMessage, ErrorCode: result.Error.Code,
+			ErrorMessage: result.Error.UserMessage, Retryable: result.Error.Retryable,
+			Data: rawObject(result.Data),
+		}
+	}
+	return agentToolResult{
+		Name: step.ToolName, Label: tool.Label, Status: "succeeded",
+		Summary: result.Summary, Data: rawObject(result.Data),
+		ChildWorkflowRunIDs: append([]string(nil), result.WorkflowRunIDs...),
 	}
 }
 
@@ -737,8 +809,6 @@ func (s *Server) storeAgentStepResult(ctx context.Context, project Project, task
 	`, stepID, taskID, status, mustMarshal(result), result.ErrorCode, result.ErrorMessage, mustMarshal(verifier)); err != nil {
 		return err
 	}
-	trace := newAgentTaskTrace()
-	trace.AddResult(result)
 	s.insertAgentStepEvent(ctx, project, taskID, stepID, eventType, map[string]any{
 		"tool":         result.Name,
 		"status":       result.Status,
@@ -746,10 +816,6 @@ func (s *Server) storeAgentStepResult(ctx context.Context, project Project, task
 		"errorCode":    result.ErrorCode,
 		"errorMessage": result.ErrorMessage,
 		"retryable":    result.Retryable,
-		"nextActions":  result.NextActions,
-		"data":         result.Data,
-		"verifier":     verifier,
-		"trace":        trace.Patch(),
 	})
 	return nil
 }
@@ -2440,7 +2506,8 @@ func (s *Server) insertAgentStepEvent(ctx context.Context, project Project, task
 	if sessionID := s.agentTaskSessionID(ctx, taskID); sessionID != "" {
 		payload["sessionId"] = sessionID
 	}
-	_ = insertAPIEvent(ctx, s.db, project.OrganizationID, project.ID, eventType, "agent_step", stepID, mustMarshal(payload))
+	raw, _ := projectevents.ProjectRealtimePayload(eventType, mustMarshal(payload))
+	_ = insertAPIEvent(ctx, s.db, project.OrganizationID, project.ID, eventType, "agent_step", stepID, raw)
 }
 
 func (s *Server) insertAgentTaskEvent(ctx context.Context, project Project, taskID, eventType string, payload map[string]any) {
@@ -2451,7 +2518,8 @@ func (s *Server) insertAgentTaskEvent(ctx context.Context, project Project, task
 	if sessionID := s.agentTaskSessionID(ctx, taskID); sessionID != "" {
 		payload["sessionId"] = sessionID
 	}
-	_ = insertAPIEvent(ctx, s.db, project.OrganizationID, project.ID, eventType, "agent_task", taskID, mustMarshal(payload))
+	raw, _ := projectevents.ProjectRealtimePayload(eventType, mustMarshal(payload))
+	_ = insertAPIEvent(ctx, s.db, project.OrganizationID, project.ID, eventType, "agent_task", taskID, raw)
 }
 
 func (s *Server) agentTaskSessionID(ctx context.Context, taskID string) string {
@@ -2485,70 +2553,37 @@ func isTerminalAgentTaskStatus(status string) bool {
 }
 
 func requestWithContext(ctx context.Context) *http.Request {
-	return (&http.Request{}).WithContext(ctx)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://project-control.internal/", nil)
+	if err != nil {
+		panic(err)
+	}
+	return request
 }
 
 func (s *Server) agentToolListWorkflowNodes(r *http.Request, project Project, args map[string]any) agentToolResult {
-	runID := agentReferenceStringArg(args, "workflowRunId")
-	if runID == "" {
-		return agentToolError("workflow.read_nodes", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowRunId is required"))
-	}
-	if _, err := s.workflowRunForProject(r, project.ID, runID); err != nil {
-		return agentToolError("workflow.read_nodes", args, err)
-	}
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, workflow_run_id, node_key, node_type, status, input, output, retry_count, error_code, error_message, started_at, completed_at, created_at
-		FROM workflow_node_runs
-		WHERE workflow_run_id = $1
-		ORDER BY created_at ASC
-	`, runID)
+	page, err := s.listWorkflowNodesAction(r.Context(), project, workflowRunChildrenActionInput{
+		WorkflowRunID: agentReferenceStringArg(args, "workflowRunId"),
+		Limit:         agentIntArg(args, "limit", 100, 1, projectOperationalReadMaximumPageSize),
+		Cursor:        agentStringArg(args, "cursor"),
+	})
 	if err != nil {
 		return agentToolError("workflow.read_nodes", args, err)
 	}
-	defer rows.Close()
-	items := make([]WorkflowNodeRun, 0)
-	for rows.Next() {
-		var item WorkflowNodeRun
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.ProjectID, &item.WorkflowRunID, &item.NodeKey, &item.NodeType, &item.Status, &item.Input, &item.Output, &item.RetryCount, &item.ErrorCode, &item.ErrorMessage, &item.StartedAt, &item.CompletedAt, &item.CreatedAt); err != nil {
-			return agentToolError("workflow.read_nodes", args, err)
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return agentToolError("workflow.read_nodes", args, err)
-	}
-	return agentToolOK("workflow.read_nodes", args, fmt.Sprintf("读取到 %d 个工作流节点。", len(items)), map[string]any{"items": items})
+	return workflowNodeListAgentResult(args, page)
 }
 
 func (s *Server) agentToolListWorkflowShots(r *http.Request, project Project, args map[string]any) agentToolResult {
-	runID := agentReferenceStringArg(args, "workflowRunId")
-	if runID == "" {
-		return agentToolError("workflow.read_shots", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowRunId is required"))
-	}
-	if _, err := s.workflowRunForProject(r, project.ID, runID); err != nil {
-		return agentToolError("workflow.read_shots", args, err)
-	}
-	rows, err := s.db.Query(r.Context(), storyboardShotSelectSQL(`
-		WHERE s.workflow_run_id = $1
-		  AND s.deleted_at IS NULL
-		ORDER BY s.shot_index ASC
-	`), runID)
+	page, err := s.listWorkflowShotsAction(r.Context(), project, workflowRunChildrenActionInput{
+		WorkflowRunID:     agentReferenceStringArg(args, "workflowRunId"),
+		Limit:             agentIntArg(args, "limit", 100, 1, projectOperationalReadMaximumPageSize),
+		Cursor:            agentStringArg(args, "cursor"),
+		IncludePreviewURL: agentBoolArgValue(args, "includePreviewUrl"),
+		PreviewExpires:    agentIntArg(args, "previewExpiresSeconds", 900, 60, 3600),
+	})
 	if err != nil {
 		return agentToolError("workflow.read_shots", args, err)
 	}
-	defer rows.Close()
-	items := make([]StoryboardShot, 0)
-	for rows.Next() {
-		item, err := scanStoryboardShot(rows)
-		if err != nil {
-			return agentToolError("workflow.read_shots", args, err)
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return agentToolError("workflow.read_shots", args, err)
-	}
-	return agentToolOK("workflow.read_shots", args, fmt.Sprintf("读取到 %d 个分镜镜头。", len(items)), map[string]any{"items": items})
+	return workflowShotListAgentResult(args, page)
 }
 
 func (s *Server) workflowRunForProject(r *http.Request, projectID, runID string) (WorkflowRun, error) {
@@ -2558,154 +2593,40 @@ func (s *Server) workflowRunForProject(r *http.Request, projectID, runID string)
 }
 
 func (s *Server) agentToolGetScript(r *http.Request, project Project, args map[string]any) agentToolResult {
-	scriptID := agentReferenceStringArg(args, "scriptId")
-	if scriptID == "" {
-		return agentToolError("script.get", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "scriptId is required"))
-	}
-	item, err := s.script(r, project.ID, scriptID)
+	page, err := s.getScriptAction(r.Context(), project, scriptGetActionInput{
+		ScriptID:      agentReferenceStringArg(args, "scriptId"),
+		VersionID:     agentReferenceStringArg(args, "versionId"),
+		EpisodeLimit:  agentIntArg(args, "episodeLimit", 20, 1, scriptActionMaximumPageSize),
+		EpisodeCursor: agentStringArg(args, "episodeCursor"),
+	})
 	if err != nil {
 		return agentToolError("script.get", args, err)
 	}
-	versionID := firstNonEmpty(agentReferenceStringArg(args, "versionId"), stringValue(item.CurrentVersionID))
-	if versionID != "" {
-		version, err := s.scriptVersion(r, project.ID, item.ID, versionID)
-		if err != nil {
-			return agentToolError("script.get", args, err)
-		}
-		item.CurrentVersion = &version
-	}
-	return agentToolOK("script.get", args, "已读取剧本《"+item.Title+"》。", map[string]any{"script": item})
+	return scriptGetAgentResult(args, page)
 }
 
 func (s *Server) agentToolListReviewItems(r *http.Request, project Project, args map[string]any) agentToolResult {
 	status := firstNonEmpty(agentStringArg(args, "status"), "open")
-	limit := agentIntArg(args, "limit", 50, 1, 200)
-	rows, err := s.db.Query(r.Context(), reviewItemSelectSQL(`
-		WHERE project_id = $1
-		  AND ($2 = 'all' OR status = $2)
-		ORDER BY created_at DESC
-		LIMIT $3
-	`), project.ID, status, limit)
-	if err != nil {
-		return agentToolError("review.list_items", args, err)
-	}
-	defer rows.Close()
-	items := make([]ReviewItem, 0)
-	for rows.Next() {
-		item, err := scanReviewItem(rows)
-		if err != nil {
-			return agentToolError("review.list_items", args, err)
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return agentToolError("review.list_items", args, err)
-	}
-	return agentToolOK("review.list_items", args, fmt.Sprintf("读取到 %d 个审阅问题。", len(items)), map[string]any{"items": items, "status": status})
-}
-
-func (s *Server) agentToolListArtifacts(r *http.Request, project Project, args map[string]any) agentToolResult {
-	limit := agentIntArg(args, "limit", 50, 1, 100)
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, project_id, workflow_run_id, node_run_id, type, storage_key, mime_type, content_hash, prompt_hash, model_id, metadata, created_at
-		FROM artifacts
-		WHERE organization_id = $1 AND project_id = $2
-		ORDER BY created_at DESC
-		LIMIT $3
-	`, project.OrganizationID, project.ID, limit)
-	if err != nil {
-		return agentToolError("artifact.list", args, err)
-	}
-	defer rows.Close()
-	items := make([]Artifact, 0)
-	for rows.Next() {
-		item, err := scanArtifact(rows)
-		if err != nil {
-			return agentToolError("artifact.list", args, err)
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return agentToolError("artifact.list", args, err)
-	}
-	return agentToolOK("artifact.list", args, fmt.Sprintf("读取到 %d 个成果。", len(items)), map[string]any{"items": items})
-}
-
-func (s *Server) agentToolArtifactPreviewURL(r *http.Request, project Project, args map[string]any) agentToolResult {
-	artifactID := agentReferenceStringArg(args, "artifactId")
-	if artifactID == "" {
-		return agentToolError("artifact.preview_url", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "artifactId is required"))
-	}
-	if s.storage == nil {
-		return agentToolError("artifact.preview_url", args, apiError{Status: http.StatusServiceUnavailable, Code: "STORAGE_UNAVAILABLE", Message: "object storage is not configured", Retryable: true})
-	}
-	artifact, err := s.artifact(r, artifactID)
-	if err != nil {
-		return agentToolError("artifact.preview_url", args, err)
-	}
-	if artifact.ProjectID == nil || *artifact.ProjectID != project.ID {
-		return agentToolError("artifact.preview_url", args, auth.ErrForbidden)
-	}
-	if artifact.StorageKey == nil || strings.TrimSpace(*artifact.StorageKey) == "" || !artifactCanPreview(artifact) {
-		return agentToolError("artifact.preview_url", args, newAPIError(http.StatusUnprocessableEntity, "UNSUPPORTED_PREVIEW_TYPE", "artifact cannot be previewed"))
-	}
-	expires := agentIntArg(args, "expiresSeconds", 900, 60, 86400)
-	presigned, err := s.storage.PresignGetObject(r.Context(), *artifact.StorageKey, previewURLExpiry(expires))
-	if err != nil {
-		return agentToolError("artifact.preview_url", args, err)
-	}
-	return agentToolOK("artifact.preview_url", args, "已生成成果预览链接。", map[string]any{
-		"artifactId": artifact.ID,
-		"storageKey": presigned.StorageKey,
-		"url":        presigned.URL,
-		"method":     presigned.Method,
-		"expiresAt":  presigned.ExpiresAt,
+	page, err := s.listReviewItemsAction(r.Context(), project, reviewItemListActionInput{
+		Status:     status,
+		Severity:   agentStringArg(args, "severity"),
+		Category:   agentStringArg(args, "category"),
+		EntityType: agentStringArg(args, "entityType"),
+		Limit:      agentIntArg(args, "limit", 50, 1, projectOperationalReadMaximumPageSize),
+		Cursor:     agentStringArg(args, "cursor"),
 	})
+	if err != nil {
+		return agentToolError("review.list_items", args, err)
+	}
+	return reviewItemListAgentResult(args, page, status)
 }
 
 func (s *Server) agentToolProviderStatus(r *http.Request, project Project, args map[string]any) agentToolResult {
-	var accounts, activeAccounts, disabledAccounts, models, activeModels, disabledModels, recentCalls, failedRecentCalls int
-	err := s.db.QueryRow(r.Context(), `
-		SELECT
-		  (SELECT count(*) FROM provider_accounts WHERE organization_id = $1),
-		  (SELECT count(*) FROM provider_accounts WHERE organization_id = $1 AND status = 'active'),
-		  (SELECT count(*) FROM provider_accounts WHERE organization_id = $1 AND status = 'disabled'),
-		  (SELECT count(*) FROM provider_models m JOIN provider_accounts a ON a.id = m.provider_account_id WHERE a.organization_id = $1),
-		  (SELECT count(*) FROM provider_models m JOIN provider_accounts a ON a.id = m.provider_account_id WHERE a.organization_id = $1 AND m.status = 'active' AND a.status = 'active'),
-		  (SELECT count(*) FROM provider_models m JOIN provider_accounts a ON a.id = m.provider_account_id WHERE a.organization_id = $1 AND m.status = 'disabled'),
-		  (SELECT count(*) FROM provider_call_logs WHERE organization_id = $1 AND created_at >= now() - interval '24 hours'),
-		  (SELECT count(*) FROM provider_call_logs WHERE organization_id = $1 AND created_at >= now() - interval '24 hours' AND status = 'failed')
-	`, project.OrganizationID).Scan(&accounts, &activeAccounts, &disabledAccounts, &models, &activeModels, &disabledModels, &recentCalls, &failedRecentCalls)
+	status, err := s.readProviderStatusAction(r.Context(), project)
 	if err != nil {
 		return agentToolError("provider.list_status", args, err)
 	}
-	videoCapabilityVariants, variantErrors, err := s.agentVideoCapabilityVariantStatus(r.Context(), project)
-	if err != nil {
-		return agentToolError("provider.list_status", args, err)
-	}
-	pendingApprovals := 0
-	for _, variant := range videoCapabilityVariants {
-		if variant["approvalState"] == "pending" || variant["approvalState"] == "rejected" {
-			pendingApprovals++
-		}
-	}
-	return agentToolOK("provider.list_status", args, fmt.Sprintf("当前有 %d 个启用供应商、%d 个启用模型，%d 个视频能力快照需要处理。", activeAccounts, activeModels, pendingApprovals), map[string]any{
-		"accounts":                        accounts,
-		"activeAccounts":                  activeAccounts,
-		"disabledAccounts":                disabledAccounts,
-		"models":                          models,
-		"activeModels":                    activeModels,
-		"disabledModels":                  disabledModels,
-		"recentCalls24h":                  recentCalls,
-		"failedCalls24h":                  failedRecentCalls,
-		"scriptProfileKey":                project.ScriptModelProfileKey,
-		"imageProfileKey":                 project.ImageModelProfileKey,
-		"videoProfileKey":                 project.VideoModelProfileKey,
-		"productionProfile":               project.VideoProductionBinding.ProfileKey,
-		"videoCapabilityVariants":         videoCapabilityVariants,
-		"videoCapabilityErrors":           variantErrors,
-		"pendingVideoCapabilityApprovals": pendingApprovals,
-	})
+	return providerStatusAgentResult(args, status)
 }
 
 func (s *Server) agentVideoCapabilityVariantStatus(ctx context.Context, project Project) ([]map[string]any, []map[string]string, error) {
@@ -2759,89 +2680,6 @@ func (s *Server) agentVideoCapabilityVariantStatus(ctx context.Context, project 
 		}
 	}
 	return variants, variantErrors, nil
-}
-
-func (s *Server) agentToolAttestVideoCapability(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
-	request := provider.CreateVideoCapabilityAttestationRequest{
-		VariantKey:             agentStringArg(args, "variantKey"),
-		CapabilitySnapshotHash: agentStringArg(args, "capabilitySnapshotHash"),
-		Decision:               agentStringArg(args, "decision"),
-		Reason:                 agentStringArg(args, "reason"),
-		Evidence:               mustMarshal(agentMapArg(args, "evidence")),
-	}
-	item, err := s.providers.CreateVideoCapabilityAttestation(
-		r.Context(), project.OrganizationID, principal.UserID, agentReferenceStringArg(args, "modelId"), request,
-	)
-	if err != nil {
-		return agentToolError("provider.attest_video_capability", args, err)
-	}
-	return agentToolOK("provider.attest_video_capability", args, "已保存当前视频模型能力快照的审批结论。", map[string]any{"attestation": item})
-}
-
-func (s *Server) agentToolVerifyVideoCapability(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
-	request := provider.VerifyVideoCapabilityRequest{
-		VariantKey:             agentStringArg(args, "variantKey"),
-		CapabilitySnapshotHash: agentStringArg(args, "capabilitySnapshotHash"),
-		VerificationMode:       agentStringArg(args, "verificationMode"),
-		ProviderTestRunID:      agentReferenceStringArg(args, "providerTestRunId"),
-		Reason:                 agentStringArg(args, "reason"),
-	}
-	item, err := s.providers.VerifyVideoCapability(
-		r.Context(), project.OrganizationID, principal.UserID, agentReferenceStringArg(args, "modelId"), request,
-	)
-	if err != nil {
-		return agentToolError("provider.verify_video_capability", args, err)
-	}
-	return agentToolOK("provider.verify_video_capability", args, "视频模型能力快照已通过 Adapter 契约验证。", map[string]any{"attestation": item})
-}
-
-func (s *Server) agentToolStartWorkflow(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	workflowType := agentStringArg(args, "workflowType")
-	if workflowType == "" {
-		return agentToolError("workflow.start", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "workflowType is required"))
-	}
-	input := cleanAgentReferenceOptions(agentMapArg(args, "input"))
-	args["input"] = input
-	if workflowType == derivedAssetBatchWorkflowType {
-		return s.agentToolStartDerivedAssetBatch(r, principal, project, task, step, args, input)
-	}
-	spec, err := s.agentWorkflowStartSpec(r, project, workflowType, input)
-	if err != nil {
-		return agentToolError("workflow.start", args, err)
-	}
-	if existing, ok, err := s.agentWorkflowRunForStep(r.Context(), project.ID, task.ID, step.ID); err != nil {
-		return agentToolError("workflow.start", args, err)
-	} else if ok {
-		return agentToolOK("workflow.start", args, fmt.Sprintf("已存在 %s 工作流 %s，未重复启动。", spec.WorkflowType, existing.ID), map[string]any{
-			"workflowRunId": existing.ID,
-			"workflowType":  spec.WorkflowType,
-			"status":        existing.Status,
-			"input":         rawObject(existing.Input),
-			"agentTaskId":   task.ID,
-			"agentStepId":   step.ID,
-			"idempotent":    true,
-		})
-	}
-	specInput := cloneMap(spec.Input)
-	specInput["agentTaskId"] = task.ID
-	specInput["agentStepId"] = step.ID
-	specInput["idempotencyKey"] = agentStepIdempotencyKey(task, step)
-	run, err := s.startProjectWorkflowCore(r.Context(), principal, project, spec.WorkflowType, specInput, spec.WorkflowFunc)
-	if err != nil {
-		return agentToolError("workflow.start", args, err)
-	}
-	data := map[string]any{
-		"workflowRunId": run.ID,
-		"workflowType":  spec.WorkflowType,
-		"status":        run.Status,
-		"input":         specInput,
-		"agentTaskId":   task.ID,
-		"agentStepId":   step.ID,
-	}
-	if spec.Note != "" {
-		data["note"] = spec.Note
-	}
-	return agentToolOK("workflow.start", args, fmt.Sprintf("已启动 %s，工作流 %s 当前状态 %s。", spec.WorkflowType, run.ID, run.Status), data)
 }
 
 func (s *Server) agentWorkflowStartSpec(r *http.Request, project Project, workflowType string, input map[string]any) (productionWorkflowSpec, error) {
@@ -2950,98 +2788,18 @@ func (s *Server) agentWorkflowRunForStep(ctx context.Context, projectID, taskID,
 }
 
 func (s *Server) agentToolShotStatus(r *http.Request, project Project, args map[string]any) agentToolResult {
-	status, err := s.loadShotProductionStatusForEpisode(r, project.ID, agentReferenceStringArg(args, "scriptSceneId"), agentReferenceStringArg(args, "workflowRunId"), agentReferenceStringArg(args, "scriptEpisodeId"), "", false)
+	status, err := s.readShotStatusAction(r.Context(), project, shotStatusActionInput{
+		ScriptSceneID:     agentReferenceStringArg(args, "scriptSceneId"),
+		WorkflowRunID:     agentReferenceStringArg(args, "workflowRunId"),
+		ScriptEpisodeID:   agentReferenceStringArg(args, "scriptEpisodeId"),
+		StoryboardPlanID:  agentReferenceStringArg(args, "storyboardPlanId"),
+		IncludePreviewURL: agentBoolArgValue(args, "includePreviewUrl"),
+		Limit:             agentIntArg(args, "limit", 100, 1, projectOperationalReadMaximumPageSize),
+	})
 	if err != nil {
 		return agentToolError("shot.status", args, err)
 	}
-	return agentToolOK("shot.status", args, fmt.Sprintf("读取到 %d 个镜头生产状态。", len(status.Shots)), map[string]any{"status": status})
-}
-
-func (s *Server) agentToolRunShotProduction(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, action string, args map[string]any) agentToolResult {
-	scriptEpisodeID := agentReferenceStringArg(args, "scriptEpisodeId")
-	options := cleanAgentReferenceOptions(agentMapArg(args, "options"))
-	if value, exists := args["maxConcurrency"]; exists {
-		options["maxConcurrency"] = value
-	}
-	effectiveAction := agentShotProductionAction(action, args)
-	req := ShotProductionActionRequest{
-		Action:          effectiveAction,
-		ScriptSceneID:   agentReferenceStringArg(args, "scriptSceneId"),
-		ScriptEpisodeID: scriptEpisodeID,
-		WorkflowRunID:   agentReferenceStringArg(args, "workflowRunId"),
-		ShotIDs:         agentReferenceStringSliceArg(args, "shotIds"),
-		Options:         options,
-	}
-	scriptSceneID, workflowRunID, filteredEpisodeID := shotProductionScopeFilters(req)
-	status, err := s.loadShotProductionStatusForEpisode(r, project.ID, scriptSceneID, workflowRunID, filteredEpisodeID, "", false)
-	if err != nil {
-		return agentToolError(action, args, err)
-	}
-	targets, errorCode := selectShotProductionTargets(req, status.Shots)
-	if errorCode != "" {
-		return agentToolError(action, args, newAPIError(http.StatusUnprocessableEntity, errorCode, shotProductionActionErrorMessage(errorCode)))
-	}
-	scriptEpisodeID = shotProductionTargetEpisodeID(req, status.Shots, targets)
-	if scriptEpisodeID != "" {
-		args["scriptEpisodeId"] = scriptEpisodeID
-	} else {
-		delete(args, "scriptEpisodeId")
-	}
-	workflowType, workflowFunc, ok := shotProductionWorkflowForAction(effectiveAction)
-	if !ok {
-		return agentToolError(action, args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shot production action is not supported"))
-	}
-	input := map[string]any{
-		"action":         effectiveAction,
-		"shotIds":        targets,
-		"force":          shotProductionOptionBool(req.Options, "force", true),
-		"aspectRatio":    firstNonEmptyString(project.VideoRatio, stringValue(project.AspectRatio), "16:9"),
-		"resolution":     firstNonEmptyString(shotProductionOptionString(req.Options, "resolution"), "720p"),
-		"maxConcurrency": shotProductionMaxConcurrency(action, req.Options),
-	}
-	if scriptEpisodeID != "" {
-		input["scriptEpisodeId"] = scriptEpisodeID
-	}
-	if value := shotProductionOptionFloat(req.Options, "duration", 0); value > 0 {
-		input["duration"] = value
-	}
-	if value := shotProductionOptionInt(req.Options, "pollIntervalSeconds", 0); value > 0 {
-		input["pollIntervalSeconds"] = value
-	}
-	if value := shotProductionOptionInt(req.Options, "maxPolls", 0); value > 0 {
-		input["maxPolls"] = value
-	}
-	if existing, ok, err := s.agentWorkflowRunForStep(r.Context(), project.ID, task.ID, step.ID); err != nil {
-		return agentToolError(action, args, err)
-	} else if ok {
-		return agentToolOK(action, args, fmt.Sprintf("已存在 %s 工作流 %s，未重复启动。", workflowType, existing.ID), map[string]any{
-			"action":        action,
-			"workflowRunId": existing.ID,
-			"workflowType":  workflowType,
-			"status":        existing.Status,
-			"targetShotIds": targets,
-			"idempotent":    true,
-		})
-	}
-	input["agentTaskId"] = task.ID
-	input["agentStepId"] = step.ID
-	input["idempotencyKey"] = agentStepIdempotencyKey(task, step)
-	run, err := s.startProjectWorkflowCoreWithHook(
-		r.Context(), principal, project, workflowType, input, workflowFunc,
-		func(ctx context.Context, tx pgx.Tx, run WorkflowRun) error {
-			return markShotProductionQueuedTx(ctx, tx, effectiveAction, run.ID, targets)
-		},
-	)
-	if err != nil {
-		return agentToolError(action, args, err)
-	}
-	return agentToolOK(action, args, fmt.Sprintf("已启动 %s，目标镜头 %d 个。", workflowType, len(targets)), map[string]any{
-		"action":        action,
-		"workflowRunId": run.ID,
-		"workflowType":  workflowType,
-		"status":        run.Status,
-		"targetShotIds": targets,
-	})
+	return shotStatusAgentResult(args, status)
 }
 
 func agentShotProductionAction(action string, args map[string]any) string {
@@ -3259,171 +3017,12 @@ func agentJSONEqual(left, right any) bool {
 	return string(leftJSON) == string(rightJSON)
 }
 
-func (s *Server) agentToolRunReview(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
-	useAgent := false
-	if value, exists := agentBoolArg(args, "includeAgent"); exists {
-		useAgent = value
-	}
-	if value, exists := agentBoolArg(args, "useAgent"); exists {
-		useAgent = value
-	}
-	var includeDeterministic *bool
-	if value, exists := agentBoolArg(args, "includeDeterministicChecks"); exists {
-		includeDeterministic = &value
-	}
-	response, err := s.runProjectReviewCore(r.Context(), principal, project, runProjectReviewRequest{
-		ReviewType:                 agentStringArg(args, "reviewType"),
-		UseAgent:                   useAgent,
-		IncludeDeterministicChecks: includeDeterministic,
-	})
-	if err != nil {
-		return agentToolError("review.run", args, err)
-	}
-	return agentToolOK("review.run", args, fmt.Sprintf("审阅已完成，生成 %d 个问题。", response.ItemCount), map[string]any{
-		"reviewRunId": response.ReviewRunID,
-		"status":      response.Status,
-		"summary":     rawObject(response.Summary),
-		"itemCount":   response.ItemCount,
-		"useAgent":    useAgent,
-	})
-}
-
-func (s *Server) agentToolGenerateReviewFix(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
-	itemID := agentReferenceStringArg(args, "itemId")
-	if itemID == "" {
-		return agentToolError("review.generate_fix", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "itemId is required"))
-	}
-	fix, err := s.generateReviewFixCore(r.Context(), principal, project, itemID, generateReviewFixRequest{
-		Mode:        firstNonEmpty(agentStringArg(args, "mode"), "deterministic"),
-		Instruction: agentStringArg(args, "instruction"),
-	})
-	if err != nil {
-		return agentToolError("review.generate_fix", args, err)
-	}
-	return agentToolOK("review.generate_fix", args, "已生成修复草稿，等待用户确认后才能应用。", map[string]any{
-		"fix":               fix,
-		"reviewFixId":       fix.ID,
-		"reviewItemId":      fix.ReviewItemID,
-		"status":            fix.Status,
-		"fixType":           fix.FixType,
-		"targetEntityType":  fix.TargetEntityType,
-		"targetEntityId":    stringPtrValue(fix.TargetEntityID),
-		"beforeSnapshot":    rawObject(fix.BeforeSnapshot),
-		"patch":             rawObject(fix.Patch),
-		"afterPreview":      rawObject(fix.AfterPreview),
-		"regenerateRequest": rawObject(fix.RegenerateRequest),
-		"providerCallId":    stringPtrValue(fix.ProviderCallID),
-		"promptVersionId":   stringPtrValue(fix.PromptVersionID),
-		"promptHash":        stringPtrValue(fix.PromptHash),
-	})
-}
-
-func (s *Server) agentToolApplyReviewFix(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	fixID := agentReferenceStringArg(args, "fixId")
-	if fixID == "" {
-		return agentToolError("review.apply_fix", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "fixId is required"))
-	}
-	resolveReviewItem := true
-	if value, exists := agentBoolArg(args, "resolveReviewItem"); exists {
-		resolveReviewItem = value
-	}
-	triggerRegeneration := false
-	if value, exists := agentBoolArg(args, "triggerRegeneration"); exists {
-		triggerRegeneration = value
-	}
-	var existingStatus string
-	var existingRegenerateRequest json.RawMessage
-	if err := s.db.QueryRow(r.Context(), `
-		SELECT status, COALESCE(regenerate_request, 'null'::jsonb)
-		FROM review_fixes
-		WHERE project_id = $1 AND id = $2
-	`, project.ID, fixID).Scan(&existingStatus, &existingRegenerateRequest); err != nil {
-		return agentToolError("review.apply_fix", args, err)
-	}
-	if existingStatus == "applied" {
-		return agentToolOK("review.apply_fix", args, "审阅修复已应用，未重复写入。", map[string]any{
-			"fixId":               fixID,
-			"status":              existingStatus,
-			"resolveReviewItem":   resolveReviewItem,
-			"regenerateRequest":   rawObject(existingRegenerateRequest),
-			"triggerRegeneration": triggerRegeneration,
-			"idempotent":          true,
-			"idempotencyKey":      agentStepIdempotencyKey(task, step),
-		})
-	}
-	response, regenerateRequest, err := s.applyReviewFixCore(r.Context(), principal, project, fixID, applyReviewFixRequest{
-		ResolveReviewItem:   resolveReviewItem,
-		TriggerRegeneration: triggerRegeneration,
-	})
-	if err != nil {
-		return agentToolError("review.apply_fix", args, err)
-	}
-	data := map[string]any{
-		"fixId":               response.FixID,
-		"status":              response.Status,
-		"reviewItemStatus":    stringPtrValue(response.ReviewItemStatus),
-		"resolveReviewItem":   resolveReviewItem,
-		"regenerateRequest":   rawObject(regenerateRequest),
-		"triggerRegeneration": triggerRegeneration,
-		"idempotencyKey":      agentStepIdempotencyKey(task, step),
-	}
-	if triggerRegeneration && len(regenerateRequest) > 0 && string(regenerateRequest) != "null" {
-		data["note"] = "修复已应用；再生请求需要通过生产工作流工具单独确认后执行。"
-	}
-	return agentToolOK("review.apply_fix", args, "已应用审阅修复。", data)
-}
-
-func (s *Server) agentToolDismissReviewFix(r *http.Request, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	fixID := agentReferenceStringArg(args, "fixId")
-	if fixID == "" {
-		return agentToolError("review.dismiss_fix", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "fixId is required"))
-	}
-	var existingStatus string
-	if err := s.db.QueryRow(r.Context(), `SELECT status FROM review_fixes WHERE project_id = $1 AND id = $2`, project.ID, fixID).Scan(&existingStatus); err != nil {
-		return agentToolError("review.dismiss_fix", args, err)
-	}
-	if existingStatus == "dismissed" {
-		return agentToolOK("review.dismiss_fix", args, "审阅修复已忽略，未重复写入。", map[string]any{
-			"fixId":          fixID,
-			"status":         existingStatus,
-			"idempotent":     true,
-			"idempotencyKey": agentStepIdempotencyKey(task, step),
-		})
-	}
-	response, err := s.dismissReviewFixCore(r.Context(), project, fixID)
-	if err != nil {
-		return agentToolError("review.dismiss_fix", args, err)
-	}
-	return agentToolOK("review.dismiss_fix", args, "已忽略审阅修复。", map[string]any{
-		"fixId":          response.FixID,
-		"status":         response.Status,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})
-}
-
 func (s *Server) agentToolRenderPromptTest(r *http.Request, project Project, args map[string]any) agentToolResult {
-	templateKey := agentStringArg(args, "templateKey")
-	if templateKey == "" {
-		return agentToolError("prompt.render_test", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "templateKey is required"))
-	}
-	variables := map[string]any{
-		"project": projectPromptVariables(project),
-	}
-	if input := agentMapArg(args, "input"); len(input) > 0 {
-		variables["input"] = input
-	}
-	for key, value := range agentMapArg(args, "variables") {
-		variables[key] = value
-	}
-	resolved, err := promptsvc.NewService(s.db).Resolve(r.Context(), promptsvc.ResolveRequest{
-		OrganizationID: project.OrganizationID,
-		ProjectID:      project.ID,
-		TemplateKey:    templateKey,
+	rendered, err := s.renderPromptAction(r.Context(), project.OrganizationID, project.ID, projectPromptVariables(project), promptRenderActionInput{
+		TemplateKey: agentStringArg(args, "templateKey"),
+		Variables:   agentMapArg(args, "variables"),
+		Input:       agentMapArg(args, "input"),
 	})
-	if err != nil {
-		return agentToolError("prompt.render_test", args, err)
-	}
-	rendered, err := promptsvc.Render(resolved, variables)
 	if err != nil {
 		return agentToolError("prompt.render_test", args, err)
 	}
@@ -3432,152 +3031,18 @@ func (s *Server) agentToolRenderPromptTest(r *http.Request, project Project, arg
 		"promptVersionId": rendered.PromptVersionID,
 		"renderedHash":    rendered.RenderedHash,
 		"contentHash":     rendered.ContentHash,
-		"promptSource":    rendered.Source,
-		"text":            rendered.RenderedText,
-	})
-}
-
-func (s *Server) agentToolRewriteScriptPreview(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	scriptID := agentReferenceStringArg(args, "scriptId")
-	instruction := agentStringArg(args, "instruction")
-	if scriptID == "" || instruction == "" {
-		return agentToolError("script.rewrite_preview", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "scriptId and instruction are required"))
-	}
-	script, err := s.script(r, project.ID, scriptID)
-	if err != nil {
-		return agentToolError("script.rewrite_preview", args, err)
-	}
-	versionID := agentReferenceStringArg(args, "versionId")
-	if versionID == "" && script.CurrentVersionID != nil {
-		versionID = *script.CurrentVersionID
-	}
-	current, err := s.scriptVersion(r, project.ID, script.ID, versionID)
-	if err != nil {
-		return agentToolError("script.rewrite_preview", args, err)
-	}
-	promptOptions := agentToolPromptOptions(task, step)
-	promptOptions.Stream = true
-	content, runID, rendered, gatewayResp, err := s.runScriptAgentPromptWithOptions(r, principal, project, nil, "rewrite_preview", "script_agent_rewrite", map[string]any{
-		"project": projectPromptVariables(project),
-		"script":  map[string]any{"id": script.ID, "versionId": current.ID, "content": current.Content},
-		"input":   map[string]any{"instruction": instruction},
-	}, promptOptions)
-	if err != nil {
-		return agentToolError("script.rewrite_preview", args, err)
-	}
-	if _, err := s.db.Exec(r.Context(), `
-		UPDATE agent_runs
-		SET status = 'succeeded', output = $2, provider_call_id = NULLIF($3, '')::uuid,
-		    prompt_version_id = $4, prompt_hash = $5, completed_at = now()
-		WHERE id = $1
-	`, runID, mustMarshal(map[string]any{"scriptId": script.ID, "versionId": current.ID, "content": content, "previewOnly": true}), gatewayResp.ProviderCallID, rendered.PromptVersionID, rendered.RenderedHash); err != nil {
-		return agentToolError("script.rewrite_preview", args, err)
-	}
-	return agentToolOK("script.rewrite_preview", args, "已生成剧本改写预览，未创建新版本。", map[string]any{
-		"scriptId":        script.ID,
-		"versionId":       current.ID,
-		"content":         content,
-		"contentFormat":   current.ContentFormat,
-		"previewOnly":     true,
-		"agentRunId":      runID,
-		"providerCallId":  gatewayResp.ProviderCallID,
-		"promptVersionId": rendered.PromptVersionID,
-		"promptHash":      rendered.RenderedHash,
+		"promptSource":    rendered.PromptSource,
+		"text":            rendered.Text,
 	})
 }
 
 func (s *Server) agentToolGenerateScriptFromSource(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	sourceID := agentReferenceStringArg(args, "sourceId")
-	if sourceID == "" {
-		if err := s.db.QueryRow(r.Context(), `
-			SELECT id::text
-			FROM project_sources
-			WHERE project_id = $1 AND COALESCE(status, 'ready') <> 'archived'
-			ORDER BY created_at DESC
-			LIMIT 1
-		`, project.ID).Scan(&sourceID); err != nil {
-			return agentToolError("script.generate_from_source", args, err)
-		}
-	}
-	source, err := s.projectSource(r, project.ID, sourceID)
-	if err != nil {
-		return agentToolError("script.generate_from_source", args, err)
-	}
-	title := firstNonEmpty(agentStringArg(args, "title"), source.Title+" Script")
-	instruction := agentStringArg(args, "instruction")
-	targetScriptID := agentReferenceStringArg(args, "scriptId")
-	createNewScript, _ := agentBoolArg(args, "createNewScript")
-	if targetScriptID != "" && createNewScript {
-		return agentToolError("script.generate_from_source", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "scriptId 与 createNewScript 不能同时使用"))
-	}
-	chapterRange := agentStringArg(args, "chapterRange")
-	scopeText := strings.Join([]string{task.UserGoal, title, instruction, chapterRange}, "\n")
-	chapterIDs := agentReferenceStringSliceArg(args, "chapterIds")
-	if source.SourceType == "novel" && len(chapterIDs) == 0 {
-		if resolvedSourceID, resolvedChapterIDs, matched, err := s.resolveNovelChapterRangeScope(r, project.ID, sourceID, scopeText); err != nil {
-			return agentToolError("script.generate_from_source", args, err)
-		} else if matched {
-			sourceID = resolvedSourceID
-			chapterIDs = resolvedChapterIDs
-			source, err = s.projectSource(r, project.ID, sourceID)
-			if err != nil {
-				return agentToolError("script.generate_from_source", args, err)
-			}
-		} else if resolvedSourceID, resolvedChapterIDs, matched, err := s.resolveNovelChapterScope(r, project.ID, sourceID, scopeText); err != nil {
-			return agentToolError("script.generate_from_source", args, err)
-		} else if matched {
-			sourceID = resolvedSourceID
-			chapterIDs = resolvedChapterIDs
-			source, err = s.projectSource(r, project.ID, sourceID)
-			if err != nil {
-				return agentToolError("script.generate_from_source", args, err)
-			}
-		}
-	}
-	chapterContexts := []scriptNovelChapterContext{}
-	if source.SourceType == "novel" {
-		if len(chapterIDs) == 0 {
-			allChapters, err := s.scriptNovelChapters(r, project.ID, sourceID, nil)
-			if err != nil {
-				return agentToolError("script.generate_from_source", args, err)
-			}
-			switch len(allChapters) {
-			case 0:
-				return agentToolError("script.generate_from_source", args, newAPIError(http.StatusUnprocessableEntity, "CHAPTER_RANGE_REQUIRED", "当前小说来源没有可生成的分集，请先重新导入或拆分原文。"))
-			case 1:
-				chapterIDs = []string{allChapters[0].ID}
-			default:
-				return agentToolError("script.generate_from_source", args, newAPIError(http.StatusUnprocessableEntity, "CHAPTER_RANGE_REQUIRED", "生成小说剧本必须指定分集范围，例如 chapterRange=1-10集；一条小说分集只能生成一条剧本分集。当前来源分集数："+intToString(len(allChapters))))
-			}
-		}
-		chapters, err := s.scriptNovelChapters(r, project.ID, sourceID, chapterIDs)
-		if err != nil {
-			return agentToolError("script.generate_from_source", args, err)
-		}
-		if len(chapters) != len(uniqueNonEmptyStrings(chapterIDs)) {
-			return agentToolError("script.generate_from_source", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "chapterIds do not match any novel chapter"))
-		}
-		chapterContexts = scriptNovelChapterContexts(chapters)
-	}
-	input := map[string]any{
-		"sourceId":        sourceID,
-		"scriptId":        targetScriptID,
-		"createNewScript": createNewScript,
-		"title":           title,
-		"instruction":     instruction,
-		"chapterIds":      chapterIDs,
-		"maxConcurrency":  agentIntArg(args, "maxConcurrency", 2, 1, 4),
-	}
-	spec, err := s.agentWorkflowStartSpec(r, project, "source_to_script", input)
-	if err != nil {
-		return agentToolError("script.generate_from_source", args, err)
-	}
 	if existing, ok, err := s.agentWorkflowRunForStep(r.Context(), project.ID, task.ID, step.ID); err != nil {
 		return agentToolError("script.generate_from_source", args, err)
 	} else if ok {
 		return agentToolOK("script.generate_from_source", args, fmt.Sprintf("已存在原文转剧本工作流 %s，未重复启动。", existing.ID), map[string]any{
 			"workflowRunId": existing.ID,
-			"workflowType":  spec.WorkflowType,
+			"workflowType":  "source_to_script",
 			"status":        existing.Status,
 			"input":         rawObject(existing.Input),
 			"agentTaskId":   task.ID,
@@ -3585,30 +3050,20 @@ func (s *Server) agentToolGenerateScriptFromSource(r *http.Request, principal au
 			"idempotent":    true,
 		})
 	}
-	specInput := cloneMap(spec.Input)
-	specInput["agentTaskId"] = task.ID
-	specInput["agentStepId"] = step.ID
-	specInput["idempotencyKey"] = agentStepIdempotencyKey(task, step)
-	run, err := s.startProjectWorkflowCore(r.Context(), principal, project, spec.WorkflowType, specInput, spec.WorkflowFunc)
+	raw := json.RawMessage(mustMarshal(args))
+	var input scriptGenerateFromSourceActionInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return agentToolError("script.generate_from_source", args, controlValidationError("生成剧本参数无效"))
+	}
+	result, err := s.generateScriptFromSourceCore(r.Context(), principal, project, input, task.UserGoal, "", task.ID, step.ID)
 	if err != nil {
 		return agentToolError("script.generate_from_source", args, err)
 	}
-	return agentToolOK("script.generate_from_source", args, fmt.Sprintf("已启动原文转剧本工作流 %s。", run.ID), map[string]any{
-		"workflowRunId":   run.ID,
-		"workflowType":    spec.WorkflowType,
-		"status":          run.Status,
-		"sourceId":        sourceID,
-		"sourceType":      source.SourceType,
-		"sourceTitle":     source.Title,
-		"scriptId":        targetScriptID,
-		"createNewScript": createNewScript,
-		"chapterIds":      chapterIDs,
-		"episodeCount":    maxInt(1, len(chapterContexts)),
-		"maxConcurrency":  specInput["maxConcurrency"],
-		"agentTaskId":     task.ID,
-		"agentStepId":     step.ID,
-		"idempotencyKey":  specInput["idempotencyKey"],
-	})
+	response := scriptGenerateFromSourceAgentResult("script.generate_from_source", raw, result)
+	response.Data["agentTaskId"] = task.ID
+	response.Data["agentStepId"] = step.ID
+	response.Data["idempotencyKey"] = agentStepIdempotencyKey(task, step)
+	return response
 }
 
 func scriptEpisodeGenerationInstruction(base string, index, total int, chapter scriptNovelChapterContext) string {
@@ -3648,87 +3103,6 @@ func firstString(values []string) string {
 		}
 	}
 	return ""
-}
-
-func (s *Server) agentToolRewriteScript(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	scriptID := agentReferenceStringArg(args, "scriptId")
-	instruction := agentStringArg(args, "instruction")
-	if scriptID == "" || instruction == "" {
-		return agentToolError("script.rewrite", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "scriptId and instruction are required"))
-	}
-	script, err := s.script(r, project.ID, scriptID)
-	if err != nil {
-		return agentToolError("script.rewrite", args, err)
-	}
-	versionID := agentReferenceStringArg(args, "versionId")
-	if versionID == "" && script.CurrentVersionID != nil {
-		versionID = *script.CurrentVersionID
-	}
-	current, err := s.scriptVersion(r, project.ID, script.ID, versionID)
-	if err != nil {
-		return agentToolError("script.rewrite", args, err)
-	}
-	promptOptions := agentToolPromptOptions(task, step)
-	promptOptions.Stream = true
-	content, runID, rendered, gatewayResp, err := s.runScriptAgentPromptWithOptions(r, principal, project, nil, "rewrite_script", "script_agent_rewrite", map[string]any{
-		"project": projectPromptVariables(project),
-		"script":  map[string]any{"id": script.ID, "versionId": current.ID, "content": current.Content},
-		"input":   map[string]any{"instruction": instruction},
-	}, promptOptions)
-	if err != nil {
-		return agentToolError("script.rewrite", args, err)
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		return agentToolError("script.rewrite", args, err)
-	}
-	defer tx.Rollback(r.Context())
-	nextVersion, err := nextScriptVersion(r, tx, script.ID)
-	if err != nil {
-		return agentToolError("script.rewrite", args, err)
-	}
-	newVersion, err := insertScriptVersionTx(r, tx, project, script.ID, nextVersion, content, current.ContentFormat, stringPtrFromValue("agent_rewrite"), rendered.PromptVersionID, rendered.RenderedHash, json.RawMessage(`{}`), principal.UserID)
-	if err != nil {
-		return agentToolError("script.rewrite", args, err)
-	}
-	if _, err := insertScriptEpisodesTx(r, tx, project, script.ID, newVersion.ID, principal.UserID, []scriptEpisodeDraft{
-		defaultScriptEpisodeDraft(script.SourceID, "第 1 集", content, current.ContentFormat, rendered.PromptVersionID, rendered.RenderedHash, gatewayResp.ProviderCallID, mustRawJSON(map[string]any{
-			"agentRunId":        runID,
-			"source":            "project_agent_script_rewrite",
-			"previousVersionId": current.ID,
-		})),
-	}); err != nil {
-		return agentToolError("script.rewrite", args, err)
-	}
-	activate := false
-	if value, exists := agentBoolArg(args, "activate"); exists {
-		activate = value
-	}
-	if activate {
-		if _, err := activateScriptVersionTx(r, tx, project, script, newVersion); err != nil {
-			return agentToolError("script.rewrite", args, err)
-		}
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE agent_runs
-		SET status = 'succeeded', output = $2, provider_call_id = NULLIF($3, '')::uuid,
-		    prompt_version_id = $4, prompt_hash = $5, completed_at = now()
-		WHERE id = $1
-	`, runID, mustMarshal(map[string]any{"scriptId": script.ID, "versionId": newVersion.ID, "content": content}), gatewayResp.ProviderCallID, rendered.PromptVersionID, rendered.RenderedHash); err != nil {
-		return agentToolError("script.rewrite", args, err)
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		return agentToolError("script.rewrite", args, err)
-	}
-	return agentToolOK("script.rewrite", args, "已改写剧本并创建新版本。", map[string]any{
-		"scriptId":       script.ID,
-		"versionId":      newVersion.ID,
-		"content":        content,
-		"activated":      activate,
-		"agentRunId":     runID,
-		"providerCallId": gatewayResp.ProviderCallID,
-		"promptHash":     rendered.RenderedHash,
-	})
 }
 
 func (s *Server) agentToolCreateScriptVersion(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
@@ -3868,620 +3242,6 @@ func (s *Server) agentToolActivateScriptVersion(r *http.Request, project Project
 		"versionId":      version.ID,
 		"version":        version.Version,
 		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})
-}
-
-func (s *Server) agentToolUpdateReviewPatchTarget(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any, toolName, entityType, idKey string) agentToolResult {
-	entityID := agentReferenceStringArg(args, idKey)
-	if entityID == "" {
-		return agentToolError(toolName, args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", idKey+" is required"))
-	}
-	patch := agentMapArg(args, "patch")
-	if len(patch) == 0 {
-		return agentToolError(toolName, args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "patch is required"))
-	}
-	target, err := reviewpkg.LoadReviewFixTarget(r.Context(), s.db, project.ID, entityType, entityID)
-	if err != nil {
-		return agentToolError(toolName, args, err)
-	}
-	if err := reviewpkg.ValidateReviewPatch(entityType, patch); err != nil {
-		return agentToolError(toolName, args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error()))
-	}
-	before := cloneMap(target.Snapshot)
-	if already, err := s.agentPatchTargetHasStep(r.Context(), project.ID, entityType, entityID, step.ID); err != nil {
-		return agentToolError(toolName, args, err)
-	} else if already {
-		return agentToolOK(toolName, args, "目标字段已由当前 Agent 步骤更新，未重复写入。", map[string]any{
-			idKey:            entityID,
-			"entityType":     entityType,
-			"before":         before,
-			"patch":          patch,
-			"after":          before,
-			"idempotent":     true,
-			"agentTaskId":    task.ID,
-			"agentStepId":    step.ID,
-			"agentTool":      toolName,
-			"idempotencyKey": agentStepIdempotencyKey(task, step),
-		})
-	}
-	after := reviewpkg.ApplyReviewPatchPreview(target.Snapshot, patch)
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		return agentToolError(toolName, args, err)
-	}
-	defer tx.Rollback(r.Context())
-	if err := s.applyReviewPatchToTarget(r.Context(), tx, project, entityType, entityID, after, principal.UserID); err != nil {
-		return agentToolError(toolName, args, err)
-	}
-	metadata := agentStepMetadata(task, step, toolName)
-	if err := s.mergeAgentPatchTargetMetadata(r.Context(), tx, project.ID, entityType, entityID, metadata); err != nil {
-		return agentToolError(toolName, args, err)
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "agent.target.updated", "agent_task", task.ID, mustRawJSON(map[string]any{
-		"tool":           toolName,
-		"entityType":     entityType,
-		"entityId":       entityID,
-		"patch":          patch,
-		"agentTaskId":    task.ID,
-		"agentStepId":    step.ID,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})); err != nil {
-		return agentToolError(toolName, args, err)
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		return agentToolError(toolName, args, err)
-	}
-	return agentToolOK(toolName, args, "已更新目标字段，并标记相关下游内容需要重新检查或生成。", map[string]any{
-		idKey:            entityID,
-		"entityType":     entityType,
-		"before":         before,
-		"patch":          patch,
-		"after":          after,
-		"agentTaskId":    task.ID,
-		"agentStepId":    step.ID,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})
-}
-
-func (s *Server) agentPatchTargetHasStep(ctx context.Context, projectID, entityType, entityID, stepID string) (bool, error) {
-	table, err := agentPatchTargetMetadataTable(entityType)
-	if err != nil {
-		return false, err
-	}
-	var ok bool
-	err = s.db.QueryRow(ctx, `
-		SELECT EXISTS(
-			SELECT 1
-			FROM `+table+`
-			WHERE project_id = $1 AND id = $2 AND metadata->>'agentStepId' = $3
-		)
-	`, projectID, entityID, stepID).Scan(&ok)
-	return ok, err
-}
-
-func (s *Server) mergeAgentPatchTargetMetadata(ctx context.Context, tx pgx.Tx, projectID, entityType, entityID string, metadata map[string]any) error {
-	table, err := agentPatchTargetMetadataTable(entityType)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `
-		UPDATE `+table+`
-		SET metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb,
-		    updated_at = now()
-		WHERE project_id = $1 AND id = $2
-	`, projectID, entityID, mustMarshal(metadata))
-	return err
-}
-
-func agentPatchTargetMetadataTable(entityType string) (string, error) {
-	switch entityType {
-	case "script_scene":
-		return "script_scenes", nil
-	case "canonical_asset":
-		return "canonical_assets", nil
-	case "storyboard_shot":
-		return "storyboard_shots", nil
-	case "shot_asset_requirement":
-		return "shot_asset_requirements", nil
-	case "timeline_clip":
-		return "timeline_clips", nil
-	case "project_timeline":
-		return "project_timelines", nil
-	default:
-		return "", reviewpkg.ErrUnsupportedFixTarget
-	}
-}
-
-func (s *Server) agentToolReorderStoryboard(r *http.Request, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	shotIDs := agentReferenceStringSliceArg(args, "shotIds")
-	if len(shotIDs) == 0 {
-		return agentToolError("storyboard.reorder", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotIds is required"))
-	}
-	seen := map[string]bool{}
-	before := make([]map[string]any, 0, len(shotIDs))
-	workflowRunID := ""
-	for _, shotID := range shotIDs {
-		if seen[shotID] {
-			return agentToolError("storyboard.reorder", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotIds contains duplicate values"))
-		}
-		seen[shotID] = true
-		var row struct {
-			ID            string
-			WorkflowRunID string
-			ShotIndex     int
-			ShotNo        int
-			Visual        string
-		}
-		if err := s.db.QueryRow(r.Context(), `
-			SELECT id::text, COALESCE(workflow_run_id::text, ''), shot_index, shot_no, COALESCE(visual, '')
-			FROM storyboard_shots
-			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
-		`, project.ID, shotID).Scan(&row.ID, &row.WorkflowRunID, &row.ShotIndex, &row.ShotNo, &row.Visual); err != nil {
-			return agentToolError("storyboard.reorder", args, err)
-		}
-		if workflowRunID == "" {
-			workflowRunID = row.WorkflowRunID
-		} else if workflowRunID != row.WorkflowRunID {
-			return agentToolError("storyboard.reorder", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "all shots must belong to the same workflow"))
-		}
-		before = append(before, map[string]any{
-			"shotId":        row.ID,
-			"workflowRunId": row.WorkflowRunID,
-			"shotIndex":     row.ShotIndex,
-			"shotNo":        row.ShotNo,
-			"visual":        row.Visual,
-		})
-	}
-	var alreadyProcessed int
-	if err := s.db.QueryRow(r.Context(), `
-		SELECT count(*)
-		FROM storyboard_shots
-		WHERE project_id = $1 AND id = ANY($2::uuid[]) AND metadata->>'agentStepId' = $3
-	`, project.ID, shotIDs, step.ID).Scan(&alreadyProcessed); err != nil {
-		return agentToolError("storyboard.reorder", args, err)
-	}
-	if alreadyProcessed == len(shotIDs) {
-		return agentToolOK("storyboard.reorder", args, fmt.Sprintf("已由当前 Agent 步骤重排 %d 个分镜镜头，未重复写入。", len(shotIDs)), map[string]any{
-			"workflowRunId":  workflowRunID,
-			"shotIds":        shotIDs,
-			"before":         before,
-			"after":          before,
-			"idempotent":     true,
-			"idempotencyKey": agentStepIdempotencyKey(task, step),
-		})
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		return agentToolError("storyboard.reorder", args, err)
-	}
-	defer tx.Rollback(r.Context())
-	metadata := agentStepMetadata(task, step, "storyboard.reorder")
-	for index, shotID := range shotIDs {
-		if _, err := tx.Exec(r.Context(), `
-			UPDATE storyboard_shots
-			SET shot_index = $3, shot_no = $3, updated_at = now()
-			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
-		`, project.ID, shotID, -1000000-index); err != nil {
-			return agentToolError("storyboard.reorder", args, err)
-		}
-	}
-	after := make([]map[string]any, 0, len(shotIDs))
-	for index, shotID := range shotIDs {
-		shotNo := index + 1
-		if _, err := tx.Exec(r.Context(), `
-			UPDATE storyboard_shots
-			SET shot_index = $3,
-			    shot_no = $4,
-			    manual_override = true,
-			    metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb,
-			    updated_at = now()
-			WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
-		`, project.ID, shotID, index, shotNo, mustMarshal(metadata)); err != nil {
-			return agentToolError("storyboard.reorder", args, err)
-		}
-		after = append(after, map[string]any{
-			"shotId":    shotID,
-			"shotIndex": index,
-			"shotNo":    shotNo,
-		})
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "agent.storyboard.reordered", "storyboard_shot", shotIDs[0], mustRawJSON(map[string]any{
-		"shotIds":        shotIDs,
-		"workflowRunId":  workflowRunID,
-		"agentTaskId":    task.ID,
-		"agentStepId":    step.ID,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})); err != nil {
-		return agentToolError("storyboard.reorder", args, err)
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		return agentToolError("storyboard.reorder", args, err)
-	}
-	return agentToolOK("storyboard.reorder", args, fmt.Sprintf("已重排 %d 个分镜镜头。", len(shotIDs)), map[string]any{
-		"workflowRunId":  workflowRunID,
-		"shotIds":        shotIDs,
-		"before":         before,
-		"after":          after,
-		"agentTaskId":    task.ID,
-		"agentStepId":    step.ID,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})
-}
-
-func (s *Server) agentToolActivateFinalVideo(r *http.Request, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	versionID := firstNonEmpty(agentReferenceStringArg(args, "finalVideoId"), agentReferenceStringArg(args, "versionId"))
-	if versionID == "" {
-		return agentToolError("final_video.activate", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "finalVideoId is required"))
-	}
-	if _, err := s.requireFinalVideoProductionReady(r.Context(), project.ID, versionID); err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	var activeVersionID string
-	if err := s.db.QueryRow(r.Context(), `SELECT COALESCE(active_final_video_version_id::text, '') FROM projects WHERE id = $1`, project.ID).Scan(&activeVersionID); err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	if activeVersionID == versionID {
-		item, err := s.finalVideoVersionByID(r, project.ID, versionID)
-		if err != nil {
-			return agentToolError("final_video.activate", args, err)
-		}
-		return agentToolOK("final_video.activate", args, "成片版本已是当前激活版本。", map[string]any{
-			"finalVideo":     item,
-			"versionId":      item.ID,
-			"status":         item.Status,
-			"idempotent":     true,
-			"idempotencyKey": agentStepIdempotencyKey(task, step),
-		})
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `UPDATE final_video_versions SET status = 'ready' WHERE project_id = $1 AND status = 'active' AND id <> $2`, project.ID, versionID); err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	tag, err := tx.Exec(r.Context(), `UPDATE final_video_versions SET status = 'active' WHERE project_id = $1 AND id = $2`, project.ID, versionID)
-	if err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	if tag.RowsAffected() == 0 {
-		return agentToolError("final_video.activate", args, pgx.ErrNoRows)
-	}
-	if _, err := tx.Exec(r.Context(), `UPDATE projects SET active_final_video_version_id = $2 WHERE id = $1`, project.ID, versionID); err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE final_video_versions
-		SET metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb
-		WHERE project_id = $1 AND id = $2
-	`, project.ID, versionID, mustMarshal(agentStepMetadata(task, step, "final_video.activate"))); err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "final_video.activated", "final_video_version", versionID, mustRawJSON(map[string]any{
-		"finalVideoVersionId": versionID,
-		"agentTaskId":         task.ID,
-		"agentStepId":         step.ID,
-		"idempotencyKey":      agentStepIdempotencyKey(task, step),
-	})); err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	item, err := s.finalVideoVersionByID(r, project.ID, versionID)
-	if err != nil {
-		return agentToolError("final_video.activate", args, err)
-	}
-	return agentToolOK("final_video.activate", args, "已激活成片版本。", map[string]any{
-		"finalVideo":     item,
-		"versionId":      item.ID,
-		"status":         item.Status,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})
-}
-
-func (s *Server) agentToolCreatePromptVersion(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	templateID := agentReferenceStringArg(args, "templateId")
-	content := strings.TrimSpace(agentStringArg(args, "content"))
-	if templateID == "" || content == "" {
-		return agentToolError("prompt.create_version", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "templateId and content are required"))
-	}
-	template, err := s.promptTemplate(r.Context(), templateID)
-	if err != nil {
-		return agentToolError("prompt.create_version", args, err)
-	}
-	if !promptTemplateBelongsToProjectOrg(template, project) {
-		return agentToolError("prompt.create_version", args, auth.ErrForbidden)
-	}
-	contentFormat := firstNonEmpty(agentStringArg(args, "contentFormat"), "text")
-	if contentFormat != "text" && contentFormat != "markdown" {
-		return agentToolError("prompt.create_version", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "contentFormat is invalid"))
-	}
-	title := agentStringArg(args, "title")
-	var titlePtr *string
-	if title != "" {
-		titlePtr = &title
-	}
-	variablesSchema := mustRawJSON(agentMapArg(args, "variablesSchema"))
-	metadata := mustRawJSON(mergeAgentStepMetadata(agentMapArg(args, "metadata"), task, step, "prompt.create_version"))
-	activate := false
-	if value, exists := agentBoolArg(args, "activate"); exists {
-		activate = value
-	}
-	var existingVersionID string
-	if err := s.db.QueryRow(r.Context(), `
-		SELECT id::text
-		FROM prompt_versions
-		WHERE COALESCE(template_id, prompt_template_id) = $1
-		  AND metadata->>'agentStepId' = $2
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, template.ID, step.ID).Scan(&existingVersionID); err == nil {
-		if activate {
-			tx, err := s.db.Begin(r.Context())
-			if err != nil {
-				return agentToolError("prompt.create_version", args, err)
-			}
-			defer tx.Rollback(r.Context())
-			if _, err := tx.Exec(r.Context(), `UPDATE prompt_versions SET status = 'archived' WHERE template_id = $1 AND status = 'active' AND id <> $2`, template.ID, existingVersionID); err != nil {
-				return agentToolError("prompt.create_version", args, err)
-			}
-			if _, err := tx.Exec(r.Context(), `UPDATE prompt_versions SET status = 'active', activated_at = COALESCE(activated_at, now()) WHERE id = $1`, existingVersionID); err != nil {
-				return agentToolError("prompt.create_version", args, err)
-			}
-			if err := tx.Commit(r.Context()); err != nil {
-				return agentToolError("prompt.create_version", args, err)
-			}
-		}
-		version, err := s.promptVersion(r.Context(), existingVersionID)
-		if err != nil {
-			return agentToolError("prompt.create_version", args, err)
-		}
-		return agentToolOK("prompt.create_version", args, fmt.Sprintf("已存在提示词版本 v%d，未重复创建。", version.Version), map[string]any{
-			"templateId":     template.ID,
-			"version":        version,
-			"versionId":      version.ID,
-			"activated":      activate,
-			"idempotent":     true,
-			"idempotencyKey": agentStepIdempotencyKey(task, step),
-		})
-	} else if err != pgx.ErrNoRows {
-		return agentToolError("prompt.create_version", args, err)
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		return agentToolError("prompt.create_version", args, err)
-	}
-	defer tx.Rollback(r.Context())
-	var versionNo int
-	if err := tx.QueryRow(r.Context(), `
-		SELECT COALESCE(MAX(COALESCE(version, version_no)), 0) + 1
-		FROM prompt_versions
-		WHERE COALESCE(template_id, prompt_template_id) = $1
-	`, template.ID).Scan(&versionNo); err != nil {
-		return agentToolError("prompt.create_version", args, err)
-	}
-	status := "draft"
-	activatedAtExpr := "NULL"
-	if activate {
-		status = "active"
-		activatedAtExpr = "now()"
-		if _, err := tx.Exec(r.Context(), `UPDATE prompt_versions SET status = 'archived' WHERE template_id = $1 AND status = 'active'`, template.ID); err != nil {
-			return agentToolError("prompt.create_version", args, err)
-		}
-	}
-	var versionID string
-	if err := tx.QueryRow(r.Context(), `
-		INSERT INTO prompt_versions(
-			prompt_template_id, template_id, version_no, version, status, title, content, content_format,
-			variables_schema, metadata, content_hash, created_by, activated_at
-		)
-		VALUES ($1, $1, $2, $2, $3, $4, $5, $6, $7, $8, $9, $10, `+activatedAtExpr+`)
-		RETURNING id::text
-	`, template.ID, versionNo, status, titlePtr, content, contentFormat, variablesSchema, metadata, promptsvc.HashText(content), principal.UserID).Scan(&versionID); err != nil {
-		return agentToolError("prompt.create_version", args, err)
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		return agentToolError("prompt.create_version", args, err)
-	}
-	version, err := s.promptVersion(r.Context(), versionID)
-	if err != nil {
-		return agentToolError("prompt.create_version", args, err)
-	}
-	return agentToolOK("prompt.create_version", args, fmt.Sprintf("已创建提示词版本 v%d。", version.Version), map[string]any{
-		"templateId":     template.ID,
-		"version":        version,
-		"versionId":      version.ID,
-		"activated":      activate,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})
-}
-
-func (s *Server) agentToolActivatePromptVersion(r *http.Request, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	versionID := agentReferenceStringArg(args, "versionId")
-	if versionID == "" {
-		return agentToolError("prompt.activate_version", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "versionId is required"))
-	}
-	version, err := s.promptVersion(r.Context(), versionID)
-	if err != nil {
-		return agentToolError("prompt.activate_version", args, err)
-	}
-	template, err := s.promptTemplate(r.Context(), version.TemplateID)
-	if err != nil {
-		return agentToolError("prompt.activate_version", args, err)
-	}
-	if !promptTemplateBelongsToProjectOrg(template, project) {
-		return agentToolError("prompt.activate_version", args, auth.ErrForbidden)
-	}
-	if version.Status == "active" {
-		return agentToolOK("prompt.activate_version", args, fmt.Sprintf("提示词版本 v%d 已是激活版本。", version.Version), map[string]any{
-			"templateId":     template.ID,
-			"version":        version,
-			"versionId":      version.ID,
-			"status":         version.Status,
-			"idempotent":     true,
-			"idempotencyKey": agentStepIdempotencyKey(task, step),
-		})
-	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		return agentToolError("prompt.activate_version", args, err)
-	}
-	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `UPDATE prompt_versions SET status = 'archived' WHERE template_id = $1 AND status = 'active'`, template.ID); err != nil {
-		return agentToolError("prompt.activate_version", args, err)
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE prompt_versions
-		SET status = 'active',
-		    activated_at = now(),
-		    metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
-		WHERE id = $1
-	`, version.ID, mustMarshal(agentStepMetadata(task, step, "prompt.activate_version"))); err != nil {
-		return agentToolError("prompt.activate_version", args, err)
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		return agentToolError("prompt.activate_version", args, err)
-	}
-	updated, err := s.promptVersion(r.Context(), version.ID)
-	if err != nil {
-		return agentToolError("prompt.activate_version", args, err)
-	}
-	return agentToolOK("prompt.activate_version", args, fmt.Sprintf("已激活提示词版本 v%d。", updated.Version), map[string]any{
-		"templateId":     template.ID,
-		"version":        updated,
-		"versionId":      updated.ID,
-		"status":         updated.Status,
-		"idempotencyKey": agentStepIdempotencyKey(task, step),
-	})
-}
-
-func promptTemplateBelongsToProjectOrg(template PromptTemplate, project Project) bool {
-	return template.OrganizationID == nil || strings.TrimSpace(*template.OrganizationID) == project.OrganizationID
-}
-
-func (s *Server) agentToolTestProviderModel(r *http.Request, principal auth.Principal, project Project, task AgentTask, step AgentStep, args map[string]any) agentToolResult {
-	if s.providers == nil {
-		return agentToolError("provider.test_model", args, apiError{Status: http.StatusServiceUnavailable, Code: "PROVIDER_SERVICE_UNAVAILABLE", Message: "provider service is not configured", Retryable: true})
-	}
-	modelID := agentReferenceStringArg(args, "modelId")
-	if modelID == "" {
-		return agentToolError("provider.test_model", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "modelId is required"))
-	}
-	testType := firstNonEmpty(agentStringArg(args, "testType"), "text_generation_test")
-	input := agentMapArg(args, "input")
-	if len(input) == 0 {
-		prompt := firstNonEmpty(agentStringArg(args, "prompt"), "Say ok.")
-		input = map[string]any{
-			"messages": []map[string]string{{"role": "user", "content": prompt}},
-		}
-	}
-	result, err := s.providers.RecordProviderModelTest(r.Context(), project.OrganizationID, principal.UserID, modelID, provider.TestProviderModelRequest{
-		TestType:       testType,
-		Input:          mustRawJSON(input),
-		IdempotencyKey: agentStepIdempotencyKey(task, step),
-	})
-	if err != nil {
-		return agentToolError("provider.test_model", args, err)
-	}
-	return agentToolOK("provider.test_model", args, "供应商模型测试已完成。", map[string]any{
-		"result":         result,
-		"testRunId":      result.TestRunID,
-		"providerCallId": result.ProviderCallID,
-		"status":         result.Status,
-		"latencyMs":      result.LatencyMS,
-	})
-}
-
-func (s *Server) agentToolUpdateProviderAccount(r *http.Request, project Project, args map[string]any) agentToolResult {
-	if s.providers == nil {
-		return agentToolError("provider.update_account", args, apiError{Status: http.StatusServiceUnavailable, Code: "PROVIDER_SERVICE_UNAVAILABLE", Message: "provider service is not configured", Retryable: true})
-	}
-	accountID := agentReferenceStringArg(args, "accountId")
-	if accountID == "" {
-		return agentToolError("provider.update_account", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "accountId is required"))
-	}
-	patch := agentMapArg(args, "patch")
-	req := provider.UpdateAccountRequest{}
-	if value, ok := optionalStringPatch(patch, "name"); ok {
-		req.Name = &value
-	}
-	if value, ok := optionalStringPatch(patch, "baseUrl"); ok {
-		req.BaseURL = &value
-	}
-	if value, ok := optionalStringPatch(patch, "authType"); ok {
-		req.AuthType = &value
-	}
-	if value, ok := optionalStringPatch(patch, "status"); ok {
-		req.Status = &value
-	}
-	if config := mapPatch(patch, "config"); len(config) > 0 {
-		req.Config = mustRawJSON(config)
-	}
-	item, err := s.providers.UpdateAccount(r.Context(), project.OrganizationID, accountID, req)
-	if err != nil {
-		return agentToolError("provider.update_account", args, err)
-	}
-	return agentToolOK("provider.update_account", args, "已更新供应商账号。", map[string]any{"account": item, "accountId": item.ID})
-}
-
-func (s *Server) agentToolUpdateProviderModel(r *http.Request, project Project, args map[string]any) agentToolResult {
-	if s.providers == nil {
-		return agentToolError("provider.update_model", args, apiError{Status: http.StatusServiceUnavailable, Code: "PROVIDER_SERVICE_UNAVAILABLE", Message: "provider service is not configured", Retryable: true})
-	}
-	modelID := agentReferenceStringArg(args, "modelId")
-	if modelID == "" {
-		return agentToolError("provider.update_model", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "modelId is required"))
-	}
-	patch := agentMapArg(args, "patch")
-	req := provider.UpdateModelRequest{}
-	if value, ok := optionalStringPatch(patch, "modelKey"); ok {
-		req.ModelKey = &value
-	}
-	if value, ok := optionalStringPatch(patch, "displayName"); ok {
-		req.DisplayName = &value
-	}
-	if value, ok := optionalStringPatch(patch, "modality"); ok {
-		req.Modality = &value
-	}
-	if value, ok := optionalStringPatch(patch, "status"); ok {
-		req.Status = &value
-	}
-	if value, ok := patch["capabilities"]; ok && value != nil {
-		var capabilities provider.CapabilityInput
-		if err := json.Unmarshal(mustMarshal(value), &capabilities); err != nil {
-			return agentToolError("provider.update_model", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "capabilities is invalid"))
-		}
-		req.Capabilities = &capabilities
-	}
-	item, err := s.providers.UpdateModel(r.Context(), project.OrganizationID, modelID, req)
-	if err != nil {
-		return agentToolError("provider.update_model", args, err)
-	}
-	return agentToolOK("provider.update_model", args, "已更新供应商模型。", map[string]any{"model": item, "modelId": item.ID})
-}
-
-func (s *Server) agentToolInstallProviderCatalogPreset(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {
-	if s.providers == nil {
-		return agentToolError("provider.install_catalog_preset", args, apiError{Status: http.StatusServiceUnavailable, Code: "PROVIDER_SERVICE_UNAVAILABLE", Message: "provider service is not configured", Retryable: true})
-	}
-	providerKey := agentStringArg(args, "providerKey")
-	if providerKey == "" {
-		return agentToolError("provider.install_catalog_preset", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "providerKey is required"))
-	}
-	var req provider.InstallCatalogRequest
-	if err := json.Unmarshal(mustMarshal(args), &req); err != nil {
-		return agentToolError("provider.install_catalog_preset", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "install request is invalid"))
-	}
-	req.OrganizationID = project.OrganizationID
-	item, err := s.providers.InstallCatalogEntry(r.Context(), project.OrganizationID, principal.UserID, providerKey, req)
-	if err != nil {
-		return agentToolError("provider.install_catalog_preset", args, err)
-	}
-	return agentToolOK("provider.install_catalog_preset", args, "已安装供应商预设。", map[string]any{
-		"result":    item,
-		"accountId": item.Account.ID,
 	})
 }
 

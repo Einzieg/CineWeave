@@ -14,15 +14,16 @@ import (
 )
 
 type ExportProjectInput struct {
-	OrganizationID string         `json:"organizationId"`
-	ProjectID      string         `json:"projectId"`
-	WorkflowRunID  string         `json:"workflowRunId"`
-	ExportID       string         `json:"exportId"`
-	ExportType     string         `json:"exportType"`
-	Format         string         `json:"format"`
-	Title          string         `json:"title"`
-	Options        map[string]any `json:"options"`
-	CreatedBy      string         `json:"createdBy"`
+	OrganizationID          string         `json:"organizationId"`
+	ProjectID               string         `json:"projectId"`
+	WorkflowRunID           string         `json:"workflowRunId"`
+	ExportID                string         `json:"exportId"`
+	ExportType              string         `json:"exportType"`
+	Format                  string         `json:"format"`
+	Title                   string         `json:"title"`
+	Options                 map[string]any `json:"options"`
+	CreatedBy               string         `json:"createdBy"`
+	ProjectControlCommandID string         `json:"projectControlCommandId,omitempty"`
 }
 
 type ExportProjectOutput struct {

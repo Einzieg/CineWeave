@@ -91,12 +91,13 @@ type RefreshRequest struct {
 }
 
 type TokenResponse struct {
-	AccessToken    string       `json:"accessToken"`
-	ExpiresIn      int64        `json:"expiresIn"`
-	RefreshToken   string       `json:"refreshToken"`
-	User           UserResponse `json:"user"`
-	OrganizationID string       `json:"organizationId,omitempty"`
-	WorkspaceID    string       `json:"workspaceId,omitempty"`
+	AccessToken     string            `json:"accessToken"`
+	ExpiresIn       int64             `json:"expiresIn"`
+	RefreshToken    string            `json:"refreshToken"`
+	User            UserResponse      `json:"user"`
+	OrganizationID  string            `json:"organizationId,omitempty"`
+	WorkspaceID     string            `json:"workspaceId,omitempty"`
+	CodexControlKey *ControlKeySecret `json:"codexControlKey,omitempty"`
 }
 
 type OrganizationChoice struct {
@@ -244,6 +245,10 @@ func (s *Service) createUserOrganizationSession(ctx context.Context, req Registe
 	if err != nil {
 		return TokenResponse{}, err
 	}
+	controlKey, err := createControlKeyTx(ctx, tx, userID, false)
+	if err != nil {
+		return TokenResponse{}, err
+	}
 
 	token, refresh, err := s.createSession(ctx, tx, userID, orgID, r)
 	if err != nil {
@@ -255,11 +260,12 @@ func (s *Service) createUserOrganizationSession(ctx context.Context, req Registe
 	}
 
 	return TokenResponse{
-		AccessToken:    token,
-		ExpiresIn:      int64(s.accessTTL.Seconds()),
-		RefreshToken:   refresh,
-		OrganizationID: orgID,
-		WorkspaceID:    workspaceID,
+		AccessToken:     token,
+		ExpiresIn:       int64(s.accessTTL.Seconds()),
+		RefreshToken:    refresh,
+		OrganizationID:  orgID,
+		WorkspaceID:     workspaceID,
+		CodexControlKey: &controlKey,
 		User: UserResponse{
 			ID:                  userID,
 			Email:               email,

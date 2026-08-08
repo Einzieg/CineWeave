@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,8 +14,6 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
-	"github.com/Einzieg/cineweave/internal/workflows"
-	"github.com/google/uuid"
 )
 
 func (s *Server) getCommerceDirectVideoOptions(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -265,7 +264,7 @@ func (s *Server) completeCommerceScriptReferenceUpload(w http.ResponseWriter, r 
 }
 
 func (s *Server) archiveCommerceScriptReference(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetDelete)
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionAssetWrite)
 	if !ok {
 		return
 	}
@@ -275,36 +274,29 @@ func (s *Server) archiveCommerceScriptReference(w http.ResponseWriter, r *http.R
 	if !decode(w, r, &req) {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	raw, err := json.Marshal(map[string]any{
+		"scriptUnitId":     strings.TrimSpace(r.PathValue("scriptUnitId")),
+		"referenceId":      strings.TrimSpace(r.PathValue("referenceId")),
+		"expectedRevision": req.ExpectedRevision,
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err := s.commerceDirect.ArchiveScriptReference(
-		r.Context(), tx, project.OrganizationID, project.ID,
-		r.PathValue("scriptUnitId"), r.PathValue("referenceId"), req.ExpectedRevision,
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "commerce.script.reference.archive", raw,
+		strings.TrimSpace(r.Header.Get("Idempotency-Key")),
 	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := insertAPIEvent(
-		r.Context(), tx, project.OrganizationID, project.ID,
-		"commerce.script_reference.archived", "commerce_script_reference_image", item.ID,
-		mustRawJSON(map[string]any{
-			"commerceScriptUnitId": item.ScriptUnitID,
-			"scriptReferenceId":    item.ID,
-			"revision":             item.Revision,
-		}),
-	); err != nil {
+	item, err := decodeAgentToolData[commercepkg.ScriptReferenceImage](result.Data)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -313,16 +305,23 @@ func (s *Server) listCommerceDirectVideos(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	items, err := s.commerceDirect.ListJobs(
-		r.Context(), s.db, project.OrganizationID, project.ID,
-		strings.TrimSpace(r.URL.Query().Get("filter[scriptUnitId]")),
-	)
+	items, err := s.listCommerceDirectVideosCore(r.Context(), project, strings.TrimSpace(r.URL.Query().Get("filter[scriptUnitId]")))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.attachCommerceDirectVideoPreviews(r, items)
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+}
+
+func (s *Server) listCommerceDirectVideosCore(ctx context.Context, project Project, scriptUnitID string) ([]commercepkg.DirectVideoJob, error) {
+	items, err := s.commerceDirect.ListJobs(
+		ctx, s.db, project.OrganizationID, project.ID, strings.TrimSpace(scriptUnitID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	s.attachCommerceDirectVideoPreviews(requestWithContext(ctx), items)
+	return items, nil
 }
 
 func (s *Server) getCommerceDirectVideo(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -330,17 +329,24 @@ func (s *Server) getCommerceDirectVideo(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	item, err := s.commerceDirect.GetJob(
-		r.Context(), s.db, project.OrganizationID, project.ID, r.PathValue("jobId"),
-	)
+	item, err := s.getCommerceDirectVideoCore(r.Context(), project, r.PathValue("jobId"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	single := []commercepkg.DirectVideoJob{item}
-	s.attachCommerceDirectVideoPreviews(r, single)
-	item = single[0]
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) getCommerceDirectVideoCore(ctx context.Context, project Project, jobID string) (commercepkg.DirectVideoJob, error) {
+	item, err := s.commerceDirect.GetJob(
+		ctx, s.db, project.OrganizationID, project.ID, strings.TrimSpace(jobID),
+	)
+	if err != nil {
+		return commercepkg.DirectVideoJob{}, err
+	}
+	single := []commercepkg.DirectVideoJob{item}
+	s.attachCommerceDirectVideoPreviews(requestWithContext(ctx), single)
+	return single[0], nil
 }
 
 func (s *Server) cancelCommerceDirectVideo(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -349,179 +355,25 @@ func (s *Server) cancelCommerceDirectVideo(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if idempotencyKey == "" {
-		httpx.WriteError(
-			w, r, http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_REQUIRED",
-			"取消视频任务需要请求标识", nil, false,
-		)
-		return
-	}
 	var req struct {
 		Reason string `json:"reason"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	jobID := strings.TrimSpace(r.PathValue("jobId"))
-	reason := strings.TrimSpace(req.Reason)
-	if reason == "" {
-		reason = "用户取消带货视频任务"
-	}
-	requestHash := idempotencyRequestHash(map[string]any{
-		"projectId": project.ID, "jobId": jobID,
-		"userId": principal.UserID, "reason": reason,
-	})
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	claim, err := claimIdempotencyTx(
-		r.Context(), tx, project.OrganizationID,
-		"commerce_direct_video:cancel:"+jobID,
-		idempotencyKey, requestHash,
+	result, err := s.executeManualAsyncAction(
+		r.Context(), principal, project, "commerce.video.cancel",
+		map[string]any{
+			"jobId":  strings.TrimSpace(r.PathValue("jobId")),
+			"reason": strings.TrimSpace(req.Reason),
+		},
+		idempotencyKey,
 	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if len(claim.replaySnapshot) > 0 {
-		var replay commercepkg.DirectVideoJob
-		if err := json.Unmarshal(claim.replaySnapshot, &replay); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if err := tx.Commit(r.Context()); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		current, loadErr := s.commerceDirect.GetJob(
-			r.Context(), s.db, project.OrganizationID, project.ID, jobID,
-		)
-		if loadErr != nil {
-			s.writeError(w, r, loadErr)
-			return
-		}
-		if !commerceDirectVideoTerminal(current.Status) {
-			if err := s.requestCommerceDirectVideoCancellation(
-				r, project, current, reason,
-			); err != nil {
-				s.writeError(w, r, err)
-				return
-			}
-		}
-		status := claim.replayStatus
-		if status != http.StatusOK && status != http.StatusAccepted {
-			status = http.StatusAccepted
-		}
-		items := []commercepkg.DirectVideoJob{replay}
-		s.attachCommerceDirectVideoPreviews(r, items)
-		httpx.WriteJSON(
-			w, r, status, items[0],
-			map[string]any{"idempotentReplay": true},
-		)
-		return
-	}
-	job, err := s.commerceDirect.GetJob(
-		r.Context(), tx, project.OrganizationID, project.ID, jobID,
-	)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if commerceDirectVideoTerminal(job.Status) {
-		if err := completeIdempotencyTxWithStatus(
-			r.Context(), tx, claim.state, http.StatusOK, job,
-		); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if err := tx.Commit(r.Context()); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		items := []commercepkg.DirectVideoJob{job}
-		s.attachCommerceDirectVideoPreviews(r, items)
-		httpx.WriteJSON(w, r, http.StatusOK, items[0], nil)
-		return
-	}
-	if job.WorkflowRunID == nil || strings.TrimSpace(*job.WorkflowRunID) == "" {
-		httpx.WriteError(
-			w, r, http.StatusConflict, commercepkg.CodeDirectVideoStateConflict,
-			"视频任务缺少可取消的工作流", nil, false,
-		)
-		return
-	}
-	tag, err := tx.Exec(r.Context(), `
-		UPDATE commerce_direct_video_jobs
-		SET status = 'cancelling',
-		    error_code = 'USER_CANCELLED',
-		    error_message = $4,
-		    updated_at = now()
-		WHERE id = $1 AND organization_id = $2 AND project_id = $3
-		  AND status IN ('queued', 'running', 'cancelling')
-	`, job.ID, project.OrganizationID, project.ID, reason)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if tag.RowsAffected() != 1 {
-		s.writeError(w, r, newAPIError(
-			http.StatusConflict, commercepkg.CodeDirectVideoStateConflict,
-			"视频任务状态已变化，请刷新后重试",
-		))
-		return
-	}
-	job.Status = "cancelling"
-	errorCode := "USER_CANCELLED"
-	job.ErrorCode = &errorCode
-	job.ErrorMessage = &reason
-	if err := completeIdempotencyTxWithStatus(
-		r.Context(), tx, claim.state, http.StatusAccepted, job,
-	); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := s.requestCommerceDirectVideoCancellation(r, project, job, reason); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	items := []commercepkg.DirectVideoJob{job}
-	s.attachCommerceDirectVideoPreviews(r, items)
-	httpx.WriteJSON(w, r, http.StatusAccepted, items[0], nil)
-}
-
-func (s *Server) requestCommerceDirectVideoCancellation(
-	r *http.Request,
-	project Project,
-	job commercepkg.DirectVideoJob,
-	reason string,
-) error {
-	if job.WorkflowRunID == nil || strings.TrimSpace(*job.WorkflowRunID) == "" {
-		return newAPIError(
-			http.StatusConflict, commercepkg.CodeDirectVideoStateConflict,
-			"视频任务缺少可取消的工作流",
-		)
-	}
-	run, err := scanWorkflowRun(s.db.QueryRow(r.Context(), workflowRunSelectSQL(`
-		WHERE id = $1 AND organization_id = $2 AND project_id = $3
-	`), *job.WorkflowRunID, project.OrganizationID, project.ID))
-	if err != nil {
-		return err
-	}
-	updatedRun, err := s.cancelWorkflowRunItem(r.Context(), run, reason)
-	if err != nil {
-		return err
-	}
-	if updatedRun.Status == "cancelled" {
-		return s.finalizePreStartCommerceDirectVideoCancellation(r, project, job, reason)
-	}
-	return nil
+	s.writeManualAsyncActionResult(w, r, result)
 }
 
 func commerceDirectVideoTerminal(status string) bool {
@@ -533,147 +385,31 @@ func commerceDirectVideoTerminal(status string) bool {
 	}
 }
 
-func (s *Server) finalizePreStartCommerceDirectVideoCancellation(
-	r *http.Request,
-	project Project,
-	job commercepkg.DirectVideoJob,
-	reason string,
-) error {
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(r.Context())
-	tag, err := tx.Exec(r.Context(), `
-		UPDATE commerce_direct_video_jobs
-		SET status = 'cancelled',
-		    completed_at = now(),
-		    cancelled_at = now(),
-		    error_code = 'USER_CANCELLED',
-		    error_message = $4,
-		    updated_at = now()
-		WHERE id = $1 AND organization_id = $2 AND project_id = $3
-		  AND status = 'cancelling'
-	`, job.ID, project.OrganizationID, project.ID, reason)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() > 0 {
-		if err := insertAPIEvent(
-			r.Context(), tx, project.OrganizationID, project.ID,
-			"commerce.direct_video.cancelled", "commerce_direct_video_job", job.ID,
-			mustRawJSON(map[string]any{
-				"workflowRunId":        job.WorkflowRunID,
-				"commerceScriptUnitId": job.ScriptUnitID,
-				"reason":               reason,
-			}),
-		); err != nil {
-			return err
-		}
-	}
-	return tx.Commit(r.Context())
-}
-
 func (s *Server) createCommerceDirectVideo(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionWorkflowRun)
 	if !ok {
 		return
 	}
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if idempotencyKey == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_REQUIRED", "生成视频需要请求标识", nil, false)
-		return
-	}
 	var req commercepkg.CreateDirectVideoJobInput
 	if !decode(w, r, &req) {
 		return
 	}
-	scriptUnitID := r.PathValue("scriptUnitId")
-	requestHash := idempotencyRequestHash(map[string]any{
-		"projectId": project.ID, "scriptUnitId": scriptUnitID, "input": req,
-	})
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	claim, err := claimIdempotencyTx(
-		r.Context(), tx, project.OrganizationID,
-		"commerce_direct_video:create:"+scriptUnitID, idempotencyKey, requestHash,
-	)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if len(claim.replaySnapshot) > 0 {
-		var replay commercepkg.DirectVideoJob
-		if err := json.Unmarshal(claim.replaySnapshot, &replay); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if err := tx.Commit(r.Context()); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		single := []commercepkg.DirectVideoJob{replay}
-		s.attachCommerceDirectVideoPreviews(r, single)
-		replay = single[0]
-		httpx.WriteJSON(w, r, http.StatusAccepted, replay, map[string]any{"idempotentReplay": true})
-		return
-	}
-	jobID := uuid.NewString()
-	workflowRunID := uuid.NewString()
-	prepared, err := s.commerceDirect.PrepareJob(
-		r.Context(), tx, commercepkg.PrepareDirectVideoJobParams{
-			JobID: jobID, WorkflowRunID: workflowRunID,
-			OrganizationID: project.OrganizationID, ProjectID: project.ID,
-			ScriptUnitID: scriptUnitID, CreatedBy: principal.UserID,
-			IdempotencyKey: idempotencyKey, Input: req,
+	result, err := s.executeManualAsyncAction(
+		r.Context(), principal, project, "commerce.video.generate",
+		map[string]any{
+			"scriptUnitId":    strings.TrimSpace(r.PathValue("scriptUnitId")),
+			"durationSeconds": req.DurationSeconds, "resolution": req.Resolution,
+			"aspectRatio": req.AspectRatio, "generateAudio": req.GenerateAudio,
+			"references": req.References,
 		},
+		idempotencyKey,
 	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	workflowInput := workflows.CommerceDirectVideoInput{
-		OrganizationID: project.OrganizationID, ProjectID: project.ID,
-		ScriptUnitID: scriptUnitID, JobID: jobID,
-		WorkflowRunID: workflowRunID, CreatedBy: principal.UserID,
-	}
-	if err := workflows.EnqueueCommerceDirectVideoTx(
-		r.Context(), tx, workflowInput, prepared.Production,
-	); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	item, err := s.commerceDirect.InsertPreparedJob(r.Context(), tx, prepared, idempotencyKey)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	run, err := scanWorkflowRun(tx.QueryRow(
-		r.Context(), workflowRunSelectSQL(`WHERE id = $1`), workflowRunID,
-	))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertWorkflowQueuedEventTx(r.Context(), tx, run, run.WorkflowType); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := completeIdempotencyTxWithStatus(
-		r.Context(), tx, claim.state, http.StatusAccepted, item,
-	); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusAccepted, item, nil)
+	s.writeManualAsyncActionResult(w, r, result)
 }
 
 func (s *Server) abandonCommerceScriptReferenceUpload(

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -50,6 +51,7 @@ type NovelEvent struct {
 	CreatedAt      time.Time       `json:"createdAt"`
 	UpdatedAt      time.Time       `json:"updatedAt"`
 	EditedAt       *time.Time      `json:"editedAt,omitempty"`
+	Revision       int64           `json:"revision"`
 }
 
 type NovelEventLink struct {
@@ -88,6 +90,7 @@ type AdaptationPlan struct {
 	CreatedAt             time.Time       `json:"createdAt"`
 	UpdatedAt             time.Time       `json:"updatedAt"`
 	EditedAt              *time.Time      `json:"editedAt,omitempty"`
+	Revision              int64           `json:"revision"`
 }
 
 type extractNovelEventsRequest struct {
@@ -106,6 +109,18 @@ type generateAdaptationPlanRequest struct {
 type generateScriptFromAdaptationPlanRequest struct {
 	Title       string `json:"title"`
 	Instruction string `json:"instruction"`
+}
+
+type generateScriptFromAdaptationPlanResult struct {
+	ScriptID         string   `json:"scriptId"`
+	VersionID        string   `json:"versionId"`
+	AdaptationPlanID string   `json:"adaptationPlanId"`
+	ProviderCallID   string   `json:"providerCallId,omitempty"`
+	ProviderCallIDs  []string `json:"providerCallIds"`
+	ModelID          string   `json:"modelId,omitempty"`
+	ModelIDs         []string `json:"modelIds"`
+	EpisodeCount     int      `json:"episodeCount"`
+	Content          string   `json:"content"`
 }
 
 type scriptNovelChapterContext struct {
@@ -229,22 +244,23 @@ func (s *Server) getNovelEvent(w http.ResponseWriter, r *http.Request, principal
 
 func (s *Server) updateNovelEvent(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	var req struct {
-		Title          *string   `json:"title"`
-		Summary        *string   `json:"summary"`
-		EventType      *string   `json:"eventType"`
-		Importance     *int      `json:"importance"`
-		TimelineHint   *string   `json:"timelineHint"`
-		LocationHint   *string   `json:"locationHint"`
-		EmotionalTone  *string   `json:"emotionalTone"`
-		Conflict       *string   `json:"conflict"`
-		Outcome        *string   `json:"outcome"`
-		AdaptationHint *string   `json:"adaptationHint"`
-		Characters     *[]string `json:"characters"`
-		Scenes         *[]string `json:"scenes"`
-		Props          *[]string `json:"props"`
-		Keywords       *[]string `json:"keywords"`
-		RawExcerpt     *string   `json:"rawExcerpt"`
-		ReviewStatus   *string   `json:"reviewStatus"`
+		ExpectedRevision int64     `json:"expectedRevision"`
+		Title            *string   `json:"title"`
+		Summary          *string   `json:"summary"`
+		EventType        *string   `json:"eventType"`
+		Importance       *int      `json:"importance"`
+		TimelineHint     *string   `json:"timelineHint"`
+		LocationHint     *string   `json:"locationHint"`
+		EmotionalTone    *string   `json:"emotionalTone"`
+		Conflict         *string   `json:"conflict"`
+		Outcome          *string   `json:"outcome"`
+		AdaptationHint   *string   `json:"adaptationHint"`
+		Characters       *[]string `json:"characters"`
+		Scenes           *[]string `json:"scenes"`
+		Props            *[]string `json:"props"`
+		Keywords         *[]string `json:"keywords"`
+		RawExcerpt       *string   `json:"rawExcerpt"`
+		ReviewStatus     *string   `json:"reviewStatus"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -257,85 +273,38 @@ func (s *Server) updateNovelEvent(w http.ResponseWriter, r *http.Request, princi
 	if !ok {
 		return
 	}
-	item, err := s.novelEvent(r, project.ID, r.PathValue("eventId"))
+	actionInput := mustRawJSON(novelEventUpdateActionInput{
+		EventID:          r.PathValue("eventId"),
+		ExpectedRevision: req.ExpectedRevision,
+		Patch: novelEventPatch{
+			Title: req.Title, Summary: req.Summary, EventType: req.EventType, Importance: req.Importance,
+			TimelineHint: req.TimelineHint, LocationHint: req.LocationHint, EmotionalTone: req.EmotionalTone,
+			Conflict: req.Conflict, Outcome: req.Outcome, AdaptationHint: req.AdaptationHint,
+			Characters: req.Characters, Scenes: req.Scenes, Props: req.Props, Keywords: req.Keywords,
+			RawExcerpt: req.RawExcerpt, ReviewStatus: req.ReviewStatus,
+		},
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "novel_event.update", actionInput, idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if req.Title != nil {
-		item.Title = strings.TrimSpace(*req.Title)
-		if item.Title == "" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "title is required", nil, false)
-			return
-		}
-	}
-	if req.Summary != nil {
-		item.Summary = strings.TrimSpace(*req.Summary)
-		if item.Summary == "" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "summary is required", nil, false)
-			return
-		}
-	}
-	if req.EventType != nil {
-		item.EventType = stringPtrFromValue(*req.EventType)
-	}
-	if req.Importance != nil {
-		if *req.Importance < 1 || *req.Importance > 5 {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "importance must be between 1 and 5", nil, false)
-			return
-		}
-		item.Importance = *req.Importance
-	}
-	if req.TimelineHint != nil {
-		item.TimelineHint = stringPtrFromValue(*req.TimelineHint)
-	}
-	if req.LocationHint != nil {
-		item.LocationHint = stringPtrFromValue(*req.LocationHint)
-	}
-	if req.EmotionalTone != nil {
-		item.EmotionalTone = stringPtrFromValue(*req.EmotionalTone)
-	}
-	if req.Conflict != nil {
-		item.Conflict = stringPtrFromValue(*req.Conflict)
-	}
-	if req.Outcome != nil {
-		item.Outcome = stringPtrFromValue(*req.Outcome)
-	}
-	if req.AdaptationHint != nil {
-		item.AdaptationHint = stringPtrFromValue(*req.AdaptationHint)
-	}
-	if req.RawExcerpt != nil {
-		item.RawExcerpt = stringPtrFromValue(*req.RawExcerpt)
-	}
-	if req.Characters != nil {
-		item.Characters = json.RawMessage(mustMarshal(normalizeStringSlice(*req.Characters)))
-	}
-	if req.Scenes != nil {
-		item.Scenes = json.RawMessage(mustMarshal(normalizeStringSlice(*req.Scenes)))
-	}
-	if req.Props != nil {
-		item.Props = json.RawMessage(mustMarshal(normalizeStringSlice(*req.Props)))
-	}
-	if req.Keywords != nil {
-		item.Keywords = json.RawMessage(mustMarshal(normalizeStringSlice(*req.Keywords)))
-	}
-	reviewStatus := "pending"
-	if req.ReviewStatus != nil {
-		reviewStatus = strings.TrimSpace(*req.ReviewStatus)
-		if !validReviewStatus(reviewStatus) {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "reviewStatus is invalid", nil, false)
-			return
-		}
-	}
-	result, err := s.updateNovelEventRow(r, project.ID, item, reviewStatus, principal.UserID)
+	item, err := decodeAgentToolResultValue[NovelEvent](result, "event")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, result, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
 func (s *Server) reviewNovelEvent(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req revisionedReviewActionInput
+	if !decode(w, r, &req) {
+		return
+	}
 	project, ok := s.requireProjectAccessAny(w, r, principal, r.PathValue("projectId"), []string{
 		authz.PermissionNovelEventWrite,
 		authz.PermissionSourceWrite,
@@ -344,10 +313,20 @@ func (s *Server) reviewNovelEvent(w http.ResponseWriter, r *http.Request, princi
 	if !ok {
 		return
 	}
-	resp, ok := s.updateReviewStatus(w, r, "novel_events", project.ID, r.PathValue("eventId"), principal.UserID)
-	if !ok {
+	actionInput := mustRawJSON(novelEventReviewActionInput{EventID: r.PathValue("eventId"), revisionedReviewActionInput: req})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "novel_event.review", actionInput, idempotencyKey(r, ""),
+	)
+	if err != nil {
+		s.writeError(w, r, err)
 		return
 	}
+	resp, err := decodeAgentToolResultValue[ReviewResponse](result, "review")
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, resp, nil)
 }
 
@@ -370,17 +349,7 @@ func (s *Server) listAdaptationPlans(w http.ResponseWriter, r *http.Request, pri
 }
 
 func (s *Server) createAdaptationPlan(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	var req struct {
-		SourceID              string          `json:"sourceId"`
-		Title                 string          `json:"title"`
-		Status                string          `json:"status"`
-		TargetFormat          string          `json:"targetFormat"`
-		TargetDurationSeconds int             `json:"targetDurationSeconds"`
-		MaxShots              int             `json:"maxShots"`
-		SelectedEventIDs      []string        `json:"selectedEventIds"`
-		Structure             json.RawMessage `json:"structure"`
-		Content               string          `json:"content"`
-	}
+	var req adaptationPlanCreateActionInput
 	if !decode(w, r, &req) {
 		return
 	}
@@ -392,46 +361,19 @@ func (s *Server) createAdaptationPlan(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	if strings.TrimSpace(req.SourceID) != "" {
-		if _, err := s.projectSource(r, project.ID, strings.TrimSpace(req.SourceID)); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if strings.TrimSpace(req.Title) == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "title is required", nil, false)
-		return
-	}
-	status := firstNonEmpty(req.Status, "draft")
-	if !validAdaptationPlanStatus(status) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "status is invalid", nil, false)
-		return
-	}
-	structure := req.Structure
-	if len(structure) == 0 {
-		structure = json.RawMessage(`{}`)
-	}
-	var planID string
-	err := s.db.QueryRow(r.Context(), `
-		INSERT INTO adaptation_plans(
-			organization_id, project_id, source_id, title, status, target_format,
-			target_duration_seconds, max_shots, selected_event_ids, structure, content,
-			manual_override, created_by
-		)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, NULLIF($7, 0), NULLIF($8, 0), $9, $10, $11, true, $12)
-		RETURNING id::text
-	`, project.OrganizationID, project.ID, strings.TrimSpace(req.SourceID), strings.TrimSpace(req.Title), status,
-		firstNonEmpty(req.TargetFormat, "short_video"), req.TargetDurationSeconds, req.MaxShots,
-		json.RawMessage(mustMarshal(normalizeStringSlice(req.SelectedEventIDs))), structure, req.Content, principal.UserID).Scan(&planID)
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "adaptation.create", mustRawJSON(req), idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	item, err := s.adaptationPlan(r, project.ID, planID)
+	item, err := decodeAgentToolResultValue[AdaptationPlan](result, "plan")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
 }
 
@@ -454,6 +396,7 @@ func (s *Server) getAdaptationPlan(w http.ResponseWriter, r *http.Request, princ
 
 func (s *Server) updateAdaptationPlan(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	var req struct {
+		ExpectedRevision      int64            `json:"expectedRevision"`
 		Title                 *string          `json:"title"`
 		Status                *string          `json:"status"`
 		TargetFormat          *string          `json:"targetFormat"`
@@ -475,64 +418,36 @@ func (s *Server) updateAdaptationPlan(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	item, err := s.adaptationPlan(r, project.ID, r.PathValue("planId"))
+	actionInput := mustRawJSON(adaptationPlanUpdateActionInput{
+		PlanID: r.PathValue("planId"), ExpectedRevision: req.ExpectedRevision,
+		Patch: adaptationPlanPatch{
+			Title: req.Title, Status: req.Status, TargetFormat: req.TargetFormat,
+			TargetDurationSeconds: req.TargetDurationSeconds, MaxShots: req.MaxShots,
+			SelectedEventIDs: req.SelectedEventIDs, Structure: req.Structure, Content: req.Content,
+			ReviewStatus: req.ReviewStatus,
+		},
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "adaptation.update", actionInput, idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if req.Title != nil {
-		item.Title = strings.TrimSpace(*req.Title)
-		if item.Title == "" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "title is required", nil, false)
-			return
-		}
-	}
-	if req.Status != nil {
-		status := strings.TrimSpace(*req.Status)
-		if !validAdaptationPlanStatus(status) {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "status is invalid", nil, false)
-			return
-		}
-		item.Status = status
-	}
-	if req.TargetFormat != nil {
-		item.TargetFormat = firstNonEmpty(*req.TargetFormat, "short_video")
-	}
-	if req.TargetDurationSeconds != nil {
-		item.TargetDurationSeconds = intPtrIfPositive(*req.TargetDurationSeconds)
-	}
-	if req.MaxShots != nil {
-		item.MaxShots = intPtrIfPositive(*req.MaxShots)
-	}
-	if req.SelectedEventIDs != nil {
-		item.SelectedEventIDs = json.RawMessage(mustMarshal(normalizeStringSlice(*req.SelectedEventIDs)))
-	}
-	if req.Structure != nil {
-		item.Structure = json.RawMessage(*req.Structure)
-		if len(item.Structure) == 0 {
-			item.Structure = json.RawMessage(`{}`)
-		}
-	}
-	if req.Content != nil {
-		item.Content = strings.TrimSpace(*req.Content)
-	}
-	reviewStatus := "pending"
-	if req.ReviewStatus != nil {
-		reviewStatus = strings.TrimSpace(*req.ReviewStatus)
-		if !validReviewStatus(reviewStatus) {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "reviewStatus is invalid", nil, false)
-			return
-		}
-	}
-	updated, err := s.updateAdaptationPlanRow(r, project.ID, item, reviewStatus, principal.UserID)
+	item, err := decodeAgentToolResultValue[AdaptationPlan](result, "plan")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, updated, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
 func (s *Server) reviewAdaptationPlan(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req revisionedReviewActionInput
+	if !decode(w, r, &req) {
+		return
+	}
 	project, ok := s.requireProjectAccessAny(w, r, principal, r.PathValue("projectId"), []string{
 		authz.PermissionAdaptationPlanWrite,
 		authz.PermissionScriptWrite,
@@ -541,14 +456,28 @@ func (s *Server) reviewAdaptationPlan(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	resp, ok := s.updateReviewStatus(w, r, "adaptation_plans", project.ID, r.PathValue("planId"), principal.UserID)
-	if !ok {
+	actionInput := mustRawJSON(adaptationPlanReviewActionInput{PlanID: r.PathValue("planId"), revisionedReviewActionInput: req})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "adaptation.review", actionInput, idempotencyKey(r, ""),
+	)
+	if err != nil {
+		s.writeError(w, r, err)
 		return
 	}
+	resp, err := decodeAgentToolResultValue[ReviewResponse](result, "review")
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, resp, nil)
 }
 
 func (s *Server) activateAdaptationPlan(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+	var req adaptationPlanActivateActionInput
+	if !decode(w, r, &req) {
+		return
+	}
 	project, ok := s.requireProjectAccessAny(w, r, principal, r.PathValue("projectId"), []string{
 		authz.PermissionAdaptationPlanWrite,
 		authz.PermissionScriptWrite,
@@ -557,44 +486,20 @@ func (s *Server) activateAdaptationPlan(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	plan, err := s.adaptationPlan(r, project.ID, r.PathValue("planId"))
+	req.PlanID = r.PathValue("planId")
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "adaptation.activate", mustRawJSON(req), idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	item, err := decodeAgentToolResultValue[AdaptationPlan](result, "plan")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	if plan.SourceID != nil {
-		if _, err := tx.Exec(r.Context(), `
-			UPDATE adaptation_plans
-			SET status = 'draft', updated_at = now()
-			WHERE project_id = $1 AND source_id = $2 AND id <> $3 AND status = 'active'
-		`, project.ID, *plan.SourceID, plan.ID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE adaptation_plans
-		SET status = 'active', updated_at = now()
-		WHERE project_id = $1 AND id = $2
-	`, project.ID, plan.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	item, err := s.adaptationPlan(r, project.ID, plan.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -680,24 +585,51 @@ func (s *Server) generateScriptFromAdaptationPlan(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	plan, err := s.adaptationPlan(r, project.ID, r.PathValue("planId"))
+	result, _, err := s.generateScriptFromAdaptationPlanCore(
+		r.Context(), principal, project, r.PathValue("planId"), req, "",
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
+	}
+	httpx.WriteJSON(w, r, http.StatusCreated, result, nil)
+}
+
+func (s *Server) generateScriptFromAdaptationPlanCore(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	planID string,
+	req generateScriptFromAdaptationPlanRequest,
+	commandID string,
+) (generateScriptFromAdaptationPlanResult, bool, error) {
+	commandID = strings.TrimSpace(commandID)
+	planID = strings.TrimSpace(planID)
+	if commandID != "" {
+		existing, found, err := s.scriptFromAdaptationPlanCommand(ctx, project.ID, planID, commandID)
+		if err != nil {
+			return generateScriptFromAdaptationPlanResult{}, false, err
+		}
+		if found {
+			return existing, true, nil
+		}
+	}
+	r := requestWithContext(ctx)
+	plan, err := s.adaptationPlan(r, project.ID, planID)
+	if err != nil {
+		return generateScriptFromAdaptationPlanResult{}, false, err
 	}
 	eventIDs := stringSliceFromRaw(plan.SelectedEventIDs)
 	events, err := s.novelEventsByIDs(r, project.ID, optionalStringPtrValue(plan.SourceID), eventIDs)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return generateScriptFromAdaptationPlanResult{}, false, err
 	}
 	novelContext, err := s.scriptNovelContextForPlan(r, project.ID, plan, events)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return generateScriptFromAdaptationPlanResult{}, false, err
 	}
 	operationPermission := s.firstAuthorizedProjectPermission(
-		r.Context(),
+		ctx,
 		principal,
 		project.ID,
 		authz.PermissionAdaptationPlanWrite,
@@ -713,30 +645,38 @@ func (s *Server) generateScriptFromAdaptationPlan(w http.ResponseWriter, r *http
 		operationPermission,
 	)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return generateScriptFromAdaptationPlanResult{}, false, err
 	}
 	content := scriptVersionContentFromEpisodeDrafts(episodeDrafts)
 	if content == "" {
-		httpx.WriteError(w, r, http.StatusBadGateway, "PROVIDER_OUTPUT_EMPTY", "provider gateway returned empty script content", nil, false)
-		return
+		return generateScriptFromAdaptationPlanResult{}, false, newAPIError(
+			http.StatusBadGateway, "PROVIDER_OUTPUT_EMPTY", "provider gateway returned empty script content",
+		)
 	}
-	scriptID, versionID, err := s.createScriptFromAdaptationPlan(r, principal, project, plan, req.Title, content, episodeDrafts, versionPromptVersionID, versionPromptHash, providerCallIDs, modelIDs)
+	scriptID, versionID, err := s.createScriptFromAdaptationPlan(r, principal, project, plan, req.Title, content, episodeDrafts, versionPromptVersionID, versionPromptHash, providerCallIDs, modelIDs, commandID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		if commandID != "" {
+			existing, found, replayErr := s.scriptFromAdaptationPlanCommand(ctx, project.ID, plan.ID, commandID)
+			if replayErr != nil {
+				return generateScriptFromAdaptationPlanResult{}, false, replayErr
+			}
+			if found {
+				return existing, true, nil
+			}
+		}
+		return generateScriptFromAdaptationPlanResult{}, false, err
 	}
-	httpx.WriteJSON(w, r, http.StatusCreated, map[string]any{
-		"scriptId":         scriptID,
-		"versionId":        versionID,
-		"adaptationPlanId": plan.ID,
-		"providerCallId":   firstString(providerCallIDs),
-		"providerCallIds":  providerCallIDs,
-		"modelId":          firstString(modelIDs),
-		"modelIds":         uniqueNonEmptyStrings(modelIDs),
-		"episodeCount":     len(episodeDrafts),
-		"content":          content,
-	}, nil)
+	return generateScriptFromAdaptationPlanResult{
+		ScriptID:         scriptID,
+		VersionID:        versionID,
+		AdaptationPlanID: plan.ID,
+		ProviderCallID:   firstString(providerCallIDs),
+		ProviderCallIDs:  providerCallIDs,
+		ModelID:          firstString(modelIDs),
+		ModelIDs:         uniqueNonEmptyStrings(modelIDs),
+		EpisodeCount:     len(episodeDrafts),
+		Content:          content,
+	}, false, nil
 }
 
 func (s *Server) generateScriptEpisodeDraftsFromPlan(
@@ -984,7 +924,11 @@ func novelEventsForChapter(events []NovelEvent, chapterID string) []NovelEvent {
 }
 
 func (s *Server) scriptNovelChapters(r *http.Request, projectID, sourceID string, chapterIDs []string) ([]NovelChapter, error) {
-	all, err := s.sourceChapters(r, projectID, sourceID)
+	return s.scriptNovelChaptersContext(r.Context(), projectID, sourceID, chapterIDs)
+}
+
+func (s *Server) scriptNovelChaptersContext(ctx context.Context, projectID, sourceID string, chapterIDs []string) ([]NovelChapter, error) {
+	all, err := s.sourceChaptersContext(ctx, projectID, sourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1157,7 +1101,7 @@ func (s *Server) insertGeneratedAdaptationPlan(r *http.Request, project Project,
 	return s.adaptationPlan(r, project.ID, planID)
 }
 
-func (s *Server) createScriptFromAdaptationPlan(r *http.Request, principal auth.Principal, project Project, plan AdaptationPlan, requestedTitle, content string, episodeDrafts []scriptEpisodeDraft, versionPromptVersionID, versionPromptHash string, providerCallIDs, modelIDs []string) (string, string, error) {
+func (s *Server) createScriptFromAdaptationPlan(r *http.Request, principal auth.Principal, project Project, plan AdaptationPlan, requestedTitle, content string, episodeDrafts []scriptEpisodeDraft, versionPromptVersionID, versionPromptHash string, providerCallIDs, modelIDs []string, commandID string) (string, string, error) {
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		return "", "", err
@@ -1177,7 +1121,7 @@ func (s *Server) createScriptFromAdaptationPlan(r *http.Request, principal auth.
 		return "", "", err
 	}
 	sourceType := "agent_generated"
-	version, err := insertScriptVersionTx(r, tx, project, script.ID, 1, content, "markdown", &sourceType, versionPromptVersionID, versionPromptHash, json.RawMessage(mustMarshal(map[string]any{
+	metadata := map[string]any{
 		"source":           "adaptation_plan_to_script",
 		"adaptationPlanId": plan.ID,
 		"sourceId":         sourceID,
@@ -1189,7 +1133,12 @@ func (s *Server) createScriptFromAdaptationPlan(r *http.Request, principal auth.
 		"promptVersionId":  versionPromptVersionID,
 		"promptHash":       versionPromptHash,
 		"episodeCount":     len(episodeDrafts),
-	})), principal.UserID)
+	}
+	if commandID = strings.TrimSpace(commandID); commandID != "" {
+		metadata["projectControlCommandId"] = commandID
+		metadata["controllerType"] = "project_control"
+	}
+	version, err := insertScriptVersionTx(r, tx, project, script.ID, 1, content, "markdown", &sourceType, versionPromptVersionID, versionPromptHash, json.RawMessage(mustMarshal(metadata)), principal.UserID)
 	if err != nil {
 		return "", "", err
 	}
@@ -1210,63 +1159,37 @@ func (s *Server) createScriptFromAdaptationPlan(r *http.Request, principal auth.
 	return script.ID, version.ID, tx.Commit(r.Context())
 }
 
-func (s *Server) updateNovelEventRow(r *http.Request, projectID string, item NovelEvent, reviewStatus, userID string) (NovelEvent, error) {
-	if _, err := s.db.Exec(r.Context(), `
-		UPDATE novel_events
-		SET title = $3,
-		    summary = $4,
-		    event_type = $5,
-		    importance = $6,
-		    timeline_hint = $7,
-		    location_hint = $8,
-		    emotional_tone = $9,
-		    conflict = $10,
-		    outcome = $11,
-		    adaptation_hint = $12,
-		    characters = $13,
-		    scenes = $14,
-		    props = $15,
-		    keywords = $16,
-		    raw_excerpt = $17,
-		    review_status = $18,
-		    manual_override = true,
-		    edited_by = $19,
-		    edited_at = now(),
-		    updated_at = now()
-		WHERE project_id = $1 AND id = $2
-	`, projectID, item.ID, item.Title, item.Summary, optionalStringPtrValue(item.EventType), item.Importance,
-		optionalStringPtrValue(item.TimelineHint), optionalStringPtrValue(item.LocationHint), optionalStringPtrValue(item.EmotionalTone),
-		optionalStringPtrValue(item.Conflict), optionalStringPtrValue(item.Outcome), optionalStringPtrValue(item.AdaptationHint),
-		rawOrDefault(item.Characters, `[]`), rawOrDefault(item.Scenes, `[]`), rawOrDefault(item.Props, `[]`), rawOrDefault(item.Keywords, `[]`),
-		optionalStringPtrValue(item.RawExcerpt), reviewStatus, userID); err != nil {
-		return NovelEvent{}, err
+func (s *Server) scriptFromAdaptationPlanCommand(ctx context.Context, projectID, planID, commandID string) (generateScriptFromAdaptationPlanResult, bool, error) {
+	var result generateScriptFromAdaptationPlanResult
+	var providerCallIDsRaw, modelIDsRaw []byte
+	err := s.db.QueryRow(ctx, `
+		SELECT version.script_id::text, version.id::text, version.content,
+		       COALESCE(version.metadata->>'providerCallId', ''),
+		       COALESCE(version.metadata->'providerCallIds', '[]'::jsonb),
+		       COALESCE(version.metadata->>'modelId', ''),
+		       COALESCE(version.metadata->'modelIds', '[]'::jsonb),
+		       (SELECT COUNT(*) FROM script_episodes episode WHERE episode.script_version_id = version.id)
+		FROM script_versions version
+		WHERE version.project_id = $1
+		  AND version.metadata->>'adaptationPlanId' = $2
+		  AND version.metadata->>'projectControlCommandId' = $3
+		ORDER BY version.created_at DESC
+		LIMIT 1
+	`, projectID, planID, commandID).Scan(
+		&result.ScriptID, &result.VersionID, &result.Content,
+		&result.ProviderCallID, &providerCallIDsRaw,
+		&result.ModelID, &modelIDsRaw, &result.EpisodeCount,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return generateScriptFromAdaptationPlanResult{}, false, nil
+		}
+		return generateScriptFromAdaptationPlanResult{}, false, err
 	}
-	return s.novelEvent(r, projectID, item.ID)
-}
-
-func (s *Server) updateAdaptationPlanRow(r *http.Request, projectID string, item AdaptationPlan, reviewStatus, userID string) (AdaptationPlan, error) {
-	if _, err := s.db.Exec(r.Context(), `
-		UPDATE adaptation_plans
-		SET title = $3,
-		    status = $4,
-		    target_format = $5,
-		    target_duration_seconds = $6,
-		    max_shots = $7,
-		    selected_event_ids = $8,
-		    structure = $9,
-		    content = $10,
-		    review_status = $11,
-		    manual_override = true,
-		    edited_by = $12,
-		    edited_at = now(),
-		    updated_at = now()
-		WHERE project_id = $1 AND id = $2
-	`, projectID, item.ID, item.Title, item.Status, item.TargetFormat, optionalIntPtrValue(item.TargetDurationSeconds),
-		optionalIntPtrValue(item.MaxShots), rawOrDefault(item.SelectedEventIDs, `[]`), rawOrDefault(item.Structure, `{}`),
-		item.Content, reviewStatus, userID); err != nil {
-		return AdaptationPlan{}, err
-	}
-	return s.adaptationPlan(r, projectID, item.ID)
+	result.AdaptationPlanID = planID
+	result.ProviderCallIDs = stringSliceFromRaw(providerCallIDsRaw)
+	result.ModelIDs = stringSliceFromRaw(modelIDsRaw)
+	return result, true, nil
 }
 
 func (s *Server) novelEvent(r *http.Request, projectID, eventID string) (NovelEvent, error) {
@@ -1466,6 +1389,7 @@ func scanNovelEvent(row rowScan) (NovelEvent, error) {
 		&item.CreatedAt,
 		&item.UpdatedAt,
 		&editedAt,
+		&item.Revision,
 	)
 	item.ChapterID = stringPtrFromNull(chapterID)
 	item.EventType = stringPtrFromNull(eventType)
@@ -1519,6 +1443,7 @@ func scanAdaptationPlan(row rowScan) (AdaptationPlan, error) {
 		&item.CreatedAt,
 		&item.UpdatedAt,
 		&editedAt,
+		&item.Revision,
 	)
 	item.SourceID = stringPtrFromNull(sourceID)
 	item.ScriptID = stringPtrFromNull(scriptID)
@@ -1552,7 +1477,7 @@ func novelEventSelectSQL(where string) string {
 		       e.outcome, e.adaptation_hint, e.characters, e.scenes, e.props,
 		       e.keywords, e.raw_excerpt, e.review_status, e.manual_override,
 		       e.stale_state, e.metadata, e.created_by, e.edited_by,
-		       e.created_at, e.updated_at, e.edited_at
+		       e.created_at, e.updated_at, e.edited_at, e.revision
 		FROM novel_events e
 		LEFT JOIN novel_chapters c ON c.id = e.chapter_id
 	` + where
@@ -1565,7 +1490,7 @@ func adaptationPlanSelectSQL(where string) string {
 		       p.max_shots, p.selected_event_ids, p.structure, p.content,
 		       p.prompt_version_id, p.prompt_hash, p.review_status, p.manual_override,
 		       p.metadata, p.created_by, p.edited_by, p.created_at, p.updated_at,
-		       p.edited_at
+		       p.edited_at, p.revision
 		FROM adaptation_plans p
 	` + where
 }

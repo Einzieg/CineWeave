@@ -487,11 +487,13 @@ func (s *Server) createAssetBatchRun(
 			return WorkflowRun{}, false, err
 		}
 		_ = tx.Rollback(r.Context())
-		status := claim.replayStatus
-		if status < 200 || status > 299 {
-			status = http.StatusOK
+		if w != nil {
+			status := claim.replayStatus
+			if status < 200 || status > 299 {
+				status = http.StatusOK
+			}
+			httpx.WriteJSON(w, r, status, replay, map[string]any{"idempotentReplay": true, "operationId": claim.state.operationID})
 		}
-		httpx.WriteJSON(w, r, status, replay, map[string]any{"idempotentReplay": true, "operationId": claim.state.operationID})
 		return replay, false, nil
 	}
 

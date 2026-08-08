@@ -113,11 +113,31 @@ events:
   - {name: derived_asset.item.started, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_execution_item, requiredPayloadFields: [batchId, workflowRunId], terminal: false}
   - {name: derived_asset.item.succeeded, schemaVersion: 1, scopeType: project, aggregateType: derived_asset_execution_item, requiredPayloadFields: [batchId, workflowRunId], terminal: true}
   - {name: final_video.activated, schemaVersion: 1, scopeType: project, aggregateType: final_video_version, requiredPayloadFields: [], terminal: false}
+  - {name: final_video.deleted, schemaVersion: 1, scopeType: project, aggregateType: final_video_version, requiredPayloadFields: [finalVideoVersionId, revision], terminal: true}
+  - {name: timeline.created, schemaVersion: 1, scopeType: project, aggregateType: project_timeline, requiredPayloadFields: [timelineId, revision], terminal: false}
+  - {name: timeline.updated, schemaVersion: 1, scopeType: project, aggregateType: project_timeline, requiredPayloadFields: [timelineId, revision], terminal: false}
+  - {name: timeline.deleted, schemaVersion: 1, scopeType: project, aggregateType: project_timeline, requiredPayloadFields: [timelineId, revision], terminal: true}
+  - {name: timeline.clip.created, schemaVersion: 1, scopeType: project, aggregateType: timeline_clip, requiredPayloadFields: [timelineId, clipId, revision, timelineRevision], terminal: false}
+  - {name: timeline.clip.updated, schemaVersion: 1, scopeType: project, aggregateType: timeline_clip, requiredPayloadFields: [timelineId, clipId, revision, timelineRevision], terminal: false}
+  - {name: timeline.clip.deleted, schemaVersion: 1, scopeType: project, aggregateType: timeline_clip, requiredPayloadFields: [timelineId, clipId, revision, timelineRevision], terminal: true}
+  - {name: timeline.clip.reordered, schemaVersion: 1, scopeType: project, aggregateType: project_timeline, requiredPayloadFields: [timelineId, revision, clipCount], terminal: false}
   - {name: media.compose.completed, schemaVersion: 1, scopeType: project, aggregateType: workflow_node_run, requiredPayloadFields: [], terminal: true}
   - {name: media.compose.failed, schemaVersion: 1, scopeType: project, aggregateType: workflow_node_run, requiredPayloadFields: [], terminal: true}
   - {name: novel.events.extracted, schemaVersion: 1, scopeType: project, aggregateType: project_source, requiredPayloadFields: [], terminal: true}
   - {name: project.audio_configuration.invalidated, schemaVersion: 1, scopeType: project, aggregateType: project, requiredPayloadFields: [], terminal: false}
   - {name: project.audio_settings.changed, schemaVersion: 1, scopeType: project, aggregateType: project, requiredPayloadFields: [], terminal: false}
+  - {name: project.control.command.cancelled, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: true}
+  - {name: project.control.command.created, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [actionName, commandId, controllerType, sequence, status], terminal: false}
+  - {name: project.control.command.failed, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: true}
+  - {name: project.control.command.partial_succeeded, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: true}
+  - {name: project.control.command.progress, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: false}
+  - {name: project.control.command.reconciled, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: false}
+  - {name: project.control.command.resumed, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: false}
+  - {name: project.control.command.retry_created, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, retryOfCommandId, sequence, status], terminal: false}
+  - {name: project.control.command.running, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: false}
+  - {name: project.control.command.succeeded, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: true}
+  - {name: project.control.command.waiting_input, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: false}
+  - {name: project.control.command.waiting_workflow, schemaVersion: 1, scopeType: organization, aggregateType: project_control_command, requiredPayloadFields: [commandId, sequence, status], terminal: false}
   - {name: project.deletion.requested, schemaVersion: 1, scopeType: organization, aggregateType: project_deletion_request, requiredPayloadFields: [projectDeletionRequestId, projectId, deletionRevision, status], terminal: false}
   - {name: project.deletion.tasks_cancelling, schemaVersion: 1, scopeType: organization, aggregateType: project_deletion_request, requiredPayloadFields: [projectDeletionRequestId, projectId, deletionRevision, status], terminal: false}
   - {name: project.deletion.drain_timeout, schemaVersion: 1, scopeType: organization, aggregateType: project_deletion_request, requiredPayloadFields: [projectDeletionRequestId, projectId, deletionRevision, status, errorCode, errorMessage], terminal: true}
@@ -136,7 +156,10 @@ events:
   - {name: provider.video.task.cancelled, schemaVersion: 1, scopeType: project, aggregateType: provider_async_task, requiredPayloadFields: [], terminal: true}
   - {name: provider.webhook.received, schemaVersion: 1, scopeType: project, aggregateType: provider_async_task, requiredPayloadFields: [], terminal: false}
   - {name: review.fix.applied, schemaVersion: 1, scopeType: project, aggregateType: review_fix, requiredPayloadFields: [], terminal: true}
+  - {name: review.fix.dismissed, schemaVersion: 1, scopeType: project, aggregateType: review_fix, requiredPayloadFields: [], terminal: true}
+  - {name: review.item.status_changed, schemaVersion: 1, scopeType: project, aggregateType: review_item, requiredPayloadFields: [], terminal: false}
   - {name: script.archived, schemaVersion: 1, scopeType: project, aggregateType: script, requiredPayloadFields: [], terminal: true}
+  - {name: script.created, schemaVersion: 1, scopeType: project, aggregateType: script, requiredPayloadFields: [scriptId, revision, createdBy], terminal: false}
   - {name: script.episode.generation.staged, schemaVersion: 1, scopeType: project, aggregateType: script_episode_generation_result, requiredPayloadFields: [attemptGeneration, generationId, manifestOrdinal, scriptId, sourceId, workflowRunId], terminal: true}
   - {name: script.episode.generated, schemaVersion: 1, scopeType: project, aggregateType: script_episode, requiredPayloadFields: [scriptId, scriptVersionId, sourceId, episodeIndex, workflowRunId], terminal: true}
   - {name: script.episode.updated, schemaVersion: 1, scopeType: project, aggregateType: script_episode, requiredPayloadFields: [], terminal: false}
@@ -147,13 +170,17 @@ events:
   - {name: script.scene.reviewed, schemaVersion: 1, scopeType: project, aggregateType: script_scene, requiredPayloadFields: [], terminal: false}
   - {name: script.scene.updated, schemaVersion: 1, scopeType: project, aggregateType: script_scene, requiredPayloadFields: [], terminal: false}
   - {name: script.scenes.parsed, schemaVersion: 1, scopeType: project, aggregateType: script_version, requiredPayloadFields: [], terminal: true}
+  - {name: script.updated, schemaVersion: 1, scopeType: project, aggregateType: script, requiredPayloadFields: [scriptId, revision, changedFields], terminal: false}
   - {name: script.version.activated, schemaVersion: 1, scopeType: project, aggregateType: script_version, requiredPayloadFields: [], terminal: false}
   - {name: script.version.archived, schemaVersion: 1, scopeType: project, aggregateType: script_version, requiredPayloadFields: [], terminal: true}
+  - {name: script.version.created, schemaVersion: 1, scopeType: project, aggregateType: script_version, requiredPayloadFields: [scriptId, scriptVersionId, version, createdBy], terminal: false}
   - {name: shot_asset_requirement.derived_image.generated, schemaVersion: 1, scopeType: project, aggregateType: shot_asset_requirement, requiredPayloadFields: [], terminal: true}
   - {name: shot_asset_requirement.skipped, schemaVersion: 1, scopeType: project, aggregateType: shot_asset_requirement, requiredPayloadFields: [], terminal: true}
   - {name: shot_asset_requirement.updated, schemaVersion: 1, scopeType: project, aggregateType: shot_asset_requirement, requiredPayloadFields: [], terminal: false}
   - {name: source.archived, schemaVersion: 1, scopeType: project, aggregateType: project_source, requiredPayloadFields: [], terminal: true}
+  - {name: source.created, schemaVersion: 1, scopeType: project, aggregateType: project_source, requiredPayloadFields: [sourceId, sourceType, revision, createdBy], terminal: false}
   - {name: source.chapter.deleted, schemaVersion: 1, scopeType: project, aggregateType: novel_chapter, requiredPayloadFields: [sourceId, chapterId], terminal: true}
+  - {name: source.chapter.updated, schemaVersion: 1, scopeType: project, aggregateType: novel_chapter, requiredPayloadFields: [sourceId, chapterId, revision, changedBy], terminal: false}
   - {name: source.updated.downstream_stale, schemaVersion: 1, scopeType: project, aggregateType: project_source, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.audio.review.completed, schemaVersion: 1, scopeType: project, aggregateType: native_audio_review, requiredPayloadFields: [], terminal: true}
   - {name: storyboard.audio.review.discarded, schemaVersion: 1, scopeType: project, aggregateType: native_audio_review, requiredPayloadFields: [], terminal: true}
@@ -184,6 +211,7 @@ events:
   - {name: storyboard.shot.segment_tail_anchor.extracted, schemaVersion: 1, scopeType: project, aggregateType: shot_visual_anchor, requiredPayloadFields: [anchorId, artifactId, mediaFileId, sourceRenderSegmentId, sourceVideoArtifactId, storyboardShotId, workflowRunId], terminal: true}
   - {name: storyboard.shot.created, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.shot.deleted, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}
+  - {name: storyboard.shot.reviewed, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: false}
   - {name: storyboard.shot.image.completed, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}
   - {name: storyboard.shot.image.failed, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: true}
   - {name: storyboard.shot.image.started, schemaVersion: 1, scopeType: project, aggregateType: storyboard_shot, requiredPayloadFields: [], terminal: false}

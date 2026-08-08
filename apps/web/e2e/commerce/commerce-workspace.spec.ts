@@ -6,6 +6,7 @@ const projectId = "00000000-0000-4000-8000-000000000103";
 const productId = "00000000-0000-4000-8000-000000000104";
 const scriptUnitId = "00000000-0000-4000-8000-000000000105";
 const productReferenceId = "00000000-0000-4000-8000-000000000106";
+const agentSessionId = "00000000-0000-4000-8000-000000000107";
 const now = "2026-07-26T00:00:00Z";
 
 test.beforeEach(async ({ page }) => {
@@ -93,6 +94,113 @@ test("带货项目工作台只显示商品配置、视频生成和项目设置",
   await expect(page.getByRole("link", { name: "分镜方案" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "成片" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "商品与脚本" })).toHaveCount(0);
+});
+
+test("任务活动共享分页缓存并可清空已结束任务", async ({ page }) => {
+  let terminalCleared = false;
+  let clearRequests = 0;
+  await installScenarioApiRoute(page, (request, url) => {
+    if (request.method() === "GET" && url.pathname === "/api/workflow-runs") {
+      const status = url.searchParams.get("filter[status]");
+      if (status === "active") return { data: { items: [workflowRun("running", "commerce_direct_video", 1)], hasMore: false } };
+      if (status === "terminal") {
+        return { data: { items: terminalCleared ? [] : [workflowRun("failed", "source_to_script", 2)], hasMore: false } };
+      }
+    }
+    if (
+      request.method() === "POST"
+      && url.pathname === `/api/projects/${projectId}/workflow-activity/clear-completed`
+    ) {
+      terminalCleared = true;
+      clearRequests += 1;
+      return {
+        data: {
+          clearedCount: 1,
+          workflowClearedCount: 1,
+          commandClearedCount: 0,
+          clearedThrough: now,
+        },
+      };
+    }
+    return undefined;
+  });
+
+  await page.goto(`/projects/${projectId}/commerce/materials`);
+  await expect(page.getByRole("heading", { name: "商品配置" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /任务活动 1/ })).toBeVisible();
+  await page.getByRole("button", { name: /任务活动 1/ }).click();
+
+  const dialog = page.getByRole("dialog", { name: "任务活动" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: /生成带货视频/ })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: /从原文生成剧本/ })).toBeVisible();
+  await dialog.getByRole("button", { name: "清空已结束" }).click();
+
+  await expect.poll(() => clearRequests).toBe(1);
+  await expect(page.getByText("已清空 1 条已结束任务", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: /从原文生成剧本/ })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("heading", { name: "商品配置" })).toBeVisible();
+});
+
+test("项目助手关闭再打开时保留当前会话", async ({ page }) => {
+  await installScenarioApiRoute(page, (request, url) => {
+    if (request.method() === "GET" && url.pathname === `/api/projects/${projectId}/agent/sessions`) {
+      return { data: { items: [agentSession()] } };
+    }
+    if (
+      request.method() === "GET"
+      && url.pathname === `/api/projects/${projectId}/agent/sessions/${agentSessionId}/messages`
+    ) {
+      return { data: { items: [agentMessage()] } };
+    }
+    return undefined;
+  });
+
+  await page.goto(`/projects/${projectId}/commerce/materials`);
+  await page.getByRole("button", { name: "AI助手" }).click();
+  await expect(page.getByRole("heading", { name: "项目控制助手" })).toBeVisible();
+  await expect(page.getByRole("combobox").filter({ hasText: "保留测试会话" })).toBeVisible();
+  await expect(page.getByText("这条消息用于验证关闭面板不会销毁会话。", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "关闭AI助手" }).click();
+  await expect(page.getByRole("heading", { name: "项目控制助手" })).toHaveCount(0);
+  await page.getByRole("button", { name: "AI助手" }).click();
+  await expect(page.getByRole("combobox").filter({ hasText: "保留测试会话" })).toBeVisible();
+  await expect(page.getByText("这条消息用于验证关闭面板不会销毁会话。", { exact: true })).toBeVisible();
+});
+
+test("个人设置展示 Codex 控制密钥状态与连接配置", async ({ page }) => {
+  await installScenarioApiRoute(page, (request, url) => {
+    if (request.method() === "GET" && url.pathname === "/api/me/codex-control-key") {
+      return {
+        data: {
+          requiresSetup: false,
+          key: {
+            id: "00000000-0000-4000-8000-000000000108",
+            name: "Codex 项目控制",
+            prefix: "cw_codex_e2e",
+            status: "active",
+            createdAt: now,
+            lastUsedAt: now,
+            canRotate: true,
+            canRevoke: true,
+            requiresSetup: false,
+          },
+        },
+      };
+    }
+    return undefined;
+  });
+
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Codex 项目控制" })).toBeVisible();
+  await expect(page.getByText("cw_codex_e2e", { exact: true })).toBeVisible();
+  await expect(page.getByText("可用", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "轮换密钥" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "撤销密钥" })).toBeEnabled();
+  await expect(page.getByText(/CINEWEAVE_USER_KEY/).first()).toBeVisible();
+  await expect(page.getByText(/mcp_servers\.cineweave/)).toBeVisible();
 });
 
 test("商品配置独立管理商品资料和默认参考图", async ({ page }) => {
@@ -444,5 +552,48 @@ function directVideoJob(status: string) {
     references: [],
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+function workflowRun(status: string, workflowType: string, ordinal: number) {
+  return {
+    id: `00000000-0000-4000-8000-${String(200 + ordinal).padStart(12, "0")}`,
+    organizationId,
+    projectId,
+    workflowType,
+    workflowVersion: 1,
+    temporalWorkflowId: `e2e-${workflowType}-${ordinal}`,
+    temporalRunId: `run-${ordinal}`,
+    status,
+    input: { projectId },
+    totalItems: 1,
+    completedItems: status === "running" ? 0 : 1,
+    failedItems: status === "failed" ? 1 : 0,
+    createdAt: now,
+    startedAt: now,
+    completedAt: status === "running" ? undefined : now,
+    updatedAt: now,
+  };
+}
+
+function agentSession() {
+  return {
+    id: agentSessionId,
+    projectId,
+    agentType: "project_agent",
+    title: "保留测试会话",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function agentMessage() {
+  return {
+    id: "00000000-0000-4000-8000-000000000109",
+    sessionId: agentSessionId,
+    role: "assistant",
+    content: "这条消息用于验证关闭面板不会销毁会话。",
+    createdAt: now,
   };
 }

@@ -112,7 +112,7 @@ func (s *Server) projectAgentCancelTaskActivity(ctx context.Context, input workf
 	if reason == "" {
 		reason = "Project Agent task cancelled"
 	}
-	cancelled, err := s.cancelAgentTaskCore(ctx, project, task.ID, reason)
+	cancelled, err := s.cancelAgentTaskCore(ctx, project, task.ID, signal.UserID, reason)
 	if err != nil {
 		return workflows.ProjectAgentWorkflowState{}, err
 	}

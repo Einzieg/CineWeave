@@ -142,6 +142,12 @@ func TestSystemAdministratorOrganizationManagement(t *testing.T) {
 		directMember.User.Email != directEmail || directMember.User.Username != directUsername {
 		t.Fatalf("direct member = %+v", directMember)
 	}
+	if directMember.CodexControlKey == nil || directMember.CodexControlKey.Secret == "" {
+		t.Fatal("new system-created account did not return its one-time Codex control key")
+	}
+	if controlPrincipal, _, controlErr := authService.AuthenticateControlKey(ctx, directMember.CodexControlKey.Secret); controlErr != nil || controlPrincipal.UserID != directMember.User.ID {
+		t.Fatalf("authenticate system-created member control key: userMatch=%t err=%v", controlPrincipal.UserID == directMember.User.ID, controlErr)
+	}
 
 	var directRoleCount, directCreateAuditCount int
 	if err := pool.QueryRow(ctx, `
@@ -213,6 +219,9 @@ func TestSystemAdministratorOrganizationManagement(t *testing.T) {
 	}, &attachedMember)
 	if attachedMember.User.ID != ordinary.User.ID || attachedMember.OrganizationID != created.Organization.ID || attachedMember.Status != "active" {
 		t.Fatalf("attached existing member = %+v", attachedMember)
+	}
+	if attachedMember.CodexControlKey != nil {
+		t.Fatal("attaching an existing account unexpectedly returned or rotated a Codex control key")
 	}
 	assertAPIErrorCode(t, handler, http.MethodPost, systemMembersPath, administrator.AccessToken, administrator.OrganizationID, map[string]any{
 		"existingUserIdentifier": ordinary.User.Email,

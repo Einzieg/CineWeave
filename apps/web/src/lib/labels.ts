@@ -40,6 +40,10 @@ export function statusLabel(status?: string) {
       return "结果未知";
     case "queued":
       return "排队中";
+    case "waiting_workflow":
+      return "后台任务运行中";
+    case "waiting_input":
+      return "等待用户确认";
     case "uploading":
       return "上传中";
     case "waiting_user_confirmation":

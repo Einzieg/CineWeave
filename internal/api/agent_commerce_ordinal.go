@@ -22,14 +22,19 @@ var commerceScriptBareOrdinalPattern = regexp.MustCompile(
 )
 
 var commerceScriptTargetArgument = map[string]string{
-	"commerce.script.get":            "scriptUnitId",
-	"commerce.script.revise":         "scriptUnitId",
-	"commerce.script.update":         "scriptUnitId",
-	"commerce.script.archive":        "scriptUnitId",
-	"commerce.script.derive.preview": "sourceScriptUnitId",
-	"commerce.script.derive.batch":   "sourceScriptUnitId",
-	"commerce.video.options":         "scriptUnitId",
-	"commerce.video.generate":        "scriptUnitId",
+	"commerce.script.get":                     "scriptUnitId",
+	"commerce.script.revise":                  "scriptUnitId",
+	"commerce.script.update":                  "scriptUnitId",
+	"commerce.script.archive":                 "scriptUnitId",
+	"commerce.script.duplicate":               "scriptUnitId",
+	"commerce.script.create_language_variant": "scriptUnitId",
+	"commerce.script.rebuild_impact":          "scriptUnitId",
+	"commerce.script.rebuild":                 "scriptUnitId",
+	"commerce.script.reference.archive":       "scriptUnitId",
+	"commerce.script.derive.preview":          "sourceScriptUnitId",
+	"commerce.script.derive.batch":            "sourceScriptUnitId",
+	"commerce.video.options":                  "scriptUnitId",
+	"commerce.video.generate":                 "scriptUnitId",
 }
 
 func commerceScriptOrdinalFromGoal(goal string) int {

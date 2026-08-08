@@ -11,8 +11,6 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
-	"github.com/Einzieg/cineweave/internal/production"
-	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -31,6 +29,8 @@ type ScriptEpisode struct {
 	EpisodeTitle    string          `json:"episodeTitle"`
 	Content         string          `json:"content"`
 	ContentFormat   string          `json:"contentFormat"`
+	Revision        int64           `json:"revision"`
+	ContentHash     string          `json:"contentHash"`
 	PromptVersionID *string         `json:"promptVersionId,omitempty"`
 	PromptHash      *string         `json:"promptHash,omitempty"`
 	ProviderCallID  *string         `json:"providerCallId,omitempty"`
@@ -181,127 +181,54 @@ func (s *Server) updateScriptEpisode(w http.ResponseWriter, r *http.Request, pri
 	if !ok {
 		return
 	}
-	current, err := s.scriptEpisode(r, project.ID, r.PathValue("episodeId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req struct {
-		EpisodeTitle  *string         `json:"episodeTitle"`
-		Content       *string         `json:"content"`
-		ContentFormat *string         `json:"contentFormat"`
-		ReviewStatus  *string         `json:"reviewStatus"`
-		StaleState    *string         `json:"staleState"`
-		Metadata      json.RawMessage `json:"metadata"`
+		ExpectedRevision int64           `json:"expectedRevision"`
+		IdempotencyKey   string          `json:"idempotencyKey"`
+		EpisodeTitle     *string         `json:"episodeTitle"`
+		Content          *string         `json:"content"`
+		ContentFormat    *string         `json:"contentFormat"`
+		ReviewStatus     *string         `json:"reviewStatus"`
+		StaleState       *string         `json:"staleState"`
+		Metadata         json.RawMessage `json:"metadata"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	title := current.EpisodeTitle
+	patch := map[string]any{}
 	if req.EpisodeTitle != nil {
-		title = strings.TrimSpace(*req.EpisodeTitle)
+		patch["episodeTitle"] = *req.EpisodeTitle
 	}
-	content := current.Content
 	if req.Content != nil {
-		content = strings.TrimSpace(*req.Content)
+		patch["content"] = *req.Content
 	}
-	contentFormat := current.ContentFormat
 	if req.ContentFormat != nil {
-		contentFormat = strings.TrimSpace(*req.ContentFormat)
+		patch["contentFormat"] = *req.ContentFormat
 	}
-	reviewStatus := current.ReviewStatus
 	if req.ReviewStatus != nil {
-		reviewStatus = strings.TrimSpace(*req.ReviewStatus)
+		patch["reviewStatus"] = *req.ReviewStatus
 	}
-	staleState := current.StaleState
 	if req.StaleState != nil {
-		staleState = strings.TrimSpace(*req.StaleState)
+		patch["staleState"] = *req.StaleState
 	}
-	if title == "" || !validScriptContentFormat(contentFormat) || !validScriptReviewStatus(reviewStatus) || !validScriptStaleState(staleState) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "episode fields are invalid", nil, false)
-		return
-	}
-	metadata := current.Metadata
 	if len(req.Metadata) > 0 {
-		var metadataOK bool
-		metadata, metadataOK = jsonObjectOrDefault(w, r, req.Metadata)
-		if !metadataOK {
-			return
-		}
+		patch["metadata"] = req.Metadata
 	}
-	tx, err := s.db.Begin(r.Context())
+	actionInput := mustRawJSON(map[string]any{
+		"episodeId": r.PathValue("episodeId"), "expectedRevision": req.ExpectedRevision, "patch": patch,
+	})
+	command, _, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "script.update_episode", actionInput, idempotencyKey(r, req.IdempotencyKey),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	if project.ProductionGeneration == nil || project.VideoProductionBinding == nil {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeGenerationMismatch, "项目没有活动的视频生产代", false))
-		return
-	}
-	if _, err := videoproduction.AssertWritableTx(
-		r.Context(), tx, project.ID,
-		project.ProductionGeneration.ID,
-		project.VideoProductionBinding.ID,
-		project.VideoProductionBinding.Revision,
-	); err != nil {
-		s.writeVideoProductionError(w, r, err)
-		return
-	}
-	item, err := scanScriptEpisode(tx.QueryRow(r.Context(), scriptEpisodeSelectSQL(`
-		WHERE se.project_id = $1 AND se.id = $2
-	`)+`
-		FOR UPDATE
-	`, project.ID, current.ID))
+	item, err := s.scriptEpisode(r, project.ID, r.PathValue("episodeId"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	item, err = scanScriptEpisode(tx.QueryRow(r.Context(), `
-		UPDATE script_episodes
-		SET episode_title = $3,
-		    content = $4,
-		    content_format = $5,
-		    review_status = $6,
-		    stale_state = $7,
-		    metadata = $8,
-		    manual_override = true,
-		    edited_by = $9,
-		    edited_at = now()
-		WHERE project_id = $1 AND id = $2
-		RETURNING id, organization_id, project_id, script_id, script_version_id, source_id, source_chapter_id,
-		          episode_index, volume_index, section_index, volume_title, episode_title, content, content_format,
-		          prompt_version_id, prompt_hash, provider_call_id, review_status, manual_override, stale_state,
-		          metadata, created_by, edited_by, created_at, updated_at, edited_at
-	`, project.ID, item.ID, title, content, contentFormat, reviewStatus, staleState, metadata, principal.UserID))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := rebuildScriptVersionContentFromEpisodesTx(r, tx, project.ID, item.ScriptVersionID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := markScriptVersionDownstreamStale(r, tx, project.ID, item.ScriptVersionID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "script.episode.updated", "script_episode", item.ID, mustRawJSON(map[string]any{
-		"scriptId":        item.ScriptID,
-		"scriptVersionId": item.ScriptVersionID,
-		"episodeIndex":    item.EpisodeIndex,
-	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -361,6 +288,7 @@ func insertScriptEpisodesTx(r *http.Request, tx pgx.Tx, project Project, scriptI
 			        $17, $18, $19, $20)
 			RETURNING id, organization_id, project_id, script_id, script_version_id, source_id, source_chapter_id,
 			          episode_index, volume_index, section_index, volume_title, episode_title, content, content_format,
+			          revision, content_hash,
 			          prompt_version_id, prompt_hash, provider_call_id, review_status, manual_override, stale_state,
 			          metadata, created_by, edited_by, created_at, updated_at, edited_at
 		`, project.OrganizationID, project.ID, scriptID, versionID, draft.SourceID, draft.SourceChapterID,
@@ -477,6 +405,7 @@ func scriptEpisodeSelectSQL(where string) string {
 		SELECT se.id, se.organization_id, se.project_id, se.script_id, se.script_version_id,
 		       se.source_id, se.source_chapter_id, se.episode_index, se.volume_index, se.section_index,
 		       se.volume_title, se.episode_title, se.content, se.content_format,
+		       se.revision, se.content_hash,
 		       se.prompt_version_id, se.prompt_hash, se.provider_call_id,
 		       se.review_status, se.manual_override, se.stale_state, se.metadata,
 		       se.created_by, se.edited_by, se.created_at, se.updated_at, se.edited_at
@@ -505,6 +434,8 @@ func scanScriptEpisode(row rowScan) (ScriptEpisode, error) {
 		&item.EpisodeTitle,
 		&item.Content,
 		&item.ContentFormat,
+		&item.Revision,
+		&item.ContentHash,
 		&promptVersionID,
 		&promptHash,
 		&providerCallID,

@@ -124,6 +124,13 @@ func validateToolArgs(tool AgentTool, raw json.RawMessage) error {
 	return validateObjectAgainstSchema(args, schema, "args", true)
 }
 
+// ValidateToolInput exposes the same schema validation used by the embedded
+// planner to other adapters. This keeps MCP, manual and Agent execution from
+// drifting on required fields or additional-property handling.
+func ValidateToolInput(tool AgentTool, raw json.RawMessage) error {
+	return validateToolArgs(tool, raw)
+}
+
 func validateObjectAgainstSchema(args map[string]any, schema map[string]any, path string, strictAdditional bool) error {
 	properties := schemaProperties(schema)
 	for _, key := range schemaRequired(schema) {

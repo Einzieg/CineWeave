@@ -765,15 +765,15 @@ function ScriptDerivationProgressCard({
       input.batchId,
       input.idempotencyKey,
     ),
-    onSuccess: (childBatch) => {
+    onSuccess: () => {
       invalidate([
         qk.commerceScriptDerivationsRoot(projectId),
         qk.commerceScriptDerivation(projectId, batch.id),
-        qk.commerceScriptDerivation(projectId, childBatch.id),
         qk.commerceScriptUnitsRoot(projectId),
         qk.workflowRuns(projectId),
+        qk.projectControlCommands(projectId),
       ]);
-      toast.success(`已提交 ${childBatch.requestedCount} 个失败变体重试`);
+      toast.success("失败变体重试命令已提交");
       onRetryStarted?.();
     },
     onError: (error) => toast.error(

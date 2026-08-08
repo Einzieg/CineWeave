@@ -24,11 +24,7 @@ export default defineConfig({
     },
   ],
   webServer: externalServer ? undefined : {
-    command: "node .next/standalone/apps/web/server.js",
-    env: {
-      HOSTNAME: "127.0.0.1",
-      PORT: String(port),
-    },
+    command: `node scripts/start-playwright-standalone.mjs ${port}`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

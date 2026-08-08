@@ -410,6 +410,10 @@ func (s *Service) registerWithInvitation(ctx context.Context, req RegisterWithIn
 		}
 		return TokenResponse{}, err
 	}
+	controlKey, err := createControlKeyTx(ctx, tx, user.ID, false)
+	if err != nil {
+		return TokenResponse{}, err
+	}
 	invitation, err := acceptInvitationTx(ctx, tx, hashRefreshToken(req.InvitationToken), user, user.ID)
 	if err != nil {
 		return TokenResponse{}, err
@@ -418,6 +422,7 @@ func (s *Service) registerWithInvitation(ctx context.Context, req RegisterWithIn
 	if err != nil {
 		return TokenResponse{}, err
 	}
+	response.CodexControlKey = &controlKey
 	if err := tx.Commit(ctx); err != nil {
 		return TokenResponse{}, err
 	}

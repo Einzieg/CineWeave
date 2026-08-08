@@ -13,6 +13,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
+	"github.com/Einzieg/cineweave/internal/controlmcp"
 	editionpkg "github.com/Einzieg/cineweave/internal/edition"
 	"github.com/Einzieg/cineweave/internal/events"
 	"github.com/Einzieg/cineweave/internal/httpx"
@@ -42,6 +43,8 @@ type Server struct {
 	storage                      *storage.Client
 	temporal                     temporalClient
 	editionRuntime               *editionpkg.Runtime
+	projectControl               *projectControlExecutor
+	projectControlMCP            *controlmcp.Handler
 	assetBatchSnapshotLockedHook func()
 }
 
@@ -111,7 +114,7 @@ func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provide
 	if len(authorizers) > 0 && authorizers[0] != nil {
 		authorizer = authorizers[0]
 	}
-	return &Server{
+	server := &Server{
 		db: pool, auth: authService, authorizer: authorizer, providers: providerService,
 		commerce:        commercepkg.NewService(commercepkg.NewRepository()),
 		commerceCatalog: commercepkg.NewCatalogService(commercepkg.NewRepository()),
@@ -122,6 +125,12 @@ func New(pool *pgxpool.Pool, authService *auth.Service, providerService *provide
 		storage: storageClient, temporal: temporalClient,
 		editionRuntime: editionpkg.MustCommunityRuntime(),
 	}
+	projectControl, err := newProjectControlExecutor(server)
+	if err != nil {
+		panic(fmt.Sprintf("initialize project control executor: %v", err))
+	}
+	server.projectControl = projectControl
+	return server
 }
 
 func (s *Server) Handler() http.Handler {
@@ -133,6 +142,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /api/system/status", s.systemStatus)
 	mux.HandleFunc("GET /api/system/edition", s.systemEdition)
+	mux.HandleFunc("GET /api/system/project-control-diagnostics", s.withAuth(s.getSystemProjectControlDiagnostics))
 	mux.HandleFunc("GET /api/system/setup-state", s.systemSetupState)
 	mux.HandleFunc("POST /api/system/setup", s.systemSetup)
 	mux.HandleFunc("GET /api/system/organizations", s.withAuth(s.listSystemOrganizations))
@@ -151,11 +161,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/password-reset/complete", s.completePasswordReset)
 	mux.HandleFunc("GET /api/auth/me", s.withAuth(s.me))
 	mux.HandleFunc("GET /api/me/entitlements", s.withAuth(s.meEntitlements))
+	mux.HandleFunc("GET /api/me/codex-control-key", s.withAuth(s.getCodexControlKey))
+	mux.HandleFunc("POST /api/me/codex-control-key", s.withAuth(s.createCodexControlKey))
+	mux.HandleFunc("POST /api/me/codex-control-key/rotate", s.withAuth(s.rotateCodexControlKey))
+	mux.HandleFunc("DELETE /api/me/codex-control-key", s.withAuth(s.revokeCodexControlKey))
+	mux.HandleFunc("GET /api/project-control/commands", s.withAuth(s.listProjectControlCommands))
+	mux.HandleFunc("GET /api/project-control/commands/{commandId}", s.withAuth(s.getProjectControlCommand))
+	mux.HandleFunc("GET /api/project-control/commands/{commandId}/events", s.withAuth(s.listProjectControlCommandEvents))
+	mux.HandleFunc("POST /api/project-control/commands/{commandId}/wait", s.withAuth(s.waitProjectControlCommand))
+	mux.HandleFunc("POST /api/project-control/commands/{commandId}/cancel", s.withAuth(s.cancelProjectControlCommand))
+	mux.HandleFunc("POST /api/project-control/commands/{commandId}/retry", s.withAuth(s.retryProjectControlCommand))
+	mux.HandleFunc("POST /api/project-control/commands/{commandId}/resolve", s.withAuth(s.resolveProjectControlCommand))
 	mux.HandleFunc("PATCH /api/auth/me", s.withAuth(s.updateProfile))
 	mux.HandleFunc("POST /api/auth/me/username", s.withAuth(s.setInitialUsername))
 	mux.HandleFunc("POST /api/organization-invitations/resolve", s.resolveOrganizationInvitation)
 	mux.HandleFunc("POST /api/organization-invitations/accept", s.withAuth(s.acceptOrganizationInvitation))
 	mux.HandleFunc("POST /api/provider-webhooks/{providerAccountId}/{webhookSecret}", s.providerWebhook)
+	mcpHandler, err := controlmcp.NewHandler(s.auth, s.projectControl, controlmcp.Options{
+		Version:        strings.TrimSpace(os.Getenv("CINEWEAVE_RELEASE_ID")),
+		AllowedOrigins: projectControlMCPOrigins(),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("initialize project control MCP: %v", err))
+	}
+	s.projectControlMCP = mcpHandler
+	mux.Handle("/mcp", mcpHandler)
 
 	mux.HandleFunc("GET /api/organizations", s.withAuth(s.listOrganizations))
 	mux.HandleFunc("GET /api/organizations/{organizationId}", s.withAuth(s.getOrganization))
@@ -220,7 +250,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/setup-sessions/{setupSessionId}/abandon", s.withAuth(s.abandonCommerceSetupSession))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product", s.withAuth(s.getCommerceProduct))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/product", s.withAuth(s.createCommerceProductVersion))
-	mux.HandleFunc("PATCH /api/projects/{projectId}/commerce/product", s.withAuth(s.createCommerceProductVersion))
+	mux.HandleFunc("PATCH /api/projects/{projectId}/commerce/product", s.withAuth(s.updateCommerceProduct))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product/versions", s.withAuth(s.listCommerceProductVersions))
 	mux.HandleFunc("GET /api/projects/{projectId}/commerce/product/versions/{versionId}", s.withAuth(s.getCommerceProductVersion))
 	mux.HandleFunc("POST /api/projects/{projectId}/commerce/product/versions", s.withAuth(s.createCommerceProductVersion))
@@ -362,6 +392,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{projectId}/scripts", s.withAuth(s.createScript))
 	mux.HandleFunc("GET /api/projects/{projectId}/scripts/{scriptId}", s.withAuth(s.getScript))
 	mux.HandleFunc("PATCH /api/projects/{projectId}/scripts/{scriptId}", s.withAuth(s.updateScript))
+	mux.HandleFunc("DELETE /api/projects/{projectId}/scripts/{scriptId}", s.withAuth(s.deleteScript))
 	mux.HandleFunc("GET /api/projects/{projectId}/scripts/{scriptId}/versions", s.withAuth(s.listScriptVersions))
 	mux.HandleFunc("POST /api/projects/{projectId}/scripts/{scriptId}/versions", s.withAuth(s.createScriptVersion))
 	mux.HandleFunc("GET /api/projects/{projectId}/scripts/{scriptId}/versions/{versionId}/episodes", s.withAuth(s.listScriptEpisodes))
@@ -555,6 +586,31 @@ func (s *Server) Handler() http.Handler {
 	return httpx.WithCORS(httpx.WithRequestID(httpx.WithRecovery(mux)))
 }
 
+func projectControlMCPOrigins() []string {
+	value := strings.TrimSpace(os.Getenv("CINEWEAVE_MCP_ALLOWED_ORIGINS"))
+	if value == "" {
+		return []string{
+			"https://cineweave.einzieg.site",
+			"http://localhost:19285",
+			"http://127.0.0.1:19285",
+		}
+	}
+	items := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		items = append(items, item)
+	}
+	return items
+}
+
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !publicRegistrationAllowed() {
@@ -719,40 +775,12 @@ func (s *Server) defaultWorkspaceID(r *http.Request, organizationID string) (str
 }
 
 func (s *Server) listOrganizations(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	rows, err := s.db.Query(r.Context(), `
-		SELECT o.id, o.name, o.slug, o.created_at
-		FROM organizations o
-		JOIN organization_members om ON om.organization_id = o.id
-		WHERE om.user_id = $1 AND om.status = 'active'
-		  AND EXISTS (
-			SELECT 1
-			FROM role_bindings rb
-			JOIN role_permissions rp ON rp.role_id = rb.role_id
-			WHERE rb.organization_id = o.id
-			  AND rb.subject_type = 'user'
-			  AND rb.subject_user_id = $1
-			  AND rb.resource_type = 'organization'
-			  AND rb.resource_organization_id = o.id
-			  AND (rp.permission_key = 'organization.read' OR rp.permission_key = 'admin.manage')
-		  )
-		ORDER BY o.created_at
-	`, principal.UserID)
+	page, err := s.listAccessibleOrganizations(r.Context(), principal, 100, "")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer rows.Close()
-
-	items := make([]Organization, 0)
-	for rows.Next() {
-		var item Organization
-		if err := rows.Scan(&item.ID, &item.Name, &item.Slug, &item.CreatedAt); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		items = append(items, item)
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": page.Items, "nextCursor": page.NextCursor}, nil)
 }
 
 func (s *Server) getOrganization(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -774,32 +802,12 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request, principa
 		httpx.WriteError(w, r, http.StatusBadRequest, "ORGANIZATION_REQUIRED", "organization context is required", nil, false)
 		return
 	}
-	if !s.authorize(w, r, principal, authz.PermissionWorkspaceRead, authz.Resource{OrganizationID: orgID}) {
-		return
-	}
-
-	rows, err := s.db.Query(r.Context(), `
-		SELECT id, organization_id, name, created_at
-		FROM workspaces
-		WHERE organization_id = $1
-		ORDER BY created_at
-	`, orgID)
+	page, err := s.listAccessibleWorkspaces(r.Context(), principal, orgID, 100, "")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer rows.Close()
-
-	items := make([]Workspace, 0)
-	for rows.Next() {
-		var item Workspace
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.CreatedAt); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		items = append(items, item)
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": page.Items, "nextCursor": page.NextCursor}, nil)
 }
 
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -859,59 +867,12 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, principal 
 		return
 	}
 	workspaceID := r.URL.Query().Get("filter[workspaceId]")
-	if workspaceID != "" {
-		if !s.authorize(w, r, principal, authz.PermissionProjectRead, authz.Resource{WorkspaceID: workspaceID}) {
-			return
-		}
-	} else if !s.authorize(w, r, principal, authz.PermissionProjectRead, authz.Resource{OrganizationID: orgID}) {
-		return
-	}
-
-	query := `
-		SELECT id, organization_id, workspace_id, name, description, project_kind, project_type, content_type, aspect_ratio,
-		       video_ratio, art_style, director_manual, visual_manual,
-		       image_model_profile_key, video_model_profile_key, script_model_profile_key,
-		       tts_model_profile_key, asr_model_profile_key, audio_strategy, audio_requirement, audio_configuration_revision,
-		       image_quality, timeline_timebase, fps_numerator, fps_denominator,
-		       active_script_id::text, active_final_video_version_id::text, active_audio_mix_version_id::text,
-		       settings, revision, lifecycle_status, deletion_revision, deletion_requested_at,
-		       created_at, updated_at
-		FROM projects
-		WHERE organization_id = $1
-		  AND lifecycle_status = 'active'
-	`
-	args := []any{orgID}
-	if workspaceID != "" {
-		query += " AND workspace_id = $2"
-		args = append(args, workspaceID)
-	}
-	query += " ORDER BY created_at DESC LIMIT 100"
-
-	rows, err := s.db.Query(r.Context(), query, args...)
+	page, err := s.listAccessibleProjects(r.Context(), principal, orgID, workspaceID, 100, "")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer rows.Close()
-
-	items := make([]Project, 0)
-	for rows.Next() {
-		item, err := scanProject(rows)
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if err := s.attachCommerceSetupContext(r.Context(), s.db, &item); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if err := s.attachVideoProductionContext(r.Context(), s.db, &item); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		items = append(items, item)
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": page.Items, "nextCursor": page.NextCursor}, nil)
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -1162,116 +1123,37 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, principal au
 
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	projectID := r.PathValue("projectId")
-	item, err := s.project(r, projectID)
+	project, err := s.project(r, projectID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if !s.authorize(w, r, principal, authz.PermissionProjectWrite, authz.Resource{ProjectID: item.ID}) {
+	if !s.authorize(w, r, principal, authz.PermissionProjectWrite, authz.Resource{ProjectID: project.ID}) {
 		return
 	}
-
-	var req struct {
-		Name                          *string         `json:"name"`
-		Description                   *string         `json:"description"`
-		ProjectType                   *string         `json:"projectType"`
-		ContentType                   *string         `json:"contentType"`
-		AspectRatio                   *string         `json:"aspectRatio"`
-		VideoRatio                    *string         `json:"videoRatio"`
-		ArtStyle                      *string         `json:"artStyle"`
-		DirectorManual                *string         `json:"directorManual"`
-		VisualManual                  *string         `json:"visualManual"`
-		DirectorManualPromptVersionID *string         `json:"directorManualPromptVersionId"`
-		VisualManualPromptVersionID   *string         `json:"visualManualPromptVersionId"`
-		ImageModelProfileKey          *string         `json:"imageModelProfileKey"`
-		VideoModelProfileKey          *string         `json:"videoModelProfileKey"`
-		ScriptModelProfileKey         *string         `json:"scriptModelProfileKey"`
-		TTSModelProfileKey            *string         `json:"ttsModelProfileKey"`
-		ASRModelProfileKey            *string         `json:"asrModelProfileKey"`
-		AudioStrategy                 *string         `json:"audioStrategy"`
-		AudioRequirement              *string         `json:"audioRequirement"`
-		ImageQuality                  *string         `json:"imageQuality"`
-		TimelineTimebase              *int64          `json:"timelineTimebase"`
-		FPSNumerator                  *int            `json:"fpsNumerator"`
-		FPSDenominator                *int            `json:"fpsDenominator"`
-		Settings                      json.RawMessage `json:"settings"`
-		ExpectedRevision              *int64          `json:"expectedRevision"`
-	}
+	var req projectUpdateActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.ExpectedRevision != nil && *req.ExpectedRevision <= 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedRevision 必须为正整数", nil, false)
+	raw := mustRawJSON(req)
+	if _, err := decodeProjectUpdateActionInput(raw); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
-	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "项目名称不能为空", nil, false)
-		return
-	}
-	productionConfigurationPresent := req.ProjectType != nil || req.ContentType != nil || req.AspectRatio != nil ||
-		req.VideoRatio != nil || req.ArtStyle != nil || req.DirectorManual != nil || req.VisualManual != nil ||
-		req.DirectorManualPromptVersionID != nil || req.VisualManualPromptVersionID != nil ||
-		req.ImageModelProfileKey != nil || req.VideoModelProfileKey != nil || req.ScriptModelProfileKey != nil ||
-		req.TTSModelProfileKey != nil || req.ASRModelProfileKey != nil || req.AudioStrategy != nil ||
-		req.AudioRequirement != nil || req.ImageQuality != nil || req.TimelineTimebase != nil ||
-		req.FPSNumerator != nil || req.FPSDenominator != nil || len(req.Settings) > 0
-	if productionConfigurationPresent {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(
-			videoproduction.CodeConfigurationRebuildRequired,
-			"视频生产配置必须先分析影响并确认换代",
-			false,
-		))
-		return
-	}
-
-	tx, err := s.db.Begin(r.Context())
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "project.update", raw, idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err = scanProject(tx.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1 FOR UPDATE OF p`), projectID))
-	if err != nil {
-		s.writeError(w, r, err)
+	updated, ok := result.Data["project"]
+	if !ok {
+		s.writeError(w, r, newAPIError(http.StatusInternalServerError, "PROJECT_CONTROL_RESULT_INVALID", "项目更新结果缺少项目数据"))
 		return
 	}
-	if req.ExpectedRevision != nil && item.Revision != *req.ExpectedRevision {
-		conflict := projectRevisionConflict(item, *req.ExpectedRevision)
-		s.writeError(w, r, conflict)
-		return
-	}
-	if req.Name != nil || req.Description != nil {
-		command, err := tx.Exec(r.Context(), `
-			UPDATE projects
-			SET name = COALESCE($2, name),
-			    description = COALESCE($3, description),
-			    revision = revision + 1,
-			    updated_at = now()
-			WHERE id = $1 AND revision = $4
-		`, projectID, normalizedOptionalString(req.Name), req.Description, item.Revision)
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if command.RowsAffected() != 1 {
-			s.writeError(w, r, projectRevisionConflict(item, item.Revision))
-			return
-		}
-		item, err = scanProject(tx.QueryRow(r.Context(), projectSelectSQL(`WHERE p.id = $1`), projectID))
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if err := s.attachVideoProductionContext(r.Context(), tx, &item); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, updated, nil)
 }
 
 func projectRevisionConflict(item Project, expectedRevision int64) apiError {
@@ -1577,6 +1459,12 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, http.StatusConflict, "SYSTEM_MEMBER_CONFLICT", "member already belongs to the organization", nil, false)
 	case errors.Is(err, auth.ErrSystemMemberNotFound):
 		httpx.WriteError(w, r, http.StatusNotFound, "SYSTEM_MEMBER_NOT_FOUND", "member account was not found", nil, false)
+	case errors.Is(err, auth.ErrControlKeyConflict):
+		httpx.WriteError(w, r, http.StatusConflict, "CODEX_CONTROL_KEY_EXISTS", "an active Codex control key already exists", nil, false)
+	case errors.Is(err, auth.ErrControlKeyNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "CODEX_CONTROL_KEY_NOT_FOUND", "Codex control key was not found", nil, false)
+	case errors.Is(err, auth.ErrControlKeyInvalid):
+		httpx.WriteError(w, r, http.StatusUnauthorized, "CODEX_CONTROL_KEY_INVALID", "Codex control key is invalid", nil, false)
 	case errors.Is(err, auth.ErrNoActiveOrganization):
 		httpx.WriteError(w, r, http.StatusForbidden, "NO_ACTIVE_ORGANIZATION", "no active organization is available", nil, false)
 	case errors.Is(err, auth.ErrOrganizationSelection):

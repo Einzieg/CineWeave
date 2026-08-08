@@ -17,6 +17,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/config"
 	"github.com/Einzieg/cineweave/internal/db"
+	projectevents "github.com/Einzieg/cineweave/internal/events"
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/observability"
 	"github.com/Einzieg/cineweave/internal/service"
@@ -562,9 +563,10 @@ func writeSSEEvent(w http.ResponseWriter, eventType string, position int64, payl
 
 func enrichEventPayload(event projectEvent) json.RawMessage {
 	body := map[string]any{}
-	if len(event.Payload) > 0 {
-		if err := json.Unmarshal(event.Payload, &body); err != nil {
-			return event.Payload
+	realtimePayload, _ := projectevents.ProjectRealtimePayload(event.EventType, event.Payload)
+	if len(realtimePayload) > 0 {
+		if err := json.Unmarshal(realtimePayload, &body); err != nil {
+			return realtimePayload
 		}
 	}
 	schemaVersion := event.SchemaVersion

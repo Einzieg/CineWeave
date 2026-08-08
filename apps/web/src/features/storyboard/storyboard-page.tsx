@@ -172,12 +172,13 @@ export function StoryboardPage({
     refetchInterval: pollingFallback && selectedPlanSummary && ["planning", "reviewing"].includes(selectedPlanSummary.status) ? 5000 : false,
   });
 
-  const { data: workflowRuns = [] } = useApiQuery({
+  const { data: workflowRunPage } = useApiQuery({
     key: qk.workflowRuns(projectId, { status: "active", limit: 100 }),
-    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "active", limit: 100 }).then((response) => response.items || []),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "active", limit: 100 }),
     refetchInterval: (query) =>
-      pollingFallback && query.state.data?.some((run) => isActiveStoryboardRun(run, effectiveEpisodeId)) ? 5000 : false,
+      pollingFallback && query.state.data?.items.some((run) => isActiveStoryboardRun(run, effectiveEpisodeId)) ? 5000 : false,
   });
+  const workflowRuns = workflowRunPage?.items ?? [];
   const activeStoryboardRun = workflowRuns.find((run) => isActiveStoryboardRun(run, effectiveEpisodeId));
   const { data: shotProduction, isLoading: productionLoading } = useApiQuery({
     key: qk.shotProduction(projectId, effectiveEpisodeId, effectivePlanId),

@@ -29,13 +29,21 @@ func (s *Server) requireFinalVideoProductionReady(ctx context.Context, projectID
 		return finalVideoGateState{}, err
 	}
 	if state.ProductionReadiness != "ready" {
-		return state, apiError{
-			Status: http.StatusConflict, Code: "AUDIO_VERIFICATION_REQUIRED",
-			Message: "成片包含未通过审核的原生音频，只能预览，不能激活或正式导出",
-			Details: map[string]any{"finalVideoVersionId": state.VersionID, "nativeAudioStatus": state.NativeAudioStatus, "productionReadiness": state.ProductionReadiness},
-		}
+		return state, finalVideoProductionReadinessError(state.VersionID, state.NativeAudioStatus, state.ProductionReadiness)
 	}
 	return state, nil
+}
+
+func finalVideoProductionReadinessError(versionID, nativeAudioStatus, productionReadiness string) apiError {
+	return apiError{
+		Status: http.StatusConflict, Code: "AUDIO_VERIFICATION_REQUIRED",
+		Message: "成片包含未通过审核的原生音频，只能预览，不能激活或正式导出",
+		Details: map[string]any{
+			"finalVideoVersionId": versionID,
+			"nativeAudioStatus":   nativeAudioStatus,
+			"productionReadiness": productionReadiness,
+		},
+	}
 }
 
 func finalVideoOptionString(values map[string]any, key string) string {

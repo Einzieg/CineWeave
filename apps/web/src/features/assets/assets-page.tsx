@@ -151,12 +151,13 @@ export function AssetsPage({
     key: qk.artifacts(projectId),
     queryFn: (session) => studioApi.listArtifacts(session, projectId).then((response) => response.items || []),
   });
-  const { data: workflowRuns = [] } = useApiQuery({
+  const { data: workflowRunPage } = useApiQuery({
     key: qk.workflowRuns(projectId, { status: "active", limit: 100 }),
-    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "active", limit: 100 }).then((response) => response.items || []),
+    queryFn: (session) => studioApi.listWorkflowRuns(session, projectId, { status: "active", limit: 100 }),
     refetchInterval: (query) =>
-      pollingFallback && query.state.data?.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
+      pollingFallback && query.state.data?.items.some((run) => isActiveWorkflowStatus(run.status)) ? 5000 : false,
   });
+  const workflowRuns = useMemo(() => workflowRunPage?.items ?? [], [workflowRunPage]);
 
   const selectedAssetFromList = useMemo(() => assets.find((asset) => asset.id === selectedAssetId) ?? null, [assets, selectedAssetId]);
   const { data: selectedAssetDetail } = useApiQuery({
@@ -347,7 +348,13 @@ export function AssetsPage({
   });
 
   const archiveAssetMutation = useApiMutation({
-    mutationFn: (session, asset: CanonicalAsset) => studioApi.deleteCanonicalAsset(session, projectId, asset.id, asset.revision),
+    mutationFn: (session, asset: CanonicalAsset) => studioApi.deleteCanonicalAsset(
+      session,
+      projectId,
+      asset.id,
+      asset.revision,
+      `asset-archive-${asset.id}-${asset.revision}-${crypto.randomUUID()}`,
+    ),
     onSuccess: (_response, asset) => {
       toast.success("资产已归档");
       setAssetToArchive(null);
@@ -369,7 +376,7 @@ export function AssetsPage({
   );
 
   const uploadReferenceMutation = useApiMutation({
-    mutationFn: async (session, payload: { assetId: string; file: File; setPrimary: boolean }) => {
+    mutationFn: async (session, payload: { assetId: string; expectedRevision: number; file: File; setPrimary: boolean }) => {
       const upload = await studioApi.createAssetReferenceUploadUrl(session, projectId, payload.assetId, {
         fileName: payload.file.name,
         mimeType: payload.file.type,
@@ -385,12 +392,13 @@ export function AssetsPage({
         throw new Error("参考图上传失败");
       }
       return studioApi.createAssetReference(session, projectId, payload.assetId, {
+        expectedRevision: payload.expectedRevision,
         title: payload.file.name,
         storageKey: upload.storageKey,
         mimeType: payload.file.type,
         referenceType: "uploaded",
         setPrimary: payload.setPrimary,
-      });
+      }, `asset-reference-create-${payload.assetId}-${payload.expectedRevision}-${crypto.randomUUID()}`);
     },
     onSuccess: (_response, payload) => {
       toast.success("参考图已上传");
@@ -404,8 +412,15 @@ export function AssetsPage({
   });
 
   const setPrimaryReferenceMutation = useApiMutation({
-    mutationFn: (session, payload: { assetId: string; referenceId: string }) =>
-      studioApi.setPrimaryAssetReference(session, projectId, payload.assetId, payload.referenceId),
+    mutationFn: (session, payload: { assetId: string; referenceId: string; expectedRevision: number }) =>
+      studioApi.setPrimaryAssetReference(
+        session,
+        projectId,
+        payload.assetId,
+        payload.referenceId,
+        payload.expectedRevision,
+        `asset-reference-primary-${payload.assetId}-${payload.expectedRevision}-${crypto.randomUUID()}`,
+      ),
     onSuccess: (_response, payload) => {
       toast.success("主图已更新");
       invalidate([qk.assetsRoot(projectId), qk.assetReferencesRoot(projectId, payload.assetId), qk.productionStatus(projectId)]);
@@ -414,8 +429,15 @@ export function AssetsPage({
   });
 
   const deleteReferenceMutation = useApiMutation({
-    mutationFn: (session, payload: { assetId: string; referenceId: string }) =>
-      studioApi.deleteAssetReference(session, projectId, payload.assetId, payload.referenceId),
+    mutationFn: (session, payload: { assetId: string; referenceId: string; expectedRevision: number }) =>
+      studioApi.deleteAssetReference(
+        session,
+        projectId,
+        payload.assetId,
+        payload.referenceId,
+        payload.expectedRevision,
+        `asset-reference-delete-${payload.assetId}-${payload.expectedRevision}-${crypto.randomUUID()}`,
+      ),
     onSuccess: (_response, payload) => {
       toast.success("参考图已解绑");
       invalidate([qk.assetsRoot(projectId), qk.assetReferencesRoot(projectId, payload.assetId), qk.artifacts(projectId), qk.productionStatus(projectId)]);
@@ -968,10 +990,10 @@ export function AssetsPage({
                   toast.error("请选择参考图文件");
                   return;
                 }
-                uploadReferenceMutation.mutate({ assetId: selectedAsset.id, file: referenceUploadFile, setPrimary });
+                uploadReferenceMutation.mutate({ assetId: selectedAsset.id, expectedRevision: selectedAsset.revision, file: referenceUploadFile, setPrimary });
               }}
-              onSetPrimary={(referenceId) => setPrimaryReferenceMutation.mutate({ assetId: selectedAsset.id, referenceId })}
-              onDeleteReference={(referenceId) => deleteReferenceMutation.mutate({ assetId: selectedAsset.id, referenceId })}
+              onSetPrimary={(referenceId) => setPrimaryReferenceMutation.mutate({ assetId: selectedAsset.id, referenceId, expectedRevision: selectedAsset.revision })}
+              onDeleteReference={(referenceId) => deleteReferenceMutation.mutate({ assetId: selectedAsset.id, referenceId, expectedRevision: selectedAsset.revision })}
               onOpenImage={(preview) => setImagePreview(preview)}
               isSaving={updateAssetMutation.isPending}
               isGeneratingCard={generatingCardAssetIds.has(selectedAsset.id)}
@@ -1613,7 +1635,13 @@ async function saveCanonicalAssetDraft(
       patch[field] = field === "lockReference" ? Boolean(payload.draft[field]) : String(payload.draft[field]).trim();
     }
     try {
-      return await studioApi.updateCanonicalAsset(session, projectId, payload.assetId, patch);
+      return await studioApi.updateCanonicalAsset(
+        session,
+        projectId,
+        payload.assetId,
+        patch,
+        `asset-update-${payload.assetId}-${latest.revision}-${crypto.randomUUID()}`,
+      );
     } catch (error) {
       if (error instanceof StudioApiError && error.code === "ASSET_REVISION_CONFLICT" && attempt < 2) {
         continue;

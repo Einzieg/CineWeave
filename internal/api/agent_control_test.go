@@ -1432,10 +1432,13 @@ func TestProjectAgentScriptVersionToolsRequireApproval(t *testing.T) {
 	if !ok || tool.Execute == nil {
 		t.Fatalf("script.create_version registry tool missing execute")
 	}
-	retryResult := seed.apiServer.executeProjectAgentTool(requestWithContext(seed.ctx), auth.Principal{
+	retryResult, err := seed.apiServer.executeAgentStep(requestWithContext(seed.ctx), auth.Principal{
 		UserID:         seed.ownerUserID,
 		OrganizationID: seed.organizationID,
-	}, project, taskForRetry, stepForRetry, tool)
+	}, project, taskForRetry, stepForRetry, registry)
+	if err != nil {
+		t.Fatalf("observe idempotent project-control command: %v", err)
+	}
 	if retryResult.Status != "succeeded" || !boolValue(retryResult.Data["idempotent"]) {
 		t.Fatalf("retry result = %+v, want idempotent success", retryResult)
 	}
@@ -2125,6 +2128,7 @@ func TestProjectAgentStoryboardReorderRequiresApproval(t *testing.T) {
 func TestProjectAgentFinalVideoActivateRequiresApproval(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
+	configureTimelineTestProject(t, server, seed, "Agent Final Video Project")
 
 	timelineID := insertProjectTimeline(t, seed)
 	first := insertFinalVideoVersion(t, seed, timelineID, 1, "active")
@@ -2140,7 +2144,7 @@ func TestProjectAgentFinalVideoActivateRequiresApproval(t *testing.T) {
 			"steps": []map[string]any{
 				{
 					"tool":           "final_video.activate",
-					"args":           map[string]any{"finalVideoId": second},
+					"args":           map[string]any{"versionId": second, "expectedRevision": finalVideoRevision(t, seed, second)},
 					"expectedResult": "切换当前成片版本",
 				},
 			},
@@ -2191,6 +2195,7 @@ func TestProjectAgentFinalVideoActivateRequiresApproval(t *testing.T) {
 func TestProjectAgentTimelineClipUpdateRequiresApproval(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
+	configureTimelineTestProject(t, server, seed, "Agent Timeline Project")
 
 	timelineID := insertProjectTimeline(t, seed)
 	clipID := seed.insertTimelineClipForAgent(t, timelineID, 0, "Clip before")
@@ -2248,6 +2253,7 @@ func TestProjectAgentTimelineClipUpdateRequiresApproval(t *testing.T) {
 func TestProjectAgentAutoApproveExecutesWriteStep(t *testing.T) {
 	server, seed := setupArtifactPreviewTest(t)
 	defer seed.Close()
+	configureTimelineTestProject(t, server, seed, "Agent Auto Approve Project")
 
 	timelineID := insertProjectTimeline(t, seed)
 	clipID := seed.insertTimelineClipForAgent(t, timelineID, 0, "Auto before")

@@ -2,8 +2,11 @@ package edition
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 )
 
 const ContractVersionV2 = "edition.v2"
@@ -308,6 +311,38 @@ type BackgroundTaskRegistration struct {
 	FeatureKey FeatureKey
 	TaskKey    string
 	Run        func(context.Context) error
+}
+
+type ProjectControlActionRequest struct {
+	Principal APIPrincipal
+	ProjectID string
+	Input     json.RawMessage
+}
+
+type ProjectControlActionHandler func(
+	context.Context,
+	ProjectControlActionRequest,
+) (projectcontrol.Result, error)
+
+// ProjectControlActionRegistration binds a Commercial project-control action
+// to an already registered Commercial API operation and its shared domain
+// handler. Core reuses the API operation's entitlement and RBAC policy, while
+// the Project Control runtime invokes the shared handler directly instead of
+// routing an internal request through the HTTP adapter.
+type ProjectControlActionRegistration struct {
+	ModuleKey       string
+	FeatureKey      FeatureKey
+	APIOperationID  string
+	QueryParameters []string
+	Descriptor      projectcontrol.Descriptor
+	Handler         ProjectControlActionHandler
+}
+
+// ProjectControlModuleRegistry is an optional Commercial extension. Keeping it
+// separate from CommercialModuleRegistry preserves compatibility for modules
+// that do not expose project actions.
+type ProjectControlModuleRegistry interface {
+	ProjectControlActions(context.Context) ([]ProjectControlActionRegistration, error)
 }
 
 type CommercialModuleRegistry interface {

@@ -59,6 +59,7 @@ type ManualDraft = {
 
 type VoiceDraft = {
   id?: string;
+  revision?: number;
   canonicalAssetId: string;
   characterName: string;
   displayName: string;
@@ -178,7 +179,7 @@ function NarrativeProjectSettingsPage({ projectId }: { projectId: string }) {
         name: submission.values.name,
         description: submission.values.description,
         expectedRevision: submission.baseRevision,
-      });
+      }, submission.clientMutationId);
     },
     onSuccess: (updatedProject, submission) => {
       queryClient.setQueryData(orgScopedKey(session.organizationId, qk.project(projectId)), updatedProject);
@@ -212,7 +213,7 @@ function NarrativeProjectSettingsPage({ projectId }: { projectId: string }) {
   const saveVoiceMutation = useApiMutation({
     mutationFn: (session, data: VoiceDraft) => {
       const body = {
-        canonicalAssetId: data.canonicalAssetId || null,
+        canonicalAssetId: data.canonicalAssetId,
         characterName: data.characterName,
         displayName: data.displayName,
         language: data.language,
@@ -221,9 +222,13 @@ function NarrativeProjectSettingsPage({ projectId }: { projectId: string }) {
         instructions: data.instructions || null,
         isDefault: data.isDefault,
       };
-      return data.id
-        ? studioApi.updateCharacterVoice(session, projectId, data.id, body)
-        : studioApi.createCharacterVoice(session, projectId, body);
+      if (data.id) {
+        if (!data.revision) {
+          throw new Error("角色声音版本信息缺失，请刷新页面后重试");
+        }
+        return studioApi.updateCharacterVoice(session, projectId, data.id, { ...body, expectedRevision: data.revision }, crypto.randomUUID());
+      }
+      return studioApi.createCharacterVoice(session, projectId, body, crypto.randomUUID());
     },
     onSuccess: () => {
       setVoiceDialogOpen(false);
@@ -235,7 +240,7 @@ function NarrativeProjectSettingsPage({ projectId }: { projectId: string }) {
   });
 
   const deleteVoiceMutation = useApiMutation({
-    mutationFn: (session, voiceId: string) => studioApi.deleteCharacterVoice(session, projectId, voiceId),
+    mutationFn: (session, voice: CharacterVoiceProfile) => studioApi.deleteCharacterVoice(session, projectId, voice.id, voice.revision, crypto.randomUUID()),
     onSuccess: () => {
       invalidateKeys([qk.characterVoices(projectId)]);
       toast.success("角色声音已移除");
@@ -311,6 +316,7 @@ function NarrativeProjectSettingsPage({ projectId }: { projectId: string }) {
   function editVoice(voice: CharacterVoiceProfile) {
     setVoiceDraft({
       id: voice.id,
+      revision: voice.revision,
       canonicalAssetId: voice.canonicalAssetId ?? "",
       characterName: voice.characterName,
       displayName: voice.displayName,
@@ -538,7 +544,7 @@ function NarrativeProjectSettingsPage({ projectId }: { projectId: string }) {
               </div>
               <div className="flex shrink-0 gap-1">
                 <Button type="button" size="icon" variant="ghost" title="编辑声音" onClick={() => editVoice(voice)}><Edit2 className="h-4 w-4" /></Button>
-                <Button type="button" size="icon" variant="ghost" title="移除声音" disabled={deleteVoiceMutation.isPending} onClick={() => deleteVoiceMutation.mutate(voice.id)}><Trash2 className="h-4 w-4" /></Button>
+                <Button type="button" size="icon" variant="ghost" title="移除声音" disabled={deleteVoiceMutation.isPending} onClick={() => deleteVoiceMutation.mutate(voice)}><Trash2 className="h-4 w-4" /></Button>
               </div>
             </div>
           ))}

@@ -7,7 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
+	"github.com/Einzieg/cineweave/internal/controlmcp"
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 	"github.com/Einzieg/cineweave/internal/workflows"
 )
 
@@ -150,17 +153,34 @@ func TestUpdateProjectSourceMarksDownstreamStale(t *testing.T) {
 	}
 	sceneID := seed.insertScriptScene(t, scriptID, versionID, 1, "approved", "fresh")
 	finalArtifactID := seed.insertArtifact(t, "final_video", "org/project/final.mp4", "video/mp4")
+	var sourceRevision int64
+	if err := seed.pool.QueryRow(seed.ctx, `SELECT revision FROM project_sources WHERE id = $1`, sourceID).Scan(&sourceRevision); err != nil {
+		t.Fatalf("read source revision: %v", err)
+	}
 
 	var updated ProjectSource
 	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/sources/"+sourceID, seed.ownerToken, seed.organizationID, map[string]any{
-		"title":         "Novel Source",
-		"sourceType":    "novel",
-		"contentFormat": "plain_text",
-		"content":       "updated chapter content",
-		"splitChapters": false,
+		"expectedRevision": sourceRevision,
+		"idempotencyKey":   "manual-source-update-downstream-stale",
+		"title":            "Novel Source",
+		"sourceType":       "novel",
+		"contentFormat":    "plain_text",
+		"content":          "updated chapter content",
+		"splitChapters":    false,
 	}, &updated)
 	if updated.ID != sourceID {
 		t.Fatalf("updated source = %+v", updated)
+	}
+	var controllerType, commandStatus string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT controller_type, status
+		FROM project_control_commands
+		WHERE project_id = $1 AND action_name = 'source.update' AND idempotency_key = $2
+	`, seed.projectID, "manual-source-update-downstream-stale").Scan(&controllerType, &commandStatus); err != nil {
+		t.Fatalf("read manual source command: %v", err)
+	}
+	if controllerType != "manual" || commandStatus != "succeeded" {
+		t.Fatalf("manual source command = %s/%s", controllerType, commandStatus)
 	}
 
 	var eventStale, eventReview string
@@ -184,6 +204,52 @@ func TestUpdateProjectSourceMarksDownstreamStale(t *testing.T) {
 	}
 	if finalMetadata["staleState"] != "needs_regeneration" {
 		t.Fatalf("final metadata = %+v", finalMetadata)
+	}
+
+	codexIdentity := controlmcp.Identity{
+		Principal:      auth.Principal{UserID: seed.ownerUserID, OrganizationID: seed.organizationID},
+		ControllerType: projectcontrol.ControllerCodexMCP,
+	}
+	staleInput, err := json.Marshal(map[string]any{
+		"projectId": seed.projectID, "idempotencyKey": "codex-source-update-stale",
+		"sourceId": sourceID, "expectedRevision": sourceRevision,
+		"patch": map[string]any{"title": "stale overwrite"},
+	})
+	if err != nil {
+		t.Fatalf("marshal stale source update: %v", err)
+	}
+	staleResult, err := seed.apiServer.projectControl.Execute(seed.ctx, codexIdentity, "source.update", staleInput)
+	if err != nil {
+		t.Fatalf("execute stale source update: %v", err)
+	}
+	if staleResult.Error == nil || staleResult.Error.Code != "REVISION_CONFLICT" {
+		t.Fatalf("stale source update result = %+v", staleResult)
+	}
+
+	codexResult := executeProjectControlTestAction(t, seed, codexIdentity, "source.update", map[string]any{
+		"projectId": seed.projectID, "idempotencyKey": "codex-source-update-fresh",
+		"sourceId": sourceID, "expectedRevision": updated.Revision,
+		"patch": map[string]any{"title": "Codex updated source"},
+	})
+	var codexData struct {
+		Source ProjectSource `json:"source"`
+	}
+	if err := json.Unmarshal(codexResult.Data, &codexData); err != nil {
+		t.Fatalf("decode Codex source update: %v", err)
+	}
+	if codexData.Source.Title != "Codex updated source" || codexData.Source.Revision <= updated.Revision {
+		t.Fatalf("Codex source update = %+v", codexData.Source)
+	}
+	var codexController, codexStatus string
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT controller_type, status
+		FROM project_control_commands
+		WHERE id = $1
+	`, codexResult.CommandID).Scan(&codexController, &codexStatus); err != nil {
+		t.Fatalf("read Codex source command: %v", err)
+	}
+	if codexController != "codex_mcp" || codexStatus != "succeeded" {
+		t.Fatalf("Codex source command = %s/%s", codexController, codexStatus)
 	}
 }
 
@@ -314,6 +380,7 @@ func TestCreativeObjectEditAPIMarksManualOverrideAndStale(t *testing.T) {
 
 	var asset CanonicalAsset
 	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/canonical-assets/"+assetID, seed.ownerToken, seed.organizationID, map[string]any{
+		"idempotencyKey":   "asset-downstream-stale-update",
 		"name":             "Lin Chu Revised",
 		"description":      "manual description",
 		"profile":          map[string]any{"appearance": "manual profile"},

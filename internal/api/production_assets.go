@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -17,7 +16,6 @@ import (
 	"github.com/Einzieg/cineweave/internal/production"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
-	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
 	"github.com/jackc/pgx/v5"
 )
@@ -247,12 +245,8 @@ func (s *Server) updateCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	current, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req struct {
+		IdempotencyKey    string          `json:"idempotencyKey"`
 		AssetType         *string         `json:"assetType"`
 		Name              *string         `json:"name"`
 		Description       *string         `json:"description"`
@@ -269,158 +263,61 @@ func (s *Server) updateCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.ExpectedRevision <= 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedRevision is required", nil, false)
-		return
-	}
-	assetType := current.AssetType
+	patch := map[string]any{}
 	if req.AssetType != nil {
-		assetType = strings.TrimSpace(*req.AssetType)
+		patch["assetType"] = *req.AssetType
 	}
-	name := current.Name
 	if req.Name != nil {
-		name = strings.TrimSpace(*req.Name)
+		patch["name"] = *req.Name
 	}
-	description := current.Description
 	if req.Description != nil {
-		description = strings.TrimSpace(*req.Description)
+		patch["description"] = *req.Description
 	}
-	status := current.Status
-	if req.Status != nil {
-		status = strings.TrimSpace(*req.Status)
-	}
-	if !validCanonicalAssetType(assetType) || name == "" || description == "" || !validCanonicalAssetStatus(status) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "canonical asset fields are invalid", nil, false)
-		return
-	}
-	visualTraits := current.VisualTraits
-	if len(req.VisualTraits) > 0 {
-		var ok bool
-		visualTraits, ok = jsonObjectOrDefault(w, r, req.VisualTraits)
-		if !ok {
-			return
-		}
-	}
-	profile := current.Profile
 	if len(req.Profile) > 0 {
-		var ok bool
-		profile, ok = jsonObjectOrDefault(w, r, req.Profile)
-		if !ok {
-			return
-		}
+		patch["profile"] = json.RawMessage(req.Profile)
 	}
-	metadata := current.Metadata
-	if len(req.Metadata) > 0 {
-		var ok bool
-		metadata, ok = jsonObjectOrDefault(w, r, req.Metadata)
-		if !ok {
-			return
-		}
-	}
-	basePromptSet := req.BasePrompt != nil
-	basePrompt := stringValue(current.BasePrompt)
 	if req.BasePrompt != nil {
-		basePrompt = strings.TrimSpace(*req.BasePrompt)
+		patch["basePrompt"] = *req.BasePrompt
 	}
-	consistencyPromptSet := req.ConsistencyPrompt != nil
-	consistencyPrompt := stringValue(current.ConsistencyPrompt)
 	if req.ConsistencyPrompt != nil {
-		consistencyPrompt = strings.TrimSpace(*req.ConsistencyPrompt)
+		patch["consistencyPrompt"] = *req.ConsistencyPrompt
 	}
-	negativePromptSet := req.NegativePrompt != nil
-	negativePrompt := stringValue(current.NegativePrompt)
 	if req.NegativePrompt != nil {
-		negativePrompt = strings.TrimSpace(*req.NegativePrompt)
+		patch["negativePrompt"] = *req.NegativePrompt
 	}
-	if req.Status == nil && (basePromptSet || consistencyPromptSet || negativePromptSet || len(req.Profile) > 0) {
-		if canonicalAssetPromptFieldsReady(basePrompt, consistencyPrompt) {
-			status = "prompt_ready"
-		} else if status == "prompt_ready" {
-			status = "draft"
-		}
-	}
-	lockReference := current.LockReference
 	if req.LockReference != nil {
-		lockReference = *req.LockReference
+		patch["lockReference"] = *req.LockReference
 	}
-	promptChanged := req.AssetType != nil || req.Name != nil || req.Description != nil || len(req.Profile) > 0 ||
-		basePromptSet || consistencyPromptSet || negativePromptSet || req.LockReference != nil || len(req.VisualTraits) > 0
-	tx, err := s.db.Begin(r.Context())
+	if len(req.VisualTraits) > 0 {
+		patch["visualTraits"] = json.RawMessage(req.VisualTraits)
+	}
+	if len(req.Metadata) > 0 {
+		patch["metadata"] = json.RawMessage(req.Metadata)
+	}
+	if req.Status != nil {
+		patch["status"] = *req.Status
+	}
+	actionInput := mustRawJSON(map[string]any{
+		"assetId": r.PathValue("assetId"), "expectedRevision": req.ExpectedRevision, "patch": patch,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "asset.update", actionInput, idempotencyKey(r, req.IdempotencyKey),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	item, err := scanCanonicalAsset(tx.QueryRow(r.Context(), `
-		UPDATE canonical_assets
-		SET asset_type = $3,
-		    name = $4,
-		    description = $5,
-		    profile = $6,
-		    base_prompt = CASE WHEN $7 THEN NULLIF($8, '') ELSE base_prompt END,
-		    consistency_prompt = CASE WHEN $9 THEN NULLIF($10, '') ELSE consistency_prompt END,
-		    negative_prompt = CASE WHEN $11 THEN NULLIF($12, '') ELSE negative_prompt END,
-		    lock_reference = $13,
-		    visual_traits = $14,
-		    metadata = $15,
-		    status = $16,
-		    review_status = 'pending',
-		    manual_override = true,
-		    stale_state = 'fresh',
-		    edited_by = $17,
-		    edited_at = now(),
-		    revision = revision + 1,
-		    prompt_revision = prompt_revision + CASE WHEN $19 THEN 1 ELSE 0 END,
-		    updated_at = now()
-		WHERE id = $1 AND project_id = $2 AND revision = $18
-		RETURNING id, organization_id, project_id, asset_type, name, description, profile, base_prompt, consistency_prompt, negative_prompt, visual_traits,
-		          primary_reference_artifact_id, primary_reference_media_file_id, primary_reference_storage_key, lock_reference,
-		          reference_artifact_id, reference_media_file_id, reference_storage_key, status, review_status,
-		          manual_override, stale_state, edited_by, edited_at, source_script_ids, metadata, created_by, created_at, updated_at,
-		          revision, prompt_revision
-	`, current.ID, project.ID, assetType, name, description, profile, basePromptSet, basePrompt, consistencyPromptSet, consistencyPrompt, negativePromptSet, negativePrompt, lockReference, visualTraits, metadata, status, principal.UserID, req.ExpectedRevision, promptChanged))
+	encodedAsset, err := json.Marshal(result.Data["asset"])
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			details := map[string]any{"expectedRevision": req.ExpectedRevision}
-			if latest, latestErr := s.canonicalAssetWithDB(r.Context(), tx, project.ID, current.ID); latestErr == nil {
-				details["currentRevision"] = latest.Revision
-				details["updatedAt"] = latest.UpdatedAt
-				details["status"] = latest.Status
-			}
-			httpx.WriteError(w, r, http.StatusConflict, "ASSET_REVISION_CONFLICT", "资产已被其他操作更新，请合并最新内容后重试", details, true)
-			return
-		}
 		s.writeError(w, r, err)
 		return
 	}
-	if err := production.MarkAssetDownstreamStale(r.Context(), tx, project.ID, current.ID); err != nil {
+	var item CanonicalAsset
+	if err := json.Unmarshal(encodedAsset, &item); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.updated", "canonical_asset", item.ID, mustRawJSON(map[string]any{
-		"assetId":        item.ID,
-		"manualOverride": item.ManualOverride,
-		"staleState":     item.StaleState,
-	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.card.updated", "canonical_asset", item.ID, mustRawJSON(map[string]any{
-		"assetId":        item.ID,
-		"manualOverride": item.ManualOverride,
-		"lockReference":  item.LockReference,
-	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -429,70 +326,26 @@ func (s *Server) deleteCanonicalAsset(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req struct {
-		ExpectedRevision int64 `json:"expectedRevision"`
+		ExpectedRevision int64  `json:"expectedRevision"`
+		IdempotencyKey   string `json:"idempotencyKey"`
+		Reason           string `json:"reason"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.ExpectedRevision <= 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "expectedRevision is required", nil, false)
-		return
-	}
-	tx, err := s.db.Begin(r.Context())
+	actionInput := mustRawJSON(map[string]any{
+		"assetId": r.PathValue("assetId"), "expectedRevision": req.ExpectedRevision, "reason": req.Reason,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "asset.delete", actionInput, idempotencyKey(r, req.IdempotencyKey),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	archiveMetadata := mustRawJSON(map[string]any{
-		"archivedAt": time.Now().UTC().Format(time.RFC3339),
-		"archivedBy": nullableMetadataValue(principal.UserID),
-	})
-	var archivedRevision int64
-	if err := tx.QueryRow(r.Context(), `
-		UPDATE canonical_assets
-		SET status = 'archived',
-		    metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb,
-		    revision = revision + 1,
-		    updated_at = now()
-		WHERE project_id = $1 AND id = $2 AND revision = $4
-		RETURNING revision
-	`, project.ID, asset.ID, archiveMetadata, req.ExpectedRevision).Scan(&archivedRevision); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			httpx.WriteError(w, r, http.StatusConflict, "ASSET_REVISION_CONFLICT", "asset changed since it was loaded", nil, true)
-			return
-		}
-		s.writeError(w, r, err)
-		return
-	}
-	if err := production.MarkAssetDownstreamStale(r.Context(), tx, project.ID, asset.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "canonical_asset.archived", "canonical_asset", asset.ID, mustRawJSON(map[string]any{
-		"assetId":    asset.ID,
-		"assetType":  asset.AssetType,
-		"archivedBy": nullableMetadataValue(principal.UserID),
-		"revision":   archivedRevision,
-	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"deleted": true, "mode": "archive", "assetId": asset.ID}, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, result.Data, nil)
 }
 
 func (s *Server) getCanonicalAssetImpact(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -826,99 +679,46 @@ func (s *Server) createAssetReference(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req struct {
-		Title         string          `json:"title"`
-		Description   string          `json:"description"`
-		StorageKey    string          `json:"storageKey"`
-		MimeType      string          `json:"mimeType"`
-		ReferenceType string          `json:"referenceType"`
-		SetPrimary    bool            `json:"setPrimary"`
-		Metadata      json.RawMessage `json:"metadata"`
+		ExpectedRevision int64           `json:"expectedRevision"`
+		Title            string          `json:"title"`
+		Description      string          `json:"description"`
+		StorageKey       string          `json:"storageKey"`
+		MimeType         string          `json:"mimeType"`
+		ReferenceType    string          `json:"referenceType"`
+		SetPrimary       bool            `json:"setPrimary"`
+		Metadata         json.RawMessage `json:"metadata"`
+		IdempotencyKey   string          `json:"idempotencyKey"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	storageKey := strings.TrimSpace(req.StorageKey)
-	mimeType := strings.TrimSpace(req.MimeType)
-	referenceType := strings.TrimSpace(req.ReferenceType)
-	if referenceType == "" {
-		referenceType = "uploaded"
-	}
-	if storageKey == "" || !validAssetReferenceType(referenceType) || !validAssetReferenceMimeType(mimeType) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "storageKey, image mimeType, and referenceType are required", nil, false)
-		return
-	}
-	metadata := json.RawMessage(`{}`)
-	if len(req.Metadata) > 0 {
-		var valid bool
-		metadata, valid = jsonObjectOrDefault(w, r, req.Metadata)
-		if !valid {
-			return
-		}
-	}
-	tx, err := s.db.Begin(r.Context())
+	actionInput := mustRawJSON(assetReferenceCreateActionInput{
+		AssetID: r.PathValue("assetId"), ExpectedRevision: req.ExpectedRevision,
+		Title: req.Title, Description: req.Description, StorageKey: req.StorageKey,
+		MimeType: req.MimeType, ReferenceType: req.ReferenceType,
+		SetPrimary: req.SetPrimary, Metadata: req.Metadata,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "asset.reference.create", actionInput,
+		idempotencyKey(r, req.IdempotencyKey),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	var artifactID string
-	if err := tx.QueryRow(r.Context(), `
-		INSERT INTO artifacts(organization_id, project_id, type, storage_key, mime_type, metadata, created_by)
-		VALUES ($1, $2, 'asset_reference_image', $3, $4, $5, $6)
-		RETURNING id::text
-	`, project.OrganizationID, project.ID, storageKey, mimeType, metadata, principal.UserID).Scan(&artifactID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	var mediaFileID string
-	if err := tx.QueryRow(r.Context(), `
-		INSERT INTO media_files(organization_id, project_id, artifact_id, storage_key, mime_type, metadata, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id::text
-	`, project.OrganizationID, project.ID, artifactID, storageKey, mimeType, metadata, principal.UserID).Scan(&mediaFileID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	isPrimary := req.SetPrimary || !canonicalAssetHasPrimaryReference(asset)
-	reference, err := scanAssetReference(tx.QueryRow(r.Context(), `
-		INSERT INTO asset_references(
-			organization_id, project_id, asset_id, reference_type, title, description,
-			artifact_id, media_file_id, storage_key, is_primary, metadata, created_by
-		)
-		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7, $8, NULLIF($9, ''), false, $10, $11)
-		RETURNING id, organization_id, project_id, asset_id, reference_type, title, description,
-		          artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
-		          is_primary, status, metadata, created_by, created_at, updated_at
-	`, project.OrganizationID, project.ID, asset.ID, referenceType, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), artifactID, mediaFileID, storageKey, metadata, principal.UserID))
+	encoded, err := json.Marshal(result.Data["reference"])
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if isPrimary {
-		reference, err = s.setPrimaryAssetReferenceTx(r.Context(), tx, project.ID, asset.ID, reference.ID)
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.reference.created", "asset_reference", reference.ID, mustRawJSON(map[string]any{
-		"assetId":     asset.ID,
-		"referenceId": reference.ID,
-		"isPrimary":   reference.IsPrimary,
-	})); err != nil {
+	var reference AssetReference
+	if err := json.Unmarshal(encoded, &reference); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	w.Header().Set("X-CineWeave-Asset-Revision", fmt.Sprint(result.Data["revision"]))
 	httpx.WriteJSON(w, r, http.StatusCreated, reference, nil)
 }
 
@@ -927,34 +727,27 @@ func (s *Server) setPrimaryAssetReference(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
+	var req struct {
+		ExpectedRevision int64  `json:"expectedRevision"`
+		IdempotencyKey   string `json:"idempotencyKey"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	actionInput := mustRawJSON(assetReferenceSetPrimaryActionInput{
+		AssetID: r.PathValue("assetId"), ReferenceID: r.PathValue("referenceId"),
+		ExpectedRevision: req.ExpectedRevision,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "asset.reference.set_primary", actionInput,
+		idempotencyKey(r, req.IdempotencyKey),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	reference, err := s.setPrimaryAssetReferenceTx(r.Context(), tx, project.ID, asset.ID, r.PathValue("referenceId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.reference.primary_set", "asset_reference", reference.ID, mustRawJSON(map[string]any{
-		"assetId":     asset.ID,
-		"referenceId": reference.ID,
-	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"assetId": asset.ID, "reference": reference}, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, result.Data, nil)
 }
 
 func (s *Server) deleteAssetReference(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -962,64 +755,28 @@ func (s *Server) deleteAssetReference(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	asset, err := s.canonicalAsset(r, project.ID, r.PathValue("assetId"))
+	var req struct {
+		ExpectedRevision int64  `json:"expectedRevision"`
+		IdempotencyKey   string `json:"idempotencyKey"`
+		Reason           string `json:"reason"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	actionInput := mustRawJSON(assetReferenceDeleteActionInput{
+		AssetID: r.PathValue("assetId"), ReferenceID: r.PathValue("referenceId"),
+		ExpectedRevision: req.ExpectedRevision, Reason: req.Reason,
+	})
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "asset.reference.delete", actionInput,
+		idempotencyKey(r, req.IdempotencyKey),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	referenceID := r.PathValue("referenceId")
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	reference, err := scanAssetReference(tx.QueryRow(r.Context(), `
-		UPDATE asset_references
-		SET status = 'archived',
-		    is_primary = false,
-		    updated_at = now()
-		WHERE project_id = $1 AND asset_id = $2 AND id = $3 AND status = 'ready'
-		RETURNING id, organization_id, project_id, asset_id, reference_type, title, description,
-		          artifact_id, media_file_id, storage_key, preview_url, prompt, prompt_version_id, prompt_hash,
-		          is_primary, status, metadata, created_by, created_at, updated_at
-	`, project.ID, asset.ID, referenceID))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := clearCanonicalAssetReferenceTx(r.Context(), tx, project.ID, asset.ID, reference); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := production.MarkAssetDownstreamStale(r.Context(), tx, project.ID, asset.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, ""); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "asset.reference.archived", "asset_reference", reference.ID, mustRawJSON(map[string]any{
-		"assetId":         asset.ID,
-		"referenceId":     reference.ID,
-		"artifactDeleted": false,
-		"mediaDeleted":    false,
-	})); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"deleted":         true,
-		"mode":            "archive",
-		"referenceId":     reference.ID,
-		"artifactDeleted": false,
-		"mediaDeleted":    false,
-	}, nil)
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
+	httpx.WriteJSON(w, r, http.StatusOK, result.Data, nil)
 }
 
 func (s *Server) listShotAssetRequirements(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -1027,32 +784,26 @@ func (s *Server) listShotAssetRequirements(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if project.ProductionGeneration == nil || strings.TrimSpace(project.ProductionGeneration.ID) == "" {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeGenerationMismatch, "项目没有活动的视频生产代", false))
-		return
-	}
-	shotID := strings.TrimSpace(r.URL.Query().Get("filter[storyboardShotId]"))
-	rows, err := s.db.Query(r.Context(), shotAssetRequirementSelectSQL(`
-		WHERE r.project_id = $1
-		  AND ($2 = '' OR r.storyboard_shot_id = $2::uuid)
-		  AND r.production_generation_id = $3
-		ORDER BY r.created_at ASC
-	`), project.ID, shotID, project.ProductionGeneration.ID)
+	page, err := s.listShotAssetRequirementsAction(r.Context(), project, shotAssetRequirementListActionInput{
+		StoryboardShotID: strings.TrimSpace(r.URL.Query().Get("filter[storyboardShotId]")),
+		ScriptEpisodeID:  strings.TrimSpace(r.URL.Query().Get("filter[scriptEpisodeId]")),
+		ReviewStatus:     strings.TrimSpace(r.URL.Query().Get("filter[reviewStatus]")),
+		Limit:            queryInt(r, "limit", maxShotAssetReviewBatchItems),
+		Cursor:           strings.TrimSpace(r.URL.Query().Get("cursor")),
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer rows.Close()
-	items := make([]ShotAssetRequirement, 0)
-	for rows.Next() {
-		item, err := scanShotAssetRequirement(rows)
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		items = append(items, item)
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"items":             page.Items,
+		"reviewItems":       page.ReviewItems,
+		"validationVersion": page.ValidationVersion,
+		"eligibleCount":     page.EligibleCount,
+		"blockedCount":      page.BlockedCount,
+		"hasMore":           page.NextCursor != "",
+		"nextCursor":        page.NextCursor,
+	}, nil)
 }
 
 func (s *Server) analyzeScriptAssets(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -1330,13 +1081,9 @@ func (s *Server) generateDerivedAssetImage(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	result, err := s.createDerivedAssetBatchRun(r.Context(), principal, project, DerivedAssetBatchCreateOptions{
-		Mode:                    derivedAssetBatchModeExplicit,
-		RequirementIDs:          []string{r.PathValue("requirementId")},
-		MaxConcurrency:          1,
-		ExpectedProjectRevision: project.Revision,
-		IdempotencyKey:          idempotencyKey(r, ""),
-	})
+	result, err := s.createDerivedAssetImageAction(
+		r.Context(), principal, project, r.PathValue("requirementId"), idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -1822,7 +1569,11 @@ func (s *Server) shotAssetRequirement(r *http.Request, projectID, requirementID 
 }
 
 func (s *Server) storyboardShotByID(r *http.Request, projectID, shotID string) (StoryboardShot, error) {
-	return scanStoryboardShot(s.db.QueryRow(r.Context(), storyboardShotSelectSQL(`
+	return s.storyboardShotByIDContext(r.Context(), projectID, shotID)
+}
+
+func (s *Server) storyboardShotByIDContext(ctx context.Context, projectID, shotID string) (StoryboardShot, error) {
+	return scanStoryboardShot(s.db.QueryRow(ctx, storyboardShotSelectSQL(`
 		WHERE s.project_id = $1 AND s.id = $2 AND s.deleted_at IS NULL
 	`), projectID, shotID))
 }

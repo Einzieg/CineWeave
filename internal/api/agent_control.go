@@ -16,6 +16,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/authz"
 	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/videoproduction"
@@ -50,25 +51,26 @@ type AgentTask struct {
 }
 
 type AgentStep struct {
-	ID                 string          `json:"id"`
-	TaskID             string          `json:"taskId"`
-	StepIndex          int             `json:"stepIndex"`
-	ToolName           string          `json:"toolName"`
-	Risk               string          `json:"risk"`
-	Permission         *string         `json:"permission,omitempty"`
-	Status             string          `json:"status"`
-	RequiresApproval   bool            `json:"requiresApproval"`
-	Input              json.RawMessage `json:"input"`
-	DryRunOutput       json.RawMessage `json:"dryRunOutput"`
-	SupervisorDecision json.RawMessage `json:"supervisorDecision"`
-	Output             json.RawMessage `json:"output"`
-	VerifierOutput     json.RawMessage `json:"verifierOutput"`
-	ErrorCode          *string         `json:"errorCode,omitempty"`
-	ErrorMessage       *string         `json:"errorMessage,omitempty"`
-	CreatedAt          time.Time       `json:"createdAt"`
-	UpdatedAt          time.Time       `json:"updatedAt"`
-	StartedAt          *time.Time      `json:"startedAt,omitempty"`
-	CompletedAt        *time.Time      `json:"completedAt,omitempty"`
+	ID                      string          `json:"id"`
+	TaskID                  string          `json:"taskId"`
+	StepIndex               int             `json:"stepIndex"`
+	ToolName                string          `json:"toolName"`
+	Risk                    string          `json:"risk"`
+	Permission              *string         `json:"permission,omitempty"`
+	Status                  string          `json:"status"`
+	RequiresApproval        bool            `json:"requiresApproval"`
+	Input                   json.RawMessage `json:"input"`
+	DryRunOutput            json.RawMessage `json:"dryRunOutput"`
+	SupervisorDecision      json.RawMessage `json:"supervisorDecision"`
+	Output                  json.RawMessage `json:"output"`
+	VerifierOutput          json.RawMessage `json:"verifierOutput"`
+	ErrorCode               *string         `json:"errorCode,omitempty"`
+	ErrorMessage            *string         `json:"errorMessage,omitempty"`
+	ProjectControlCommandID *string         `json:"projectControlCommandId,omitempty"`
+	CreatedAt               time.Time       `json:"createdAt"`
+	UpdatedAt               time.Time       `json:"updatedAt"`
+	StartedAt               *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt             *time.Time      `json:"completedAt,omitempty"`
 }
 
 type AgentApproval struct {
@@ -258,6 +260,12 @@ func (s *Server) enforceAgentProjectTaskConcurrency(ctx context.Context, project
 		FROM agent_tasks
 		WHERE project_id = $1
 		  AND status IN ('queued', 'planning', 'running', 'waiting_approval')
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM agent_steps project_control_step
+		      WHERE project_control_step.task_id = agent_tasks.id
+		        AND project_control_step.project_control_command_id IS NOT NULL
+		  )
 	`, projectID).Scan(&active); err != nil {
 		return err
 	}
@@ -1658,6 +1666,12 @@ func (s *Server) listAgentTasks(w http.ResponseWriter, r *http.Request, principa
 		FROM agent_tasks
 		WHERE project_id = $1
 		  AND ($3 = '' OR session_id::text = $3)
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM agent_steps project_control_step
+		      WHERE project_control_step.task_id = agent_tasks.id
+		        AND project_control_step.project_control_command_id IS NOT NULL
+		  )
 		ORDER BY created_at DESC
 		LIMIT $2
 	`, project.ID, limit, sessionID)
@@ -1710,7 +1724,7 @@ func (s *Server) cancelAgentTask(w http.ResponseWriter, r *http.Request, princip
 	if r.ContentLength != 0 && !decode(w, r, &req) {
 		return
 	}
-	item, err := s.cancelAgentTaskCore(r.Context(), project, r.PathValue("taskId"), strings.TrimSpace(req.Reason))
+	item, err := s.cancelAgentTaskCore(r.Context(), project, r.PathValue("taskId"), principal.UserID, strings.TrimSpace(req.Reason))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -1726,9 +1740,21 @@ func (s *Server) cancelAgentTask(w http.ResponseWriter, r *http.Request, princip
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
-func (s *Server) cancelAgentTaskCore(ctx context.Context, project Project, taskID, reason string) (AgentTask, error) {
+func (s *Server) cancelAgentTaskCore(ctx context.Context, project Project, taskID, actorUserID, reason string) (AgentTask, error) {
 	r := requestWithContext(ctx)
-	item, err := scanAgentTask(s.db.QueryRow(ctx, `
+	item, err := s.agentTask(r, project.ID, taskID)
+	if err != nil {
+		return AgentTask{}, err
+	}
+	actorUserID = strings.TrimSpace(actorUserID)
+	if actorUserID == "" && item.CreatedBy != nil {
+		actorUserID = strings.TrimSpace(*item.CreatedBy)
+	}
+	cancelledCommandIDs, err := s.cancelAgentTaskProjectControlCommands(ctx, item, actorUserID, strings.TrimSpace(reason))
+	if err != nil {
+		return AgentTask{}, err
+	}
+	item, err = scanAgentTask(s.db.QueryRow(ctx, `
 		UPDATE agent_tasks
 		SET status = CASE WHEN status IN ('succeeded', 'failed', 'cancelled') THEN status ELSE 'cancelled' END,
 		    error_code = CASE WHEN status IN ('succeeded', 'failed', 'cancelled') THEN error_code ELSE 'AGENT_TASK_CANCELLED' END,
@@ -1770,7 +1796,65 @@ func (s *Server) cancelAgentTaskCore(ctx context.Context, project Project, taskI
 			return AgentTask{}, err
 		}
 	}
+	if len(cancelledCommandIDs) > 0 {
+		if _, err := s.db.Exec(ctx, `
+			UPDATE agent_tasks
+			SET summary = jsonb_set(COALESCE(summary, '{}'::jsonb), '{cancelledProjectControlCommandIds}', $2::jsonb, true)
+			WHERE id = $1
+		`, item.ID, mustMarshal(cancelledCommandIDs)); err != nil {
+			return AgentTask{}, err
+		}
+		item, err = s.agentTask(r, project.ID, item.ID)
+		if err != nil {
+			return AgentTask{}, err
+		}
+	}
 	return item, nil
+}
+
+func (s *Server) cancelAgentTaskProjectControlCommands(ctx context.Context, task AgentTask, actorUserID, reason string) ([]string, error) {
+	commands, err := s.projectControl.repository.ListActiveForAgentTask(ctx, task.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(commands) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(actorUserID) == "" {
+		return nil, fmt.Errorf("agent task %s has no cancellation actor", task.ID)
+	}
+	cancelled := make([]string, 0, len(commands))
+	for _, command := range commands {
+		current := command
+		for attempt := 0; attempt < 3; attempt++ {
+			updated, _, cancelErr := s.projectControl.repository.RequestCancellation(ctx, projectcontrol.RequestCancellation{
+				CommandID:        current.ID,
+				ExpectedRevision: current.Revision,
+				ActorUserID:      actorUserID,
+				IdempotencyKey:   "agent-task-cancel:" + task.ID + ":" + current.ID,
+				Reason:           reason,
+			})
+			if cancelErr == nil {
+				cancelled = append(cancelled, updated.ID)
+				break
+			}
+			if !errors.Is(cancelErr, projectcontrol.ErrRevisionConflict) {
+				return nil, cancelErr
+			}
+			current, cancelErr = s.projectControl.repository.Get(ctx, current.ID)
+			if cancelErr != nil {
+				return nil, cancelErr
+			}
+			if current.Terminal() || current.CancellationRequestedAt != nil {
+				cancelled = append(cancelled, current.ID)
+				break
+			}
+			if attempt == 2 {
+				return nil, projectcontrol.ErrRevisionConflict
+			}
+		}
+	}
+	return cancelled, nil
 }
 
 func (s *Server) approveAgentStep(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -2470,7 +2554,8 @@ func (s *Server) listAgentTaskSteps(r *http.Request, taskID string) ([]AgentStep
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, task_id, step_index, tool_name, risk, permission, status, requires_approval,
 		       input, dry_run_output, supervisor_decision, output, verifier_output,
-		       error_code, error_message, created_at, updated_at, started_at, completed_at
+		       error_code, error_message, project_control_command_id::text,
+		       created_at, updated_at, started_at, completed_at
 		FROM agent_steps
 		WHERE task_id = $1
 		ORDER BY step_index ASC
@@ -2591,7 +2676,7 @@ func scanAgentTask(row rowScan) (AgentTask, error) {
 
 func scanAgentStep(row rowScan) (AgentStep, error) {
 	var item AgentStep
-	var permission, errorCode, errorMessage sql.NullString
+	var permission, errorCode, errorMessage, projectControlCommandID sql.NullString
 	var startedAt, completedAt sql.NullTime
 	var input, dryRunOutput, supervisorDecision, output, verifierOutput []byte
 	err := row.Scan(
@@ -2610,6 +2695,7 @@ func scanAgentStep(row rowScan) (AgentStep, error) {
 		&verifierOutput,
 		&errorCode,
 		&errorMessage,
+		&projectControlCommandID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 		&startedAt,
@@ -2623,6 +2709,7 @@ func scanAgentStep(row rowScan) (AgentStep, error) {
 	item.VerifierOutput = rawOrDefaultBytes(verifierOutput, "{}")
 	item.ErrorCode = stringPtrFromNull(errorCode)
 	item.ErrorMessage = stringPtrFromNull(errorMessage)
+	item.ProjectControlCommandID = stringPtrFromNull(projectControlCommandID)
 	item.StartedAt = timePtrFromNull(startedAt)
 	item.CompletedAt = timePtrFromNull(completedAt)
 	return item, err

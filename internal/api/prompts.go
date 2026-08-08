@@ -265,72 +265,19 @@ func (s *Server) createPromptVersion(w http.ResponseWriter, r *http.Request, pri
 	if !s.authorizePromptTemplate(w, r, principal, authz.PermissionPromptManage, template) {
 		return
 	}
-	var req struct {
-		Title           *string         `json:"title"`
-		Content         string          `json:"content"`
-		ContentFormat   string          `json:"contentFormat"`
-		VariablesSchema json.RawMessage `json:"variablesSchema"`
-		Metadata        json.RawMessage `json:"metadata"`
-		Activate        bool            `json:"activate"`
-	}
+	var req promptVersionCreateActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	content := strings.TrimSpace(req.Content)
-	if content == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "content is required", nil, false)
-		return
-	}
-	contentFormat := strings.TrimSpace(req.ContentFormat)
-	if contentFormat == "" {
-		contentFormat = "text"
-	}
-	if contentFormat != "text" && contentFormat != "markdown" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "contentFormat is invalid", nil, false)
-		return
-	}
-	variablesSchema, ok := jsonObjectRaw(w, r, req.VariablesSchema, "variablesSchema")
-	if !ok {
-		return
-	}
-	metadata, ok := jsonObjectRaw(w, r, req.Metadata, "metadata")
-	if !ok {
-		return
-	}
+	req.TemplateID = template.ID
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var versionNo int
-	if err := tx.QueryRow(r.Context(), `
-		SELECT COALESCE(MAX(COALESCE(version, version_no)), 0) + 1
-		FROM prompt_versions
-		WHERE COALESCE(template_id, prompt_template_id) = $1
-	`, template.ID).Scan(&versionNo); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	status := "draft"
-	activatedAt := any(nil)
-	if req.Activate {
-		status = "active"
-		activatedAt = time.Now().UTC()
-		if _, err := tx.Exec(r.Context(), `UPDATE prompt_versions SET status = 'archived' WHERE template_id = $1 AND status = 'active'`, template.ID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	var versionID string
-	if err := tx.QueryRow(r.Context(), `
-		INSERT INTO prompt_versions(
-			prompt_template_id, template_id, version_no, version, status, title, content, content_format,
-			variables_schema, metadata, content_hash, created_by, activated_at
-		)
-		VALUES ($1, $1, $2, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		RETURNING id
-	`, template.ID, versionNo, status, req.Title, content, contentFormat, variablesSchema, metadata, promptsvc.HashText(content), principal.UserID, activatedAt).Scan(&versionID); err != nil {
+	result, err := s.createPromptVersionActionTx(r.Context(), tx, firstNonEmptyString(stringValue(template.OrganizationID), organizationID(r, principal)), principal.UserID, "manual", req)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -338,12 +285,7 @@ func (s *Server) createPromptVersion(w http.ResponseWriter, r *http.Request, pri
 		s.writeError(w, r, err)
 		return
 	}
-	item, err := s.promptVersion(r.Context(), versionID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
+	httpx.WriteJSON(w, r, http.StatusCreated, result.Version, nil)
 }
 
 func (s *Server) activatePromptVersion(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -366,11 +308,8 @@ func (s *Server) activatePromptVersion(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `UPDATE prompt_versions SET status = 'archived' WHERE template_id = $1 AND status = 'active'`, template.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `UPDATE prompt_versions SET status = 'active', activated_at = now() WHERE id = $1`, version.ID); err != nil {
+	result, err := s.activatePromptVersionActionTx(r.Context(), tx, firstNonEmptyString(stringValue(template.OrganizationID), organizationID(r, principal)), "manual", promptVersionActivateActionInput{VersionID: version.ID})
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -378,12 +317,7 @@ func (s *Server) activatePromptVersion(w http.ResponseWriter, r *http.Request, p
 		s.writeError(w, r, err)
 		return
 	}
-	updated, err := s.promptVersion(r.Context(), version.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, updated, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, result.Version, nil)
 }
 
 func (s *Server) listPromptBindings(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -563,40 +497,36 @@ func (s *Server) renderPromptTest(w http.ResponseWriter, r *http.Request, princi
 		ProjectID      string         `json:"projectId"`
 		TemplateKey    string         `json:"templateKey"`
 		Variables      map[string]any `json:"variables"`
+		Input          map[string]any `json:"input"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
 	orgID := firstNonEmptyString(req.OrganizationID, organizationID(r, principal))
 	resource := authz.Resource{OrganizationID: orgID}
-	if strings.TrimSpace(req.ProjectID) != "" {
-		resource = authz.Resource{ProjectID: strings.TrimSpace(req.ProjectID)}
+	projectID := strings.TrimSpace(req.ProjectID)
+	projectVariables := map[string]any(nil)
+	if projectID != "" {
+		project, err := projectByIDForControl(r.Context(), s, projectID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		orgID = project.OrganizationID
+		resource = authz.Resource{ProjectID: project.ID}
+		projectVariables = projectPromptVariables(project)
 	}
 	if !s.authorize(w, r, principal, authz.PermissionPromptRead, resource) {
 		return
 	}
-	resolved, err := promptsvc.NewService(s.db).Resolve(r.Context(), promptsvc.ResolveRequest{
-		OrganizationID: orgID,
-		ProjectID:      req.ProjectID,
-		TemplateKey:    req.TemplateKey,
+	rendered, err := s.renderPromptAction(r.Context(), orgID, projectID, projectVariables, promptRenderActionInput{
+		TemplateKey: req.TemplateKey, Variables: req.Variables, Input: req.Input,
 	})
 	if err != nil {
 		s.writePromptError(w, r, err)
 		return
 	}
-	rendered, err := promptsvc.Render(resolved, req.Variables)
-	if err != nil {
-		s.writePromptError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"templateKey":     rendered.TemplateKey,
-		"promptVersionId": rendered.PromptVersionID,
-		"renderedHash":    rendered.RenderedHash,
-		"contentHash":     rendered.ContentHash,
-		"promptSource":    rendered.Source,
-		"text":            rendered.RenderedText,
-	}, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, rendered, nil)
 }
 
 func (s *Server) authorizePromptTemplate(w http.ResponseWriter, r *http.Request, principal auth.Principal, permission string, item PromptTemplate) bool {

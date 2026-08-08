@@ -144,33 +144,53 @@ func (s *Server) createStoryboardShotRenderPlan(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	shot, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	var req struct {
-		ModelProfileKey  string `json:"modelProfileKey"`
-		ProviderModelID  string `json:"providerModelId"`
-		AspectRatio      string `json:"aspectRatio"`
-		Resolution       string `json:"resolution"`
-		AudioStrategy    string `json:"audioStrategy"`
-		AudioRequirement string `json:"audioRequirement"`
-	}
+	var req createStoryboardShotRenderPlanRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	requirements, err := s.storyboardShotRequirementDetails(r, project.ID, shot.ID)
+	req.ShotID = r.PathValue("shotId")
+	detail, err := s.createStoryboardShotRenderPlanCore(r.Context(), principal, project, req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	projectReferenceOptions, err := s.projectCurrentAssetReferenceOptions(r, project.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
+	httpx.WriteJSON(w, r, http.StatusCreated, detail, nil)
+}
+
+type createStoryboardShotRenderPlanRequest struct {
+	ShotID           string `json:"shotId,omitempty"`
+	ModelProfileKey  string `json:"modelProfileKey"`
+	ProviderModelID  string `json:"providerModelId"`
+	AspectRatio      string `json:"aspectRatio"`
+	Resolution       string `json:"resolution"`
+	AudioStrategy    string `json:"audioStrategy"`
+	AudioRequirement string `json:"audioRequirement"`
+}
+
+func (s *Server) createStoryboardShotRenderPlanCore(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	req createStoryboardShotRenderPlanRequest,
+) (VideoRenderPlanDetail, error) {
+	req.ShotID = strings.TrimSpace(req.ShotID)
+	if req.ShotID == "" {
+		return VideoRenderPlanDetail{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotId is required")
 	}
-	references := s.storyboardShotVideoReferenceOptions(r, shot, s.storyboardShotImageReferenceOptions(r, shot, requirements, projectReferenceOptions...))
+	shot, err := s.storyboardShotByIDContext(ctx, project.ID, req.ShotID)
+	if err != nil {
+		return VideoRenderPlanDetail{}, err
+	}
+	request := requestWithContext(ctx)
+	requirements, err := s.storyboardShotRequirementDetails(request, project.ID, shot.ID)
+	if err != nil {
+		return VideoRenderPlanDetail{}, err
+	}
+	projectReferenceOptions, err := s.projectCurrentAssetReferenceOptions(request, project.ID)
+	if err != nil {
+		return VideoRenderPlanDetail{}, err
+	}
+	references := s.storyboardShotVideoReferenceOptions(request, shot, s.storyboardShotImageReferenceOptions(request, shot, requirements, projectReferenceOptions...))
 	referenceMode := "none"
 	taskType := "video.text_to_video"
 	for _, reference := range references {
@@ -186,35 +206,32 @@ func (s *Server) createStoryboardShotRenderPlan(w http.ResponseWriter, r *http.R
 	audioStrategy := firstNonEmptyString(strings.ToLower(strings.TrimSpace(req.AudioStrategy)), project.AudioStrategy)
 	audioRequirement := firstNonEmptyString(strings.ToLower(strings.TrimSpace(req.AudioRequirement)), project.AudioRequirement)
 	if !validProjectAudioSettings(audioStrategy, audioRequirement) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "audioStrategy or audioRequirement is invalid", nil, false)
-		return
+		return VideoRenderPlanDetail{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "audioStrategy or audioRequirement is invalid")
 	}
 	dialogueSpans, err := apiGatewayVideoDialogueSpans(shot)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return VideoRenderPlanDetail{}, err
 	}
-	productionContext, err := videoproduction.LoadActiveContext(r.Context(), s.db, project.ID)
+	productionContext, err := videoproduction.LoadActiveContext(ctx, s.db, project.ID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return VideoRenderPlanDetail{}, err
 	}
 	operationPermission := s.firstAuthorizedProjectPermission(
-		r.Context(),
+		ctx,
 		principal,
 		project.ID,
 		authz.PermissionStoryboardGenerate,
 		authz.PermissionProjectWrite,
 	)
-	plan, err := provider.NewGatewayClientFromEnv().PlanVideo(r.Context(), provider.GatewayVideoPlanRequest{
+	plan, err := provider.NewGatewayClientFromEnv().PlanVideo(ctx, provider.GatewayVideoPlanRequest{
 		GatewayBillingIdentity: gatewayBillingIdentityFromContext(
-			r.Context(),
+			ctx,
 			operationPermission,
 			provider.BillingContextReasonManualProvider,
 		),
 		OrganizationID: project.OrganizationID, ProjectID: project.ID,
 		IdempotencyKey: gatewayProviderIdempotencyKey(
-			r.Context(),
+			ctx,
 			provider.TaskTypeVideoCreateTask,
 			project.ID,
 			shot.ID,
@@ -233,15 +250,13 @@ func (s *Server) createStoryboardShotRenderPlan(w http.ResponseWriter, r *http.R
 		DialogueSpans: dialogueSpans,
 	})
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return VideoRenderPlanDetail{}, err
 	}
-	detail, err := s.videoRenderPlanDetail(r.Context(), project.ID, shot.ID, plan.ExecutionPlanID)
+	detail, err := s.videoRenderPlanDetail(ctx, project.ID, shot.ID, plan.ExecutionPlanID)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return VideoRenderPlanDetail{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusCreated, detail, nil)
+	return detail, nil
 }
 
 func apiGatewayVideoDialogueSpans(shot StoryboardShot) ([]provider.GatewayVideoDialogueSpan, error) {

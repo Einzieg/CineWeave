@@ -1,7 +1,6 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/Einzieg/cineweave/internal/auth"
@@ -65,63 +64,6 @@ func (s *Server) retryFailedDerivedAssetBatch(
 		return WorkflowRun{}, false, err
 	}
 	return result.WorkflowRun, true, nil
-}
-
-func (s *Server) agentToolStartDerivedAssetBatch(
-	r *http.Request,
-	principal auth.Principal,
-	project Project,
-	task AgentTask,
-	step AgentStep,
-	args map[string]any,
-	input map[string]any,
-) agentToolResult {
-	if existing, ok, err := s.agentWorkflowRunForStep(r.Context(), project.ID, task.ID, step.ID); err != nil {
-		return agentToolError("workflow.start", args, err)
-	} else if ok {
-		return agentToolOK("workflow.start", args, fmt.Sprintf("已存在 %s 工作流 %s，未重复启动。", derivedAssetBatchWorkflowType, existing.ID), map[string]any{
-			"workflowRunId": existing.ID,
-			"workflowType":  derivedAssetBatchWorkflowType,
-			"status":        existing.Status,
-			"input":         rawObject(existing.Input),
-			"agentTaskId":   task.ID,
-			"agentStepId":   step.ID,
-			"idempotent":    true,
-		})
-	}
-
-	requirementIDs := agentReferenceStringSliceArg(input, "requirementIds")
-	mode := derivedAssetBatchModeSelectAll
-	if len(requirementIDs) > 0 {
-		mode = derivedAssetBatchModeExplicit
-	}
-	result, err := s.createDerivedAssetBatchRun(r.Context(), principal, project, DerivedAssetBatchCreateOptions{
-		Mode:           mode,
-		RequirementIDs: requirementIDs,
-		Filters: DerivedAssetBatchFilters{
-			ScriptEpisodeID: agentReferenceStringArg(input, "scriptEpisodeId"),
-			ShotIDs:         agentReferenceStringSliceArg(input, "shotIds"),
-		},
-		MaxConcurrency:          agentIntArg(input, "maxConcurrency", workflows.DefaultDerivedAssetImageConcurrency, 1, workflows.MaxDerivedAssetImageConcurrency),
-		Force:                   boolValue(input["force"]),
-		ExpectedProjectRevision: project.Revision,
-		IdempotencyKey:          agentStepIdempotencyKey(task, step),
-		AgentTaskID:             task.ID,
-		AgentStepID:             step.ID,
-	})
-	if err != nil {
-		return agentToolError("workflow.start", args, err)
-	}
-	return agentToolOK("workflow.start", args, fmt.Sprintf("已启动 %s，工作流 %s 当前状态 %s。", derivedAssetBatchWorkflowType, result.WorkflowRun.ID, result.WorkflowRun.Status), map[string]any{
-		"workflowRunId": result.WorkflowRun.ID,
-		"workflowType":  derivedAssetBatchWorkflowType,
-		"status":        result.WorkflowRun.Status,
-		"input":         input,
-		"agentTaskId":   task.ID,
-		"agentStepId":   step.ID,
-		"operationId":   result.OperationID,
-		"derivedAssets": result.Batch,
-	})
 }
 
 func (s *Server) createDerivedAssetBatchForAgentAction(

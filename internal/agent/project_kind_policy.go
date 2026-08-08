@@ -21,7 +21,11 @@ func (p ProjectKindPolicy) Tools() []AgentTool {
 	if p.tools == nil {
 		return nil
 	}
-	return append([]AgentTool(nil), p.tools()...)
+	tools := append([]AgentTool(nil), p.tools()...)
+	for i := range tools {
+		tools[i].ProjectKinds = []string{p.ProjectKind}
+	}
+	return tools
 }
 
 func PolicyForProjectKind(projectKind string) (ProjectKindPolicy, error) {

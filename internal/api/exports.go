@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"github.com/Einzieg/cineweave/internal/httpx"
 	"github.com/Einzieg/cineweave/internal/videoproduction"
 	"github.com/Einzieg/cineweave/internal/workflows"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type ProjectExport struct {
@@ -42,6 +45,13 @@ type CreateProjectExportResponse struct {
 	ExportID      string `json:"exportId"`
 	WorkflowRunID string `json:"workflowRunId"`
 	Status        string `json:"status"`
+}
+
+type createProjectExportRequest struct {
+	ExportType string         `json:"exportType"`
+	Format     string         `json:"format"`
+	Title      string         `json:"title"`
+	Options    map[string]any `json:"options"`
 }
 
 func (s *Server) listProjectExports(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -84,24 +94,29 @@ func (s *Server) createProjectExport(w http.ResponseWriter, r *http.Request, pri
 	if !ok {
 		return
 	}
-	if s.temporal == nil {
-		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEMPORAL_UNAVAILABLE", "Temporal client is not configured", nil, true)
-		return
-	}
-	var req struct {
-		ExportType string         `json:"exportType"`
-		Format     string         `json:"format"`
-		Title      string         `json:"title"`
-		Options    map[string]any `json:"options"`
-	}
+	var req createProjectExportRequest
 	if !decode(w, r, &req) {
 		return
 	}
+	response, _, _, err := s.createProjectExportCore(r.Context(), principal, project, req, "")
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusAccepted, response, nil)
+}
+
+func (s *Server) createProjectExportCore(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	req createProjectExportRequest,
+	projectControlCommandID string,
+) (CreateProjectExportResponse, WorkflowRun, bool, error) {
 	exportType := strings.TrimSpace(req.ExportType)
 	format := defaultExportFormat(exportType, req.Format)
 	if !validProjectExport(exportType, format) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "exportType or format is invalid", nil, false)
-		return
+		return CreateProjectExportResponse{}, WorkflowRun{}, false, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "exportType or format is invalid")
 	}
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
@@ -111,122 +126,84 @@ func (s *Server) createProjectExport(w http.ResponseWriter, r *http.Request, pri
 		req.Options = map[string]any{}
 	}
 	if exportType == "final_video" {
-		if _, err := s.requireFinalVideoProductionReady(r.Context(), project.ID, finalVideoOptionString(req.Options, "finalVideoVersionId")); err != nil {
-			s.writeError(w, r, err)
-			return
+		if _, err := s.requireFinalVideoProductionReady(ctx, project.ID, finalVideoOptionString(req.Options, "finalVideoVersionId")); err != nil {
+			return CreateProjectExportResponse{}, WorkflowRun{}, false, err
 		}
 	}
-	requestJSON := mustMarshal(map[string]any{
-		"exportType": exportType,
-		"format":     format,
-		"title":      title,
-		"options":    req.Options,
-	})
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.writeError(w, r, err)
-		return
+	commandID := strings.TrimSpace(projectControlCommandID)
+	if commandID != "" {
+		existing, found, err := s.workflowRunForProjectControlCommand(ctx, project.ID, "export_project", commandID)
+		if err != nil {
+			return CreateProjectExportResponse{}, WorkflowRun{}, false, err
+		}
+		if found {
+			exportItem, err := s.projectExportByWorkflowRun(ctx, project.ID, existing.ID)
+			if err != nil {
+				return CreateProjectExportResponse{}, WorkflowRun{}, false, err
+			}
+			return CreateProjectExportResponse{ExportID: exportItem.ID, WorkflowRunID: existing.ID, Status: exportItem.Status}, existing, true, nil
+		}
 	}
-	defer tx.Rollback(r.Context())
-	var exportItem ProjectExport
-	if err := tx.QueryRow(r.Context(), `
-		INSERT INTO project_exports(organization_id, project_id, export_type, status, title, format, request, output, created_by)
-		VALUES ($1, $2, $3, 'queued', $4, $5, $6, '{}', $7)
-		RETURNING id, organization_id, project_id, export_type, status, title, format, workflow_run_id::text,
-		          artifact_id::text, media_file_id::text, storage_key, byte_size, content_hash,
-		          request, output, error_code, error_message, created_by::text, created_at, started_at, completed_at
-	`, project.OrganizationID, project.ID, exportType, title, format, requestJSON, principal.UserID).Scan(
-		&exportItem.ID, &exportItem.OrganizationID, &exportItem.ProjectID, &exportItem.ExportType, &exportItem.Status, &exportItem.Title, &exportItem.Format, &exportItem.WorkflowRunID,
-		&exportItem.ArtifactID, &exportItem.MediaFileID, &exportItem.StorageKey, &exportItem.ByteSize, &exportItem.ContentHash,
-		&exportItem.Request, &exportItem.Output, &exportItem.ErrorCode, &exportItem.ErrorMessage, &exportItem.CreatedBy, &exportItem.CreatedAt, &exportItem.StartedAt, &exportItem.CompletedAt,
-	); err != nil {
-		s.writeError(w, r, err)
-		return
+	if project.VideoProductionBinding == nil || project.ProductionGeneration == nil {
+		return CreateProjectExportResponse{}, WorkflowRun{}, false, videoproduction.NewError(videoproduction.CodeGenerationMismatch, "项目没有活动的视频生产代", false)
 	}
+	exportID := uuid.NewString()
 	workflowInput := workflows.ExportProjectInput{
-		OrganizationID: project.OrganizationID,
-		ProjectID:      project.ID,
-		ExportID:       exportItem.ID,
-		ExportType:     exportType,
-		Format:         format,
-		Title:          title,
-		Options:        req.Options,
-		CreatedBy:      principal.UserID,
+		OrganizationID:          project.OrganizationID,
+		ProjectID:               project.ID,
+		ExportID:                exportID,
+		ExportType:              exportType,
+		Format:                  format,
+		Title:                   title,
+		Options:                 req.Options,
+		CreatedBy:               principal.UserID,
+		ProjectControlCommandID: commandID,
+	}
+	storedInput := map[string]any{
+		"exportId": exportID, "exportType": exportType, "format": format,
+		"title": title, "options": req.Options,
+	}
+	if commandID != "" {
+		storedInput["projectControlCommandId"] = commandID
+		storedInput["idempotencyKey"] = "project-control-command:" + commandID
 	}
 	runInput := json.RawMessage(mustMarshal(map[string]any{
-		"prompt":       "",
-		"workflowType": "export_project",
-		"input":        workflowInput,
+		"prompt": "", "workflowType": "export_project", "input": storedInput,
 	}))
-	var run WorkflowRun
-	if project.VideoProductionBinding == nil || project.ProductionGeneration == nil {
-		s.writeVideoProductionError(w, r, videoproduction.NewError(videoproduction.CodeGenerationMismatch, "项目没有活动的视频生产代", false))
-		return
+	run, err := s.enqueueProjectWorkflowWithHook(
+		ctx, principal, project, "export_project", runInput, workflows.MediaTaskQueue, workflows.ExportProjectWorkflow,
+		func(run WorkflowRun) any {
+			input := workflowInput
+			input.WorkflowRunID = run.ID
+			return input
+		},
+		func(ctx context.Context, tx pgx.Tx, run WorkflowRun) error {
+			input := workflowInput
+			input.WorkflowRunID = run.ID
+			fullRunInput := json.RawMessage(mustMarshal(map[string]any{
+				"prompt": "", "workflowType": "export_project", "input": input,
+			}))
+			if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET input = $2 WHERE id = $1`, run.ID, fullRunInput); err != nil {
+				return err
+			}
+			requestJSON := mustMarshal(map[string]any{
+				"exportType": exportType, "format": format, "title": title,
+				"options": req.Options, "workflowRunId": run.ID,
+			})
+			_, err := tx.Exec(ctx, `
+				INSERT INTO project_exports(
+					id, organization_id, project_id, export_type, status, title, format,
+					workflow_run_id, request, output, created_by
+				)
+				VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, '{}', $9)
+			`, exportID, project.OrganizationID, project.ID, exportType, title, format, run.ID, requestJSON, principal.UserID)
+			return err
+		},
+	)
+	if err != nil {
+		return CreateProjectExportResponse{}, WorkflowRun{}, false, err
 	}
-	if err := tx.QueryRow(r.Context(), `
-		WITH new_run AS (SELECT gen_random_uuid() AS id)
-		INSERT INTO workflow_runs(
-			id, organization_id, project_id, temporal_workflow_id, workflow_type, status, input, output, created_by,
-			production_generation_id, video_production_binding_id, video_production_binding_revision
-		)
-		SELECT id, $1, $2, 'workflow-' || id::text, 'export_project', 'queued', $3, '{}', $4, $5, $6, $7
-		FROM new_run
-		RETURNING id, organization_id, project_id, production_generation_id, video_production_binding_id,
-		          video_production_binding_revision, template_id, temporal_workflow_id, status, input, output,
-		          error_code, error_message, created_by, created_at, started_at, completed_at, cancelled_at
-	`, project.OrganizationID, project.ID, runInput, principal.UserID, project.ProductionGeneration.ID,
-		project.VideoProductionBinding.ID, project.VideoProductionBinding.Revision).Scan(
-		&run.ID, &run.OrganizationID, &run.ProjectID, &run.ProductionGenerationID, &run.VideoProductionBindingID,
-		&run.VideoProductionBindingRevision, &run.TemplateID, &run.TemporalWorkflowID, &run.Status, &run.Input, &run.Output,
-		&run.ErrorCode, &run.ErrorMessage, &run.CreatedBy, &run.CreatedAt, &run.StartedAt, &run.CompletedAt, &run.CancelledAt,
-	); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	workflowInput.WorkflowRunID = run.ID
-	runInputWithWorkflowID := json.RawMessage(mustMarshal(map[string]any{
-		"prompt":       "",
-		"workflowType": "export_project",
-		"input":        workflowInput,
-	}))
-	if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET input = $2 WHERE id = $1`, run.ID, runInputWithWorkflowID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE project_exports
-		SET workflow_run_id = $2::uuid, request = jsonb_set(request, '{workflowRunId}', to_jsonb($2::text), true)
-		WHERE id = $1
-	`, exportItem.ID, run.ID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := s.enqueueWorkflowStartTx(
-		r.Context(),
-		tx,
-		run.ID,
-		"",
-		project.OrganizationID,
-		project.ID,
-		project.ProductionGeneration.ID,
-		"export_project",
-		"export_project",
-		run.TemporalWorkflowID,
-		workflows.MediaTaskQueue,
-		workflowInput,
-	); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertWorkflowQueuedEventTx(r.Context(), tx, run, "export_project"); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, r, http.StatusAccepted, CreateProjectExportResponse{ExportID: exportItem.ID, WorkflowRunID: run.ID, Status: "queued"}, nil)
+	return CreateProjectExportResponse{ExportID: exportID, WorkflowRunID: run.ID, Status: "queued"}, run, false, nil
 }
 
 func (s *Server) getProjectExport(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -243,17 +220,8 @@ func (s *Server) getProjectExport(w http.ResponseWriter, r *http.Request, princi
 }
 
 func (s *Server) createProjectExportDownloadURL(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectRead)
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionArtifactRead)
 	if !ok {
-		return
-	}
-	if s.storage == nil {
-		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
-		return
-	}
-	item, err := s.projectExportByID(r, project.ID, r.PathValue("exportId"))
-	if err != nil {
-		s.writeError(w, r, err)
 		return
 	}
 	var req struct {
@@ -262,36 +230,24 @@ func (s *Server) createProjectExportDownloadURL(w http.ResponseWriter, r *http.R
 	if !decode(w, r, &req) {
 		return
 	}
-	if item.Status != "succeeded" || item.StorageKey == nil || strings.TrimSpace(*item.StorageKey) == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "EXPORT_NOT_READY", "export is not ready for download", nil, false)
-		return
-	}
-	presigned, err := s.storage.PresignGetObject(r.Context(), *item.StorageKey, previewURLExpiry(req.ExpiresSeconds))
+	input, err := validateProjectExportDownloadActionInput(projectExportDownloadActionInput{
+		ExportID: r.PathValue("exportId"), ExpiresSeconds: req.ExpiresSeconds,
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"exportId":   item.ID,
-		"storageKey": presigned.StorageKey,
-		"url":        presigned.URL,
-		"method":     presigned.Method,
-		"expiresAt":  presigned.ExpiresAt,
-	}, nil)
+	result, err := s.createProjectExportDownloadURLAction(r.Context(), project, input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, result, nil)
 }
 
 func (s *Server) createFinalVideoDownloadURL(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
-	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectRead)
+	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionArtifactRead)
 	if !ok {
-		return
-	}
-	if s.storage == nil {
-		httpx.WriteError(w, r, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "object storage is not configured", nil, true)
-		return
-	}
-	version, err := s.finalVideoVersionByID(r, project.ID, r.PathValue("versionId"))
-	if err != nil {
-		s.writeError(w, r, err)
 		return
 	}
 	var req struct {
@@ -300,22 +256,19 @@ func (s *Server) createFinalVideoDownloadURL(w http.ResponseWriter, r *http.Requ
 	if !decode(w, r, &req) {
 		return
 	}
-	if version.StorageKey == nil || strings.TrimSpace(*version.StorageKey) == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "FINAL_VIDEO_NOT_READY", "final video has no storage object", nil, false)
-		return
-	}
-	presigned, err := s.storage.PresignGetObject(r.Context(), *version.StorageKey, previewURLExpiry(req.ExpiresSeconds))
+	input, err := validateFinalVideoDownloadActionInput(finalVideoDownloadActionInput{
+		VersionID: r.PathValue("versionId"), ExpiresSeconds: req.ExpiresSeconds,
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"finalVideoVersionId": version.ID,
-		"storageKey":          presigned.StorageKey,
-		"url":                 presigned.URL,
-		"method":              presigned.Method,
-		"expiresAt":           presigned.ExpiresAt,
-	}, nil)
+	result, err := s.createFinalVideoDownloadURLAction(r.Context(), project, input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, result, nil)
 }
 
 func (s *Server) projectExportByID(r *http.Request, projectID, exportID string) (ProjectExport, error) {
@@ -326,6 +279,16 @@ func (s *Server) projectExportByID(r *http.Request, projectID, exportID string) 
 		FROM project_exports
 		WHERE project_id = $1 AND id = $2
 	`, projectID, exportID))
+}
+
+func (s *Server) projectExportByWorkflowRun(ctx context.Context, projectID, workflowRunID string) (ProjectExport, error) {
+	return scanProjectExport(s.db.QueryRow(ctx, `
+		SELECT id, organization_id, project_id, export_type, status, title, format, workflow_run_id::text,
+		       artifact_id::text, media_file_id::text, storage_key, byte_size, content_hash,
+		       request, output, error_code, error_message, created_by::text, created_at, started_at, completed_at
+		FROM project_exports
+		WHERE project_id = $1 AND workflow_run_id = $2
+	`, projectID, workflowRunID))
 }
 
 func scanProjectExport(row rowScan) (ProjectExport, error) {

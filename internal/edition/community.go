@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Einzieg/cineweave/internal/projectcontrol"
 )
 
 const CommunityDistributionID = "cineweave-ce"
@@ -142,6 +144,27 @@ func (r *Runtime) ValidatedAPIModules(ctx context.Context) ([]APIModuleRegistrat
 	cloned := make([]APIModuleRegistration, 0, len(registrations))
 	for _, registration := range registrations {
 		registration.RequiredPermissions = append([]string(nil), registration.RequiredPermissions...)
+		cloned = append(cloned, registration)
+	}
+	return cloned, nil
+}
+
+func (r *Runtime) ValidatedProjectControlActions(ctx context.Context) ([]ProjectControlActionRegistration, error) {
+	if err := r.Validate(ctx); err != nil {
+		return nil, err
+	}
+	registry, ok := r.CommercialModules.(ProjectControlModuleRegistry)
+	if !ok {
+		return []ProjectControlActionRegistration{}, nil
+	}
+	registrations, err := registry.ProjectControlActions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load commercial project-control actions: %w", err)
+	}
+	cloned := make([]ProjectControlActionRegistration, 0, len(registrations))
+	for _, registration := range registrations {
+		registration.QueryParameters = append([]string(nil), registration.QueryParameters...)
+		registration.Descriptor = registration.Descriptor.Clone()
 		cloned = append(cloned, registration)
 	}
 	return cloned, nil
@@ -386,7 +409,100 @@ func validateModuleRegistry(ctx context.Context, manifest Manifest, registry Com
 			return fmt.Errorf("commercial background task %q: %w", registration.TaskKey, err)
 		}
 	}
+	if projectControlRegistry, ok := registry.(ProjectControlModuleRegistry); ok {
+		projectControlActions, actionErr := projectControlRegistry.ProjectControlActions(ctx)
+		if actionErr != nil {
+			return fmt.Errorf("load commercial project-control actions: %w", actionErr)
+		}
+		if err := validateProjectControlActionRegistrations(projectControlActions, apiModules); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateProjectControlActionRegistrations(
+	registrations []ProjectControlActionRegistration,
+	apiModules []APIModuleRegistration,
+) error {
+	apiByOperation := make(map[string]APIModuleRegistration, len(apiModules))
+	for _, registration := range apiModules {
+		apiByOperation[registration.OperationID] = registration
+	}
+	actionNames := make(map[string]struct{}, len(registrations))
+	operationIDs := make(map[string]struct{}, len(registrations))
+	for _, registration := range registrations {
+		descriptor := registration.Descriptor
+		if registration.Handler == nil {
+			return fmt.Errorf("commercial project-control action %q has no shared domain handler", descriptor.Name)
+		}
+		if err := descriptor.Validate(); err != nil {
+			return fmt.Errorf("commercial project-control action %q: %w", descriptor.Name, err)
+		}
+		if descriptor.Scope != projectcontrol.ScopeProject {
+			return fmt.Errorf("commercial project-control action %q must use project scope", descriptor.Name)
+		}
+		if !descriptor.ExportToMCP {
+			return fmt.Errorf("commercial project-control action %q must be exported to MCP", descriptor.Name)
+		}
+		if _, exists := actionNames[descriptor.Name]; exists {
+			return fmt.Errorf("commercial project-control action %q is duplicated", descriptor.Name)
+		}
+		actionNames[descriptor.Name] = struct{}{}
+
+		operationID := strings.TrimSpace(registration.APIOperationID)
+		apiRegistration, exists := apiByOperation[operationID]
+		if !exists {
+			return fmt.Errorf("commercial project-control action %q references unknown API operation %q", descriptor.Name, operationID)
+		}
+		if _, exists := operationIDs[operationID]; exists {
+			return fmt.Errorf("commercial API operation %q is linked to multiple project-control actions", operationID)
+		}
+		operationIDs[operationID] = struct{}{}
+		if registration.ModuleKey != apiRegistration.ModuleKey || registration.FeatureKey != apiRegistration.FeatureKey {
+			return fmt.Errorf("commercial project-control action %q module identity disagrees with API operation %q", descriptor.Name, operationID)
+		}
+		if apiRegistration.ResourceScope != APIResourceScopeProject || apiRegistration.ResourcePathParameter != "projectId" {
+			return fmt.Errorf("commercial project-control action %q must bind a project-scoped API operation", descriptor.Name)
+		}
+		apiReadOnly := apiRegistration.Operation == CommercialOperationReadOrExport
+		if descriptor.ReadOnly != apiReadOnly {
+			return fmt.Errorf("commercial project-control action %q read-only policy disagrees with API operation %q", descriptor.Name, operationID)
+		}
+		if strings.Join(sortedDistinctStrings(descriptor.Permissions), "\x00") != strings.Join(sortedDistinctStrings(apiRegistration.RequiredPermissions), "\x00") {
+			return fmt.Errorf("commercial project-control action %q permissions disagree with API operation %q", descriptor.Name, operationID)
+		}
+		queryNames := make(map[string]struct{}, len(registration.QueryParameters))
+		for _, queryName := range registration.QueryParameters {
+			queryName = strings.TrimSpace(queryName)
+			if queryName == "" || strings.ContainsAny(queryName, "{}[] \t\r\n") {
+				return fmt.Errorf("commercial project-control action %q has invalid query parameter %q", descriptor.Name, queryName)
+			}
+			if _, exists := queryNames[queryName]; exists {
+				return fmt.Errorf("commercial project-control action %q duplicates query parameter %q", descriptor.Name, queryName)
+			}
+			queryNames[queryName] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func sortedDistinctStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func validateAPIModuleRegistration(

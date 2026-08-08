@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -128,20 +129,19 @@ func (s *Server) getShotProductionStatus(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	status, err := s.loadShotProductionStatusForEpisode(
-		r,
-		project.ID,
-		r.URL.Query().Get("scriptSceneId"),
-		r.URL.Query().Get("workflowRunId"),
-		r.URL.Query().Get("scriptEpisodeId"),
-		r.URL.Query().Get("storyboardPlanId"),
-		strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true"),
-	)
+	status, err := s.readShotStatusAction(r.Context(), project, shotStatusActionInput{
+		ScriptSceneID:     strings.TrimSpace(r.URL.Query().Get("scriptSceneId")),
+		WorkflowRunID:     strings.TrimSpace(r.URL.Query().Get("workflowRunId")),
+		ScriptEpisodeID:   strings.TrimSpace(r.URL.Query().Get("scriptEpisodeId")),
+		StoryboardPlanID:  strings.TrimSpace(r.URL.Query().Get("storyboardPlanId")),
+		IncludePreviewURL: strings.EqualFold(r.URL.Query().Get("includePreviewUrl"), "true"),
+		Limit:             queryInt(r, "limit", 1000),
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, status, nil)
+	httpx.WriteJSON(w, r, http.StatusOK, status.Status, nil)
 }
 
 func (s *Server) runShotProductionAction(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -209,21 +209,49 @@ func (s *Server) runShotProductionActionRequest(
 	principal auth.Principal,
 	req ShotProductionActionRequest,
 ) {
-	req.Action = strings.TrimSpace(req.Action)
-	if req.Options == nil {
-		req.Options = map[string]any{}
-	}
-	if _, _, ok := shotProductionWorkflowForAction(req.Action); !ok {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shot production action is not supported", nil, false)
-		return
-	}
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionWorkflowRun)
 	if !ok {
 		return
 	}
+	response, _, err := s.runShotProductionActionCore(r.Context(), principal, project, req, "")
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusAccepted, response, nil)
+}
+
+func (s *Server) runShotProductionActionCore(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	req ShotProductionActionRequest,
+	projectControlCommandID string,
+) (ShotProductionActionResponse, bool, error) {
+	req.Action = strings.TrimSpace(req.Action)
+	if req.Options == nil {
+		req.Options = map[string]any{}
+	}
+	workflowType, workflowFunc, ok := shotProductionWorkflowForAction(req.Action)
+	if !ok {
+		return ShotProductionActionResponse{}, false, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shot production action is not supported")
+	}
+	commandID := strings.TrimSpace(projectControlCommandID)
+	if commandID != "" {
+		existing, found, err := s.workflowRunForProjectControlCommand(ctx, project.ID, workflowType, commandID)
+		if err != nil {
+			return ShotProductionActionResponse{}, false, err
+		}
+		if found {
+			return ShotProductionActionResponse{
+				Action: req.Action, WorkflowRunID: existing.ID, Status: existing.Status,
+				WorkflowType: workflowType, TargetShotIDs: shotProductionWorkflowTargetIDs(existing.Input),
+			}, true, nil
+		}
+	}
 	scriptSceneID, workflowRunID, scriptEpisodeID := shotProductionScopeFilters(req)
 	status, err := s.loadShotProductionStatusForEpisode(
-		r,
+		requestWithContext(ctx),
 		project.ID,
 		scriptSceneID,
 		workflowRunID,
@@ -232,16 +260,13 @@ func (s *Server) runShotProductionActionRequest(
 		false,
 	)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotProductionActionResponse{}, false, err
 	}
 	targets, errorCode := selectShotProductionTargets(req, status.Shots)
 	if errorCode != "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, errorCode, shotProductionActionErrorMessage(errorCode), nil, false)
-		return
+		return ShotProductionActionResponse{}, false, newAPIError(http.StatusUnprocessableEntity, errorCode, shotProductionActionErrorMessage(errorCode))
 	}
 	scriptEpisodeID = shotProductionTargetEpisodeID(req, status.Shots, targets)
-	workflowType, workflowFunc, _ := shotProductionWorkflowForAction(req.Action)
 	input := map[string]any{
 		"action":         req.Action,
 		"shotIds":        targets,
@@ -262,23 +287,40 @@ func (s *Server) runShotProductionActionRequest(
 	if value := shotProductionOptionInt(req.Options, "maxPolls", 0); value > 0 {
 		input["maxPolls"] = value
 	}
+	if commandID != "" {
+		input["projectControlCommandId"] = commandID
+		input["idempotencyKey"] = "project-control-command:" + commandID
+	}
 	run, err := s.startProjectWorkflowCoreWithHook(
-		r.Context(), principal, project, workflowType, input, workflowFunc,
+		ctx, principal, project, workflowType, input, workflowFunc,
 		func(ctx context.Context, tx pgx.Tx, run WorkflowRun) error {
 			return markShotProductionQueuedTx(ctx, tx, req.Action, run.ID, targets)
 		},
 	)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return ShotProductionActionResponse{}, false, err
 	}
-	httpx.WriteJSON(w, r, http.StatusAccepted, ShotProductionActionResponse{
+	return ShotProductionActionResponse{
 		Action:        req.Action,
 		WorkflowRunID: run.ID,
 		Status:        run.Status,
 		WorkflowType:  workflowType,
 		TargetShotIDs: targets,
-	}, nil)
+	}, false, nil
+}
+
+func shotProductionWorkflowTargetIDs(raw json.RawMessage) []string {
+	var envelope struct {
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || len(envelope.Input) == 0 {
+		return nil
+	}
+	var input map[string]any
+	if err := json.Unmarshal(envelope.Input, &input); err != nil {
+		return nil
+	}
+	return uniqueNonEmptyStrings(agentReferenceStringSliceArg(input, "shotIds"))
 }
 
 func (s *Server) loadShotProductionStatus(r *http.Request, projectID, scriptSceneID, workflowRunID string, includePreviewURL bool) (ShotProductionStatus, error) {

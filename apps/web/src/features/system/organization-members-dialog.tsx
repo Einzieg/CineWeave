@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CodexControlKeySecretDialog } from "@/features/settings/codex-control-key-secret-dialog";
 import { StudioApiError, studioApi } from "@/lib/api-client";
 import { roleKeyLabel } from "@/lib/labels";
 import { qk } from "@/lib/query/keys";
@@ -46,6 +47,7 @@ export function SystemOrganizationMembersDialog({
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<OrganizationMember | null>(null);
+  const [createdMember, setCreatedMember] = useState<OrganizationMember | null>(null);
   const invalidateKeys = useInvalidateKeys();
   const organizationId = organization?.id ?? "";
 
@@ -61,10 +63,11 @@ export function SystemOrganizationMembersDialog({
   });
   const createMutation = useApiMutation<OrganizationMember, CreateSystemOrganizationMemberRequest>({
     mutationFn: (session, request) => studioApi.createSystemOrganizationMember(session, organizationId, request),
-    onSuccess: () => {
+    onSuccess: (member) => {
       setCreateOpen(false);
+      setCreatedMember(member.codexControlKey ? member : null);
       setPage(1);
-      toast.success("成员已直接加入组织");
+      toast.success(member.codexControlKey ? "新账号已创建并加入组织" : "已有账号已加入组织");
       invalidateKeys([
         qk.systemOrganizationMembers(organizationId),
         qk.systemOrganizationsRoot(),
@@ -251,6 +254,11 @@ export function SystemOrganizationMembersDialog({
             updateMutation.mutate({ userId: editing.user.id, request });
           }
         }}
+      />
+      <CodexControlKeySecretDialog
+        secret={createdMember?.codexControlKey}
+        title="保存新成员的 Codex 项目控制密钥"
+        onClose={() => setCreatedMember(null)}
       />
     </>
   );

@@ -46,6 +46,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SystemEditionEnvelope"
+  /api/system/project-control-diagnostics:
+    get:
+      operationId: getSystemProjectControlDiagnostics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: System-administrator Project Control runtime diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectControlDiagnosticsEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
   /api/me/entitlements:
     get:
       operationId: getMyEntitlements
@@ -59,6 +75,263 @@ paths:
               schema:
                 $ref: "#/components/schemas/EntitlementSnapshotEnvelope"
         "401":
+          $ref: "#/components/responses/Error"
+  /api/me/codex-control-key:
+    get:
+      operationId: getCodexControlKey
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user's Codex project-control key metadata. Secret material is never returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexControlKeyStatusEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createCodexControlKey
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Newly created Codex project-control key. The plaintext secret is returned only once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexControlKeySecretEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: revokeCodexControlKey
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: The current active Codex project-control key was revoked, or no active key existed.
+        "401":
+          $ref: "#/components/responses/Error"
+  /api/me/codex-control-key/rotate:
+    post:
+      operationId: rotateCodexControlKey
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Replacement Codex project-control key. The previous key is revoked atomically and the new plaintext secret is returned only once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexControlKeySecretEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+  /api/project-control/commands:
+    get:
+      operationId: listProjectControlCommands
+      description: Lists current-user project-control commands with current RBAC filtering and keyset pagination.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: filter[projectId]
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: filter[status]
+          in: query
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/ProjectControlCommandStatus"
+        - name: filter[controllerType]
+          in: query
+          schema:
+            $ref: "#/components/schemas/ProjectControlControllerType"
+        - name: filter[createdAfter]
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: view
+          in: query
+          description: Activity view only returns primary commands and applies the current user's completed-task watermark.
+          schema:
+            type: string
+            enum: [activity]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Project-control command page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/project-control/commands/{commandId}:
+    get:
+      operationId: getProjectControlCommand
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectControlCommandId"
+      responses:
+        "200":
+          description: Project-control command snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/project-control/commands/{commandId}/events:
+    get:
+      operationId: listProjectControlCommandEvents
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectControlCommandId"
+        - name: afterCursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        "200":
+          description: Incremental command events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/project-control/commands/{commandId}/wait:
+    post:
+      operationId: waitProjectControlCommand
+      description: Waits up to 45 seconds for new command events or a terminal state.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectControlCommandId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WaitProjectControlCommandRequest"
+      responses:
+        "200":
+          description: Current command snapshot and incremental events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/project-control/commands/{commandId}/cancel:
+    post:
+      operationId: cancelProjectControlCommand
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectControlCommandId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelProjectControlCommandRequest"
+      responses:
+        "200":
+          description: Cancellation request state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/project-control/commands/{commandId}/retry:
+    post:
+      operationId: retryProjectControlCommand
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectControlCommandId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetryProjectControlCommandRequest"
+      responses:
+        "200":
+          description: New retry command or idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /api/project-control/commands/{commandId}/resolve:
+    post:
+      operationId: resolveProjectControlCommand
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectControlCommandId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveProjectControlCommandRequest"
+      responses:
+        "200":
+          description: Answered prompt and resumed command
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /api/realtime/events:
     get:
@@ -1543,6 +1816,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2230,6 +2504,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2299,6 +2574,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2328,6 +2604,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2378,6 +2655,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2407,6 +2685,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2456,6 +2735,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2486,6 +2766,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2528,7 +2809,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/WorkflowRun"
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -2581,6 +2862,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/CommerceScriptUnitId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2620,11 +2902,11 @@ paths:
               $ref: "#/components/schemas/CommerceScriptUnitRebuildRequest"
       responses:
         "202":
-          description: Existing idempotent result or newly queued script-unit rebuild workflow
+          description: Persistent script-unit rebuild command accepted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/WorkflowRun"
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -2869,6 +3151,7 @@ paths:
           in: path
           required: true
           schema: {type: string, format: uuid}
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -2932,11 +3215,11 @@ paths:
               $ref: "#/components/schemas/CreateCommerceDirectVideoRequest"
       responses:
         "202":
-          description: Existing idempotent result or newly queued direct-video job
+          description: Persistent direct-video command accepted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CommerceDirectVideoJobEnvelope"
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -2963,11 +3246,11 @@ paths:
               $ref: "#/components/schemas/CreateCommerceScriptDerivationRequest"
       responses:
         "202":
-          description: Existing idempotent result or newly queued script derivation batch
+          description: Persistent script-derivation command accepted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -3031,7 +3314,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -3057,11 +3340,11 @@ paths:
               additionalProperties: false
       responses:
         "202":
-          description: Retry child batch
+          description: Persistent retry command accepted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -3087,18 +3370,12 @@ paths:
             schema:
               $ref: "#/components/schemas/CancelCommerceScriptDerivationRequest"
       responses:
-        "200":
-          description: The batch was already terminal
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
         "202":
-          description: Cancellation request accepted
+          description: Persistent cancellation command accepted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CommerceScriptDerivationBatchEnvelope"
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -3154,18 +3431,12 @@ paths:
             schema:
               $ref: "#/components/schemas/CancelCommerceDirectVideoRequest"
       responses:
-        "200":
-          description: The job was already terminal
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CommerceDirectVideoJobEnvelope"
         "202":
-          description: Cancellation was accepted or completed before workflow start
+          description: Persistent cancellation command accepted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CommerceDirectVideoJobEnvelope"
+                $ref: "#/components/schemas/ProjectControlResultEnvelope"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -4449,18 +4720,6 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
-        - name: filter[type]
-          in: query
-          schema:
-            type: string
-            enum: [character, scene, prop]
-        - name: filter[status]
-          in: query
-          description: Canonical asset visibility filter. Defaults to active, which hides archived assets.
-          schema:
-            type: string
-            enum: [active, archived, all]
-            default: active
       responses:
         "200":
           description: Project timelines
@@ -4476,6 +4735,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -4519,6 +4779,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/TimelineId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -4547,6 +4808,13 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/TimelineId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteProjectTimelineRequest"
       responses:
         "200":
           description: Deleted project timeline
@@ -4557,6 +4825,10 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/timelines/{timelineId}/detail:
     get:
@@ -4609,6 +4881,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/TimelineId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -4626,6 +4899,8 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/timelines/{timelineId}/clips/reorder:
@@ -4636,6 +4911,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/TimelineId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -4653,6 +4929,8 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/timelines/{timelineId}/clips/{clipId}:
@@ -4664,6 +4942,7 @@ paths:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/TimelineId"
         - $ref: "#/components/parameters/TimelineClipId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -4681,6 +4960,8 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
     delete:
@@ -4691,6 +4972,13 @@ paths:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/TimelineId"
         - $ref: "#/components/parameters/TimelineClipId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteTimelineClipRequest"
       responses:
         "200":
           description: Deleted timeline clip
@@ -4701,6 +4989,10 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/timelines/{timelineId}/compose:
     post:
@@ -4771,12 +5063,13 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/FinalVideoVersionId"
-        - name: confirmActive
-          in: query
-          description: Required when deleting the active final video version.
-          schema:
-            type: boolean
-            default: false
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteFinalVideoRequest"
       responses:
         "200":
           description: Deleted final video version
@@ -4790,6 +5083,8 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/projects/{projectId}/final-videos/{versionId}/activate:
     post:
       operationId: activateFinalVideo
@@ -4798,6 +5093,13 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/FinalVideoVersionId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivateFinalVideoRequest"
       responses:
         "200":
           description: Activated final video version
@@ -4808,6 +5110,10 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/final-videos/{versionId}/download-url:
     post:
@@ -5459,12 +5765,13 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/UpsertCharacterVoiceProfileRequest"
+              $ref: "#/components/schemas/CreateCharacterVoiceProfileRequest"
       responses:
         "201":
           description: Created character voice profile
@@ -5489,12 +5796,13 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/UpsertCharacterVoiceProfileRequest"
+              $ref: "#/components/schemas/UpdateCharacterVoiceProfileRequest"
       responses:
         "200":
           description: Updated character voice profile
@@ -5503,6 +5811,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/CharacterVoiceProfileEnvelope"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
@@ -5518,10 +5828,21 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExpectedRevisionRequest"
       responses:
         "204":
           description: Character voice profile archived
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /api/projects/{projectId}/sources:
     get:
@@ -5550,6 +5871,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -5614,6 +5936,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/SourceId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -5634,6 +5957,13 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/SourceId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteProjectSourceRequest"
       responses:
         "200":
           description: Deleted project source
@@ -5705,6 +6035,13 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteSourceChapterRequest"
       responses:
         "200":
           description: Source chapter deleted and downstream outputs marked stale
@@ -5803,6 +6140,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
         - name: eventId
           in: path
           required: true
@@ -5829,6 +6167,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
         - name: eventId
           in: path
           required: true
@@ -5840,7 +6179,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ReviewRequest"
+              $ref: "#/components/schemas/RevisionedReviewRequest"
       responses:
         "200":
           description: Reviewed novel event
@@ -5868,6 +6207,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -5896,6 +6236,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScriptEnvelope"
+    delete:
+      operationId: deleteScript
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ScriptId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteScriptRequest"
+      responses:
+        "200":
+          description: Archived script
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteScriptResponseEnvelope"
     patch:
       operationId: updateScript
       security:
@@ -5903,6 +6264,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/ScriptId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -5938,6 +6300,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/ScriptId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -5980,17 +6343,13 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/ScriptId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [versionId]
-              properties:
-                versionId:
-                  type: string
-                  format: uuid
+              $ref: "#/components/schemas/ActivateScriptVersionRequest"
       responses:
         "200":
           description: Activated script version
@@ -6012,6 +6371,13 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteScriptVersionRequest"
       responses:
         "200":
           description: Archived non-current script version
@@ -6083,6 +6449,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6128,6 +6495,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6153,6 +6521,13 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteScriptSceneRequest"
       responses:
         "200":
           description: Archived structured script scene
@@ -6173,6 +6548,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6379,6 +6755,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6418,6 +6795,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
         - name: planId
           in: path
           required: true
@@ -6444,6 +6822,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
         - name: planId
           in: path
           required: true
@@ -6455,7 +6834,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ReviewRequest"
+              $ref: "#/components/schemas/RevisionedReviewRequest"
       responses:
         "200":
           description: Reviewed adaptation plan
@@ -6470,12 +6849,19 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
         - name: planId
           in: path
           required: true
           schema:
             type: string
             format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivateAdaptationPlanRequest"
       responses:
         "200":
           description: Activated adaptation plan
@@ -7069,6 +7455,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/AssetId"
+        - $ref: "#/components/parameters/IdempotencyKey"
         - name: includePreviewUrl
           in: query
           schema:
@@ -7094,6 +7481,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/AssetId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -7114,6 +7502,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/AssetId"
+        - $ref: "#/components/parameters/RequiredIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -7220,6 +7609,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - $ref: "#/components/parameters/AssetId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -7268,6 +7658,13 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteAssetReferenceRequest"
       responses:
         "200":
           description: Archived asset reference
@@ -7289,6 +7686,13 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPrimaryAssetReferenceRequest"
       responses:
         "200":
           description: Selected primary asset reference
@@ -10293,6 +10697,13 @@ components:
       schema:
         type: string
         format: uuid
+    ProjectControlCommandId:
+      name: commandId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     CommerceSetupSessionId:
       name: setupSessionId
       in: path
@@ -10664,6 +11075,108 @@ components:
         providerGateway:
           type: string
           enum: [ok, unknown]
+    ProjectControlDiagnosticsEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectControlDiagnostics"
+    ProjectControlDiagnostics:
+      type: object
+      required: [mcp, actionMatrixHash, releaseId, runtime]
+      properties:
+        mcp:
+          $ref: "#/components/schemas/ProjectControlMCPDiagnostics"
+        actionMatrixHash:
+          type: string
+          minLength: 64
+          maxLength: 64
+        releaseId:
+          type: string
+        runtime:
+          $ref: "#/components/schemas/ProjectControlRuntimeDiagnostics"
+    ProjectControlMCPDiagnostics:
+      type: object
+      required: [enabled, toolCatalogHash, recentAuthenticationFailures]
+      properties:
+        enabled:
+          type: boolean
+        toolCatalogHash:
+          type: string
+        recentAuthenticationFailures:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectControlAuthenticationFailureAggregate"
+    ProjectControlAuthenticationFailureAggregate:
+      type: object
+      required: [reason, count, firstFailureAt, lastFailureAt]
+      properties:
+        reason:
+          type: string
+        count:
+          type: integer
+          format: int64
+          minimum: 1
+        firstFailureAt:
+          type: string
+          format: date-time
+        lastFailureAt:
+          type: string
+          format: date-time
+    ProjectControlRuntimeDiagnostics:
+      type: object
+      required:
+        - commandCounts
+        - activeCommands
+        - waitingCommands
+        - expiredLeases
+        - overdueReconciliations
+        - oldestReconcileLagSeconds
+        - unlinkedDeterministicWorkflows
+      properties:
+        commandCounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectControlRuntimeCommandCount"
+        activeCommands:
+          type: integer
+          format: int64
+          minimum: 0
+        waitingCommands:
+          type: integer
+          format: int64
+          minimum: 0
+        expiredLeases:
+          type: integer
+          format: int64
+          minimum: 0
+        overdueReconciliations:
+          type: integer
+          format: int64
+          minimum: 0
+        oldestReconcileLagSeconds:
+          type: number
+          format: double
+          minimum: 0
+        unlinkedDeterministicWorkflows:
+          type: integer
+          format: int64
+          minimum: 0
+    ProjectControlRuntimeCommandCount:
+      type: object
+      required: [status, controller, count]
+      properties:
+        status:
+          type: string
+        controller:
+          type: string
+          enum: [embedded_agent, codex_mcp, manual]
+        count:
+          type: integer
+          format: int64
+          minimum: 0
     SystemEditionEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -11019,6 +11532,299 @@ components:
           format: uuid
         user:
           $ref: "#/components/schemas/User"
+        codexControlKey:
+          allOf:
+            - $ref: "#/components/schemas/CodexControlKeySecret"
+          description: Present only when the user account and its default Codex project-control key were created in the same operation. The plaintext secret is returned once.
+    CodexControlKeyMetadata:
+      type: object
+      required: [id, name, prefix, status, createdAt, canRotate, canRevoke, requiresSetup]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        prefix:
+          type: string
+          description: Non-secret key prefix suitable for display and audit correlation.
+        status:
+          type: string
+          enum: [active, requires_rotation, revoked]
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+        rotatedAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+        canRotate:
+          type: boolean
+        canRevoke:
+          type: boolean
+        requiresSetup:
+          type: boolean
+    CodexControlKeySecret:
+      type: object
+      required: [id, prefix, secret, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        prefix:
+          type: string
+        secret:
+          type: string
+          description: Plaintext bearer credential returned once. The server stores only a one-way hash.
+        createdAt:
+          type: string
+          format: date-time
+    CodexControlKeyStatusResponse:
+      type: object
+      required: [requiresSetup]
+      properties:
+        key:
+          $ref: "#/components/schemas/CodexControlKeyMetadata"
+        requiresSetup:
+          type: boolean
+          description: True when the user has never created a Codex project-control key.
+    CodexControlKeySecretResponse:
+      type: object
+      required: [codexControlKey]
+      properties:
+        codexControlKey:
+          $ref: "#/components/schemas/CodexControlKeySecret"
+    CodexControlKeyStatusEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CodexControlKeyStatusResponse"
+    CodexControlKeySecretEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/CodexControlKeySecretResponse"
+    ProjectControlCommandStatus:
+      type: string
+      enum: [queued, running, waiting_workflow, waiting_input, succeeded, partial_succeeded, failed, cancelled]
+    ProjectControlControllerType:
+      type: string
+      enum: [embedded_agent, codex_mcp, manual]
+    ProjectControlCommand:
+      type: object
+      required: [id, organizationId, actorUserId, controllerType, actionName, actionVersion, executionMode, activityVisibility, status, createdAt, updatedAt, revision]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        actorUserId:
+          type: string
+          format: uuid
+        controllerType:
+          $ref: "#/components/schemas/ProjectControlControllerType"
+        controlKeyId:
+          type: string
+          format: uuid
+        agentTaskId:
+          type: string
+          format: uuid
+        agentStepId:
+          type: string
+          format: uuid
+        actionName:
+          type: string
+        actionLabel:
+          type: string
+        workflowRunIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        actionVersion:
+          type: integer
+          minimum: 1
+        executionMode:
+          type: string
+          enum: [sync, async_command, workflow]
+        activityVisibility:
+          type: string
+          enum: [primary, nested, audit_only]
+        status:
+          $ref: "#/components/schemas/ProjectControlCommandStatus"
+        output:
+          type: object
+          additionalProperties: true
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        parentCommandId:
+          type: string
+          format: uuid
+        retryOfCommandId:
+          type: string
+          format: uuid
+        cancellationRequestedAt:
+          type: string
+          format: date-time
+        cancellationRequestedByUserId:
+          type: string
+          format: uuid
+        cancellationReason:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+    ProjectControlError:
+      type: object
+      required: [code, userMessage, retryable]
+      properties:
+        code:
+          type: string
+        userMessage:
+          type: string
+        retryable:
+          type: boolean
+        details:
+          type: object
+          additionalProperties: true
+    ProjectControlNextAction:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+        reason:
+          type: string
+        action:
+          type: string
+        arguments:
+          type: object
+          additionalProperties: true
+    ProjectControlResult:
+      type: object
+      required: [schemaVersion, status, summary, workflowRunIds, retryable, nextActions]
+      properties:
+        schemaVersion:
+          type: string
+          const: project-control.v1
+        commandId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        summary:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        workflowRunIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        nextCursor:
+          type: string
+        retryable:
+          type: boolean
+        error:
+          $ref: "#/components/schemas/ProjectControlError"
+        nextActions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectControlNextAction"
+    ProjectControlResultEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/ProjectControlResult"
+    WaitProjectControlCommandRequest:
+      type: object
+      properties:
+        afterCursor:
+          type: string
+        timeoutSeconds:
+          type: integer
+          minimum: 1
+          maximum: 45
+    CancelProjectControlCommandRequest:
+      type: object
+      required: [expectedCommandRevision, idempotencyKey]
+      properties:
+        expectedCommandRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+        reason:
+          type: string
+          maxLength: 1000
+    RetryProjectControlCommandRequest:
+      type: object
+      required: [expectedCommandRevision, idempotencyKey]
+      properties:
+        expectedCommandRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+    ResolveProjectControlCommandRequest:
+      type: object
+      required: [promptId, expectedCommandRevision, idempotencyKey, answer]
+      properties:
+        promptId:
+          type: string
+          format: uuid
+        expectedCommandRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+        answer:
+          type: object
+          additionalProperties: true
     User:
       type: object
       required: [id, email]
@@ -11151,6 +11957,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MemberRoleSummary"
+        codexControlKey:
+          allOf:
+            - $ref: "#/components/schemas/CodexControlKeySecret"
+          description: Present only when a system administrator creates a new user account. Existing accounts are never issued or rotated implicitly.
     UpdateOrganizationMemberRequest:
       type: object
       required: [status]
@@ -12128,7 +12938,7 @@ components:
           format: date-time
     ProjectSource:
       type: object
-      required: [id, organizationId, projectId, sourceType, title, contentFormat, status, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, sourceType, title, contentFormat, status, metadata, revision, contentRevision, contentHash, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -12159,6 +12969,19 @@ components:
         metadata:
           type: object
           additionalProperties: true
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Optimistic concurrency revision for source metadata and content changes.
+        contentRevision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Revision used by staged long-content writes.
+        contentHash:
+          type: string
+          description: SHA-256 hash of the current source content.
         splitChapters:
           type: boolean
           description: Re-split novel chapters from content when chapters is not provided.
@@ -12302,7 +13125,7 @@ components:
           $ref: "#/components/schemas/CreatedScriptSummary"
     Script:
       type: object
-      required: [id, organizationId, projectId, title, status, isCurrent, createdAt, updatedAt]
+      required: [id, organizationId, projectId, title, status, revision, isCurrent, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -12320,7 +13143,12 @@ components:
           type: string
         status:
           type: string
-          enum: [draft, active, archived]
+          enum: [draft, active]
+          description: Use DELETE /scripts/{scriptId} to archive a script.
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
         isCurrent:
           type: boolean
           readOnly: true
@@ -12382,7 +13210,7 @@ components:
           format: date-time
     ScriptEpisode:
       type: object
-      required: [id, organizationId, projectId, scriptId, scriptVersionId, episodeIndex, episodeTitle, content, contentFormat, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, scriptId, scriptVersionId, episodeIndex, episodeTitle, content, contentFormat, revision, contentHash, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -12420,6 +13248,13 @@ components:
         contentFormat:
           type: string
           enum: [plain_text, markdown]
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        contentHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
         promptVersionId:
           type: string
           format: uuid
@@ -12454,7 +13289,7 @@ components:
           format: date-time
     CharacterVoiceProfile:
       type: object
-      required: [id, organizationId, projectId, characterName, displayName, language, modelProfileKey, voiceKey, parameters, isDefault, status, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, characterName, displayName, language, modelProfileKey, voiceKey, parameters, isDefault, status, metadata, revision, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -12503,6 +13338,10 @@ components:
         metadata:
           type: object
           additionalProperties: true
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
         createdBy:
           type: string
           format: uuid
@@ -12749,7 +13588,7 @@ components:
           format: date-time
     ScriptScene:
       type: object
-      required: [id, projectId, scriptId, scriptVersionId, sceneIndex, sceneNo, title, characters, scenes, props, sourceEventIds, content, contentFormat, reviewStatus, manualOverride, staleState]
+      required: [id, projectId, scriptId, scriptVersionId, sceneIndex, sceneNo, title, characters, scenes, props, sourceEventIds, content, contentFormat, reviewStatus, revision, manualOverride, staleState]
       properties:
         id:
           type: string
@@ -12818,6 +13657,10 @@ components:
           enum: [plain_text, markdown]
         reviewStatus:
           $ref: "#/components/schemas/ReviewStatus"
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
         manualOverride:
           type: boolean
         staleState:
@@ -13162,6 +14005,9 @@ components:
           type: string
         errorMessage:
           type: string
+        projectControlCommandId:
+          type: string
+          format: uuid
         createdAt:
           type: string
           format: date-time
@@ -16902,7 +17748,7 @@ components:
             $ref: "#/components/schemas/VideoRenderSegment"
     ProjectTimeline:
       type: object
-      required: [id, organizationId, projectId, title, status, aspectRatio, resolution, timelineTimebase, fpsNumerator, fpsDenominator, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, revision, title, status, aspectRatio, resolution, timelineTimebase, fpsNumerator, fpsDenominator, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -16913,6 +17759,10 @@ components:
         projectId:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
         workflowRunId:
           type: string
           format: uuid
@@ -16952,7 +17802,7 @@ components:
           format: date-time
     TimelineClip:
       type: object
-      required: [id, organizationId, projectId, timelineId, clipIndex, title, enabled, startTick, endTick, durationTicks, trimStartTick, timelineTimebase, fpsNumerator, fpsDenominator, durationSeconds, trimStartSeconds, metadata, createdAt, updatedAt]
+      required: [id, organizationId, projectId, timelineId, revision, timelineRevision, clipIndex, title, enabled, startTick, endTick, durationTicks, trimStartTick, timelineTimebase, fpsNumerator, fpsDenominator, durationSeconds, trimStartSeconds, metadata, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -16966,6 +17816,14 @@ components:
         timelineId:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        timelineRevision:
+          type: integer
+          format: int64
+          minimum: 1
         storyboardShotId:
           type: string
           format: uuid
@@ -17045,7 +17903,7 @@ components:
               format: uri
     FinalVideoVersion:
       type: object
-      required: [id, organizationId, projectId, timelineId, version, title, status, timelineTimebase, fpsNumerator, fpsDenominator, resolution, aspectRatio, composeSettings, metadata, createdAt]
+      required: [id, organizationId, projectId, timelineId, version, revision, title, status, timelineTimebase, fpsNumerator, fpsDenominator, resolution, aspectRatio, composeSettings, metadata, createdAt]
       properties:
         id:
           type: string
@@ -17064,6 +17922,10 @@ components:
           format: uuid
         version:
           type: integer
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
         title:
           type: string
         status:
@@ -17109,6 +17971,27 @@ components:
         previewUrl:
           type: string
           format: uri
+    ActivateFinalVideoRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    DeleteFinalVideoRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        confirmActive:
+          type: boolean
+          default: false
     ProjectExport:
       type: object
       required: [id, organizationId, projectId, exportType, status, title, format, request, output, createdAt]
@@ -17578,7 +18461,12 @@ components:
           default: false
     UpdateProjectTimelineRequest:
       type: object
+      required: [expectedRevision]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         title:
           type: string
         status:
@@ -17588,9 +18476,22 @@ components:
           type: string
         resolution:
           type: string
+    DeleteProjectTimelineRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
     CreateTimelineClipRequest:
       type: object
+      required: [expectedTimelineRevision]
       properties:
+        expectedTimelineRevision:
+          type: integer
+          format: int64
+          minimum: 1
         storyboardShotId:
           type: string
           format: uuid
@@ -17624,7 +18525,16 @@ components:
           type: string
     UpdateTimelineClipRequest:
       type: object
+      required: [expectedTimelineRevision, expectedRevision]
       properties:
+        expectedTimelineRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         title:
           type: string
         enabled:
@@ -17640,19 +18550,40 @@ components:
           format: int64
         notes:
           type: string
+          nullable: true
+    DeleteTimelineClipRequest:
+      type: object
+      required: [expectedTimelineRevision, expectedRevision]
+      properties:
+        expectedTimelineRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
     ReorderTimelineClipItem:
       type: object
-      required: [clipId, clipIndex]
+      required: [clipId, expectedRevision, clipIndex]
       properties:
         clipId:
           type: string
           format: uuid
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         clipIndex:
           type: integer
     ReorderTimelineClipsRequest:
       type: object
-      required: [items]
+      required: [expectedTimelineRevision, items]
       properties:
+        expectedTimelineRevision:
+          type: integer
+          format: int64
+          minimum: 1
         items:
           type: array
           minItems: 1
@@ -17681,7 +18612,7 @@ components:
           type: string
     NovelEvent:
       type: object
-      required: [id, projectId, sourceId, eventIndex, sequenceNo, title, summary, importance, characters, scenes, props, keywords, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt]
+      required: [id, projectId, sourceId, eventIndex, sequenceNo, title, summary, importance, characters, scenes, props, keywords, reviewStatus, manualOverride, staleState, metadata, createdAt, updatedAt, revision]
       properties:
         id:
           type: string
@@ -17768,6 +18699,10 @@ components:
         editedAt:
           type: string
           format: date-time
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
     NovelEventLink:
       type: object
       required: [id, projectId, sourceEventId, targetEventId, linkType, metadata, createdAt]
@@ -17800,7 +18735,7 @@ components:
           format: date-time
     AdaptationPlan:
       type: object
-      required: [id, projectId, title, status, targetFormat, selectedEventIds, structure, content, reviewStatus, manualOverride, metadata, createdAt, updatedAt]
+      required: [id, projectId, title, status, targetFormat, selectedEventIds, structure, content, reviewStatus, manualOverride, metadata, createdAt, updatedAt, revision]
       properties:
         id:
           type: string
@@ -17865,6 +18800,10 @@ components:
         editedAt:
           type: string
           format: date-time
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
     ExtractNovelEventsRequest:
       type: object
       properties:
@@ -17926,7 +18865,12 @@ components:
               type: string
     UpdateNovelEventRequest:
       type: object
+      required: [expectedRevision]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         title:
           type: string
         summary:
@@ -17971,7 +18915,12 @@ components:
           $ref: "#/components/schemas/ReviewStatus"
     UpdateAdaptationPlanRequest:
       type: object
+      required: [expectedRevision]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         title:
           type: string
         status:
@@ -18396,6 +19345,24 @@ components:
           $ref: "#/components/schemas/ReviewStatus"
         note:
           type: string
+    RevisionedReviewRequest:
+      allOf:
+        - $ref: "#/components/schemas/ReviewRequest"
+        - type: object
+          required: [expectedRevision]
+          properties:
+            expectedRevision:
+              type: integer
+              format: int64
+              minimum: 1
+    ActivateAdaptationPlanRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
     ReviewResponse:
       type: object
       required: [id, reviewStatus, updatedAt]
@@ -18405,6 +19372,10 @@ components:
           format: uuid
         reviewStatus:
           $ref: "#/components/schemas/ReviewStatus"
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
         note:
           type: string
         updatedAt:
@@ -18780,11 +19751,19 @@ components:
           properties:
             data:
               type: object
+              required: [timelineId, timelineRevision, items]
               properties:
+                timelineId:
+                  type: string
+                  format: uuid
+                timelineRevision:
+                  type: integer
+                  format: int64
+                  minimum: 1
                 items:
                   type: array
                   items:
-                    $ref: "#/components/schemas/ReorderTimelineClipItem"
+                    $ref: "#/components/schemas/TimelineClip"
     ComposeTimelineResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -19177,14 +20156,51 @@ components:
           properties:
             data:
               type: object
+              required: [deleted, mode, scriptId, versionId, version, scriptRevision]
               properties:
                 deleted:
                   type: boolean
                 mode:
                   type: string
+                scriptId:
+                  type: string
+                  format: uuid
                 versionId:
                   type: string
                   format: uuid
+                version:
+                  type: integer
+                  minimum: 1
+                scriptRevision:
+                  type: integer
+                  format: int64
+                  minimum: 1
+    DeleteScriptResponseEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [deleted, mode, scriptId, revision, versionCount]
+              properties:
+                deleted:
+                  type: boolean
+                mode:
+                  type: string
+                scriptId:
+                  type: string
+                  format: uuid
+                revision:
+                  type: integer
+                  format: int64
+                versionIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                versionCount:
+                  type: integer
     ScriptSceneEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -19211,6 +20227,7 @@ components:
           properties:
             data:
               type: object
+              required: [deleted, mode, sceneId, revision]
               properties:
                 deleted:
                   type: boolean
@@ -19219,6 +20236,10 @@ components:
                 sceneId:
                   type: string
                   format: uuid
+                revision:
+                  type: integer
+                  format: int64
+                  minimum: 1
     ParseScriptScenesResponseEnvelope:
       allOf:
         - $ref: "#/components/schemas/Envelope"
@@ -19545,6 +20566,12 @@ components:
       required: [clearedCount, clearedThrough]
       properties:
         clearedCount:
+          type: integer
+          minimum: 0
+        workflowClearedCount:
+          type: integer
+          minimum: 0
+        commandClearedCount:
           type: integer
           minimum: 0
         clearedThrough:
@@ -27439,12 +28466,12 @@ components:
         promptVersionId:
           type: string
           format: uuid
-    UpsertCharacterVoiceProfileRequest:
+    CharacterVoiceProfileFields:
       type: object
       properties:
         canonicalAssetId:
           type: string
-          format: uuid
+          description: Character asset UUID. Empty string clears the association on update.
         characterName:
           type: string
         displayName:
@@ -27457,23 +28484,38 @@ components:
           default: tts_generation_default
         providerModelId:
           type: string
-          format: uuid
+          description: Provider model UUID. Empty string clears the fixed model on update.
         voiceKey:
           type: string
         instructions:
           type: string
         referenceArtifactId:
           type: string
-          format: uuid
+          description: Project artifact UUID. Empty string clears the reference on update.
         referenceMediaFileId:
           type: string
-          format: uuid
+          description: Project media UUID. Empty string clears the reference on update.
         parameters:
           type: object
           additionalProperties: true
         isDefault:
           type: boolean
           default: false
+    CreateCharacterVoiceProfileRequest:
+      allOf:
+        - $ref: "#/components/schemas/CharacterVoiceProfileFields"
+        - type: object
+          required: [characterName, displayName, voiceKey]
+    UpdateCharacterVoiceProfileRequest:
+      allOf:
+        - $ref: "#/components/schemas/CharacterVoiceProfileFields"
+        - type: object
+          required: [expectedRevision]
+          properties:
+            expectedRevision:
+              type: integer
+              format: int64
+              minimum: 1
     CreateProjectSourceRequest:
       type: object
       required: [sourceType, title, content]
@@ -27485,6 +28527,8 @@ components:
           type: string
         content:
           type: string
+          maxLength: 49152
+          description: Inline content only. Use staged content write actions for larger text.
         contentFormat:
           type: string
           enum: [plain_text, markdown]
@@ -27502,6 +28546,11 @@ components:
         createScript:
           type: boolean
           description: Defaults to true for script sources and false for novel sources.
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
         chapters:
           type: array
           items:
@@ -27542,7 +28591,17 @@ components:
           description: Defaults to true for script sources and false for novel sources.
     UpdateProjectSourceRequest:
       type: object
+      required: [expectedRevision]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
         sourceType:
           type: string
           enum: [novel, script, brief]
@@ -27557,6 +28616,9 @@ components:
           type: string
         storageKey:
           type: string
+        status:
+          type: string
+          enum: [ready, processing, processed, failed, archived]
         metadata:
           type: object
           additionalProperties: true
@@ -27581,10 +28643,50 @@ components:
                 type: string
               content:
                 type: string
+        splitChapters:
+          type: boolean
+          description: Re-split novel chapters from content when chapters is not provided.
+    DeleteProjectSourceRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
+        reason:
+          type: string
+          maxLength: 1000
+    DeleteSourceChapterRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
+        reason:
+          type: string
+          maxLength: 1000
     CreateScriptRequest:
       type: object
       required: [title]
       properties:
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
         sourceId:
           type: string
           format: uuid
@@ -27592,6 +28694,8 @@ components:
           type: string
         content:
           type: string
+          maxLength: 49152
+          description: Inline UTF-8 content is additionally limited to 49152 bytes; use project-control content staging for larger bodies.
         contentFormat:
           type: string
           enum: [plain_text, markdown]
@@ -27603,7 +28707,17 @@ components:
           additionalProperties: true
     UpdateScriptRequest:
       type: object
+      required: [expectedRevision]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
         sourceId:
           type: string
           format: uuid
@@ -27612,12 +28726,39 @@ components:
         status:
           type: string
           enum: [draft, active, archived]
+    DeleteScriptRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
+        reason:
+          type: string
+          maxLength: 1000
     CreateScriptVersionRequest:
       type: object
-      required: [content]
+      required: [expectedRevision, content]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
         content:
           type: string
+          maxLength: 49152
+          description: Inline UTF-8 content is additionally limited to 49152 bytes; use project-control content staging for larger bodies.
         contentFormat:
           type: string
           enum: [plain_text, markdown]
@@ -27630,6 +28771,38 @@ components:
         activate:
           type: boolean
           default: false
+    ActivateScriptVersionRequest:
+      type: object
+      required: [versionId, expectedRevision]
+      properties:
+        versionId:
+          type: string
+          format: uuid
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
+    DeleteScriptVersionRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
+        reason:
+          type: string
+          maxLength: 1000
     ParseScriptScenesRequest:
       type: object
       properties:
@@ -27638,7 +28811,17 @@ components:
           default: false
     UpdateScriptEpisodeRequest:
       type: object
+      required: [expectedRevision]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
         episodeTitle:
           type: string
         content:
@@ -27676,7 +28859,12 @@ components:
           type: string
     UpdateScriptSceneRequest:
       type: object
+      required: [expectedRevision]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         title:
           type: string
         summary:
@@ -27715,11 +28903,25 @@ components:
           type: string
     ReviewScriptSceneRequest:
       type: object
-      required: [reviewStatus]
+      required: [expectedRevision, reviewStatus]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         reviewStatus:
           $ref: "#/components/schemas/ReviewStatus"
         note:
+          type: string
+    DeleteScriptSceneRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        reason:
           type: string
     AnalyzeScriptAssetsRequest:
       type: object
@@ -27933,7 +29135,7 @@ components:
           format: uuid
     RewriteScriptRequest:
       type: object
-      required: [scriptId]
+      required: [scriptId, instruction]
       properties:
         scriptId:
           type: string
@@ -27941,8 +29143,13 @@ components:
         versionId:
           type: string
           format: uuid
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         instruction:
           type: string
+          minLength: 1
         sessionId:
           type: string
           format: uuid
@@ -27957,6 +29164,11 @@ components:
           type: integer
           format: int64
           minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
         assetType:
           type: string
           enum: [character, scene, prop]
@@ -27991,6 +29203,14 @@ components:
           type: integer
           format: int64
           minimum: 1
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Body fallback for clients that cannot set Idempotency-Key.
+        reason:
+          type: string
+          maxLength: 1000
     CreateAssetBatchRequest:
       type: object
       required: [operation, assetIds, expectedProjectRevision]
@@ -28093,8 +29313,12 @@ components:
           type: integer
     CreateAssetReferenceRequest:
       type: object
-      required: [storageKey, mimeType]
+      required: [expectedRevision, storageKey, mimeType]
       properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
         title:
           type: string
         description:
@@ -28111,25 +29335,50 @@ components:
         metadata:
           type: object
           additionalProperties: true
+    DeleteAssetReferenceRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        reason:
+          type: string
+    SetPrimaryAssetReferenceRequest:
+      type: object
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
     DeleteAssetReferenceResponse:
       type: object
-      required: [deleted, mode, referenceId, artifactDeleted, mediaDeleted]
+      required: [deleted, mode, assetId, referenceId, revision, artifactDeleted, mediaDeleted]
       properties:
         deleted:
           type: boolean
         mode:
           type: string
           enum: [archive]
+        assetId:
+          type: string
+          format: uuid
         referenceId:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
         artifactDeleted:
           type: boolean
         mediaDeleted:
           type: boolean
     DeleteCanonicalAssetResponse:
       type: object
-      required: [deleted, mode, assetId]
+      required: [deleted, mode, assetId, revision]
       properties:
         deleted:
           type: boolean
@@ -28139,13 +29388,21 @@ components:
         assetId:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
     SetPrimaryAssetReferenceResponse:
       type: object
-      required: [assetId, reference]
+      required: [assetId, revision, reference]
       properties:
         assetId:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
         reference:
           $ref: "#/components/schemas/AssetReference"
     UpdateShotAssetRequirementRequest:
@@ -28385,6 +29642,8 @@ components:
           description: Optional human-readable cancellation reason.
     UpdateProjectRequest:
       type: object
+      required:
+        - expectedRevision
       properties:
         name:
           type: string
@@ -28394,4 +29653,4 @@ components:
           type: integer
           format: int64
           minimum: 1
-          description: Optional optimistic concurrency revision. A stale value returns PROJECT_REVISION_CONFLICT.
+          description: Required optimistic concurrency revision. A stale value returns PROJECT_REVISION_CONFLICT.

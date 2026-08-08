@@ -22,11 +22,12 @@ func TestPatchNovelEventMarksManualOverride(t *testing.T) {
 
 	var updated NovelEvent
 	doAPISuccess(t, server, http.MethodPatch, "/api/projects/"+seed.projectID+"/novel-events/"+eventID, seed.ownerToken, seed.organizationID, map[string]any{
-		"title":          "Manual Event",
-		"summary":        "Manual summary",
-		"importance":     4,
-		"adaptationHint": "Keep the station reveal.",
-	}, &updated)
+		"expectedRevision": 1,
+		"title":            "Manual Event",
+		"summary":          "Manual summary",
+		"importance":       4,
+		"adaptationHint":   "Keep the station reveal.",
+	}, &updated, map[string]string{"Idempotency-Key": "novel-event-manual-update-test"})
 	if !updated.ManualOverride || updated.ReviewStatus != "pending" || updated.Title != "Manual Event" || updated.Importance != 4 || updated.EditedBy == nil || *updated.EditedBy != seed.ownerUserID || updated.EditedAt == nil {
 		t.Fatalf("updated event = %+v", updated)
 	}

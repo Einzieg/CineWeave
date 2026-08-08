@@ -1,0 +1,4055 @@
+{
+  "schemaVersion": "cineweave.mcp-tool-catalog.v1",
+  "catalogHash": "2d732f3c231ebfdf618bc66732b6fdee806d26c7a284a789fe92fd10a7499b45",
+  "tools": [
+    {
+      "name": "adaptation_activate",
+      "actionName": "adaptation.activate",
+      "version": 1,
+      "label": "激活改编计划",
+      "summary": "激活改编计划",
+      "inputSchemaHash": "76d2c2cdc2d4e4a3426ae949fb611714f4c014d0c811c1830d7201ee12a70151",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "adaptation_plan.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "adaptation_create",
+      "actionName": "adaptation.create",
+      "version": 1,
+      "label": "创建改编计划",
+      "summary": "创建改编计划",
+      "inputSchemaHash": "1b5756f09bc46df6ef7ca8e4754b4b0bc787adc64e7ee04c98d85dd045d1fb16",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "adaptation_plan.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "adaptation_generate_script",
+      "actionName": "adaptation.generate_script",
+      "version": 1,
+      "label": "从改编计划生成剧本",
+      "summary": "从改编计划生成剧本",
+      "inputSchemaHash": "984049edc6c430eb4e204c88e2df5fec8038b9b609afed9a8bc779a1e6d97611",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "adaptation_review",
+      "actionName": "adaptation.review",
+      "version": 1,
+      "label": "审核改编计划",
+      "summary": "审核改编计划",
+      "inputSchemaHash": "f52cb261486de53ea2f2ef9640b566e11e8a1d9eeeadd43ff427d07827d8302a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "adaptation_plan.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "adaptation_update",
+      "actionName": "adaptation.update",
+      "version": 1,
+      "label": "修改改编计划",
+      "summary": "修改改编计划",
+      "inputSchemaHash": "95ce83dc0523a02f4a7e3e298dd0c9da1b00151c1ff1b585bb3d1f61dd44b19e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "adaptation_plan.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "artifact_get",
+      "actionName": "artifact.get",
+      "version": 1,
+      "label": "读取成果",
+      "summary": "读取成果",
+      "inputSchemaHash": "af36d7ba3754f6a0ea78f3f2a36148293592c70e6a68646098b6a58df1210093",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "artifact_list",
+      "actionName": "artifact.list",
+      "version": 1,
+      "label": "成果列表",
+      "summary": "成果列表",
+      "inputSchemaHash": "9744f5616fba620e10669c745a122b3a002d56e1db02b0a17b9d061b75558beb",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "artifact_preview_url",
+      "actionName": "artifact.preview_url",
+      "version": 1,
+      "label": "成果预览",
+      "summary": "成果预览",
+      "inputSchemaHash": "57f287283fb3257e4c2755e960d87151847f1174990292a95d6031b376ba9496",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "asset_batch_generate_images",
+      "actionName": "asset.batch_generate_images",
+      "version": 1,
+      "label": "批量生成资产图片",
+      "summary": "批量生成资产图片",
+      "inputSchemaHash": "fedacd55e0c764d297a2e1667d2936a0fb3ae607a7feb397d903b21b71c0437a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "asset_batch_generate_prompts",
+      "actionName": "asset.batch_generate_prompts",
+      "version": 1,
+      "label": "批量生成资产提示词",
+      "summary": "批量生成资产提示词",
+      "inputSchemaHash": "f835a36a8dc7b1f244ae9ced5e1bd7624171fb55e0ea33c9199c7ec30f884c19",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "asset_delete",
+      "actionName": "asset.delete",
+      "version": 1,
+      "label": "删除资产",
+      "summary": "删除资产",
+      "inputSchemaHash": "f1d05fae8f488edff81f352891e0f65b931b6f1508e4bfdeeecf9de83a730aa3",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "asset_get",
+      "actionName": "asset.get",
+      "version": 1,
+      "label": "读取资产卡",
+      "summary": "读取资产卡",
+      "inputSchemaHash": "136b6be27cce52d514ec022afff8813fd71c01a5fdc0de94e4d216e42a3d2569",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "asset_impact",
+      "actionName": "asset.impact",
+      "version": 1,
+      "label": "资产归档影响",
+      "summary": "资产归档影响",
+      "inputSchemaHash": "a3d0ca0e7133f8815f0e5c5cd1f0c1a9dbec400a3b7d7d1eb3452ee14c324cfd",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "asset_list",
+      "actionName": "asset.list",
+      "version": 1,
+      "label": "资产列表",
+      "summary": "资产列表",
+      "inputSchemaHash": "acfc9b87b15fabf3762bad318b7203ec33a97f835c8e55df7048bfca03c65c2e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "asset_reference_create",
+      "actionName": "asset.reference.create",
+      "version": 1,
+      "label": "添加资产参考图",
+      "summary": "添加资产参考图",
+      "inputSchemaHash": "e5e7bf0fabc611a80382bf513227a7a0ce2e72849b815e4410687f1af7f5913d",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "asset_reference_delete",
+      "actionName": "asset.reference.delete",
+      "version": 1,
+      "label": "移除资产参考图",
+      "summary": "移除资产参考图",
+      "inputSchemaHash": "0b5c385263641f3a3c831c65e055c1bc985c9a12cbaf481b01e1049e0e45f200",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "asset_reference_list",
+      "actionName": "asset.reference.list",
+      "version": 1,
+      "label": "资产参考图版本",
+      "summary": "资产参考图版本",
+      "inputSchemaHash": "1519200883828a2884353c74639cf1cb2931d86ed90bc353275cf8f5e7164d2e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "asset_reference_set_primary",
+      "actionName": "asset.reference.set_primary",
+      "version": 1,
+      "label": "设为资产主图",
+      "summary": "设为资产主图",
+      "inputSchemaHash": "007b57b56694a9535ad03eca7e18656549db58c850ed96bf08232d4958a8fe5f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "asset_revise_prompt",
+      "actionName": "asset.revise_prompt",
+      "version": 1,
+      "label": "修订资产提示词",
+      "summary": "修订资产提示词",
+      "inputSchemaHash": "fa834c7eeb48aad021c1a273367ca33b9fee93178fecf499ff89d97377880d48",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "asset_update",
+      "actionName": "asset.update",
+      "version": 1,
+      "label": "更新资产",
+      "summary": "更新资产",
+      "inputSchemaHash": "aea2f4950a5991480c806e6727b928f7ce81f94803872e5a9364f99ae88588fc",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "character_voice_create",
+      "actionName": "character_voice.create",
+      "version": 1,
+      "label": "创建角色声音",
+      "summary": "创建角色声音",
+      "inputSchemaHash": "816f32f592a839e81ac435e8cf1e9ddf312db00cab8382236b9e9366846a6e4d",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "character_voice_delete",
+      "actionName": "character_voice.delete",
+      "version": 1,
+      "label": "删除角色声音",
+      "summary": "删除角色声音",
+      "inputSchemaHash": "1e804211d5a0bee0e317880f7a7b04738fd20abf4610b6d193fff460fdd2b176",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "character_voice_update",
+      "actionName": "character_voice.update",
+      "version": 1,
+      "label": "修改角色声音",
+      "summary": "修改角色声音",
+      "inputSchemaHash": "a77e0422b71d2793508b32d7b60c9d6cf626c7a508d9fadd05aff3ba6fbc0783",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_product_get",
+      "actionName": "commerce.product.get",
+      "version": 1,
+      "label": "读取商品配置",
+      "summary": "读取商品配置",
+      "inputSchemaHash": "fc543253e602dec2c77a5fded6c8f169c40a134ee41e72c8e50d67396ff29cbe",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_product_rebuild",
+      "actionName": "commerce.product.rebuild",
+      "version": 1,
+      "label": "确认商品换版",
+      "summary": "确认商品换版",
+      "inputSchemaHash": "6c519432ed188a509f02fcdfda54c03c01514063039753fa440b9eeeef79ed8d",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_product_rebuild_impact",
+      "actionName": "commerce.product.rebuild_impact",
+      "version": 1,
+      "label": "商品换版影响",
+      "summary": "商品换版影响",
+      "inputSchemaHash": "b55cdeca6c1a87c9522110f0731ee55a3bcaaa04eb64df83efe386d2caaada87",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_product_reference_archive",
+      "actionName": "commerce.product.reference.archive",
+      "version": 1,
+      "label": "归档商品参考图",
+      "summary": "归档商品参考图",
+      "inputSchemaHash": "c08ec034052e835b9644d691e5e92071b94275e5311ae3c7dd16baf99b44f75a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_product_reference_set_primary",
+      "actionName": "commerce.product.reference.set_primary",
+      "version": 1,
+      "label": "设为商品主图",
+      "summary": "设为商品主图",
+      "inputSchemaHash": "c08ec034052e835b9644d691e5e92071b94275e5311ae3c7dd16baf99b44f75a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_product_reference_update",
+      "actionName": "commerce.product.reference.update",
+      "version": 1,
+      "label": "修改商品参考图",
+      "summary": "修改商品参考图",
+      "inputSchemaHash": "631d3176bc1329cf6611dc24ab490df290893f746a3dee677365be54867d2078",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_product_references_list",
+      "actionName": "commerce.product.references.list",
+      "version": 1,
+      "label": "商品参考图",
+      "summary": "商品参考图",
+      "inputSchemaHash": "5a70bc17620aa478a466ea04bb225eed45d8cce9f768ec109727062c9ef11000",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_product_update",
+      "actionName": "commerce.product.update",
+      "version": 1,
+      "label": "修改商品配置",
+      "summary": "修改商品配置",
+      "inputSchemaHash": "81f9fb37039b1d2c9ae011e4e136692290df24bb731d831da9441626dcc091ca",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_product_version_create",
+      "actionName": "commerce.product.version.create",
+      "version": 1,
+      "label": "创建商品版本",
+      "summary": "创建商品版本",
+      "inputSchemaHash": "d6f484e582b4e0d3ba896d1f67f0431b75967359745d49a6f937af99a5c5d72c",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_product_versions_list",
+      "actionName": "commerce.product.versions.list",
+      "version": 1,
+      "label": "商品版本",
+      "summary": "商品版本",
+      "inputSchemaHash": "fc543253e602dec2c77a5fded6c8f169c40a134ee41e72c8e50d67396ff29cbe",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_project_read_summary",
+      "actionName": "commerce.project.read_summary",
+      "version": 1,
+      "label": "带货项目摘要",
+      "summary": "带货项目摘要",
+      "inputSchemaHash": "fc543253e602dec2c77a5fded6c8f169c40a134ee41e72c8e50d67396ff29cbe",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_script_archive",
+      "actionName": "commerce.script.archive",
+      "version": 1,
+      "label": "归档广告脚本",
+      "summary": "归档广告脚本",
+      "inputSchemaHash": "096ea3f9f2ad16e082ff7bf0975e510a9ad27c6176db101c04c8d5cfb6675dc5",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_create",
+      "actionName": "commerce.script.create",
+      "version": 1,
+      "label": "新增广告脚本",
+      "summary": "新增广告脚本",
+      "inputSchemaHash": "73ab9006f77bde719d072294a2f80e23abe8393402d09b72b6f5dc213b490913",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_create_language_variant",
+      "actionName": "commerce.script.create_language_variant",
+      "version": 1,
+      "label": "创建多语言脚本",
+      "summary": "创建多语言脚本",
+      "inputSchemaHash": "d8e79e97fa5aa7cfa73a6031ee4db218c97a12c541613ecf84ba1b1b5f4162aa",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_defaults_update",
+      "actionName": "commerce.script.defaults.update",
+      "version": 1,
+      "label": "修改广告脚本默认值",
+      "summary": "修改广告脚本默认值",
+      "inputSchemaHash": "a68bb26d3277e86db5bfbd6ac4bebf3c79e16b56c019cd8825a3e33fd0e53c2f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_derivation_get",
+      "actionName": "commerce.script.derivation.get",
+      "version": 1,
+      "label": "查看脚本裂变",
+      "summary": "查看脚本裂变",
+      "inputSchemaHash": "acdc919e21ae5af0ff3c863425de10419c4594c94d36ddff29c926107eb14f2f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_script_derive_batch",
+      "actionName": "commerce.script.derive.batch",
+      "version": 1,
+      "label": "创建脚本裂变",
+      "summary": "创建脚本裂变",
+      "inputSchemaHash": "ca88caf55a21b064e9f59fd44563333d11c4d28d9ab51aafcefc53a53ea15bbe",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write",
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_derive_cancel",
+      "actionName": "commerce.script.derive.cancel",
+      "version": 1,
+      "label": "取消脚本裂变",
+      "summary": "取消脚本裂变",
+      "inputSchemaHash": "65778841f22364d488b2b7097e3d4b347939ddb0a578e0d4851e9f339c47a565",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.cancel"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_derive_preview",
+      "actionName": "commerce.script.derive.preview",
+      "version": 1,
+      "label": "预览脚本裂变",
+      "summary": "预览脚本裂变",
+      "inputSchemaHash": "8ae4657e0387f7a9a83b1b57e7edc0709c77b395972949fc558b3dcf2666674a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_derive_retry_failed",
+      "actionName": "commerce.script.derive.retry_failed",
+      "version": 1,
+      "label": "重试失败变体",
+      "summary": "重试失败变体",
+      "inputSchemaHash": "cb641631be102041b69e37a977f0e45c780065d11295fe53183057f4615a04a4",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write",
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_duplicate",
+      "actionName": "commerce.script.duplicate",
+      "version": 1,
+      "label": "复制广告脚本",
+      "summary": "复制广告脚本",
+      "inputSchemaHash": "c4ec3533c857e7740f550b13be6ced81c0272684b96130f780b6bb75ab0f5d65",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_get",
+      "actionName": "commerce.script.get",
+      "version": 1,
+      "label": "读取广告脚本",
+      "summary": "读取广告脚本",
+      "inputSchemaHash": "68b0bfa401381ae803421656b3bbb5ca6927798bd780fb6253c40df084ec2cff",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_script_list",
+      "actionName": "commerce.script.list",
+      "version": 1,
+      "label": "列出广告脚本",
+      "summary": "列出广告脚本",
+      "inputSchemaHash": "adbd103dcaf8f5f1f1a3efb2029a911fe0ea4e05cd30f71308739b904705391c",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_script_rebuild",
+      "actionName": "commerce.script.rebuild",
+      "version": 1,
+      "label": "确认广告脚本换代",
+      "summary": "确认广告脚本换代",
+      "inputSchemaHash": "00994c10b7170b796e682c5a361e8237c4c1c54e91922b17c33a94a8ce651a37",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_rebuild_impact",
+      "actionName": "commerce.script.rebuild_impact",
+      "version": 1,
+      "label": "广告脚本换代影响",
+      "summary": "广告脚本换代影响",
+      "inputSchemaHash": "c1c4a6a9e9719d0473bb728012fd452b1c48f283e0c0c760073190450be883ff",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_script_reference_archive",
+      "actionName": "commerce.script.reference.archive",
+      "version": 1,
+      "label": "移除广告脚本参考图",
+      "summary": "移除广告脚本参考图",
+      "inputSchemaHash": "a6eeaa387d4a64fd5f197f77910acced70194840fb13104090c439ba9b124a47",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_reorder",
+      "actionName": "commerce.script.reorder",
+      "version": 1,
+      "label": "调整广告脚本顺序",
+      "summary": "调整广告脚本顺序",
+      "inputSchemaHash": "2154875345d4963f5191ff388587f781badf8ab9cde103a987166502c5d3cab4",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_revise",
+      "actionName": "commerce.script.revise",
+      "version": 1,
+      "label": "按要求改写广告脚本",
+      "summary": "按要求改写广告脚本",
+      "inputSchemaHash": "4048e61f507aa005970acb6b62495ff7a190d9207df63549b0eecf707147765b",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_script_update",
+      "actionName": "commerce.script.update",
+      "version": 1,
+      "label": "修改广告脚本",
+      "summary": "修改广告脚本",
+      "inputSchemaHash": "5230b26144e5b06a233c1034090e28e795de7fe02c28102dda7c23cf42645172",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_video_cancel",
+      "actionName": "commerce.video.cancel",
+      "version": 1,
+      "label": "取消视频任务",
+      "summary": "取消视频任务",
+      "inputSchemaHash": "c6c09d853b87faf99f0ce93ff754122cace3d653e567e5799d15f858d64431e4",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.cancel"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_video_generate",
+      "actionName": "commerce.video.generate",
+      "version": 1,
+      "label": "生成带货视频",
+      "summary": "生成带货视频",
+      "inputSchemaHash": "0f4791b134063dbccaf91d6d550cceab60e5a721d16b05ea0ea644b88c7c300f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "commerce_video_get",
+      "actionName": "commerce.video.get",
+      "version": 1,
+      "label": "查看视频任务",
+      "summary": "查看视频任务",
+      "inputSchemaHash": "d0e21f2446a4227a96a38ad63ab54c8366b94003d49e03013cc14ad352709b89",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_video_list",
+      "actionName": "commerce.video.list",
+      "version": 1,
+      "label": "视频任务列表",
+      "summary": "视频任务列表",
+      "inputSchemaHash": "3c91fd6fb05bd23b416752c1b864b8e18afae19eda1ad7320a75d20ed01ad4e2",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "commerce_video_options",
+      "actionName": "commerce.video.options",
+      "version": 1,
+      "label": "视频生成选项",
+      "summary": "视频生成选项",
+      "inputSchemaHash": "68b0bfa401381ae803421656b3bbb5ca6927798bd780fb6253c40df084ec2cff",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "commerce_video"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "content_describe",
+      "actionName": "content.describe",
+      "version": 1,
+      "label": "内容信息",
+      "summary": "读取长文本内容的长度、版本、格式和 SHA-256",
+      "inputSchemaHash": "6603175727452cd4f3edd68e23a25ba2f7dce007d836943597140528082bfde5",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "content_read",
+      "actionName": "content.read",
+      "version": 1,
+      "label": "分块读取内容",
+      "summary": "按 UTF-8 边界分页读取原文、章节、剧本分集或带货脚本",
+      "inputSchemaHash": "116eb2987a82e4f73d2bc9b0ed3f8aafd71594f615b912f225dea25912c5ff36",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "content_write_abort",
+      "actionName": "content.write.abort",
+      "version": 1,
+      "label": "放弃暂存内容",
+      "summary": "幂等终止未提交的内容暂存上传",
+      "inputSchemaHash": "97b95eca615fc94e46e6cc031d73a21b16118afd4d960518f351e851836ae35b",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "content_write_begin",
+      "actionName": "content.write.begin",
+      "version": 1,
+      "label": "开始暂存内容",
+      "summary": "校验目标 revision 并创建私有长文本暂存上传",
+      "inputSchemaHash": "de75e98ca75fea83d1cd1e6227a729fff3677b83549db64a9ea858585139c95f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "content_write_chunk",
+      "actionName": "content.write.chunk",
+      "version": 1,
+      "label": "写入内容分块",
+      "summary": "按 chunk index 和 SHA-256 幂等写入私有暂存区",
+      "inputSchemaHash": "519c470b2db5e058770a4e6299c4e7a87c02b723d7b1cd22056fddc33e8a50af",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "content_write_commit",
+      "actionName": "content.write.commit",
+      "version": 1,
+      "label": "提交暂存内容",
+      "summary": "校验完整内容 hash 和 revision 后原子更新 canonical 内容",
+      "inputSchemaHash": "97b95eca615fc94e46e6cc031d73a21b16118afd4d960518f351e851836ae35b",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "control_command_cancel",
+      "actionName": "control.command.cancel",
+      "version": 1,
+      "label": "取消命令",
+      "summary": "请求取消命令及其仍在活动的子工作流",
+      "inputSchemaHash": "7c1f72aae161bbaf4666f1235da5fe34664605c3c4e3f4482c4535c162de014c",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "control_command_events",
+      "actionName": "control.command.events",
+      "version": 1,
+      "label": "命令事件",
+      "summary": "按事件游标读取命令增量动态",
+      "inputSchemaHash": "2bdfdd8bcf8130b2238e641f321b5ca0cdca553bf24625c617e25c4b143c23d7",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "control_command_get",
+      "actionName": "control.command.get",
+      "version": 1,
+      "label": "命令详情",
+      "summary": "读取命令、item、工作流和待确认问题",
+      "inputSchemaHash": "f695caba178429da3df5bd3094597e57d3794957653c84c5173023317feed20e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "control_command_list",
+      "actionName": "control.command.list",
+      "version": 1,
+      "label": "命令列表",
+      "summary": "分页查找活动命令和最近命令",
+      "inputSchemaHash": "a7c03466cb935d54bcd32c2828c56fe166984e30f60a2c230023d54c375a4739",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "control_command_resolve",
+      "actionName": "control.command.resolve",
+      "version": 1,
+      "label": "回答命令问题",
+      "summary": "回答待确认问题并恢复命令执行",
+      "inputSchemaHash": "4334d173fdadf0925a5f53f1c6ac9867e725fe81ebf390e76294c9c6da5dee98",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "control_command_retry",
+      "actionName": "control.command.retry",
+      "version": 1,
+      "label": "重试失败项",
+      "summary": "按冻结失败项创建独立重试命令",
+      "inputSchemaHash": "2c3f6e018f6139dead621013a6df6408e4e5616dc51e721d125a69a72f8c3021",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "control_command_wait",
+      "actionName": "control.command.wait",
+      "version": 1,
+      "label": "等待命令",
+      "summary": "短等待命令状态或新增事件，最长 45 秒",
+      "inputSchemaHash": "c63a9ece3add8b2b4d05aff927437db8d892b27acaecd629437e77875956cbb6",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "export_create",
+      "actionName": "export.create",
+      "version": 1,
+      "label": "创建项目导出",
+      "summary": "创建项目导出",
+      "inputSchemaHash": "ff711093d751f3e73c4a2c7d7722d0848fa71f6da472ee29abc919b01a65abc6",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "export_download_url",
+      "actionName": "export.download_url",
+      "version": 1,
+      "label": "导出下载链接",
+      "summary": "导出下载链接",
+      "inputSchemaHash": "7caa9e4ab9c695ecddeba1bb8fe8dccee38e27b6355a5f9db9a86fe3229a92ee",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "final_video_activate",
+      "actionName": "final_video.activate",
+      "version": 1,
+      "label": "激活成片",
+      "summary": "激活成片",
+      "inputSchemaHash": "433c1f283a39718ac5f78aedd72c66c775275aedd7af8b7d54df1d83584465f3",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "final_video_delete",
+      "actionName": "final_video.delete",
+      "version": 1,
+      "label": "删除成片版本",
+      "summary": "删除成片版本",
+      "inputSchemaHash": "22682fb86425633f3d3fdbd41a79e6efbe3d1e2f6b258ac9b4af0f5a6f718db9",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "final_video_download_url",
+      "actionName": "final_video.download_url",
+      "version": 1,
+      "label": "成片下载链接",
+      "summary": "成片下载链接",
+      "inputSchemaHash": "4379c0bcb51391c1e5719e3ec3a78ddf7bd2abcba0cbdf9ec3d800eb4d59cb15",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "artifact.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "identity_me",
+      "actionName": "identity.me",
+      "version": 1,
+      "label": "当前用户",
+      "summary": "读取当前用户、控制密钥元数据和可访问组织",
+      "inputSchemaHash": "cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "novel_event_review",
+      "actionName": "novel_event.review",
+      "version": 1,
+      "label": "审核小说事件",
+      "summary": "审核小说事件",
+      "inputSchemaHash": "988be5e8df38950027365366647289d7876d3b03c9e905d1f74619331023e206",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "novel_event.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "novel_event_update",
+      "actionName": "novel_event.update",
+      "version": 1,
+      "label": "修改小说事件",
+      "summary": "修改小说事件",
+      "inputSchemaHash": "e5c2ed1d16e6863f3c9e0648066f8a3cd1aaf90c96a9ba4e6b629cb884a43ad9",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "novel_event.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "organization_list",
+      "actionName": "organization.list",
+      "version": 1,
+      "label": "组织列表",
+      "summary": "分页列出当前用户可访问的组织",
+      "inputSchemaHash": "2c9f70c536b21bc47826c228db1f90adf95a478b85c7abb7353407887d8f4cd3",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_capabilities",
+      "actionName": "project.capabilities",
+      "version": 1,
+      "label": "项目能力",
+      "summary": "按当前用户权限和项目类型列出可执行动作",
+      "inputSchemaHash": "738935371a254994df5b8de1014f46f929cb13ed1bd441c1835f00b0b1885662",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_clear_production_content",
+      "actionName": "project.clear_production_content",
+      "version": 1,
+      "label": "清空生产内容",
+      "summary": "清空生产内容",
+      "inputSchemaHash": "46778472f7701ba6d26773b880463d4db81f98d037824845456ba61a7bde2816",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.delete"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "project_context",
+      "actionName": "project.context",
+      "version": 1,
+      "label": "项目上下文",
+      "summary": "读取项目、生产状态和最近工作流上下文",
+      "inputSchemaHash": "738935371a254994df5b8de1014f46f929cb13ed1bd441c1835f00b0b1885662",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_delete",
+      "actionName": "project.delete",
+      "version": 1,
+      "label": "删除项目",
+      "summary": "删除项目",
+      "inputSchemaHash": "fbd5fbfc5ea3c9a330b99c2fe0e09f881f647f695f003636c29ed05169d04f51",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.delete"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "project_delete_retry",
+      "actionName": "project.delete.retry",
+      "version": 1,
+      "label": "重试项目删除",
+      "summary": "重试项目删除",
+      "inputSchemaHash": "f39cc88da4cb835aa9b23702378d7bb0e4f970847b12228324fdccdec13fe7f4",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.delete"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "project_deletion_impact",
+      "actionName": "project.deletion_impact",
+      "version": 1,
+      "label": "项目删除影响",
+      "summary": "项目删除影响",
+      "inputSchemaHash": "fc543253e602dec2c77a5fded6c8f169c40a134ee41e72c8e50d67396ff29cbe",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.delete"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_get",
+      "actionName": "project.get",
+      "version": 1,
+      "label": "项目详情",
+      "summary": "读取项目基本信息和当前生产绑定",
+      "inputSchemaHash": "738935371a254994df5b8de1014f46f929cb13ed1bd441c1835f00b0b1885662",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_list",
+      "actionName": "project.list",
+      "version": 1,
+      "label": "项目列表",
+      "summary": "分页列出组织或工作区内可访问的项目",
+      "inputSchemaHash": "1e057708a3bf6154be172aa9a7241568b31d16a4a92475eb432432c76d3adb47",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_production_rebuild",
+      "actionName": "project.production_rebuild",
+      "version": 1,
+      "label": "确认生产配置换代",
+      "summary": "确认生产配置换代",
+      "inputSchemaHash": "de602828df2a80396fb8fafc402e45a4887442124e7e42e6c634311ca8c76de0",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.video_production.rebuild"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "project_production_rebuild_impact",
+      "actionName": "project.production_rebuild_impact",
+      "version": 1,
+      "label": "生产配置换代影响",
+      "summary": "生产配置换代影响",
+      "inputSchemaHash": "e6328eccb92da4a7f3fc64ccf620fb13fabc7dad73f7ef9df9d67094fafda9db",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.video_production.rebuild"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_production_rebuild_retry_failed",
+      "actionName": "project.production_rebuild.retry_failed",
+      "version": 1,
+      "label": "重试换代失败分集",
+      "summary": "重试换代失败分集",
+      "inputSchemaHash": "423f48d875de66f28b0d7f5dabf6e614285d2d0a00727166c95af2b27ad208bb",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.video_production.rebuild"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "project_production_status",
+      "actionName": "project.production_status",
+      "version": 1,
+      "label": "生产状态",
+      "summary": "读取项目当前生产阶段和完成度",
+      "inputSchemaHash": "738935371a254994df5b8de1014f46f929cb13ed1bd441c1835f00b0b1885662",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_read_summary",
+      "actionName": "project.read_summary",
+      "version": 1,
+      "label": "项目摘要",
+      "summary": "项目摘要",
+      "inputSchemaHash": "fc543253e602dec2c77a5fded6c8f169c40a134ee41e72c8e50d67396ff29cbe",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_task_activity",
+      "actionName": "project.task_activity",
+      "version": 1,
+      "label": "任务活动",
+      "summary": "分页读取项目控制命令和最近工作流",
+      "inputSchemaHash": "5804e1f3554a95cd9b40fff8e64499e1672b1cc16ab65de5661bce1773895b41",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read",
+        "workflow.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "project_update",
+      "actionName": "project.update",
+      "version": 1,
+      "label": "修改项目",
+      "summary": "修改项目",
+      "inputSchemaHash": "d3bf8e07882477a4c62f3fb4c361f4aacbd7a24e309416f6417146c552072c3a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "prompt_activate_version",
+      "actionName": "prompt.activate_version",
+      "version": 1,
+      "label": "激活提示词版本",
+      "summary": "激活提示词版本",
+      "inputSchemaHash": "04b49c0f072b3cd30579c91de927b1bbe47b5416fc6953273d2361c53c1bd354",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "prompt.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "prompt_create_version",
+      "actionName": "prompt.create_version",
+      "version": 1,
+      "label": "创建提示词版本",
+      "summary": "创建提示词版本",
+      "inputSchemaHash": "f94901bb8903e84f05dfeab039d4025096fc7f34dd88d7da424f2fdd0163ad08",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "prompt.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "prompt_render_test",
+      "actionName": "prompt.render_test",
+      "version": 1,
+      "label": "提示词渲染测试",
+      "summary": "提示词渲染测试",
+      "inputSchemaHash": "bcb02b713d7304f8e09a21d3a3e15428fc8f0c2cc863c8b61de1dfaeea4eba2b",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "prompt.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "provider_attest_video_capability",
+      "actionName": "provider.attest_video_capability",
+      "version": 1,
+      "label": "审批视频模型能力",
+      "summary": "审批视频模型能力",
+      "inputSchemaHash": "0479795e44f2f32a1ee70d39a08c8e41f97c7b67173dcdee26ebc3bcbdcf5e72",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "provider_install_catalog_preset",
+      "actionName": "provider.install_catalog_preset",
+      "version": 1,
+      "label": "安装渠道预设",
+      "summary": "安装渠道预设",
+      "inputSchemaHash": "b5400a8dcdb0baed765bc7bea36326607a06b3c175410f558bc05af2a0d3af54",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "provider_list_status",
+      "actionName": "provider.list_status",
+      "version": 1,
+      "label": "供应商状态",
+      "summary": "供应商状态",
+      "inputSchemaHash": "fc543253e602dec2c77a5fded6c8f169c40a134ee41e72c8e50d67396ff29cbe",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "provider.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "provider_test_model",
+      "actionName": "provider.test_model",
+      "version": 1,
+      "label": "测试模型",
+      "summary": "测试模型",
+      "inputSchemaHash": "e5bca02854d79a9b095d8a46ebe5f8007f3c1cfd7962e6e8dbdf20dea48e243f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "provider_update_account",
+      "actionName": "provider.update_account",
+      "version": 1,
+      "label": "更新供应商",
+      "summary": "更新供应商",
+      "inputSchemaHash": "1b3adf2bddb38116d576fbb7ca9687b07d8213c4a6c2677fcef50fc8019472c2",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "provider_update_model",
+      "actionName": "provider.update_model",
+      "version": 1,
+      "label": "更新模型",
+      "summary": "更新模型",
+      "inputSchemaHash": "3979956c6fdf4889bf5402191db54bd22f141f1352b9923f825c1a03773cf33d",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "provider_verify_video_capability",
+      "actionName": "provider.verify_video_capability",
+      "version": 1,
+      "label": "验证视频模型能力",
+      "summary": "验证视频模型能力",
+      "inputSchemaHash": "1ed8569132c84ebdce8398681fcdc362e5f2462b4bb32d4cf9642289152e3e28",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "provider.manage"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "review_apply_fix",
+      "actionName": "review.apply_fix",
+      "version": 1,
+      "label": "应用修复",
+      "summary": "应用修复",
+      "inputSchemaHash": "1dfa53071999f5c01bac463f0b9e76195a77e27d9edb2f83fbc2be6976f4ee54",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "review_dismiss_fix",
+      "actionName": "review.dismiss_fix",
+      "version": 1,
+      "label": "忽略修复",
+      "summary": "忽略修复",
+      "inputSchemaHash": "df50d238e685aef3657e0dea51e6ba5ec96bf6c6b5b0422035986a6d4cf5697e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "review_generate_fix",
+      "actionName": "review.generate_fix",
+      "version": 1,
+      "label": "生成修复建议",
+      "summary": "生成修复建议",
+      "inputSchemaHash": "bb1ea19871755c58a66416db29690b0cab8981735a4cc836116182d46e5df187",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "review_ignore_item",
+      "actionName": "review.ignore_item",
+      "version": 1,
+      "label": "忽略审阅项",
+      "summary": "忽略审阅项",
+      "inputSchemaHash": "80f59a5a36860891f7658e8af461bbdc3be755ea85b338c3ca09ade5b84220bf",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "review_list_items",
+      "actionName": "review.list_items",
+      "version": 1,
+      "label": "审阅问题",
+      "summary": "审阅问题",
+      "inputSchemaHash": "72117484ac8be0d2adfe6fe1a6d71e22d4d7f131633ea4edf3859cb09474ac53",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "review_reopen_item",
+      "actionName": "review.reopen_item",
+      "version": 1,
+      "label": "重新打开审阅项",
+      "summary": "重新打开审阅项",
+      "inputSchemaHash": "87d5bcd62f4c4791ae6f0304c8f950dd4b8a4e47343faad243586e8f780f63f2",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "review_resolve_item",
+      "actionName": "review.resolve_item",
+      "version": 1,
+      "label": "解决审阅项",
+      "summary": "解决审阅项",
+      "inputSchemaHash": "041f0326ea062f2e0f13b5b0f9729414979915563e5d4cbfbbc09354918cc38e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "review_run",
+      "actionName": "review.run",
+      "version": 1,
+      "label": "运行审阅",
+      "summary": "运行审阅",
+      "inputSchemaHash": "4d11476382d35d87dea0d10c411b02d56c785dde4c6e530d3593db381ef3d18f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_activate_version",
+      "actionName": "script.activate_version",
+      "version": 1,
+      "label": "激活剧本版本",
+      "summary": "激活剧本版本",
+      "inputSchemaHash": "e960c414aed6347b7802a7fc7b3f7df6ae8684114a726bcd42c2ab5e3dabccfb",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_archive_version",
+      "actionName": "script.archive_version",
+      "version": 1,
+      "label": "归档剧本版本",
+      "summary": "归档剧本版本",
+      "inputSchemaHash": "89057291e8e2663d3f31a307a956503080b02f2693b82dcfe5af349ce2022e5b",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_create",
+      "actionName": "script.create",
+      "version": 1,
+      "label": "创建剧本",
+      "summary": "创建剧本",
+      "inputSchemaHash": "cb94980df17274276d38d76588f50b01a52046900067029d73b47640fdd3fe91",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_create_version",
+      "actionName": "script.create_version",
+      "version": 1,
+      "label": "创建剧本版本",
+      "summary": "创建剧本版本",
+      "inputSchemaHash": "e730ec9b169c44e7cc1b6961de5d266228c2414df413650aae2bd3c27d9de23f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_delete",
+      "actionName": "script.delete",
+      "version": 1,
+      "label": "删除剧本",
+      "summary": "删除剧本",
+      "inputSchemaHash": "d9321571241a505e8aa742f61c38d97be6b7ee7db0971111a1256d560533d84a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_generate_from_source",
+      "actionName": "script.generate_from_source",
+      "version": 1,
+      "label": "生成剧本",
+      "summary": "生成剧本",
+      "inputSchemaHash": "f786b00eea88239b628690b3a9f1ac50b89cddc8521de5f4cdd5bc8878f1a511",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_get",
+      "actionName": "script.get",
+      "version": 1,
+      "label": "读取剧本",
+      "summary": "读取剧本",
+      "inputSchemaHash": "a650c8a93e65ae0f34b35c824ebd896e5f22202cbc81b2f94bf52f411ac2fa31",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "script_list",
+      "actionName": "script.list",
+      "version": 1,
+      "label": "剧本列表",
+      "summary": "剧本列表",
+      "inputSchemaHash": "cff3897ea9f99e2c0f721f149f0036adb3ec937e7b986583810f3a29a108ff85",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "script_rewrite",
+      "actionName": "script.rewrite",
+      "version": 1,
+      "label": "改写剧本",
+      "summary": "改写剧本",
+      "inputSchemaHash": "c130d699d8cb09e781d01570358f3220eb5fc6a5ee128d6d68900d8afd8e3bbf",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_rewrite_preview",
+      "actionName": "script.rewrite_preview",
+      "version": 1,
+      "label": "剧本改写预览",
+      "summary": "剧本改写预览",
+      "inputSchemaHash": "a252a5e175e7c8605cf756b169dbbca249695a08b8cff00ff7363b91a9ce3a4c",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_scene_delete",
+      "actionName": "script_scene.delete",
+      "version": 1,
+      "label": "删除剧本场景",
+      "summary": "删除剧本场景",
+      "inputSchemaHash": "881add0657efd5ddac380190c01deb78d46bafdbe7e42aaec8fb817522fa316a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_scene_review",
+      "actionName": "script_scene.review",
+      "version": 1,
+      "label": "审核剧本场景",
+      "summary": "审核剧本场景",
+      "inputSchemaHash": "c7fe14d2e2ad3830605ce8717501f98ac1fa7cdcb66dfd00e1ffd3438a3b2e9c",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_scene_update",
+      "actionName": "script_scene.update",
+      "version": 1,
+      "label": "修改剧本场景",
+      "summary": "修改剧本场景",
+      "inputSchemaHash": "34e02bc600e8d9d8c001dbbb4cf8e9edb4206e96a3e33c3eaeda2aeee9a07ee6",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_update",
+      "actionName": "script.update",
+      "version": 1,
+      "label": "修改剧本信息",
+      "summary": "修改剧本信息",
+      "inputSchemaHash": "90f83512f10a17eaf7aa896839944081a22ec025fcbd93d7c7acd02aa0f082d8",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "script_update_episode",
+      "actionName": "script.update_episode",
+      "version": 1,
+      "label": "覆盖剧本分集",
+      "summary": "覆盖剧本分集",
+      "inputSchemaHash": "5b941def5a3ef219ece8c339c50ca6f48459e5b72ce0e1d62ef58e1f7033f68f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "script.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_asset_generate_derived_image",
+      "actionName": "shot_asset.generate_derived_image",
+      "version": 1,
+      "label": "生成镜头衍生资产图",
+      "summary": "生成镜头衍生资产图",
+      "inputSchemaHash": "ad96bc076288506754c738af555204044a2302289e976aaeebbaa06310800e6b",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_asset_list_requirements",
+      "actionName": "shot_asset.list_requirements",
+      "version": 1,
+      "label": "镜头资产需求",
+      "summary": "镜头资产需求",
+      "inputSchemaHash": "b1ec30f914803e4dea23eb699b6e7a5090b5924fd7cc3cd5dfb41bbaa1a00fe1",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "shot_asset_review_requirements",
+      "actionName": "shot_asset.review_requirements",
+      "version": 1,
+      "label": "审核镜头资产需求",
+      "summary": "审核镜头资产需求",
+      "inputSchemaHash": "ba07b4345c310b177b2124a18fa4826e4856c0dde5d0dcb7824990d3c6c279c0",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_asset_skip_requirement",
+      "actionName": "shot_asset.skip_requirement",
+      "version": 1,
+      "label": "跳过镜头资产需求",
+      "summary": "跳过镜头资产需求",
+      "inputSchemaHash": "4dd18d9bdb088e1d692bd8fd72de037fa05a25b752af31e83abc98c66648c9e9",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_asset_update_requirement",
+      "actionName": "shot_asset.update_requirement",
+      "version": 1,
+      "label": "修正镜头资产需求",
+      "summary": "修正镜头资产需求",
+      "inputSchemaHash": "67a01f63c37241290e3c12613981917def64cc38ffb2c9ff14b01b44e45490d9",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "asset.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_cancel_running_videos",
+      "actionName": "shot.cancel_running_videos",
+      "version": 1,
+      "label": "取消镜头视频",
+      "summary": "取消镜头视频",
+      "inputSchemaHash": "0254df0563d413b392717b3bfb2dbc6211883f6dc9d9af658ad7272701cdea44",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.cancel"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_generate_image_prompts",
+      "actionName": "shot.generate_image_prompts",
+      "version": 1,
+      "label": "生成图片提示词",
+      "summary": "生成图片提示词",
+      "inputSchemaHash": "25c97008c7d88dbfa987f9da33ba456e909acf5448d388c2cb02896c258b91ff",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_generate_missing_images",
+      "actionName": "shot.generate_missing_images",
+      "version": 1,
+      "label": "生成缺失图片",
+      "summary": "生成缺失图片",
+      "inputSchemaHash": "e1b5561490178c00b89109fdaf58047025d4f5d9d6d977678317397e0be6a954",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_generate_missing_videos",
+      "actionName": "shot.generate_missing_videos",
+      "version": 1,
+      "label": "生成缺失视频",
+      "summary": "生成缺失视频",
+      "inputSchemaHash": "0637050211fd16e5b4c7f2370b1c4e16040631f9a54300948ed58e40608876a3",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_generate_video_prompts",
+      "actionName": "shot.generate_video_prompts",
+      "version": 1,
+      "label": "生成视频提示词",
+      "summary": "生成视频提示词",
+      "inputSchemaHash": "e5b9dfa6c394b4a2710616cdfcfaa628676dd0b2770b80b555c45682aff8a6cf",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_render_plan_create",
+      "actionName": "shot.render_plan.create",
+      "version": 1,
+      "label": "创建视频执行计划",
+      "summary": "创建视频执行计划",
+      "inputSchemaHash": "d19e8bde626b85cefeae9876e019e5b426144607eb1c3619be07bd9187a88d25",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_render_plan_review_audio",
+      "actionName": "shot.render_plan.review_audio",
+      "version": 1,
+      "label": "运行原生音频审阅",
+      "summary": "运行原生音频审阅",
+      "inputSchemaHash": "fdaed17023167f99f1cbe00e5df4962dd5ef25120122b23d12d51e78ca05b0e0",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_render_plan_verify_audio",
+      "actionName": "shot.render_plan.verify_audio",
+      "version": 1,
+      "label": "核验镜头音频",
+      "summary": "核验镜头音频",
+      "inputSchemaHash": "799eb351f6fcda13e055e99380742ee4ceac6098df6f0cfa012af800f3fd3a76",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_status",
+      "actionName": "shot.status",
+      "version": 1,
+      "label": "镜头状态",
+      "summary": "镜头状态",
+      "inputSchemaHash": "a9b80d20675567f35d81c1e7d7ada2d22940321a246c887de37fd6e1e8ae4ceb",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "shot_video_prompt_approve",
+      "actionName": "shot.video_prompt.approve",
+      "version": 1,
+      "label": "批准视频提示词",
+      "summary": "批准视频提示词",
+      "inputSchemaHash": "d127941a1facc51ee31df7337ccd87a73d2d11c14b1166c7c64ac8cc58f394a3",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_video_prompt_create_revision",
+      "actionName": "shot.video_prompt.create_revision",
+      "version": 1,
+      "label": "编辑视频提示词",
+      "summary": "编辑视频提示词",
+      "inputSchemaHash": "3cce567b03c2604ff8fc1e378ef9e2e08c9b3a3ca50d00e050b138951400ff2d",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "shot_video_prompt_reject",
+      "actionName": "shot.video_prompt.reject",
+      "version": 1,
+      "label": "拒绝视频提示词",
+      "summary": "拒绝视频提示词",
+      "inputSchemaHash": "d127941a1facc51ee31df7337ccd87a73d2d11c14b1166c7c64ac8cc58f394a3",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "source_create",
+      "actionName": "source.create",
+      "version": 1,
+      "label": "创建项目内容",
+      "summary": "创建项目内容",
+      "inputSchemaHash": "b0c729a3f264d51407630e7f20e7fd0bb37687c967032b34bfed377aa58708f5",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "source.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "source_delete",
+      "actionName": "source.delete",
+      "version": 1,
+      "label": "删除原文",
+      "summary": "删除原文",
+      "inputSchemaHash": "32b2c610723af41e98c576da53d57753f9e52407d306be977f1c8f4f3ecffe25",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "source.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "source_delete_chapter",
+      "actionName": "source.delete_chapter",
+      "version": 1,
+      "label": "删除原文章节",
+      "summary": "删除原文章节",
+      "inputSchemaHash": "45a8749254e319ff1ad53420248c94fa88936bdeda67c3063ae77f973e19cc67",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "source.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "source_list",
+      "actionName": "source.list",
+      "version": 1,
+      "label": "原文列表",
+      "summary": "原文列表",
+      "inputSchemaHash": "e4aa30e0fcad13d92942de23bee108566f2fe193606104c6609a97449c507c95",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "source.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "source_list_chapters",
+      "actionName": "source.list_chapters",
+      "version": 1,
+      "label": "分集章节",
+      "summary": "分集章节",
+      "inputSchemaHash": "95480f82e15acd90d96b468f9fa4f7400b1c7a4cc3f3e421457f8ab969a5891e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "source.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "source_update",
+      "actionName": "source.update",
+      "version": 1,
+      "label": "覆盖原文",
+      "summary": "覆盖原文",
+      "inputSchemaHash": "7a91f33a6e1b77ecf5b1a64e1507008c39c5e33a972a6e372164f2e171edf1e5",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "source.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_activate_plan",
+      "actionName": "storyboard.activate_plan",
+      "version": 1,
+      "label": "激活分镜方案",
+      "summary": "激活分镜方案",
+      "inputSchemaHash": "7b6b72bfb76d7a86aa3f9afb9b4953eb0e256f13af01f5aa00c3aaaffcbc2eb6",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_approve_anchor",
+      "actionName": "storyboard.approve_anchor",
+      "version": 1,
+      "label": "批准镜头锚点",
+      "summary": "批准镜头锚点",
+      "inputSchemaHash": "6cbff97a833fdbb7f5a598245df8fa210f97eb58c86276fd63dae529190743cf",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_create_shot",
+      "actionName": "storyboard.create_shot",
+      "version": 1,
+      "label": "新增分镜镜头",
+      "summary": "新增分镜镜头",
+      "inputSchemaHash": "0e911f7db95984d2e725357785d0775b37773e5a532f0f09fc24b03da3d2120f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_delete_shot",
+      "actionName": "storyboard.delete_shot",
+      "version": 1,
+      "label": "删除分镜镜头",
+      "summary": "删除分镜镜头",
+      "inputSchemaHash": "ffb961b9d9249c41cc0b04fbfab6b08ab093eb137130bc77a28a190300c511b4",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_generate_anchor",
+      "actionName": "storyboard.generate_anchor",
+      "version": 1,
+      "label": "生成镜头锚点图",
+      "summary": "生成镜头锚点图",
+      "inputSchemaHash": "48037e07fb2a482f24963d862fc93f541659e495435ac602eef81d74b176ce16",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_list",
+      "actionName": "storyboard.list",
+      "version": 1,
+      "label": "分镜列表",
+      "summary": "分镜列表",
+      "inputSchemaHash": "3864cdcf5d42114c5af4eadb41ebe08fcebdb2455e57502e67e5f12827fc46ce",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "storyboard_merge_shots",
+      "actionName": "storyboard.merge_shots",
+      "version": 1,
+      "label": "合并分镜镜头",
+      "summary": "合并分镜镜头",
+      "inputSchemaHash": "5d806d9e3778097359eb7c7efe57b59fed419974ab42a6eb656050a5d617ca0f",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_reject_anchor",
+      "actionName": "storyboard.reject_anchor",
+      "version": 1,
+      "label": "拒绝镜头锚点",
+      "summary": "拒绝镜头锚点",
+      "inputSchemaHash": "6cbff97a833fdbb7f5a598245df8fa210f97eb58c86276fd63dae529190743cf",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_reorder",
+      "actionName": "storyboard.reorder",
+      "version": 1,
+      "label": "重排分镜",
+      "summary": "重排分镜",
+      "inputSchemaHash": "6c6c27366532bcbad09348f359563bd72eee38dba8dd007ce88c5f52a541a451",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_replan_shot_state",
+      "actionName": "storyboard.replan_shot_state",
+      "version": 1,
+      "label": "重算镜头状态",
+      "summary": "重算镜头状态",
+      "inputSchemaHash": "ea761155590d28d42eae61f47432148c9208082d6ae5bb243e56867d25cf1f00",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_review_shot",
+      "actionName": "storyboard.review_shot",
+      "version": 1,
+      "label": "审核镜头",
+      "summary": "审核镜头",
+      "inputSchemaHash": "bd34aad04fd03c6f82be40a5cf14cb02659dbd348a8eed4139285a508efdb43e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_split_shot",
+      "actionName": "storyboard.split_shot",
+      "version": 1,
+      "label": "拆分分镜镜头",
+      "summary": "拆分分镜镜头",
+      "inputSchemaHash": "5a30ae8578c16b393e808462bcea3cdb9999318feeda86f11262e25c1cbdea8e",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_unlink_media",
+      "actionName": "storyboard.unlink_media",
+      "version": 1,
+      "label": "解除镜头媒体",
+      "summary": "解除镜头媒体",
+      "inputSchemaHash": "fd1c4a992155d6f9739355c844a7feea4ead94735c38ee1ab5af92bdb2e1fb3c",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "storyboard.generate"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "storyboard_update_shot",
+      "actionName": "storyboard.update_shot",
+      "version": 1,
+      "label": "更新分镜",
+      "summary": "更新分镜",
+      "inputSchemaHash": "78c1b58d332c46af2037e5e686992b451db587b1c1b2f8145606b38db2397627",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "timeline_clip_create",
+      "actionName": "timeline.clip.create",
+      "version": 1,
+      "label": "新增时间线片段",
+      "summary": "新增时间线片段",
+      "inputSchemaHash": "f4323a6ca04bd8239e7d61c1ec24976bb59d3acdd85152e63001c74d1c9a8c34",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "timeline_clip_delete",
+      "actionName": "timeline.clip.delete",
+      "version": 1,
+      "label": "删除时间线片段",
+      "summary": "删除时间线片段",
+      "inputSchemaHash": "d9a3d85c7cc09a61e067eb480aafed1084f5b1950cfdc5b7417a27f5c7297cb7",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "timeline_clip_reorder",
+      "actionName": "timeline.clip.reorder",
+      "version": 1,
+      "label": "重排时间线片段",
+      "summary": "重排时间线片段",
+      "inputSchemaHash": "8022d2e9ac8a385195807f878788f57f2ceda3594f1fb7bd1e06e880b1edc27d",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "timeline_compose",
+      "actionName": "timeline.compose",
+      "version": 1,
+      "label": "合成时间线",
+      "summary": "合成时间线",
+      "inputSchemaHash": "723615bf643638cd8d165ebc8e0a68b6c10eb1383f212c92ec7d67e6ae6fa69a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "timeline_create",
+      "actionName": "timeline.create",
+      "version": 1,
+      "label": "创建时间线",
+      "summary": "创建时间线",
+      "inputSchemaHash": "fd08f4ab0c7e86044bef1894300c6a2658a1987591afd090b6f23c848004b482",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "timeline_delete",
+      "actionName": "timeline.delete",
+      "version": 1,
+      "label": "删除时间线",
+      "summary": "删除时间线",
+      "inputSchemaHash": "e1c86921324c82d9bb54307ecf653af3a050e585d6e7c783ae6f53b1a5b6ee09",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "timeline_update",
+      "actionName": "timeline.update",
+      "version": 1,
+      "label": "修改时间线",
+      "summary": "修改时间线",
+      "inputSchemaHash": "41816ffdc7e64e2bd79061bdb715febf49cb5a945e8d45307adf3c350701079d",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "timeline_update_clip",
+      "actionName": "timeline.update_clip",
+      "version": 1,
+      "label": "更新时间线片段",
+      "summary": "更新时间线片段",
+      "inputSchemaHash": "e887071a4d669efdb356833dd11fdf6a5fdd0d59e98849c48ee7bf9982c4b34a",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "project.write"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "workflow_cancel",
+      "actionName": "workflow.cancel",
+      "version": 1,
+      "label": "取消任务",
+      "summary": "取消任务",
+      "inputSchemaHash": "b3c222b960a27102d22e4b69c59ef0aca9de0306393fe18a4d0ca38bbba096f3",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.cancel"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "async_command",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "workflow_read_nodes",
+      "actionName": "workflow.read_nodes",
+      "version": 1,
+      "label": "任务节点",
+      "summary": "任务节点",
+      "inputSchemaHash": "6f34bab2e118b3cb19a993e08561cb7a1295fb3374cf0f73933d465324c93779",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "workflow_read_runs",
+      "actionName": "workflow.read_runs",
+      "version": 1,
+      "label": "任务列表",
+      "summary": "任务列表",
+      "inputSchemaHash": "7af581299d88a6f7f8912b279b51289e3781e8dfc50dca3a2feb6dd212091e8c",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "commerce_video",
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "workflow_read_shots",
+      "actionName": "workflow.read_shots",
+      "version": 1,
+      "label": "任务镜头",
+      "summary": "任务镜头",
+      "inputSchemaHash": "bc58ab19488fac260d75078f732bffc2ccf78d3ccb9c64dbade33144eb7fc163",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.read"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    },
+    {
+      "name": "workflow_start",
+      "actionName": "workflow.start",
+      "version": 1,
+      "label": "启动任务",
+      "summary": "启动任务",
+      "inputSchemaHash": "e48905f5b3cb228ddca018c8ce35c5425593604855944c5b6bfd280c1bae1112",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workflow.run"
+      ],
+      "projectKinds": [
+        "narrative"
+      ],
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "costed": true,
+      "startsWorkflow": true,
+      "supportsDryRun": false,
+      "executionMode": "workflow",
+      "activityVisibility": "primary"
+    },
+    {
+      "name": "workspace_list",
+      "actionName": "workspace.list",
+      "version": 1,
+      "label": "工作区列表",
+      "summary": "分页列出组织内可访问的工作区",
+      "inputSchemaHash": "e81b8b6356a1b7ce6a62450f9e8a0688074fcbc2b462f55c6bbd003385207b05",
+      "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
+      "permissions": [
+        "workspace.read"
+      ],
+      "projectKinds": [],
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "costed": false,
+      "startsWorkflow": false,
+      "supportsDryRun": false,
+      "executionMode": "sync",
+      "activityVisibility": "audit_only"
+    }
+  ]
+}

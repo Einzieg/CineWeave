@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/Einzieg/cineweave/internal/agent"
@@ -16,6 +17,21 @@ func (s *Server) projectAgentRegistry(project Project) (*agent.Registry, error) 
 		return nil, err
 	}
 	tools := policy.Tools()
+	if s != nil && s.projectControl != nil {
+		actionNames := make([]string, 0, len(s.projectControl.editionActions))
+		for name := range s.projectControl.editionActions {
+			actionNames = append(actionNames, name)
+		}
+		sort.Strings(actionNames)
+		for _, name := range actionNames {
+			action := s.projectControl.editionActions[name]
+			descriptor := action.registration.Descriptor
+			if !projectControlDescriptorAllowsProjectKind(descriptor, string(project.ProjectKind)) {
+				continue
+			}
+			tools = append(tools, projectControlAgentToolFromDescriptor(descriptor))
+		}
+	}
 	for i := range tools {
 		tool := tools[i]
 		tools[i].Execute = s.projectAgentExecuteFunc(tool)
@@ -30,7 +46,7 @@ func (s *Server) projectAgentExecuteFunc(tool agent.AgentTool) agent.ToolFunc {
 		if err != nil {
 			return agent.ToolResult{}, err
 		}
-		if !agent.ToolAllowedForProjectKind(string(project.ProjectKind), tool.Name) {
+		if !s.agentToolAllowedForProjectKind(string(project.ProjectKind), tool.Name) {
 			return agent.ToolResult{}, newAPIError(http.StatusConflict, "PROJECT_KIND_MISMATCH", "当前项目类型不支持此工具")
 		}
 		task, err := s.agentTask(r, project.ID, toolCtx.TaskID)
@@ -48,16 +64,26 @@ func (s *Server) projectAgentExecuteFunc(tool agent.AgentTool) agent.ToolFunc {
 			UserID:         toolCtx.UserID,
 			OrganizationID: toolCtx.OrganizationID,
 		}
-		result := s.executeProjectAgentTool(r, principal, project, task, step, tool)
+		result := s.executeProjectAction(r, principal, project, task, step, tool)
 		return agentToolResultToRegistry(result), nil
 	}
+}
+
+func (s *Server) agentToolAllowedForProjectKind(projectKind, toolName string) bool {
+	if s != nil && s.projectControl != nil && s.projectControl.registry != nil {
+		if descriptor, exists := s.projectControl.registry.Get(toolName); exists {
+			return projectControlDescriptorAllowsProjectKind(descriptor, projectKind)
+		}
+	}
+	return agent.ToolAllowedForProjectKind(projectKind, toolName)
 }
 
 func (s *Server) agentStep(r *http.Request, taskID, stepID string) (AgentStep, error) {
 	return scanAgentStep(s.db.QueryRow(r.Context(), `
 		SELECT id, task_id, step_index, tool_name, risk, permission, status, requires_approval,
 		       input, dry_run_output, supervisor_decision, output, verifier_output,
-		       error_code, error_message, created_at, updated_at, started_at, completed_at
+		       error_code, error_message, project_control_command_id::text,
+		       created_at, updated_at, started_at, completed_at
 		FROM agent_steps
 		WHERE task_id = $1 AND id = $2
 	`, taskID, stepID))

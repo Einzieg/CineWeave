@@ -1,0 +1,257 @@
+{
+  "httpFixtures": [
+    {
+      "errorCode": "AUTHENTICATION_REQUIRED",
+      "httpStatus": 401,
+      "id": "missing-authentication",
+      "retryable": false,
+      "wwwAuthenticate": "Bearer"
+    },
+    {
+      "errorCode": "ORIGIN_NOT_ALLOWED",
+      "httpStatus": 403,
+      "id": "invalid-origin",
+      "retryable": false
+    },
+    {
+      "errorCode": "REQUEST_TOO_LARGE",
+      "httpStatus": 413,
+      "id": "request-too-large",
+      "retryable": false
+    },
+    {
+      "errorCode": "RATE_LIMITED",
+      "httpStatus": 429,
+      "id": "request-rate-limited",
+      "retryAfterRequired": true,
+      "retryable": true
+    },
+    {
+      "errorCode": "COMMAND_CONCURRENCY_LIMIT",
+      "httpStatus": 429,
+      "id": "command-concurrency-limited",
+      "retryAfterRequired": true,
+      "retryable": true
+    }
+  ],
+  "legacyProtocols": [
+    "2025-11-25",
+    "2025-06-18"
+  ],
+  "mcpFixtures": [
+    {
+      "expected": {
+        "httpStatus": 200,
+        "resultContains": {
+          "supportedVersions": [
+            "2026-07-28",
+            "2025-11-25"
+          ]
+        }
+      },
+      "headers": {
+        "Mcp-Method": "server/discover",
+        "Mcp-Protocol-Version": "2026-07-28"
+      },
+      "id": "primary-server-discover",
+      "protocolVersion": "2026-07-28",
+      "request": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "server/discover",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "contract-fixture",
+              "version": "1"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "httpStatus": 200,
+        "resultRequired": [
+          "tools"
+        ]
+      },
+      "headers": {
+        "Mcp-Method": "tools/list",
+        "Mcp-Protocol-Version": "2026-07-28"
+      },
+      "id": "primary-tools-list",
+      "protocolVersion": "2026-07-28",
+      "request": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "tools/list",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "contract-fixture",
+              "version": "1"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "httpStatus": 200,
+        "isError": false,
+        "structuredStatus": "succeeded"
+      },
+      "headers": {
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "project_get",
+        "Mcp-Protocol-Version": "2026-07-28"
+      },
+      "id": "primary-tools-call-success",
+      "protocolVersion": "2026-07-28",
+      "request": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "contract-fixture",
+              "version": "1"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "arguments": {
+            "projectId": "00000000-0000-0000-0000-000000000001"
+          },
+          "name": "project_get"
+        }
+      }
+    },
+    {
+      "expected": {
+        "httpStatus": 200,
+        "isError": true,
+        "structuredErrorCode": "PROJECT_NOT_FOUND"
+      },
+      "headers": {
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "project_get",
+        "Mcp-Protocol-Version": "2026-07-28"
+      },
+      "id": "primary-tools-call-business-error",
+      "protocolVersion": "2026-07-28",
+      "request": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "contract-fixture",
+              "version": "1"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "arguments": {
+            "projectId": "00000000-0000-0000-0000-000000000404"
+          },
+          "name": "project_get"
+        }
+      }
+    },
+    {
+      "expected": {
+        "httpStatus": 200,
+        "isError": true,
+        "structuredErrorCode": "PERMISSION_DENIED"
+      },
+      "headers": {
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "project_update",
+        "Mcp-Protocol-Version": "2026-07-28"
+      },
+      "id": "primary-tools-call-permission-error",
+      "protocolVersion": "2026-07-28",
+      "request": {
+        "id": 5,
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "contract-fixture",
+              "version": "1"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "arguments": {
+            "projectId": "00000000-0000-0000-0000-000000000403"
+          },
+          "name": "project_update"
+        }
+      }
+    },
+    {
+      "expected": {
+        "httpStatus": 200,
+        "resultContains": {
+          "protocolVersion": "2025-11-25"
+        }
+      },
+      "headers": {
+        "Mcp-Protocol-Version": "2025-11-25"
+      },
+      "id": "legacy-2025-11-25-initialize",
+      "protocolVersion": "2025-11-25",
+      "request": {
+        "id": 6,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "capabilities": {},
+          "clientInfo": {
+            "name": "contract-fixture",
+            "version": "1"
+          },
+          "protocolVersion": "2025-11-25"
+        }
+      }
+    },
+    {
+      "expected": {
+        "httpStatus": 200,
+        "resultContains": {
+          "protocolVersion": "2025-06-18"
+        }
+      },
+      "headers": {
+        "Mcp-Protocol-Version": "2025-06-18"
+      },
+      "id": "legacy-2025-06-18-initialize",
+      "protocolVersion": "2025-06-18",
+      "request": {
+        "id": 7,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "capabilities": {},
+          "clientInfo": {
+            "name": "contract-fixture",
+            "version": "1"
+          },
+          "protocolVersion": "2025-06-18"
+        }
+      }
+    }
+  ],
+  "primaryProtocol": "2026-07-28",
+  "schemaVersion": "cineweave.mcp-protocol-fixtures.v1"
+}

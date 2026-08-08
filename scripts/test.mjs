@@ -7,6 +7,8 @@ const commands = [
   ["go", ["run", "./cmd/cineweave-migrate", "validate"]],
   ["go", ["run", "./cmd/cineweave-migration-bundle", "verify"]],
   ["go", ["run", "./cmd/cineweave-seed", "validate"]],
+  ["go", ["run", "./cmd/project-control-contracts", "-check"]],
+  ["python", ["scripts/check-project-control-contracts.py", "--production"]],
   ["pnpm", ["--filter", "@cineweave/web", "test"]],
   ["pnpm", ["--filter", "@cineweave/web", "typecheck"]],
   ["pnpm", ["--filter", "@cineweave/web", "lint"]],

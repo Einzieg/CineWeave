@@ -10,6 +10,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -105,6 +106,29 @@ func (s *Server) batchReviewShotAssetRequirementsCore(
 	source string,
 	req BatchReviewShotAssetRequirementsRequest,
 ) (BatchReviewShotAssetRequirementsResponse, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return BatchReviewShotAssetRequirementsResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+	result, err := s.batchReviewShotAssetRequirementsActionTx(ctx, tx, project, userID, source, req)
+	if err != nil {
+		return BatchReviewShotAssetRequirementsResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return BatchReviewShotAssetRequirementsResponse{}, err
+	}
+	return result, nil
+}
+
+func (s *Server) batchReviewShotAssetRequirementsActionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	project Project,
+	userID string,
+	source string,
+	req BatchReviewShotAssetRequirementsRequest,
+) (BatchReviewShotAssetRequirementsResponse, error) {
 	req.ReviewStatus = strings.ToLower(strings.TrimSpace(req.ReviewStatus))
 	req.Note = strings.TrimSpace(req.Note)
 	req.ScriptEpisodeID = strings.TrimSpace(req.ScriptEpisodeID)
@@ -118,11 +142,6 @@ func (s *Server) batchReviewShotAssetRequirementsCore(
 	if project.ProductionGeneration == nil || strings.TrimSpace(project.ProductionGeneration.ID) == "" {
 		return BatchReviewShotAssetRequirementsResponse{}, newAPIError(http.StatusConflict, "PRODUCTION_GENERATION_MISMATCH", "项目没有活动的视频生产代")
 	}
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return BatchReviewShotAssetRequirementsResponse{}, err
-	}
-	defer tx.Rollback(ctx)
 
 	reviewFilter := ""
 	if len(req.RequirementIDs) == 0 {
@@ -205,9 +224,6 @@ func (s *Server) batchReviewShotAssetRequirementsCore(
 			result.RejectedCount++
 		}
 		result.Items = append(result.Items, shotAssetRequirementReviewItem(candidate, effectiveStatus, eligible, issues, warnings, updatedAt))
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return BatchReviewShotAssetRequirementsResponse{}, err
 	}
 	return result, nil
 }
@@ -337,48 +353,17 @@ func (s *Server) agentToolListShotAssetRequirements(r *http.Request, principal a
 	if err := s.authorizer.Authorize(r.Context(), principal, authz.PermissionAssetRead, authz.Resource{ProjectID: project.ID}); err != nil {
 		return agentToolError("shot_asset.list_requirements", args, err)
 	}
-	if project.ProductionGeneration == nil || strings.TrimSpace(project.ProductionGeneration.ID) == "" {
-		return agentToolError("shot_asset.list_requirements", args, newAPIError(http.StatusConflict, "PRODUCTION_GENERATION_MISMATCH", "项目没有活动的视频生产代"))
-	}
-	reviewStatus := strings.ToLower(strings.TrimSpace(agentStringArg(args, "reviewStatus")))
-	scriptEpisodeID := agentReferenceStringArg(args, "scriptEpisodeId")
-	if reviewStatus == "all" {
-		reviewStatus = ""
-	}
-	if reviewStatus != "" && !validReviewStatus(reviewStatus) {
-		return agentToolError("shot_asset.list_requirements", args, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "reviewStatus is invalid"))
-	}
-	limit := agentIntArg(args, "limit", 200, 1, maxShotAssetReviewBatchItems)
-	candidates, err := loadShotAssetRequirementReviewCandidates(
-		r.Context(), s.db, project.ID, project.ProductionGeneration.ID, scriptEpisodeID, nil, reviewStatus, limit, false,
-	)
+	page, err := s.listShotAssetRequirementsAction(r.Context(), project, shotAssetRequirementListActionInput{
+		StoryboardShotID: agentReferenceStringArg(args, "storyboardShotId"),
+		ScriptEpisodeID:  agentReferenceStringArg(args, "scriptEpisodeId"),
+		ReviewStatus:     agentStringArg(args, "reviewStatus"),
+		Limit:            agentIntArg(args, "limit", 200, 1, maxShotAssetReviewBatchItems),
+		Cursor:           agentStringArg(args, "cursor"),
+	})
 	if err != nil {
 		return agentToolError("shot_asset.list_requirements", args, err)
 	}
-	items := make([]ShotAssetRequirementReviewItem, 0, len(candidates))
-	eligibleCount := 0
-	for _, candidate := range candidates {
-		issues, warnings := validateShotAssetRequirementReviewCandidate(candidate)
-		eligible := len(issues) == 0
-		if eligible {
-			eligibleCount++
-		}
-		items = append(items, shotAssetRequirementReviewItem(
-			candidate, candidate.ReviewStatus, eligible, issues, warnings, candidate.UpdatedAt,
-		))
-	}
-	return agentToolOK(
-		"shot_asset.list_requirements",
-		args,
-		fmt.Sprintf("读取到 %d 个镜头资产需求，其中 %d 个通过结构化校验。", len(items), eligibleCount),
-		map[string]any{
-			"validationVersion": shotAssetReviewValidationVersion,
-			"totalItems":        len(items),
-			"eligibleCount":     eligibleCount,
-			"blockedCount":      len(items) - eligibleCount,
-			"items":             items,
-		},
-	)
+	return shotAssetRequirementListAgentResult(args, page)
 }
 
 func (s *Server) agentToolReviewShotAssetRequirements(r *http.Request, principal auth.Principal, project Project, args map[string]any) agentToolResult {

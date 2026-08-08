@@ -14,14 +14,16 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/config"
 	"github.com/Einzieg/cineweave/internal/db"
+	projectevents "github.com/Einzieg/cineweave/internal/events"
 	"github.com/Einzieg/cineweave/internal/observability"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 )
 
 const (
-	streamName    = "CINEWEAVE_EVENTS"
-	subjectPrefix = "cineweave.events"
+	streamName                       = "CINEWEAVE_EVENTS"
+	subjectPrefix                    = "cineweave.events"
+	legacyOversizedAgentPayloadBytes = 900 * 1024
 )
 
 type outboxEvent struct {
@@ -61,6 +63,11 @@ func main() {
 	}
 
 	publisher := publisher{db: pool, js: js, logger: logger}
+	if recovered, err := publisher.requeueLegacyOversizedAgentEvents(ctx); err != nil {
+		logger.Error("legacy oversized agent events could not be requeued", "error", err)
+	} else if recovered > 0 {
+		logger.Info("legacy oversized agent events requeued", "count", recovered)
+	}
 	ticker := time.NewTicker(config.Duration("CINEWEAVE_EVENT_PUBLISH_INTERVAL", time.Second))
 	defer ticker.Stop()
 	batchSize := config.Int("CINEWEAVE_EVENT_PUBLISH_BATCH", 50)
@@ -158,6 +165,17 @@ func (p publisher) publishBatch(ctx context.Context, limit int) (int, error) {
 }
 
 func (p publisher) publishEvent(ctx context.Context, event outboxEvent) error {
+	originalPayloadBytes := len(event.Payload)
+	event, projected := prepareTransportEvent(event)
+	if projected {
+		p.logger.Debug(
+			"event payload projected for transport",
+			"eventId", event.ID,
+			"eventType", event.EventType,
+			"originalPayloadBytes", originalPayloadBytes,
+			"payloadBytes", len(event.Payload),
+		)
+	}
 	raw, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -165,6 +183,27 @@ func (p publisher) publishEvent(ctx context.Context, event outboxEvent) error {
 	subject := subjectPrefix + "." + sanitizeSubjectToken(event.EventType)
 	_, err = p.js.Publish(subject, raw, nats.Context(ctx), nats.MsgId(event.ID))
 	return err
+}
+
+func (p publisher) requeueLegacyOversizedAgentEvents(ctx context.Context) (int64, error) {
+	tag, err := p.db.Exec(ctx, `
+		UPDATE event_outbox
+		SET next_attempt_at = now()
+		WHERE status = 'failed'
+		  AND (event_type LIKE 'agent.step.%' OR event_type LIKE 'agent.task.%')
+		  AND octet_length(payload::text) > $1
+		  AND next_attempt_at > now()
+	`, legacyOversizedAgentPayloadBytes)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func prepareTransportEvent(event outboxEvent) (outboxEvent, bool) {
+	payload, projected := projectevents.ProjectRealtimePayload(event.EventType, event.Payload)
+	event.Payload = payload
+	return event, projected
 }
 
 func (p publisher) markPublished(ctx context.Context, eventID string) error {

@@ -17,6 +17,15 @@ export type WorkflowRunListQueryShape = {
   cursor?: string;
 };
 
+export type ProjectControlCommandListQueryShape = {
+  statuses?: readonly string[];
+  controllerType?: string;
+  view?: "activity";
+  createdAfter?: string;
+  limit?: number;
+  cursor?: string;
+};
+
 function canonicalAssetListShape(shape: CanonicalAssetListQueryShape = {}) {
   return [
     shape.status ?? "active",
@@ -30,9 +39,11 @@ export const qk = {
   // 全局
   setupState: () => ["setup-state"] as const,
   editionEntitlements: () => ["edition-entitlements"] as const,
+  codexControlKey: () => ["codex-control-key"] as const,
   organizations: () => ["organizations"] as const,
   systemOrganizationsRoot: () => ["system-organizations"] as const,
   systemOrganizations: (search = "", page = 1) => ["system-organizations", search, page] as const,
+  systemProjectControlDiagnostics: () => ["system-project-control-diagnostics"] as const,
   systemOrganizationMembers: (organizationId: string, search = "", status = "", page = 1) =>
     ["system-organization-members", organizationId, search, status, page] as const,
   organizationMembers: (search = "", status = "", page = 1) => ["organization-members", search, status, page] as const,
@@ -49,6 +60,21 @@ export const qk = {
   roleBindings: (filters?: Record<string, string>) => ["role-bindings", filters ?? {}] as const,
   permissions: () => ["permissions"] as const,
   projects: () => ["projects"] as const,
+  projectControlCommands: (projectId = "all", shape?: ProjectControlCommandListQueryShape) =>
+    shape
+      ? [
+          "project-control-commands",
+          projectId,
+          shape.statuses?.join(",") || "all",
+          shape.controllerType?.trim() || "all",
+          shape.view ?? "history",
+          shape.createdAfter?.trim() || "all",
+          shape.limit ?? 20,
+          shape.cursor?.trim() || "first",
+        ] as const
+      : ["project-control-commands", projectId] as const,
+  projectControlCommand: (commandId: string) => ["project-control-command", commandId] as const,
+  projectControlCommandEvents: (commandId: string) => ["project-control-command-events", commandId] as const,
   commerceProjectOptions: (workspaceId: string) => ["workspace", workspaceId, "commerce-project-options"] as const,
   videoProductionProfiles: () => ["video-production-profiles"] as const,
   providerAccounts: () => ["provider-accounts"] as const,

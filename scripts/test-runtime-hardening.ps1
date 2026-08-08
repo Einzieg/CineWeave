@@ -8,6 +8,8 @@ param(
   [switch]$ScriptDerivationOnly,
   [switch]$CommerceOnly,
   [switch]$ProjectDeletionOnly,
+  [switch]$ProjectControlOnly,
+  [switch]$ControlKeyOnly,
   [switch]$KeepEnvironment
 )
 
@@ -191,6 +193,24 @@ try {
       '-run', '^TestProjectDeletionWorkflowDrainTimeoutIsRetryableAndStopsBeforeStorage$'
     )
     Write-Host 'Project deletion API, storage recovery, fencing, and drain timeout tests passed.'
+    return
+  }
+
+  if ($ProjectControlOnly) {
+    Invoke-GoContainer -Integration -Arguments @(
+      'go', 'test', '-count=1', './internal/projectcontrol', './internal/api',
+      '-run', '^(TestCommandRepositoryPersistsIdempotencyLeaseWorkflowAndEventsIntegration|TestProjectControlAdaptationActionsShareRevisionedDomainPath|TestProjectControlCharacterVoiceActionsShareRevisionedDomainPath|TestProjectControlFinalVideoActionsShareRevisionedDomainPath|TestProjectControlTimelineLifecycleIsIdempotentAndRevisionSafe|TestTimelineCreateFromStoryboardAndReorder|TestPatchNovelEventMarksManualOverride|TestProjectExportAccessAndDownloadURL|TestFinalVideoDownloadURL)$'
+    )
+    Write-Host 'Project control migration, command repository, shared adaptation, character voice, timeline, final video, and download actions, cancellation, retry, lease, workflow, and event tests passed.'
+    return
+  }
+
+  if ($ControlKeyOnly) {
+    Invoke-GoContainer -Integration -Arguments @(
+      'go', 'test', '-count=1', './internal/auth', './internal/api',
+      '-run', '^(TestCodexControlKeyLifecycleIntegration|TestOrganizationInvitationAndMemberLifecycle|TestSystemAdministratorOrganizationManagement)$'
+    )
+    Write-Host 'Codex control key issuance, rotation, revocation, and user-creation integration tests passed.'
     return
   }
 

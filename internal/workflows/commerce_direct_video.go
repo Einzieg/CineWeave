@@ -29,13 +29,14 @@ const (
 )
 
 type CommerceDirectVideoInput struct {
-	OrganizationID    string `json:"organizationId"`
-	ProjectID         string `json:"projectId"`
-	ScriptUnitID      string `json:"scriptUnitId"`
-	JobID             string `json:"jobId"`
-	WorkflowRunID     string `json:"workflowRunId"`
-	CreatedBy         string `json:"createdBy"`
-	AttemptGeneration int    `json:"attemptGeneration"`
+	OrganizationID          string `json:"organizationId"`
+	ProjectID               string `json:"projectId"`
+	ScriptUnitID            string `json:"scriptUnitId"`
+	JobID                   string `json:"jobId"`
+	WorkflowRunID           string `json:"workflowRunId"`
+	CreatedBy               string `json:"createdBy"`
+	AttemptGeneration       int    `json:"attemptGeneration"`
+	ProjectControlCommandID string `json:"projectControlCommandId,omitempty"`
 }
 
 type CommerceDirectVideoTaskState struct {

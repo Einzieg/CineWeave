@@ -160,7 +160,7 @@ export function useProjectEvents(projectId: string) {
               }
               latestRevisionByAggregate.set(aggregateKey, aggregateRevision);
             }
-            recordActivityEvent(projectId, event.event, payload, event.id);
+            recordActivityEvent(projectId, event.event, activitySignalPayload(payload), event.id);
             if (event.event === "script.episode.generated") {
               const scriptId = stringPayload(payload, "scriptId");
               const scriptVersionId = stringPayload(payload, "scriptVersionId");
@@ -233,6 +233,37 @@ function stringPayload(payload: Record<string, unknown>, key: string): string {
 
 function numberPayload(payload: Record<string, unknown>, key: string): number {
   return typeof payload[key] === "number" && Number.isSafeInteger(payload[key]) ? payload[key] : -1;
+}
+
+const activitySignalFields = [
+  "aggregateId",
+  "aggregateRevision",
+  "aggregateType",
+  "agentStepId",
+  "agentTaskId",
+  "commandId",
+  "eventId",
+  "nodeKey",
+  "nodeRunId",
+  "projectControlCommandId",
+  "schemaVersion",
+  "sessionId",
+  "shotId",
+  "storyboardShotId",
+  "streamPosition",
+  "workflowRunId",
+  "workflowType",
+] as const;
+
+function activitySignalPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const signal: Record<string, unknown> = {};
+  for (const field of activitySignalFields) {
+    const value = payload[field];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      signal[field] = value;
+    }
+  }
+  return signal;
 }
 
 async function readRealtimeError(response: Response): Promise<RealtimeErrorBody> {

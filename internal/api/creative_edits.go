@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/production"
 	promptsvc "github.com/Einzieg/cineweave/internal/prompts"
 	storyboardtiming "github.com/Einzieg/cineweave/internal/storyboard"
+	"github.com/jackc/pgx/v5"
 )
 
 type UpdateShotAssetRequirementRequest struct {
@@ -27,38 +29,52 @@ type UpdateShotAssetRequirementRequest struct {
 	Prompt          *string `json:"prompt"`
 }
 
+type updateStoryboardShotActionInput struct {
+	ShotID               string          `json:"shotId"`
+	Visual               *string         `json:"visual"`
+	Camera               *string         `json:"camera"`
+	Motion               *string         `json:"motion"`
+	Mood                 *string         `json:"mood"`
+	PlannedDurationTicks *int64          `json:"plannedDurationTicks"`
+	ImagePrompt          *string         `json:"imagePrompt"`
+	VideoPrompt          *string         `json:"videoPrompt"`
+	ImageReferenceMode   *string         `json:"imageReferenceMode"`
+	ImageReferenceKeys   *[]string       `json:"imageReferenceKeys"`
+	VideoReferenceMode   *string         `json:"videoReferenceMode"`
+	VideoReferenceKeys   *[]string       `json:"videoReferenceKeys"`
+	Provenance           json.RawMessage `json:"-"`
+}
+
 func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	project, ok := s.requireProjectAccess(w, r, principal, r.PathValue("projectId"), authz.PermissionProjectWrite)
 	if !ok {
 		return
 	}
-	current, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
+	var req updateStoryboardShotActionInput
+	if !decode(w, r, &req) {
+		return
+	}
+	req.ShotID = r.PathValue("shotId")
+	item, err := s.updateStoryboardShotAction(r.Context(), project, principal.UserID, req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	var req struct {
-		Visual               *string   `json:"visual"`
-		Camera               *string   `json:"camera"`
-		Motion               *string   `json:"motion"`
-		Mood                 *string   `json:"mood"`
-		PlannedDurationTicks *int64    `json:"plannedDurationTicks"`
-		ImagePrompt          *string   `json:"imagePrompt"`
-		VideoPrompt          *string   `json:"videoPrompt"`
-		ImageReferenceMode   *string   `json:"imageReferenceMode"`
-		ImageReferenceKeys   *[]string `json:"imageReferenceKeys"`
-		VideoReferenceMode   *string   `json:"videoReferenceMode"`
-		VideoReferenceKeys   *[]string `json:"videoReferenceKeys"`
-	}
-	if !decode(w, r, &req) {
-		return
+	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+}
+
+func (s *Server) updateStoryboardShotAction(ctx context.Context, project Project, userID string, req updateStoryboardShotActionInput) (StoryboardShot, error) {
+	r := requestWithContext(ctx)
+	current, err := s.storyboardShotByID(r, project.ID, strings.TrimSpace(req.ShotID))
+	if err != nil {
+		return StoryboardShot{}, err
 	}
 	if current.StoryboardPlanID != nil && req.PlannedDurationTicks != nil {
-		httpx.WriteError(w, r, http.StatusConflict, "STORYBOARD_PLAN_REVISION_REQUIRED", "分镜计划中的镜头时长必须通过计划时长修订功能修改", map[string]any{
-			"storyboardPlanId": *current.StoryboardPlanID,
-			"shotId":           current.ID,
-		}, false)
-		return
+		return StoryboardShot{}, apiError{
+			Status: http.StatusConflict, Code: "STORYBOARD_PLAN_REVISION_REQUIRED",
+			Message: "分镜计划中的镜头时长必须通过计划时长修订功能修改",
+			Details: map[string]any{"storyboardPlanId": *current.StoryboardPlanID, "shotId": current.ID},
+		}
 	}
 	timebase := storyboardtiming.Timebase{
 		TicksPerSecond: project.TimelineTimebase,
@@ -66,8 +82,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		FPSDenominator: int64(project.FPSDenominator),
 	}
 	if req.PlannedDurationTicks != nil && (*req.PlannedDurationTicks <= 0 || !timebase.IsFrameAligned(*req.PlannedDurationTicks)) {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "镜头时长必须大于零，并与项目帧率对齐", nil, false)
-		return
+		return StoryboardShot{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "镜头时长必须大于零，并与项目帧率对齐")
 	}
 	imageReferenceMode := current.ImageReferenceMode
 	if imageReferenceMode == "" {
@@ -110,56 +125,48 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	}
 	if req.ImageReferenceMode != nil || req.ImageReferenceKeys != nil {
 		if imageReferenceMode != "auto" && imageReferenceMode != "custom" && imageReferenceMode != "none" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "图片参考图策略无效", nil, false)
-			return
+			return StoryboardShot{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "图片参考图策略无效")
 		}
 		if imageReferenceMode != "custom" {
 			imageReferenceKeys = []string{}
 		} else {
 			if err := loadReferenceOptions(); err != nil {
-				s.writeError(w, r, err)
-				return
+				return StoryboardShot{}, err
 			}
 			available := map[string]bool{}
 			for _, option := range imageOptions {
 				available[option.Key] = true
 			}
 			if len(imageReferenceKeys) == 0 {
-				httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "手动选择图片参考图时至少需要选择一张图片", nil, false)
-				return
+				return StoryboardShot{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "手动选择图片参考图时至少需要选择一张图片")
 			}
 			for _, key := range imageReferenceKeys {
 				if !available[key] {
-					httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "选择的图片参考图不适用于当前镜头", map[string]any{"referenceKey": key}, false)
-					return
+					return StoryboardShot{}, apiError{Status: http.StatusUnprocessableEntity, Code: "VALIDATION_FAILED", Message: "选择的图片参考图不适用于当前镜头", Details: map[string]any{"referenceKey": key}}
 				}
 			}
 		}
 	}
 	if req.VideoReferenceMode != nil || req.VideoReferenceKeys != nil {
 		if videoReferenceMode != "auto" && videoReferenceMode != "custom" && videoReferenceMode != "none" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "视频参考图策略无效", nil, false)
-			return
+			return StoryboardShot{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "视频参考图策略无效")
 		}
 		if videoReferenceMode != "custom" {
 			videoReferenceKeys = []string{}
 		} else {
 			if err := loadReferenceOptions(); err != nil {
-				s.writeError(w, r, err)
-				return
+				return StoryboardShot{}, err
 			}
 			available := map[string]bool{}
 			for _, option := range s.storyboardShotVideoReferenceOptions(r, current, imageOptions) {
 				available[option.Key] = true
 			}
 			if len(videoReferenceKeys) == 0 {
-				httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "手动选择视频参考素材时至少需要选择一项", nil, false)
-				return
+				return StoryboardShot{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "手动选择视频参考素材时至少需要选择一项")
 			}
 			for _, key := range videoReferenceKeys {
 				if !available[key] {
-					httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "选择的视频参考素材不适用于当前镜头", map[string]any{"referenceKey": key}, false)
-					return
+					return StoryboardShot{}, apiError{Status: http.StatusUnprocessableEntity, Code: "VALIDATION_FAILED", Message: "选择的视频参考素材不适用于当前镜头", Details: map[string]any{"referenceKey": key}}
 				}
 			}
 		}
@@ -168,8 +175,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		req.ImagePrompt != nil || req.VideoPrompt != nil || req.ImageReferenceMode != nil || req.ImageReferenceKeys != nil ||
 		req.VideoReferenceMode != nil || req.VideoReferenceKeys != nil
 	if !hasFields {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "请至少修改一项镜头设置", nil, false)
-		return
+		return StoryboardShot{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "请至少修改一项镜头设置")
 	}
 	visualChanged := stringFieldChanged(req.Visual, current.Visual)
 	cameraChanged := stringFieldChanged(req.Camera, current.Camera)
@@ -184,35 +190,29 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 	imageChanged := visualChanged || cameraChanged || motionChanged || moodChanged || stringFieldChanged(req.ImagePrompt, current.ImagePrompt) || manualImagePromptStatusChanged || imageReferenceChanged
 	videoChanged := imageChanged || durationChanged || stringFieldChanged(req.VideoPrompt, current.VideoPrompt) || videoReferenceChanged
 	if !videoChanged {
-		httpx.WriteJSON(w, r, http.StatusOK, current, nil)
-		return
+		return current, nil
 	}
 	if imageChanged && (current.ImageStatus == "queued" || current.ImageStatus == "running") {
-		httpx.WriteError(w, r, http.StatusConflict, "SHOT_IMAGE_RUNNING", "镜头图片正在生成，完成前不能修改图片生成设置", nil, true)
-		return
+		return StoryboardShot{}, apiError{Status: http.StatusConflict, Code: "SHOT_IMAGE_RUNNING", Message: "镜头图片正在生成，完成前不能修改图片生成设置", Retryable: true}
 	}
 	if imageChanged && (current.ImagePromptStatus == "queued" || current.ImagePromptStatus == "running") {
-		httpx.WriteError(w, r, http.StatusConflict, "SHOT_IMAGE_PROMPT_RUNNING", "镜头图片提示词正在生成，完成前不能修改图片提示词设置", nil, true)
-		return
+		return StoryboardShot{}, apiError{Status: http.StatusConflict, Code: "SHOT_IMAGE_PROMPT_RUNNING", Message: "镜头图片提示词正在生成，完成前不能修改图片提示词设置", Retryable: true}
 	}
 	if videoChanged && (current.VideoStatus == "queued" || current.VideoStatus == "running") {
-		httpx.WriteError(w, r, http.StatusConflict, "SHOT_VIDEO_RUNNING", "镜头视频正在生成，完成前不能修改视频生成设置", nil, true)
-		return
+		return StoryboardShot{}, apiError{Status: http.StatusConflict, Code: "SHOT_VIDEO_RUNNING", Message: "镜头视频正在生成，完成前不能修改视频生成设置", Retryable: true}
 	}
 	if videoChanged && (current.VideoPromptStatus == "queued" || current.VideoPromptStatus == "running") {
-		httpx.WriteError(w, r, http.StatusConflict, "SHOT_VIDEO_PROMPT_RUNNING", "镜头视频提示词正在生成，完成前不能修改视频提示词设置", nil, true)
-		return
+		return StoryboardShot{}, apiError{Status: http.StatusConflict, Code: "SHOT_VIDEO_PROMPT_RUNNING", Message: "镜头视频提示词正在生成，完成前不能修改视频提示词设置", Retryable: true}
 	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return StoryboardShot{}, err
 	}
 	defer tx.Rollback(r.Context())
 	manualImagePromptMetadata := mustRawJSON(map[string]any{
 		"status":     "manual",
 		"promptHash": promptsvc.HashText(trimPtr(req.ImagePrompt)),
-		"editedBy":   principal.UserID,
+		"editedBy":   userID,
 	})
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE storyboard_shots
@@ -265,10 +265,10 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		    END,
 		    video_error_code = CASE WHEN $26 THEN NULL ELSE video_error_code END,
 		    video_error_message = CASE WHEN $26 THEN NULL ELSE video_error_message END,
-		    metadata = CASE
+		    metadata = (CASE
 		      WHEN $13 AND NULLIF(BTRIM($14), '') IS NOT NULL THEN COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('imagePromptAgent', $28::jsonb)
-		      ELSE metadata
-		    END,
+		      ELSE COALESCE(metadata, '{}'::jsonb)
+		    END) || $29::jsonb,
 		    edited_by = $27,
 		    edited_at = now(),
 		    updated_at = now()
@@ -287,10 +287,10 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		req.VideoReferenceKeys != nil || req.VideoReferenceMode != nil, videoReferenceKeys,
 		imageChanged,
 		videoChanged,
-		principal.UserID,
-		manualImagePromptMetadata); err != nil {
-		s.writeError(w, r, err)
-		return
+		userID,
+		manualImagePromptMetadata,
+		rawOrDefault(req.Provenance, "{}")); err != nil {
+		return StoryboardShot{}, err
 	}
 	videoPlanInputsChanged := imageChanged || durationChanged || videoReferenceChanged
 	if videoPlanInputsChanged && current.ActiveVideoRenderPlanID != nil {
@@ -302,8 +302,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 			    updated_at = now()
 			WHERE id = $1 AND project_id = $2
 		`, *current.ActiveVideoRenderPlanID, project.ID); err != nil {
-			s.writeError(w, r, err)
-			return
+			return StoryboardShot{}, err
 		}
 		if _, err := tx.Exec(r.Context(), `
 			UPDATE storyboard_shots
@@ -317,8 +316,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 			    updated_at = now()
 			WHERE id = $1 AND project_id = $2
 		`, current.ID, project.ID); err != nil {
-			s.writeError(w, r, err)
-			return
+			return StoryboardShot{}, err
 		}
 	} else if req.VideoPrompt != nil {
 		manualPrompt := strings.TrimSpace(*req.VideoPrompt)
@@ -333,8 +331,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 				WHERE shot.id = $1 AND shot.project_id = $2
 				  AND segment.video_render_plan_id = shot.active_video_render_plan_id
 			`, current.ID, project.ID); err != nil {
-				s.writeError(w, r, err)
-				return
+				return StoryboardShot{}, err
 			}
 		} else {
 			manualPromptHash := promptsvc.HashText(manualPrompt)
@@ -355,10 +352,9 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 				  AND plan.active = true
 				  AND plan.status NOT IN ('stale', 'archived', 'cancelled', 'replan_required')
 				  AND segment.video_render_plan_id = plan.id
-			`, current.ID, project.ID, manualPrompt, manualPromptHash, principal.UserID)
+			`, current.ID, project.ID, manualPrompt, manualPromptHash, userID)
 			if err != nil {
-				s.writeError(w, r, err)
-				return
+				return StoryboardShot{}, err
 			}
 			promptPlanStatus := "ready"
 			promptStatus := "succeeded"
@@ -378,15 +374,13 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 				    updated_at = now()
 				WHERE id = $1 AND project_id = $2
 			`, current.ID, project.ID, promptStatus, promptPlanStatus, manualPromptHash); err != nil {
-				s.writeError(w, r, err)
-				return
+				return StoryboardShot{}, err
 			}
 		}
 	}
 	if durationChanged {
 		if err := reflowStoryboardShotTicksTx(r.Context(), tx, project.ID); err != nil {
-			s.writeError(w, r, err)
-			return
+			return StoryboardShot{}, err
 		}
 		if current.StoryboardPlanID != nil {
 			if _, err := tx.Exec(r.Context(), `
@@ -397,8 +391,7 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 				    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('shotTimingChangedAt', now())
 				WHERE id = $1
 			`, *current.StoryboardPlanID); err != nil {
-				s.writeError(w, r, err)
-				return
+				return StoryboardShot{}, err
 			}
 		}
 	}
@@ -406,32 +399,29 @@ func (s *Server) updateStoryboardShot(w http.ResponseWriter, r *http.Request, pr
 		WHERE s.project_id = $1 AND s.id = $2
 	`), project.ID, current.ID))
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return StoryboardShot{}, err
 	}
 	if videoChanged {
 		if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, current.WorkflowRunID); err != nil {
-			s.writeError(w, r, err)
-			return
+			return StoryboardShot{}, err
 		}
 	}
 	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shot.updated", "storyboard_shot", item.ID, mustRawJSON(map[string]any{
-		"shotId":             item.ID,
-		"manualOverride":     item.ManualOverride,
-		"staleState":         item.StaleState,
-		"imageReferenceMode": item.ImageReferenceMode,
-		"imageReferenceKeys": item.ImageReferenceKeys,
-		"videoReferenceMode": item.VideoReferenceMode,
-		"videoReferenceKeys": item.VideoReferenceKeys,
+		"shotId":                  item.ID,
+		"manualOverride":          item.ManualOverride,
+		"staleState":              item.StaleState,
+		"imageReferenceMode":      item.ImageReferenceMode,
+		"imageReferenceKeys":      item.ImageReferenceKeys,
+		"videoReferenceMode":      item.VideoReferenceMode,
+		"videoReferenceKeys":      item.VideoReferenceKeys,
+		"projectControlCommandId": stringValueFromAny(rawObject(req.Provenance)["projectControlCommandId"]),
 	})); err != nil {
-		s.writeError(w, r, err)
-		return
+		return StoryboardShot{}, err
 	}
 	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
+		return StoryboardShot{}, err
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
+	return item, nil
 }
 
 func cleanStoryboardShotReferenceKeys(values []string) []string {
@@ -460,81 +450,19 @@ func (s *Server) unlinkStoryboardShotMedia(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	current, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	var req struct {
-		Kind string `json:"kind"`
-	}
+	var req storyboardUnlinkMediaActionInput
 	if !decode(w, r, &req) {
 		return
 	}
-	kind := strings.TrimSpace(req.Kind)
-	if kind != "image" && kind != "video" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "生成类型必须是图片或视频", nil, false)
-		return
-	}
+	req.ShotID = r.PathValue("shotId")
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	defer tx.Rollback(r.Context())
-
-	if kind == "image" {
-		_, err = tx.Exec(r.Context(), `
-			UPDATE storyboard_shots
-			SET image_artifact_id = NULL,
-			    image_media_file_id = NULL,
-			    image_storage_key = NULL,
-			    image_status = 'not_started',
-			    image_error_code = NULL,
-			    image_error_message = NULL,
-			    video_status = CASE
-			      WHEN video_artifact_id IS NOT NULL OR video_media_file_id IS NOT NULL OR COALESCE(video_storage_key, '') <> '' THEN 'stale'
-			      ELSE video_status
-			    END,
-			    stale_state = 'needs_regeneration',
-			    updated_at = now()
-			WHERE project_id = $1 AND id = $2
-		`, project.ID, current.ID)
-	} else {
-		_, err = tx.Exec(r.Context(), `
-			UPDATE storyboard_shots
-			SET video_artifact_id = NULL,
-			    video_media_file_id = NULL,
-			    video_storage_key = NULL,
-			    video_provider_async_task_id = NULL,
-			    video_external_task_id = NULL,
-			    video_status = 'not_started',
-			    video_error_code = NULL,
-			    video_error_message = NULL,
-			    stale_state = 'needs_regeneration',
-			    updated_at = now()
-			WHERE project_id = $1 AND id = $2
-		`, project.ID, current.ID)
-	}
+	item, err := s.unlinkStoryboardShotMediaActionTx(r.Context(), tx, project, req)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	item, err := scanStoryboardShot(tx.QueryRow(r.Context(), storyboardShotSelectSQL(`
-		WHERE s.project_id = $1 AND s.id = $2
-	`), project.ID, current.ID))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := production.MarkFinalVideoStale(r.Context(), tx, project.ID, current.WorkflowRunID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := insertAPIEvent(r.Context(), tx, project.OrganizationID, project.ID, "storyboard.shot.media.unlinked", "storyboard_shot", item.ID, mustRawJSON(map[string]any{
-		"shotId": item.ID,
-		"kind":   kind,
-	})); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -563,13 +491,38 @@ func (s *Server) updateShotAssetRequirement(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) updateShotAssetRequirementCore(ctx context.Context, project Project, userID, source, requirementID string, req UpdateShotAssetRequirementRequest) (ShotAssetRequirement, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return ShotAssetRequirement{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := s.updateShotAssetRequirementActionTx(ctx, tx, project, userID, source, requirementID, req)
+	if err != nil {
+		return ShotAssetRequirement{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ShotAssetRequirement{}, err
+	}
+	return item, nil
+}
+
+func (s *Server) updateShotAssetRequirementActionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	project Project,
+	userID string,
+	source string,
+	requirementID string,
+	req UpdateShotAssetRequirementRequest,
+) (ShotAssetRequirement, error) {
 	if !hasShotAssetRequirementPatch(req) {
 		return ShotAssetRequirement{}, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "至少需要提供一个镜头资产需求字段")
 	}
-	current, err := scanShotAssetRequirement(s.db.QueryRow(ctx, shotAssetRequirementSelectSQL(`
+	current, err := scanShotAssetRequirement(tx.QueryRow(ctx, shotAssetRequirementSelectSQL(`
 		WHERE r.project_id = $1
 		  AND r.id = $2
 		  AND r.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
+		FOR UPDATE OF r
 	`), project.ID, requirementID))
 	if err != nil {
 		return ShotAssetRequirement{}, err
@@ -592,7 +545,7 @@ func (s *Server) updateShotAssetRequirementCore(ctx context.Context, project Pro
 		}
 	}
 	var targetAssetType, targetAssetStatus, targetAssetStaleState string
-	if err := s.db.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		SELECT asset_type, status, stale_state
 		FROM canonical_assets
 		WHERE project_id = $1 AND id = $2
@@ -608,11 +561,6 @@ func (s *Server) updateShotAssetRequirementCore(ctx context.Context, project Pro
 	if !strings.HasPrefix(targetRequirementType, strings.TrimSpace(targetAssetType)+"_") {
 		return ShotAssetRequirement{}, newAPIError(http.StatusUnprocessableEntity, "SHOT_ASSET_REQUIREMENT_TYPE_MISMATCH", "镜头资产需求类型与核心资产类型不匹配")
 	}
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return ShotAssetRequirement{}, err
-	}
-	defer tx.Rollback(ctx)
 	var updatedID string
 	if err := tx.QueryRow(ctx, `
 		UPDATE shot_asset_requirements
@@ -670,9 +618,6 @@ func (s *Server) updateShotAssetRequirementCore(ctx context.Context, project Pro
 	})); err != nil {
 		return ShotAssetRequirement{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ShotAssetRequirement{}, err
-	}
 	return item, nil
 }
 
@@ -690,19 +635,39 @@ func (s *Server) skipShotAssetRequirement(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) skipShotAssetRequirementCore(ctx context.Context, project Project, userID, source, reason, requirementID string) (ShotAssetRequirement, error) {
-	current, err := scanShotAssetRequirement(s.db.QueryRow(ctx, shotAssetRequirementSelectSQL(`
-		WHERE r.project_id = $1
-		  AND r.id = $2
-		  AND r.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
-	`), project.ID, requirementID))
-	if err != nil {
-		return ShotAssetRequirement{}, err
-	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return ShotAssetRequirement{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := s.skipShotAssetRequirementActionTx(ctx, tx, project, userID, source, reason, requirementID)
+	if err != nil {
+		return ShotAssetRequirement{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ShotAssetRequirement{}, err
+	}
+	return item, nil
+}
+
+func (s *Server) skipShotAssetRequirementActionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	project Project,
+	userID string,
+	source string,
+	reason string,
+	requirementID string,
+) (ShotAssetRequirement, error) {
+	current, err := scanShotAssetRequirement(tx.QueryRow(ctx, shotAssetRequirementSelectSQL(`
+		WHERE r.project_id = $1
+		  AND r.id = $2
+		  AND r.production_generation_id = (SELECT active_video_production_generation_id FROM projects WHERE id = $1)
+		FOR UPDATE OF r
+	`), project.ID, requirementID))
+	if err != nil {
+		return ShotAssetRequirement{}, err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE shot_asset_requirements
 		SET status = 'skipped',
@@ -738,9 +703,6 @@ func (s *Server) skipShotAssetRequirementCore(ctx context.Context, project Proje
 		"source":        strings.TrimSpace(source),
 		"reason":        strings.TrimSpace(reason),
 	})); err != nil {
-		return ShotAssetRequirement{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return ShotAssetRequirement{}, err
 	}
 	return item, nil

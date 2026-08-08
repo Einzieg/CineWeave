@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -12,10 +11,7 @@ import (
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/authz"
 	"github.com/Einzieg/cineweave/internal/httpx"
-	"github.com/Einzieg/cineweave/internal/provider"
 	"github.com/Einzieg/cineweave/internal/workflows"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type CharacterVoiceProfile struct {
@@ -36,6 +32,7 @@ type CharacterVoiceProfile struct {
 	IsDefault            bool            `json:"isDefault"`
 	Status               string          `json:"status"`
 	Metadata             json.RawMessage `json:"metadata"`
+	Revision             int64           `json:"revision"`
 	CreatedBy            *string         `json:"createdBy,omitempty"`
 	CreatedAt            time.Time       `json:"createdAt"`
 	UpdatedAt            time.Time       `json:"updatedAt"`
@@ -169,6 +166,7 @@ func (s *Server) listCharacterVoices(w http.ResponseWriter, r *http.Request, pri
 }
 
 type characterVoiceRequest struct {
+	ExpectedRevision     int64           `json:"expectedRevision"`
 	CanonicalAssetID     *string         `json:"canonicalAssetId"`
 	CharacterName        *string         `json:"characterName"`
 	DisplayName          *string         `json:"displayName"`
@@ -192,65 +190,26 @@ func (s *Server) createCharacterVoice(w http.ResponseWriter, r *http.Request, pr
 	if !decode(w, r, &req) {
 		return
 	}
-	characterName := trimmedStringPtr(req.CharacterName)
-	displayName := trimmedStringPtr(req.DisplayName)
-	voiceKey := trimmedStringPtr(req.VoiceKey)
-	if characterName == "" || displayName == "" || voiceKey == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "characterName, displayName, and voiceKey are required", nil, false)
-		return
-	}
-	if !s.validateCharacterVoiceReferences(w, r, project, req) {
-		return
-	}
-	parameters := req.Parameters
-	if len(parameters) == 0 {
-		parameters = json.RawMessage(`{}`)
-	}
-	tx, err := s.db.Begin(r.Context())
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "character_voice.create", mustRawJSON(characterVoiceCreateActionInput{
+			CanonicalAssetID: trimmedStringPtr(req.CanonicalAssetID), CharacterName: trimmedStringPtr(req.CharacterName),
+			DisplayName: trimmedStringPtr(req.DisplayName), Language: trimmedStringPtr(req.Language),
+			ModelProfileKey: trimmedStringPtr(req.ModelProfileKey), ProviderModelID: trimmedStringPtr(req.ProviderModelID),
+			VoiceKey: trimmedStringPtr(req.VoiceKey), Instructions: trimmedStringPtr(req.Instructions),
+			ReferenceArtifactID: trimmedStringPtr(req.ReferenceArtifactID), ReferenceMediaFileID: trimmedStringPtr(req.ReferenceMediaFileID),
+			Parameters: req.Parameters, IsDefault: req.IsDefault,
+		}), idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	isDefault := req.IsDefault != nil && *req.IsDefault
-	if req.IsDefault == nil || !isDefault {
-		if err := tx.QueryRow(r.Context(), `SELECT NOT EXISTS(SELECT 1 FROM character_voice_profiles WHERE project_id = $1 AND status = 'active' AND is_default = true)`, project.ID).Scan(&isDefault); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if isDefault {
-		if _, err := tx.Exec(r.Context(), `UPDATE character_voice_profiles SET is_default = false, updated_at = now() WHERE project_id = $1 AND status = 'active' AND is_default = true`, project.ID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	var item CharacterVoiceProfile
-	err = scanCharacterVoice(tx.QueryRow(r.Context(), `
-		INSERT INTO character_voice_profiles(
-			organization_id, project_id, canonical_asset_id, character_name, display_name, language,
-			model_profile_key, provider_model_id, voice_key, instructions, reference_artifact_id,
-			reference_media_file_id, parameters, is_default, created_by
-		)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, COALESCE(NULLIF($6, ''), 'zh-CN'),
-		        COALESCE(NULLIF($7, ''), 'tts_generation_default'), NULLIF($8, '')::uuid, $9, NULLIF($10, ''),
-		        NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $15)
-		RETURNING `+characterVoiceSelectColumns+`
-	`, project.OrganizationID, project.ID, trimmedStringPtr(req.CanonicalAssetID), characterName, displayName,
-		trimmedStringPtr(req.Language), trimmedStringPtr(req.ModelProfileKey), trimmedStringPtr(req.ProviderModelID), voiceKey,
-		trimmedStringPtr(req.Instructions), trimmedStringPtr(req.ReferenceArtifactID), trimmedStringPtr(req.ReferenceMediaFileID), parameters, isDefault, principal.UserID), &item)
+	item, err := decodeAgentToolResultValue[CharacterVoiceProfile](result, "voice")
 	if err != nil {
-		s.writeAudioError(w, r, err)
-		return
-	}
-	if _, err := invalidateProjectAudioConfigurationTx(r.Context(), tx, project, "character_voice_created", principal.UserID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusCreated, item, nil)
 }
 
@@ -259,96 +218,36 @@ func (s *Server) updateCharacterVoice(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	current, err := s.characterVoice(r.Context(), project.ID, r.PathValue("voiceId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	var req characterVoiceRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	if !s.validateCharacterVoiceReferences(w, r, project, req) {
-		return
-	}
-	characterName, displayName, language := current.CharacterName, current.DisplayName, current.Language
-	profileKey, voiceKey := current.ModelProfileKey, current.VoiceKey
-	canonicalAssetID, providerModelID := derefOptionalString(current.CanonicalAssetID), derefOptionalString(current.ProviderModelID)
-	instructions := derefOptionalString(current.Instructions)
-	referenceArtifactID, referenceMediaFileID := derefOptionalString(current.ReferenceArtifactID), derefOptionalString(current.ReferenceMediaFileID)
-	parameters := current.Parameters
-	isDefault := current.IsDefault
-	applyString := func(target *string, value *string) {
-		if value != nil {
-			*target = strings.TrimSpace(*value)
-		}
-	}
-	applyString(&characterName, req.CharacterName)
-	applyString(&displayName, req.DisplayName)
-	applyString(&language, req.Language)
-	applyString(&profileKey, req.ModelProfileKey)
-	applyString(&providerModelID, req.ProviderModelID)
-	applyString(&voiceKey, req.VoiceKey)
-	applyString(&canonicalAssetID, req.CanonicalAssetID)
-	applyString(&instructions, req.Instructions)
-	applyString(&referenceArtifactID, req.ReferenceArtifactID)
-	applyString(&referenceMediaFileID, req.ReferenceMediaFileID)
+	var parameters *json.RawMessage
 	if len(req.Parameters) > 0 {
-		parameters = req.Parameters
+		value := req.Parameters
+		parameters = &value
 	}
-	if req.IsDefault != nil {
-		if current.IsDefault && !*req.IsDefault {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "请先将另一条声音设为默认旁白", nil, false)
-			return
-		}
-		isDefault = *req.IsDefault
-	}
-	if characterName == "" || displayName == "" || voiceKey == "" {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "characterName, displayName, and voiceKey are required", nil, false)
-		return
-	}
-	generationSettingsChanged := canonicalAssetID != derefOptionalString(current.CanonicalAssetID) ||
-		characterName != current.CharacterName || language != current.Language || profileKey != current.ModelProfileKey ||
-		providerModelID != derefOptionalString(current.ProviderModelID) || voiceKey != current.VoiceKey ||
-		instructions != derefOptionalString(current.Instructions) || referenceArtifactID != derefOptionalString(current.ReferenceArtifactID) ||
-		referenceMediaFileID != derefOptionalString(current.ReferenceMediaFileID) || isDefault != current.IsDefault ||
-		!audioJSONEquivalent(parameters, current.Parameters)
-	tx, err := s.db.Begin(r.Context())
+	command, result, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "character_voice.update", mustRawJSON(characterVoiceUpdateActionInput{
+			VoiceID: r.PathValue("voiceId"), ExpectedRevision: req.ExpectedRevision,
+			Patch: characterVoicePatch{
+				CanonicalAssetID: req.CanonicalAssetID, CharacterName: req.CharacterName, DisplayName: req.DisplayName,
+				Language: req.Language, ModelProfileKey: req.ModelProfileKey, ProviderModelID: req.ProviderModelID,
+				VoiceKey: req.VoiceKey, Instructions: req.Instructions, ReferenceArtifactID: req.ReferenceArtifactID,
+				ReferenceMediaFileID: req.ReferenceMediaFileID, Parameters: parameters, IsDefault: req.IsDefault,
+			},
+		}), idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	if isDefault {
-		if _, err := tx.Exec(r.Context(), `UPDATE character_voice_profiles SET is_default = false, updated_at = now() WHERE project_id = $1 AND id <> $2 AND status = 'active' AND is_default = true`, project.ID, current.ID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	var item CharacterVoiceProfile
-	err = scanCharacterVoice(tx.QueryRow(r.Context(), `
-		UPDATE character_voice_profiles SET canonical_asset_id = NULLIF($3, '')::uuid, character_name = $4,
-		  display_name = $5, language = COALESCE(NULLIF($6, ''), 'zh-CN'), model_profile_key = COALESCE(NULLIF($7, ''), 'tts_generation_default'),
-		  provider_model_id = NULLIF($8, '')::uuid, voice_key = $9, instructions = NULLIF($10, ''),
-		  reference_artifact_id = NULLIF($11, '')::uuid, reference_media_file_id = NULLIF($12, '')::uuid,
-		  parameters = $13, is_default = $14, updated_at = now() WHERE project_id = $1 AND id = $2 AND status = 'active'
-		RETURNING `+characterVoiceSelectColumns+`
-	`, project.ID, current.ID, canonicalAssetID, characterName, displayName, language, profileKey, providerModelID,
-		voiceKey, instructions, referenceArtifactID, referenceMediaFileID, parameters, isDefault), &item)
+	item, err := decodeAgentToolResultValue[CharacterVoiceProfile](result, "voice")
 	if err != nil {
-		s.writeAudioError(w, r, err)
-		return
-	}
-	if generationSettingsChanged {
-		if _, err := invalidateProjectAudioConfigurationTx(r.Context(), tx, project, "character_voice_updated", principal.UserID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if err := tx.Commit(r.Context()); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	httpx.WriteJSON(w, r, http.StatusOK, item, nil)
 }
 
@@ -357,43 +256,22 @@ func (s *Server) deleteCharacterVoice(w http.ResponseWriter, r *http.Request, pr
 	if !ok {
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	var req struct {
+		ExpectedRevision int64 `json:"expectedRevision"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	command, _, _, err := s.projectControl.executeManualSyncAction(
+		r.Context(), principal, project, "character_voice.delete", mustRawJSON(characterVoiceDeleteActionInput{
+			VoiceID: r.PathValue("voiceId"), ExpectedRevision: req.ExpectedRevision,
+		}), idempotencyKey(r, ""),
+	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-	var wasDefault bool
-	err = tx.QueryRow(r.Context(), `SELECT is_default FROM character_voice_profiles WHERE project_id = $1 AND id = $2 AND status = 'active' FOR UPDATE`, project.ID, r.PathValue("voiceId")).Scan(&wasDefault)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			s.writeError(w, r, pgx.ErrNoRows)
-		} else {
-			s.writeError(w, r, err)
-		}
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `UPDATE character_voice_profiles SET status = 'archived', is_default = false, metadata = metadata || jsonb_build_object('archivedAt', now(), 'archivedBy', $3::uuid::text), updated_at = now() WHERE project_id = $1 AND id = $2`, project.ID, r.PathValue("voiceId"), principal.UserID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if wasDefault {
-		if _, err := tx.Exec(r.Context(), `
-			UPDATE character_voice_profiles SET is_default = true, updated_at = now()
-			WHERE id = (SELECT id FROM character_voice_profiles WHERE project_id = $1 AND status = 'active' ORDER BY updated_at DESC, created_at DESC LIMIT 1)
-		`, project.ID); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-	}
-	if _, err := invalidateProjectAudioConfigurationTx(r.Context(), tx, project, "character_voice_archived", principal.UserID); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	w.Header().Set("X-CineWeave-Command-ID", command.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -409,7 +287,7 @@ func (s *Server) characterVoice(ctx context.Context, projectID, voiceID string) 
 const characterVoiceSelectColumns = `id::text, organization_id::text, project_id::text, canonical_asset_id::text,
        character_name, display_name, language, model_profile_key, provider_model_id::text,
        voice_key, instructions, reference_artifact_id::text, reference_media_file_id::text,
-       parameters, is_default, status, metadata, created_by::text, created_at, updated_at`
+       parameters, is_default, status, metadata, revision, created_by::text, created_at, updated_at`
 
 type characterVoiceScanner interface {
 	Scan(dest ...any) error
@@ -419,41 +297,8 @@ func scanCharacterVoice(scanner characterVoiceScanner, item *CharacterVoiceProfi
 	return scanner.Scan(&item.ID, &item.OrganizationID, &item.ProjectID, &item.CanonicalAssetID,
 		&item.CharacterName, &item.DisplayName, &item.Language, &item.ModelProfileKey, &item.ProviderModelID,
 		&item.VoiceKey, &item.Instructions, &item.ReferenceArtifactID, &item.ReferenceMediaFileID,
-		&item.Parameters, &item.IsDefault, &item.Status, &item.Metadata, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
-}
-
-func (s *Server) validateCharacterVoiceReferences(w http.ResponseWriter, r *http.Request, project Project, req characterVoiceRequest) bool {
-	if value := trimmedStringPtr(req.CanonicalAssetID); value != "" {
-		var assetType, status string
-		if err := s.db.QueryRow(r.Context(), `SELECT asset_type, status FROM canonical_assets WHERE project_id = $1 AND id = $2`, project.ID, value).Scan(&assetType, &status); err != nil {
-			s.writeError(w, r, err)
-			return false
-		}
-		if assetType != "character" || status == "archived" {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "canonicalAssetId must reference an active character asset", nil, false)
-			return false
-		}
-	}
-	if value := trimmedStringPtr(req.ProviderModelID); value != "" {
-		var compatible bool
-		err := s.db.QueryRow(r.Context(), `
-			SELECT EXISTS(
-			  SELECT 1 FROM provider_models model JOIN provider_accounts account ON account.id = model.provider_account_id
-			  JOIN provider_model_capabilities capability ON capability.provider_model_id = model.id
-			  WHERE account.organization_id = $1 AND model.id = $2 AND model.status = 'active' AND account.status = 'active'
-			    AND model.modality IN ('audio', 'multimodal') AND capability.task_types ? $3
-			)
-		`, project.OrganizationID, value, provider.TaskTypeAudioTTS).Scan(&compatible)
-		if err != nil {
-			s.writeError(w, r, err)
-			return false
-		}
-		if !compatible {
-			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", "providerModelId does not support audio.tts", nil, false)
-			return false
-		}
-	}
-	return true
+		&item.Parameters, &item.IsDefault, &item.Status, &item.Metadata, &item.Revision,
+		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
 }
 
 func (s *Server) produceEpisodeAudio(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -595,31 +440,61 @@ func (s *Server) startNativeAudioReview(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	shot, err := s.storyboardShotByID(r, project.ID, r.PathValue("shotId"))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	var req struct {
-		VideoRenderPlanID string `json:"videoRenderPlanId"`
-		MaxConcurrency    int    `json:"maxConcurrency"`
-	}
+	var req nativeAudioReviewRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	run, err := s.startTypedProjectWorkflow(r.Context(), principal, project, "native_audio_review", map[string]any{
-		"storyboardShotId": shot.ID, "videoRenderPlanId": req.VideoRenderPlanID, "maxConcurrency": req.MaxConcurrency,
-	}, workflows.AudioTaskQueue, workflows.NativeAudioReviewWorkflow, func(run WorkflowRun) any {
-		return workflows.NativeAudioReviewWorkflowInput{
-			OrganizationID: project.OrganizationID, ProjectID: project.ID, WorkflowRunID: run.ID, CreatedBy: principal.UserID,
-			StoryboardShotID: shot.ID, VideoRenderPlanID: req.VideoRenderPlanID, MaxConcurrency: req.MaxConcurrency,
-		}
-	})
+	req.ShotID = r.PathValue("shotId")
+	run, _, err := s.startNativeAudioReviewCore(r.Context(), principal, project, req, "")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusAccepted, run, nil)
+}
+
+type nativeAudioReviewRequest struct {
+	ShotID            string `json:"shotId,omitempty"`
+	VideoRenderPlanID string `json:"videoRenderPlanId"`
+	MaxConcurrency    int    `json:"maxConcurrency"`
+}
+
+func (s *Server) startNativeAudioReviewCore(
+	ctx context.Context,
+	principal auth.Principal,
+	project Project,
+	req nativeAudioReviewRequest,
+	projectControlCommandID string,
+) (WorkflowRun, bool, error) {
+	req.ShotID = strings.TrimSpace(req.ShotID)
+	if req.ShotID == "" {
+		return WorkflowRun{}, false, newAPIError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "shotId is required")
+	}
+	shot, err := s.storyboardShotByIDContext(ctx, project.ID, req.ShotID)
+	if err != nil {
+		return WorkflowRun{}, false, err
+	}
+	commandID := strings.TrimSpace(projectControlCommandID)
+	if commandID != "" {
+		existing, found, err := s.workflowRunForProjectControlCommand(ctx, project.ID, "native_audio_review", commandID)
+		if err != nil || found {
+			return existing, found, err
+		}
+	}
+	requestInput := map[string]any{
+		"storyboardShotId": shot.ID, "videoRenderPlanId": strings.TrimSpace(req.VideoRenderPlanID), "maxConcurrency": req.MaxConcurrency,
+	}
+	if commandID != "" {
+		requestInput["projectControlCommandId"] = commandID
+		requestInput["idempotencyKey"] = "project-control-command:" + commandID
+	}
+	run, err := s.startTypedProjectWorkflow(ctx, principal, project, "native_audio_review", requestInput, workflows.AudioTaskQueue, workflows.NativeAudioReviewWorkflow, func(run WorkflowRun) any {
+		return workflows.NativeAudioReviewWorkflowInput{
+			OrganizationID: project.OrganizationID, ProjectID: project.ID, WorkflowRunID: run.ID, CreatedBy: principal.UserID,
+			StoryboardShotID: shot.ID, VideoRenderPlanID: strings.TrimSpace(req.VideoRenderPlanID), MaxConcurrency: req.MaxConcurrency,
+		}
+	})
+	return run, false, err
 }
 
 func (s *Server) listNativeAudioReviews(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
@@ -687,13 +562,4 @@ func audioJSONEquivalent(left, right json.RawMessage) bool {
 		return string(left) == string(right)
 	}
 	return reflect.DeepEqual(leftValue, rightValue)
-}
-
-func (s *Server) writeAudioError(w http.ResponseWriter, r *http.Request, err error) {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		httpx.WriteError(w, r, http.StatusConflict, "CONFLICT", "该角色已存在启用的声音配置", nil, false)
-		return
-	}
-	s.writeError(w, r, err)
 }

@@ -325,12 +325,12 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
         `commerce-direct-video-${input.unit.id}-${crypto.randomUUID()}`,
       );
     },
-    onSuccess: (job) => {
+    onSuccess: () => {
       setGenerate(null);
-      terminalNotifications.current.set(job.id, job.status);
       invalidate([
         qk.commerceDirectVideosRoot(projectId),
         qk.workflowRuns(projectId),
+        qk.projectControlCommands(projectId),
       ]);
       toast.success("视频任务已提交");
     },
@@ -354,7 +354,7 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
           const references: CommerceDirectVideoReferenceSelection[] = input.selectedProductReferenceIds.map(
             (sourceId) => ({ sourceType: "product", sourceId }),
           );
-          const job = await studioApi.createCommerceDirectVideo(
+          const command = await studioApi.createCommerceDirectVideo(
             session,
             projectId,
             unit.id,
@@ -367,11 +367,11 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
             },
             `commerce-derivation-video-${block.batchId}-${unit.id}-${crypto.randomUUID()}`,
           );
-          return { unit, job, error: null as Error | null };
+          return { unit, command, error: null as Error | null };
         } catch (error) {
           return {
             unit,
-            job: null,
+            command: null,
             error: error instanceof Error ? error : new Error("视频任务提交失败"),
           };
         }
@@ -379,14 +379,12 @@ export function CommerceVideoPage({ projectId }: { projectId: string }) {
       return { block, results };
     },
     onSuccess: ({ results }) => {
-      const succeeded = results.filter((result) => result.job);
+      const succeeded = results.filter((result) => result.command);
       const failed = results.filter((result) => result.error);
-      for (const result of succeeded) {
-        if (result.job) terminalNotifications.current.set(result.job.id, result.job.status);
-      }
       invalidate([
         qk.commerceDirectVideosRoot(projectId),
         qk.workflowRuns(projectId),
+        qk.projectControlCommands(projectId),
       ]);
       if (failed.length === 0) {
         toast.success(`已提交 ${succeeded.length} 个视频任务`);
