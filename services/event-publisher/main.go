@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	streamName                       = "CINEWEAVE_EVENTS"
-	subjectPrefix                    = "cineweave.events"
-	legacyOversizedAgentPayloadBytes = 900 * 1024
+	streamName                          = "CINEWEAVE_EVENTS"
+	subjectPrefix                       = "cineweave.events"
+	legacyOversizedActivityPayloadBytes = 900 * 1024
 )
 
 type outboxEvent struct {
@@ -63,10 +63,10 @@ func main() {
 	}
 
 	publisher := publisher{db: pool, js: js, logger: logger}
-	if recovered, err := publisher.requeueLegacyOversizedAgentEvents(ctx); err != nil {
-		logger.Error("legacy oversized agent events could not be requeued", "error", err)
+	if recovered, err := publisher.requeueLegacyOversizedActivityEvents(ctx); err != nil {
+		logger.Error("legacy oversized activity events could not be requeued", "error", err)
 	} else if recovered > 0 {
-		logger.Info("legacy oversized agent events requeued", "count", recovered)
+		logger.Info("legacy oversized activity events requeued", "count", recovered)
 	}
 	ticker := time.NewTicker(config.Duration("CINEWEAVE_EVENT_PUBLISH_INTERVAL", time.Second))
 	defer ticker.Stop()
@@ -185,15 +185,21 @@ func (p publisher) publishEvent(ctx context.Context, event outboxEvent) error {
 	return err
 }
 
-func (p publisher) requeueLegacyOversizedAgentEvents(ctx context.Context) (int64, error) {
+func (p publisher) requeueLegacyOversizedActivityEvents(ctx context.Context) (int64, error) {
 	tag, err := p.db.Exec(ctx, `
 		UPDATE event_outbox
 		SET next_attempt_at = now()
 		WHERE status = 'failed'
-		  AND (event_type LIKE 'agent.step.%' OR event_type LIKE 'agent.task.%')
+		  AND (
+		      event_type LIKE 'agent.step.%'
+		      OR event_type LIKE 'agent.task.%'
+		      OR event_type LIKE 'workflow.node.%'
+		      OR event_type LIKE 'workflow.run.%'
+		      OR event_type LIKE 'workflow.result.%'
+		  )
 		  AND octet_length(payload::text) > $1
 		  AND next_attempt_at > now()
-	`, legacyOversizedAgentPayloadBytes)
+	`, legacyOversizedActivityPayloadBytes)
 	if err != nil {
 		return 0, err
 	}

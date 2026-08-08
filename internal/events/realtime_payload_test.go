@@ -44,11 +44,47 @@ func TestProjectRealtimePayloadKeepsAgentActivitySignalOnly(t *testing.T) {
 	}
 }
 
-func TestProjectRealtimePayloadLeavesNonAgentEventUnchanged(t *testing.T) {
+func TestProjectRealtimePayloadKeepsWorkflowActivitySignalOnly(t *testing.T) {
+	payload := json.RawMessage(`{
+		"workflowRunId":"run-1",
+		"workflowType":"source_to_script",
+		"nodeKey":"generate_episode",
+		"status":"partial_succeeded",
+		"totalItems":199,
+		"completedItems":198,
+		"content":"` + strings.Repeat("x", 1_500_000) + `",
+		"output":{"content":"large"},
+		"providerCallIds":["call-1","call-2"]
+	}`)
+
+	projected, changed := ProjectRealtimePayload("workflow.run.partial_succeeded", payload)
+	if !changed {
+		t.Fatal("workflow activity payload was not projected")
+	}
+	if len(projected) >= 8_192 {
+		t.Fatalf("projected payload is too large: %d bytes", len(projected))
+	}
+	var values map[string]any
+	if err := json.Unmarshal(projected, &values); err != nil {
+		t.Fatalf("decode projected payload: %v", err)
+	}
+	for _, field := range []string{"workflowRunId", "workflowType", "nodeKey", "status", "totalItems", "completedItems", "detailsAvailable"} {
+		if _, ok := values[field]; !ok {
+			t.Fatalf("projected payload is missing %s: %#v", field, values)
+		}
+	}
+	for _, field := range []string{"content", "output", "providerCallIds"} {
+		if _, ok := values[field]; ok {
+			t.Fatalf("projected payload retained %s", field)
+		}
+	}
+}
+
+func TestProjectRealtimePayloadLeavesNonActivityEventUnchanged(t *testing.T) {
 	payload := json.RawMessage(`{"workflowRunId":"run-1","output":{"count":2}}`)
-	projected, changed := ProjectRealtimePayload("workflow.run.completed", payload)
+	projected, changed := ProjectRealtimePayload("asset.card.updated", payload)
 	if changed {
-		t.Fatal("non-agent event was unexpectedly projected")
+		t.Fatal("non-activity event was unexpectedly projected")
 	}
 	if string(projected) != string(payload) {
 		t.Fatalf("payload changed: %s", projected)

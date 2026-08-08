@@ -34,11 +34,35 @@ func TestPrepareTransportEventProjectsOversizedAgentActivity(t *testing.T) {
 	}
 }
 
-func TestPrepareTransportEventPreservesNonAgentPayload(t *testing.T) {
-	event := outboxEvent{EventType: "workflow.run.completed", Payload: json.RawMessage(`{"workflowRunId":"run-1"}`)}
+func TestPrepareTransportEventProjectsOversizedWorkflowActivity(t *testing.T) {
+	event := outboxEvent{
+		EventType: "workflow.node.completed",
+		Payload: json.RawMessage(`{
+			"workflowRunId":"run-1",
+			"nodeKey":"generate_episode",
+			"output":{"content":"` + strings.Repeat("x", 1_500_000) + `"}
+		}`),
+	}
+	projected, changed := prepareTransportEvent(event)
+	if !changed {
+		t.Fatal("workflow activity event was not projected")
+	}
+	if len(projected.Payload) >= 8_192 {
+		t.Fatalf("projected payload is too large: %d bytes", len(projected.Payload))
+	}
+	if strings.Contains(string(projected.Payload), `"output"`) {
+		t.Fatalf("canonical workflow output leaked into transport payload: %s", projected.Payload)
+	}
+	if !strings.Contains(string(projected.Payload), `"workflowRunId":"run-1"`) {
+		t.Fatalf("workflow identity was not preserved: %s", projected.Payload)
+	}
+}
+
+func TestPrepareTransportEventPreservesNonActivityPayload(t *testing.T) {
+	event := outboxEvent{EventType: "asset.card.updated", Payload: json.RawMessage(`{"assetId":"asset-1"}`)}
 	projected, changed := prepareTransportEvent(event)
 	if changed {
-		t.Fatal("non-agent event was unexpectedly projected")
+		t.Fatal("non-activity event was unexpectedly projected")
 	}
 	if string(projected.Payload) != string(event.Payload) {
 		t.Fatalf("payload changed: %s", projected.Payload)
