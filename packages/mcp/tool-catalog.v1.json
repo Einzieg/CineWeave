@@ -1,6 +1,6 @@
 {
   "schemaVersion": "cineweave.mcp-tool-catalog.v1",
-  "catalogHash": "2d732f3c231ebfdf618bc66732b6fdee806d26c7a284a789fe92fd10a7499b45",
+  "catalogHash": "4770f637f958752d25458a36d050ab8e33ee5606ac93b337f65a1c29446053bb",
   "tools": [
     {
       "name": "adaptation_activate",
@@ -816,7 +816,7 @@
       "version": 1,
       "label": "新增广告脚本",
       "summary": "新增广告脚本",
-      "inputSchemaHash": "73ab9006f77bde719d072294a2f80e23abe8393402d09b72b6f5dc213b490913",
+      "inputSchemaHash": "7c448ac681dffbd4848eaaf1d353801bb046b8e9db8e6198222c11a4fcf09d3a",
       "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
       "permissions": [
         "script.write"

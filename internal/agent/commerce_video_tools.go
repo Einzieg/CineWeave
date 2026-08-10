@@ -118,6 +118,7 @@ func CommerceVideoTools() []AgentTool {
 			"expectedScriptUnitsRevision": integerSchema("当前脚本集合 revision。", 1, 1000000000),
 			"title":                       stringSchema("脚本标题。"),
 			"content":                     stringSchema("广告脚本正文。"),
+			"sourceLanguageHint":          stringSchema("可选的脚本源语言 BCP-47 标记，例如 ms-MY；省略时由系统识别。"),
 			"languageMode":                enumSchema("语言模式。", []string{"auto", "explicit"}),
 			"explicitTargetLanguage":      stringSchema("目标语言 BCP-47 标记。"),
 			"targetDurationSeconds":       integerSchema("目标视频秒数。", 1, 3600),

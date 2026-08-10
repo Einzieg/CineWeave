@@ -133,3 +133,25 @@ func TestCommerceScriptToolsAcceptStableOrdinalWithoutCopiedUUID(t *testing.T) {
 		}
 	}
 }
+
+func TestCommerceScriptCreateAcceptsSourceLanguageHint(t *testing.T) {
+	registry, err := NewRegistry(CommerceVideoTools()...)
+	if err != nil {
+		t.Fatalf("commerce video registry: %v", err)
+	}
+	step := PlanStep{
+		Tool: "commerce.script.create",
+		Args: json.RawMessage(`{
+			"expectedScriptUnitsRevision":7,
+			"title":"马来语头盔广告",
+			"content":"Helmet ini ringan dan selesa.",
+			"sourceLanguageHint":"ms-MY",
+			"languageMode":"auto",
+			"targetDurationSeconds":15,
+			"targetPlatform":"tiktok"
+		}`),
+	}
+	if _, err := ValidatePlan(Plan{Steps: []PlanStep{step}}, registry, 1); err != nil {
+		t.Fatalf("commerce.script.create sourceLanguageHint rejected: %v", err)
+	}
+}
