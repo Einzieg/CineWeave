@@ -1329,7 +1329,27 @@ func (s *Service) selectGatewayVideoModel(
 	if strings.TrimSpace(req.ProviderModelID) != "" {
 		model, err := s.GetModel(ctx, req.OrganizationID, req.ProviderModelID)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) &&
+				strings.TrimSpace(req.GatewayBillingIdentity.BillingContextID) != "" &&
+				strings.TrimSpace(req.ProviderModelKey) != "" {
+				return s.completeGatewaySelectionByModelKeyWithBilling(
+					ctx,
+					req.OrganizationID,
+					req.ProjectID,
+					req.GatewayBillingIdentity,
+					req.ProviderModelKey,
+					"video",
+					TaskTypeVideoCreateTask,
+					"",
+					"",
+					strings.TrimSpace(req.ModelProfileKey),
+				)
+			}
 			return gatewayModelSelection{}, err
+		}
+		if strings.TrimSpace(req.ProviderModelKey) != "" &&
+			!strings.EqualFold(strings.TrimSpace(req.ProviderModelKey), strings.TrimSpace(model.ModelKey)) {
+			return gatewayModelSelection{}, fmt.Errorf("%w: providerModelKey does not match providerModelId", ErrValidation)
 		}
 		if model.Status != "active" {
 			return gatewayModelSelection{}, fmt.Errorf("%w: provider model is not active", ErrValidation)

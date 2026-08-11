@@ -297,6 +297,31 @@ func (s *Service) listLogicalModelEquivalents(
 	organizationID string,
 	model Model,
 ) ([]Model, error) {
+	candidates, err := s.listLogicalModelEquivalentsByKey(
+		ctx,
+		organizationID,
+		model.ModelKey,
+		model.ID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Model, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Modality != model.Modality {
+			continue
+		}
+		result = append(result, candidate)
+	}
+	return result, nil
+}
+
+func (s *Service) listLogicalModelEquivalentsByKey(
+	ctx context.Context,
+	organizationID string,
+	modelKey string,
+	preferredModelID string,
+) ([]Model, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT candidate.id::text
 		FROM provider_models candidate
@@ -306,8 +331,8 @@ func (s *Service) listLogicalModelEquivalents(
 		  AND account.status = 'active'
 		  AND candidate.status = 'active'
 		  AND lower(btrim(candidate.model_key)) = lower(btrim($2))
-		ORDER BY (candidate.id = $3::uuid) DESC, candidate.id
-	`, organizationID, model.ModelKey, model.ID)
+		ORDER BY (candidate.id::text = NULLIF($3, '')) DESC, candidate.id
+	`, organizationID, strings.TrimSpace(modelKey), strings.TrimSpace(preferredModelID))
 	if err != nil {
 		return nil, err
 	}
@@ -331,9 +356,6 @@ func (s *Service) listLogicalModelEquivalents(
 		candidate, err := s.GetModel(ctx, organizationID, modelID)
 		if err != nil {
 			return nil, err
-		}
-		if candidate.Modality != model.Modality {
-			continue
 		}
 		result = append(result, candidate)
 	}

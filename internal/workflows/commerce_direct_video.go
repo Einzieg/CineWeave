@@ -242,7 +242,8 @@ func (a Activities) CreateCommerceDirectVideoTask(
 		WorkflowRunID:                  input.WorkflowRunID, NodeRunID: execution.NodeRunID,
 		NodeExecutionToken: execution.ExecutionToken, NodeAttemptGeneration: execution.AttemptGeneration,
 		ModelProfileKey: job.ModelProfileKey, ProviderModelID: pointerString(job.ProviderModelID),
-		PromptHash: job.PromptHash, PromptSource: "user_script",
+		ProviderModelKey: job.ProviderModelKey,
+		PromptHash:       job.PromptHash, PromptSource: "user_script",
 		IdempotencyKey:         "commerce-direct-video:" + job.ID + ":create",
 		CapabilitySnapshotHash: job.CapabilitySnapshotHash,
 		Input: mustJSON(map[string]any{

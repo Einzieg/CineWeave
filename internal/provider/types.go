@@ -968,6 +968,7 @@ type GatewayVideoCreateTaskRequest struct {
 	NodeAttemptGeneration          int                                 `json:"nodeAttemptGeneration,omitempty"`
 	ModelProfileKey                string                              `json:"modelProfileKey,omitempty"`
 	ProviderModelID                string                              `json:"providerModelId,omitempty"`
+	ProviderModelKey               string                              `json:"providerModelKey,omitempty"`
 	PromptTemplateKey              string                              `json:"promptTemplateKey,omitempty"`
 	PromptVersionID                string                              `json:"promptVersionId,omitempty"`
 	PromptHash                     string                              `json:"promptHash,omitempty"`

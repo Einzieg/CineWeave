@@ -88,8 +88,9 @@ func TestGatewayModelSelectionDoesNotBypassBillingContextFallback(t *testing.T) 
 		t.Fatal(err)
 	}
 	allowedFunctions := map[string]bool{
-		"completeGatewaySelection":                    true,
-		"completeGatewaySelectionWithBillingFallback": true,
+		"completeGatewaySelection":                      true,
+		"completeGatewaySelectionWithBillingFallback":   true,
+		"completeGatewaySelectionByModelKeyWithBilling": true,
 	}
 	for _, path := range entries {
 		if strings.HasSuffix(path, "_test.go") {

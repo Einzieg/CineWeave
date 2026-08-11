@@ -23196,6 +23196,8 @@ components:
         providerModelId:
           type: string
           format: uuid
+        providerModelKey:
+          type: string
         promptTemplateKey:
           type: string
         promptVersionId:

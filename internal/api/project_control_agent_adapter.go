@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Einzieg/cineweave/internal/agent"
 	"github.com/Einzieg/cineweave/internal/controlmcp"
@@ -215,9 +216,31 @@ func (e *projectControlExecutor) workflowLinks(
 	projectID string,
 	workflowRunIDs []string,
 ) ([]projectcontrol.WorkflowLink, error) {
+	return e.workflowLinksWithConsistencyWait(
+		ctx,
+		command,
+		projectID,
+		workflowRunIDs,
+		5*time.Second,
+		100*time.Millisecond,
+	)
+}
+
+func (e *projectControlExecutor) workflowLinksWithConsistencyWait(
+	ctx context.Context,
+	command projectcontrol.Command,
+	projectID string,
+	workflowRunIDs []string,
+	maxWait time.Duration,
+	pollInterval time.Duration,
+) ([]projectcontrol.WorkflowLink, error) {
 	if len(workflowRunIDs) == 0 {
 		return nil, nil
 	}
+	if pollInterval <= 0 {
+		pollInterval = 100 * time.Millisecond
+	}
+	deadline := time.Now().Add(maxWait)
 	expectedTemporalID, err := projectcontrol.TemporalWorkflowIdentity(command.ID, "", command.ActionVersion)
 	if err != nil {
 		return nil, err
@@ -233,16 +256,31 @@ func (e *projectControlExecutor) workflowLinks(
 			continue
 		}
 		seen[workflowRunID] = struct{}{}
-		var temporalWorkflowID, temporalRunID string
-		if err := e.server.db.QueryRow(ctx, `
-			SELECT temporal_workflow_id, COALESCE(temporal_run_id, '')
-			FROM workflow_runs
-			WHERE id = $1 AND project_id = $2
-		`, workflowRunID, projectID).Scan(&temporalWorkflowID, &temporalRunID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+		var temporalWorkflowID string
+		for {
+			err := e.server.db.QueryRow(ctx, `
+				SELECT temporal_workflow_id
+				FROM workflow_runs
+				WHERE id = $1 AND project_id = $2
+			`, workflowRunID, projectID).Scan(&temporalWorkflowID)
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return nil, err
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 || maxWait <= 0 {
 				return nil, fmt.Errorf("workflow run %s is not owned by project", workflowRunID)
 			}
-			return nil, err
+			wait := min(pollInterval, remaining)
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
 		}
 		relationType := projectcontrol.WorkflowRelationDomainIdempotentChild
 		if temporalWorkflowID == expectedTemporalID {
@@ -250,7 +288,7 @@ func (e *projectControlExecutor) workflowLinks(
 		}
 		links = append(links, projectcontrol.WorkflowLink{
 			WorkflowRunID: workflowRunID, TemporalWorkflowID: temporalWorkflowID,
-			TemporalRunID: temporalRunID, RelationType: relationType,
+			RelationType: relationType,
 		})
 	}
 	return links, nil

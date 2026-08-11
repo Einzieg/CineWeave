@@ -751,6 +751,7 @@ func exerciseCommerceDirectVideoProviderStub(
 			require.Equal(t, projectID, gatewayRequest.ProjectID)
 			require.Equal(t, envelope.Data.ID, gatewayRequest.CommerceDirectVideoJobID)
 			require.Equal(t, providerModelID, gatewayRequest.ProviderModelID)
+			require.Equal(t, envelope.Data.ProviderModelKey, gatewayRequest.ProviderModelKey)
 			require.Len(t, gatewayRequest.References, 1)
 			require.Equal(t, productReferenceID, gatewayRequest.References[0].SourceID)
 			var input struct {

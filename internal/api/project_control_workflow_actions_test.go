@@ -1,13 +1,81 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/auth"
 	"github.com/Einzieg/cineweave/internal/projectcontrol"
+	"github.com/google/uuid"
 )
+
+func TestProjectControlWorkflowLinksWaitForOutboxProjection(t *testing.T) {
+	_, seed := setupArtifactPreviewTest(t)
+	defer seed.Close()
+	configureTimelineTestProject(t, seed.apiServer.Handler(), seed, "Workflow Link Wait Project")
+
+	workflowRunID := uuid.NewString()
+	temporalWorkflowID := "project-control-link-wait-" + uuid.NewString()
+	var productionGenerationID, videoProductionBindingID string
+	var videoProductionBindingRevision int64
+	if err := seed.pool.QueryRow(seed.ctx, `
+		SELECT generation.id::text, generation.binding_id::text, binding.revision
+		FROM projects project
+		JOIN project_video_production_generations generation
+		  ON generation.id = project.active_video_production_generation_id
+		JOIN project_video_production_bindings binding
+		  ON binding.id = generation.binding_id
+		WHERE project.id = $1
+	`, seed.projectID).Scan(
+		&productionGenerationID,
+		&videoProductionBindingID,
+		&videoProductionBindingRevision,
+	); err != nil {
+		t.Fatalf("load active project production identity: %v", err)
+	}
+	inserted := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_, err := seed.pool.Exec(context.Background(), `
+			INSERT INTO workflow_runs(
+				id, organization_id, project_id, temporal_workflow_id,
+				workflow_type, status, input, output, created_by,
+				production_generation_id, video_production_binding_id,
+				video_production_binding_revision
+			)
+			VALUES (
+				$1, $2, $3, $4, 'commerce_direct_video', 'queued', '{}', '{}', $5,
+				$6, $7, $8
+			)
+		`, workflowRunID, seed.organizationID, seed.projectID, temporalWorkflowID,
+			seed.ownerUserID, productionGenerationID, videoProductionBindingID,
+			videoProductionBindingRevision)
+		inserted <- err
+	}()
+
+	links, err := seed.apiServer.projectControl.workflowLinksWithConsistencyWait(
+		seed.ctx,
+		projectcontrol.Command{ID: uuid.NewString(), ActionVersion: 1},
+		seed.projectID,
+		[]string{workflowRunID},
+		time.Second,
+		10*time.Millisecond,
+	)
+	insertErr := <-inserted
+	if insertErr != nil {
+		t.Fatalf("insert delayed workflow run: %v", insertErr)
+	}
+	if err != nil {
+		t.Fatalf("wait for projected workflow link: %v", err)
+	}
+	if len(links) != 1 || links[0].WorkflowRunID != workflowRunID ||
+		links[0].TemporalWorkflowID != temporalWorkflowID ||
+		links[0].RelationType != projectcontrol.WorkflowRelationDomainIdempotentChild {
+		t.Fatalf("workflow links = %+v", links)
+	}
+}
 
 func TestProjectControlWorkflowStartReusesRunAfterDispatchCrash(t *testing.T) {
 	_, seed := setupArtifactPreviewTest(t)

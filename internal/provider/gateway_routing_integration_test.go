@@ -201,6 +201,59 @@ func TestGatewayRoutingIntegration(t *testing.T) {
 				billingCredentialID,
 			)
 		}
+
+		const videoModelKey = "grok-video-integration"
+		requestedVideoModelID := insertProviderModelForRouting(
+			t,
+			ctx,
+			pool,
+			requestedAccountID,
+			videoModelKey,
+			"video",
+			`["video.create_task","video.generate"]`,
+			`{"videoCostPerSecond":"0.0500"}`,
+		)
+		billingVideoModelID := insertProviderModelForRouting(
+			t,
+			ctx,
+			pool,
+			billingAccountProviderID,
+			videoModelKey,
+			"video",
+			`["video.create_task","video.generate"]`,
+			`{"videoCostPerSecond":"0.0500"}`,
+		)
+		if _, err := pool.Exec(ctx, `DELETE FROM provider_models WHERE id = $1`, requestedVideoModelID); err != nil {
+			t.Fatalf("delete frozen provider model: %v", err)
+		}
+		videoSelection, err := service.selectGatewayVideoModel(
+			ctx,
+			GatewayVideoCreateTaskRequest{
+				OrganizationID:   orgID,
+				ProjectID:        "project-billing-context",
+				ProviderModelID:  requestedVideoModelID,
+				ProviderModelKey: videoModelKey,
+				GatewayBillingIdentity: GatewayBillingIdentity{
+					BillingContextID: "billing-context",
+				},
+			},
+		)
+		if err != nil {
+			t.Fatalf("select deleted video model by immutable logical key: %v", err)
+		}
+		if videoSelection.Account.ID != billingAccountProviderID ||
+			videoSelection.Model.ID != billingVideoModelID ||
+			videoSelection.CredentialID != billingCredentialID {
+			t.Fatalf(
+				"video selection = account %s model %s credential %s, want %s/%s/%s",
+				videoSelection.Account.ID,
+				videoSelection.Model.ID,
+				videoSelection.CredentialID,
+				billingAccountProviderID,
+				billingVideoModelID,
+				billingCredentialID,
+			)
+		}
 	})
 
 	t.Run("model default reasoning level reaches upstream", func(t *testing.T) {

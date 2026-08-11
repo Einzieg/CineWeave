@@ -1065,6 +1065,69 @@ func (s *Service) completeGatewaySelectionWithBillingFallback(
 	return gatewayModelSelection{}, originalErr
 }
 
+func (s *Service) completeGatewaySelectionByModelKeyWithBilling(
+	ctx context.Context,
+	organizationID string,
+	projectID string,
+	identity GatewayBillingIdentity,
+	modelKey string,
+	modality string,
+	taskType string,
+	profileID string,
+	bindingID string,
+	profileKey string,
+) (gatewayModelSelection, error) {
+	if strings.TrimSpace(identity.BillingContextID) == "" || strings.TrimSpace(modelKey) == "" {
+		return gatewayModelSelection{}, pgx.ErrNoRows
+	}
+	models, err := s.listLogicalModelEquivalentsByKey(
+		ctx,
+		organizationID,
+		modelKey,
+		"",
+	)
+	if err != nil {
+		return gatewayModelSelection{}, err
+	}
+	var routingErr error
+	for _, model := range models {
+		if model.Modality != modality && model.Modality != "multimodal" {
+			continue
+		}
+		if !modelSupportsTaskType(model, taskType) {
+			continue
+		}
+		account, err := s.GetAccount(ctx, organizationID, model.ProviderAccountID)
+		if err != nil {
+			return gatewayModelSelection{}, err
+		}
+		selection, err := s.completeGatewaySelectionWithBilling(
+			ctx,
+			organizationID,
+			projectID,
+			identity,
+			account,
+			model,
+			profileID,
+			bindingID,
+			profileKey,
+		)
+		if err == nil {
+			return selection, nil
+		}
+		if !billingRoutingCandidateUnavailable(err) {
+			return gatewayModelSelection{}, err
+		}
+		if routingErr == nil {
+			routingErr = err
+		}
+	}
+	if routingErr != nil {
+		return gatewayModelSelection{}, routingErr
+	}
+	return gatewayModelSelection{}, pgx.ErrNoRows
+}
+
 func (s *Service) completeGatewaySelectionWithBilling(
 	ctx context.Context,
 	organizationID string,
