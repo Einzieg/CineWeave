@@ -136,7 +136,12 @@ func usesNativeOpenAICompatibleRuntime(account Account) bool {
 	if runtime != "" {
 		return runtime == "openai_compatible"
 	}
-	return strings.EqualFold(strings.TrimSpace(account.ConnectorKey), "openai_compatible_custom")
+	switch strings.ToLower(strings.TrimSpace(account.ConnectorKey)) {
+	case "openai_compatible", "openai_compatible_custom":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c openAICompatibleClient) discoverModels(ctx context.Context, account Account, apiKey string, cfg openAICompatibleConfig) (ModelDiscoveryResult, error) {

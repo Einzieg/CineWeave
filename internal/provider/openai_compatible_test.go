@@ -25,11 +25,43 @@ func TestParseOpenAIModels(t *testing.T) {
 }
 
 func TestUsesNativeOpenAICompatibleRuntime(t *testing.T) {
-	if !usesNativeOpenAICompatibleRuntime(Account{ConnectorKey: "openai_compatible_custom", Config: json.RawMessage(`{}`)}) {
-		t.Fatal("openai-compatible connector without an explicit runtime should use the native runtime")
+	tests := []struct {
+		name    string
+		account Account
+		want    bool
+	}{
+		{
+			name:    "system connector default",
+			account: Account{ConnectorKey: "openai_compatible", Config: json.RawMessage(`{}`)},
+			want:    true,
+		},
+		{
+			name:    "custom connector default",
+			account: Account{ConnectorKey: "openai_compatible_custom", Config: json.RawMessage(`{}`)},
+			want:    true,
+		},
+		{
+			name:    "explicit declarative override",
+			account: Account{ConnectorKey: "openai_compatible", Config: json.RawMessage(`{"runtime":"declarative_manifest"}`)},
+			want:    false,
+		},
+		{
+			name:    "explicit native override",
+			account: Account{ConnectorKey: "declarative_http", Config: json.RawMessage(`{"runtime":"openai_compatible"}`)},
+			want:    true,
+		},
+		{
+			name:    "declarative connector default",
+			account: Account{ConnectorKey: "declarative_http", Config: json.RawMessage(`{}`)},
+			want:    false,
+		},
 	}
-	if usesNativeOpenAICompatibleRuntime(Account{ConnectorKey: "openai_compatible_custom", Config: json.RawMessage(`{"runtime":"declarative_manifest"}`)}) {
-		t.Fatal("explicit declarative runtime should take precedence over the connector default")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := usesNativeOpenAICompatibleRuntime(tt.account); got != tt.want {
+				t.Fatalf("usesNativeOpenAICompatibleRuntime() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
