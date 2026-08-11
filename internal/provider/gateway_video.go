@@ -327,7 +327,7 @@ func (s *Service) executeGatewayVideoCreateAttempt(ctx context.Context, req Gate
 	var openAIConfig openAICompatibleConfig
 	endpointTimeoutMS := 0
 	if openAICompatibleRuntime {
-		openAIConfig = parseOpenAICompatibleConfig(selection.Account.Config)
+		openAIConfig = openAICompatibleVideoConfigForModel(parseOpenAICompatibleConfig(selection.Account.Config), selection.Model)
 		endpointTimeoutMS = openAIConfig.TimeoutMS
 	} else {
 		var err error
@@ -750,7 +750,7 @@ func (s *Service) executeGatewayVideoPoll(ctx context.Context, req GatewayVideoP
 	var openAIConfig openAICompatibleConfig
 	endpointTimeoutMS := 0
 	if openAICompatibleRuntime {
-		openAIConfig = parseOpenAICompatibleConfig(account.Config)
+		openAIConfig = openAICompatibleVideoConfigForModel(parseOpenAICompatibleConfig(account.Config), model)
 		endpointTimeoutMS = openAIConfig.VideoPollTimeoutMS
 	} else {
 		manifest, err = s.manifestForAccount(ctx, account)
@@ -1167,7 +1167,7 @@ func (s *Service) executeGatewayVideoCancel(ctx context.Context, req GatewayVide
 	var manifest ProviderManifest
 	var openAIConfig openAICompatibleConfig
 	if openAICompatibleRuntime {
-		openAIConfig = parseOpenAICompatibleConfig(account.Config)
+		openAIConfig = openAICompatibleVideoConfigForModel(parseOpenAICompatibleConfig(account.Config), model)
 	} else {
 		manifest, err = s.manifestForAccount(ctx, account)
 		if err != nil {

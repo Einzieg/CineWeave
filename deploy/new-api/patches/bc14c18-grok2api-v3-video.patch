@@ -1,0 +1,268 @@
+diff --git a/relay/channel/task/sora/adaptor.go b/relay/channel/task/sora/adaptor.go
+index e9029aa2..b0435e86 100644
+--- a/relay/channel/task/sora/adaptor.go
++++ b/relay/channel/task/sora/adaptor.go
+@@ -18,6 +18,7 @@ import (
+ 	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
+ 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+ 	"github.com/QuantumNous/new-api/service"
++	"github.com/QuantumNous/new-api/setting/system_setting"
+ 
+ 	"github.com/gin-gonic/gin"
+ 	"github.com/pkg/errors"
+@@ -41,6 +42,7 @@ type ImageURL struct {
+ type responseTask struct {
+ 	ID                 string `json:"id"`
+ 	TaskID             string `json:"task_id,omitempty"` //兼容旧接口
++	RequestID          string `json:"request_id,omitempty"`
+ 	Object             string `json:"object"`
+ 	Model              string `json:"model"`
+ 	Status             string `json:"status"`
+@@ -51,7 +53,10 @@ type responseTask struct {
+ 	Seconds            string `json:"seconds,omitempty"`
+ 	Size               string `json:"size,omitempty"`
+ 	RemixedFromVideoID string `json:"remixed_from_video_id,omitempty"`
+-	Error              *struct {
++	Video              *struct {
++		URL string `json:"url"`
++	} `json:"video,omitempty"`
++	Error *struct {
+ 		Message string `json:"message"`
+ 		Code    string `json:"code"`
+ 	} `json:"error,omitempty"`
+@@ -68,6 +73,13 @@ type TaskAdaptor struct {
+ 	baseURL     string
+ }
+ 
++const grokImagineVideoModel = "grok-imagine-video"
++
++func isGrokImagineVideo(modelName string) bool {
++	normalized := strings.ToLower(strings.TrimSpace(modelName))
++	return normalized == grokImagineVideoModel || strings.HasPrefix(normalized, grokImagineVideoModel+"-")
++}
++
+ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
+ 	a.ChannelType = info.ChannelType
+ 	a.baseURL = info.ChannelBaseUrl
+@@ -87,10 +99,55 @@ func validateRemixRequest(c *gin.Context) *dto.TaskError {
+ 	return nil
+ }
+ 
++func validateGrokImagineVideoRequest(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
++	if !strings.HasPrefix(c.GetHeader("Content-Type"), gin.MIMEJSON) {
++		return service.TaskErrorWrapperLocal(fmt.Errorf("grok video generation only supports application/json"), "invalid_request", http.StatusUnsupportedMediaType)
++	}
++
++	var req struct {
++		Model           string     `json:"model"`
++		Prompt          string     `json:"prompt"`
++		Duration        int        `json:"duration"`
++		Image           *ImageURL  `json:"image"`
++		ReferenceImages []ImageURL `json:"reference_images"`
++	}
++	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
++		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
++	}
++	if strings.TrimSpace(req.Model) == "" {
++		return service.TaskErrorWrapperLocal(fmt.Errorf("field model is required"), "invalid_request", http.StatusBadRequest)
++	}
++
++	images := make([]string, 0, len(req.ReferenceImages)+1)
++	if req.Image != nil && strings.TrimSpace(req.Image.URL) != "" {
++		images = append(images, strings.TrimSpace(req.Image.URL))
++	}
++	for _, image := range req.ReferenceImages {
++		if url := strings.TrimSpace(image.URL); url != "" {
++			images = append(images, url)
++		}
++	}
++	if strings.TrimSpace(req.Prompt) == "" && len(images) == 0 {
++		return service.TaskErrorWrapperLocal(fmt.Errorf("prompt or image is required"), "invalid_request", http.StatusBadRequest)
++	}
++
++	c.Set("task_request", relaycommon.TaskSubmitReq{
++		Model: req.Model, Prompt: req.Prompt, Duration: req.Duration, Images: images,
++	})
++	info.Action = constant.TaskActionTextGenerate
++	if len(images) > 0 {
++		info.Action = constant.TaskActionGenerate
++	}
++	return nil
++}
++
+ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
+ 	if info.Action == constant.TaskActionRemix {
+ 		return validateRemixRequest(c)
+ 	}
++	if isGrokImagineVideo(info.OriginModelName) {
++		return validateGrokImagineVideoRequest(c, info)
++	}
+ 	return relaycommon.ValidateMultipartDirect(c, info)
+ }
+ 
+@@ -133,6 +190,9 @@ func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, erro
+ 	if info.Action == constant.TaskActionRemix {
+ 		return fmt.Sprintf("%s/v1/videos/%s/remix", a.baseURL, info.OriginTaskID), nil
+ 	}
++	if isGrokImagineVideo(info.OriginModelName) {
++		return fmt.Sprintf("%s/v1/videos/generations", a.baseURL), nil
++	}
+ 	return fmt.Sprintf("%s/v1/videos", a.baseURL), nil
+ }
+ 
+@@ -244,6 +304,9 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
+ 	if upstreamID == "" {
+ 		upstreamID = dResp.TaskID
+ 	}
++	if upstreamID == "" {
++		upstreamID = dResp.RequestID
++	}
+ 	if upstreamID == "" {
+ 		taskErr = service.TaskErrorWrapper(fmt.Errorf("task_id is empty"), "invalid_response", http.StatusInternalServerError)
+ 		return
+@@ -252,6 +315,9 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
+ 	// 使用公开 task_xxxx ID 返回给客户端
+ 	dResp.ID = info.PublicTaskID
+ 	dResp.TaskID = info.PublicTaskID
++	if isGrokImagineVideo(info.OriginModelName) {
++		dResp.RequestID = info.PublicTaskID
++	}
+ 	c.JSON(http.StatusOK, dResp)
+ 	return upstreamID, responseBody, nil
+ }
+@@ -302,9 +368,11 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
+ 		taskResult.Status = model.TaskStatusQueued
+ 	case "processing", "in_progress":
+ 		taskResult.Status = model.TaskStatusInProgress
+-	case "completed":
++	case "completed", "done":
+ 		taskResult.Status = model.TaskStatusSuccess
+-		// Url intentionally left empty — the caller constructs the proxy URL using the public task ID
++		if resTask.Video != nil {
++			taskResult.Url = resTask.Video.URL
++		}
+ 	case "failed", "cancelled":
+ 		taskResult.Status = model.TaskStatusFailure
+ 		if resTask.Error != nil {
+@@ -327,5 +395,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
+ 	if data, err = sjson.SetBytes(data, "id", task.TaskID); err != nil {
+ 		return nil, errors.Wrap(err, "set id failed")
+ 	}
++	if isGrokImagineVideo(task.Properties.OriginModelName) {
++		if data, err = sjson.SetBytes(data, "request_id", task.TaskID); err != nil {
++			return nil, errors.Wrap(err, "set request id failed")
++		}
++		contentURL := fmt.Sprintf("%s/v1/videos/%s/content", strings.TrimRight(system_setting.ServerAddress, "/"), task.TaskID)
++		if data, err = sjson.SetBytes(data, "video.url", contentURL); err != nil {
++			return nil, errors.Wrap(err, "set video url failed")
++		}
++	}
+ 	return data, nil
+ }
+diff --git a/relay/channel/task/sora/adaptor_grok_test.go b/relay/channel/task/sora/adaptor_grok_test.go
+new file mode 100644
+index 00000000..05bf41b0
+--- /dev/null
++++ b/relay/channel/task/sora/adaptor_grok_test.go
+@@ -0,0 +1,100 @@
++package sora
++
++import (
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"github.com/QuantumNous/new-api/constant"
++	"github.com/QuantumNous/new-api/model"
++	relaycommon "github.com/QuantumNous/new-api/relay/common"
++	"github.com/QuantumNous/new-api/setting/system_setting"
++	"github.com/gin-gonic/gin"
++	"github.com/stretchr/testify/require"
++)
++
++func TestGrokImagineVideoModelRecognition(t *testing.T) {
++	require.True(t, isGrokImagineVideo("grok-imagine-video"))
++	require.True(t, isGrokImagineVideo("grok-imagine-video-1.5-preview"))
++	require.False(t, isGrokImagineVideo("omni-fast-no-water"))
++}
++
++func TestValidateGrokImagineVideoRequestAcceptsImageObject(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	recorder := httptest.NewRecorder()
++	ctx, _ := gin.CreateTestContext(recorder)
++	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(`{
++		"model":"grok-imagine-video",
++		"prompt":"product turntable",
++		"duration":6,
++		"image":{"url":"https://example.com/reference.png"}
++	}`))
++	ctx.Request.Header.Set("Content-Type", gin.MIMEJSON)
++	info := &relaycommon.RelayInfo{OriginModelName: grokImagineVideoModel, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
++
++	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(ctx, info)
++
++	require.Nil(t, taskErr)
++	require.Equal(t, constant.TaskActionGenerate, info.Action)
++	taskRequest, err := relaycommon.GetTaskRequest(ctx)
++	require.NoError(t, err)
++	require.Equal(t, 6, taskRequest.Duration)
++	require.Equal(t, []string{"https://example.com/reference.png"}, taskRequest.Images)
++}
++
++func TestBuildRequestURLUsesGrokGenerationEndpoint(t *testing.T) {
++	adaptor := &TaskAdaptor{baseURL: "http://grok2api:8000"}
++	url, err := adaptor.BuildRequestURL(&relaycommon.RelayInfo{OriginModelName: grokImagineVideoModel, TaskRelayInfo: &relaycommon.TaskRelayInfo{}})
++	require.NoError(t, err)
++	require.Equal(t, "http://grok2api:8000/v1/videos/generations", url)
++}
++
++func TestDoResponseAcceptsGrokRequestIDAndReturnsPublicID(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	recorder := httptest.NewRecorder()
++	ctx, _ := gin.CreateTestContext(recorder)
++	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"request_id":"video_upstream"}`))}
++	info := &relaycommon.RelayInfo{OriginModelName: grokImagineVideoModel, PublicTaskID: "task_public"}
++
++	taskID, _, taskErr := (&TaskAdaptor{}).DoResponse(ctx, resp, info)
++
++	require.Nil(t, taskErr)
++	require.Equal(t, "video_upstream", taskID)
++	require.JSONEq(t, `{"id":"task_public","task_id":"task_public","request_id":"task_public","object":"","model":"","status":"","progress":0,"created_at":0}`, recorder.Body.String())
++}
++
++func TestParseTaskResultAcceptsGrokDoneStatus(t *testing.T) {
++	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
++		"status":"done",
++		"video":{"url":"https://grok.example/v1/videos/video_upstream/content"}
++	}`))
++	require.NoError(t, err)
++	require.Equal(t, string(model.TaskStatusSuccess), result.Status)
++	require.Equal(t, "https://grok.example/v1/videos/video_upstream/content", result.Url)
++}
++
++func TestConvertToOpenAIVideoRewritesGrokContentURL(t *testing.T) {
++	originalServerAddress := system_setting.ServerAddress
++	system_setting.ServerAddress = "https://api.example.com/"
++	t.Cleanup(func() { system_setting.ServerAddress = originalServerAddress })
++	task := &model.Task{TaskID: "task_public", Properties: model.Properties{OriginModelName: grokImagineVideoModel}}
++	task.SetData(map[string]any{
++		"request_id": "video_upstream",
++		"status":     "done",
++		"video": map[string]any{
++			"url": "https://grok.example/v1/videos/video_upstream/content",
++		},
++	})
++
++	response, err := (&TaskAdaptor{}).ConvertToOpenAIVideo(task)
++
++	require.NoError(t, err)
++	require.JSONEq(t, `{
++		"id":"task_public",
++		"request_id":"task_public",
++		"status":"done",
++		"video":{"url":"https://api.example.com/v1/videos/task_public/content"}
++	}`, string(response))
++}
+

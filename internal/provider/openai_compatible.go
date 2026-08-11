@@ -36,6 +36,7 @@ type openAICompatibleConfig struct {
 	AudioSpeechEndpoint         string `json:"audioSpeechEndpoint"`
 	AudioTranscriptionsEndpoint string `json:"audioTranscriptionsEndpoint"`
 	VideoProtocol               string `json:"videoProtocol"`
+	VideoUpstreamModel          string `json:"videoUpstreamModel"`
 	VideoCreateEndpoint         string `json:"videoCreateEndpoint"`
 	VideoPollEndpoint           string `json:"videoPollEndpoint"`
 	VideoCancelEndpoint         string `json:"videoCancelEndpoint"`

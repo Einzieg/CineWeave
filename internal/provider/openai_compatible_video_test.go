@@ -18,25 +18,24 @@ func TestOpenAICompatibleVideoCreateAndPoll(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode create body: %v", err)
 			}
-			if body["model"] != "grok-imagine-video-1.5-preview" || body["prompt"] != "slow camera push" || body["image"] != "https://cdn.example/frame.png" {
+			image, _ := body["image"].(map[string]any)
+			if body["model"] != "grok-imagine-video" || body["prompt"] != "slow camera push" || image["url"] != "https://cdn.example/frame.png" {
 				t.Fatalf("create body = %#v", body)
 			}
-			if body["size"] != "1280x720" || body["aspect_ratio"] != "16:9" || body["resolution"] != "720p" ||
-				body["duration"] != float64(5) || body["n"] != float64(1) {
+			if body["aspect_ratio"] != "16:9" || body["resolution"] != "720p" || body["duration"] != float64(5) {
 				t.Fatalf("create layout = %#v", body)
 			}
-			if _, ok := body["width"]; ok {
-				t.Fatalf("New API request must use size, got width in %#v", body)
+			for _, unsupported := range []string{"n", "size", "width", "height"} {
+				if _, ok := body[unsupported]; ok {
+					t.Fatalf("Grok v3 request must omit %s: %#v", unsupported, body)
+				}
 			}
-			if _, ok := body["height"]; ok {
-				t.Fatalf("New API request must use size, got height in %#v", body)
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"task_id": "task-1", "status": "queued", "size": "1280x720"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"request_id": "task-1"})
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/video/generations/task-1":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status":   "completed",
-				"output":   map[string]any{"video_url": "https://cdn.example/video.mp4"},
-				"metadata": map[string]any{"duration": 5},
+				"request_id": "task-1",
+				"status":     "done",
+				"video":      map[string]any{"url": "https://cdn.example/video.mp4", "duration": 5},
 			})
 		default:
 			http.NotFound(w, r)
@@ -63,6 +62,47 @@ func TestOpenAICompatibleVideoCreateAndPoll(t *testing.T) {
 	}
 	if pollResult.Status != "succeeded" || videoStringField(pollResult.NormalizedOutput, "videoUrl") != "https://cdn.example/video.mp4" || videoFloatField(pollResult.NormalizedOutput, "durationSeconds") != 5 {
 		t.Fatalf("poll result = %+v %s", pollResult, pollResult.NormalizedOutput)
+	}
+}
+
+func TestOpenAICompatibleVideoConfigForModelKeepsGenericModelsIsolated(t *testing.T) {
+	base := parseOpenAICompatibleConfig(json.RawMessage(`{"runtime":"openai_compatible"}`))
+	grok := openAICompatibleVideoConfigForModel(base, Model{ModelKey: "grok-imagine-video-1.5-preview"})
+	if grok.VideoProtocol != openAIVideoProtocolNewAPIGrok2APIV3 || grok.VideoUpstreamModel != grokImagineVideoUpstreamModel {
+		t.Fatalf("grok config = %+v", grok)
+	}
+
+	omni := openAICompatibleVideoConfigForModel(base, Model{ModelKey: "omni-fast-no-water"})
+	if omni.VideoProtocol != openAIVideoProtocolNewAPI || omni.VideoUpstreamModel != "" {
+		t.Fatalf("omni config changed = %+v", omni)
+	}
+}
+
+func TestGrok2APIV3VideoRequestMapsReferenceImages(t *testing.T) {
+	body, err := buildOpenAICompatibleVideoRequest(
+		"grok-imagine-video-1.5-preview",
+		json.RawMessage(`{"prompt":"product turntable","duration":6.4,"aspectRatio":"9:16","resolution":"720p","negativePrompt":"ignored","providerOptions":{"size":"1x1"}}`),
+		[]GatewayVideoReference{
+			{Role: "first_frame", Type: "image", URL: "https://cdn.example/first.png"},
+			{Role: "semantic_reference", Type: "image", URL: "https://cdn.example/product.png"},
+		},
+		openAICompatibleConfig{VideoProtocol: openAIVideoProtocolNewAPIGrok2APIV3, VideoUpstreamModel: grokImagineVideoUpstreamModel},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, _ := body["image"].(map[string]any)
+	if image["url"] != "https://cdn.example/first.png" || body["duration"] != 6 || body["aspect_ratio"] != "9:16" || body["resolution"] != "720p" {
+		t.Fatalf("grok request = %#v", body)
+	}
+	references, ok := body["reference_images"].([]map[string]any)
+	if !ok || len(references) != 1 || references[0]["url"] != "https://cdn.example/product.png" {
+		t.Fatalf("grok references = %#v", body["reference_images"])
+	}
+	for _, unsupported := range []string{"n", "size", "negative_prompt", "input_references"} {
+		if _, exists := body[unsupported]; exists {
+			t.Fatalf("Grok v3 request contains unsupported %s: %#v", unsupported, body)
+		}
 	}
 }
 

@@ -13,7 +13,14 @@ import (
 	"time"
 )
 
+const (
+	openAIVideoProtocolNewAPI           = "new_api"
+	openAIVideoProtocolNewAPIGrok2APIV3 = "new_api_grok2api_v3"
+	grokImagineVideoUpstreamModel       = "grok-imagine-video"
+)
+
 func (c openAICompatibleClient) createVideoTask(ctx context.Context, account Account, model Model, apiKey string, cfg openAICompatibleConfig, input json.RawMessage, references []GatewayVideoReference) (manifestRunResult, error) {
+	cfg = openAICompatibleVideoConfigForModel(cfg, model)
 	for _, reference := range references {
 		if strings.TrimSpace(reference.URL) == "" {
 			continue
@@ -38,11 +45,51 @@ func (c openAICompatibleClient) createVideoTask(ctx context.Context, account Acc
 		result.NormalizedOutput = videoLayoutWarningOutput(
 			result.NormalizedOutput,
 			warning,
-			videoMapString(requestBody, "size"),
+			openAICompatibleVideoRequestedSize(requestBody),
 			videoStringField(result.NormalizedOutput, "size"),
 		)
 	}
 	return result, nil
+}
+
+func openAICompatibleVideoConfigForModel(cfg openAICompatibleConfig, model Model) openAICompatibleConfig {
+	if value := firstNonEmpty(
+		modelProviderOptionString(model, "videoRequestProtocol"),
+		modelProviderOptionString(model, "videoProtocol"),
+	); value != "" {
+		cfg.VideoProtocol = value
+	}
+	if value := modelProviderOptionString(model, "videoUpstreamModel"); value != "" {
+		cfg.VideoUpstreamModel = value
+	}
+	if value := modelProviderOptionString(model, "videoCreateEndpoint"); value != "" {
+		cfg.VideoCreateEndpoint = value
+	}
+	if value := modelProviderOptionString(model, "videoPollEndpoint"); value != "" {
+		cfg.VideoPollEndpoint = value
+	}
+	if value := modelProviderOptionString(model, "videoCancelEndpoint"); value != "" {
+		cfg.VideoCancelEndpoint = value
+	}
+
+	protocol := strings.ToLower(strings.TrimSpace(cfg.VideoProtocol))
+	if (protocol == "" || protocol == openAIVideoProtocolNewAPI || protocol == "newapi") && isGrokImagineVideoModel(model.ModelKey) {
+		cfg.VideoProtocol = openAIVideoProtocolNewAPIGrok2APIV3
+		if strings.TrimSpace(cfg.VideoUpstreamModel) == "" {
+			cfg.VideoUpstreamModel = grokImagineVideoUpstreamModel
+		}
+	}
+	return cfg
+}
+
+func isGrokImagineVideoModel(modelKey string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(modelKey))
+	for _, prefix := range []string{"grok-imagine-video", "xai/grok-imagine-video", "x-ai/grok-imagine-video"} {
+		if normalized == prefix || strings.HasPrefix(normalized, prefix+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 func (c openAICompatibleClient) pollVideoTask(ctx context.Context, account Account, apiKey string, cfg openAICompatibleConfig, externalTaskID string) (manifestRunResult, error) {
@@ -130,6 +177,9 @@ func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, r
 		return nil, fmt.Errorf("%w: input.prompt is required", ErrValidation)
 	}
 	protocol := strings.ToLower(strings.TrimSpace(cfg.VideoProtocol))
+	if protocol == openAIVideoProtocolNewAPIGrok2APIV3 {
+		return buildGrok2APIV3VideoRequest(modelKey, prompt, decoded, references, cfg)
+	}
 	body := map[string]any{"model": strings.TrimSpace(modelKey), "prompt": prompt}
 	ordinaryReferences := make([]GatewayVideoReference, 0, len(references))
 	for _, reference := range references {
@@ -220,6 +270,56 @@ func buildOpenAICompatibleVideoRequest(modelKey string, input json.RawMessage, r
 	mergeVideoRequestOverrides(body, decoded["extraBody"])
 	mergeVideoRequestOverrides(body, decoded["providerOptions"])
 	applyOpenAICompatibleVideoLayout(body, decoded, modelKey, cfg)
+	return body, nil
+}
+
+func buildGrok2APIV3VideoRequest(modelKey, prompt string, decoded map[string]any, references []GatewayVideoReference, cfg openAICompatibleConfig) (map[string]any, error) {
+	upstreamModel := strings.TrimSpace(cfg.VideoUpstreamModel)
+	if upstreamModel == "" {
+		upstreamModel = strings.TrimSpace(modelKey)
+	}
+	body := map[string]any{
+		"model":  upstreamModel,
+		"prompt": prompt,
+	}
+	if duration := floatField(decoded["duration"], "duration"); duration > 0 {
+		body["duration"] = int(math.Round(duration))
+	}
+	if aspectRatio := videoStringOption(decoded, "aspectRatio"); aspectRatio != "" {
+		body["aspect_ratio"] = aspectRatio
+	}
+	if resolution := videoStringOption(decoded, "resolution"); resolution != "" {
+		body["resolution"] = resolution
+	}
+
+	referenceImages := make([]map[string]any, 0, len(references))
+	for index, reference := range references {
+		url := strings.TrimSpace(reference.URL)
+		if url == "" {
+			continue
+		}
+		role := gatewayVideoReferenceRole(reference)
+		if role == "" && len(references) == 1 && index == 0 {
+			role = "first_frame"
+		}
+		switch role {
+		case "first_frame":
+			if _, exists := body["image"]; exists {
+				return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "Grok 视频协议只接受一张首帧", Retryable: false}}
+			}
+			body["image"] = map[string]any{"url": url}
+		case "semantic_reference", "character_identity", "character_costume", "scene_identity", "scene_spatial", "prop_identity", "continuity_hint", "style_reference", "storyboard_sheet":
+			if gatewayVideoReferenceMediaType(reference) == "video" || gatewayVideoReferenceMediaType(reference) == "audio" {
+				return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "Grok 视频协议的参考输入必须是图片", Retryable: false}}
+			}
+			referenceImages = append(referenceImages, map[string]any{"url": url})
+		default:
+			return nil, &StandardErrorError{Standard: StandardError{Code: CodeModelInputContractUnsupported, Message: "Grok 视频协议无法映射引用角色：" + role, Retryable: false}}
+		}
+	}
+	if len(referenceImages) > 0 {
+		body["reference_images"] = referenceImages
+	}
 	return body, nil
 }
 
@@ -345,16 +445,16 @@ func normalizeOpenAICompatibleVideoResponse(body []byte, requireTaskID, cancelle
 		return nil, "", fmt.Errorf("%w: provider video response is invalid", ErrValidation)
 	}
 	externalTaskID := firstVideoResponseString(decoded,
-		"task_id", "taskId", "id", "data.task_id", "data.taskId", "data.id", "data.0.task_id", "data.0.taskId", "data.0.id", "output.task_id", "output.id", "result.task_id", "result.id")
+		"task_id", "taskId", "request_id", "requestId", "id", "data.task_id", "data.taskId", "data.request_id", "data.requestId", "data.id", "data.0.task_id", "data.0.taskId", "data.0.request_id", "data.0.requestId", "data.0.id", "output.task_id", "output.request_id", "output.id", "result.task_id", "result.request_id", "result.id")
 	rawStatus := firstVideoResponseString(decoded, "status", "data.status", "data.data.status", "output.status", "result.status")
 	videoURL := firstVideoResponseString(decoded,
-		"url", "video_url", "videoUrl", "output_url", "unsigned_urls.0", "data.url", "data.video_url", "data.videoUrl", "data.0.url", "data.0.video_url", "output.url", "output.video_url", "output.videoUrl", "result.url", "result.video_url", "result.videoUrl")
+		"url", "video_url", "videoUrl", "output_url", "video.url", "unsigned_urls.0", "data.url", "data.video_url", "data.videoUrl", "data.video.url", "data.0.url", "data.0.video_url", "output.url", "output.video_url", "output.videoUrl", "output.video.url", "result.url", "result.video_url", "result.videoUrl", "result.video.url")
 	resultURL := firstVideoResponseString(decoded, "result_url", "resultUrl", "data.result_url", "data.resultUrl", "data.data.result_url", "data.data.resultUrl", "output.result_url", "output.resultUrl")
 	mimeType := firstVideoResponseString(decoded, "mime_type", "mimeType", "data.mime_type", "output.mime_type", "result.mime_type")
 	errorCode := firstVideoResponseString(decoded, "error.code", "code", "data.error.code", "data.data.error.code", "output.error.code", "result.error.code")
 	errorMessage := firstVideoResponseString(decoded,
 		"error.message", "fail_reason", "failReason", "message", "detail", "data.error.message", "data.data.error.message", "data.message", "data.data.message", "output.error.message", "result.error.message")
-	duration := firstVideoResponseFloat(decoded, "duration", "duration_seconds", "durationSeconds", "data.duration", "output.duration", "result.duration", "metadata.duration")
+	duration := firstVideoResponseFloat(decoded, "duration", "duration_seconds", "durationSeconds", "video.duration", "data.duration", "data.video.duration", "output.duration", "output.video.duration", "result.duration", "result.video.duration", "metadata.duration")
 	size := firstVideoResponseString(decoded, "size", "data.size", "data.0.size", "output.size", "result.size", "metadata.size")
 
 	status := normalizeGatewayVideoStatus(rawStatus)
@@ -365,6 +465,8 @@ func normalizeOpenAICompatibleVideoResponse(body []byte, requireTaskID, cancelle
 		status = "succeeded"
 	case status == "" && errorMessage != "":
 		status = "failed"
+	case status == "" && requireTaskID && externalTaskID != "":
+		status = "queued"
 	case status == "":
 		status = "running"
 	}
@@ -395,7 +497,7 @@ func normalizeOpenAICompatibleVideoResponse(body []byte, requireTaskID, cancelle
 }
 
 func openAICompatibleVideoCreateLayoutWarning(requestBody map[string]any, normalized json.RawMessage) *GatewayVideoOutputWarning {
-	requestedSize := videoMapString(requestBody, "size")
+	requestedSize := openAICompatibleVideoRequestedSize(requestBody)
 	providerSize := videoStringField(normalized, "size")
 	requestedWidth, requestedHeight, requestedOK := parseVideoDimensions(requestedSize)
 	providerWidth, providerHeight, providerOK := parseVideoDimensions(providerSize)
@@ -407,6 +509,16 @@ func openAICompatibleVideoCreateLayoutWarning(requestBody map[string]any, normal
 		providerWidth,
 		providerHeight,
 	)
+}
+
+func openAICompatibleVideoRequestedSize(requestBody map[string]any) string {
+	requestedSize := videoMapString(requestBody, "size")
+	if requestedSize == "" {
+		if width, height := newAPIVideoDimensions(videoMapString(requestBody, "resolution"), videoMapString(requestBody, "aspect_ratio")); width > 0 && height > 0 {
+			requestedSize = fmt.Sprintf("%dx%d", width, height)
+		}
+	}
+	return requestedSize
 }
 
 func videoMapString(value map[string]any, key string) string {
