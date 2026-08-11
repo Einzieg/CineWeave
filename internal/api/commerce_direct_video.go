@@ -305,7 +305,9 @@ func (s *Server) listCommerceDirectVideos(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	items, err := s.listCommerceDirectVideosCore(r.Context(), project, strings.TrimSpace(r.URL.Query().Get("filter[scriptUnitId]")))
+	items, err := s.listCommerceDirectVideosCore(r.Context(), project, commercepkg.DirectVideoJobListFilter{
+		ScriptUnitID: strings.TrimSpace(r.URL.Query().Get("filter[scriptUnitId]")),
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -313,9 +315,9 @@ func (s *Server) listCommerceDirectVideos(w http.ResponseWriter, r *http.Request
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"items": items}, nil)
 }
 
-func (s *Server) listCommerceDirectVideosCore(ctx context.Context, project Project, scriptUnitID string) ([]commercepkg.DirectVideoJob, error) {
+func (s *Server) listCommerceDirectVideosCore(ctx context.Context, project Project, filter commercepkg.DirectVideoJobListFilter) ([]commercepkg.DirectVideoJob, error) {
 	items, err := s.commerceDirect.ListJobs(
-		ctx, s.db, project.OrganizationID, project.ID, strings.TrimSpace(scriptUnitID),
+		ctx, s.db, project.OrganizationID, project.ID, filter,
 	)
 	if err != nil {
 		return nil, err

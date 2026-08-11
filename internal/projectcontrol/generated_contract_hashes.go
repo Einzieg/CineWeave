@@ -3,6 +3,6 @@
 package projectcontrol
 
 const (
-	GeneratedToolCatalogHash  = "4770f637f958752d25458a36d050ab8e33ee5606ac93b337f65a1c29446053bb"
+	GeneratedToolCatalogHash  = "7916e42d79a957279be3637b440fd3057a8bb422715f899b36b76658f101fbe0"
 	GeneratedActionMatrixHash = "532efd911b4ccd93703370880bc5eec789d30ad54e433f52638b8819e8612a75"
 )

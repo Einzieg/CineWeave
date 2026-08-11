@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/Einzieg/cineweave/internal/authz"
@@ -153,5 +154,128 @@ func TestCommerceScriptCreateAcceptsSourceLanguageHint(t *testing.T) {
 	}
 	if _, err := ValidatePlan(Plan{Steps: []PlanStep{step}}, registry, 1); err != nil {
 		t.Fatalf("commerce.script.create sourceLanguageHint rejected: %v", err)
+	}
+}
+
+func TestCommerceVideoGenerateAcceptsAspectRatio(t *testing.T) {
+	registry, err := NewRegistry(CommerceVideoTools()...)
+	if err != nil {
+		t.Fatalf("commerce video registry: %v", err)
+	}
+	step := PlanStep{
+		Tool: "commerce.video.generate",
+		Args: json.RawMessage(`{
+			"stableOrdinal":2,
+			"expectedScriptUnitsRevision":7,
+			"durationSeconds":16,
+			"resolution":"720p",
+			"aspectRatio":"9:16",
+			"generateAudio":true
+		}`),
+	}
+	if _, err := ValidatePlan(Plan{Steps: []PlanStep{step}}, registry, 1); err != nil {
+		t.Fatalf("commerce.video.generate aspectRatio rejected: %v", err)
+	}
+}
+
+func TestCommerceVideoListAcceptsStableOrdinalAndEffectiveFilters(t *testing.T) {
+	registry, err := NewRegistry(CommerceVideoTools()...)
+	if err != nil {
+		t.Fatalf("commerce video registry: %v", err)
+	}
+	step := PlanStep{
+		Tool: "commerce.video.list",
+		Args: json.RawMessage(`{
+			"stableOrdinal":2,
+			"expectedScriptUnitsRevision":7,
+			"status":"running",
+			"limit":20
+		}`),
+	}
+	if _, err := ValidatePlan(Plan{Steps: []PlanStep{step}}, registry, 1); err != nil {
+		t.Fatalf("commerce.video.list filters rejected: %v", err)
+	}
+	step.Args = json.RawMessage(`{"status":"unknown"}`)
+	if _, err := ValidatePlan(Plan{Steps: []PlanStep{step}}, registry, 1); err == nil {
+		t.Fatal("commerce.video.list accepted an unsupported status")
+	}
+}
+
+func TestCommerceVideoToolInputSchemasMatchAuditedExecutorContracts(t *testing.T) {
+	expected := map[string][]string{
+		"commerce.project.read_summary":           {},
+		"commerce.product.get":                    {},
+		"commerce.product.versions.list":          {},
+		"commerce.product.version.create":         {"brand", "expectedRevision", "immutableFeatures", "metadata", "name", "prohibitedClaims", "sellingPoints"},
+		"commerce.product.rebuild_impact":         {"expectedProductRevision", "targetProductVersionId", "targetReferenceIds"},
+		"commerce.product.rebuild":                {"expectedProductRevision", "impactToken"},
+		"commerce.product.references.list":        {"status"},
+		"commerce.product.reference.archive":      {"expectedRevision", "referenceId"},
+		"commerce.product.reference.set_primary":  {"expectedRevision", "referenceId"},
+		"commerce.product.reference.update":       {"expectedRevision", "ordinal", "referenceId", "referenceRole", "setPrimary"},
+		"commerce.attachment.assign":              {"attachmentId", "expectedScriptUnitsRevision", "referenceRole", "scope", "scriptUnitId", "setPrimary", "stableOrdinal"},
+		"commerce.product.update":                 {"brand", "expectedRevision", "immutableFeatures", "metadata", "name", "prohibitedClaims", "sellingPoints"},
+		"commerce.script.list":                    {"cursor", "limit", "status"},
+		"commerce.script.get":                     {"expectedScriptUnitsRevision", "scriptUnitId", "stableOrdinal"},
+		"commerce.script.revise":                  {"expectedRevision", "expectedScriptUnitsRevision", "instruction", "preserve", "scriptUnitId", "stableOrdinal", "targetLengthUnit", "targetMaxLength"},
+		"commerce.script.create":                  {"content", "expectedScriptUnitsRevision", "explicitTargetLanguage", "languageMode", "sourceLanguageHint", "targetDurationSeconds", "targetPlatform", "title"},
+		"commerce.script.defaults.update":         {"expectedRevision", "languageMode", "targetDurationSeconds", "targetLanguage", "targetPlatform"},
+		"commerce.script.duplicate":               {"expectedScriptUnitsRevision", "scriptUnitId", "stableOrdinal"},
+		"commerce.script.create_language_variant": {"expectedScriptUnitsRevision", "scriptUnitId", "stableOrdinal", "targetLanguage"},
+		"commerce.script.reorder":                 {"expectedScriptUnitsRevision", "items"},
+		"commerce.script.rebuild_impact":          {"expectedRevision", "expectedScriptUnitsRevision", "scriptUnitId", "stableOrdinal", "targetDurationSeconds", "targetLanguage", "targetLanguageMode", "targetPlatform", "targetSourceScriptVersionId", "targetStoryboardStrategy"},
+		"commerce.script.rebuild":                 {"expectedRevision", "expectedScriptUnitsRevision", "impactToken", "scriptUnitId", "stableOrdinal"},
+		"commerce.script.reference.archive":       {"expectedRevision", "expectedScriptUnitsRevision", "referenceId", "scriptUnitId", "stableOrdinal"},
+		"commerce.script.update":                  {"draftContent", "expectedRevision", "expectedScriptUnitsRevision", "explicitTargetLanguage", "languageMode", "scriptUnitId", "stableOrdinal", "targetDurationSeconds", "targetPlatform", "title"},
+		"commerce.script.archive":                 {"expectedRevision", "expectedScriptUnitsRevision", "reason", "scriptUnitId", "stableOrdinal"},
+		"commerce.script.derive.preview":          {"candidateValues", "count", "dimension", "expectedScriptUnitsRevision", "instruction", "preserve", "sourceScriptUnitId", "stableOrdinal"},
+		"commerce.script.derive.batch":            {"dimension", "expectedScriptUnitsRevision", "instruction", "preserve", "sourceScriptUnitId", "stableOrdinal", "variations"},
+		"commerce.script.derivation.get":          {"batchId", "include"},
+		"commerce.script.derive.retry_failed":     {"batchId"},
+		"commerce.script.derive.cancel":           {"batchId", "reason"},
+		"commerce.video.options":                  {"expectedScriptUnitsRevision", "scriptUnitId", "stableOrdinal"},
+		"commerce.video.list":                     {"expectedScriptUnitsRevision", "limit", "scriptUnitId", "stableOrdinal", "status"},
+		"commerce.video.get":                      {"jobId"},
+		"commerce.video.generate":                 {"aspectRatio", "durationSeconds", "expectedScriptUnitsRevision", "generateAudio", "references", "resolution", "scriptUnitId", "stableOrdinal"},
+		"commerce.video.cancel":                   {"jobId", "reason"},
+	}
+
+	tools := CommerceVideoTools()
+	if len(tools) != len(expected) {
+		t.Fatalf("commerce tool count = %d, audited contracts = %d", len(tools), len(expected))
+	}
+	seen := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		want, exists := expected[tool.Name]
+		if !exists {
+			t.Errorf("commerce tool %s has no audited executor contract", tool.Name)
+			continue
+		}
+		seen[tool.Name] = struct{}{}
+		var schema struct {
+			Properties           map[string]json.RawMessage `json:"properties"`
+			AdditionalProperties *bool                      `json:"additionalProperties"`
+		}
+		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+			t.Errorf("decode %s schema: %v", tool.Name, err)
+			continue
+		}
+		if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
+			t.Errorf("%s must reject unaudited top-level arguments", tool.Name)
+		}
+		got := make([]string, 0, len(schema.Properties))
+		for property := range schema.Properties {
+			got = append(got, property)
+		}
+		sort.Strings(got)
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s properties = %v, audited executor contract = %v", tool.Name, got, want)
+		}
+	}
+	for name := range expected {
+		if _, exists := seen[name]; !exists {
+			t.Errorf("audited executor contract %s has no active tool", name)
+		}
 	}
 }

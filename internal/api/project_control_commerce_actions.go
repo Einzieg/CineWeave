@@ -9,6 +9,7 @@ import (
 
 	"github.com/Einzieg/cineweave/internal/agent"
 	"github.com/Einzieg/cineweave/internal/auth"
+	commercepkg "github.com/Einzieg/cineweave/internal/commerce"
 	"github.com/Einzieg/cineweave/internal/controlmcp"
 	"github.com/Einzieg/cineweave/internal/projectcontrol"
 )
@@ -280,7 +281,11 @@ func (s *Server) executeCommerceVideoListReadAction(
 	if err != nil {
 		return agentToolResult{}, err
 	}
-	items, err := s.listCommerceDirectVideosCore(ctx, project, scriptUnitID)
+	items, err := s.listCommerceDirectVideosCore(ctx, project, commercepkg.DirectVideoJobListFilter{
+		ScriptUnitID: scriptUnitID,
+		Status:       agentStringArg(arguments, "status"),
+		Limit:        agentIntArg(arguments, "limit", 50, 1, 200),
+	})
 	if err != nil {
 		return agentToolResult{}, err
 	}

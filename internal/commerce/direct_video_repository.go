@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -561,16 +562,28 @@ func (s *DirectVideoService) ListJobs(
 	db rowsQuerier,
 	organizationID string,
 	projectID string,
-	scriptUnitID string,
+	filter DirectVideoJobListFilter,
 ) ([]DirectVideoJob, error) {
+	filter, err := filter.normalized()
+	if err != nil {
+		return nil, err
+	}
 	query := directVideoJobSelectSQL + `
 		WHERE job.organization_id = $1 AND job.project_id = $2`
 	args := []any{organizationID, projectID}
-	if strings.TrimSpace(scriptUnitID) != "" {
-		query += ` AND job.script_unit_id = $3`
-		args = append(args, scriptUnitID)
+	if filter.ScriptUnitID != "" {
+		args = append(args, filter.ScriptUnitID)
+		query += fmt.Sprintf(` AND job.script_unit_id = $%d`, len(args))
+	}
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		query += fmt.Sprintf(` AND job.status = $%d`, len(args))
 	}
 	query += ` ORDER BY job.created_at DESC, job.id DESC`
+	if filter.Limit > 0 {
+		args = append(args, filter.Limit)
+		query += fmt.Sprintf(` LIMIT $%d`, len(args))
+	}
 	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err

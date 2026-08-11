@@ -1,6 +1,6 @@
 {
   "schemaVersion": "cineweave.mcp-tool-catalog.v1",
-  "catalogHash": "4770f637f958752d25458a36d050ab8e33ee5606ac93b337f65a1c29446053bb",
+  "catalogHash": "7916e42d79a957279be3637b440fd3057a8bb422715f899b36b76658f101fbe0",
   "tools": [
     {
       "name": "adaptation_activate",
@@ -1232,7 +1232,7 @@
       "version": 1,
       "label": "生成带货视频",
       "summary": "生成带货视频",
-      "inputSchemaHash": "0f4791b134063dbccaf91d6d550cceab60e5a721d16b05ea0ea644b88c7c300f",
+      "inputSchemaHash": "2613433e2fb8f32713401d46d753d828f03cdbe41f5e0f0e06f1da9af26d4191",
       "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
       "permissions": [
         "workflow.run"
@@ -1278,7 +1278,7 @@
       "version": 1,
       "label": "视频任务列表",
       "summary": "视频任务列表",
-      "inputSchemaHash": "3c91fd6fb05bd23b416752c1b864b8e18afae19eda1ad7320a75d20ed01ad4e2",
+      "inputSchemaHash": "7ba284533cee1c20da0804c290e1c72fbb6da72f2a94d2b41baada107ee8fc28",
       "outputSchemaHash": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
       "permissions": [
         "workflow.read"

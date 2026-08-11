@@ -148,6 +148,32 @@ func TestValidateDirectVideoJobInputAllowsDefaultDuration(t *testing.T) {
 	}
 }
 
+func TestDirectVideoJobListFilterNormalizesAndRejectsInvalidValues(t *testing.T) {
+	filter, err := (DirectVideoJobListFilter{
+		ScriptUnitID: " script-unit ", Status: "RUNNING", Limit: 20,
+	}).normalized()
+	if err != nil {
+		t.Fatalf("normalized() error = %v", err)
+	}
+	if filter.ScriptUnitID != "script-unit" || filter.Status != "running" || filter.Limit != 20 {
+		t.Fatalf("normalized filter = %+v", filter)
+	}
+
+	all, err := (DirectVideoJobListFilter{Status: "all"}).normalized()
+	if err != nil || all.Status != "" {
+		t.Fatalf("all filter = %+v, error = %v", all, err)
+	}
+	for _, invalid := range []DirectVideoJobListFilter{
+		{Status: "unknown"},
+		{Limit: -1},
+		{Limit: 201},
+	} {
+		if _, err := invalid.normalized(); err == nil {
+			t.Fatalf("normalized() accepted invalid filter %+v", invalid)
+		}
+	}
+}
+
 func TestAssignDirectVideoReferenceRolesUsesFirstFrameThenSemanticReferences(t *testing.T) {
 	contract := DirectVideoInputContract{
 		ContractKey: "first_frame_plus_references",

@@ -217,6 +217,33 @@ type CreateDirectVideoJobInput struct {
 	References      []DirectVideoReferenceSelection `json:"references,omitempty"`
 }
 
+type DirectVideoJobListFilter struct {
+	ScriptUnitID string
+	Status       string
+	Limit        int
+}
+
+func (filter DirectVideoJobListFilter) normalized() (DirectVideoJobListFilter, error) {
+	filter.ScriptUnitID = strings.TrimSpace(filter.ScriptUnitID)
+	filter.Status = strings.ToLower(strings.TrimSpace(filter.Status))
+	if filter.Status == "all" {
+		filter.Status = ""
+	}
+	switch filter.Status {
+	case "", "queued", "running", "succeeded", "failed", "cancelling", "cancelled":
+	default:
+		return DirectVideoJobListFilter{}, Error{
+			Code: CodeDirectVideoInvalid, Message: "视频任务状态筛选无效",
+		}
+	}
+	if filter.Limit < 0 || filter.Limit > 200 {
+		return DirectVideoJobListFilter{}, Error{
+			Code: CodeDirectVideoInvalid, Message: "视频任务返回数量必须在 1 到 200 之间",
+		}
+	}
+	return filter, nil
+}
+
 type PreparedDirectVideoJob struct {
 	Job         DirectVideoJob
 	Route       DirectVideoRoute

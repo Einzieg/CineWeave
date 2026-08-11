@@ -226,9 +226,13 @@ func CommerceVideoTools() []AgentTool {
 			"expectedScriptUnitsRevision": scriptUnitsRevision,
 		}, false)),
 		readTool("commerce.video.list", "视频任务列表", "列出直生成视频任务。", authz.PermissionWorkflowRead, objectSchema(map[string]any{
-			"scriptUnitId": scriptUnitID,
-			"status":       stringSchema("状态筛选。"),
-			"limit":        integerSchema("返回数量。", 1, 200),
+			"scriptUnitId":                scriptUnitID,
+			"stableOrdinal":               stableOrdinal,
+			"expectedScriptUnitsRevision": scriptUnitsRevision,
+			"status": enumSchema("状态筛选。", []string{
+				"queued", "running", "succeeded", "failed", "cancelling", "cancelled",
+			}),
+			"limit": integerSchema("返回数量。", 1, 200),
 		}, false)),
 		readTool("commerce.video.get", "查看视频任务", "读取一个直生成视频任务、真实进度和输出。", authz.PermissionWorkflowRead, objectSchemaRequired(map[string]any{
 			"jobId": stringSchema("直生成视频任务 ID。"),
@@ -239,6 +243,7 @@ func CommerceVideoTools() []AgentTool {
 			"expectedScriptUnitsRevision": scriptUnitsRevision,
 			"durationSeconds":             integerSchema("视频秒数；省略时使用可执行时长中的最大值。", 1, 3600),
 			"resolution":                  stringSchema("分辨率；省略时使用当前默认值。"),
+			"aspectRatio":                 stringSchema("画面比例；省略时使用项目配置，例如 9:16、16:9 或 1:1。"),
 			"generateAudio":               booleanSchema("是否生成原生音频。"),
 			"references": arraySchema("参考图。", objectSchemaRequired(map[string]any{
 				"sourceType": enumSchema("参考图来源。", []string{"product", "custom"}),

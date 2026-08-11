@@ -21,7 +21,7 @@ func (s *Server) commerceAgentPlannerContext(ctx context.Context, project Projec
 		return nil, err
 	}
 	options, optionsErr := s.commerceDirect.Options(ctx, s.db, project.OrganizationID, project.ID)
-	jobs, jobsErr := s.commerceDirect.ListJobs(ctx, s.db, project.OrganizationID, project.ID, "")
+	jobs, jobsErr := s.commerceDirect.ListJobs(ctx, s.db, project.OrganizationID, project.ID, commercepkg.DirectVideoJobListFilter{Limit: 20})
 
 	scriptSummaries := make([]map[string]any, 0, len(scripts.Items))
 	for index, item := range scripts.Items {
@@ -41,9 +41,6 @@ func (s *Server) commerceAgentPlannerContext(ctx context.Context, project Projec
 	}
 	jobSummaries := make([]map[string]any, 0)
 	if jobsErr == nil {
-		if len(jobs) > 20 {
-			jobs = jobs[:20]
-		}
 		for _, item := range jobs {
 			jobSummaries = append(jobSummaries, map[string]any{
 				"id":              item.ID,
