@@ -95,7 +95,7 @@ func TestGatewayVideoRuntimeIntegration(t *testing.T) {
 		t.Fatalf("create response = %+v", createResp)
 	}
 	assertGatewayVideoAsyncTask(t, ctx, pool, createResp.ProviderAsyncTaskID, "running", 0)
-	assertGatewayVideoCallLog(t, ctx, pool, createResp.ProviderCallID, "video.create_task", "", "")
+	assertGatewayVideoCallLog(t, ctx, pool, createResp.ProviderCallID, "video.create_task", "succeeded", "new-api-create-1", "", "")
 
 	firstPoll, err := gatewayService.PollVideoTask(ctx, GatewayVideoPollTaskRequest{
 		OrganizationID:         orgID,
@@ -110,6 +110,7 @@ func TestGatewayVideoRuntimeIntegration(t *testing.T) {
 	if firstPoll.Status != "running" || firstPoll.Output.ArtifactID != "" {
 		t.Fatalf("first poll = %+v", firstPoll)
 	}
+	assertGatewayVideoCallLog(t, ctx, pool, firstPoll.ProviderCallID, "video.poll_task", "succeeded", "new-api-poll-1", "", "")
 	assertGatewayVideoArtifactCount(t, ctx, pool, createResp.ProviderAsyncTaskID, 0)
 
 	secondPoll, err := gatewayService.PollVideoTask(ctx, GatewayVideoPollTaskRequest{
@@ -133,7 +134,7 @@ func TestGatewayVideoRuntimeIntegration(t *testing.T) {
 	assertGatewayVideoRowsPersisted(t, ctx, pool, secondPoll.ProviderCallID, createResp.ProviderAsyncTaskID, createResp.ExternalTaskID, secondPoll.Output, projectID, modelID)
 	assertGatewayVideoAsyncTask(t, ctx, pool, createResp.ProviderAsyncTaskID, "succeeded", 2)
 	assertGatewayVideoCostRecord(t, ctx, pool, secondPoll.ProviderCallID)
-	assertGatewayVideoCallLog(t, ctx, pool, secondPoll.ProviderCallID, "video.poll_task", secondPoll.Output.ArtifactID, secondPoll.Output.MediaFileID)
+	assertGatewayVideoCallLog(t, ctx, pool, secondPoll.ProviderCallID, "video.poll_task", "succeeded", "new-api-poll-2", secondPoll.Output.ArtifactID, secondPoll.Output.MediaFileID)
 
 	if _, err := pool.Exec(ctx, `DELETE FROM media_files WHERE id = $1`, secondPoll.Output.MediaFileID); err != nil {
 		t.Fatalf("delete materialized media row: %v", err)
@@ -694,6 +695,7 @@ func newVideoRuntimeMock(t *testing.T) *httptest.Server {
 			polls[taskID] = 0
 			durations[taskID] = requestedDuration
 			mu.Unlock()
+			w.Header().Set("X-Oneapi-Request-Id", "new-api-create-1")
 			_ = json.NewEncoder(w).Encode(map[string]any{"taskId": taskID, "status": "processing"})
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/video/poll/"):
 			taskID := strings.TrimPrefix(r.URL.Path, "/video/poll/")
@@ -702,6 +704,7 @@ func newVideoRuntimeMock(t *testing.T) *httptest.Server {
 			count := polls[taskID]
 			duration := durations[taskID]
 			mu.Unlock()
+			w.Header().Set("X-Oneapi-Request-Id", fmt.Sprintf("new-api-poll-%d", count))
 			if count == 1 {
 				_ = json.NewEncoder(w).Encode(map[string]any{"status": "processing"})
 				return
@@ -1014,22 +1017,28 @@ func assertGatewayVideoCostRecord(t *testing.T, ctx context.Context, pool *pgxpo
 	}
 }
 
-func assertGatewayVideoCallLog(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerCallID, wantTaskType, artifactID, mediaFileID string) {
+func assertGatewayVideoCallLog(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerCallID, wantTaskType, wantStatus, wantProviderExternalLogID, artifactID, mediaFileID string) {
 	t.Helper()
-	var taskType, artifactIDsRaw, mediaFileIDsRaw, requestSnapshot, probeStatus string
+	var taskType, status, providerExternalLogID, artifactIDsRaw, mediaFileIDsRaw, requestSnapshot, probeStatus string
 	var requestedDuration, actualDuration float64
 	if err := pool.QueryRow(ctx, `
-		SELECT task_type, artifact_ids::text, media_file_ids::text, request_snapshot::text,
+		SELECT task_type, status, COALESCE(provider_external_log_id, ''), artifact_ids::text, media_file_ids::text, request_snapshot::text,
 		       COALESCE(requested_duration_seconds, -1)::float8,
 		       COALESCE(actual_duration_seconds, -1)::float8,
 		       COALESCE(media_probe->>'status', '')
 		FROM provider_call_logs
 		WHERE id = $1
-	`, providerCallID).Scan(&taskType, &artifactIDsRaw, &mediaFileIDsRaw, &requestSnapshot, &requestedDuration, &actualDuration, &probeStatus); err != nil {
+	`, providerCallID).Scan(&taskType, &status, &providerExternalLogID, &artifactIDsRaw, &mediaFileIDsRaw, &requestSnapshot, &requestedDuration, &actualDuration, &probeStatus); err != nil {
 		t.Fatalf("select provider_call_logs: %v", err)
 	}
 	if taskType != wantTaskType {
 		t.Fatalf("taskType = %s, want %s", taskType, wantTaskType)
+	}
+	if status != wantStatus {
+		t.Fatalf("status = %s, want %s", status, wantStatus)
+	}
+	if providerExternalLogID != wantProviderExternalLogID {
+		t.Fatalf("providerExternalLogID = %s, want %s", providerExternalLogID, wantProviderExternalLogID)
 	}
 	if strings.Contains(requestSnapshot, gatewayIntegrationAPIKey) {
 		t.Fatal("request_snapshot leaked API key")

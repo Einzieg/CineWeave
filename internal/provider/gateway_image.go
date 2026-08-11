@@ -466,6 +466,7 @@ func (s *Service) executeGatewayImageAttempt(ctx context.Context, req GatewayIma
 	finalCall.RequestSnapshot = result.RequestSnapshot
 	finalCall.ResponseSnapshot = responseSnapshot
 	finalCall.NormalizedOutput = normalizedOutput
+	finalCall.ProviderExternalLogID = result.ProviderExternalLogID
 	call, err := s.recordGatewayImageCall(ctx, selection, attemptReq, callID, finalCall, usage, stored, attemptImageInput, result)
 	if err != nil {
 		return GatewayImageResponse{}, GatewayAttempt{}, err
@@ -643,14 +644,15 @@ func imageResultFromManifest(result manifestRunResult) imageGenerationResult {
 		responseType = "b64_json"
 	}
 	return imageGenerationResult{
-		RequestSnapshot:  result.RequestSnapshot,
-		ResponseSnapshot: result.ResponseSnapshot,
-		NormalizedOutput: output,
-		ImageURL:         strings.TrimSpace(imageURL),
-		B64JSON:          strings.TrimSpace(b64JSON),
-		MimeType:         strings.TrimSpace(mimeType),
-		ResponseType:     responseType,
-		LatencyMS:        result.LatencyMS,
+		RequestSnapshot:       result.RequestSnapshot,
+		ResponseSnapshot:      result.ResponseSnapshot,
+		NormalizedOutput:      output,
+		ImageURL:              strings.TrimSpace(imageURL),
+		B64JSON:               strings.TrimSpace(b64JSON),
+		MimeType:              strings.TrimSpace(mimeType),
+		ResponseType:          responseType,
+		LatencyMS:             result.LatencyMS,
+		ProviderExternalLogID: result.ProviderExternalLogID,
 	}
 }
 

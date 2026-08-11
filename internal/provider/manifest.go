@@ -92,11 +92,12 @@ type ManifestTestRunResult struct {
 }
 
 type manifestRunResult struct {
-	Status           string
-	LatencyMS        int
-	RequestSnapshot  json.RawMessage
-	ResponseSnapshot json.RawMessage
-	NormalizedOutput json.RawMessage
+	Status                string
+	LatencyMS             int
+	RequestSnapshot       json.RawMessage
+	ResponseSnapshot      json.RawMessage
+	NormalizedOutput      json.RawMessage
+	ProviderExternalLogID string
 }
 
 var manifestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-_.]*$`)
@@ -367,23 +368,26 @@ func callManifestEndpointWithContext(ctx context.Context, manifest ProviderManif
 		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot}, err
 	}
 	defer resp.Body.Close()
+	providerExternalLogID := providerExternalLogIDFromHeader(resp.Header)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot}, err
+		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ProviderExternalLogID: providerExternalLogID}, err
 	}
 	if resp.StatusCode >= 400 {
 		return manifestRunResult{
-			LatencyMS:        latencyMS,
-			RequestSnapshot:  requestSnapshot,
-			ResponseSnapshot: body,
+			LatencyMS:             latencyMS,
+			RequestSnapshot:       requestSnapshot,
+			ResponseSnapshot:      body,
+			ProviderExternalLogID: providerExternalLogID,
 		}, upstreamError(resp.StatusCode, body)
 	}
 	normalizedOutput, err := mapResponse(body, endpoint.ResponseMapping)
 	if err != nil {
 		return manifestRunResult{
-			LatencyMS:        latencyMS,
-			RequestSnapshot:  requestSnapshot,
-			ResponseSnapshot: body,
+			LatencyMS:             latencyMS,
+			RequestSnapshot:       requestSnapshot,
+			ResponseSnapshot:      body,
+			ProviderExternalLogID: providerExternalLogID,
 		}, err
 	}
 	status := mappedStatus(normalizedOutput)
@@ -391,11 +395,12 @@ func callManifestEndpointWithContext(ctx context.Context, manifest ProviderManif
 		status = "succeeded"
 	}
 	return manifestRunResult{
-		Status:           status,
-		LatencyMS:        latencyMS,
-		RequestSnapshot:  requestSnapshot,
-		ResponseSnapshot: body,
-		NormalizedOutput: normalizedOutput,
+		Status:                status,
+		LatencyMS:             latencyMS,
+		RequestSnapshot:       requestSnapshot,
+		ResponseSnapshot:      body,
+		NormalizedOutput:      normalizedOutput,
+		ProviderExternalLogID: providerExternalLogID,
 	}, nil
 }
 

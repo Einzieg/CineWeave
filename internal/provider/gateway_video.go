@@ -496,8 +496,12 @@ func (s *Service) executeGatewayVideoCreateAttempt(ctx context.Context, req Gate
 		normalizedOutput = json.RawMessage(`{}`)
 	}
 	normalizedOutput = withRoutingNormalizedOutput(normalizedOutput, selection, attemptIndex, maxAttempts, selectedBy)
+	callStatus := status
+	if runErr == nil {
+		callStatus = gatewayVideoObservedCallStatus(status)
+	}
 
-	call, taskID, err := s.recordVideoCreateTask(ctx, selection, req, providerRequestID, attemptGeneration, attemptIndex, callID, lease.LeaseID, externalTaskID, status, latencyMS, errorCode, errorMessage, upstreamStatus, upstreamErrorCode, result.RequestSnapshot, responseSnapshot, normalizedOutput, usage, stored, videoInput)
+	call, taskID, err := s.recordVideoCreateTask(ctx, selection, req, providerRequestID, attemptGeneration, attemptIndex, callID, lease.LeaseID, result.ProviderExternalLogID, externalTaskID, status, callStatus, latencyMS, errorCode, errorMessage, upstreamStatus, upstreamErrorCode, result.RequestSnapshot, responseSnapshot, normalizedOutput, usage, stored, videoInput)
 	if err != nil {
 		return GatewayVideoCreateTaskResponse{}, GatewayAttempt{}, err
 	}
@@ -873,7 +877,7 @@ func (s *Service) executeGatewayVideoPoll(ctx context.Context, req GatewayVideoP
 	usage := GatewayUsage{EstimatedCost: "0.00000000", Currency: "USD"}
 	var stored *gatewayStoredVideo
 	videoInput, _ := parseGatewayVideoInput(task.Input)
-	callStatus := status
+	callStatus := gatewayVideoObservedCallStatus(status)
 	mediaTransferPending := false
 
 	if runErr != nil {
@@ -923,7 +927,7 @@ func (s *Service) executeGatewayVideoPoll(ctx context.Context, req GatewayVideoP
 	}
 	if runErr == nil {
 		if !mediaTransferPending {
-			callStatus = status
+			callStatus = gatewayVideoObservedCallStatus(status)
 		}
 	}
 	if len(responseSnapshot) == 0 {
@@ -933,7 +937,7 @@ func (s *Service) executeGatewayVideoPoll(ctx context.Context, req GatewayVideoP
 		normalizedOutput = json.RawMessage(`{}`)
 	}
 
-	call, err := s.recordVideoPollTask(ctx, selection, req, task, providerRequestID, attemptGeneration, 1, callID, lease.LeaseID, status, callStatus, latencyMS, errorCode, errorMessage, upstreamStatus, upstreamErrorCode, result.RequestSnapshot, responseSnapshot, normalizedOutput, usage, stored, videoInput)
+	call, err := s.recordVideoPollTask(ctx, selection, req, task, providerRequestID, attemptGeneration, 1, callID, lease.LeaseID, result.ProviderExternalLogID, status, callStatus, latencyMS, errorCode, errorMessage, upstreamStatus, upstreamErrorCode, result.RequestSnapshot, responseSnapshot, normalizedOutput, usage, stored, videoInput)
 	if err != nil {
 		return GatewayVideoPollTaskResponse{}, err
 	}
@@ -958,6 +962,15 @@ func (s *Service) executeGatewayVideoPoll(ctx context.Context, req GatewayVideoP
 		Error:               standardError,
 		LatencyMS:           latencyMS,
 	}, nil
+}
+
+func gatewayVideoObservedCallStatus(taskStatus string) string {
+	switch normalizeGatewayVideoStatus(taskStatus) {
+	case "queued", "running":
+		return "succeeded"
+	default:
+		return taskStatus
+	}
 }
 
 type gatewayVideoPollFailureOutcome struct {
@@ -1299,7 +1312,7 @@ func (s *Service) executeGatewayVideoCancel(ctx context.Context, req GatewayVide
 	if len(responseSnapshot) == 0 {
 		responseSnapshot = json.RawMessage(`null`)
 	}
-	call, err := s.recordVideoCancelTask(ctx, selection, task, providerRequestID, attemptGeneration, 1, callID, lease.LeaseID, status, latencyMS, errorCode, errorMessage, upstreamStatus, upstreamErrorCode, requestSnapshot, responseSnapshot, normalizedOutput)
+	call, err := s.recordVideoCancelTask(ctx, selection, task, providerRequestID, attemptGeneration, 1, callID, lease.LeaseID, cancelResult.ProviderExternalLogID, status, latencyMS, errorCode, errorMessage, upstreamStatus, upstreamErrorCode, requestSnapshot, responseSnapshot, normalizedOutput)
 	if err != nil {
 		return GatewayVideoCancelTaskResponse{}, err
 	}
@@ -1707,7 +1720,7 @@ func gatewayVideoMediaFailure(err error) (string, string, *StandardError) {
 	return normalizedGatewayMediaFailure(err, "video")
 }
 
-func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayModelSelection, req GatewayVideoCreateTaskRequest, providerRequestID string, attemptGeneration, attemptSequence int, callID, leaseID, externalTaskID, status string, latencyMS int, errorCode, errorMessage string, upstreamStatus *int, upstreamErrorCode string, requestSnapshot, responseSnapshot, normalizedOutput json.RawMessage, usage GatewayUsage, stored *gatewayStoredVideo, input gatewayVideoInput) (CallLog, string, error) {
+func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayModelSelection, req GatewayVideoCreateTaskRequest, providerRequestID string, attemptGeneration, attemptSequence int, callID, leaseID, providerExternalLogID, externalTaskID, taskStatus, callStatus string, latencyMS int, errorCode, errorMessage string, upstreamStatus *int, upstreamErrorCode string, requestSnapshot, responseSnapshot, normalizedOutput json.RawMessage, usage GatewayUsage, stored *gatewayStoredVideo, input gatewayVideoInput) (CallLog, string, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return CallLog{}, "", err
@@ -1733,7 +1746,6 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 	requestedDuration := float64PtrIfPositive(input.DurationSeconds)
 	actualDuration, mediaProbe := videoMediaObservation(stored)
 	callTaskType, callExecutionMode, taskExecutionMode, recoveryCallStatus := gatewayVideoTaskRecordingMode(req.Input)
-	callStatus := status
 	if recoveryCallStatus != "" {
 		callStatus = recoveryCallStatus
 	}
@@ -1778,6 +1790,7 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 		RequestSnapshot:          requestSnapshot,
 		ResponseSnapshot:         responseSnapshot,
 		NormalizedOutput:         normalizedOutput,
+		ProviderExternalLogID:    providerExternalLogID,
 	}
 	if stored != nil {
 		callReq.ArtifactIDs = mustJSON([]string{stored.ArtifactID})
@@ -1787,8 +1800,8 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 	if err != nil {
 		return CallLog{}, "", err
 	}
-	if isProviderFailureStatus(status) {
-		if err := updateVideoRenderSegmentCreateTx(ctx, tx, req, call.ID, "", externalTaskID, status, errorCode, errorMessage, stored); err != nil {
+	if isProviderFailureStatus(taskStatus) {
+		if err := updateVideoRenderSegmentCreateTx(ctx, tx, req, call.ID, "", externalTaskID, taskStatus, errorCode, errorMessage, stored); err != nil {
 			return CallLog{}, "", err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -1834,10 +1847,10 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 	`, taskID, call.ID, providerRequestID, req.OrganizationID, nullString(req.ProjectID), nullString(req.WorkflowRunID), nullString(req.NodeRunID),
 		req.ProductionGenerationID, req.VideoProductionBindingID, req.VideoProductionBindingRevision,
 		req.OperationID, req.OperationItemID, req.OperationItemAttempt,
-		selection.Account.ID, selection.Model.ID, selection.CredentialID, nullString(selection.ModelProfileID), nullString(selection.ModelProfileBindingID), nullString(selection.ModelProfileKey), nullString(externalTaskID), status, taskInput, nullIfJSONNull(normalizedOutput), nullIfJSONNull(responseSnapshot), nullString(errorCode), nullString(errorMessage), nullFloat(requestedDuration), nullFloat(actualDuration), mediaProbe, req.ExecutionPlanID, req.RenderSegmentID, req.CapabilitySnapshotHash, req.NodeExecutionToken, req.NodeAttemptGeneration, taskExecutionMode).Scan(&taskID); err != nil {
+		selection.Account.ID, selection.Model.ID, selection.CredentialID, nullString(selection.ModelProfileID), nullString(selection.ModelProfileBindingID), nullString(selection.ModelProfileKey), nullString(externalTaskID), taskStatus, taskInput, nullIfJSONNull(normalizedOutput), nullIfJSONNull(responseSnapshot), nullString(errorCode), nullString(errorMessage), nullFloat(requestedDuration), nullFloat(actualDuration), mediaProbe, req.ExecutionPlanID, req.RenderSegmentID, req.CapabilitySnapshotHash, req.NodeExecutionToken, req.NodeAttemptGeneration, taskExecutionMode).Scan(&taskID); err != nil {
 		return CallLog{}, "", err
 	}
-	if err := updateVideoRenderSegmentCreateTx(ctx, tx, req, call.ID, taskID, externalTaskID, status, errorCode, errorMessage, stored); err != nil {
+	if err := updateVideoRenderSegmentCreateTx(ctx, tx, req, call.ID, taskID, externalTaskID, taskStatus, errorCode, errorMessage, stored); err != nil {
 		return CallLog{}, "", err
 	}
 	if stored != nil {
@@ -1854,7 +1867,7 @@ func (s *Service) recordVideoCreateTask(ctx context.Context, selection gatewayMo
 	return call, taskID, nil
 }
 
-func (s *Service) recordVideoPollTask(ctx context.Context, selection gatewayModelSelection, req GatewayVideoPollTaskRequest, task gatewayVideoTask, providerRequestID string, attemptGeneration, attemptSequence int, callID, leaseID, taskStatus, callStatus string, latencyMS int, errorCode, errorMessage string, upstreamStatus *int, upstreamErrorCode string, requestSnapshot, responseSnapshot, normalizedOutput json.RawMessage, usage GatewayUsage, stored *gatewayStoredVideo, input gatewayVideoInput) (CallLog, error) {
+func (s *Service) recordVideoPollTask(ctx context.Context, selection gatewayModelSelection, req GatewayVideoPollTaskRequest, task gatewayVideoTask, providerRequestID string, attemptGeneration, attemptSequence int, callID, leaseID, providerExternalLogID, taskStatus, callStatus string, latencyMS int, errorCode, errorMessage string, upstreamStatus *int, upstreamErrorCode string, requestSnapshot, responseSnapshot, normalizedOutput json.RawMessage, usage GatewayUsage, stored *gatewayStoredVideo, input gatewayVideoInput) (CallLog, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return CallLog{}, err
@@ -1921,6 +1934,7 @@ func (s *Service) recordVideoPollTask(ctx context.Context, selection gatewayMode
 		RequestSnapshot:          requestSnapshot,
 		ResponseSnapshot:         responseSnapshot,
 		NormalizedOutput:         normalizedOutput,
+		ProviderExternalLogID:    providerExternalLogID,
 	}
 	if stored != nil {
 		callReq.ArtifactIDs = mustJSON([]string{stored.ArtifactID})
@@ -1977,7 +1991,7 @@ func (s *Service) recordVideoPollTask(ctx context.Context, selection gatewayMode
 	return call, nil
 }
 
-func (s *Service) recordVideoCancelTask(ctx context.Context, selection gatewayModelSelection, task gatewayVideoTask, providerRequestID string, attemptGeneration, attemptSequence int, callID, leaseID, status string, latencyMS int, errorCode, errorMessage string, upstreamStatus *int, upstreamErrorCode string, requestSnapshot, responseSnapshot, normalizedOutput json.RawMessage) (CallLog, error) {
+func (s *Service) recordVideoCancelTask(ctx context.Context, selection gatewayModelSelection, task gatewayVideoTask, providerRequestID string, attemptGeneration, attemptSequence int, callID, leaseID, providerExternalLogID, status string, latencyMS int, errorCode, errorMessage string, upstreamStatus *int, upstreamErrorCode string, requestSnapshot, responseSnapshot, normalizedOutput json.RawMessage) (CallLog, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return CallLog{}, err
@@ -2016,6 +2030,7 @@ func (s *Service) recordVideoCancelTask(ctx context.Context, selection gatewayMo
 		RequestSnapshot:        requestSnapshot,
 		ResponseSnapshot:       responseSnapshot,
 		NormalizedOutput:       normalizedOutput,
+		ProviderExternalLogID:  providerExternalLogID,
 	})
 	if err != nil {
 		return CallLog{}, err

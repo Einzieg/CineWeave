@@ -50,24 +50,39 @@ type openAICompatibleConfig struct {
 }
 
 type chatCompletionResult struct {
-	RequestSnapshot  json.RawMessage
-	ResponseSnapshot json.RawMessage
-	NormalizedOutput json.RawMessage
-	Text             string
-	Usage            GatewayUsage
-	LatencyMS        int
+	RequestSnapshot       json.RawMessage
+	ResponseSnapshot      json.RawMessage
+	NormalizedOutput      json.RawMessage
+	Text                  string
+	Usage                 GatewayUsage
+	LatencyMS             int
+	ProviderExternalLogID string
 }
 
 type imageGenerationResult struct {
-	RequestSnapshot  json.RawMessage
-	ResponseSnapshot json.RawMessage
-	NormalizedOutput json.RawMessage
-	ImageURL         string
-	B64JSON          string
-	RevisedPrompt    string
-	MimeType         string
-	ResponseType     string
-	LatencyMS        int
+	RequestSnapshot       json.RawMessage
+	ResponseSnapshot      json.RawMessage
+	NormalizedOutput      json.RawMessage
+	ImageURL              string
+	B64JSON               string
+	RevisedPrompt         string
+	MimeType              string
+	ResponseType          string
+	LatencyMS             int
+	ProviderExternalLogID string
+}
+
+func providerExternalLogIDFromHeader(header http.Header) string {
+	for _, key := range []string{
+		"X-Oneapi-Request-Id",
+		"X-Request-Id",
+		"Request-Id",
+	} {
+		if value := strings.TrimSpace(header.Get(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func newOpenAICompatibleClient(timeout time.Duration) openAICompatibleClient {
@@ -205,16 +220,17 @@ func (c openAICompatibleClient) chatCompletion(ctx context.Context, account Acco
 		return chatCompletionResult{}, err
 	}
 	defer resp.Body.Close()
+	providerExternalLogID := providerExternalLogIDFromHeader(resp.Header)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return chatCompletionResult{}, err
+		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ProviderExternalLogID: providerExternalLogID}, err
 	}
 	if resp.StatusCode >= 400 {
-		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: body}, upstreamError(resp.StatusCode, body)
+		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: body, ProviderExternalLogID: providerExternalLogID}, upstreamError(resp.StatusCode, body)
 	}
 	text, err := parseChatCompletionText(body)
 	if err != nil {
-		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: body}, err
+		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: body, ProviderExternalLogID: providerExternalLogID}, err
 	}
 	usage := parseChatCompletionUsage(body)
 	normalizedOutput, err := json.Marshal(map[string]any{"text": text})
@@ -222,12 +238,13 @@ func (c openAICompatibleClient) chatCompletion(ctx context.Context, account Acco
 		return chatCompletionResult{}, err
 	}
 	return chatCompletionResult{
-		RequestSnapshot:  requestBytes,
-		ResponseSnapshot: body,
-		NormalizedOutput: normalizedOutput,
-		Text:             text,
-		Usage:            usage,
-		LatencyMS:        latencyMS,
+		RequestSnapshot:       requestBytes,
+		ResponseSnapshot:      body,
+		NormalizedOutput:      normalizedOutput,
+		Text:                  text,
+		Usage:                 usage,
+		LatencyMS:             latencyMS,
+		ProviderExternalLogID: providerExternalLogID,
 	}, nil
 }
 
@@ -259,12 +276,13 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 		return chatCompletionResult{}, err
 	}
 	defer resp.Body.Close()
+	providerExternalLogID := providerExternalLogIDFromHeader(resp.Header)
 	if resp.StatusCode >= 400 {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		if readErr != nil {
-			return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes}, readErr
+			return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ProviderExternalLogID: providerExternalLogID}, readErr
 		}
-		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: body}, upstreamError(resp.StatusCode, body)
+		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: body, ProviderExternalLogID: providerExternalLogID}, upstreamError(resp.StatusCode, body)
 	}
 
 	var text strings.Builder
@@ -283,7 +301,7 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 				result = "truncated"
 			}
 			observability.RecordProviderStreamTerminal(terminalMode, result)
-			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}), Text: text.String(), Usage: usage}, err
+			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}), Text: text.String(), Usage: usage, ProviderExternalLogID: providerExternalLogID}, err
 		}
 		if !ok {
 			break
@@ -299,7 +317,7 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 		payloadBytes := []byte(payload)
 		if strings.EqualFold(event.Event, "error") || openAIStreamPayloadHasError(payloadBytes) {
 			observability.RecordProviderStreamTerminal(terminalMode, "upstream_error")
-			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks, "error": rawJSONValue(json.RawMessage(payloadBytes))}), Text: text.String(), Usage: usage}, upstreamError(http.StatusBadGateway, payloadBytes)
+			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks, "error": rawJSONValue(json.RawMessage(payloadBytes))}), Text: text.String(), Usage: usage, ProviderExternalLogID: providerExternalLogID}, upstreamError(http.StatusBadGateway, payloadBytes)
 		}
 		if snapshotBytes+len(payloadBytes) <= 4<<20 {
 			chunkCopy := append(json.RawMessage(nil), payloadBytes...)
@@ -309,7 +327,7 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 		delta, chunkUsage, chunkTerminal, err := parseChatCompletionStreamChunk(payloadBytes)
 		if err != nil {
 			observability.RecordProviderStreamTerminal(terminalMode, "invalid_event")
-			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}), Text: text.String(), Usage: usage}, err
+			return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}), Text: text.String(), Usage: usage, ProviderExternalLogID: providerExternalLogID}, err
 		}
 		if chunkUsage.TotalTokens > 0 || chunkUsage.InputTokens > 0 || chunkUsage.OutputTokens > 0 {
 			usage = chunkUsage
@@ -324,14 +342,14 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 		if onDelta != nil {
 			if err := onDelta(delta); err != nil {
 				observability.RecordProviderStreamTerminal(terminalMode, "consumer_error")
-				return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}), Text: text.String(), Usage: usage}, err
+				return chatCompletionResult{LatencyMS: int(time.Since(started).Milliseconds()), RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}), Text: text.String(), Usage: usage, ProviderExternalLogID: providerExternalLogID}, err
 			}
 		}
 	}
 	latencyMS = int(time.Since(started).Milliseconds())
 	if !openAIStreamTerminalSatisfied(terminalMode, sawDoneMarker, sawFinishReason) {
 		observability.RecordProviderStreamTerminal(terminalMode, "truncated")
-		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks, "terminalMode": terminalMode, "sawDoneMarker": sawDoneMarker, "sawFinishReason": sawFinishReason}), Text: text.String(), Usage: usage}, fmt.Errorf("%w: provider stream ended without the required %s terminal", io.ErrUnexpectedEOF, terminalMode)
+		return chatCompletionResult{LatencyMS: latencyMS, RequestSnapshot: requestBytes, ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks, "terminalMode": terminalMode, "sawDoneMarker": sawDoneMarker, "sawFinishReason": sawFinishReason}), Text: text.String(), Usage: usage, ProviderExternalLogID: providerExternalLogID}, fmt.Errorf("%w: provider stream ended without the required %s terminal", io.ErrUnexpectedEOF, terminalMode)
 	}
 	outputText := text.String()
 	if responseFormatRequiresJSON(requestBody["response_format"]) {
@@ -342,11 +360,12 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 			}
 			observability.RecordProviderStreamTerminal(terminalMode, result)
 			return chatCompletionResult{
-				LatencyMS:        latencyMS,
-				RequestSnapshot:  requestBytes,
-				ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks, "structuredOutputError": err.Error()}),
-				Text:             outputText,
-				Usage:            usage,
+				LatencyMS:             latencyMS,
+				RequestSnapshot:       requestBytes,
+				ResponseSnapshot:      mustJSON(map[string]any{"chunks": chunks, "structuredOutputError": err.Error()}),
+				Text:                  outputText,
+				Usage:                 usage,
+				ProviderExternalLogID: providerExternalLogID,
 			}, err
 		}
 	}
@@ -356,12 +375,13 @@ func (c openAICompatibleClient) streamChatCompletion(ctx context.Context, accoun
 		return chatCompletionResult{}, err
 	}
 	return chatCompletionResult{
-		RequestSnapshot:  requestBytes,
-		ResponseSnapshot: mustJSON(map[string]any{"chunks": chunks}),
-		NormalizedOutput: normalizedOutput,
-		Text:             outputText,
-		Usage:            usage,
-		LatencyMS:        latencyMS,
+		RequestSnapshot:       requestBytes,
+		ResponseSnapshot:      mustJSON(map[string]any{"chunks": chunks}),
+		NormalizedOutput:      normalizedOutput,
+		Text:                  outputText,
+		Usage:                 usage,
+		LatencyMS:             latencyMS,
+		ProviderExternalLogID: providerExternalLogID,
 	}, nil
 }
 
@@ -479,17 +499,19 @@ func (c openAICompatibleClient) imageGeneration(ctx context.Context, account Acc
 		return imageGenerationResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot}, err
 	}
 	defer resp.Body.Close()
+	providerExternalLogID := providerExternalLogIDFromHeader(resp.Header)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGatewayImageBytes*2))
 	if err != nil {
-		return imageGenerationResult{}, err
+		return imageGenerationResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ProviderExternalLogID: providerExternalLogID}, err
 	}
 	if resp.StatusCode >= 400 {
-		return imageGenerationResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ResponseSnapshot: body}, upstreamError(resp.StatusCode, body)
+		return imageGenerationResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ResponseSnapshot: body, ProviderExternalLogID: providerExternalLogID}, upstreamError(resp.StatusCode, body)
 	}
 	result, err := parseImageGenerationResponse(body)
 	result.LatencyMS = latencyMS
 	result.RequestSnapshot = requestSnapshot
 	result.ResponseSnapshot = body
+	result.ProviderExternalLogID = providerExternalLogID
 	return result, err
 }
 

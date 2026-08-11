@@ -144,26 +144,28 @@ func (c openAICompatibleClient) callVideoEndpoint(ctx context.Context, account A
 		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot}, err
 	}
 	defer resp.Body.Close()
+	providerExternalLogID := providerExternalLogIDFromHeader(resp.Header)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot}, err
+		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ProviderExternalLogID: providerExternalLogID}, err
 	}
 	if resp.StatusCode >= 400 {
-		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ResponseSnapshot: body}, upstreamError(resp.StatusCode, body)
+		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ResponseSnapshot: body, ProviderExternalLogID: providerExternalLogID}, upstreamError(resp.StatusCode, body)
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
 		body = []byte(`{}`)
 	}
 	normalized, status, err := normalizeOpenAICompatibleVideoResponse(body, requireTaskID, cancelled)
 	if err != nil {
-		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ResponseSnapshot: body}, err
+		return manifestRunResult{LatencyMS: latencyMS, RequestSnapshot: requestSnapshot, ResponseSnapshot: body, ProviderExternalLogID: providerExternalLogID}, err
 	}
 	return manifestRunResult{
-		Status:           status,
-		LatencyMS:        latencyMS,
-		RequestSnapshot:  requestSnapshot,
-		ResponseSnapshot: body,
-		NormalizedOutput: normalized,
+		Status:                status,
+		LatencyMS:             latencyMS,
+		RequestSnapshot:       requestSnapshot,
+		ResponseSnapshot:      body,
+		NormalizedOutput:      normalized,
+		ProviderExternalLogID: providerExternalLogID,
 	}, nil
 }
 

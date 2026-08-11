@@ -124,6 +124,7 @@ func TestOpenAICompatibleImageGeneration(t *testing.T) {
 			t.Fatalf("request = %#v", request)
 		}
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Oneapi-Request-Id", "new-api-log-image-1")
 		_, _ = w.Write([]byte(`{"data":[{"url":"https://cdn.example/generated.png"}]}`))
 	}))
 	defer server.Close()
@@ -137,6 +138,9 @@ func TestOpenAICompatibleImageGeneration(t *testing.T) {
 	}
 	if result.ImageURL != "https://cdn.example/generated.png" {
 		t.Fatalf("image url = %q", result.ImageURL)
+	}
+	if result.ProviderExternalLogID != "new-api-log-image-1" {
+		t.Fatalf("provider external log id = %q", result.ProviderExternalLogID)
 	}
 }
 

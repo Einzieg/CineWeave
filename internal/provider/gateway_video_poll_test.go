@@ -41,3 +41,16 @@ func TestNormalizeGatewayVideoPollFailurePreservesTerminalFailure(t *testing.T) 
 		t.Fatalf("outcome = %+v", outcome)
 	}
 }
+
+func TestGatewayVideoObservedCallStatusSeparatesTaskProgress(t *testing.T) {
+	for _, status := range []string{"queued", "running"} {
+		if got := gatewayVideoObservedCallStatus(status); got != "succeeded" {
+			t.Fatalf("call status for task %q = %q", status, got)
+		}
+	}
+	for _, status := range []string{"succeeded", "failed", "cancelled"} {
+		if got := gatewayVideoObservedCallStatus(status); got != status {
+			t.Fatalf("call status for task %q = %q", status, got)
+		}
+	}
+}

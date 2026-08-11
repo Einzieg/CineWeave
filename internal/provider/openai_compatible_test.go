@@ -255,6 +255,7 @@ func TestOpenAICompatibleStreamChatCompletion(t *testing.T) {
 			t.Fatalf("stream = %v, want true", request["stream"])
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Oneapi-Request-Id", "new-api-log-stream-1")
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n"))
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
@@ -281,6 +282,9 @@ func TestOpenAICompatibleStreamChatCompletion(t *testing.T) {
 	}
 	if result.Usage.InputTokens != 3 || result.Usage.OutputTokens != 2 || result.Usage.TotalTokens != 5 {
 		t.Fatalf("usage = %+v, want 3/2/5", result.Usage)
+	}
+	if result.ProviderExternalLogID != "new-api-log-stream-1" {
+		t.Fatalf("provider external log id = %q", result.ProviderExternalLogID)
 	}
 }
 

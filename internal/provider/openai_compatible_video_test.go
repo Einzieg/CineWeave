@@ -14,6 +14,7 @@ func TestOpenAICompatibleVideoCreateAndPoll(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/video/generations":
+			w.Header().Set("X-Oneapi-Request-Id", "new-api-log-video-1")
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode create body: %v", err)
@@ -54,6 +55,9 @@ func TestOpenAICompatibleVideoCreateAndPoll(t *testing.T) {
 	}
 	if createResult.Status != "queued" || videoStringField(createResult.NormalizedOutput, "externalTaskId") != "task-1" {
 		t.Fatalf("create result = %+v %s", createResult, createResult.NormalizedOutput)
+	}
+	if createResult.ProviderExternalLogID != "new-api-log-video-1" {
+		t.Fatalf("provider external log id = %q", createResult.ProviderExternalLogID)
 	}
 
 	pollResult, err := client.pollVideoTask(context.Background(), account, "test-key", cfg, "task-1")

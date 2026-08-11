@@ -825,6 +825,7 @@ func (s *Service) executeGatewayTextAttempt(ctx context.Context, req GatewayText
 	finalCall.RequestSnapshot = requestSnapshot
 	finalCall.ResponseSnapshot = responseSnapshot
 	finalCall.NormalizedOutput = normalizedOutput
+	finalCall.ProviderExternalLogID = result.ProviderExternalLogID
 	call, err := s.recordGatewayTextCall(ctx, selection, req, finalCall, usage)
 	if err != nil {
 		return GatewayTextResponse{}, GatewayAttempt{}, err
