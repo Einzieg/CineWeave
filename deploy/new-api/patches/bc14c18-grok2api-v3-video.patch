@@ -223,7 +223,7 @@ index 00000000..05bf41b0
 +	recorder := httptest.NewRecorder()
 +	ctx, _ := gin.CreateTestContext(recorder)
 +	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"request_id":"video_upstream"}`))}
-+	info := &relaycommon.RelayInfo{OriginModelName: grokImagineVideoModel, PublicTaskID: "task_public"}
++	info := &relaycommon.RelayInfo{OriginModelName: grokImagineVideoModel, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task_public"}}
 +
 +	taskID, _, taskErr := (&TaskAdaptor{}).DoResponse(ctx, resp, info)
 +
@@ -265,4 +265,3 @@ index 00000000..05bf41b0
 +		"video":{"url":"https://api.example.com/v1/videos/task_public/content"}
 +	}`, string(response))
 +}
-
