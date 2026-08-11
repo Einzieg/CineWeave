@@ -1348,7 +1348,7 @@ func (s *Service) selectGatewayVideoModel(
 		if err != nil {
 			return gatewayModelSelection{}, err
 		}
-		return s.completeGatewaySelectionWithBilling(
+		return s.completeGatewaySelectionWithBillingFallback(
 			ctx,
 			req.OrganizationID,
 			req.ProjectID,

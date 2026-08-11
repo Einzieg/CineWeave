@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Einzieg/cineweave/internal/db"
+	editionpkg "github.com/Einzieg/cineweave/internal/edition"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -66,6 +67,140 @@ func TestGatewayRoutingIntegration(t *testing.T) {
 		assertRoutingAttempts(t, resp.Attempts, []string{"failed", "succeeded"}, []string{firstModelID, secondModelID})
 		assertProviderCallStatus(t, ctx, pool, resp.Attempts[0].ProviderCallID, "failed", CodeUpstreamInternalError)
 		assertProviderCallStatus(t, ctx, pool, resp.Attempts[1].ProviderCallID, "succeeded", "")
+	})
+
+	t.Run("explicit model follows billing context credential", func(t *testing.T) {
+		upstream := httptest.NewServer(textRoutingMock(t))
+		defer upstream.Close()
+		orgID, userID, requestedModelID := seedGatewayIntegrationData(
+			t,
+			ctx,
+			pool,
+			vault,
+			upstream.URL,
+		)
+		requestedAccountID := providerAccountIDForModel(
+			t,
+			ctx,
+			pool,
+			requestedModelID,
+		)
+		var connectorID, requestedCredentialID string
+		if err := pool.QueryRow(ctx, `
+			SELECT account.connector_id::text, credential.id::text
+			FROM provider_accounts account
+			JOIN provider_credentials credential
+			  ON credential.provider_account_id = account.id
+			WHERE account.id = $1
+			  AND credential.status = 'active'
+			  AND credential.is_active
+			ORDER BY credential.created_at DESC
+			LIMIT 1
+		`, requestedAccountID).Scan(&connectorID, &requestedCredentialID); err != nil {
+			t.Fatalf("load requested provider identity: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO provider_managed_credentials(
+				provider_credential_id, organization_id, provider_account_id,
+				management_scope, management_reference
+			)
+			VALUES ($1, $2, $3, 'system_managed', $4)
+		`, requestedCredentialID, orgID, requestedAccountID,
+			"billing-test:requested"); err != nil {
+			t.Fatalf("mark requested credential managed: %v", err)
+		}
+
+		var billingAccountProviderID string
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO provider_accounts(
+				organization_id, connector_id, name, base_url, auth_type,
+				status, config, created_by
+			)
+			VALUES ($1, $2, 'Billing Context Account', $3, 'bearer',
+			        'active', '{}', $4)
+			RETURNING id
+		`, orgID, connectorID, upstream.URL, userID).Scan(
+			&billingAccountProviderID,
+		); err != nil {
+			t.Fatalf("insert Billing Context provider account: %v", err)
+		}
+		encrypted, err := vault.EncryptJSON(
+			map[string]any{"apiKey": gatewayIntegrationAPIKey},
+		)
+		if err != nil {
+			t.Fatalf("encrypt Billing Context credential: %v", err)
+		}
+		var billingCredentialID string
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO provider_credentials(
+				organization_id, provider_account_id, credential_key,
+				credential_type, secret_ref, encrypted_payload,
+				masked_preview, status, is_active, created_by
+			)
+			VALUES ($1, $2, 'generation-default', 'api_key',
+			        'local:aes-gcm:v1', $3, $4, 'active', true, $5)
+			RETURNING id
+		`, orgID, billingAccountProviderID, encrypted,
+			MaskSecret(gatewayIntegrationAPIKey), userID).Scan(
+			&billingCredentialID,
+		); err != nil {
+			t.Fatalf("insert Billing Context credential: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO provider_managed_credentials(
+				provider_credential_id, organization_id, provider_account_id,
+				management_scope, management_reference
+			)
+			VALUES ($1, $2, $3, 'system_managed', $4)
+		`, billingCredentialID, orgID, billingAccountProviderID,
+			"billing-test:allowed"); err != nil {
+			t.Fatalf("mark Billing Context credential managed: %v", err)
+		}
+		billingModelID := insertProviderModelForRouting(
+			t,
+			ctx,
+			pool,
+			billingAccountProviderID,
+			"gpt-integration",
+			"text",
+			`["text.generate","text.stream"]`,
+			`{"inputTokenPer1K":"0.0100","outputTokenPer1K":"0.0200"}`,
+		)
+
+		service := NewService(pool, vault)
+		service.SetBillingRoutingAuthorizer(
+			fixedCredentialBillingAuthorizer{
+				credentialID: billingCredentialID,
+			},
+		)
+		selection, err := service.selectGatewayTextModel(
+			ctx,
+			GatewayTextRequest{
+				OrganizationID:  orgID,
+				ProjectID:       "project-billing-context",
+				ProviderModelID: requestedModelID,
+				GatewayBillingIdentity: GatewayBillingIdentity{
+					BillingContextID: "billing-context",
+				},
+			},
+			TaskTypeTextGenerate,
+		)
+		if err != nil {
+			t.Fatalf("select Billing Context credential: %v", err)
+		}
+		if selection.Account.ID != billingAccountProviderID ||
+			selection.Model.ID != billingModelID ||
+			selection.CredentialID != billingCredentialID {
+			t.Fatalf(
+				"selection = account %s model %s credential %s, want %s/%s/%s",
+				selection.Account.ID,
+				selection.Model.ID,
+				selection.CredentialID,
+				billingAccountProviderID,
+				billingModelID,
+				billingCredentialID,
+			)
+		}
 	})
 
 	t.Run("model default reasoning level reaches upstream", func(t *testing.T) {
@@ -351,6 +486,28 @@ func TestGatewayRoutingIntegration(t *testing.T) {
 		assertAsyncTaskModel(t, ctx, pool, resp.ProviderAsyncTaskID, secondModelID)
 		assertProviderCallStatus(t, ctx, pool, resp.Attempts[0].ProviderCallID, "failed", CodeUpstreamInternalError)
 	})
+}
+
+type fixedCredentialBillingAuthorizer struct {
+	credentialID string
+}
+
+func (a fixedCredentialBillingAuthorizer) Authorize(
+	_ context.Context,
+	request editionpkg.BillingRoutingRequest,
+) (editionpkg.BillingRoutingDecision, error) {
+	for _, candidate := range request.Candidates {
+		if candidate.CredentialID != a.credentialID {
+			continue
+		}
+		return editionpkg.BillingRoutingDecision{
+			AllowedCredentialIDs: []string{a.credentialID},
+		}, nil
+	}
+	return editionpkg.BillingRoutingDecision{}, editionpkg.AuthorizationError{
+		Code:    editionpkg.DenialBillingRoutingCandidateMissing,
+		Message: "candidate is outside the Billing Context account",
+	}
 }
 
 func textRoutingMock(t *testing.T) http.Handler {

@@ -358,7 +358,7 @@ func (s *Service) gatewayAudioSelections(
 		if err != nil {
 			return nil, FallbackStrategy{}, err
 		}
-		selection, err := s.completeGatewaySelectionWithBilling(
+		selection, err := s.completeGatewaySelectionWithBillingFallback(
 			ctx,
 			organizationID,
 			projectID,

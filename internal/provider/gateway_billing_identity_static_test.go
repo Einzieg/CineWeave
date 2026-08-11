@@ -76,3 +76,55 @@ func TestRuntimePaidGatewayRequestsHaveDurableOrDirectBillingIdentity(t *testing
 		}
 	}
 }
+
+func TestGatewayModelSelectionDoesNotBypassBillingContextFallback(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test path")
+	}
+	dir := filepath.Dir(currentFile)
+	entries, err := filepath.Glob(filepath.Join(dir, "gateway*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowedFunctions := map[string]bool{
+		"completeGatewaySelection":                    true,
+		"completeGatewaySelectionWithBillingFallback": true,
+	}
+	for _, path := range entries {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		fileSet := token.NewFileSet()
+		file, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Body == nil ||
+				allowedFunctions[function.Name.Name] {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				selector, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name !=
+					"completeGatewaySelectionWithBilling" {
+					return true
+				}
+				position := fileSet.Position(call.Pos())
+				t.Errorf(
+					"%s:%d: %s bypasses Billing Context equivalent-model fallback",
+					filepath.ToSlash(position.Filename),
+					position.Line,
+					function.Name.Name,
+				)
+				return true
+			})
+		}
+	}
+}

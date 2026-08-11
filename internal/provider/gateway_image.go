@@ -516,7 +516,7 @@ func (s *Service) selectGatewayImageModel(ctx context.Context, req GatewayImageR
 		if err != nil {
 			return gatewayModelSelection{}, err
 		}
-		return s.completeGatewaySelectionWithBilling(
+		return s.completeGatewaySelectionWithBillingFallback(
 			ctx,
 			req.OrganizationID,
 			req.ProjectID,
