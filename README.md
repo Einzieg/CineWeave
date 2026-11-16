@@ -2,7 +2,6 @@
 
 CineWeave 是面向长篇内容改编的 AI 视频生产平台。系统以项目、分集剧本、资产、分镜、镜头媒体和成片为主线，使用 Provider Gateway 统一接入模型，使用 Temporal 承载可恢复的长时间生产任务。
 
-仓库根目录就是当前目录，不要创建嵌套的 `cineweave/` 或 `CineWeave/` 目录。
 
 ## 运行要求
 
